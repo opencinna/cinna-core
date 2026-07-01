@@ -60,6 +60,13 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## GET `/api/v1/cli/git-coordinates`
+**Cli Git Coordinates**
+
+**Response:** `CliGitCoordinates`
+
+---
+
 ## GET `/api/v1/cli/agents/{agent_id}/sync-runtime`
 **Get Sync Runtime**
 
@@ -142,6 +149,16 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 **Request body** (`KnowledgeSearchBody`):
   - `query`: string (required)
   - `topic`: string | null
+
+---
+
+## POST `/api/v1/cli/account/files/upload`
+**Account Upload File**
+
+**Request body** (`Body_cli-account_upload_file`):
+  - `file`: binary (required)
+
+**Response:** `FileUploadPublic`
 
 ---
 

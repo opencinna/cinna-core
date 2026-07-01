@@ -37,6 +37,7 @@ import { TasksService, AgentsService, AgenticTeamsService } from "@/client"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import type { InputTaskDetailPublic, TaskCommentPublic, TaskAttachmentPublic, SessionPublic, AgenticTeamNodePublic } from "@/client"
 import PendingItems from "@/components/Pending/PendingItems"
+import NotFound from "@/components/Common/NotFound"
 import { usePageHeader } from "@/routes/_layout"
 import { TaskSessionsModal } from "@/components/Tasks/TaskSessionsModal"
 import { TriggerManagementModal } from "@/components/Tasks/Triggers/TriggerManagementModal"
@@ -723,6 +724,17 @@ function TaskDetailPage() {
 
   if (isLoading) return <PendingItems />
   if (error || !task) {
+    const isMissing = !error || (error as { status?: number }).status === 404
+    if (isMissing) {
+      return (
+        <NotFound
+          inline
+          fallbackPath="/tasks"
+          title="Task not found"
+          message="This task doesn't exist, was deleted, or belongs to another user."
+        />
+      )
+    }
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-destructive">Error loading task</p>

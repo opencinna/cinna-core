@@ -45,6 +45,8 @@ const credentialTypeLabels: Record<string, string> = {
   google_service_account: "Google Service Account",
   api_token: "API Token",
   ssh_key: "SSH Key",
+  agent_api: "Agent REST API",
+  mcp_provider: "MCP Provider",
 }
 
 export const columns: ColumnDef<CredentialPublic>[] = [

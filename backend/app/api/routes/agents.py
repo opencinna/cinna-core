@@ -111,8 +111,17 @@ def read_agents(
         apply_workspace_filter=apply_filter,
     )
 
-    # Convert to public format with clone info
-    agents_public = [_agent_to_public(session, a) for a in agents]
+    # Convert to public format with clone info. Capability flags are computed
+    # in a single batched query (not per-agent) to keep the list off N+1.
+    capability_map = AgentService.compute_capability_flags(
+        session, [a.id for a in agents]
+    )
+    agents_public = [
+        AgentService.to_public_with_clone_info(
+            session, a, capabilities=capability_map.get(a.id)
+        )
+        for a in agents
+    ]
     return AgentsPublic(data=agents_public, count=count)
 
 
@@ -377,6 +386,10 @@ def read_agent_credentials(
                 "template_private_fields": list(credential.template_private_fields or []),
                 "owner_id": credential.owner_id,
                 "user_workspace_id": credential.user_workspace_id,
+                # agent2agent mcp_provider credentials appear in this list (they
+                # are linked to their consumer agent); without this the new
+                # consumer-binding column would always project as null here.
+                "mcp_consumer_agent_id": credential.mcp_consumer_agent_id,
                 "is_placeholder": credential.is_placeholder,
                 "placeholder_source_id": credential.placeholder_source_id,
                 "status": status,

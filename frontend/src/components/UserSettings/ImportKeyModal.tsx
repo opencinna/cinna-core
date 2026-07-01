@@ -12,15 +12,21 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { SshKeysService } from "@/client"
+import { SshKeysService, type SSHKeyPublic } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
 
 interface ImportKeyModalProps {
   open: boolean
   onClose: () => void
+  /** Called once the key has been imported (e.g. to auto-select it). */
+  onImported?: (key: SSHKeyPublic) => void
 }
 
-export function ImportKeyModal({ open, onClose }: ImportKeyModalProps) {
+export function ImportKeyModal({
+  open,
+  onClose,
+  onImported,
+}: ImportKeyModalProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [keyName, setKeyName] = useState("")
@@ -43,8 +49,9 @@ export function ImportKeyModal({ open, onClose }: ImportKeyModalProps) {
       SshKeysService.importSshKey({
         requestBody: data
       }),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["sshKeys"] })
+      onImported?.(data)
       showSuccessToast("SSH key imported successfully")
       onClose()
     },

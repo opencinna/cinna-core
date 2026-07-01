@@ -50,6 +50,26 @@ class Settings(BaseSettings):
     # link-local / private ranges unless this is True. Default false; a
     # self-hosted operator may flip it to reach private MCP servers.
     MCP_PROVIDER_ALLOW_PRIVATE_HOSTS: bool = False
+    # SSRF/egress guard for git-source operations: backend-initiated git
+    # network calls (clone / pull / push / ls-remote) reject internal /
+    # link-local / private ranges unless this is True. Independent of the MCP
+    # setting so a self-hosted operator can host git on a private LAN without
+    # also opening up MCP egress. Default false.
+    GIT_SOURCE_ALLOW_PRIVATE_HOSTS: bool = False
+    # Per-file size cap (bytes) for files captured under a git source's
+    # ``workspace/`` subtree. Enforced on checkout AND pull (inbound) before the
+    # tree is seeded, and on push (outbound) before the commit — binary-in-git
+    # hygiene + a guard against a malicious repo shipping a huge file. Default
+    # 10 MiB.
+    GIT_SOURCE_MAX_FILE_BYTES: int = 10 * 1024 * 1024
+    # Bounded network timeout (seconds) for backend-initiated git remote calls
+    # (clone / ls-remote / fetch / log / push). A hung or slow remote must fail
+    # fast rather than pin a worker (and, for the status reads, a pooled DB
+    # connection). Applied as the GitPython ``kill_after_timeout`` hard stop on
+    # the clone / ls-remote subprocesses, the HTTP low-speed-abort window
+    # (``GIT_HTTP_LOW_SPEED_LIMIT`` / ``GIT_HTTP_LOW_SPEED_TIME``), and the SSH
+    # ``ConnectTimeout`` / keepalive. Default 30s.
+    GIT_SOURCE_NETWORK_TIMEOUT_SECONDS: int = 30
     # Redirect URI for the MCP-provider OAuth/DCR authorization-code flow
     # (Phase 5). The target AS redirects the browser back here after consent; the
     # frontend route forwards (code, state) to POST /mcp-providers/oauth/callback.
@@ -66,6 +86,13 @@ class Settings(BaseSettings):
     MUTAGEN_VERSION: str = "0.18.1"
     # Platform API version advertised to the CLI alongside the Mutagen pin.
     PLATFORM_API_VERSION: str = "1.0"
+    # Minimum cinna-cli version the platform's setup flow supports. Embedded in
+    # the `curl | python3` bootstrap script: when a locally-installed `cinna` is
+    # older than this, the bootstrap prints upgrade instructions and stops
+    # instead of invoking a subcommand the old CLI doesn't have (which would
+    # otherwise fail with a confusing "No such command" error). Bump this when a
+    # setup-flow change requires a newer CLI.
+    MINIMUM_CLI_VERSION: str = "0.2.3"
 
     # ── Environment console (web terminal + logs follow) ─────────────────
     # Idle timeout for an interactive PTY shell: the env-core /shell/pty

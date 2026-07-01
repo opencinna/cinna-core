@@ -33,6 +33,21 @@ VALID_USER_ROLES = [r.value for r in UserRole]
 DEVELOPER_OR_ADMIN_ROLES = {UserRole.DEVELOPER.value, UserRole.ADMIN.value}
 
 
+# ── Conversation style ─────────────────────────────────────────────────
+#
+# A user-global tone hint that personalizes how every one of the user's
+# agents communicates in conversation mode. ``ai_default`` means no
+# adjustment (the agent's natural behavior); the two non-default values
+# append a single tone sentence to the conversation-mode system prompt.
+class ConversationStyle(str, Enum):
+    AI_DEFAULT = "ai_default"
+    CONCISE_DIRECT = "concise_direct"
+    FRIENDLY_CHATTY = "friendly_chatty"
+
+
+VALID_CONVERSATION_STYLES = [s.value for s in ConversationStyle]
+
+
 # Shared properties
 class UserBase(SQLModel):
     email: EmailStr = Field(unique=True, index=True, max_length=255)
@@ -76,6 +91,11 @@ class UserUpdateMe(SQLModel):
     default_ai_credential_building_id: uuid.UUID | None = None
     default_model_override_conversation: str | None = Field(default=None, max_length=255)
     default_model_override_building: str | None = Field(default=None, max_length=255)
+    # Locale / communication preferences (free-text; curated by the frontend).
+    timezone: str | None = Field(default=None, max_length=64)
+    language: str | None = Field(default=None, max_length=64)
+    locale: str | None = Field(default=None, max_length=64)
+    conversation_style: str | None = Field(default=None, max_length=32)
 
 
 class UpdatePassword(SQLModel):
@@ -148,6 +168,18 @@ class User(UserBase, table=True):
     # Source of truth for the ``custom_details`` block injected into the
     # agent environment's credentials.json. ``NULL`` = no details.
     details_parsed: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    # ── Locale / communication preferences ───────────────────────────────
+    # Personalization fields that ride the ``current_user`` block into every
+    # owned agent's credentials.json. Free-text (no DB enum / FK); the curated
+    # lists live in the frontend. ``timezone``/``language``/``locale`` are
+    # NULL when unset; ``conversation_style`` is NOT NULL with a server_default
+    # so existing rows backfill to ``ai_default`` (current behavior).
+    timezone: str | None = Field(default=None, max_length=64)
+    language: str | None = Field(default=None, max_length=64)
+    locale: str | None = Field(default=None, max_length=64)
+    conversation_style: str = Field(
+        default=ConversationStyle.AI_DEFAULT.value, max_length=32
+    )
     agents: List["app.models.agents.agent.Agent"] = Relationship(back_populates="owner", cascade_delete=True)
     credentials: List["app.models.credentials.credential.Credential"] = Relationship(back_populates="owner", cascade_delete=True)
 
@@ -179,6 +211,12 @@ class UserPublic(UserBase):
     email_confirmed: bool = False
     email_confirmed_at: datetime | None = None
     confirmation_resend_available_at: datetime | None = None
+    # Locale / communication preferences (so the UI can render current values
+    # and decide which are still NULL for the auto-detect flow).
+    timezone: str | None = None
+    language: str | None = None
+    locale: str | None = None
+    conversation_style: str = ConversationStyle.AI_DEFAULT.value
 
 
 class UsersPublic(SQLModel):
@@ -221,6 +259,17 @@ class UserDetailsUpdate(SQLModel):
     clear the user's details. Parsed/normalized server-side.
     """
     details_raw: str
+
+
+class UserLocaleDefaults(SQLModel):
+    """Browser-detected locale defaults; server fills only still-NULL fields.
+
+    Used by ``PATCH /users/me/locale-defaults``. ``conversation_style`` is
+    deliberately absent — it is never browser-detected.
+    """
+    timezone: str | None = Field(default=None, max_length=64)
+    language: str | None = Field(default=None, max_length=64)
+    locale: str | None = Field(default=None, max_length=64)
 
 
 class UserDetailsPublic(SQLModel):

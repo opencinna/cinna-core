@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Copy, Check, Key, MonitorDot, RefreshCw, Unplug } from "lucide-react"
+import { Copy, Check, Key, Laptop, MonitorDot, RefreshCw, Unplug } from "lucide-react"
 import { useState, useEffect } from "react"
 
 import type { CLISetupTokenCreated, CLITokenPublic } from "@/client"
@@ -26,12 +26,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { LocalDevSyncStatus } from "@/components/Agents/LocalDevSyncStatus"
 
 function formatCountdown(seconds: number): string {
@@ -218,70 +212,64 @@ export function LocalDevCard({ agentId }: LocalDevCardProps) {
                 : "No active sessions. Click Setup to generate an install command."}
             </p>
           ) : (
-            <div className="space-y-1.5">
+            <ul className="divide-y divide-border">
               {tokens.map((token) => (
-                <div
+                <li
                   key={token.id}
-                  className="flex items-center justify-between px-3 py-2 border rounded-lg"
+                  className="flex items-center justify-between gap-3 py-3"
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-sm truncate">
-                      {token.name || token.prefix}
-                    </p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <LocalDevSyncStatus lastSyncConnectedAt={token.last_sync_connected_at} />
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Laptop className="h-4 w-4 text-muted-foreground" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {token.name || token.prefix}
+                      </p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <LocalDevSyncStatus lastSyncConnectedAt={token.last_sync_connected_at} />
+                      </div>
                     </div>
                   </div>
-                  <div className="shrink-0 ml-2">
-                    <AlertDialog>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                aria-label="Disconnect session"
-                                className="h-7 w-7 text-destructive hover:text-destructive"
-                              >
-                                <Unplug className="h-4 w-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Disconnect
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <AlertDialogContent
-                        onOpenAutoFocus={(e) => e.preventDefault()}
+
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                        title="Disconnect"
+                        aria-label="Disconnect session"
                       >
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Disconnect Session</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            This will revoke the CLI token. The local files
-                            remain intact, but the CLI will need to be set up
-                            again.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            autoFocus
-                            onClick={() =>
-                              revokeCliTokenMutation.mutate(token.id)
-                            }
-                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                          >
-                            Disconnect
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  </div>
-                </div>
+                        <Unplug className="h-4 w-4" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent
+                      onOpenAutoFocus={(e) => e.preventDefault()}
+                    >
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Disconnect Session</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This will revoke the CLI token. The local files
+                          remain intact, but the CLI will need to be set up
+                          again.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          autoFocus
+                          onClick={() =>
+                            revokeCliTokenMutation.mutate(token.id)
+                          }
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                          Disconnect
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
       </CardContent>

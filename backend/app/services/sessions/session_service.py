@@ -417,6 +417,64 @@ class SessionService:
         return session
 
     @staticmethod
+    async def clear_interaction_status(session_id: UUID, reason: str = "") -> None:
+        """Defensively clear a session's ``interaction_status`` and notify the UI.
+
+        Streaming normally clears ``interaction_status`` via the terminal
+        STREAM_COMPLETED / STREAM_INTERRUPTED / STREAM_ERROR events. But if a
+        stream task is cancelled or torn down before it can emit a terminal
+        event (e.g. client disconnect, interrupt, an OpenCode answer turn that
+        never finalized), the session would be left stuck showing "streaming".
+        This helper is a best-effort safety net for those paths.
+
+        Idempotent: only writes + emits when the session is found and currently
+        has a non-empty ``interaction_status``, so calling it on an
+        already-finalized stream is a no-op. Never raises — failures are logged.
+        """
+        try:
+            with create_session() as db:
+                session = db.get(Session, session_id)
+                if not session or not session.interaction_status:
+                    return
+                session.interaction_status = ""
+                session.streaming_started_at = None
+                session.updated_at = datetime.now(UTC)
+                user_id = session.user_id
+                db.add(session)
+                db.commit()
+
+            logger.info(
+                "Defensively cleared interaction_status for session %s%s",
+                session_id, f" ({reason})" if reason else "",
+            )
+
+            try:
+                from app.services.events.event_service import event_service
+                status_meta = {"session_id": str(session_id), "interaction_status": ""}
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=session_id,
+                    meta=status_meta,
+                    user_id=user_id,
+                )
+                await event_service.emit_event(
+                    event_type="session_interaction_status_changed",
+                    model_id=session_id,
+                    meta=status_meta,
+                    room=f"session_{session_id}_stream",
+                )
+            except Exception as ws_err:  # noqa: BLE001 — WS emit is best-effort
+                logger.error(
+                    "Failed to emit session_interaction_status_changed during "
+                    "defensive clear for session %s: %s", session_id, ws_err,
+                )
+        except Exception as exc:  # noqa: BLE001 — safety net must never raise
+            logger.error(
+                "Defensive interaction_status clear failed for session %s: %s",
+                session_id, exc, exc_info=True,
+            )
+
+    @staticmethod
     def switch_mode(db_session: DBSession, session_id: UUID, new_mode: str) -> Session | None:
         """Switch session mode (building <-> conversation)"""
         session = db_session.get(Session, session_id)

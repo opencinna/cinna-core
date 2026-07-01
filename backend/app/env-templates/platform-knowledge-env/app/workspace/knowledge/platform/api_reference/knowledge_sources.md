@@ -118,6 +118,25 @@ Auto-generated from OpenAPI spec. Tag: `knowledge-sources`
 
 ---
 
+## GET `/api/v1/knowledge-sources/{source_id}/articles/{article_id}`
+**Get Knowledge Article**
+
+**Path parameters:**
+- `source_id`: uuid
+- `article_id`: uuid
+
+**Response:** `KnowledgeArticleDetail`
+
+---
+
+## GET `/api/v1/knowledge-sources/{source_id}/export`
+**Export Knowledge Source**
+
+**Path parameters:**
+- `source_id`: uuid
+
+---
+
 ## GET `/api/v1/knowledge-sources/discoverable/list`
 **List Discoverable Sources**
 

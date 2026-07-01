@@ -13,9 +13,14 @@ Pure filesystem tests — no DB, no HTTP. Covers:
      marketplace-dir survival assertions — folded into scenarios 4/5 per plan).
   8. ``_hash_tree_with_manifest``: identical v2 trees hash equal; changing
      any captured file (webapp/, custom dir) changes the hash.
+  9. ``hash_workspace_tree`` (git dirty-check primitive): stable across
+     rebuilds, sensitive to content, excludes symlinks, missing root → empty
+     digest.
 
 API-observable counterparts (scenarios 2, 3, 4) live in
 ``tests/api/agents/agents_bundles_workspace_snapshot_test.py``.
+The API-observable dirty-check behavior is covered in
+``tests/api/agents/agents_git_source_test.py`` (Scenario 7).
 """
 import json
 import uuid
@@ -594,3 +599,112 @@ def test_content_hash_changes_when_new_file_added(tmp_path: Path) -> None:
 
     assert res_a["hash"] != res_b["hash"], \
         "Adding a new file to the workspace must change the content hash"
+
+
+# ── Scenario 9: hash_workspace_tree (git dirty-check primitive) ───────────────
+#
+# ``hash_workspace_tree`` is the workspace-only sibling of
+# ``_hash_tree_with_manifest``.  It omits the manifest body, making the digest
+# stable across rebuilds (revision_number / published_at never affect it).
+# The git dirty check compares the digest of the live env workspace against the
+# digest of the last-synced snapshot workspace to decide whether files changed.
+
+
+def test_hash_workspace_tree_identical_content_gives_same_digest(tmp_path: Path) -> None:
+    """Two workspace directories with byte-identical content hash equal."""
+    tree = {
+        "scripts": {"run.sh": "#!/bin/bash\necho hello"},
+        "docs": {"README.md": "# Docs"},
+    }
+
+    ws_a = tmp_path / "ws_a"
+    ws_b = tmp_path / "ws_b"
+    _make_env_workspace(ws_a, tree)
+    _make_env_workspace(ws_b, tree)
+
+    digest_a = PublishService.hash_workspace_tree(ws_a)
+    digest_b = PublishService.hash_workspace_tree(ws_b)
+
+    assert digest_a == digest_b, (
+        "Identical workspace content must produce the same hash_workspace_tree digest"
+    )
+
+
+def test_hash_workspace_tree_content_change_gives_different_digest(tmp_path: Path) -> None:
+    """Modifying one file's content produces a different digest."""
+    ws_a = tmp_path / "ws_a"
+    ws_b = tmp_path / "ws_b"
+    _make_env_workspace(ws_a, {"scripts": {"run.sh": "#!/bin/bash\necho v1"}})
+    _make_env_workspace(ws_b, {"scripts": {"run.sh": "#!/bin/bash\necho v2"}})
+
+    assert PublishService.hash_workspace_tree(ws_a) != PublishService.hash_workspace_tree(ws_b), (
+        "Different file content must yield different hash_workspace_tree digests"
+    )
+
+
+def test_hash_workspace_tree_added_file_gives_different_digest(tmp_path: Path) -> None:
+    """Adding a new file to the workspace changes the digest."""
+    ws_base = tmp_path / "ws_base"
+    ws_plus = tmp_path / "ws_plus"
+    _make_env_workspace(ws_base, {"scripts": {"run.sh": "echo hi"}})
+    _make_env_workspace(ws_plus, {
+        "scripts": {"run.sh": "echo hi"},
+        "docs": {"new_file.md": "locally added"},  # extra file
+    })
+
+    assert PublishService.hash_workspace_tree(ws_base) != PublishService.hash_workspace_tree(ws_plus), (
+        "Adding a file must change hash_workspace_tree"
+    )
+
+
+def test_hash_workspace_tree_missing_root_returns_empty_digest(tmp_path: Path) -> None:
+    """A non-existent root directory returns the SHA-256 of empty input."""
+    import hashlib
+
+    non_existent = tmp_path / "does_not_exist"
+
+    digest = PublishService.hash_workspace_tree(non_existent)
+
+    # SHA-256 of zero bytes — the identity value when no files are fed.
+    expected = hashlib.sha256().hexdigest()
+    assert digest == expected, (
+        "A missing workspace root must return the empty SHA-256 digest"
+    )
+
+
+def test_hash_workspace_tree_symlinks_excluded_from_digest(tmp_path: Path) -> None:
+    """Symlinks inside the workspace are skipped; only real files contribute."""
+    # Build a workspace with a real file and a symlink that points to a secret.
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET_DATA")
+
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "scripts").mkdir()
+    (ws / "scripts" / "run.sh").write_text("echo hi")
+    (ws / "scripts" / "secret_link").symlink_to(secret)  # symlink to secret
+
+    digest_with_link = PublishService.hash_workspace_tree(ws)
+
+    # Remove the symlink and recompute — digest must be the same.
+    (ws / "scripts" / "secret_link").unlink()
+    digest_without_link = PublishService.hash_workspace_tree(ws)
+
+    assert digest_with_link == digest_without_link, (
+        "Symlinks must be excluded from hash_workspace_tree so they cannot inject "
+        "secret content into the digest"
+    )
+
+
+def test_hash_workspace_tree_stable_across_empty_dir(tmp_path: Path) -> None:
+    """Empty directories are not files and do not affect the digest."""
+    ws_with_empty = tmp_path / "ws_with_empty"
+    ws_without = tmp_path / "ws_without"
+    _make_env_workspace(ws_with_empty, {"scripts": {"run.sh": "echo hi"}, "empty_dir": None})
+    _make_env_workspace(ws_without, {"scripts": {"run.sh": "echo hi"}})
+
+    # Only files contribute; an empty directory changes neither the set of
+    # (rel, content) pairs nor the digest.
+    assert PublishService.hash_workspace_tree(ws_with_empty) == PublishService.hash_workspace_tree(ws_without), (
+        "Empty directories must not affect the hash_workspace_tree digest"
+    )

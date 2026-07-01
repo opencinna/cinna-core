@@ -16,6 +16,9 @@ from .users.user import (
     UserRoleUpdate,
     UserDetailsUpdate,
     UserDetailsPublic,
+    UserLocaleDefaults,
+    ConversationStyle,
+    VALID_CONVERSATION_STYLES,
     UpdatePassword,
     Message,
     NewPassword,
@@ -158,6 +161,22 @@ from .bundles.bundle_access_grant import (
     BundleAccessGrantsPublic,
     BundleAccessGrantCreate,
 )
+from .bundles.bundle_permissions import (
+    BundlePermissionScopeCatalogEntry,
+    BundlePermissionGrant,
+    BundlePermissionProducer,
+    BundlePermissionUser,
+    BundlePermissionsOverview,
+)
+from .bundles.agent_git_source import (
+    AgentGitSource,
+    AgentGitSourceBase,
+    AgentGitSourcePublic,
+    AgentGitSourceCreate,
+    AgentGitSourceUpdate,
+    GitSyncDirection,
+    GitSourceStatus,
+)
 from .bundles.catalog import (
     CatalogEntryPublic,
     CatalogPublic,
@@ -257,6 +276,7 @@ from .agents.agent_webhook import (
     AgentWebhookType,
     AgentWebhookCreateSession,
     AgentWebhookCreateScript,
+    AgentWebhookCreateGitSource,
     AgentWebhookUpdate,
     AgentWebhookPublic,
     AgentWebhookPublicWithToken,
@@ -862,6 +882,19 @@ __all__ = [
     "BundleAccessGrantPublic",
     "BundleAccessGrantsPublic",
     "BundleAccessGrantCreate",
+    "BundlePermissionScopeCatalogEntry",
+    "BundlePermissionGrant",
+    "BundlePermissionProducer",
+    "BundlePermissionUser",
+    "BundlePermissionsOverview",
+    # Agent Git Sources (git-backed versioning)
+    "AgentGitSource",
+    "AgentGitSourceBase",
+    "AgentGitSourcePublic",
+    "AgentGitSourceCreate",
+    "AgentGitSourceUpdate",
+    "GitSyncDirection",
+    "GitSourceStatus",
     # Catalog & install schemas
     "CatalogEntryPublic",
     "CatalogPublic",
@@ -949,6 +982,7 @@ __all__ = [
     "AgentWebhookType",
     "AgentWebhookCreateSession",
     "AgentWebhookCreateScript",
+    "AgentWebhookCreateGitSource",
     "AgentWebhookUpdate",
     "AgentWebhookPublic",
     "AgentWebhookPublicWithToken",

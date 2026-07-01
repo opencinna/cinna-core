@@ -13,10 +13,19 @@ Live sync model (replaces tarball push/pull and local container):
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, status
+from fastapi import (
+    APIRouter,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    status,
+)
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.api.deps import (
     AccountCLIContextDep,
@@ -76,6 +85,7 @@ from app.models.credentials.credential import (
     CredentialPublic,
     CredentialsPublic,
 )
+from app.models.files.file_upload import FileUploadPublic
 from app.models.mcp.mcp_provider import (
     DiscoverableAgents,
     MCPProviderConnectionResponse,
@@ -93,6 +103,7 @@ from app.services.cli.device_login_service import (
     DeviceLoginError,
     DeviceLoginService,
 )
+from app.services.files.file_service import FileService
 
 if TYPE_CHECKING:
     from app.services.agents.agent_service import CanBuildError
@@ -410,6 +421,67 @@ async def search_knowledge(
     return {"results": results}
 
 
+# ── Git Versioning Discovery (CLI token auth) ────────────────────────────────
+
+
+class CliGitCoordinates(BaseModel):
+    """Where this agent's git remote is — for the CLI's sparse-checkout link.
+
+    Carries NO deploy-key / private-key material: the developer authenticates to
+    the remote with their OWN git/SSH client. ``repo_url`` / ``subdir`` / ``ref``
+    are not secrets (the agent owner already sees them in the UI).
+    """
+
+    vcs_enabled: bool
+    repo_url: str | None = None
+    subdir: str | None = None
+    ref: str | None = None
+    sync_direction: str | None = None
+    last_synced_commit: str | None = None
+    # "ssh" | "https" | None — how the USER should auth locally.
+    auth_hint: str | None = None
+
+
+def _git_auth_hint(repo_url: str) -> str:
+    """Derive how the developer should authenticate locally from the URL shape."""
+    if repo_url.startswith("git@") or repo_url.startswith("ssh://"):
+        return "ssh"
+    if repo_url.startswith("https://") or repo_url.startswith("http://"):
+        return "https"
+    return "ssh"
+
+
+@router.get("/git-coordinates", response_model=CliGitCoordinates)
+def cli_git_coordinates(
+    cli_ctx: CLIContextDep,
+    db: SessionDep,
+) -> Any:
+    """Tell the CLI whether this agent is VCS-enabled and where the remote is.
+
+    Auth: the per-agent CLI token (``cli_ctx.agent``) — already scoped to exactly
+    one agent, so token A cannot read agent B's coordinates. No deploy key, no
+    private-key material is ever returned; the developer uses their own git/SSH
+    client. Returns ``vcs_enabled=False`` (all other fields ``None``) when the
+    agent has no git source.
+    """
+    from app.models.bundles.agent_git_source import AgentGitSource
+
+    source = db.exec(
+        select(AgentGitSource).where(AgentGitSource.agent_id == cli_ctx.agent.id)
+    ).first()
+    if source is None:
+        return CliGitCoordinates(vcs_enabled=False)
+    return CliGitCoordinates(
+        vcs_enabled=True,
+        repo_url=source.repo_url,
+        subdir=source.subdir,
+        ref=source.ref,
+        sync_direction=source.sync_direction,
+        last_synced_commit=source.last_synced_commit,
+        auth_hint=_git_auth_hint(source.repo_url),
+    )
+
+
 # ── Live Sync Routes (CLI token auth) ────────────────────────────────────────
 
 @router.get("/agents/{agent_id}/sync-runtime")
@@ -623,6 +695,41 @@ async def account_search_knowledge(
         db=db, user=account_ctx.user, query=body.query, topic=body.topic,
     )
     return {"results": results}
+
+
+@router.post("/account/files/upload", response_model=FileUploadPublic)
+async def account_upload_file(
+    *,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    file: UploadFile = File(...),
+) -> Any:
+    """Upload a file for the account user and return its File record.
+
+    The account-CLI analogue of ``POST /files/upload``. The generic
+    ``/account/api-proxy`` escape hatch is JSON-only (it cannot carry a
+    multipart/binary body), so ``cinna chat --file`` needs a dedicated
+    multipart route to materialize a platform ``File`` it can then reference by
+    id in a session message's ``file_ids``.
+
+    The created file is attributed to the account token's owning user and is
+    subject to the same size / mime-type / quota validation as the normal
+    upload route. New uploads start as ``status="temporary"`` and are
+    referenced (made durable) when attached to a message.
+    """
+    db_file = await FileService.create_file_upload(
+        session=db,
+        user_id=account_ctx.user.id,
+        file=file,
+    )
+    return FileUploadPublic(
+        id=db_file.id,
+        filename=db_file.filename,
+        file_size=db_file.file_size,
+        mime_type=db_file.mime_type,
+        status=db_file.status,
+        uploaded_at=db_file.uploaded_at,
+    )
 
 
 class MintChildTokenBody(BaseModel):

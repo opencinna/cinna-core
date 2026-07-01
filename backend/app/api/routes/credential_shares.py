@@ -61,7 +61,8 @@ def share_credential(
             session=session,
             credential_id=credential_id,
             owner_id=current_user.id,
-            shared_with_email=share_data.shared_with_email
+            shared_with_email=share_data.shared_with_email,
+            source="direct",  # explicit: a user→user direct share
         )
         return share
     except ValueError as e:

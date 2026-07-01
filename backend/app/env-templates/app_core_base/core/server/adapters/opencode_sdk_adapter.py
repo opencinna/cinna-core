@@ -181,10 +181,20 @@ class OpenCodeAdapter(BaseSDKAdapter):
         self._event_transformer = OpenCodeEventTransformer(self.workspace_dir)
 
         # Strong references to fire-and-forget background tasks (e.g. the
-        # /question/{id}/reject call after a question.asked event).  Prevents
-        # Python GC from collecting the task reference mid-flight and raising
-        # "Task was destroyed but it is pending!" warnings.
+        # /question/{id}/reject call fired on the interrupt/teardown path).
+        # Prevents Python GC from collecting the task reference mid-flight and
+        # raising "Task was destroyed but it is pending!" warnings.
         self._background_tasks: set[asyncio.Task] = set()
+
+        # Pending interactive `question` tools, keyed by opencode session id.
+        # Populated when a `question.asked` requestID is captured during a
+        # stream; the NEXT message for that session is treated as the answer
+        # and relayed via POST /question/{id}/reply instead of a fresh message
+        # post.  This is the in-memory fast path; GET /question is the
+        # authoritative, parameter-free source of truth (see
+        # _resolve_pending_question).  Each value is
+        # ``{"id": request_id, "questions": [...]}``.
+        self._pending_questions: dict[str, dict] = {}
 
     def _resolve_mode(self, mode: str) -> None:
         """
@@ -850,6 +860,30 @@ class OpenCodeAdapter(BaseSDKAdapter):
                     data={"unsupported": self._plugin_unsupported},
                 )
 
+            # 6c. Answer relay: if this session has an outstanding `question`
+            #     tool, the incoming message IS the answer — relay it via
+            #     POST /question/{id}/reply (resuming the suspended turn)
+            #     instead of posting a fresh message (which would wedge,
+            #     because opencode serializes turns per session and the
+            #     prior turn never reached session.idle).  Detection is
+            #     parameter-free (GET /question + in-memory fast path).
+            #     A brand-new session can't have a pending question.
+            reply_request_id: Optional[str] = None
+            reply_answers: Optional[list] = None
+            if not is_new_session:
+                pending_q = await self._resolve_pending_question(session_id)
+                if pending_q and pending_q.get("id"):
+                    reply_request_id = pending_q["id"]
+                    n_questions = len(pending_q.get("questions") or []) or 1
+                    reply_answers = self._build_question_answers(
+                        message, n_questions, session_state
+                    )
+                    logger.info(
+                        "Session %s has pending question %s — relaying message "
+                        "as answer (%d question(s))",
+                        session_id, reply_request_id, n_questions,
+                    )
+
             # 7-8. Connect SSE stream FIRST, then send the message once
             #      connected so we don't miss any events.
             # The POST is fired as a background task because it can block
@@ -858,11 +892,12 @@ class OpenCodeAdapter(BaseSDKAdapter):
             message_posted = False
             post_task: Optional[asyncio.Task] = None
             last_progress_time = asyncio.get_running_loop().time()
-            # Track the pending question requestID so we can release the
-            # suspended session server-side via POST /question/{id}/reject
-            # once the stream closes (the `question` tool suspends opencode
-            # until either /reply or /reject is called).
-            pending_question_request_id: Optional[str] = None
+            # Questions captured from `question.asked` during THIS stream are
+            # remembered in self._pending_questions so the next message relays
+            # as a /reply.  We do NOT reject on stream close — the suspended
+            # turn must stay alive for that reply (it survives the POST
+            # disconnect; reject is reserved for interrupt/teardown).
+            captured_question_payload: Optional[list] = None
             try:
                 async with aiohttp.ClientSession() as http_session:
                     async with http_session.get(
@@ -891,6 +926,9 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                     session_id,
                                 )
                                 interrupt_initiated = True
+                                # Explicit teardown: release any abandoned
+                                # question so it doesn't leak a parked turn.
+                                self._cleanup_pending_question(session_id)
                                 await self._delete_session(session_id)
                                 yield SDKEvent(
                                     type=SDKEventType.INTERRUPTED,
@@ -947,13 +985,27 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                         # Fired as background task — POST can block
                                         # until the LLM finishes responding.
                                         if not message_posted:
-                                            logger.info(
-                                                "SSE alive (first event: %s), posting message to session %s",
-                                                event_type, session_id,
-                                            )
-                                            post_task = asyncio.create_task(
-                                                self._post_message(session_id, message)
-                                            )
+                                            if reply_request_id is not None:
+                                                logger.info(
+                                                    "SSE alive (first event: %s), replying to "
+                                                    "question %s on session %s",
+                                                    event_type, reply_request_id, session_id,
+                                                )
+                                                post_task = asyncio.create_task(
+                                                    self._reply_question(
+                                                        reply_request_id, reply_answers
+                                                    )
+                                                )
+                                                # Consumed — this question is being answered.
+                                                self._pending_questions.pop(session_id, None)
+                                            else:
+                                                logger.info(
+                                                    "SSE alive (first event: %s), posting message to session %s",
+                                                    event_type, session_id,
+                                                )
+                                                post_task = asyncio.create_task(
+                                                    self._post_message(session_id, message)
+                                                )
                                             message_posted = True
                                             # Skip server lifecycle events
                                             if event_type in ("server.connected", "server.heartbeat"):
@@ -1001,19 +1053,45 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                         for sdk_event in sdk_events:
                                             yield sdk_event
 
-                                            # Capture the question requestID
-                                            # from the transformer's DONE
-                                            # metadata (single source of
-                                            # truth for OpenCode event shape).
+                                            # Capture the question's structure
+                                            # from the TOOL_USE event (carries
+                                            # the questions array) so the
+                                            # in-memory fast path knows how many
+                                            # answer slots to pad on the next
+                                            # turn.  Metadata key contract is
+                                            # owned by the transformer.
+                                            if (
+                                                sdk_event.type == SDKEventType.TOOL_USE
+                                                and (sdk_event.metadata or {}).get(
+                                                    OPENCODE_QUESTION_REQUEST_ID_KEY
+                                                )
+                                            ):
+                                                captured_question_payload = (
+                                                    (sdk_event.metadata or {})
+                                                    .get("tool_input", {})
+                                                    .get("questions", [])
+                                                )
+
+                                            # Capture the question requestID from
+                                            # the transformer's DONE metadata and
+                                            # remember it as PENDING for this
+                                            # session.  We do NOT reject: the
+                                            # suspended turn stays alive so the
+                                            # next message can answer it via
+                                            # POST /question/{id}/reply.
                                             if sdk_event.type == SDKEventType.DONE:
                                                 req_id = (sdk_event.metadata or {}).get(
                                                     OPENCODE_QUESTION_REQUEST_ID_KEY
                                                 )
                                                 if req_id:
-                                                    pending_question_request_id = req_id
+                                                    self._pending_questions[session_id] = {
+                                                        "id": req_id,
+                                                        "questions": captured_question_payload or [],
+                                                    }
                                                     logger.info(
                                                         "question.asked signalled for session %s "
-                                                        "(requestID=%s) — will reject after stream close",
+                                                        "(requestID=%s) — turn kept alive; next "
+                                                        "message will be relayed as the answer",
                                                         session_id, req_id,
                                                     )
 
@@ -1024,14 +1102,14 @@ class OpenCodeAdapter(BaseSDKAdapter):
                                             ):
                                                 return
             finally:
-                # Release any suspended `question` tool before tearing down
-                # the post task so the session can finalize gracefully.
-                # Fire-and-forget, but keep a strong reference so the task
-                # is not garbage-collected before the HTTP call completes.
-                if pending_question_request_id:
-                    self._spawn_background(
-                        self._reject_question(pending_question_request_id)
-                    )
+                # NOTE: do NOT reject a pending `question` here.  On a normal
+                # question.asked close the suspended turn must stay alive so the
+                # next message can answer it via /reply (the turn survives this
+                # POST teardown — verified against opencode 1.14.x).  Reject is
+                # reserved for the explicit interrupt path above, which calls
+                # _cleanup_pending_question; the CancelledError handler below
+                # tears the question down via _delete_session (DELETE settles
+                # the suspended Deferred and pops the fast-path entry).
 
                 # Ensure the POST task is awaited to catch errors
                 if post_task is not None and not post_task.done():
@@ -1119,6 +1197,12 @@ class OpenCodeAdapter(BaseSDKAdapter):
         if aiohttp is None:
             return False
 
+        # Deleting the opencode session settles any suspended `question`
+        # Deferred (the fiber is interrupted), so forget our fast-path entry
+        # for it — every delete path (interrupt, progress timeout, cancel)
+        # funnels through here.
+        self._pending_questions.pop(session_id, None)
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.delete(
@@ -1162,16 +1246,204 @@ class OpenCodeAdapter(BaseSDKAdapter):
         task.add_done_callback(self._background_tasks.discard)
         return task
 
+    # ------------------------------------------------------------------
+    # Interactive `question` tool — detection, reply, cleanup
+    # ------------------------------------------------------------------
+
+    async def _list_pending_question(self, session_id: str) -> Optional[dict]:
+        """
+        GET /question — return the pending question for ``session_id``, if any.
+
+        ``GET /question`` lists pending interactive questions across every
+        session on this mode's serve process; there is no server-side
+        per-session filter, so we filter client-side by ``sessionID``.
+
+        IMPORTANT: opencode scopes pending questions to the project directory,
+        so the ``directory`` query param is REQUIRED — without it the endpoint
+        returns an empty list even when questions are pending (verified against
+        opencode 1.14.x).
+
+        Returns the matching ``{"id", "sessionID", "questions", ...}`` dict, or
+        ``None`` when no question is pending for the session.  Raises on
+        transport/parse errors so the caller can fall back to the in-memory
+        fast path.
+        """
+        aiohttp = _import_aiohttp()
+        if aiohttp is None:
+            return None
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{self._base_url}/question",
+                params={"directory": self.workspace_dir},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                resp.raise_for_status()
+                pending = await resp.json()
+
+        if not isinstance(pending, list):
+            return None
+        for entry in pending:
+            if isinstance(entry, dict) and entry.get("sessionID") == session_id:
+                return entry
+        return None
+
+    async def _resolve_pending_question(self, session_id: str) -> Optional[dict]:
+        """
+        Decide whether ``session_id`` has an outstanding question to answer.
+
+        Detection is parameter-free and does not rely on any "reply-to"
+        marker — the rule is simply *if the session has a pending question,
+        the next message is the answer*.  Two sources combine:
+
+        - ``GET /question`` (authoritative).  When it succeeds, its result is
+          definitive: a hit means answer-this-question; an empty result means
+          there is no pending question, so any stale in-memory entry is dropped
+          and the message is posted normally (handles opencode restarts / gone
+          sessions without wedging).
+        - ``self._pending_questions`` (in-memory fast path).  Used only when the
+          authoritative GET fails (transport error), so a transient blip can't
+          turn an answer into a brand-new message post.
+
+        Returns the resolved question dict (``{"id", "questions", ...}``) or
+        ``None`` when the message should be posted as a normal turn.
+        """
+        try:
+            server_pending = await self._list_pending_question(session_id)
+        except Exception as exc:  # noqa: BLE001 — fall back to the fast path
+            logger.warning(
+                "GET /question failed for session %s (%s); using in-memory "
+                "pending-question fast path", session_id, exc,
+            )
+            return self._pending_questions.get(session_id)
+
+        if server_pending is None:
+            # Authoritative: nothing pending — drop any stale fast-path entry.
+            self._pending_questions.pop(session_id, None)
+            return None
+        return server_pending
+
+    @staticmethod
+    def _build_question_answers(
+        message: str,
+        n_questions: int,
+        session_state: Optional[dict],
+    ) -> list:
+        """
+        Map an incoming answer to opencode's ``reply`` payload shape.
+
+        ``POST /question/{id}/reply`` expects ``{"answers": Answer[]}`` where
+        ``Answer = string[]`` — one entry per question in order, with custom
+        free-text labels allowed.
+
+        Structured selections take precedence when the caller threads them
+        through ``session_state`` (key ``question_answers``: a list of
+        per-question string lists).  Otherwise we fall back to treating the
+        message text as a single custom answer to the first question and pad
+        the remaining slots with empty lists::
+
+            answers = [[text]] + [[]] * (n_questions - 1)
+
+        NOTE: no caller wires ``session_state["question_answers"]`` today — the
+        frontend submits all selections as one ``\\n\\n``-joined text blob, so
+        every reply currently goes through the free-text fallback.  The
+        structured branch is intentional forward-looking scaffolding for when
+        the frontend threads per-question selections through.  Empty padding
+        slots are accepted by opencode's ``/reply`` (verified live against
+        opencode 1.14.x: a 2-question reply ``[["Red"], []]`` resolves the turn
+        to a clean ``session.idle``), so multi-question asks do not wedge.
+        """
+        n = max(n_questions, 1)
+
+        structured = None
+        if isinstance(session_state, dict):
+            candidate = session_state.get("question_answers")
+            if isinstance(candidate, list) and candidate and all(
+                isinstance(a, list) for a in candidate
+            ):
+                structured = [
+                    [str(item) for item in answer] for answer in candidate
+                ]
+
+        if structured is not None:
+            # Normalise length to the number of questions (pad / truncate).
+            if len(structured) < n:
+                structured = structured + [[] for _ in range(n - len(structured))]
+            return structured[:n]
+
+        return [[message]] + [[] for _ in range(n - 1)]
+
+    async def _reply_question(self, request_id: str, answers: list) -> bool:
+        """
+        POST /question/{requestID}/reply — answer a suspended `question` tool.
+
+        Resolves opencode's pending Deferred WITH the answers, so the same
+        suspended assistant turn resumes and runs to a clean ``session.idle``
+        (unlike ``/reject``, which aborts the turn).  The resumed turn's events
+        stream back over the serve-wide ``GET /global/event`` connection that
+        the caller is already reading.
+
+        ``directory`` is passed to match the project scope used everywhere else.
+        """
+        aiohttp = _import_aiohttp()
+        if aiohttp is None or not request_id:
+            return False
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self._base_url}/question/{request_id}/reply",
+                    params={"directory": self.workspace_dir},
+                    json={"answers": answers},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    success = resp.status in (200, 204)
+                    if success:
+                        logger.info(
+                            "Replied to OpenCode question %s (status=%d)",
+                            request_id, resp.status,
+                        )
+                    else:
+                        text = await resp.text()
+                        logger.warning(
+                            "POST /question/%s/reply returned %d: %s",
+                            request_id, resp.status, text[:200],
+                        )
+                    return success
+        except Exception as exc:
+            logger.error(
+                "Failed to reply to OpenCode question %s: %s", request_id, exc
+            )
+            return False
+
+    def _cleanup_pending_question(self, session_id: str) -> None:
+        """
+        Reject and forget any pending question for a session being torn down.
+
+        Used ONLY on the explicit interrupt / cancel / session-delete paths so
+        an abandoned question (user switched context, interrupted, etc.) does
+        not leak a parked Deferred + suspended turn inside opencode.  Never
+        called on the normal ``question.asked`` close — there the turn must
+        stay alive for the next message's ``/reply``.
+        """
+        pending = self._pending_questions.pop(session_id, None)
+        if not pending:
+            return
+        request_id = pending.get("id")
+        if request_id:
+            self._spawn_background(self._reject_question(request_id))
+
     async def _reject_question(self, request_id: str) -> bool:
         """
-        POST /question/{requestID}/reject — unblock a session suspended by
-        the `question` tool.
+        POST /question/{requestID}/reject — abort a session suspended by the
+        `question` tool.
 
-        The frontend shows the AskUserQuestion widget to the user, and their
-        answer is sent as a fresh user message on the next turn.  Calling
-        /reject here releases opencode's `Question.Service.ask()` Deferred
-        so the suspended POST /session/:id/message can return and the
-        session is ready to accept the answer message.
+        Reserved for the explicit interrupt / cancel / teardown path: it fails
+        opencode's `Question.Service.ask()` Deferred with QuestionRejectedError,
+        aborting the suspended turn.  This is NOT used on the normal answer
+        flow — answers go through ``_reply_question`` so the turn completes
+        cleanly.  Rejecting here just releases an abandoned question so it does
+        not leak a parked turn.
 
         This endpoint is undocumented in the public OpenAPI spec but present
         since at least OpenCode 1.4.0; 1.4.4 officially exposes the schema.
@@ -1221,6 +1493,10 @@ class OpenCodeAdapter(BaseSDKAdapter):
 
         Returns True if the interrupt was accepted.
         """
+        # Release any abandoned question so the interrupt doesn't leave a
+        # parked Deferred + suspended turn behind in opencode.
+        self._cleanup_pending_question(session_id)
+
         # Request interrupt via active_session_manager (checked in SSE loop)
         flagged = await active_session_manager.request_interrupt(session_id)
         if flagged:

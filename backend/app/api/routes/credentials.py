@@ -52,9 +52,17 @@ def _credential_to_public(
     session,
     credential: Credential,
     is_shared: bool = False,
-    owner_email: str | None = None
+    owner_email: str | None = None,
+    agent_usage_count: int = 0,
+    used_in_bundle: bool = False,
+    category: str = "mine",
 ) -> CredentialPublic:
-    """Convert a Credential model to CredentialPublic with share_count and status."""
+    """Convert a Credential model to CredentialPublic with share_count and status.
+
+    ``agent_usage_count``, ``used_in_bundle``, and ``category`` are computed by
+    the caller (batched once per page for ``read_credentials``) and threaded in
+    so this helper never issues a per-row usage query.
+    """
     share_count = 0
     if not is_shared:
         # Only show share_count to owners
@@ -85,7 +93,11 @@ def _credential_to_public(
         owner_email=owner_email,
         is_placeholder=credential.is_placeholder,
         placeholder_source_id=credential.placeholder_source_id,
-        status=status
+        status=status,
+        category=category,
+        agent_usage_count=agent_usage_count,
+        used_in_bundle=used_in_bundle,
+        mcp_consumer_agent_id=credential.mcp_consumer_agent_id,
     )
 
 
@@ -140,8 +152,36 @@ def read_credentials(
     count = session.exec(count_statement).one()
     credentials = session.exec(statement.offset(skip).limit(limit)).all()
 
-    # Convert to public models with share_count
-    credentials_public = [_credential_to_public(session, c) for c in credentials]
+    # Batch the agent-usage counts and bundle-usage flags once for the whole
+    # page (no per-row N+1). Owned rows are owner-scoped for the usage count.
+    credential_ids = [c.id for c in credentials]
+    usage_counts = CredentialsService.get_agent_usage_counts(
+        session=session,
+        credential_ids=credential_ids,
+        owner_scope=current_user.id,
+    )
+    bundle_flags = CredentialsService.get_used_in_bundle_flags(
+        session=session,
+        owner_id=current_user.id,
+        credential_ids=credential_ids,
+    )
+
+    # Convert to public models with share_count, category, and the batched badges.
+    credentials_public = [
+        _credential_to_public(
+            session,
+            c,
+            agent_usage_count=usage_counts.get(c.id, 0),
+            used_in_bundle=c.id in bundle_flags,
+            category=CredentialsService.classify_credential_category(
+                is_owned=True,
+                credential_type=c.type,
+                share_source=None,
+                mcp_auth_mode=c.mcp_auth_mode,
+            ),
+        )
+        for c in credentials
+    ]
 
     return CredentialsPublic(data=credentials_public, count=count)
 

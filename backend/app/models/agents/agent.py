@@ -257,6 +257,18 @@ class AgentPublic(SQLModel):
     webapp_enabled: bool = False
     agent_api_enabled: bool = False
     agent_api_identity_enabled: bool = False
+
+    # Computed capability flags — surface the agent's "purpose" on list cards
+    # without per-card queries. Reflect whether each integration is actively
+    # enabled (not merely configured). Populated in the public conversion.
+    has_email_integration: bool = False
+    has_mcp_connectors: bool = False
+    has_webhooks: bool = False
+    # Whether an AgentGitSource is attached (git versioning connected). Lets the
+    # card render its toggle from the already-loaded agent, before its own
+    # git-source query resolves.
+    git_versioning_enabled: bool = False
+
     created_at: datetime
     updated_at: datetime
     owner_id: uuid.UUID

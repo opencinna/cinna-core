@@ -112,7 +112,7 @@ A coarser engine matrix (`SDK_CREDENTIAL_COMPATIBILITY` — `claude-code` ↔ `[
 - **Rebuild regeneration:** After an environment rebuild (core replacement), config files are regenerated from stored credentials for all SDK types
 - **Encrypted storage:** All AI credentials are stored per the named `AICredential` model; no migration needed for new provider types
 - **OpenCode per-mode isolation:** Building and conversation modes each run their own `opencode serve` process on separate ports with separate config directories. No shared state between concurrent sessions.
-- **Cross-SDK UI parity for ask-user-question:** OpenCode's built-in `question` tool suspends the session until a client calls `/question/{id}/reply` or `/reject`. The OpenCode adapter unifies this behaviour with Claude Code's `AskUserQuestion` tool — the transformer emits the same `askuserquestion` TOOL_USE + DONE event pair, then the adapter fires `POST /question/{id}/reject` so the user's answer can land as a fresh turn.
+- **Cross-SDK UI parity for ask-user-question:** OpenCode's built-in `question` tool suspends the session until a client calls `/question/{id}/reply` or `/reject`. The OpenCode adapter unifies this behaviour with Claude Code's `AskUserQuestion` tool — the transformer emits the same `askuserquestion` TOOL_USE + DONE event pair. The adapter then relays the **next** user message for that session as the answer via `POST /question/{id}/reply` (parameter-free detection through `GET /question`); `reject` is reserved for interrupt/teardown. (An earlier version rejected the question, which aborted the turn and wedged the session so the next message hung and the UI stayed stuck "streaming" — fixed.) See [OpenCode Interactive Questions](opencode_interactive_questions.md).
 
 ## Architecture Overview
 
@@ -160,3 +160,4 @@ Unified SDKEvent stream → Backend WebSocket → Frontend
 - **Environment Data Management:** Rebuild flow must regenerate settings files — see [Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md)
 - **Tools Approval:** OpenCode permission events (`permission.asked`) are forwarded to the frontend as SYSTEM events — see [Tools Approval Management](tools_approval_management.md)
 - **AskUserQuestion widget:** OpenCode's `question` tool is remapped to the unified `askuserquestion` TOOL_USE + DONE pair so the existing widget renders identically across SDKs — see [AskUserQuestion Tool Widget](../../application/chat_interface/tool_answer_questions_widget.md)
+- **OpenCode interactive questions:** the blocking `question` tool, the session-wedge bug, and the `/reply`-relay fix — see [OpenCode Interactive Questions](opencode_interactive_questions.md)

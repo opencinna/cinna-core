@@ -155,10 +155,41 @@ cinna dev                      # inside agents/concierge/
 cinna exec --agent concierge -- cat workspace/AGENTS.md
 ```
 
-Building each agent's logic is outside the scope of this playbook; see your
-platform knowledge docs for the per-agent development guide. Return here once
-the basic logic for each agent is sketched in (even a placeholder prompt is
-enough to register the team; you can iterate afterwards).
+Building each agent's logic is outside the scope of this playbook. For a
+producer agent's REST API specifically (like crm-agent below), see
+[building-an-agent-api.md](building-an-agent-api.md) — it covers the handler
+files, `policy.yaml`, the per-user `scopes:` catalog, and verifying the spec.
+Return here once the basic logic for each agent is sketched in (even a
+placeholder prompt is enough to register the team; you can iterate afterwards).
+
+> **⚠️ Prompts: the agent config (DB) is authoritative — editing `docs/*.md`
+> alone does NOT update the live prompts.** When you "edit prompts" above, hand-
+> editing the synced `agents/<name>/workspace/docs/{WORKFLOW,ENTRYPOINT,REFINER}_PROMPT.md`
+> files is **not** sufficient to change what the runtime actually uses.
+> `cinna agent show <name> --prompts` reads the prompts from the agent **config
+> (database)**, which is the source of truth — a freshly created agent still has
+> the placeholder template prompts there, so the runtime keeps serving the
+> placeholders no matter what your local doc files say. Worse, editing the doc
+> files *after* the env exists makes the next `cinna sync push` report a
+> **conflict** on those files (both the DB-seeded env copy and your local copy
+> changed), which you then have to resolve.
+>
+> **Fix / correct path — bulk-write the config, then sync it into the env:**
+> ```bash
+> # 1. Author the full set locally (description + the prompt fields).
+> #    See authoring-agent-prompts.md for what each of the six fields is for.
+> cinna api PUT agents/<agent_id> --data @agents/<name>/prompts.json
+> # 2. Push the doc-backed prompts into the already-running env immediately
+> #    (otherwise they seed DB→env only on the next env start):
+> cinna api POST agents/<agent_id>/sync-prompts
+> # 3. Verify what the runtime actually reads:
+> cinna agent show <name> --prompts
+> ```
+> Pick **one** path — the bulk write **or** hand-editing `docs/*.md`, never both
+> at once (editing both sides forces a three-way, last-writer-wins merge of the
+> doc prompts). For the account orchestrator, the bulk write is the recommended
+> single path. Full field reference and the finalize checklist:
+> [authoring-agent-prompts.md](authoring-agent-prompts.md).
 
 One important note for crm-agent: its REST API only works when
 `agent_api_enabled` is set to true. You can do this from the CLI:

@@ -132,6 +132,33 @@ Tabs: **Configuration** (read-only, Information + Agent Prompts only), **Credent
 ### Read-only Configuration tab
 Foreign installs render the Configuration tab read-only. The tab uses `AgentConfigTab` with `readOnly={true}`, which passes `readOnly` into each edit modal — Description, Entrypoint prompt, Workflow prompt, Refiner prompt, and Example Prompts modals disable their inputs and hide the Save button.
 
+## Agents List Page — Card Presentation
+
+The `/agents` route renders one `AgentCard` per agent. Each card communicates the agent's purpose through a content area below the agent name:
+
+- **Capability badges** — when the agent has at least one active integration, a row of labelled icon badges replaces the entrypoint-prompt preview. Badges appear for every enabled integration:
+
+  | Badge label | Source flag | Lucide icon |
+  |-------------|-------------|-------------|
+  | Bundle | `bundle_uuid` set **and** `is_publisher_install` (bundle publisher install) | Package |
+  | API | `agent_api_enabled` | Network |
+  | Web App | `webapp_enabled` | Globe |
+  | Email | `has_email_integration` | Mail |
+  | MCP | `has_mcp_connectors` | Unplug |
+  | Webhooks | `has_webhooks` | Webhook |
+  | GIT | `git_versioning_enabled` | GitBranch |
+  | A2A | `a2a_config.enabled` | Waypoints |
+
+- **Entrypoint-prompt preview** — when no integration is active, a monospace block shows the first four lines of `entrypoint_prompt` (if set). This is the fallback; the badge row takes precedence whenever any badge would appear.
+
+- **Colored card border** — a purely visual identification aid layered on top of the same flags used for the Bundle and API badges: the card gets a **green** border if the agent is the bundle publisher install (`bundle_uuid` set and `is_publisher_install`), otherwise a **blue** border if `agent_api_enabled` is set, otherwise no special border. Green takes priority over blue when both conditions apply. No data model or API change — computed client-side in `AgentCard`.
+
+- **Card ordering** — the list is ordered deterministically by **creation date ascending (newest agents last)**, with the agent `id` as a stable tiebreaker. This is enforced server-side in `AgentService.list_agents` via `order_by(Agent.created_at, Agent.id)`; without an explicit `ORDER BY` Postgres returns rows in an unstable order, which made the cards appear to shuffle between refetches.
+
+The four computed capability flags (`has_email_integration`, `has_mcp_connectors`, `has_webhooks`, `git_versioning_enabled`) are derived server-side and carried on `AgentPublic` (batched in `compute_capability_flags`). They reflect only *actively enabled* integrations — `AgentEmailIntegration.enabled`, `MCPConnector.is_active`, `AgentWebhook.enabled`, and presence of an `AgentGitSource` row respectively. The other three flags (`agent_api_enabled`, `webapp_enabled`, `a2a_config.enabled`) are pre-existing fields on the agent record.
+
+See [Agent Status Tracking — Tech](../../agents/agent_status_tracking/agent_status_tracking_tech.md) for the `AgentPublic` model changes and `compute_capability_flags` service method that backs this feature.
+
 ## Agent Creation Wizard
 
 The entry point for all agent management is the **New Agent Creation Wizard** — a multi-step SSE-streaming flow that creates the agent, spins up its first environment, optionally links credentials, and opens the first session in one go.

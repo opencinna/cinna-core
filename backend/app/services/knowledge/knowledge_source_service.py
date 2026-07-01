@@ -19,6 +19,7 @@ from app.models.knowledge.knowledge import (
     AIKnowledgeGitRepoUpdate,
     AIKnowledgeGitRepoWorkspace,
     KnowledgeArticle,
+    KnowledgeArticleDetail,
     SourceStatus,
     WorkspaceAccessType,
     CheckAccessResponse,
@@ -178,6 +179,31 @@ def get_source_by_id(
         **source.model_dump(),
         article_count=article_count,
     )
+
+
+def _get_source_for_read(
+    *,
+    session: Session,
+    source_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Optional[AIKnowledgeGitRepo]:
+    """Return the source ORM object if the user may READ it, else None.
+
+    Read access == owner OR (public_discovery AND enabled AND connected).
+    Mirrors the boundary already implied by get_source_by_id + get_discoverable_sources.
+    """
+    source = session.get(AIKnowledgeGitRepo, source_id)
+    if not source:
+        return None
+    if source.user_id == user_id:
+        return source
+    if (
+        source.public_discovery
+        and source.is_enabled
+        and source.status == SourceStatus.connected
+    ):
+        return source
+    return None
 
 
 def update_source(
@@ -753,6 +779,76 @@ def get_source_articles(
     ).all()
 
     return list(articles)
+
+
+def get_article_content(
+    *,
+    session: Session,
+    source_id: uuid.UUID,
+    article_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Optional[KnowledgeArticleDetail]:
+    """Return one article's full content (incl. Markdown body) if the user may read the source.
+
+    Read access == owner OR public-discoverable (enabled + connected).
+    Returns None if the source is unreadable OR the article does not belong to it.
+    """
+    source = _get_source_for_read(
+        session=session, source_id=source_id, user_id=user_id
+    )
+    if not source:
+        return None
+    article = session.get(KnowledgeArticle, article_id)
+    if not article or article.git_repo_id != source_id:
+        return None
+    return KnowledgeArticleDetail(
+        id=article.id,
+        git_repo_id=article.git_repo_id,
+        title=article.title,
+        description=article.description,
+        tags=article.tags,
+        features=article.features,
+        file_path=article.file_path,
+        embedding_model=article.embedding_model,
+        embedding_dimensions=article.embedding_dimensions,
+        updated_at=article.updated_at,
+        content=article.content,
+        commit_hash=article.commit_hash,
+    )
+
+
+def export_source_markdown(
+    *,
+    session: Session,
+    source_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Optional[str]:
+    """Return all of a source's articles concatenated into one Markdown document.
+
+    Read access == owner OR public-discoverable (enabled + connected).
+    Returns None if the source is unreadable. An empty source returns a valid
+    (header-only) document.
+    """
+    source = _get_source_for_read(
+        session=session, source_id=source_id, user_id=user_id
+    )
+    if not source:
+        return None
+    articles = session.exec(
+        select(KnowledgeArticle)
+        .where(KnowledgeArticle.git_repo_id == source_id)
+        .order_by(KnowledgeArticle.file_path)
+    ).all()
+    parts = [f"# {source.name}\n"]
+    if source.description:
+        parts.append(f"{source.description}\n")
+    for a in articles:
+        parts.append(f"\n---\n\n## {a.title}\n")
+        parts.append(f"*Source file: `{a.file_path}`*\n")
+        if a.description:
+            parts.append(f"\n> {a.description}\n")
+        parts.append(f"\n{a.content}\n")
+    return "\n".join(parts)
 
 
 def get_discoverable_sources(

@@ -19,6 +19,7 @@ import EditAgent from "@/components/Agents/EditAgent"
 import DeleteAgent from "@/components/Agents/DeleteAgent"
 import UninstallAgent from "@/components/Agents/UninstallAgent"
 import PendingItems from "@/components/Pending/PendingItems"
+import NotFound from "@/components/Common/NotFound"
 import { HashTabs } from "@/components/Common/HashTabs"
 import { PublisherEmailConfirmedIcon } from "@/components/Common/PublisherEmailConfirmedIcon"
 import { Button } from "@/components/ui/button"
@@ -207,6 +208,17 @@ function AgentDetail() {
   }
 
   if (error || !agent) {
+    const isMissing = !error || (error as { status?: number }).status === 404
+    if (isMissing) {
+      return (
+        <NotFound
+          inline
+          fallbackPath="/agents"
+          title="Agent not found"
+          message="This agent doesn't exist, was deleted, or belongs to another user."
+        />
+      )
+    }
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-destructive">Error loading agent details</p>

@@ -15,9 +15,10 @@ Each file below documents one API domain.
 | Agent Api | [agent_api.md](./agent_api.md) | 11 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
 | Agent App Mcp Routes | [agent_app_mcp_routes.md](./agent_app_mcp_routes.md) | 7 |
+| Agent Git | [agent_git.md](./agent_git.md) | 10 |
 | Agent Hooks | [agent_hooks.md](./agent_hooks.md) | 1 |
 | Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 11 |
-| Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 8 |
+| Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 9 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
 | Agents | [agents.md](./agents.md) | 36 |
 | Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 10 |
@@ -26,7 +27,7 @@ Each file below documents one API domain.
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
-| Cli | [cli.md](./cli.md) | 52 |
+| Cli | [cli.md](./cli.md) | 54 |
 | Credentials | [credentials.md](./credentials.md) | 19 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
@@ -39,9 +40,9 @@ Each file below documents one API domain.
 | Guest Shares | [guest_shares.md](./guest_shares.md) | 5 |
 | Identity | [identity.md](./identity.md) | 7 |
 | Identity Contacts | [identity_contacts.md](./identity_contacts.md) | 2 |
-| Installs | [installs.md](./installs.md) | 11 |
+| Installs | [installs.md](./installs.md) | 12 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
-| Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 11 |
+| Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 13 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |
 | Mail Servers | [mail_servers.md](./mail_servers.md) | 6 |
 | Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 9 |
@@ -56,7 +57,7 @@ Each file below documents one API domain.
 | Tasks | [tasks.md](./tasks.md) | 26 |
 | User App Agent Routes | [user_app_agent_routes.md](./user_app_agent_routes.md) | 5 |
 | User Workspaces | [user_workspaces.md](./user_workspaces.md) | 5 |
-| Users | [users.md](./users.md) | 21 |
+| Users | [users.md](./users.md) | 22 |
 | Webapp | [webapp.md](./webapp.md) | 4 |
 | Webapp Chat | [webapp_chat.md](./webapp_chat.md) | 6 |
 | Webapp Interface Config | [webapp_interface_config.md](./webapp_interface_config.md) | 2 |

@@ -1033,7 +1033,8 @@ class EnvironmentLifecycleManager:
     async def stop_environment(
         self,
         db_session: Session,
-        environment: AgentEnvironment
+        environment: AgentEnvironment,
+        update_status: bool = True
     ) -> bool:
         """
         Stop environment container (keeps container).
@@ -1045,6 +1046,12 @@ class EnvironmentLifecycleManager:
         Args:
             db_session: Database session
             environment: Environment instance
+            update_status: When True (default) persist ``status="stopped"`` after
+                the container stops. The rebuild path passes ``False`` so the
+                in-progress ``"rebuilding"`` status is not clobbered — otherwise a
+                status poll landing during the rebuild window would flip the UI to
+                "stopped" until the env comes back online. The error path still
+                stamps ``"error"`` regardless of this flag.
 
         Returns:
             True if successful
@@ -1054,10 +1061,11 @@ class EnvironmentLifecycleManager:
             adapter = self.get_adapter(environment)
             await adapter.stop()
 
-            environment.status = "stopped"
-            environment.status_message = "Environment stopped"
-            db_session.add(environment)
-            db_session.commit()
+            if update_status:
+                environment.status = "stopped"
+                environment.status_message = "Environment stopped"
+                db_session.add(environment)
+                db_session.commit()
 
             logger.info(f"Environment {environment.id} stopped successfully")
             return True
@@ -1338,9 +1346,20 @@ class EnvironmentLifecycleManager:
                 }
             )
 
-            # Stop if running
+            # Stop if running. Keep the persisted status as "rebuilding" — passing
+            # update_status=False prevents stop_environment from committing
+            # "stopped", which a status poll could otherwise catch and surface in
+            # the UI mid-rebuild (the status flips to "stopped" then back online).
             if was_running:
-                await self.stop_environment(db_session, environment)
+                await self.stop_environment(
+                    db_session, environment, update_status=False
+                )
+                # Re-assert the in-progress status: adapter.stop() can take many
+                # seconds, and any concurrent refresh may have re-read the row.
+                environment.status = "rebuilding"
+                environment.status_message = "Container stopped; rebuilding..."
+                db_session.add(environment)
+                db_session.commit()
 
             # Get adapter
             adapter = self.get_adapter(environment)
@@ -2161,7 +2180,10 @@ class EnvironmentLifecycleManager:
         always sees ``/app/workspace/app-data`` whether or not a real volume is
         attached, matching the prompt convention agents now rely on.
         """
-        from app.services.bundles.app_data_service import AppDataService
+        from app.services.bundles.app_data_service import (
+            APP_DATA_SUBDIRS,
+            AppDataService,
+        )
 
         bundle_id = getattr(agent, "bundle_id", None)
         if not bundle_id:
@@ -2178,7 +2200,7 @@ class EnvironmentLifecycleManager:
                 agent.id,
             )
             fallback = instance_dir / "app-data"
-            for sub in ("storage", "uploads", "cache"):
+            for sub in APP_DATA_SUBDIRS:
                 (fallback / sub).mkdir(parents=True, exist_ok=True, mode=0o755)
             if settings.HOST_AGENT_ENVIRONMENTS_DIR:
                 return f"{settings.HOST_AGENT_ENVIRONMENTS_DIR}/{environment.id}/app-data"

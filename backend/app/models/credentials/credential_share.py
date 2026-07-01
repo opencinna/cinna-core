@@ -19,6 +19,12 @@ if TYPE_CHECKING:
 class CredentialShareBase(SQLModel):
     """Base model for credential shares."""
     access_level: str = Field(default="read", max_length=20)  # Currently only 'read' is supported
+    # Provenance of the share, stamped at creation time. "direct" = a user→user
+    # share created via the credential detail sharing UI; "bundle_install" = an
+    # auto-created share from installing a bundle whose publisher provides the
+    # credential (PBP). NULL = legacy row (pre-feature), read as "direct"
+    # everywhere. Never inferred after the fact, never accepted from client input.
+    source: str | None = Field(default=None, max_length=20)
 
 
 class CredentialShare(CredentialShareBase, table=True):
@@ -79,6 +85,7 @@ class CredentialSharePublic(SQLModel):
     shared_by_email: str
     shared_at: datetime
     access_level: str
+    source: str | None = None  # "direct" | "bundle_install"; NULL = legacy (direct)
 
 
 class CredentialShareCreate(SQLModel):
@@ -102,6 +109,16 @@ class SharedCredentialPublic(SQLModel):
     owner_email: str
     shared_at: datetime
     access_level: str
+    # Tab discriminator computed via CredentialsService.classify_credential_category.
+    # For shared rows this is "bundle" (share.source == "bundle_install") or "mine".
+    category: str = "mine"
+    # Raw provenance marker (debug / forward-compat). "direct" | "bundle_install" | None.
+    source: str | None = None
+    # Agents the recipient has linked this shared credential to (recipient-scoped).
+    agent_usage_count: int = 0
+    # Always False for shared rows in MVP (bundle badge is an owner concept);
+    # kept for shape symmetry with CredentialPublic.
+    used_in_bundle: bool = False
 
 
 class SharedCredentialsPublic(SQLModel):

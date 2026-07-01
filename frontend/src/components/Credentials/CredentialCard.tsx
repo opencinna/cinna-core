@@ -1,7 +1,18 @@
 import { Link } from "@tanstack/react-router"
-import { Key, KeyRound, Mail, Database, AtSign, Share2, Users, AlertTriangle, FileJson } from "lucide-react"
+import {
+  Key,
+  KeyRound,
+  Mail,
+  Database,
+  AtSign,
+  Share2,
+  Users,
+  AlertTriangle,
+  FileJson,
+  Bot,
+  Package,
+} from "lucide-react"
 
-import type { CredentialPublic } from "@/client"
 import {
   Card,
   CardContent,
@@ -17,8 +28,33 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
+/**
+ * Normalized view-model the card renders, covering both owned credentials
+ * (CredentialPublic) and credentials shared with the current user
+ * (SharedCredentialPublic). The credentials route builds this from the two
+ * fetches and the server-computed ``category`` decides which tab the card
+ * lands in.
+ */
+export interface CredentialCardModel {
+  id: string
+  name: string
+  type: string
+  notes?: string | null
+  category: string
+  agent_usage_count: number
+  used_in_bundle: boolean
+  is_shared: boolean
+  // Owner-only fields (only meaningful when !is_shared).
+  allow_sharing?: boolean
+  share_count?: number
+  status?: string | null
+  // Shared-only fields (only meaningful when is_shared).
+  owner_email?: string | null
+  shared_at?: string | null
+}
+
 interface CredentialCardProps {
-  credential: CredentialPublic
+  credential: CredentialCardModel
 }
 
 function getCredentialIcon(type: string) {
@@ -72,14 +108,20 @@ function getCredentialTypeLabel(type: string): string {
       return "API Token"
     case "ssh_key":
       return "SSH Key"
+    case "agent_api":
+      return "Agent REST API"
+    case "mcp_provider":
+      return "MCP Provider"
     default:
       return type
   }
 }
 
 export function CredentialCard({ credential }: CredentialCardProps) {
+  const isShared = credential.is_shared
   const shareCount = credential.share_count ?? 0
   const isIncomplete = credential.status === "incomplete"
+  const agentUsageCount = credential.agent_usage_count ?? 0
 
   return (
     <Link
@@ -90,7 +132,13 @@ export function CredentialCard({ credential }: CredentialCardProps) {
       <Card className="relative transition-all hover:shadow-md hover:-translate-y-0.5 cursor-pointer h-full flex flex-col gap-0">
         <CardHeader className="pb-2">
           <div className="flex items-start gap-3">
-            <div className="rounded-lg bg-primary/10 p-2 text-primary">
+            <div
+              className={
+                isShared
+                  ? "rounded-lg bg-blue-500/10 p-2 text-blue-500"
+                  : "rounded-lg bg-primary/10 p-2 text-primary"
+              }
+            >
               {getCredentialIcon(credential.type)}
             </div>
             <div className="flex-1 min-w-0">
@@ -111,7 +159,9 @@ export function CredentialCard({ credential }: CredentialCardProps) {
             <Badge variant="secondary">
               {getCredentialTypeLabel(credential.type)}
             </Badge>
-            {isIncomplete && (
+
+            {/* Incomplete badge — owner only (we never decrypt shared creds). */}
+            {!isShared && isIncomplete && (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -126,7 +176,70 @@ export function CredentialCard({ credential }: CredentialCardProps) {
                 </Tooltip>
               </TooltipProvider>
             )}
-            {credential.allow_sharing && (
+
+            {/* Agents-using badge — both owned and shared rows. */}
+            {agentUsageCount > 0 && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="gap-1">
+                      <Bot className="h-3 w-3" />
+                      {agentUsageCount}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Used by {agentUsageCount} agent{agentUsageCount > 1 ? "s" : ""}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
+            {/* Bundle badge — credential is used in a bundle. */}
+            {credential.used_in_bundle && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="gap-1">
+                      <Package className="h-3 w-3" />
+                      bundle
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    This credential is used in a bundle
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
+            {/* Shared treatment — blue "Shared" badge for shared-in rows. */}
+            {isShared && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant="outline"
+                      className="gap-1 bg-blue-50 text-blue-700 border-blue-200"
+                    >
+                      <Users className="h-3 w-3" />
+                      Shared
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {credential.shared_at ? (
+                      <p>
+                        Shared on{" "}
+                        {new Date(credential.shared_at).toLocaleDateString()}
+                      </p>
+                    ) : (
+                      <p>Shared with you</p>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
+            {/* Owner-only shareable / share-count badge. */}
+            {!isShared && credential.allow_sharing && (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -153,6 +266,12 @@ export function CredentialCard({ credential }: CredentialCardProps) {
               </TooltipProvider>
             )}
           </div>
+
+          {isShared && credential.owner_email && (
+            <div className="mt-2 text-xs text-muted-foreground">
+              Shared by {credential.owner_email}
+            </div>
+          )}
         </CardContent>
       </Card>
     </Link>

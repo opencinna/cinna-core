@@ -35,6 +35,7 @@ Auto-generated from OpenAPI spec. Tag: `mcp-providers`
   - `auth_mode`: string
   - `token`: string | null
   - `consumer_agent_id`: string | null
+  - `user_workspace_id`: string | null
   - `mcp_mode_conversation`: boolean
   - `mcp_mode_building`: boolean
   - `label`: string | null

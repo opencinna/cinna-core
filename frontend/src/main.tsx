@@ -9,6 +9,7 @@ import { GoogleOAuthProvider } from "@react-oauth/google"
 import { StrictMode } from "react"
 import ReactDOM from "react-dom/client"
 import { ApiError, OpenAPI } from "./client"
+import NotFound from "./components/Common/NotFound"
 import { ThemeProvider } from "./components/theme-provider"
 import { Toaster } from "./components/ui/sonner"
 import { safeRedirectPath } from "./utils"
@@ -49,7 +50,18 @@ const queryClient = new QueryClient({
   }),
 })
 
-const router = createRouter({ routeTree })
+const router = createRouter({
+  routeTree,
+  // Catch unmatched URLs that fall through nested layout routes (e.g.
+  // /sessions/<uuid>, which matches the `sessions` layout but has no child
+  // route for the id). Without this, TanStack renders its raw built-in
+  // "Not Found" text instead of our styled screen.
+  // Fires for partial matches inside a layout (e.g. /sessions/<uuid> matches
+  // the `sessions` layout but no child) — renders within the app shell, so use
+  // the compact inline variant. The root route's notFoundComponent handles
+  // fully unmatched top-level URLs full-screen.
+  defaultNotFoundComponent: () => <NotFound inline />,
+})
 declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router

@@ -190,6 +190,10 @@ Every agent environment's `credentials.json` contains a **synthetic, reserved en
     "full_name": "Evgeny L.",
     "email": "owner@example.com",
     "email_confirmed": true,
+    "timezone": "Europe/Berlin",
+    "language": "en",
+    "locale": "en-GB",
+    "conversation_style": "ai_default",
     "custom_details": {
       "REAL_NAME": "Evgeny L.",
       "FAVORITE_FOOD": "hotdogs"
@@ -197,6 +201,8 @@ Every agent environment's `credentials.json` contains a **synthetic, reserved en
   }
 }
 ```
+
+`timezone`, `language`, and `locale` are `null` when the user has not set them. `conversation_style` is always present (non-null, defaults to `"ai_default"`). The three nullable fields are filled on first browser login via `PATCH /users/me/locale-defaults` (NULL-only fill, never overwrites an explicit choice) and can be set manually in the **Communication & Locale** card (Settings → My profile).
 
 The `id` is a fixed sentinel (not a UUID). Real credential IDs are UUIDs, so there is no collision.
 
@@ -217,11 +223,24 @@ The standard dict-comprehension consumer pattern absorbs the synthetic entry nat
 
 ### custom_details — User's Details card
 
-`custom_details` is a user-authored `KEY = value` map. Users edit it from **Settings → My profile → User's Details** (the card after Notifications). Input is free-text env-file style: `REAL_NAME = Master of the universe`. On save, the backend normalizes each key to `UPPER_SNAKE` form and stores both the raw text (for re-opening the editor) and the normalized map. Invalid input (bad key, duplicates, >100 keys, >10 KB) returns a 422 with a line-referencing error shown inline in the editor.
+`custom_details` is a user-authored `KEY = value` map. Users edit it from the **User's Details** card (Settings → My profile). The card body shows the normalized map as read-only `KEY="value"` lines; an **Edit** button in the card header opens a modal with a free-text editor (env-file style: `REAL_NAME = Master of the universe`). On save, the backend normalizes each key to `UPPER_SNAKE` form and stores both the raw text (for re-opening the editor) and the normalized map. Invalid input (bad key, duplicates, >100 keys, >10 KB) returns a 422 with a line-referencing error shown inline in the modal (editor stays open).
+
+The My profile tab orders its cards: **User Information**, **User's Details**, **Communication & Locale**, **Notifications**.
+
+### Locale and communication preferences
+
+The `current_user` block also carries four locale and communication preference fields set in the **Communication & Locale** card (Settings → My profile). Each control auto-saves on change (a per-field `PATCH /users/me` fires immediately — there is no Save button); the three locale fields use searchable dropdowns, and conversation style is a plain select:
+
+- `timezone` — IANA timezone string (e.g. `Europe/Berlin`). `null` when unset.
+- `language` — preferred communication language (e.g. `en`, `English`). `null` when unset.
+- `locale` — BCP-47 formatting locale for dates/times/numbers (e.g. `en-US`, `de-DE`). Distinct from `language`. `null` when unset.
+- `conversation_style` — tone hint for the agent in conversation mode. One of `ai_default` (no adjustment), `concise_direct`, or `friendly_chatty`. Always present (non-null).
+
+Agents read these directly from `credentials.json` `current_user.credential_data`. The `credentials/README.md` `## Current User` section explains each field and instructs the agent how to honor them. In addition, for `concise_direct` and `friendly_chatty`, a single tone sentence is appended to the conversation-mode system prompt by the prompt generator (see [Agent Prompts](../agent_prompts/agent_prompts.md)). Note: the tone sentence requires an environment image rebuild to take effect; the `credentials.json` / README fields propagate immediately via normal credential sync.
 
 ### Re-sync fan-out
 
-When a user saves their details, the platform re-syncs **all running environments of all agents the user owns**. The block injected into any given environment always reflects that environment's install owner — so foreign installs (agents installed by someone else) show the installer's details, not the original publisher's.
+When a user saves their locale/communication preferences (via `PATCH /users/me`) or their User's Details, the platform re-syncs **all running environments of all agents the user owns** via `event_user_details_updated`. The block injected into any given environment always reflects that environment's install owner — so foreign installs (agents installed by someone else) show the installer's details, not the original publisher's.
 
 ### Prompt visibility
 

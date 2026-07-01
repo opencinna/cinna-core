@@ -119,12 +119,13 @@ const AddCredential = () => {
     <ConnectMcpProviderDialog
       open={connectMcpOpen}
       onOpenChange={setConnectMcpOpen}
+      defaultWorkspaceId={workspaceFilter || undefined}
     />
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button className="my-4">
           <Plus className="mr-2" />
-          Add Credential
+          New Credential
         </Button>
       </DialogTrigger>
 

@@ -17,12 +17,13 @@ from app.models.bundles.agent_bundle_revision import (
     AgentBundleRevisionPublic,
     PublishRequest,
 )
+from app.models.bundles.bundle_permissions import BundlePermissionsOverview
 from app.models.bundles.catalog import (
     BundleCredentialDrift,
     CheckUpdatesResponse,
     EditBundleIdRequest,
-    SetUpdateModeRequest,
     SetupCredentialSummary,
+    SetUpdateModeRequest,
     SetupStatusMissingItem,
     SetupStatusResponse,
 )
@@ -34,6 +35,9 @@ from app.models.credentials.credential import (
 from app.models.credentials.link_models import AgentCredentialLink
 from app.models.events.event import EventType
 from app.services.agents.agent_service import AgentService
+from app.services.bundles.bundle_permissions_service import (
+    BundlePermissionsService,
+)
 from app.services.bundles.install_readiness_gate import InstallReadinessGate
 from app.services.bundles.install_service import InstallError, InstallService
 from app.services.bundles.publish_service import PublishService
@@ -371,6 +375,43 @@ def get_bundle_credential_drift(
     ):
         raise HTTPException(status_code=404, detail="Agent not found")
     return PublishService.compute_credential_spec_drift(session, install)
+
+
+@router.get(
+    "/{agent_id}/bundle-permissions-overview",
+    response_model=BundlePermissionsOverview,
+    dependencies=[Depends(require_developer)],
+)
+def get_bundle_permissions_overview(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> BundlePermissionsOverview:
+    """Aggregate the publisher install's bundle access + producer scopes.
+
+    Powers the unified "Permissions management" card on the Bundle tab: one
+    read-only response unioning bundle catalog grants (when
+    ``visibility == "users"``) and the per-user capability scopes of every
+    identity-enabled connected producer the install consumes.
+
+    Owner-gated reads (producer grants + scope catalog) run **only** for
+    producers the caller can manage (owns or is superuser); non-manageable
+    producers come back read-only ("Managed by <owner_email>") with empty
+    grants/catalog. The ``agent_api`` credential token is never serialized.
+
+    Publisher-install owner-only. Returns 404 (not 403) for non-owners and for
+    installs that are not publisher installs, mirroring
+    ``get_bundle_credential_drift`` to avoid leaking the existence of a bundle
+    to non-publishers.
+    """
+    install = session.get(Agent, agent_id)
+    if (
+        install is None
+        or (install.owner_id != current_user.id and not current_user.is_superuser)
+        or not install.is_publisher_install
+    ):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return BundlePermissionsService.build_overview(session, install, current_user)
 
 
 @router.put(

@@ -14,7 +14,7 @@ The minted token is identical in scope and lifetime to the token produced by `ci
 
 ## Why Not Just Paste Another Setup Token?
 
-A new account setup token requires navigating to **Settings → Channels → Local Development**, generating the one-liner, and pasting it in the terminal. When the account token expires, this forces the developer — or the local orchestrator agent — to reach into the browser, which breaks unattended workflows and interrupts the coding loop. `cinna login` keeps the entire refresh in the browser where the user is already authenticated.
+A new account setup token requires navigating to **Settings → Security → Local Development**, generating the one-liner, and pasting it in the terminal. When the account token expires, this forces the developer — or the local orchestrator agent — to reach into the browser, which breaks unattended workflows and interrupts the coding loop. `cinna login` keeps the entire refresh in the browser where the user is already authenticated.
 
 ## High-Level Flow
 
@@ -155,7 +155,7 @@ The first `authorized` poll flips the row to `consumed` and nulls `account_token
 
 ### No Token Supersession in v1
 
-`cinna login` mints a new account token alongside any existing one — it does not revoke the prior token. If the existing token is still valid, both tokens are live until expiry or manual disconnection from Settings → Channels → Local Development. Supersession (single-active-per-machine) is a deferred enhancement.
+`cinna login` mints a new account token alongside any existing one — it does not revoke the prior token. If the existing token is still valid, both tokens are live until expiry or manual disconnection from Settings → Security → Local Development. Supersession (single-active-per-machine) is a deferred enhancement.
 
 ### Security Properties
 

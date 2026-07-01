@@ -40,6 +40,7 @@ subtree excludes it for free.
 """
 from __future__ import annotations
 
+import fnmatch
 import logging
 import shutil
 from collections.abc import Iterator
@@ -83,6 +84,26 @@ RUNTIME_NAME_DENYLIST: frozenset[str] = frozenset(
     }
 )
 
+# Regenerated language / tooling cache artifacts excluded at EVERY depth of a
+# captured tree — not just the workspace root. Unlike
+# :data:`RUNTIME_NAME_DENYLIST` (top-level only), these appear NESTED inside
+# agent code directories (e.g. ``agent_api/__pycache__/`` with its ``*.pyc``
+# files), so they must be filtered recursively by the copy walk and the
+# ``.gitignore``. They are never agent-authored content — always regenerated —
+# so dropping them at any depth is safe and keeps them out of every bundle
+# snapshot, env seed, and git commit.
+NESTED_EXCLUDED_DIRS: frozenset[str] = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+)
+
+# File-name glob patterns excluded at every depth (compiled-Python artifacts).
+NESTED_EXCLUDED_FILE_GLOBS: tuple[str, ...] = ("*.pyc", "*.pyo")
+
 # Plugins-root derived files: present in ``plugins/`` but regenerated per
 # consumer by the container install routine — never snapshotted or seeded.
 PLUGIN_DERIVED_FILES: frozenset[str] = frozenset({"settings.json", "manifest.json"})
@@ -100,16 +121,34 @@ def is_runtime_denylisted(name: str) -> bool:
     return name in RUNTIME_NAME_DENYLIST
 
 
+def is_nested_excluded(name: str) -> bool:
+    """True when an entry named ``name`` is regenerated junk at ANY depth.
+
+    Matches :data:`NESTED_EXCLUDED_DIRS` exactly and
+    :data:`NESTED_EXCLUDED_FILE_GLOBS` by glob. Unlike
+    :func:`is_runtime_denylisted` this is applied recursively (by the
+    :func:`safe_copytree` ignore callback) as well as at the workspace root, so
+    nested caches like ``agent_api/__pycache__/*.pyc`` are never copied,
+    seeded, or committed.
+    """
+    if name in NESTED_EXCLUDED_DIRS:
+        return True
+    return any(fnmatch.fnmatch(name, pat) for pat in NESTED_EXCLUDED_FILE_GLOBS)
+
+
 def is_bundle_owned_toplevel(name: str) -> bool:
     """True when a top-level workspace entry named ``name`` is bundle content.
 
-    Bundle-owned = not in :data:`BUNDLE_EXCLUDED_TOPLEVEL` and not
-    runtime-name-denylisted. ``plugins/`` IS bundle-owned (it has special
+    Bundle-owned = not in :data:`BUNDLE_EXCLUDED_TOPLEVEL`, not
+    runtime-name-denylisted, and not a regenerated cache artifact
+    (:func:`is_nested_excluded`). ``plugins/`` IS bundle-owned (it has special
     derived-file / merge handling at the call sites, not here).
     """
     if name in BUNDLE_EXCLUDED_TOPLEVEL:
         return False
     if is_runtime_denylisted(name):
+        return False
+    if is_nested_excluded(name):
         return False
     return True
 
@@ -159,13 +198,17 @@ def _skip_symlink_toplevel(child: Path) -> bool:
     return False
 
 
-def _ignore_symlinks(directory: str, names: list[str]) -> set[str]:
-    """``shutil.copytree(ignore=...)`` callback that drops nested symlinks.
+def _copytree_ignore(directory: str, names: list[str]) -> set[str]:
+    """``shutil.copytree(ignore=...)`` callback dropping symlinks + cache junk.
 
     Called once per directory in the source tree with that dir's child names;
-    returns the names that are symlinks so ``copytree`` neither follows nor
-    recreates them. Guarantees no nested symlink inside a captured tree can
-    dereference excluded/host content into the destination.
+    returns the names ``copytree`` must neither follow nor recreate:
+
+    * **symlinks** — guarantees no nested symlink inside a captured tree can
+      dereference excluded/host content into the destination;
+    * **regenerated cache artifacts** (:func:`is_nested_excluded`) — e.g.
+      ``__pycache__/`` and ``*.pyc``, which appear nested inside agent code
+      dirs and must never reach a bundle snapshot or git commit.
     """
     base = Path(directory)
     skipped: set[str] = set()
@@ -175,19 +218,22 @@ def _ignore_symlinks(directory: str, names: list[str]) -> set[str]:
                 "Skipping nested symlink in workspace copy: %s", base / name
             )
             skipped.add(name)
+        elif is_nested_excluded(name):
+            skipped.add(name)
     return skipped
 
 
 def safe_copytree(src: Path, dst: Path, *, dirs_exist_ok: bool = False) -> None:
-    """``shutil.copytree`` that never follows or copies symlinks (any depth).
+    """``shutil.copytree`` that skips symlinks (any depth) and cache junk.
 
     The single safe copy primitive for the agent-controlled workspace: top-level
     callers already skip symlinked entries via :func:`_skip_symlink_toplevel`,
     and this guards every NESTED symlink inside the captured tree via the
-    :func:`_ignore_symlinks` callback (``symlinks=False`` would otherwise
-    dereference them).
+    :func:`_copytree_ignore` callback (``symlinks=False`` would otherwise
+    dereference them). The same callback drops regenerated cache artifacts
+    (:func:`is_nested_excluded`, e.g. ``__pycache__/``/``*.pyc``) at every depth.
     """
-    shutil.copytree(src, dst, ignore=_ignore_symlinks, dirs_exist_ok=dirs_exist_ok)
+    shutil.copytree(src, dst, ignore=_copytree_ignore, dirs_exist_ok=dirs_exist_ok)
 
 
 def iter_bundle_toplevel(workspace_root: Path) -> Iterator[Path]:

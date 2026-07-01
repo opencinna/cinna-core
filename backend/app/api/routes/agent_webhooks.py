@@ -8,11 +8,12 @@ Public webhook execution lives in ``agent_hooks.py`` (no JWT, token-auth only).
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, SessionDep, require_developer
 from app.models import (
     AgentWebhook,
+    AgentWebhookCreateGitSource,
     AgentWebhookCreateScript,
     AgentWebhookCreateSession,
     AgentWebhookLog,
@@ -96,6 +97,35 @@ def create_script_webhook(
     """Create a script-type webhook. Returns the plaintext token ONCE."""
     try:
         webhook, token = AgentWebhookService.create_script_webhook(
+            db_session=session,
+            agent_id=agent_id,
+            user_id=current_user.id,
+            data=data,
+        )
+        return _to_public_with_token(webhook, token)
+    except WebhookError as exc:
+        _handle_webhook_error(exc)
+
+
+@router.post(
+    "/agents/{agent_id}/webhooks/git-source",
+    response_model=AgentWebhookPublicWithToken,
+    dependencies=[Depends(require_developer)],
+)
+def create_git_source_webhook(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    agent_id: uuid.UUID,
+    data: AgentWebhookCreateGitSource,
+) -> Any:
+    """Create a git-source (GitOps) webhook. Returns the plaintext token ONCE.
+
+    Firing the webhook triggers the agent's git source ``pull_update``.
+    Developer-gated — wiring a GitOps trigger is a developer action.
+    """
+    try:
+        webhook, token = AgentWebhookService.create_git_source_webhook(
             db_session=session,
             agent_id=agent_id,
             user_id=current_user.id,

@@ -11,7 +11,7 @@ import {
   UsersService,
 } from "@/client"
 import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
-import { clearLoginScopedDisclaimerAck, handleError, safeRedirectPath } from "@/utils"
+import { clearLoginScopedDisclaimerAck, handleError, persistDetectedLocaleDefaults, safeRedirectPath } from "@/utils"
 import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 import useCustomToast from "./useCustomToast"
 
@@ -199,6 +199,9 @@ const useAuth = () => {
       }
       localStorage.setItem("access_token", outcome.token.access_token)
       clearLoginScopedDisclaimerAck()
+      // Fire-and-forget: persist browser-detected locale defaults (NULL-only
+      // fill server-side). Must not block navigation; errors are swallowed.
+      persistDetectedLocaleDefaults()
       navigateToPostAuthTarget(target)
     },
     onError: handleError.bind(showErrorToast),

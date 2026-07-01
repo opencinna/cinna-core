@@ -18,6 +18,7 @@ import {
 import { AgentsService, DashboardsService } from "@/client"
 import { usePageHeader } from "@/routes/_layout"
 import PendingItems from "@/components/Pending/PendingItems"
+import NotFound from "@/components/Common/NotFound"
 import { DashboardGrid } from "@/components/Dashboard/UserDashboards/DashboardGrid"
 import { AddBlockDialog } from "@/components/Dashboard/UserDashboards/AddBlockDialog"
 import { Button } from "@/components/ui/button"
@@ -228,9 +229,12 @@ function DashboardViewPage() {
 
   if (!dashboard) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Dashboard not found</p>
-      </div>
+      <NotFound
+        inline
+        fallbackPath="/dashboards"
+        title="Dashboard not found"
+        message="This dashboard doesn't exist, was deleted, or belongs to another user."
+      />
     )
   }
 

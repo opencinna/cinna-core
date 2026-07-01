@@ -161,6 +161,14 @@ SuperUser = Annotated[User, Depends(get_current_active_superuser)]
 | POST | `/{source_id}/check-access` | Verify Git access (ls-remote) | - | `CheckAccessResponse` |
 | POST | `/{source_id}/refresh` | Clone + parse + embed articles | - | `RefreshKnowledgeResponse` |
 | GET | `/{source_id}/articles` | List articles | `?skip&limit` | `list[KnowledgeArticlePublic]` |
+| GET | `/{source_id}/articles/{article_id}` | Get full article content | - | `KnowledgeArticleDetail` |
+| GET | `/{source_id}/export` | Export source as Markdown download | - | `text/markdown` (file download) |
+
+`KnowledgeArticleDetail` extends `KnowledgeArticlePublic` with two additional fields: `content` (full Markdown body) and `commit_hash` (Git commit that last wrote the article). Previously this model existed in the codebase but was not wired to any route; these endpoints are the first callers.
+
+The `/articles/{article_id}` route returns 404 when the source is unreadable to the requesting user OR when the article does not belong to the given source. The `/export` route also returns 404 when the source is unreadable; an empty source (no articles) returns a valid header-only Markdown document.
+
+**Access scope for these two routes**: Read access is granted when the requesting superuser is the source owner OR the source is publicly discoverable (`public_discovery=True AND is_enabled=True AND status=connected`). All other endpoints on this router remain strict owner-only.
 
 ### Discoverable Sources Endpoint
 
@@ -198,7 +206,10 @@ Request body: `{ "query": "string", "article_ids": ["uuid"] }` - omit `article_i
 | `disable_source(session, source_id, user_id)` | Sets `is_enabled=false` |
 | `check_access(session, source_id, user_id)` | Decrypts SSH key, runs `git ls-remote`, updates status |
 | `refresh_knowledge(session, source_id, user_id)` | Full clone + parse + embed workflow |
-| `get_source_articles(session, source_id, user_id, skip, limit)` | Lists articles for a source |
+| `get_source_articles(session, source_id, user_id, skip, limit)` | Lists articles for a source (owner-only) |
+| `_get_source_for_read(session, source_id, user_id)` | Internal helper — returns the ORM source object if the user is the owner OR the source is publicly discoverable (enabled + connected), else `None`. Used by `get_article_content` and `export_source_markdown` to apply the broadened read-access boundary |
+| `get_article_content(session, source_id, article_id, user_id)` | Returns a `KnowledgeArticleDetail` (full content + commit_hash) when the user may read the source AND the article belongs to it; `None` otherwise |
+| `export_source_markdown(session, source_id, user_id)` | Concatenates all articles for a source into one Markdown string (source header + per-article `##` section ordered by `file_path`); `None` if source is unreadable, empty string document if source has no articles |
 | `get_discoverable_sources(session, user_id, skip, limit)` | Lists public sources from other admins (read-only, no enablement state) |
 
 Removed methods (no longer exist): `enable_discoverable_source`, `disable_discoverable_source`, `get_user_enabled_discoverable_source_ids`.
@@ -268,8 +279,9 @@ Default config: model `gemini-embedding-001`, 768 dimensions, 1000 char chunks, 
 ### `frontend/src/routes/_layout/knowledge-source/$sourceId.tsx`
 
 - Source detail page with two tabs (Configuration, Articles)
-- Header with source name, edit/delete dropdown
+- Header with source name and a vertical-ellipsis dropdown menu containing three items: **Export as Markdown** (Download icon), **Edit Source** (Edit icon), **Delete Source** (Trash icon, destructive style)
 - Back navigation to sources list
+- **Export as Markdown**: uses a raw authenticated `fetch` + blob URL download (not the generated SDK client, which cannot stream file downloads). Reads the JWT from `localStorage["access_token"]`, sends `Authorization: Bearer` header. Filename resolved from the `Content-Disposition` response header; falls back to `knowledge-source-{sourceId}.md`
 
 ### `frontend/src/components/KnowledgeSources/AddSourceModal.tsx`
 
@@ -296,9 +308,13 @@ Default config: model `gemini-embedding-001`, 768 dimensions, 1000 char chunks, 
 ### `frontend/src/components/KnowledgeSources/KnowledgeSourceArticlesTab.tsx`
 
 - Alert if source is disabled (directs to Configuration tab)
-- Table: title (bold), description, tags (first 3 + overflow), features (first 2 + overflow)
+- Table columns: **Title** (~30% width) and **Description** (~70% width). The table uses `table-fixed w-full` with `whitespace-normal break-words` so long titles and descriptions wrap instead of forcing a horizontal scrollbar. The shared `ui/table.tsx` primitive's `overflow-x-auto` container is neutralized locally via a Tailwind arbitrary selector (`[&_[data-slot=table-container]]:overflow-x-hidden`) — the shared primitive was not modified
+- Description column shows text truncated to 2 lines (`line-clamp-2`) in the table, plus tags (first 3 + overflow badge) and features (first 2 + overflow badge)
+- Each article row is **clickable** (`cursor-pointer`): clicking opens a Dialog showing the full article content
+- **Article preview Dialog**: `max-w-3xl`, scrollable content area. Shows `MarkdownViewer` (existing shared component from `@/components/Environment/MarkdownViewer`) for the article body. Loading skeleton (4 lines) while the content is fetching. Error message if the fetch fails. Dialog title shows the article title (falls back to "Article" while loading)
+- Article content is fetched on-demand from `GET /{source_id}/articles/{article_id}` via a React Query query keyed on `["knowledge-article", sourceId, selectedArticleId]`. Query is disabled until an article is selected (`enabled: !!selectedArticleId`)
 - Empty state with instructions about `.ai-knowledge/settings.json`
-- Skeleton loaders during fetch
+- Skeleton loaders during articles list fetch
 
 ### `frontend/src/components/Sidebar/AdminMenu.tsx`
 
@@ -322,11 +338,14 @@ Default config: model `gemini-embedding-001`, 768 dimensions, 1000 char chunks, 
 ## Security
 
 - **Superuser-only**: All routes use `SuperUser = Annotated[User, Depends(get_current_active_superuser)]`. FastAPI returns 403 for non-superuser requests before the handler runs
-- **Source ownership**: CRUD operations also verify `user_id` at the service level
+- **Source ownership**: CRUD and write operations (create, update, delete, enable, disable, check-access, refresh, list articles) verify strict `user_id == source.user_id` ownership at the service level
+- **Read access boundary**: `_get_source_for_read(session, source_id, user_id)` implements the broader read check used by article-content and export: grants access when `source.user_id == user_id` OR (`source.public_discovery AND source.is_enabled AND source.status == SourceStatus.connected`). Sources that are private, disabled, or not connected are not readable by non-owners
+- **404 not 403 on read denial**: `get_article_content` and `export_source_markdown` return `None` (mapped to 404 by the route) when access is denied, preventing existence-leak of private source IDs
 - **Agent auth**: Knowledge query uses two-factor header-based auth (`Authorization: Bearer <env_token>` + `X-Agent-Env-Id`), separate from user JWT. Backend validates both match the database record via `verify_agent_auth_token()` dependency in `backend/app/api/routes/knowledge.py`
 - **Access filtering**: `backend/app/services/knowledge/vector_search_service.py:get_accessible_source_ids()` enforces ownership, enablement, and status. Public sources bypass per-user check but still require `is_enabled=true` and `status=connected`
-- **Article access**: Retrieval step validates all requested articles belong to accessible sources (403 if not)
+- **Article access (agent retrieval)**: Retrieval step validates all requested articles belong to accessible sources (403 if not)
 - **SSH key handling**: Decrypted in-memory only, temp files `0o600`, cleanup in `finally`
+- **Export download**: Implemented as a raw authenticated `fetch` on the frontend (not through the generated SDK). The JWT is read from `localStorage["access_token"]` and sent as an `Authorization: Bearer` header; the backend enforces the same superuser dependency as all other routes
 
 ## Related Aspect Docs
 

@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useState, useEffect } from "react"
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
-import { ArrowLeft, EllipsisVertical, Edit, Trash } from "lucide-react"
+import { ArrowLeft, EllipsisVertical, Edit, Trash, Download } from "lucide-react"
 
 import { KnowledgeSourcesService } from "@/client"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
@@ -18,6 +18,7 @@ import { KnowledgeSourceConfigurationTab } from "@/components/KnowledgeSources/K
 import { KnowledgeSourceArticlesTab } from "@/components/KnowledgeSources/KnowledgeSourceArticlesTab"
 import { EditSourceModal } from "@/components/KnowledgeSources/EditSourceModal"
 import PendingItems from "@/components/Pending/PendingItems"
+import NotFound from "@/components/Common/NotFound"
 import { usePageHeader } from "@/routes/_layout"
 
 export const Route = createFileRoute("/_layout/knowledge-source/$sourceId")({
@@ -48,6 +49,44 @@ function KnowledgeSourceDetailPage() {
   const handleDelete = () => {
     if (confirm("Are you sure you want to delete this knowledge source?")) {
       deleteMutation.mutate()
+    }
+  }
+
+  const handleExport = async () => {
+    // The export is a file download (not JSON), so use a raw authenticated
+    // fetch + blob download — the generated SDK cannot stream file downloads.
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000"
+    const token = localStorage.getItem("access_token")
+    try {
+      const response = await fetch(
+        `${apiUrl}/api/v1/knowledge-sources/${sourceId}/export`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      )
+      if (!response.ok) {
+        throw new Error("Export failed")
+      }
+
+      // Resolve filename from Content-Disposition, fall back to a sane default.
+      const disposition = response.headers.get("content-disposition") || ""
+      const match = disposition.match(/filename="?([^"]+)"?/)
+      const filename = match?.[1] || `knowledge-source-${sourceId}.md`
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+      showSuccessToast("Knowledge source exported")
+    } catch (error: any) {
+      showErrorToast(error.message || "Failed to export knowledge source")
     }
   }
 
@@ -88,6 +127,10 @@ function KnowledgeSourceDetailPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleExport}>
+                <Download className="mr-2 h-4 w-4" />
+                Export as Markdown
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setIsEditModalOpen(true)}>
                 <Edit className="mr-2 h-4 w-4" />
                 Edit Source
@@ -112,6 +155,17 @@ function KnowledgeSourceDetailPage() {
   }
 
   if (error || !source) {
+    const isMissing = !error || (error as { status?: number }).status === 404
+    if (isMissing) {
+      return (
+        <NotFound
+          inline
+          fallbackPath="/knowledge-sources"
+          title="Knowledge source not found"
+          message="This knowledge source doesn't exist, was deleted, or belongs to another user."
+        />
+      )
+    }
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-destructive">Error loading knowledge source details</p>

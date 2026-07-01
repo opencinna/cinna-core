@@ -22,7 +22,11 @@
 - `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` - Loads credentials README for prompt
 
 ### Frontend
-- `frontend/src/components/UserSettings/UserDetailsSettings.tsx` — "User's Details" card in Settings → My profile (inserted after `<NotificationSettings />`). Displays the normalized `details_parsed` map as `KEY="value"` lines (read-only `<pre>`). Edit button toggles an inline `<Textarea>` seeded with `details_raw`; Save calls `PATCH /users/me/details`; 422 errors render inline below the textarea (editor stays open); non-422 errors show a toast. The card never normalizes locally — the server-returned `details_parsed` is the display source of truth.
+- `frontend/src/components/UserSettings/UserDetailsSettings.tsx` — "User's Details" card in Settings → My profile. Card body always shows the normalized `details_parsed` map as read-only `KEY="value"` lines (`<pre>`, or "No details set yet."). A header **Edit** button (with `Pencil` icon) seeds `details_raw` and opens a `Dialog` containing a `<Textarea>` + Cancel/Save; Save calls `PATCH /users/me/details`; 422 errors render inline in the modal (editor stays open); non-422 errors show a toast. The card never normalizes locally — the server-returned `details_parsed` is the display source of truth.
+- `frontend/src/components/UserSettings/UserPreferences.tsx` — "Communication & Locale" card in Settings → My profile. Compact label-left / control-right rows for `conversation_style` (plain `Select`), `language`, `locale`, and `timezone` (searchable dropdowns via `SearchableSelect`). No Save button: each control auto-saves on change by firing a per-field `PATCH /users/me` (skips the call when the value is unchanged from `currentUser`). The Language row carries a `(?)` tooltip noting the agent replies in the language you wrote in and this setting is only a fallback.
+- `frontend/src/components/Common/SearchableSelect.tsx` — reusable single-select with an in-popover client-side search box (Popover + filter `Input` + filtered list, case-insensitive label match). Used for long static lists (languages, locales, timezones); a leading empty-value "Not set" option clears the preference.
+- `frontend/src/components/UserSettings/UserInformation.tsx` — "User Information" card; the **Edit** button (with `Pencil` icon) moved to the card header and opens the profile-edit `Dialog` (controlled `open` state; Cancel/Save right-aligned in the dialog).
+- `frontend/src/routes/_layout/settings.tsx` — My profile tab card order: `UserInformation`, `UserDetailsSettings`, `UserPreferences`, `NotificationSettings`.
 - `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Link/unlink credentials to agents; now also surfaces incomplete credential state: a top-of-card amber `Alert` when one or more linked credentials have `is_placeholder=true` or `status === "incomplete"`, and a per-row "Setup needed" badge next to the credential name. The credential name is a link to `/credential/$credentialId` (the standard edit page) — clicking it is the fix entry point. The "Add Credential" modal uses a searchable, credential-type-grouped badge picker (icon + name per badge) backed by `CREDENTIAL_TYPE_GROUPS` and `getCredentialTypeMeta` from `frontend/src/components/Credentials/credentialTypes.ts`
 - `frontend/src/components/Credentials/` - Full credential management UI (create, edit, delete, share)
 - `frontend/src/components/Credentials/CredentialForms/ApiTokenCredentialForm.tsx` - API token template form
@@ -58,6 +62,12 @@ Two nullable columns added in migration `6e6af979678c_add_user_details_columns.p
 - `details_raw` (`Text`, nullable) — verbatim env-file text as the user typed it; the editor re-opens exactly this
 - `details_parsed` (`JSON`, nullable) — normalized `{UPPER_SNAKE: "value"}` map; source of truth for the `custom_details` block. `NULL` means no details (treated as `{}` by `build_current_user_block`).
 
+Four locale/communication preference columns (migration adds these to `user`):
+- `timezone` (`VARCHAR(64)`, nullable) — IANA timezone string, e.g. `Europe/Berlin`. `NULL` when unset.
+- `language` (`VARCHAR(64)`, nullable) — preferred communication language. `NULL` when unset.
+- `locale` (`VARCHAR(64)`, nullable) — BCP-47 formatting locale, e.g. `en-US`. `NULL` when unset.
+- `conversation_style` (`VARCHAR(32)`, NOT NULL, `server_default='ai_default'`) — tone hint; existing rows backfill to `ai_default` via the server default. Validated at the route layer against `VALID_CONVERSATION_STYLES`.
+
 ### AgentCredentialLink Table
 - `agent_id` (UUID, FK → Agent) - Linked agent
 - `credential_id` (UUID, FK → Credential) - Linked credential
@@ -77,10 +87,12 @@ Two nullable columns added in migration `6e6af979678c_add_user_details_columns.p
   - `POST /api/v1/agents/{agent_id}/credentials/{credential_id}` - Link credential to agent
   - `DELETE /api/v1/agents/{agent_id}/credentials/{credential_id}` - Unlink credential from agent
 
-### User Details Endpoints
+### User Details and Locale Endpoints
 - `backend/app/api/routes/users.py`
   - `GET /api/v1/users/me/details` — Returns `UserDetailsPublic {details_raw, details_parsed}`. Owner-scoped (`CurrentUser`); no admin path.
   - `PATCH /api/v1/users/me/details` — Body: `UserDetailsUpdate {details_raw}`. Enforces 10 KB cap (422), parses/normalizes via `parse_user_details` (ValueError → 422 with line-referencing message), persists raw + parsed, then best-effort awaits `event_user_details_updated`. A sync failure must not 500 the save (try/except around the fan-out call). Returns `UserDetailsPublic`.
+  - `PATCH /api/v1/users/me` (`update_user_me`) — In addition to existing profile fields, now also accepts `timezone`, `language`, `locale`, and `conversation_style` (from `UserUpdateMe`). `conversation_style` is validated against `VALID_CONVERSATION_STYLES` → HTTP 400 on mismatch; explicit `null` is also rejected (400) since the column is NOT NULL. When any of the four locale/style fields change, a best-effort `event_user_details_updated` fan-out re-syncs all owned agents' running environments (identical semantics to `/me/details`). Returns `UserPublic`.
+  - `PATCH /api/v1/users/me/locale-defaults` — Body: `UserLocaleDefaults {timezone?, language?, locale?}`. NULL-only fill: writes a field **only when** the stored value is currently `NULL`, so an explicit user choice is never overwritten by a later browser session. Idempotent (returns HTTP 200 even when nothing was changed). `conversation_style` is deliberately absent from this endpoint — it is never browser-detected. Triggers `event_user_details_updated` only when at least one field was actually filled. Returns `UserPublic`.
 
 ### OAuth Flow Endpoints
 - `backend/app/api/routes/oauth_credentials.py`
@@ -98,7 +110,7 @@ Two nullable columns added in migration `6e6af979678c_add_user_details_columns.p
 ### CredentialsService (`backend/app/services/credentials/credentials_service.py`)
 - `prepare_credentials_for_environment()` - Decrypts credentials, applies field whitelisting, appends the synthetic `current_user` block, returns JSON and README data. Single builder covering both the env-start sweep and live-sync paths.
 - `get_agent_credentials_with_data()` - Decrypts each linked credential; for `api_token` runs `_process_api_token_credential()` and injects the non-secret `service_uri` column (when set) into the credential data. Sole caller is `prepare_credentials_for_environment()`
-- `generate_credentials_readme()` - Creates redacted README with ID-based lookup examples. When it encounters a `type == "current_user"` entry it emits a `## Current User` prose section with the owner's name/email and a one-line access snippet; the entry is not redacted and does not go through the `SENSITIVE_FIELDS` machinery.
+- `generate_credentials_readme()` - Creates redacted README with ID-based lookup examples. When it encounters a `type == "current_user"` entry it emits a `## Current User` prose section with the owner's name/email, a **Communication preferences** block documenting all four locale/style fields (`language`, `locale`, `timezone`, `conversation_style`) with per-field instructions for the agent, and an extended Python access snippet showing how to read `language`, `locale`, and `timezone` alongside identity fields. The `current_user` entry is never redacted and does not go through the `SENSITIVE_FIELDS` machinery.
 - `redact_credential_data()` - Replaces sensitive field values with `***REDACTED***` (only for non-empty values)
 - `_process_api_token_credential()` - Converts API token input (type + template + token) to ready-to-use HTTP headers (`http_header_name` / `http_header_value`). The non-secret `service_uri` slot id is added separately in `get_agent_credentials_with_data()` (it is a `Credential` column, not part of `credential_data`)
 - `sync_credentials_to_agent_environments()` - Syncs credential files to all running environments of an agent
@@ -115,7 +127,7 @@ New service responsible for the `current_user` credentials.json block and the "U
 
 - `parse_user_details(raw: str) -> dict[str, str]` — Pure parser. Reads env-file style text (`KEY = value` lines); ignores blank lines and `#` comments; splits on first `=` only; normalizes keys to `UPPER_SNAKE` (trim → uppercase → collapse non-alnum runs to `_` → strip leading/trailing `_`); strips one layer of surrounding quotes from values. Raises `ValueError` with a line-referencing message on any rule violation. Limits: raw text ≤ 10 KB, ≤ 100 keys, key ≤ 64 chars, value ≤ 1 KB. Duplicate normalized keys are an error (not last-wins). Empty input is valid and returns `{}`.
 - `format_user_details(parsed: dict[str, str] | None) -> str` — Renders a normalized map as `KEY="value"` lines for the editor's display view. Values always double-quoted; inner `"` escaped as `\"`. Returns `""` when there are no details.
-- `build_current_user_block(user: User) -> dict` — Builds the synthetic credentials.json list entry `{id, name, type, notes, credential_data}`. `credential_data` contains `username`, `full_name`, `email`, `email_confirmed` from the `User` row, and `custom_details = user.details_parsed or {}`. Sentinel constants: `CURRENT_USER_ID = "current_user"`, `CURRENT_USER_TYPE = "current_user"`, `CURRENT_USER_NAME = "Current User"`.
+- `build_current_user_block(user: User) -> dict` — Builds the synthetic credentials.json list entry `{id, name, type, notes, credential_data}`. `credential_data` contains `username`, `full_name`, `email`, `email_confirmed`, `timezone`, `language`, `locale`, `conversation_style` from the `User` row, and `custom_details = user.details_parsed or {}`. The locale/style fields are always present: `timezone`/`language`/`locale` are `null` when unset; `conversation_style` is always a non-null string. Sentinel constants: `CURRENT_USER_ID = "current_user"`, `CURRENT_USER_TYPE = "current_user"`, `CURRENT_USER_NAME = "Current User"`.
 - `event_user_details_updated(session, user_id)` — `async`; enumerates all `Agent` rows where `owner_id == user_id` and calls `CredentialsService.sync_credentials_to_agent_environments` per agent (which filters to running envs). Imports `CredentialsService` locally to avoid a circular import. Mirrors `event_credential_updated` but with a broader enumeration root.
 
 ### OAuthCredentialsService (`backend/app/services/credentials/oauth_credentials_service.py`)

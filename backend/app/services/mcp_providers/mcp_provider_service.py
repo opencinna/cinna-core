@@ -38,6 +38,7 @@ from app.models import (
     MCPProviderTargetAgent,
     MCPToken,
     User,
+    UserWorkspace,
 )
 from app.models.credentials.credential import Credential, CredentialType
 from app.models.mcp.mcp_provider import (
@@ -198,6 +199,42 @@ class MCPProviderService:
                 )
             workspace_id = consumer_agent.user_workspace_id
 
+            # One-per-pair idempotency (Fix 5). Connecting the same
+            # (producer connector, consumer agent) twice returns the existing
+            # connection instead of minting a second token / creating a second
+            # credential. Resolved decrypt-free via the bound mcp_token join:
+            # the connector linkage lives on mcp_token.connector_id, and the
+            # consumer linkage on the new credential.mcp_consumer_agent_id column.
+            existing = session.exec(
+                select(Credential)
+                .join(MCPToken, MCPToken.credential_id == Credential.id)
+                .where(
+                    Credential.type == CredentialType.MCP_PROVIDER,
+                    Credential.mcp_consumer_agent_id == consumer_agent.id,
+                    MCPToken.connector_id == connector.id,
+                )
+            ).first()
+            if existing is not None:
+                existing_data = CredentialsService.decrypt_credential_data(
+                    session=session, credential=existing
+                )
+                # Re-assert the consumer link (idempotent) in case it was lost.
+                await CredentialsService.link_credential_to_agent(
+                    session,
+                    agent_id=consumer_agent.id,
+                    credential_id=existing.id,
+                    owner_id=user.id,
+                    is_superuser=is_superuser,
+                )
+                return MCPProviderConnectionResponse(
+                    credential_id=existing.id,
+                    auth_mode=existing_data.get("auth_mode", "agent2agent"),
+                    endpoint_url=existing_data.get("endpoint_url", ""),
+                    transport=existing_data.get("transport", "streamable-http"),
+                    status="connected",
+                    linked_consumer_agent_id=consumer_agent.id,
+                )
+
         # 4. Mint a connector-scoped direct token (full value returned once).
         created_token = MCPDirectTokenService.create_token(
             db_session=session, connector=connector, label=label
@@ -223,6 +260,14 @@ class MCPProviderService:
                     user_workspace_id=workspace_id,
                     mcp_mode_conversation=data.mcp_mode_conversation,
                     mcp_mode_building=data.mcp_mode_building,
+                    # Auto-managed pair → "Automatic Credentials" tab.
+                    mcp_auth_mode="agent2agent",
+                    # Record the consumer side of the pair (Fix 2). NULL when
+                    # connecting without a consumer (a "floating" connection);
+                    # link_credential_to_agent binds it on first link.
+                    mcp_consumer_agent_id=(
+                        consumer_agent.id if consumer_agent is not None else None
+                    ),
                     credential_data={
                         "endpoint_url": endpoint_url,
                         "transport": "streamable-http",
@@ -343,6 +388,18 @@ class MCPProviderService:
                     "You do not own the consumer agent", status_code=403
                 )
             workspace_id = consumer_agent.user_workspace_id
+        elif data.user_workspace_id is not None:
+            # No consumer agent: a manual external provider follows the user's
+            # active workspace (like any "My Credentials" entry). Validate
+            # ownership before stamping it (mirror POST /credentials).
+            workspace = session.get(UserWorkspace, data.user_workspace_id)
+            if workspace is None:
+                raise MCPProviderError("Workspace not found", status_code=400)
+            if not is_superuser and workspace.user_id != user.id:
+                raise MCPProviderError(
+                    "You do not own this workspace", status_code=403
+                )
+            workspace_id = data.user_workspace_id
 
         credential_data: dict = {
             "endpoint_url": endpoint_url,
@@ -366,6 +423,7 @@ class MCPProviderService:
                 user_workspace_id=workspace_id,
                 mcp_mode_conversation=data.mcp_mode_conversation,
                 mcp_mode_building=data.mcp_mode_building,
+                mcp_auth_mode=data.auth_mode,
                 credential_data=credential_data,
             ),
             owner_id=user.id,
@@ -495,6 +553,33 @@ class MCPProviderService:
                     ui_color_preset=agent.ui_color_preset,
                 )
 
+        # (agent2agent only) the single mode the producer connector serves — the
+        # server side's true reachability. Resolved from the bound connector.
+        connector_mode: str | None = None
+        target_connector_id_raw = data.get("target_connector_id")
+        if target_connector_id_raw:
+            try:
+                connector = session.get(
+                    MCPConnector, uuid.UUID(target_connector_id_raw)
+                )
+            except (ValueError, TypeError):
+                connector = None
+            if connector is not None:
+                connector_mode = connector.mode
+
+        # (Fix 2) Resolve the consumer side of the pair from the first-class
+        # column. None for external/manual providers, floating connections, or a
+        # deleted consumer agent (SET NULL).
+        consumer_agent: MCPProviderTargetAgent | None = None
+        if credential.mcp_consumer_agent_id is not None:
+            consumer = session.get(Agent, credential.mcp_consumer_agent_id)
+            if consumer is not None:
+                consumer_agent = MCPProviderTargetAgent(
+                    id=consumer.id,
+                    name=consumer.name,
+                    ui_color_preset=consumer.ui_color_preset,
+                )
+
         return MCPProviderStatus(
             credential_id=credential.id,
             auth_mode=auth_mode,
@@ -504,6 +589,8 @@ class MCPProviderService:
             mcp_mode_conversation=credential.mcp_mode_conversation,
             mcp_mode_building=credential.mcp_mode_building,
             target_agent=target_agent,
+            connector_mode=connector_mode,
+            consumer_agent=consumer_agent,
             last_error=data.get("last_error"),
         )
 

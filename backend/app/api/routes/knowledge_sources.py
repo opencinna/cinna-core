@@ -10,6 +10,7 @@ import uuid
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 
 from app.api.deps import SessionDep, get_current_active_superuser
 from app.models import User
@@ -19,6 +20,7 @@ from app.models.knowledge.knowledge import (
     AIKnowledgeGitRepoUpdate,
     CheckAccessResponse,
     DiscoverableSourcePublic,
+    KnowledgeArticleDetail,
     KnowledgeArticlePublic,
     RefreshKnowledgeResponse,
 )
@@ -246,6 +248,63 @@ def list_knowledge_articles(
         )
         for article in articles
     ]
+
+
+@router.get(
+    "/{source_id}/articles/{article_id}",
+    response_model=KnowledgeArticleDetail,
+)
+def get_knowledge_article(
+    *,
+    session: SessionDep,
+    current_user: SuperUser,
+    source_id: uuid.UUID,
+    article_id: uuid.UUID,
+) -> Any:
+    """
+    Get a single article's full content.
+
+    Admin only. Read access: owner OR public-discoverable source.
+    """
+    article = knowledge_source_service.get_article_content(
+        session=session,
+        source_id=source_id,
+        article_id=article_id,
+        user_id=current_user.id,
+    )
+    if article is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return article
+
+
+@router.get("/{source_id}/export", response_class=PlainTextResponse)
+def export_knowledge_source(
+    *,
+    session: SessionDep,
+    current_user: SuperUser,
+    source_id: uuid.UUID,
+) -> Any:
+    """
+    Export all articles of a knowledge source as a single Markdown document.
+
+    Admin only. Read access: owner OR public-discoverable source.
+    """
+    doc = knowledge_source_service.export_source_markdown(
+        session=session,
+        source_id=source_id,
+        user_id=current_user.id,
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Knowledge source not found")
+    return PlainTextResponse(
+        content=doc,
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="knowledge-source-{source_id}.md"'
+            )
+        },
+    )
 
 
 # Discoverable Sources Endpoints

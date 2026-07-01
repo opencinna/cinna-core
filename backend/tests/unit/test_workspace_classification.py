@@ -13,12 +13,15 @@ from pathlib import Path
 from app.services.environments.workspace_classification import (
     BUNDLE_EXCLUDED_TOPLEVEL,
     ENV_MIGRATION_EXTRA,
+    NESTED_EXCLUDED_DIRS,
+    NESTED_EXCLUDED_FILE_GLOBS,
     PLUGIN_DERIVED_FILES,
     PLUGINS_DIRNAME,
     RUNTIME_NAME_DENYLIST,
     WORKSPACE_ROOT_REL,
     is_bundle_owned_toplevel,
     is_env_migration_toplevel,
+    is_nested_excluded,
     is_runtime_denylisted,
     iter_bundle_toplevel,
     iter_env_migration_toplevel,
@@ -98,6 +101,33 @@ def test_cinna_plugin_ref_not_denylisted() -> None:
     # Per-plugin marker is kept verbatim in snapshots.
     assert is_runtime_denylisted(".cinna_plugin_ref") is False
     assert is_bundle_owned_toplevel(".cinna_plugin_ref") is True
+
+
+# ── is_nested_excluded (recursive cache-artifact denylist) ──────────
+
+
+def test_pycache_dir_is_nested_excluded() -> None:
+    assert is_nested_excluded("__pycache__") is True
+    # Also rejected at the workspace root.
+    assert is_bundle_owned_toplevel("__pycache__") is False
+    assert is_env_migration_toplevel("__pycache__") is False
+
+
+def test_compiled_python_files_are_nested_excluded() -> None:
+    for name in ("module.pyc", "thing.pyo"):
+        assert is_nested_excluded(name) is True, name
+
+
+def test_tooling_caches_are_nested_excluded() -> None:
+    for name in NESTED_EXCLUDED_DIRS:
+        assert is_nested_excluded(name) is True, name
+
+
+def test_normal_names_are_not_nested_excluded() -> None:
+    for name in ("scripts", "agent_api", "main.py", "notes.md", "data.json"):
+        assert is_nested_excluded(name) is False, name
+    # Sanity: the glob set is the pyc/pyo pair.
+    assert set(NESTED_EXCLUDED_FILE_GLOBS) == {"*.pyc", "*.pyo"}
 
 
 # ── is_env_migration_toplevel ───────────────────────────────────────
@@ -300,3 +330,32 @@ def test_safe_copytree_drops_nested_symlink(tmp_path: Path) -> None:
     # Neither the symlink itself nor its dereferenced content lands in dest.
     assert not (dst / "leak.json").exists()
     assert not (dst / "sublink").exists()
+
+
+def test_safe_copytree_drops_nested_pycache(tmp_path: Path) -> None:
+    """``safe_copytree`` strips nested ``__pycache__``/``*.pyc`` at every depth.
+
+    Regression: agent code dirs (e.g. ``agent_api/``) carry a nested
+    ``__pycache__/`` with compiled ``*.pyc`` files that must never reach a
+    bundle snapshot or git commit.
+    """
+    src = tmp_path / "agent_api"
+    (src / "__pycache__").mkdir(parents=True)
+    (src / "__pycache__" / "main.cpython-312.pyc").write_bytes(b"\x00cached")
+    (src / "main.py").write_text("print('hi')")
+    # A stray compiled file outside __pycache__ is dropped too.
+    (src / "legacy.pyc").write_bytes(b"\x00old")
+    # A nested cache dir deeper in the tree.
+    nested = src / "sub"
+    (nested / ".mypy_cache").mkdir(parents=True)
+    (nested / ".mypy_cache" / "cache.json").write_text("{}")
+    (nested / "real.py").write_text("x = 1")
+
+    dst = tmp_path / "dest" / "agent_api"
+    safe_copytree(src, dst)
+
+    assert (dst / "main.py").read_text() == "print('hi')"
+    assert (dst / "sub" / "real.py").read_text() == "x = 1"
+    assert not (dst / "__pycache__").exists()
+    assert not (dst / "legacy.pyc").exists()
+    assert not (dst / "sub" / ".mypy_cache").exists()

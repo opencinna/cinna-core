@@ -15,6 +15,7 @@ import { AgenticTeamsService } from "@/client"
 import type { AgenticTeamNodePositionUpdate } from "@/client"
 import { usePageHeader } from "@/routes/_layout"
 import PendingItems from "@/components/Pending/PendingItems"
+import NotFound from "@/components/Common/NotFound"
 import { AgenticTeamChart } from "@/components/AgenticTeams/AgenticTeamChart"
 import { AgenticTeamFormDialog } from "@/components/AgenticTeams/AgenticTeamSettings"
 import { TaskBoard } from "@/components/Tasks/TaskBoard"
@@ -319,9 +320,12 @@ function AgenticTeamChartPage() {
 
   if (!chartData || !team) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Team not found</p>
-      </div>
+      <NotFound
+        inline
+        fallbackPath="/agentic-teams"
+        title="Team not found"
+        message="This team doesn't exist, was deleted, or belongs to another user."
+      />
     )
   }
 

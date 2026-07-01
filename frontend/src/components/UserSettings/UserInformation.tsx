@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, BadgeCheck } from "lucide-react"
+import { AlertTriangle, BadgeCheck, Pencil } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -11,7 +11,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -21,7 +20,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 import {
   Form,
@@ -147,7 +145,13 @@ const UserInformation = () => {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>User Information</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle>User Information</CardTitle>
+          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+            <Pencil className="h-4 w-4 mr-2" />
+            Edit
+          </Button>
+        </div>
         <CardDescription>Manage your personal details</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -197,11 +201,7 @@ const UserInformation = () => {
             </div>
           </div>
       </CardContent>
-      <CardFooter className="justify-end">
-            <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset() }}>
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm">Edit Profile</Button>
-              </DialogTrigger>
+      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset() }}>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Edit Profile</DialogTitle>
@@ -240,19 +240,29 @@ const UserInformation = () => {
                     )}
                   />
 
-                  <LoadingButton
-                    type="submit"
-                    loading={mutation.isPending}
-                    disabled={!form.formState.isDirty}
-                    className="self-start"
-                  >
-                    Save
-                  </LoadingButton>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setOpen(false)}
+                      disabled={mutation.isPending}
+                    >
+                      Cancel
+                    </Button>
+                    <LoadingButton
+                      type="submit"
+                      size="sm"
+                      loading={mutation.isPending}
+                      disabled={!form.formState.isDirty}
+                    >
+                      Save
+                    </LoadingButton>
+                  </div>
                 </form>
               </Form>
             </DialogContent>
-            </Dialog>
-      </CardFooter>
+      </Dialog>
     </Card>
   )
 }

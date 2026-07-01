@@ -23,6 +23,7 @@ from app.core.security import decrypt_field, encrypt_field
 from app.models import (
     Agent,
     AgentWebhook,
+    AgentWebhookCreateGitSource,
     AgentWebhookCreateScript,
     AgentWebhookCreateSession,
     AgentWebhookLog,
@@ -257,6 +258,49 @@ class AgentWebhookService:
         return webhook, token
 
     @staticmethod
+    def create_git_source_webhook(
+        db_session: DBSession,
+        agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        data: AgentWebhookCreateGitSource,
+    ) -> tuple[AgentWebhook, str]:
+        """
+        Create a git-source (GitOps) webhook.
+
+        Firing it triggers ``GitSourceService.pull_update`` for the agent. No
+        type-specific fields — just name + optional payload_template. Returns
+        ``(AgentWebhook, plaintext_token)`` — token shown to the user once.
+        """
+        AgentWebhookService.verify_agent_access(db_session, agent_id, user_id)
+
+        webhook_id = AgentWebhookService._generate_unique_webhook_id(db_session)
+        _, token, encrypted_token, token_prefix = (
+            AgentWebhookService.generate_webhook_credentials()
+        )
+
+        webhook = AgentWebhook(
+            agent_id=agent_id,
+            owner_id=user_id,
+            type=AgentWebhookType.GIT_SOURCE,
+            name=data.name,
+            payload_template=data.payload_template,
+            prompt=None,
+            session_mode=None,
+            command=None,
+            command_timeout_seconds=None,
+            webhook_id=webhook_id,
+            webhook_token_encrypted=encrypted_token,
+            webhook_token_prefix=token_prefix,
+        )
+        db_session.add(webhook)
+        db_session.commit()
+        db_session.refresh(webhook)
+        logger.info(
+            f"Created git-source webhook {webhook.id} for agent {agent_id}"
+        )
+        return webhook, token
+
+    @staticmethod
     def list_webhooks(
         db_session: DBSession,
         agent_id: uuid.UUID,
@@ -320,6 +364,13 @@ class AgentWebhookService:
             if invalid:
                 raise WebhookValidationError(
                     f"Fields {sorted(invalid)} are not valid for a script-type webhook"
+                )
+        elif webhook.type == AgentWebhookType.GIT_SOURCE:
+            invalid = (session_only | script_only) & update_fields.keys()
+            if invalid:
+                raise WebhookValidationError(
+                    f"Fields {sorted(invalid)} are not valid for a "
+                    "git-source-type webhook"
                 )
 
         for field, value in update_fields.items():
@@ -463,6 +514,17 @@ class AgentWebhookService:
                 )
             elif webhook.type == AgentWebhookType.SCRIPT:
                 log = await cls._fire_script(
+                    db_session,
+                    webhook=webhook,
+                    agent=agent,
+                    payload_text=payload_text,
+                    payload_content_type=payload_content_type,
+                    headers_subset=headers_subset,
+                    remote_ip=remote_ip,
+                    start=start,
+                )
+            elif webhook.type == AgentWebhookType.GIT_SOURCE:
+                log = await cls._fire_git_source(
                     db_session,
                     webhook=webhook,
                     agent=agent,
@@ -733,6 +795,69 @@ class AgentWebhookService:
             command_output=stdout,
             command_stderr=stderr,
             command_exit_code=exit_code,
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
+
+    @classmethod
+    async def _fire_git_source(
+        cls,
+        db_session: DBSession,
+        *,
+        webhook: AgentWebhook,
+        agent: Agent,
+        payload_text: str | None,
+        payload_content_type: str | None,
+        headers_subset: dict[str, str],
+        remote_ip: str | None,
+        start: float,
+    ) -> AgentWebhookLog:
+        """Trigger the agent's git source ``pull_update`` (GitOps).
+
+        The git pull is itself egress-guarded, fast-forward-safe and per-agent
+        locked (Phases 2/4). Any pull failure is captured as a ``status="error"``
+        log so the public endpoint still returns 200 with a correlatable log_id
+        (post-auth contract). The HTTP payload body is ignored.
+        """
+        from app.models.users.user import User
+        from app.services.bundles.git_source_service import GitSourceService
+
+        owner = db_session.get(User, webhook.owner_id)
+        if owner is None:
+            return cls._create_log(
+                db_session,
+                webhook=webhook,
+                status="error",
+                remote_ip=remote_ip,
+                headers_subset=headers_subset,
+                payload_received=payload_text,
+                payload_content_type=payload_content_type,
+                error_message="Webhook owner not found",
+                duration_ms=int((time.perf_counter() - start) * 1000),
+            )
+
+        try:
+            await GitSourceService.pull_update(
+                session=db_session, agent_id=agent.id, owner=owner
+            )
+            status = "success"
+            error_message = None
+        except Exception as exc:  # noqa: BLE001 — surfaced via the error log
+            logger.info(
+                "webhook %s: git pull failed for agent %s: %s",
+                webhook.id, agent.id, exc,
+            )
+            status = "error"
+            error_message = str(exc)
+
+        return cls._create_log(
+            db_session,
+            webhook=webhook,
+            status=status,
+            remote_ip=remote_ip,
+            headers_subset=headers_subset,
+            payload_received=payload_text,
+            payload_content_type=payload_content_type,
+            error_message=error_message,
             duration_ms=int((time.perf_counter() - start) * 1000),
         )
 

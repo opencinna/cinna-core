@@ -637,6 +637,7 @@ export type AgentApiConnectedAgent = {
     id: string;
     name: string;
     ui_color_preset?: (string | null);
+    owner_name?: (string | null);
     owner_email?: (string | null);
 };
 
@@ -649,6 +650,7 @@ export type AgentApiConnectedAgent = {
 export type AgentApiConnectionInfo = {
     producer_agent_id: (string | null);
     producer_agent_name: (string | null);
+    producer_ui_color_preset?: (string | null);
     base_url: string;
     spec_url: string;
     read_only: boolean;
@@ -707,7 +709,7 @@ export type AgentBundlePublic = {
     bundle_id: string;
     display_name: string;
     description: (string | null);
-    publisher_user_id: string;
+    publisher_user_id?: (string | null);
     publisher_handle?: (string | null);
     publisher_name?: (string | null);
     publisher_email?: (string | null);
@@ -774,6 +776,26 @@ export type AgentBundleUpdate = {
     default_install_mode?: (string | null);
     publisher_ai_credential_conversation_id?: (string | null);
     publisher_ai_credential_building_id?: (string | null);
+};
+
+/**
+ * Body of ``POST /agents/checkout``.
+ */
+export type AgentCheckoutRequest = {
+    repo_url: string;
+    subdir?: (string | null);
+    ref?: string;
+    ssh_key_id?: (string | null);
+    sync_direction?: string;
+    name_override?: (string | null);
+};
+
+/**
+ * Combined response for checkout: the created install + its git source.
+ */
+export type AgentCheckoutResponse = {
+    agent: AgentPublic;
+    git_source: AgentGitSourcePublic;
 };
 
 export type AgentCommentResponse = {
@@ -950,6 +972,43 @@ export type AgentEnvironmentUpdate = {
     config?: ({
     [key: string]: unknown;
 } | null);
+};
+
+/**
+ * Body of ``POST /agents/{agent_id}/git/connect``.
+ */
+export type AgentGitConnectRequest = {
+    repo_url: string;
+    subdir?: (string | null);
+    ref?: string;
+    ssh_key_id?: (string | null);
+    sync_direction?: string;
+    commit_message?: string;
+    adopt_existing?: boolean;
+};
+
+/**
+ * API response schema. Never includes SSH key material.
+ */
+export type AgentGitSourcePublic = {
+    repo_url: string;
+    subdir?: (string | null);
+    ref?: string;
+    ssh_key_id?: (string | null);
+    sync_direction?: string;
+    id: string;
+    agent_id: string;
+    owner_id: string;
+    bundle_uuid?: (string | null);
+    status: string;
+    last_synced_commit?: (string | null);
+    last_sync_at?: (string | null);
+    last_error?: (string | null);
+    created_at: string;
+    updated_at: string;
+    update_available?: boolean;
+    web_history_url?: (string | null);
+    web_tree_url?: (string | null);
 };
 
 export type AgentGuestShareCreate = {
@@ -1217,6 +1276,10 @@ export type AgentPublic = {
     webapp_enabled?: boolean;
     agent_api_enabled?: boolean;
     agent_api_identity_enabled?: boolean;
+    has_email_integration?: boolean;
+    has_mcp_connectors?: boolean;
+    has_webhooks?: boolean;
+    git_versioning_enabled?: boolean;
     created_at: string;
     updated_at: string;
     owner_id: string;
@@ -1473,6 +1536,20 @@ export type AgentWebappShareUpdate = {
     allow_data_api?: (boolean | null);
     security_code?: (string | null);
     remove_security_code?: (boolean | null);
+};
+
+/**
+ * Create payload for a git-source (GitOps) webhook.
+ *
+ * A git-source webhook carries no type-specific fields — firing it simply
+ * triggers the agent's git source ``pull_update``. ``payload_template`` is
+ * accepted for parity / future use (e.g. asserting the pushed ref) but is not
+ * required.
+ */
+export type AgentWebhookCreateGitSource = {
+    name: string;
+    type?: "git_source";
+    payload_template?: (string | null);
 };
 
 /**
@@ -1990,6 +2067,10 @@ export type BlockLayoutUpdate = {
     grid_h: number;
 };
 
+export type Body_cli_account_upload_file = {
+    file: (Blob | File);
+};
+
 export type Body_credentials_update_credential_sharing = {
     allow_sharing: boolean;
 };
@@ -2076,6 +2157,71 @@ export type BundleAccessGrantsPublic = {
 export type BundleCredentialDrift = {
     stale: boolean;
     drift?: Array<CredentialSpecDrift>;
+};
+
+/**
+ * Per-user scope state on one producer.
+ *
+ * Minimal — display info lives in the top-level ``users`` union to avoid
+ * duplicating user resolution per producer.
+ */
+export type BundlePermissionGrant = {
+    user_id: string;
+    grant_id: string;
+    scopes?: Array<(string)>;
+};
+
+/**
+ * One connected, identity-enabled producer the install consumes.
+ *
+ * Manageable producers (``can_manage=True``) carry the scope catalog and the
+ * current grants; non-manageable ones carry neither (the owner-gated reads
+ * never run for them) and are surfaced read-only via ``owner_email``.
+ */
+export type BundlePermissionProducer = {
+    producer_agent_id: string;
+    producer_agent_name?: (string | null);
+    producer_ui_color_preset?: (string | null);
+    credential_id: string;
+    credential_name?: (string | null);
+    identity_enabled: boolean;
+    can_manage: boolean;
+    owner_email?: (string | null);
+    scope_catalog?: Array<BundlePermissionScopeCatalogEntry>;
+    grants?: Array<BundlePermissionGrant>;
+};
+
+/**
+ * One ``policy.yaml`` catalog scope, for the modal's quick-add chips.
+ */
+export type BundlePermissionScopeCatalogEntry = {
+    name: string;
+    description?: (string | null);
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/bundle-permissions-overview``.
+ */
+export type BundlePermissionsOverview = {
+    bundle_uuid?: (string | null);
+    visibility?: (string | null);
+    bundle_access_applicable?: boolean;
+    bundle_grants?: Array<BundleAccessGrantPublic>;
+    producers?: Array<BundlePermissionProducer>;
+    users?: Array<BundlePermissionUser>;
+    show_card?: boolean;
+};
+
+/**
+ * Resolved display info for every user appearing anywhere in the union.
+ *
+ * Drives the table rows and supplies ``fallbackLabel`` for pills.
+ */
+export type BundlePermissionUser = {
+    user_id: string;
+    email?: (string | null);
+    full_name?: (string | null);
+    bundle_grant_id?: (string | null);
 };
 
 /**
@@ -2202,6 +2348,23 @@ export type CLIAccountTokensPublic = {
     count: number;
 };
 
+/**
+ * Where this agent's git remote is — for the CLI's sparse-checkout link.
+ *
+ * Carries NO deploy-key / private-key material: the developer authenticates to
+ * the remote with their OWN git/SSH client. ``repo_url`` / ``subdir`` / ``ref``
+ * are not secrets (the agent owner already sees them in the UI).
+ */
+export type CliGitCoordinates = {
+    vcs_enabled: boolean;
+    repo_url?: (string | null);
+    subdir?: (string | null);
+    ref?: (string | null);
+    sync_direction?: (string | null);
+    last_synced_commit?: (string | null);
+    auth_hint?: (string | null);
+};
+
 export type CLISetupTokenCreate = {
     agent_id: string;
 };
@@ -2299,6 +2462,7 @@ export type ConnectMcpProviderExternalRequest = {
     auth_mode?: string;
     token?: (string | null);
     consumer_agent_id?: (string | null);
+    user_workspace_id?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
     label?: (string | null);
@@ -2412,6 +2576,8 @@ export type CredentialCreate = {
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
+    mcp_consumer_agent_id?: (string | null);
+    mcp_auth_mode?: (string | null);
     credential_data?: ({
     [key: string]: unknown;
 } | null);
@@ -2462,6 +2628,8 @@ export type CredentialPublic = {
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
+    mcp_consumer_agent_id?: (string | null);
+    mcp_auth_mode?: (string | null);
     id: string;
     owner_id: string;
     user_workspace_id: (string | null);
@@ -2472,6 +2640,9 @@ export type CredentialPublic = {
     is_placeholder?: boolean;
     placeholder_source_id?: (string | null);
     status?: (string | null);
+    category?: string;
+    agent_usage_count?: number;
+    used_in_bundle?: boolean;
 };
 
 /**
@@ -2495,6 +2666,7 @@ export type CredentialSharePublic = {
     shared_by_email: string;
     shared_at: string;
     access_level: string;
+    source?: (string | null);
 };
 
 /**
@@ -2557,6 +2729,8 @@ export type CredentialWithData = {
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
+    mcp_consumer_agent_id?: (string | null);
+    mcp_auth_mode?: (string | null);
     id: string;
     owner_id: string;
     user_workspace_id: (string | null);
@@ -2567,6 +2741,9 @@ export type CredentialWithData = {
     is_placeholder?: boolean;
     placeholder_source_id?: (string | null);
     status?: (string | null);
+    category?: string;
+    agent_usage_count?: number;
+    used_in_bundle?: boolean;
     credential_data: {
         [key: string]: unknown;
     };
@@ -2963,6 +3140,82 @@ export type GenerateSQLRequest = {
     current_query?: (string | null);
 };
 
+/**
+ * One commit in the source's subdir history.
+ */
+export type GitCommit = {
+    sha: string;
+    short_sha: string;
+    author_name: string;
+    author_email: string;
+    date: string;
+    message: string;
+    commit_url?: (string | null);
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/git/commits``.
+ */
+export type GitCommitList = {
+    commits: Array<GitCommit>;
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/git/dirty``.
+ */
+export type GitDirtyStatus = {
+    dirty: boolean;
+    prompts_dirty: boolean;
+    workspace_dirty: boolean;
+    has_env: boolean;
+    last_synced_commit?: (string | null);
+};
+
+/**
+ * One changed workspace file in the commit preview.
+ */
+export type GitFileChange = {
+    path: string;
+    change_type: string;
+};
+
+/**
+ * One changed prompt field in the commit preview.
+ */
+export type GitPromptChange = {
+    field: string;
+    change_type: string;
+};
+
+/**
+ * Body of ``POST /agents/{agent_id}/git/push``.
+ */
+export type GitPushRequest = {
+    commit_message: string;
+    version?: (string | null);
+    also_publish_bundle?: boolean;
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/git/status`` — commit preview.
+ */
+export type GitStatus = {
+    dirty: boolean;
+    has_env: boolean;
+    last_synced_commit?: (string | null);
+    prompt_changes?: Array<GitPromptChange>;
+    file_changes?: Array<GitFileChange>;
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/git/check-updates``.
+ */
+export type GitUpdateStatus = {
+    update_available: boolean;
+    remote_commit?: (string | null);
+    last_synced_commit?: (string | null);
+};
+
 export type GoogleCallbackRequest = {
     code: string;
     state: string;
@@ -3330,6 +3583,24 @@ export type KeyEnvelopeInput = {
 };
 
 export type wrap_method = 'device' | 'recovery' | 'passphrase';
+
+/**
+ * Detailed schema for knowledge article including content.
+ */
+export type KnowledgeArticleDetail = {
+    id: string;
+    git_repo_id: string;
+    title: string;
+    description: string;
+    tags: Array<(string)>;
+    features: Array<(string)>;
+    file_path: string;
+    embedding_model: (string | null);
+    embedding_dimensions: (number | null);
+    updated_at: string;
+    content: string;
+    commit_hash: (string | null);
+};
 
 /**
  * Public schema for knowledge article.
@@ -3792,6 +4063,8 @@ export type MCPProviderStatus = {
     mcp_mode_conversation: boolean;
     mcp_mode_building: boolean;
     target_agent?: (MCPProviderTargetAgent | null);
+    connector_mode?: (string | null);
+    consumer_agent?: (MCPProviderTargetAgent | null);
     last_error?: (string | null);
 };
 
@@ -4662,6 +4935,10 @@ export type SharedCredentialPublic = {
     owner_email: string;
     shared_at: string;
     access_level: string;
+    category?: string;
+    source?: (string | null);
+    agent_usage_count?: number;
+    used_in_bundle?: boolean;
 };
 
 /**
@@ -5204,6 +5481,18 @@ export type UserInfoResponse = {
     username?: (string | null);
 };
 
+/**
+ * Browser-detected locale defaults; server fills only still-NULL fields.
+ *
+ * Used by ``PATCH /users/me/locale-defaults``. ``conversation_style`` is
+ * deliberately absent — it is never browser-detected.
+ */
+export type UserLocaleDefaults = {
+    timezone?: (string | null);
+    language?: (string | null);
+    locale?: (string | null);
+};
+
 export type UserNotificationSettingUpdate = {
     email_enabled: boolean;
 };
@@ -5260,6 +5549,10 @@ export type UserPublic = {
     email_confirmed?: boolean;
     email_confirmed_at?: (string | null);
     confirmation_resend_available_at?: (string | null);
+    timezone?: (string | null);
+    language?: (string | null);
+    locale?: (string | null);
+    conversation_style?: string;
 };
 
 /**
@@ -5290,6 +5583,10 @@ export type UserPublicWithAICredentials = {
     email_confirmed?: boolean;
     email_confirmed_at?: (string | null);
     confirmation_resend_available_at?: (string | null);
+    timezone?: (string | null);
+    language?: (string | null);
+    locale?: (string | null);
+    conversation_style?: string;
     has_anthropic_api_key?: boolean;
     has_openai_api_key?: boolean;
     has_google_ai_api_key?: boolean;
@@ -5364,6 +5661,10 @@ export type UserUpdateMe = {
     default_ai_credential_building_id?: (string | null);
     default_model_override_conversation?: (string | null);
     default_model_override_building?: (string | null);
+    timezone?: (string | null);
+    language?: (string | null);
+    locale?: (string | null);
+    conversation_style?: (string | null);
 };
 
 export type UserWorkspaceCreate = {
@@ -5788,6 +6089,69 @@ export type AgentAppMcpRoutesRemoveUserAssignmentFromAgentRouteData = {
 
 export type AgentAppMcpRoutesRemoveUserAssignmentFromAgentRouteResponse = (Message);
 
+export type AgentGitCheckoutAgentData = {
+    requestBody: AgentCheckoutRequest;
+};
+
+export type AgentGitCheckoutAgentResponse = (AgentCheckoutResponse);
+
+export type AgentGitConnectGitSourceData = {
+    agentId: string;
+    requestBody: AgentGitConnectRequest;
+};
+
+export type AgentGitConnectGitSourceResponse = (AgentGitSourcePublic);
+
+export type AgentGitDisconnectGitSourceData = {
+    agentId: string;
+};
+
+export type AgentGitDisconnectGitSourceResponse = (Message);
+
+export type AgentGitGetGitSourceData = {
+    agentId: string;
+};
+
+export type AgentGitGetGitSourceResponse = (AgentGitSourcePublic);
+
+export type AgentGitCheckGitUpdatesData = {
+    agentId: string;
+};
+
+export type AgentGitCheckGitUpdatesResponse = (GitUpdateStatus);
+
+export type AgentGitListGitCommitsData = {
+    agentId: string;
+    limit?: number;
+};
+
+export type AgentGitListGitCommitsResponse = (GitCommitList);
+
+export type AgentGitGetGitDirtyData = {
+    agentId: string;
+};
+
+export type AgentGitGetGitDirtyResponse = (GitDirtyStatus);
+
+export type AgentGitGetGitStatusData = {
+    agentId: string;
+};
+
+export type AgentGitGetGitStatusResponse = (GitStatus);
+
+export type AgentGitPullGitSourceData = {
+    agentId: string;
+};
+
+export type AgentGitPullGitSourceResponse = (AgentPublic);
+
+export type AgentGitPushGitSourceData = {
+    agentId: string;
+    requestBody: GitPushRequest;
+};
+
+export type AgentGitPushGitSourceResponse = (AgentGitSourcePublic);
+
 export type AgentHooksExecuteAgentWebhookData = {
     authorization?: (string | null);
     token?: (string | null);
@@ -6160,36 +6524,42 @@ export type AgentsGenerateRouterTriggerPromptEndpointResponse = (GenerateRouterT
 
 export type AgentTasksAgentCreateTaskData = {
     requestBody: AgentTaskCreate;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentCreateTaskResponse = (AgentTaskOperationResponse);
 
 export type AgentTasksAgentResolveTaskByCodeData = {
     shortCode: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentResolveTaskByCodeResponse = (unknown);
 
 export type AgentTasksAgentAddCommentCurrentData = {
     requestBody: AgentTaskCommentCreate;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentAddCommentCurrentResponse = (AgentCommentResponse);
 
 export type AgentTasksAgentUpdateStatusCurrentData = {
     requestBody: AgentTaskStatusUpdate;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentUpdateStatusCurrentResponse = (AgentTaskOperationResponse);
 
 export type AgentTasksAgentGetTaskDetailsCurrentData = {
     sourceSessionId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentGetTaskDetailsCurrentResponse = (unknown);
 
 export type AgentTasksAgentCreateSubtaskCurrentData = {
     requestBody: AgentSubtaskCreate;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentCreateSubtaskCurrentResponse = (AgentTaskOperationResponse);
@@ -6197,6 +6567,7 @@ export type AgentTasksAgentCreateSubtaskCurrentResponse = (AgentTaskOperationRes
 export type AgentTasksAgentAddCommentData = {
     requestBody: AgentTaskCommentCreate;
     taskId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentAddCommentResponse = (AgentCommentResponse);
@@ -6204,6 +6575,7 @@ export type AgentTasksAgentAddCommentResponse = (AgentCommentResponse);
 export type AgentTasksAgentUpdateStatusData = {
     requestBody: AgentTaskStatusUpdate;
     taskId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentUpdateStatusResponse = (AgentTaskOperationResponse);
@@ -6211,6 +6583,7 @@ export type AgentTasksAgentUpdateStatusResponse = (AgentTaskOperationResponse);
 export type AgentTasksAgentCreateSubtaskData = {
     requestBody: AgentSubtaskCreate;
     taskId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentCreateSubtaskResponse = (AgentTaskOperationResponse);
@@ -6218,6 +6591,7 @@ export type AgentTasksAgentCreateSubtaskResponse = (AgentTaskOperationResponse);
 export type AgentTasksAgentListTasksData = {
     scope?: string;
     status?: (string | null);
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentListTasksResponse = (InputTasksPublicExtended);
@@ -6225,6 +6599,7 @@ export type AgentTasksAgentListTasksResponse = (InputTasksPublicExtended);
 export type AgentTasksAgentGetTaskDetailsData = {
     sourceSessionId?: (string | null);
     taskId: string;
+    xAgentEnvId?: (string | null);
 };
 
 export type AgentTasksAgentGetTaskDetailsResponse = (unknown);
@@ -6242,6 +6617,13 @@ export type AgentWebhooksCreateScriptWebhookData = {
 };
 
 export type AgentWebhooksCreateScriptWebhookResponse = (AgentWebhookPublicWithToken);
+
+export type AgentWebhooksCreateGitSourceWebhookData = {
+    agentId: string;
+    requestBody: AgentWebhookCreateGitSource;
+};
+
+export type AgentWebhooksCreateGitSourceWebhookResponse = (AgentWebhookPublicWithToken);
 
 export type AgentWebhooksListWebhooksData = {
     agentId: string;
@@ -6684,6 +7066,8 @@ export type CliSearchKnowledgeData = {
 
 export type CliSearchKnowledgeResponse = (unknown);
 
+export type CliCliGitCoordinatesResponse = (CliGitCoordinates);
+
 export type CliGetSyncRuntimeData = {
     agentId: string;
 };
@@ -6724,6 +7108,12 @@ export type CliAccountSearchKnowledgeData = {
 };
 
 export type CliAccountSearchKnowledgeResponse = (unknown);
+
+export type CliAccountUploadFileData = {
+    formData: Body_cli_account_upload_file;
+};
+
+export type CliAccountUploadFileResponse = (FileUploadPublic);
 
 export type CliMintChildTokenData = {
     agentId: string;
@@ -7380,7 +7770,6 @@ export type EnvironmentsGetEnvironmentActionLogsData = {
 export type EnvironmentsGetEnvironmentActionLogsResponse = (AgentEnvActionLogsPublic);
 
 export type EnvironmentsWorkspaceFilesChangedData = {
-    authorization?: (string | null);
     id: string;
     requestBody?: (WorkspaceFilesChangedRequest | null);
     xAgentEnvId?: (string | null);
@@ -7389,7 +7778,6 @@ export type EnvironmentsWorkspaceFilesChangedData = {
 export type EnvironmentsWorkspaceFilesChangedResponse = (Message);
 
 export type EnvironmentsPromptFileChangedData = {
-    authorization?: (string | null);
     id: string;
     xAgentEnvId?: (string | null);
 };
@@ -7397,7 +7785,6 @@ export type EnvironmentsPromptFileChangedData = {
 export type EnvironmentsPromptFileChangedResponse = (Message);
 
 export type EnvironmentsAgentApiReloadedData = {
-    authorization?: (string | null);
     id: string;
     xAgentEnvId?: (string | null);
 };
@@ -7745,6 +8132,12 @@ export type InstallsGetBundleCredentialDriftData = {
 
 export type InstallsGetBundleCredentialDriftResponse = (BundleCredentialDrift);
 
+export type InstallsGetBundlePermissionsOverviewData = {
+    agentId: string;
+};
+
+export type InstallsGetBundlePermissionsOverviewResponse = (BundlePermissionsOverview);
+
 export type InstallsUpdateSetupCredentialData = {
     agentId: string;
     credentialId: string;
@@ -7754,7 +8147,6 @@ export type InstallsUpdateSetupCredentialData = {
 export type InstallsUpdateSetupCredentialResponse = (CredentialPublic);
 
 export type KnowledgeQueryKnowledgeData = {
-    authorization?: (string | null);
     requestBody: KnowledgeQueryRequest;
     xAgentEnvId?: (string | null);
 };
@@ -7825,6 +8217,19 @@ export type KnowledgeSourcesListKnowledgeArticlesData = {
 };
 
 export type KnowledgeSourcesListKnowledgeArticlesResponse = (Array<KnowledgeArticlePublic>);
+
+export type KnowledgeSourcesGetKnowledgeArticleData = {
+    articleId: string;
+    sourceId: string;
+};
+
+export type KnowledgeSourcesGetKnowledgeArticleResponse = (KnowledgeArticleDetail);
+
+export type KnowledgeSourcesExportKnowledgeSourceData = {
+    sourceId: string;
+};
+
+export type KnowledgeSourcesExportKnowledgeSourceResponse = (string);
 
 export type KnowledgeSourcesListDiscoverableSourcesData = {
     limit?: number;
@@ -8326,6 +8731,7 @@ export type PrivateCreateUserResponse = (UserPublic);
 
 export type SecurityEventsReportSecurityEventData = {
     requestBody: SecurityEventReport;
+    xAgentEnvId?: (string | null);
 };
 
 export type SecurityEventsReportSecurityEventResponse = (SecurityEventReportResponse);
@@ -8743,6 +9149,7 @@ export type UsersCreateUserData = {
 export type UsersCreateUserResponse = (UserPublic);
 
 export type UsersSearchUsersData = {
+    includeSelf?: boolean;
     limit?: number;
     q: string;
 };
@@ -8778,6 +9185,12 @@ export type UsersUpdateUserDetailsMeData = {
 };
 
 export type UsersUpdateUserDetailsMeResponse = (UserDetailsPublic);
+
+export type UsersUpdateUserLocaleDefaultsData = {
+    requestBody: UserLocaleDefaults;
+};
+
+export type UsersUpdateUserLocaleDefaultsResponse = (UserPublic);
 
 export type UsersResendConfirmationMeResponse = (ResendConfirmationResponse);
 

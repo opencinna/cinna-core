@@ -620,6 +620,69 @@ class CLIService:
 import os, shutil, signal, subprocess, sys
 
 SETUP_URL = "{setup_url}"
+MINIMUM_CLI_VERSION = "{settings.MINIMUM_CLI_VERSION}"
+
+
+def _parse_version(text):
+    """Extract a numeric version tuple from arbitrary version text.
+
+    Finds the first whitespace token that starts with a digit (e.g. the
+    "0.2.3" in `cinna --version`'s "cinna, version 0.2.3") and parses its
+    leading dotted-numeric components, stopping at the first non-numeric part
+    so pre-release suffixes (e.g. "0.2.3rc1") degrade to (0, 2, 3). Returns
+    None when no version-looking token is found.
+    """
+    token = ""
+    for raw in (text or "").replace(",", " ").split():
+        if raw and raw[0].isdigit():
+            token = raw
+            break
+    if not token:
+        return None
+    nums = []
+    for part in token.split("."):
+        digits = ""
+        for ch in part:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if digits == "":
+            break
+        nums.append(int(digits))
+    return tuple(nums) or None
+
+
+def _installed_cli_version(cinna):
+    """Return the installed cinna CLI version tuple, or None if undeterminable."""
+    try:
+        result = subprocess.run(
+            [cinna, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception:
+        return None
+    return _parse_version((result.stdout or "") + " " + (result.stderr or ""))
+
+
+def _print_upgrade_instructions(installed):
+    print("Your installed cinna CLI is too old for this platform's setup flow.")
+    print()
+    if installed is not None:
+        print("  installed: " + ".".join(str(p) for p in installed))
+    print("  required:  " + MINIMUM_CLI_VERSION + " or newer")
+    print()
+    print("Update it with one of:")
+    if shutil.which("uv"):
+        print("  uv tool upgrade cinna-cli")
+    else:
+        print("  uv tool upgrade cinna-cli    (recommended, install uv: https://docs.astral.sh/uv/)")
+    print("  pip install --upgrade cinna-cli")
+    print()
+    print("Then re-run this command:")
+    print("  curl -sL " + SETUP_URL + " | python3 -")
 
 
 def _reattach_stdin_to_tty():
@@ -644,6 +707,14 @@ def _reattach_stdin_to_tty():
 def main():
     cinna = shutil.which("cinna")
     if cinna:
+        installed = _installed_cli_version(cinna)
+        required = _parse_version(MINIMUM_CLI_VERSION)
+        # Only block when we could actually determine an older version. A version
+        # we can't parse (None) is left to proceed — never falsely block a CLI
+        # whose `--version` output we don't recognize.
+        if installed is not None and required is not None and installed < required:
+            _print_upgrade_instructions(installed)
+            sys.exit(1)
         print("Found cinna CLI, running setup...")
         _reattach_stdin_to_tty()
         # Ctrl+C is delivered to the whole foreground process group. Ignore it

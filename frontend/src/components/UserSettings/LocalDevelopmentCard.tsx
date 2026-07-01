@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Copy, Check, Key, MonitorDot, RefreshCw, Unplug } from "lucide-react"
+import { Copy, Check, Key, Laptop, MonitorDot, RefreshCw, Unplug } from "lucide-react"
 import { useState, useEffect } from "react"
 
 import type { CLISetupTokenCreated, CLIAccountTokenPublic } from "@/client"
@@ -27,12 +27,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 
 function formatCountdown(seconds: number): string {
   if (seconds >= 60) {
@@ -149,9 +143,7 @@ export function LocalDevelopmentCard() {
             onClick={handleSetup}
             disabled={createSetupTokenMutation.isPending}
           >
-            {createSetupTokenMutation.isPending
-              ? "Generating..."
-              : "Set up Local Development"}
+            {createSetupTokenMutation.isPending ? "Generating..." : "Setup"}
           </Button>
         </div>
       </CardHeader>
@@ -227,75 +219,71 @@ export function LocalDevelopmentCard() {
                 : "No active account sessions. Click Set up Local Development to generate a bootstrap command."}
             </p>
           ) : (
-            <div className="space-y-1.5">
+            <ul className="divide-y divide-border">
               {tokens.map((token) => (
-                <div
+                <li
                   key={token.id}
-                  className="flex items-center justify-between px-3 py-2 border rounded-lg"
+                  className="flex items-center justify-between gap-3 py-3"
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-sm truncate">
-                      {token.name || token.prefix}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {token.child_count} agent
-                      {token.child_count === 1 ? "" : "s"} synced
-                    </p>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Laptop className="h-4 w-4 text-muted-foreground" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {token.name || token.prefix}
+                      </p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-muted-foreground text-xs">
+                          {token.child_count} agent
+                          {token.child_count === 1 ? "" : "s"} synced
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="shrink-0 ml-2">
-                    <AlertDialog>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                aria-label="Disconnect account session"
-                                className="h-7 w-7 text-destructive hover:text-destructive"
-                              >
-                                <Unplug className="h-4 w-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Disconnect
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <AlertDialogContent
-                        onOpenAutoFocus={(e) => e.preventDefault()}
+
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                        title="Disconnect"
+                        aria-label="Disconnect account session"
                       >
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>
-                            Disconnect Account Session
-                          </AlertDialogTitle>
-                          <AlertDialogDescription>
-                            Revoking disconnects all agents synced from this
-                            machine ({token.child_count} agent
-                            {token.child_count === 1 ? "" : "s"}). Local files
-                            remain intact, but the CLI will need to be set up
-                            again.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            autoFocus
-                            onClick={() =>
-                              revokeAccountTokenMutation.mutate(token.id)
-                            }
-                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                          >
-                            Disconnect
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  </div>
-                </div>
+                        <Unplug className="h-4 w-4" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent
+                      onOpenAutoFocus={(e) => e.preventDefault()}
+                    >
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>
+                          Disconnect Account Session
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Revoking disconnects all agents synced from this
+                          machine ({token.child_count} agent
+                          {token.child_count === 1 ? "" : "s"}). Local files
+                          remain intact, but the CLI will need to be set up
+                          again.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          autoFocus
+                          onClick={() =>
+                            revokeAccountTokenMutation.mutate(token.id)
+                          }
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                          Disconnect
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
       </CardContent>

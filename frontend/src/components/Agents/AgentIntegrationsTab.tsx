@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Copy, Check } from "lucide-react"
+import { Copy, Check, Waypoints } from "lucide-react"
 import { useState } from "react"
 
 import type { AgentPublic } from "@/client"
@@ -25,6 +25,7 @@ import { McpConnectorsCard } from "./McpConnectorsCard"
 import { McpConnectorsCardSimple } from "./McpConnectorsCardSimple"
 import { WebappShareCard } from "./WebappShareCard"
 import { LocalDevCard } from "./LocalDevCard"
+import { GitVersioningCard } from "./GitVersioningCard"
 import { AgentWebhooksCard } from "./Webhooks/AgentWebhooksCard"
 
 interface AgentIntegrationsTabProps {
@@ -99,7 +100,10 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
           <CardHeader>
             <div className="flex items-start justify-between">
               <div className="space-y-1.5">
-                <CardTitle>A2A Integration</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <Waypoints className="h-5 w-5" />
+                  A2A Integration
+                </CardTitle>
                 <CardDescription>
                   Enable Agent-to-Agent protocol for external agent communication
                 </CardDescription>
@@ -181,12 +185,13 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
           agentApiIdentityEnabled={agent.agent_api_identity_enabled ?? false}
         />
 
-        {/* Email Integration Card — only for the publisher install (or
-            unpublished agents). Foreign installs of a published bundle
-            inherit email integration from the publisher and don't get
-            their own. */}
-        {(agent.is_publisher_install || !agent.bundle_uuid) && (
-          <EmailIntegrationCard agentId={agent.id} />
+        {/* Git Versioning Card - owner-only (connect/push/pull are developer-gated) */}
+        {isOwner && (
+          <GitVersioningCard
+            agentId={agent.id}
+            agentName={agent.name}
+            gitVersioningEnabled={agent.git_versioning_enabled ?? false}
+          />
         )}
 
         {/* Webhooks Card - owner-only (mirrors AgentSchedulesCard ownership gate) */}
@@ -194,6 +199,14 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
 
         {/* Local Development Card */}
         <LocalDevCard agentId={agent.id} />
+
+        {/* Email Integration Card — only for the publisher install (or
+            unpublished agents). Foreign installs of a published bundle
+            inherit email integration from the publisher and don't get
+            their own. */}
+        {(agent.is_publisher_install || !agent.bundle_uuid) && (
+          <EmailIntegrationCard agentId={agent.id} />
+        )}
       </div>
     </div>
   )

@@ -60,6 +60,11 @@ class ConnectMcpProviderExternalRequest(SQLModel):
     # Required for fixed_token; ignored otherwise.
     token: str | None = None
     consumer_agent_id: uuid.UUID | None = None
+    # Active workspace to stamp the new credential with when there is no consumer
+    # agent (a manually-created external provider follows the user's active
+    # workspace, like any "My Credentials" entry). Ignored when a consumer agent
+    # is given — the agent's workspace wins. Ownership is validated server-side.
+    user_workspace_id: uuid.UUID | None = None
     mcp_mode_conversation: bool = True
     mcp_mode_building: bool = True
     label: str | None = Field(default=None, max_length=2048)
@@ -102,6 +107,17 @@ class MCPProviderStatus(SQLModel):
     mcp_mode_building: bool
     # (agent2agent only) best-effort — None if the producer agent is gone.
     target_agent: MCPProviderTargetAgent | None = None
+    # (agent2agent only) the single mode the producer connector actually serves
+    # ("conversation" | "building"), resolved from the bound connector. This is
+    # the server side's true reachability — distinct from the consumer-side
+    # mcp_mode_* toggles, which only choose where the *client* injects it. None
+    # for external/manual providers or a deleted connector.
+    connector_mode: str | None = None
+    # (agent2agent only) the consumer agent this connection is bound to (the pair's
+    # consumer side), resolved from credential.mcp_consumer_agent_id. None for
+    # external/manual providers, for floating (unbound) connections, or if the
+    # consumer agent was deleted (SET NULL). Reuses the MCPProviderTargetAgent shape.
+    consumer_agent: MCPProviderTargetAgent | None = None
     # Last error message for the ``error`` state (best-effort, Phase 5 fills it).
     last_error: str | None = None
 

@@ -1,12 +1,14 @@
 /**
  * DesktopSessionsCard — Settings > Security tab
  *
- * Shows all desktop app clients connected to the user's account and allows
- * disconnecting (revoking) individual clients.  Follows the same card layout
- * as other Settings sections.
+ * Shows all native app clients (Cinna Desktop and Cinna Mobile) connected to
+ * the user's account and allows disconnecting (revoking) individual clients.
+ * Both client kinds share the same `desktop_oauth_client` backing table, so
+ * this single card lists them together.  Follows the same card layout as other
+ * Settings sections.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Monitor, Apple, Chrome, Laptop, Trash2 } from "lucide-react"
+import { Monitor, Apple, Chrome, Laptop, Smartphone, Unplug } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 
 import { DesktopAuthService } from "@/client"
@@ -45,6 +47,9 @@ function PlatformIcon({ platform }: { platform?: string | null }) {
       return <Monitor className={cls} />
     case "linux":
       return <Chrome className={cls} />
+    case "ios":
+    case "android":
+      return <Smartphone className={cls} />
     default:
       return <Laptop className={cls} />
   }
@@ -81,19 +86,19 @@ export function DesktopSessionsCard() {
       DesktopAuthService.revokeDesktopClient({ clientId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["desktop-clients"] })
-      showSuccessToast("Desktop app disconnected.")
+      showSuccessToast("App disconnected.")
     },
     onError: () => {
-      showErrorToast("Failed to disconnect desktop app.")
+      showErrorToast("Failed to disconnect app.")
     },
   })
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Desktop Sessions</CardTitle>
+        <CardTitle>App Sessions</CardTitle>
         <CardDescription>
-          Manage Cinna Desktop app connections to this account.
+          Manage Cinna Desktop and Cinna Mobile app connections to this account.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -103,10 +108,10 @@ export function DesktopSessionsCard() {
           <div className="flex flex-col items-center gap-2 py-6 text-center">
             <Laptop className="h-8 w-8 text-muted-foreground/50" />
             <p className="text-sm text-muted-foreground">
-              No desktop apps connected.
+              No apps connected.
             </p>
             <p className="text-xs text-muted-foreground">
-              Download Cinna Desktop to get started.
+              Download Cinna Desktop or Cinna Mobile to get started.
             </p>
           </div>
         ) : (
@@ -136,22 +141,22 @@ export function DesktopSessionsCard() {
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button
-                      variant="destructive"
-                      size="sm"
-                      className="shrink-0"
+                      variant="ghost"
+                      size="icon"
+                      className="shrink-0 text-muted-foreground hover:text-destructive"
+                      title="Disconnect"
                       aria-label={`Disconnect ${c.device_name}`}
                     >
-                      <Trash2 className="h-4 w-4 mr-1" />
-                      Disconnect
+                      <Unplug className="h-4 w-4" />
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>Disconnect desktop app?</AlertDialogTitle>
+                      <AlertDialogTitle>Disconnect app?</AlertDialogTitle>
                       <AlertDialogDescription>
                         This will revoke access for{" "}
-                        <strong>{c.device_name}</strong>. The desktop app will
-                        need to log in again.
+                        <strong>{c.device_name}</strong>. The app will need to
+                        log in again.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

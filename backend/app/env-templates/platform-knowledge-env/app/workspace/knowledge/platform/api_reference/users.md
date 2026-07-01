@@ -36,6 +36,7 @@ Auto-generated from OpenAPI spec. Tag: `users`
 **Query parameters:**
 - `q`: string (required)
 - `limit`: integer, default: `10`
+- `include_self`: boolean, default: `False`
 
 **Response:** `UsersSearchPublic`
 
@@ -71,6 +72,10 @@ Auto-generated from OpenAPI spec. Tag: `users`
   - `default_ai_credential_building_id`: string | null
   - `default_model_override_conversation`: string | null
   - `default_model_override_building`: string | null
+  - `timezone`: string | null
+  - `language`: string | null
+  - `locale`: string | null
+  - `conversation_style`: string | null
 
 **Response:** `UserPublic`
 
@@ -111,6 +116,18 @@ Auto-generated from OpenAPI spec. Tag: `users`
   - `details_raw`: string (required)
 
 **Response:** `UserDetailsPublic`
+
+---
+
+## PATCH `/api/v1/users/me/locale-defaults`
+**Update User Locale Defaults**
+
+**Request body** (`UserLocaleDefaults`):
+  - `timezone`: string | null
+  - `language`: string | null
+  - `locale`: string | null
+
+**Response:** `UserPublic`
 
 ---
 

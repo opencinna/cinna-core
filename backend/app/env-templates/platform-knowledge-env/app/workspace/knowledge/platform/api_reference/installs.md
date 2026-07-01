@@ -111,6 +111,16 @@ Auto-generated from OpenAPI spec. Tag: `installs`
 
 ---
 
+## GET `/api/v1/agents/{agent_id}/bundle-permissions-overview`
+**Get Bundle Permissions Overview**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `BundlePermissionsOverview`
+
+---
+
 ## PUT `/api/v1/agents/{agent_id}/setup-credentials/{credential_id}`
 **Update Setup Credential**
 

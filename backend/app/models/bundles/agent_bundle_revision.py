@@ -20,7 +20,21 @@ import uuid
 from datetime import datetime, UTC
 
 from sqlmodel import Field, SQLModel, Column
-from sqlalchemy import JSON, Index, UniqueConstraint, Text, text
+from sqlalchemy import JSON, Index, String, UniqueConstraint, Text, text
+
+
+# Provenance of a revision row.
+#
+# ``publish`` — a user-facing catalog publish (``PublishService.publish``).
+#   These are the rows shown in the agent's **Revisions** card and the ones the
+#   publish dialog reads to suggest the next version label.
+# ``git`` — an internal SSOT / dirty-check baseline persisted by the git
+#   versioning operations (checkout / pull / push / connect). These back App
+#   Data keying, install bookkeeping, and the git dirty check, but they are NOT
+#   catalog publishes — so they are hidden from the Revisions listing and never
+#   influence the suggested next version.
+REVISION_ORIGIN_PUBLISH = "publish"
+REVISION_ORIGIN_GIT = "git"
 
 
 class AgentBundleRevision(SQLModel, table=True):
@@ -41,8 +55,25 @@ class AgentBundleRevision(SQLModel, table=True):
         foreign_key="agent_bundle.id", nullable=False, ondelete="CASCADE"
     )
 
-    # Monotonically increasing per bundle. Allocated by ``PublishService``.
+    # Monotonically increasing per bundle. Allocated globally across BOTH
+    # publish and git revisions (the ``uq_revision_bundle_number`` uniqueness +
+    # the ``<bundle>/<rev>/`` snapshot path depend on it), so publish-only
+    # numbering would gap — that is expected. Use ``origin`` to tell the two
+    # apart, not ``revision_number``.
     revision_number: int = Field(nullable=False)
+
+    # Provenance discriminator — ``REVISION_ORIGIN_PUBLISH`` (default) or
+    # ``REVISION_ORIGIN_GIT``. Lets the Revisions UI / version suggestion show
+    # only real catalog publishes while git baselines stay as the internal SSOT
+    # the dirty check compares against. Existing rows backfill to ``publish``.
+    origin: str = Field(
+        default=REVISION_ORIGIN_PUBLISH,
+        sa_column=Column(
+            String(32),
+            nullable=False,
+            server_default=text(f"'{REVISION_ORIGIN_PUBLISH}'"),
+        ),
+    )
 
     # Human-friendly version label entered by the publisher at publish
     # time (e.g. "1.0", "1.1", "2.0"). Independent from ``revision_number``,
@@ -106,6 +137,29 @@ class AgentBundleRevision(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default=text("'[]'::json")),
     )
+
+    # ── Agent-row definitional metadata (schema_version 2, additive) ──
+    # Snapshot of agent-level config that defines the published agent beyond the
+    # prompts / SDK selections above. All nullable so revisions published before
+    # these columns existed (and pre-existing rows / v1 manifests) read cleanly:
+    # a NULL means "the snapshot did not carry this field" and restore must NOT
+    # clobber the consumer's current value. No server-side backfill. Tokens /
+    # grants / per-install UI prefs are deliberately excluded (see the
+    # agent-metadata-snapshot plan).
+    description: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    example_prompts: list | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    status_refresh_command: str | None = Field(
+        default=None, sa_column=Column(String(1024), nullable=True)
+    )
+    agent_api_enabled: bool | None = Field(default=None)
+    agent_api_identity_enabled: bool | None = Field(default=None)
+    a2a_config: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    agent_sdk_config: dict | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    webapp_enabled: bool | None = Field(default=None)
 
     # Filesystem location of the snapshot under ``BUNDLE_STORAGE_DIR``.
     snapshot_path: str = Field(max_length=1024, nullable=False)

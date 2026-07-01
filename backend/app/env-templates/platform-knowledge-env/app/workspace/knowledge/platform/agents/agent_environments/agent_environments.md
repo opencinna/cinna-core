@@ -59,13 +59,13 @@ The platform supports multiple Docker base images for different agent use cases.
 ### 3. Environment Rebuild
 
 1. User triggers rebuild (or admin pushes system update)
-2. If running, container stopped first
+2. Status set to `rebuilding` and held there for the entire operation; if running, the container is stopped first **without** flipping the status to `stopped` (so a status poll mid-rebuild never shows the env as down)
 3. Old container removed completely (`docker-compose down`)
 4. Shared template image rebuilt (or reused from cache) by `TemplateImageService`; tag injected into regenerated compose file
 5. Compose template overwritten from template dir; old core directory deleted, fresh core copied from shared `app_core_base`
 6. Knowledge base files synced from template (add/update only, no deletions)
 7. If was running: new container started with full setup (packages + dynamic data)
-8. Environment returns to previous state (running or stopped)
+8. Environment returns to previous state: `running` (with `ENVIRONMENT_ACTIVATED`) if it was running, otherwise `stopped`
 
 ### 4. Environment Suspension (Automatic)
 
@@ -124,6 +124,8 @@ creating → building → stopped ──→ starting → running
 ```
 
 **Status values**: `stopped`, `creating`, `building`, `initializing`, `starting`, `running`, `rebuilding`, `suspended`, `activating`, `error`, `deprecated`
+
+**Status stability during rebuild**: the persisted status stays `rebuilding` from the first step until the env is back up. The internal container-stop step does not write `stopped` — otherwise the ~30s rebuild window would persist a `stopped` status that the frontend's fallback poll (every 10s) could catch and surface as a spurious "stopped → running" flicker. Only the terminal transition writes the real end state (`running`/`stopped`).
 
 ### Inactivity Period Configuration
 

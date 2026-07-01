@@ -12,25 +12,30 @@ ships with the safe behaviour.
 import logging
 import shutil
 import uuid
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlmodel import Session, select
 from sqlalchemy import func
+from sqlmodel import Session, select
 
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import (
     AgentBundle,
     AgentBundleUpdate,
-    BundleVisibility,
     BundleInstallMode,
+    BundleVisibility,
 )
-from app.models.bundles.agent_bundle_revision import AgentBundleRevision
-from app.models.bundles.bundle_access_grant import BundleAccessGrant
+from app.models.bundles.agent_bundle_revision import (
+    REVISION_ORIGIN_PUBLISH,
+    AgentBundleRevision,
+)
+from app.models.bundles.bundle_access_grant import (
+    BundleAccessGrant,
+    BundleAccessGrantPublic,
+)
 from app.models.credentials.ai_credential import AICredential
 from app.models.environments.environment import AgentEnvironment
 from app.models.users.user import User
-from app.services.environments.sdk_constants import sdk_expected_credential_type
 from app.services.bundles.exceptions import (
     BundleAccessDeniedError,
     BundleConflictError,
@@ -40,6 +45,7 @@ from app.services.bundles.exceptions import (
     RevisionInUseError,
     RevisionNotFoundError,
 )
+from app.services.environments.sdk_constants import sdk_expected_credential_type
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +188,15 @@ class BundleService:
         """
         revisions_stmt = (
             select(AgentBundleRevision)
-            .where(AgentBundleRevision.bundle_id == bundle.id)
+            .where(
+                AgentBundleRevision.bundle_id == bundle.id,
+                # Only user-facing catalog publishes belong in the Revisions
+                # card. Git-versioning baselines (origin="git") are the internal
+                # dirty-check SSOT and must not appear here — nor inflate the
+                # version-suggestion the publish dialog derives from the latest
+                # listed revision.
+                AgentBundleRevision.origin == REVISION_ORIGIN_PUBLISH,
+            )
             .order_by(AgentBundleRevision.revision_number.desc())
         )
         revisions = list(session.exec(revisions_stmt).all())
@@ -207,15 +221,17 @@ class BundleService:
     def create_bundle(
         session: Session,
         bundle_id: str,
-        publisher_user_id: uuid.UUID,
+        publisher_user_id: uuid.UUID | None,
         display_name: str,
         description: str | None = None,
     ) -> AgentBundle:
         """Create a new ``AgentBundle`` row.
 
-        Used by ``PublishService`` on first publish. Callers are responsible
-        for re-using an existing bundle (looked up by ``bundle_id``) before
-        invoking this — duplicate ``bundle_id`` raises an integrity error.
+        Used by ``PublishService`` on first publish (with a real
+        ``publisher_user_id``) and by the git-source import path (with
+        ``publisher_user_id=None`` for an ownerless / shared row). Callers are
+        responsible for re-using an existing bundle (looked up by ``bundle_id``)
+        before invoking this — duplicate ``bundle_id`` raises an integrity error.
         """
         bundle = AgentBundle(
             bundle_id=bundle_id,
@@ -382,6 +398,7 @@ class BundleService:
                 .where(
                     AgentBundleRevision.bundle_id == bundle.id,
                     AgentBundleRevision.id != revision.id,
+                    AgentBundleRevision.origin == REVISION_ORIGIN_PUBLISH,
                 )
                 .order_by(AgentBundleRevision.revision_number.desc())
                 .limit(1)
@@ -453,6 +470,29 @@ class BundleService:
         logger.info("Deleted AgentBundle id=%s bundle_id=%s", bundle.id, bundle.bundle_id)
 
     # ── Access grants ──────────────────────────────────────────────
+
+    @staticmethod
+    def grant_to_public(
+        session: Session,
+        grant: BundleAccessGrant,
+        user: User | None = None,
+    ) -> BundleAccessGrantPublic:
+        """Project a grant to its public schema, resolving the user's email.
+
+        Pass ``user`` when the caller already holds the resolved ``User`` row to
+        skip the lookup (used by the permissions-overview aggregator, which
+        batch-resolves all referenced users once).
+        """
+        if user is None:
+            user = session.get(User, grant.user_id)
+        return BundleAccessGrantPublic(
+            id=grant.id,
+            bundle_id=grant.bundle_id,
+            user_id=grant.user_id,
+            user_email=user.email if user is not None else None,
+            granted_by_user_id=grant.granted_by_user_id,
+            created_at=grant.created_at,
+        )
 
     @staticmethod
     def list_grants(session: Session, bundle: AgentBundle) -> list[BundleAccessGrant]:

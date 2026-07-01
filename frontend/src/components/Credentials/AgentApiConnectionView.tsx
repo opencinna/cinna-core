@@ -1,7 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
-import { ArrowRight, FileJson, Lock, Network } from "lucide-react"
+import { FileJson, Lock, Network } from "lucide-react"
 import { useEffect } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -109,146 +108,136 @@ export function AgentApiConnectionView({
           disconnect.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
-        {/* Connection map: producer → consumers */}
-        <div className="rounded-lg border p-4 space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
+      <CardContent>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left column: editable label / notes */}
+          <Form {...form}>
+            <form
+              onSubmit={form.handleSubmit((d) => mutation.mutate(d))}
+              className="space-y-4"
+            >
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      Name <span className="text-destructive">*</span>
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="Connection name"
+                        type="text"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="notes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Notes</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Additional notes..."
+                        className="min-h-[120px]"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              {form.formState.isDirty && (
+                <div className="flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => form.reset()}
+                    disabled={mutation.isPending}
+                  >
+                    Reset
+                  </Button>
+                  <LoadingButton type="submit" loading={mutation.isPending}>
+                    Save Changes
+                  </LoadingButton>
+                </div>
+              )}
+            </form>
+          </Form>
+
+          {/* Right column: producer info + connected-agents list */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-medium text-muted-foreground">
                 Producer
               </span>
-              {producerAgentId ? (
-                <Badge
-                  asChild
-                  variant="secondary"
-                  className="gap-1 hover:underline transition-colors"
-                >
-                  <Link
-                    to="/agent/$agentId"
-                    params={{ agentId: producerAgentId }}
-                  >
-                    <Network className="h-3 w-3" />
-                    {producerName}
-                  </Link>
-                </Badge>
-              ) : (
-                <Badge variant="secondary" className="gap-1">
-                  <Network className="h-3 w-3" />
-                  {producerName}
-                </Badge>
-              )}
+              <AgentBadge
+                agent={{
+                  id: producerAgentId ?? "",
+                  name: producerName,
+                  ui_color_preset: connection?.producer_ui_color_preset,
+                }}
+                linkTo={producerAgentId ? "agent" : "none"}
+              />
               {connection?.read_only && (
                 <Badge variant="outline" className="gap-1 text-xs">
                   <Lock className="h-3 w-3" />
                   read-only
                 </Badge>
               )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto"
+                disabled={!producerAgentId}
+                onClick={() =>
+                  producerAgentId && openAgentApiSpec(producerAgentId)
+                }
+                title={
+                  producerAgentId
+                    ? "Open the endpoints this connection exposes (rendered docs) in a new tab"
+                    : "Producer agent is no longer accessible"
+                }
+              >
+                <FileJson className="h-4 w-4 mr-1" />
+                View Spec
+              </Button>
             </div>
 
-            <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-medium text-muted-foreground">
-                Connected agents
-              </span>
-              {connLoading ? (
-                <span className="text-sm text-muted-foreground">Loading…</span>
-              ) : consumers.length === 0 ? (
-                <span className="text-sm text-muted-foreground">
-                  Not linked to any agent yet
-                </span>
-              ) : (
-                consumers.map((a) => (
-                  <AgentBadge key={a.id} agent={a} linkTo="agent" />
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 pt-1">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!producerAgentId}
-              onClick={() =>
-                producerAgentId && openAgentApiSpec(producerAgentId)
-              }
-              title={
-                producerAgentId
-                  ? "Open the endpoints this connection exposes (rendered docs) in a new tab"
-                  : "Producer agent is no longer accessible"
-              }
-            >
-              <FileJson className="h-4 w-4 mr-1" />
-              View Spec
-            </Button>
-            {connection?.base_url && (
-              <code className="text-xs text-muted-foreground truncate">
-                {connection.base_url}
-              </code>
+            {/* Connected consumer agents — name + owner (disambiguates
+                identical agent names across bundle installs by owner). */}
+            {connLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : consumers.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Not linked to any agent yet
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {consumers.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2"
+                  >
+                    <AgentBadge agent={a} linkTo="agent" />
+                    {(a.owner_name || a.owner_email) && (
+                      <span className="text-xs text-muted-foreground truncate text-right">
+                        {a.owner_name && a.owner_email
+                          ? `${a.owner_name} · ${a.owner_email}`
+                          : a.owner_name || a.owner_email}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
-
-        {/* Editable label / notes */}
-        <Form {...form}>
-          <form
-            onSubmit={form.handleSubmit((d) => mutation.mutate(d))}
-            className="space-y-4"
-          >
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>
-                    Name <span className="text-destructive">*</span>
-                  </FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder="Connection name"
-                      type="text"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="notes"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Notes</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      placeholder="Additional notes..."
-                      className="min-h-[80px]"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            {form.formState.isDirty && (
-              <div className="flex justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => form.reset()}
-                  disabled={mutation.isPending}
-                >
-                  Reset
-                </Button>
-                <LoadingButton type="submit" loading={mutation.isPending}>
-                  Save Changes
-                </LoadingButton>
-              </div>
-            )}
-          </form>
-        </Form>
       </CardContent>
     </Card>
   )

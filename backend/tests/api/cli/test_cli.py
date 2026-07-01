@@ -381,3 +381,40 @@ def test_cli_environment_keep_alive_and_auto_activation(
     assert "active" in r.json()["detail"].lower() or "environment" in r.json()["detail"].lower(), (
         f"404 detail should mention environment, got: {r.json()['detail']!r}"
     )
+
+
+# ── Scenario 5: Bootstrap script renders a CLI-version gate ──────────────────
+
+def test_bootstrap_script_embeds_version_gate(
+    client: TestClient,
+) -> None:
+    """The `curl | python3` bootstrap script must guard against an outdated CLI.
+
+    The GET bootstrap routes render a self-contained Python script (no token
+    validation — the token is just embedded). Both the per-agent and account
+    flavors must embed the platform's MINIMUM_CLI_VERSION and the version-check
+    logic so an old `cinna` is told to upgrade instead of failing with a
+    confusing "No such command" error when the new subcommand is invoked.
+    """
+    for path, expected_subcommand in (
+        ("/api/cli-setup/sometoken", '"setup"'),
+        ("/api/cli-setup/account/sometoken", '"account", "setup"'),
+    ):
+        r = client.get(path)
+        assert r.status_code == 200, f"{path} -> {r.status_code}: {r.text}"
+        script = r.text
+
+        # The configured minimum version and the gate that consumes it.
+        assert f'MINIMUM_CLI_VERSION = "{settings.MINIMUM_CLI_VERSION}"' in script
+        assert "_installed_cli_version" in script
+        assert "installed < required" in script
+        # The upgrade guidance shown when the gate trips.
+        assert "pip install --upgrade cinna-cli" in script
+        assert "uv tool upgrade cinna-cli" in script
+        # The correct subcommand is still wired for the up-to-date path.
+        assert expected_subcommand in script
+
+        # The rendered script must be valid, importable Python.
+        import ast
+
+        ast.parse(script)

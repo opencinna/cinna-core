@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { Loader2 } from "lucide-react"
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { z } from "zod"
 
 import { McpProvidersService } from "@/client"
@@ -25,6 +25,13 @@ export const Route = createFileRoute("/mcp-providers/oauth/callback")({
 function McpProviderOAuthCallback() {
   const navigate = useNavigate()
   const search = Route.useSearch()
+  // The authorization ``state`` is single-use on the backend: it is consumed on
+  // the first POST /oauth/callback and the code is exchanged for a token. React
+  // 18 StrictMode runs this effect twice in dev, which would fire a second
+  // callback whose (now-consumed) state is rejected with a 400 — surfacing a
+  // spurious "Authorization failed" even though the first call succeeded. Guard
+  // so the callback is submitted exactly once per mount.
+  const submittedRef = useRef(false)
 
   const callbackMutation = useMutation({
     mutationFn: (params: { code: string; state: string }) =>
@@ -70,6 +77,10 @@ function McpProviderOAuthCallback() {
   })
 
   useEffect(() => {
+    // Run exactly once, even under StrictMode's double-invoke (see ref note).
+    if (submittedRef.current) return
+    submittedRef.current = true
+
     if (search.error) {
       if (window.opener) {
         try {
