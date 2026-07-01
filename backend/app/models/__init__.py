@@ -161,6 +161,13 @@ from .bundles.bundle_access_grant import (
     BundleAccessGrantsPublic,
     BundleAccessGrantCreate,
 )
+from .bundles.bundle_permissions import (
+    BundlePermissionScopeCatalogEntry,
+    BundlePermissionGrant,
+    BundlePermissionProducer,
+    BundlePermissionUser,
+    BundlePermissionsOverview,
+)
 from .bundles.agent_git_source import (
     AgentGitSource,
     AgentGitSourceBase,
@@ -875,6 +882,11 @@ __all__ = [
     "BundleAccessGrantPublic",
     "BundleAccessGrantsPublic",
     "BundleAccessGrantCreate",
+    "BundlePermissionScopeCatalogEntry",
+    "BundlePermissionGrant",
+    "BundlePermissionProducer",
+    "BundlePermissionUser",
+    "BundlePermissionsOverview",
     # Agent Git Sources (git-backed versioning)
     "AgentGitSource",
     "AgentGitSourceBase",

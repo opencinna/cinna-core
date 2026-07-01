@@ -140,6 +140,7 @@ The `/agents` route renders one `AgentCard` per agent. Each card communicates th
 
   | Badge label | Source flag | Lucide icon |
   |-------------|-------------|-------------|
+  | Bundle | `bundle_uuid` set **and** `is_publisher_install` (bundle publisher install) | Package |
   | API | `agent_api_enabled` | Network |
   | Web App | `webapp_enabled` | Globe |
   | Email | `has_email_integration` | Mail |
@@ -149,6 +150,8 @@ The `/agents` route renders one `AgentCard` per agent. Each card communicates th
   | A2A | `a2a_config.enabled` | Waypoints |
 
 - **Entrypoint-prompt preview** — when no integration is active, a monospace block shows the first four lines of `entrypoint_prompt` (if set). This is the fallback; the badge row takes precedence whenever any badge would appear.
+
+- **Colored card border** — a purely visual identification aid layered on top of the same flags used for the Bundle and API badges: the card gets a **green** border if the agent is the bundle publisher install (`bundle_uuid` set and `is_publisher_install`), otherwise a **blue** border if `agent_api_enabled` is set, otherwise no special border. Green takes priority over blue when both conditions apply. No data model or API change — computed client-side in `AgentCard`.
 
 - **Card ordering** — the list is ordered deterministically by **creation date ascending (newest agents last)**, with the agent `id` as a stable tiebreaker. This is enforced server-side in `AgentService.list_agents` via `order_by(Agent.created_at, Agent.id)`; without an explicit `ORDER BY` Postgres returns rows in an unstable order, which made the cards appear to shuffle between refetches.
 

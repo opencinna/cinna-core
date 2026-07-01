@@ -9903,6 +9903,266 @@ has never been published (no latest revision) reports \`\`stale=False\`\`
 with an empty \`\`drift\`\` list — there is nothing to be stale against.`
 } as const;
 
+export const BundlePermissionGrantSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        grant_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Grant Id'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'grant_id'],
+    title: 'BundlePermissionGrant',
+    description: `Per-user scope state on one producer.
+
+Minimal — display info lives in the top-level \`\`users\`\` union to avoid
+duplicating user resolution per producer.`
+} as const;
+
+export const BundlePermissionProducerSchema = {
+    properties: {
+        producer_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Producer Agent Id'
+        },
+        producer_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Agent Name'
+        },
+        producer_ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Ui Color Preset'
+        },
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        credential_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Name'
+        },
+        identity_enabled: {
+            type: 'boolean',
+            title: 'Identity Enabled'
+        },
+        can_manage: {
+            type: 'boolean',
+            title: 'Can Manage'
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
+        },
+        scope_catalog: {
+            items: {
+                '$ref': '#/components/schemas/BundlePermissionScopeCatalogEntry'
+            },
+            type: 'array',
+            title: 'Scope Catalog',
+            default: []
+        },
+        grants: {
+            items: {
+                '$ref': '#/components/schemas/BundlePermissionGrant'
+            },
+            type: 'array',
+            title: 'Grants',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['producer_agent_id', 'credential_id', 'identity_enabled', 'can_manage'],
+    title: 'BundlePermissionProducer',
+    description: `One connected, identity-enabled producer the install consumes.
+
+Manageable producers (\`\`can_manage=True\`\`) carry the scope catalog and the
+current grants; non-manageable ones carry neither (the owner-gated reads
+never run for them) and are surfaced read-only via \`\`owner_email\`\`.`
+} as const;
+
+export const BundlePermissionScopeCatalogEntrySchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'BundlePermissionScopeCatalogEntry',
+    description: "One ``policy.yaml`` catalog scope, for the modal's quick-add chips."
+} as const;
+
+export const BundlePermissionUserSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        },
+        bundle_grant_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Grant Id'
+        }
+    },
+    type: 'object',
+    required: ['user_id'],
+    title: 'BundlePermissionUser',
+    description: `Resolved display info for every user appearing anywhere in the union.
+
+Drives the table rows and supplies \`\`fallbackLabel\`\` for pills.`
+} as const;
+
+export const BundlePermissionsOverviewSchema = {
+    properties: {
+        bundle_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Uuid'
+        },
+        visibility: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Visibility'
+        },
+        bundle_access_applicable: {
+            type: 'boolean',
+            title: 'Bundle Access Applicable',
+            default: false
+        },
+        bundle_grants: {
+            items: {
+                '$ref': '#/components/schemas/BundleAccessGrantPublic'
+            },
+            type: 'array',
+            title: 'Bundle Grants',
+            default: []
+        },
+        producers: {
+            items: {
+                '$ref': '#/components/schemas/BundlePermissionProducer'
+            },
+            type: 'array',
+            title: 'Producers',
+            default: []
+        },
+        users: {
+            items: {
+                '$ref': '#/components/schemas/BundlePermissionUser'
+            },
+            type: 'array',
+            title: 'Users',
+            default: []
+        },
+        show_card: {
+            type: 'boolean',
+            title: 'Show Card',
+            default: false
+        }
+    },
+    type: 'object',
+    title: 'BundlePermissionsOverview',
+    description: 'Response of ``GET /agents/{agent_id}/bundle-permissions-overview``.'
+} as const;
+
 export const BundleVersionInfoSchema = {
     properties: {
         installed_revision_number: {

@@ -40,7 +40,7 @@ Each file below documents one API domain.
 | Guest Shares | [guest_shares.md](./guest_shares.md) | 5 |
 | Identity | [identity.md](./identity.md) | 7 |
 | Identity Contacts | [identity_contacts.md](./identity_contacts.md) | 2 |
-| Installs | [installs.md](./installs.md) | 11 |
+| Installs | [installs.md](./installs.md) | 12 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
 | Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 13 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |

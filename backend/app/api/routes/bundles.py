@@ -125,15 +125,7 @@ def _revision_to_public(
 
 
 def _grant_to_public(session, grant: BundleAccessGrant) -> BundleAccessGrantPublic:
-    user = session.get(User, grant.user_id)
-    return BundleAccessGrantPublic(
-        id=grant.id,
-        bundle_id=grant.bundle_id,
-        user_id=grant.user_id,
-        user_email=user.email if user else None,
-        granted_by_user_id=grant.granted_by_user_id,
-        created_at=grant.created_at,
-    )
+    return BundleService.grant_to_public(session, grant)
 
 
 # ── Bundle CRUD ─────────────────────────────────────────────────

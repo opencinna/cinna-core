@@ -12,28 +12,30 @@ ships with the safe behaviour.
 import logging
 import shutil
 import uuid
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlmodel import Session, select
 from sqlalchemy import func
+from sqlmodel import Session, select
 
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import (
     AgentBundle,
     AgentBundleUpdate,
-    BundleVisibility,
     BundleInstallMode,
+    BundleVisibility,
 )
 from app.models.bundles.agent_bundle_revision import (
-    AgentBundleRevision,
     REVISION_ORIGIN_PUBLISH,
+    AgentBundleRevision,
 )
-from app.models.bundles.bundle_access_grant import BundleAccessGrant
+from app.models.bundles.bundle_access_grant import (
+    BundleAccessGrant,
+    BundleAccessGrantPublic,
+)
 from app.models.credentials.ai_credential import AICredential
 from app.models.environments.environment import AgentEnvironment
 from app.models.users.user import User
-from app.services.environments.sdk_constants import sdk_expected_credential_type
 from app.services.bundles.exceptions import (
     BundleAccessDeniedError,
     BundleConflictError,
@@ -43,6 +45,7 @@ from app.services.bundles.exceptions import (
     RevisionInUseError,
     RevisionNotFoundError,
 )
+from app.services.environments.sdk_constants import sdk_expected_credential_type
 
 logger = logging.getLogger(__name__)
 
@@ -467,6 +470,29 @@ class BundleService:
         logger.info("Deleted AgentBundle id=%s bundle_id=%s", bundle.id, bundle.bundle_id)
 
     # ── Access grants ──────────────────────────────────────────────
+
+    @staticmethod
+    def grant_to_public(
+        session: Session,
+        grant: BundleAccessGrant,
+        user: User | None = None,
+    ) -> BundleAccessGrantPublic:
+        """Project a grant to its public schema, resolving the user's email.
+
+        Pass ``user`` when the caller already holds the resolved ``User`` row to
+        skip the lookup (used by the permissions-overview aggregator, which
+        batch-resolves all referenced users once).
+        """
+        if user is None:
+            user = session.get(User, grant.user_id)
+        return BundleAccessGrantPublic(
+            id=grant.id,
+            bundle_id=grant.bundle_id,
+            user_id=grant.user_id,
+            user_email=user.email if user is not None else None,
+            granted_by_user_id=grant.granted_by_user_id,
+            created_at=grant.created_at,
+        )
 
     @staticmethod
     def list_grants(session: Session, bundle: AgentBundle) -> list[BundleAccessGrant]:

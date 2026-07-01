@@ -25,9 +25,9 @@ import {
   type AgentPublic,
 } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
+import { BundlePermissionsCard } from "@/components/Agents/BundlePermissionsCard"
 import { CredentialProvisioningSection } from "@/components/Agents/CredentialProvisioningSection"
 import { providedByLabel } from "@/components/Credentials/providedByLabel"
-import { UserAllowlistPicker } from "@/components/Common/UserAllowlistPicker"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -143,16 +143,6 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
     enabled: agent.is_publisher_install && !!agent.bundle_uuid,
   })
 
-  // Grants (only fetched when visibility is "users").
-  const { data: grants } = useQuery({
-    queryKey: ["bundles", agent.bundle_uuid, "grants"],
-    queryFn: () =>
-      BundlesService.listGrants({
-        bundleUuid: agent.bundle_uuid as string,
-      }),
-    enabled: !!agent.bundle_uuid && bundle?.visibility === "users",
-  })
-
   const driftedCredentials = (credentialDrift?.drift ?? []).filter(
     (d) => d.drifted,
   )
@@ -241,35 +231,6 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
     },
     onError: (e: any) => {
       showErrorToast(e?.body?.detail || "Failed to update bundle")
-    },
-  })
-
-  const addGrantMutation = useMutation({
-    mutationFn: (email: string) =>
-      BundlesService.addGrant({
-        bundleUuid: agent.bundle_uuid as string,
-        requestBody: { email },
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["bundles", agent.bundle_uuid, "grants"],
-      })
-    },
-    onError: (e: any) => {
-      showErrorToast(e?.body?.detail || "Failed to add grant")
-    },
-  })
-
-  const revokeGrantMutation = useMutation({
-    mutationFn: (grantId: string) =>
-      BundlesService.revokeGrant({
-        bundleUuid: agent.bundle_uuid as string,
-        grantId,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["bundles", agent.bundle_uuid, "grants"],
-      })
     },
   })
 
@@ -374,21 +335,10 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
                   </div>
 
                   {bundle.visibility === "users" && (
-                    <div className="pl-1">
-                      <UserAllowlistPicker
-                        enabled={bundle.visibility === "users"}
-                        selected={(grants?.data ?? []).map((g) => ({
-                          id: g.id,
-                          userId: g.user_id,
-                          fallbackLabel: g.user_email ?? undefined,
-                        }))}
-                        onAdd={(u) => addGrantMutation.mutate(u.email)}
-                        onRemove={(item) => revokeGrantMutation.mutate(item.id)}
-                        isAdding={addGrantMutation.isPending}
-                        isRemoving={revokeGrantMutation.isPending}
-                        emptyHint="Nobody can see this bundle yet — add users above."
-                      />
-                    </div>
+                    <p className="pl-1 text-xs text-muted-foreground">
+                      Manage who can see this bundle in the Permissions
+                      management card below.
+                    </p>
                   )}
 
                   {bundle.visibility !== "private" && (
@@ -639,10 +589,14 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
         </Card>
       </div>
 
-      {/* Phase 5 — publisher-only credential provisioning controls. */}
+      {/* Phase 5 — publisher-only credential provisioning controls, with the
+          unified permissions card sitting right next to it in the same row. */}
       {agent.is_publisher_install && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <CredentialProvisioningSection agent={agent} bundle={bundle} />
+          {isPublished && agent.bundle_uuid && (
+            <BundlePermissionsCard agent={agent} bundleUuid={agent.bundle_uuid} />
+          )}
         </div>
       )}
 

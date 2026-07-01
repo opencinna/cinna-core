@@ -2160,6 +2160,71 @@ export type BundleCredentialDrift = {
 };
 
 /**
+ * Per-user scope state on one producer.
+ *
+ * Minimal — display info lives in the top-level ``users`` union to avoid
+ * duplicating user resolution per producer.
+ */
+export type BundlePermissionGrant = {
+    user_id: string;
+    grant_id: string;
+    scopes?: Array<(string)>;
+};
+
+/**
+ * One connected, identity-enabled producer the install consumes.
+ *
+ * Manageable producers (``can_manage=True``) carry the scope catalog and the
+ * current grants; non-manageable ones carry neither (the owner-gated reads
+ * never run for them) and are surfaced read-only via ``owner_email``.
+ */
+export type BundlePermissionProducer = {
+    producer_agent_id: string;
+    producer_agent_name?: (string | null);
+    producer_ui_color_preset?: (string | null);
+    credential_id: string;
+    credential_name?: (string | null);
+    identity_enabled: boolean;
+    can_manage: boolean;
+    owner_email?: (string | null);
+    scope_catalog?: Array<BundlePermissionScopeCatalogEntry>;
+    grants?: Array<BundlePermissionGrant>;
+};
+
+/**
+ * One ``policy.yaml`` catalog scope, for the modal's quick-add chips.
+ */
+export type BundlePermissionScopeCatalogEntry = {
+    name: string;
+    description?: (string | null);
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/bundle-permissions-overview``.
+ */
+export type BundlePermissionsOverview = {
+    bundle_uuid?: (string | null);
+    visibility?: (string | null);
+    bundle_access_applicable?: boolean;
+    bundle_grants?: Array<BundleAccessGrantPublic>;
+    producers?: Array<BundlePermissionProducer>;
+    users?: Array<BundlePermissionUser>;
+    show_card?: boolean;
+};
+
+/**
+ * Resolved display info for every user appearing anywhere in the union.
+ *
+ * Drives the table rows and supplies ``fallbackLabel`` for pills.
+ */
+export type BundlePermissionUser = {
+    user_id: string;
+    email?: (string | null);
+    full_name?: (string | null);
+    bundle_grant_id?: (string | null);
+};
+
+/**
  * Installed-vs-latest bundle version state for an installed agent.
  *
  * Surfaced on ``ExternalTargetPublic.bundle_version`` so native clients
@@ -8066,6 +8131,12 @@ export type InstallsGetBundleCredentialDriftData = {
 };
 
 export type InstallsGetBundleCredentialDriftResponse = (BundleCredentialDrift);
+
+export type InstallsGetBundlePermissionsOverviewData = {
+    agentId: string;
+};
+
+export type InstallsGetBundlePermissionsOverviewResponse = (BundlePermissionsOverview);
 
 export type InstallsUpdateSetupCredentialData = {
     agentId: string;

@@ -22,6 +22,7 @@ import hashlib
 import logging
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlmodel import Session, select
@@ -58,6 +59,25 @@ class AgentApiTokenError(Exception):
 class AgentApiTokenNotFoundError(AgentApiTokenError):
     def __init__(self, message: str = "Token not found"):
         super().__init__(message, status_code=404)
+
+
+@dataclass
+class ConnectedProducerRow:
+    """Internal projection of one producer the consumer install connects to.
+
+    Carries only the non-secret annotations the bundle-permissions overview
+    needs. ``can_manage`` is the single authority that decides whether the
+    owner-gated grant / scope-catalog reads run for this producer.
+    """
+
+    producer_agent_id: uuid.UUID
+    producer_agent_name: str | None
+    producer_ui_color_preset: str | None
+    credential_id: uuid.UUID
+    credential_name: str | None
+    identity_enabled: bool
+    can_manage: bool
+    owner_email: str | None = None
 
 
 class AgentApiTokenService:
@@ -433,6 +453,97 @@ class AgentApiTokenService:
                 )
             )
         return connections
+
+    @staticmethod
+    def list_connected_producers(
+        session: Session,
+        consumer_agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        is_superuser: bool = False,
+    ) -> list[ConnectedProducerRow]:
+        """Discover the identity-enabled producers this install consumes.
+
+        The inverse direction of ``list_producer_connections`` (producer →
+        consumers): here we walk the *consumer* install's linked ``agent_api``
+        credentials to find the *producers* it calls, so the bundle-permissions
+        overview can offer per-producer scope management.
+
+        Read-only. Never mutates; never raises on a single bad credential (logs
+        and skips). The credential ``token`` is **never** read — only
+        ``producer_agent_id`` is decrypted out of the credential data.
+
+        Returns only producers with ``agent_api_identity_enabled`` true (scope
+        management is meaningless otherwise — a producer with identity OFF has
+        no scope concept). An owner who wants scopes on a currently-OFF producer
+        enables identity on that producer's own Integrations tab first.
+
+        Deduped by ``producer_agent_id`` (the first linked credential wins;
+        multiple credentials pointing at the same producer is unusual but
+        possible).
+        """
+        from app.services.credentials.credentials_service import CredentialsService
+
+        credentials = CredentialsService.get_agent_credentials(
+            session, consumer_agent_id
+        )
+
+        rows: list[ConnectedProducerRow] = []
+        seen_producers: set[uuid.UUID] = set()
+
+        for credential in credentials:
+            if credential.type != CredentialType.AGENT_API:
+                continue
+            try:
+                data = CredentialsService.decrypt_credential_data(
+                    session=session, credential=credential
+                )
+            except Exception:
+                logger.warning(
+                    "Skipping agent_api credential %s: failed to decrypt data",
+                    credential.id,
+                )
+                continue
+
+            raw = data.get("producer_agent_id")
+            if not raw:
+                continue
+            try:
+                producer_agent_id = uuid.UUID(str(raw))
+            except (ValueError, TypeError):
+                logger.warning(
+                    "Skipping agent_api credential %s: malformed producer_agent_id %r",
+                    credential.id,
+                    raw,
+                )
+                continue
+
+            if producer_agent_id in seen_producers:
+                continue
+
+            producer = session.get(Agent, producer_agent_id)
+            if producer is None:
+                # Dangling connection — the producer agent was deleted.
+                continue
+            seen_producers.add(producer_agent_id)
+
+            if not producer.agent_api_identity_enabled:
+                # No scope concept — not surfaced.
+                continue
+
+            owner = session.get(User, producer.owner_id)
+            rows.append(
+                ConnectedProducerRow(
+                    producer_agent_id=producer.id,
+                    producer_agent_name=producer.name,
+                    producer_ui_color_preset=producer.ui_color_preset,
+                    credential_id=credential.id,
+                    credential_name=credential.name,
+                    identity_enabled=True,
+                    can_manage=is_superuser or producer.owner_id == user_id,
+                    owner_email=owner.email if owner is not None else None,
+                )
+            )
+        return rows
 
     @staticmethod
     async def delete_producer_connection(
