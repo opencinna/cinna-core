@@ -197,7 +197,46 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                     ClaudeAgentOptions,
                     ResultMessage,
                     create_sdk_mcp_server,
+                    PermissionResultDeny,
                 )
+
+                # AskUserQuestion's checkPermissions() always returns
+                # behavior="ask" (it's how the interactive CLI intercepts the
+                # call to render its multi-choice UI and merge the answers
+                # into updated_input) — it is never covered by allowed_tools
+                # or permission_mode. Headless here means there's no TTY to
+                # answer it, so without this callback the CLI's control
+                # request errors out ("canUseTool callback is not provided")
+                # and the CLI reports that as a generic denied tool_result
+                # using its own permission prompt text ("Answer questions?")
+                # as the content — confusing the model into retrying or
+                # apologizing instead of just ending its turn. We already
+                # relay the user's next chat message as the answer at the
+                # application layer (see MessageService), so deny cleanly
+                # with an explicit instruction instead.
+                async def can_use_tool(tool_name, tool_input, context):
+                    if tool_name == "AskUserQuestion":
+                        return PermissionResultDeny(
+                            message=(
+                                "The questions were shown to the user; they will reply "
+                                "in a separate message. Do not retry or rephrase the "
+                                "questions — end your turn now."
+                            ),
+                            interrupt=False,
+                        )
+                    # Every other tool we actually want to run is already
+                    # pre-approved via allowed_tools/permission_mode and is
+                    # resolved CLI-side without ever reaching this callback.
+                    # Reaching here means some other tool (e.g. ExitPlanMode,
+                    # which always requires interactive "ask" approval)
+                    # needs a real answer we can't provide headlessly — deny
+                    # by default rather than silently granting it.
+                    return PermissionResultDeny(
+                        message=(
+                            f"{tool_name} requires interactive approval, which is "
+                            "not available in this environment."
+                        ),
+                    )
 
                 # Build pre-allowed tools — PascalCase is required by the Claude
                 # SDK config. Normalized to lowercase at tools_init emission.
@@ -223,7 +262,8 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                     permission_mode=self.permission_mode,
                     cwd=self.workspace_dir,
                     stderr=stderr_capture,
-                    setting_sources=["user", "project", "local"]  # Load all settings
+                    setting_sources=["user", "project", "local"],  # Load all settings
+                    can_use_tool=can_use_tool,
                 )
 
                 # Check for SDK settings file (MiniMax, etc.)

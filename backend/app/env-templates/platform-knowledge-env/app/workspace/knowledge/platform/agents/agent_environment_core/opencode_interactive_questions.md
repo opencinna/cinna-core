@@ -8,8 +8,8 @@ question wedges the session (the session gets stuck "streaming" forever), why th
 as the answer via `POST /question/{requestID}/reply`.
 
 This is an aspect of [Multi-SDK Support](multi_sdk.md); it only concerns the OpenCode
-engine. Claude Code's `AskUserQuestion` is unaffected (it round-trips through the Claude
-Agent SDK in-process).
+engine. Claude Code's `AskUserQuestion` has a related but distinct fix — see
+[Claude Code Interactive Tools](claude_code_interactive_tools.md).
 
 > **Status:** the `/reply`-relay fix described below is **implemented** (the bug section is
 > kept as design rationale). The adapter files are baked into agent containers, so the fix
@@ -127,7 +127,9 @@ The `/reply` relay is preferred because it preserves the widget.
   path after a question is asked.
 - A cancelled or interrupted stream must still clear the session's `interaction_status`, so
   a transient hang never leaves the UI stuck "streaming".
-- Claude Code's `AskUserQuestion` flow is unchanged.
+- Claude Code's `AskUserQuestion` is handled separately, by denying the CLI's ask-only
+  permission check with an explicit instruction rather than suspending/relaying — see
+  [Claude Code Interactive Tools](claude_code_interactive_tools.md).
 
 ## Architecture Overview
 

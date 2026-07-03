@@ -14,6 +14,7 @@ Controls which tools agent environments are permitted to use autonomously. Plugi
 - MCP bridge tools pre-allowed: knowledge query (`mcp__knowledge__*`) and agent task tools (`mcp__agent_task__*`). Both naming conventions are pre-allowed — Claude Code's `mcp__{server}__{tool}` and OpenCode's `{server}_{tool}` (e.g., `agent_task_add_comment`)
 - Canonical set defined in `adapters/tool_name_registry.PRE_APPROVED_TOOLS` (inside agent-env); mirrored in `backend/app/services/sessions/message_service.py` (`PRE_ALLOWED_TOOLS`)
 - All tool names use the **unified lowercase convention**
+- **Not the same thing as Claude Code's own `checkPermissions()` behavior:** this list only gates whether the chat UI shows an "Approve Tools" button — it says nothing about whether the Claude Code CLI itself can run a tool unattended. `askuserquestion` and `exitplanmode` are both in this list (no approval button needed) yet the CLI hardcodes both as always requiring interactive permission approval regardless of this list or `allowed_tools`/`permission_mode` — see [Claude Code Interactive Tools](claude_code_interactive_tools.md).
 
 **User-Approved Tools** (require explicit approval)
 - Tools introduced by installed plugins (MCP servers, custom commands)
@@ -114,3 +115,4 @@ sdk_manager.send_message_stream()
 - **Multi SDK** — Pre-allowed tool merging and `ClaudeAgentOptions` construction happen in the SDK manager. See [Multi SDK](multi_sdk.md)
 - **Agent Credentials** — Same environment HTTP sync pattern used for credential and plugin updates. See [Agent Credentials](../agent_credentials/agent_credentials.md)
 - **Agent Sessions** — `tools_needing_approval` is attached to messages during streaming; filtered on fetch. See [Agent Sessions](../../application/agent_sessions/agent_sessions.md)
+- **Claude Code Interactive Tools** — the separate, CLI-internal ask-only permission mechanism for `AskUserQuestion`/`ExitPlanMode` that this list does not override. See [Claude Code Interactive Tools](claude_code_interactive_tools.md)
