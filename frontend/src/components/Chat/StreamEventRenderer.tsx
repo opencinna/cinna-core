@@ -38,9 +38,12 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
               className="prose dark:prose-invert max-w-none prose-p:leading-normal prose-p:my-2 prose-ul:my-2 prose-li:my-0"
             />
           )
-        } else if (event.type === "thinking" && event.content.trim() && conversationModeUi !== "compact") {
+        } else if (event.type === "thinking" && conversationModeUi !== "compact") {
           // Render thinking block - strip [Thinking] prefix if present (hidden in compact mode)
-          const thinkingContent = event.content.replace(/^\[Thinking\]\s*/i, "")
+          const thinkingContent = event.content.replace(/^\[Thinking\]\s*/i, "").trim()
+          if (!thinkingContent) {
+            return null
+          }
           return (
             <div key={key} className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
               <Lightbulb className="h-3.5 w-3.5 mt-0.5 shrink-0" />
