@@ -634,6 +634,45 @@ class GitSourceService:
     # ── Status / update check ────────────────────────────────────────
 
     @staticmethod
+    def _remote_change_is_relevant(
+        *,
+        repo_url: str,
+        ref: str,
+        subdir: str | None,
+        last_synced_commit: str | None,
+        remote_sha: str,
+        ssh_key_path: str | None,
+    ) -> bool:
+        """Whether a remote HEAD advance actually concerns this agent's subdir.
+
+        Single source of truth shared by the update-check read path
+        (:meth:`_compute_update_available_remote`, which drives the UI's "update
+        available" banner) and the push fast-forward precheck (:meth:`_push_locked`,
+        which drives the 409 "pull first" guard) so the two can never disagree —
+        the failure they previously exhibited was exactly a disagreement (banner
+        said "no update", push said "pull first"), stranding a subdir-scoped agent.
+
+        Assumes the caller has already established the remote advanced
+        (``remote_sha != last_synced_commit``).
+
+        - No ``subdir`` (repo root) or no ``last_synced_commit`` baseline → every
+          advance is relevant (unchanged root-repo behaviour).
+        - ``subdir`` + baseline → relevant only when the subdir tree actually
+          changed between the baseline and ``remote_sha`` (a commit to an unrelated
+          folder of a shared repo is not relevant). The only branch that clones.
+        """
+        subdir_norm = (subdir or "").strip("/")
+        if not subdir_norm or not last_synced_commit:
+            return True
+        return subdir_changed_between(
+            repo_url=repo_url,
+            ref=ref,
+            subdir=subdir_norm,
+            base_commit=last_synced_commit,
+            ssh_key_path=ssh_key_path,
+        )
+
+    @staticmethod
     def _compute_update_available_remote(
         *,
         repo_url: str,
@@ -675,22 +714,18 @@ class GitSourceService:
             if remote_sha == last_synced_commit:
                 return False, remote_sha
 
-            subdir_norm = (subdir or "").strip("/")
-            if not subdir_norm or not last_synced_commit:
-                # Repo root (every commit touches it) or no baseline to scope
-                # against — the cheap HEAD advance is the verdict.
-                return True, remote_sha
-
-            # HEAD advanced and a subdir is configured: only a real update when
-            # the subdir tree actually changed beyond the synced commit.
-            changed = subdir_changed_between(
+            # HEAD advanced: an update only when the advance is relevant to this
+            # agent (repo root / no baseline → always; subdir → only when that
+            # subdir tree actually changed). Shared with the push precheck.
+            relevant = GitSourceService._remote_change_is_relevant(
                 repo_url=repo_url,
                 ref=ref,
-                subdir=subdir_norm,
-                base_commit=last_synced_commit,
+                subdir=subdir,
+                last_synced_commit=last_synced_commit,
+                remote_sha=remote_sha,
                 ssh_key_path=key,
             )
-            return changed, remote_sha
+            return relevant, remote_sha
 
     @staticmethod
     def get_source(
@@ -1265,9 +1300,24 @@ class GitSourceService:
             # not applied; the hold is bounded by the GIT_HTTP_LOW_SPEED_* idle guard
             # and SSH ConnectTimeout/keepalive.
             with _resolve_ssh_key(session, source.ssh_key_id, source.owner_id) as key:
-                # ff precheck (do not clone/commit if the remote already advanced).
+                # ff precheck: only block when the remote advance is relevant to
+                # this agent's subdir (matching the update-check banner via the
+                # shared helper); an advance touching only an unrelated folder of a
+                # shared repo falls through, and a genuine non-ff push is still
+                # caught loudly by fast_forward_push's merge-base check below.
                 remote_sha = ls_remote_head(source.repo_url, source.ref, key)
-                if source.last_synced_commit and remote_sha != source.last_synced_commit:
+                if (
+                    source.last_synced_commit
+                    and remote_sha != source.last_synced_commit
+                    and GitSourceService._remote_change_is_relevant(
+                        repo_url=source.repo_url,
+                        ref=source.ref,
+                        subdir=source.subdir,
+                        last_synced_commit=source.last_synced_commit,
+                        remote_sha=remote_sha,
+                        ssh_key_path=key,
+                    )
+                ):
                     raise GitSourceConflictError(
                         "Remote has advanced since the last sync — pull first."
                     )

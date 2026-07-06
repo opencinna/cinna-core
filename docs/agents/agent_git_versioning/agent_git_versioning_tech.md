@@ -236,6 +236,10 @@ Returns `(source, update_available)` where `update_available` is always `False`.
 
 Strict update check via `_compute_update_available_remote` — raises on network/auth failure. Releases the DB connection before the remote call (see Pool-Safety Contract below). Returns `{update_available, remote_commit, last_synced_commit}`.
 
+**`_remote_change_is_relevant(*, repo_url, ref, subdir, last_synced_commit, remote_sha, ssh_key_path) -> bool`** (new — shared helper)
+
+Whether a remote HEAD advance actually concerns this agent's `subdir`, given the caller has already established `remote_sha != last_synced_commit`. No `subdir` or no `last_synced_commit` baseline → always relevant (unchanged root-repo behavior). `subdir` + baseline → relevant only when `subdir_changed_between` reports the subdir tree changed between `last_synced_commit` and `remote_sha`. Single source of truth shared by `_compute_update_available_remote` (drives the "update available" banner) and `_push_locked`'s fast-forward precheck (drives the 409 "pull first" guard) — fixes a prior disagreement where the banner reported no update while push still 409'd on an advance confined to another folder of a shared repo.
+
 **`_compute_update_available_remote(repo_url, ref, subdir, last_synced_commit, key_material) -> tuple[bool, str]`** (private helper, used only by `check_updates`)
 
 Takes captured primitives and in-memory SSH key material rather than a live `(session, source)` pair — so the DB connection is already released before this function is entered. Returns `(update_available, remote_head_sha)`.
@@ -276,7 +280,9 @@ Acquires per-agent lock, delegates to `_push_locked`. Same error-class split as 
 
 **`_push_locked(...) -> AgentGitSource`**
 
-Direction guard → env + workspace readable → `also_publish_bundle` precondition check → `ls_remote_head` precheck (409 if remote advanced) → full-history clone (`depth=None`) → delete stale `workspace/` subtree → `_capture_and_push` helper → advance `last_synced_commit`. If `also_publish_bundle`: `PublishService.publish` best-effort.
+Direction guard → env + workspace readable → `also_publish_bundle` precondition check → `ls_remote_head` precheck → full-history clone (`depth=None`) → delete stale `workspace/` subtree → `_capture_and_push` helper → advance `last_synced_commit`. If `also_publish_bundle`: `PublishService.publish` best-effort.
+
+The precheck is subdir-aware: a remote HEAD advance only raises `GitSourceConflictError` (409 "pull first") when `_remote_change_is_relevant` (below) says the advance concerns this agent — a repo-root install (no `subdir`) always blocks; a `subdir` install blocks only when the subdir tree changed since `last_synced_commit`. When the advance is subdir-irrelevant, the precheck does not raise and control falls through to the full-history clone + `_capture_and_push` + `fast_forward_push` exactly as if the remote had not advanced; `fast_forward_push`'s own merge-base ancestor check is unaffected and still raises `GitNonFastForwardError` (409) on a genuine non-fast-forward, so a real conflict the subdir check couldn't see is still caught. This is the same helper `_compute_update_available_remote` uses for the update-check banner, so the two can no longer disagree.
 
 **`_capture_and_push(session, *, install, env, source_like, owner, key, repo, repo_path, commit_message, version, revision_number_hint) -> str`** (new shared helper)
 
@@ -486,6 +492,8 @@ Implementation:
 3. `git rev-parse HEAD:<subdir>` → tree hash at tip; `git rev-parse <base_commit>:<subdir>` → tree hash at base.
 4. Equal hashes → return `False` (subdir unchanged). Unequal → return `True`.
 5. Any exception (server disallows fetch-by-reachable-SHA, base commit GC'd or rewritten, subdir missing at one revision, auth failure) → return `True` conservatively. On git hosts that disallow fetch-by-SHA (some self-hosted Gitea/GitLab without `uploadpack.allowReachableSHA1InWant`), this degrades gracefully to the legacy always-`True` behavior.
+
+Call sites: `_remote_change_is_relevant`, invoked from both `_compute_update_available_remote` (the update-check path) and `_push_locked`'s fast-forward precheck (previously only the update check used it — the push precheck now shares the same subdir-relevance decision).
 
 ### Existing primitives (unchanged, now egress-guarded)
 

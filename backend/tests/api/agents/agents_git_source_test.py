@@ -87,6 +87,11 @@ _COMMIT_ALL = "app.services.bundles.git_source_service.commit_all"
 _FF_PUSH = "app.services.bundles.git_source_service.fast_forward_push"
 _INIT_REPO = "app.services.bundles.git_source_service.init_repo_with_remote"
 _GIT_LOG = "app.services.bundles.git_source_service.git_log_subdir"
+# Subdir-aware push precheck bug fix: `_push_locked` now delegates its
+# fast-forward precheck to `_remote_change_is_relevant`, which — for a
+# subdir-scoped agent with a baseline — calls `subdir_changed_between` to
+# decide whether a remote HEAD advance is actually relevant to this agent.
+_SUBDIR_CHANGED = "app.services.bundles.git_source_service.subdir_changed_between"
 
 # ── Test git SHAs ─────────────────────────────────────────────────────────────
 
@@ -842,6 +847,119 @@ def test_git_push_scenarios(
         )
     assert r.status_code == 400, (
         f"Expected 400 for push on pull-only source, got {r.status_code}: {r.text}"
+    )
+
+
+# ── Scenario 4b: Push fast-forward precheck is subdir-aware (bug fix) ───────
+
+
+def test_git_push_subdir_scoped_precheck(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """
+    Regression coverage for the subdir-aware push precheck fix.
+
+    Before the fix, ``_push_locked``'s fast-forward precheck compared the
+    remote HEAD directly against ``last_synced_commit``: ANY advance raised
+    409 "Remote has advanced since the last sync — pull first.", even when the
+    advance was a commit to an unrelated folder of a shared repo that never
+    touched this agent's ``subdir``. This stranded subdir-scoped agents that
+    could never push, and disagreed with the update-check banner (which was
+    already subdir-scoped), since the two now share a single decision function
+    (``_remote_change_is_relevant``).
+
+      1. Checkout a subdir-scoped agent ("myagent"), last_synced_commit=SHA_V1
+      2. Remote HEAD advanced to an unrelated commit; subdir_changed_between
+         returns False → push now SUCCEEDS (200), not the naive 409
+      3. Remote HEAD advanced again; subdir_changed_between returns True
+         (the advance DOES touch this agent's subdir) → push still 409
+
+    Root (no-subdir) agents keep raising 409 on ANY advance without ever
+    calling ``subdir_changed_between`` — already covered by
+    ``test_git_push_scenarios`` Scenario 3, which never patches
+    ``subdir_changed_between``; if the fix regressed into calling it
+    unconditionally for root agents, that scenario would fail immediately
+    (unpatched call attempts a real clone).
+    """
+    headers = superuser_token_headers
+    bundle_id = f"io.test.git.push.subdir.{random_lower_string()[:6]}"
+
+    # ── Phase 1: Checkout a subdir-scoped agent ───────────────────────────────
+    v1_dir = tmp_path / "push_subdir_repo_v1"
+    _make_agent_repo_tree(v1_dir, bundle_id=bundle_id, subdir="myagent")
+
+    result = _do_checkout(
+        client, headers, clone_dir=v1_dir, sha=_SHA_V1, subdir="myagent",
+        repo_url="https://github.com/example/push-subdir.git",
+    )
+    agent_id = result["agent"]["id"]
+    assert result["git_source"]["subdir"] == "myagent"
+    assert result["git_source"]["last_synced_commit"] == _SHA_V1
+
+    # Seed the agent's active environment workspace on disk so the push
+    # service's _assert_workspace_readable check passes.
+    agent_data = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
+    env_id = str(agent_data["active_environment_id"])
+    _seed_env_workspace(
+        env_id,
+        {"docs": {"workflow.md": "# Workflow\nTest"}, "scripts": {"run.sh": "#!/bin/bash\necho hello"}},
+    )
+
+    # ── Phase 2: Remote advanced but subdir UNCHANGED → push succeeds ─────────
+    # ls_remote returns a SHA different from last_synced_commit (an advance),
+    # but subdir_changed_between says the advance never touched "myagent/" —
+    # the precheck must fall through and let the push proceed.
+    _SHA_UNRELATED = "c" * 40
+
+    with (
+        patch(_LS_REMOTE, return_value=_SHA_UNRELATED),
+        patch(_SUBDIR_CHANGED, return_value=False),
+        patch(_CLONE_CTX, _fake_clone_ctx(v1_dir, _SHA_V1)),
+        patch(_GET_HASH, return_value=_SHA_V1),
+        patch(_COMMIT_ALL, return_value=_SHA_V2),
+        patch(_FF_PUSH, return_value=None),
+    ):
+        r = client.post(
+            _git_push_url(agent_id),
+            headers=headers,
+            json={"commit_message": "Push despite unrelated remote advance"},
+        )
+    assert r.status_code == 200, (
+        "Expected push to succeed when the remote advance does not touch "
+        f"this agent's subdir, got {r.status_code}: {r.text}"
+    )
+    push_result = r.json()
+    assert push_result["status"] == "connected"
+    assert push_result["last_synced_commit"] == _SHA_V2
+
+    # Verify the source really advanced via GET /agents/{id}/git (remote-free).
+    src_after = client.get(_git_source_url(agent_id), headers=headers).json()
+    assert src_after["last_synced_commit"] == _SHA_V2
+
+    # ── Phase 3: Remote advanced AND subdir CHANGED → still 409 ───────────────
+    # subdir_changed_between now says the advance DOES touch "myagent/" — the
+    # precheck must still block with the conflict error.
+    _SHA_RELATED = "d" * 40
+
+    with (
+        patch(_LS_REMOTE, return_value=_SHA_RELATED),
+        patch(_SUBDIR_CHANGED, return_value=True),
+        patch(_CLONE_CTX, _fake_clone_ctx(v1_dir, _SHA_V2)),
+        patch(_GET_HASH, return_value=_SHA_V2),
+    ):
+        r = client.post(
+            _git_push_url(agent_id),
+            headers=headers,
+            json={"commit_message": "Should fail - subdir-relevant advance"},
+        )
+    assert r.status_code == 409, (
+        "Expected 409 when the remote advance touches this agent's subdir, "
+        f"got {r.status_code}: {r.text}"
+    )
+    assert "pull" in r.json()["detail"].lower() or "advance" in r.json()["detail"].lower(), (
+        f"Expected 'pull'/'advance' in 409 detail, got: {r.json()['detail']}"
     )
 
 
