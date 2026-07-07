@@ -1343,62 +1343,98 @@ class MessageService:
         """
         logger.info(f"process_pending_messages called for session {session_id}")
 
-        from app.services.sessions.stream_processor import SessionStreamProcessor
+        from app.services.sessions.stream_processor import (
+            SessionStreamProcessor,
+            get_session_lock,
+        )
         from app.services.sessions.stream_event_handlers import WebSocketEventHandler
 
-        # Quick check: reset session state if no pending messages exist
-        with get_fresh_db_session() as db:
-            chat_session = db.get(ChatSession, session_id)
-            if not chat_session:
-                logger.error(f"Session {session_id} not found")
-                return
-            pending_check, _ = MessageService.collect_pending_messages(db, session_id)
-            if not pending_check:
-                logger.info(f"No pending messages found for session {session_id}")
-                chat_session.pending_messages_count = 0
-                chat_session.interaction_status = ""
-                db.add(chat_session)
-                db.commit()
-                return
+        # ── Same-session serialization (concurrency fix) ──────────────────────
+        # Acquire the shared per-session lock in WAIT mode (plain ``async with``,
+        # NOT MCP's reject-if-busy ``SessionLockBusyError`` semantics) and hold it
+        # around the ENTIRE body — quick-check, ``processor.process()``, AND the
+        # ``finally`` teardown clear. This is the one send path that historically
+        # opted out of the lock (``use_session_lock=False`` below), which let two
+        # near-simultaneous sends to the same session spawn fully independent,
+        # uncoordinated processing tasks whose separate finalizers reset
+        # ``interaction_status`` to "" while the other stream was still working
+        # for minutes — a false "done" in the UI.
+        #
+        # The teardown clear MUST be inside the lock, not just ``process()``:
+        # if the lock only wrapped ``process()`` (as ``use_session_lock=True``
+        # does inside the processor), task A's teardown would run AFTER the lock
+        # released and could race task B's freshly-set "running" state and nuke
+        # it. Wrapping the whole body means that in the normal (and single-
+        # cancellation) path task A is completely done — teardown included —
+        # before task B (queued on this lock) does anything. The processor stays
+        # ``use_session_lock=False`` so we do not double-lock. Do NOT "simplify"
+        # this lock away.
+        #
+        # Residual (accepted; see plan §3 / §2.1): the teardown clear below is
+        # wrapped in ``asyncio.shield``. If a cancellation lands *at* that await,
+        # the shielded clear runs detached and this ``async with`` releases the
+        # lock while it is still running, so it could momentarily clear a queued
+        # task B's "running". This is pre-existing, no worse than the old fully-
+        # unlocked behavior, and self-healing (the 3s session poll re-derives
+        # state from the DB). The no-migration fix is the deferred stream-epoch
+        # guard in ``session_metadata``, not tightening this lock.
+        lock = get_session_lock(str(session_id))
+        async with lock:
+            # Quick check: reset session state if no pending messages exist
+            with get_fresh_db_session() as db:
+                chat_session = db.get(ChatSession, session_id)
+                if not chat_session:
+                    logger.error(f"Session {session_id} not found")
+                    return
+                pending_check, _ = MessageService.collect_pending_messages(db, session_id)
+                if not pending_check:
+                    logger.info(f"No pending messages found for session {session_id}")
+                    chat_session.pending_messages_count = 0
+                    chat_session.interaction_status = ""
+                    db.add(chat_session)
+                    db.commit()
+                    return
 
-        handler = WebSocketEventHandler(session_id, get_fresh_db_session)
+            handler = WebSocketEventHandler(session_id, get_fresh_db_session)
 
-        processor = SessionStreamProcessor(
-            session_id=session_id,
-            get_fresh_db_session=get_fresh_db_session,
-            event_handler=handler,
-            use_session_lock=False,
-            ensure_env_ready=False,  # UI path handles env readiness in initiate_stream
-            inject_recovery_context=True,
-            inject_webapp_context=True,
-            log_prefix="[UI]",
-        )
+            processor = SessionStreamProcessor(
+                session_id=session_id,
+                get_fresh_db_session=get_fresh_db_session,
+                event_handler=handler,
+                use_session_lock=False,  # lock is held here in process_pending_messages
+                ensure_env_ready=False,  # UI path handles env readiness in initiate_stream
+                inject_recovery_context=True,
+                inject_webapp_context=True,
+                log_prefix="[UI]",
+            )
 
-        try:
-            await processor.process()
-        except Exception as e:
-            logger.error(f"Error in process_pending_messages for session {session_id}: {e}", exc_info=True)
-            await handler.on_error(e)
-            raise
-        finally:
-            # Safety net: guarantee the session never stays stuck "streaming".
-            # The happy path clears interaction_status via on_complete / the
-            # terminal STREAM_* events, but a cancellation (client disconnect,
-            # interrupt) or an error that bypasses a terminal event would leave
-            # it set. Shielded so a cancel propagating through this finally
-            # can't abort the clear. Idempotent — a no-op once already cleared.
-            from app.services.sessions.session_service import SessionService
             try:
-                await asyncio.shield(
-                    SessionService.clear_interaction_status(
-                        session_id, reason="process_pending_messages teardown"
+                await processor.process()
+            except Exception as e:
+                logger.error(f"Error in process_pending_messages for session {session_id}: {e}", exc_info=True)
+                await handler.on_error(e)
+                raise
+            finally:
+                # Safety net: guarantee the session never stays stuck "streaming".
+                # The happy path clears interaction_status via on_complete / the
+                # terminal STREAM_* events, but a cancellation (client disconnect,
+                # interrupt) or an error that bypasses a terminal event would leave
+                # it set. Shielded so a cancel propagating through this finally
+                # can't abort the clear. Idempotent — a no-op once already cleared.
+                # Runs INSIDE the session lock (see comment above) so a queued
+                # second send cannot have started streaming yet.
+                from app.services.sessions.session_service import SessionService
+                try:
+                    await asyncio.shield(
+                        SessionService.clear_interaction_status(
+                            session_id, reason="process_pending_messages teardown"
+                        )
                     )
-                )
-            except Exception as clear_err:  # noqa: BLE001 — best-effort net
-                logger.warning(
-                    f"Defensive interaction_status clear failed for session "
-                    f"{session_id}: {clear_err}"
-                )
+                except Exception as clear_err:  # noqa: BLE001 — best-effort net
+                    logger.warning(
+                        f"Defensive interaction_status clear failed for session "
+                        f"{session_id}: {clear_err}"
+                    )
 
     @staticmethod
     def detect_ask_user_question_tool(streaming_events: list[dict]) -> bool:

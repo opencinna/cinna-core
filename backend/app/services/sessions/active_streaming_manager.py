@@ -61,6 +61,17 @@ class ActiveStreamingManager:
         Args:
             session_id: Backend session UUID
             external_session_id: External SDK session ID (may be None for new sessions)
+
+        Note (same-session serialization): entries here are keyed by
+        ``session_id`` only, and both this dict write and ``unregister_stream``'s
+        delete are unconditional. Historically two concurrent same-session UI
+        streams could overwrite / falsely-unregister each other's entry. That is
+        now moot: the UI/web send path serializes all same-session processing on
+        the shared per-session lock in ``MessageService.process_pending_messages``
+        (WAIT mode), so only one stream is ever registered for a given session at
+        a time and register/unregister for that session never overlap. (An
+        in-memory ``stream_uid`` identity guard on unregister is a documented,
+        severable follow-up hardening; not required once processing is serialized.)
         """
         async with self._lock:
             self._active_streams[session_id] = ActiveStream(

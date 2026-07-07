@@ -109,6 +109,7 @@ idle ("") → running → idle ("")
 - `running` is set when the backend begins streaming from the agent environment
 - Cleared back to `""` on stream completion, error, or interruption
 - `streaming_started_at` is set on `running` and cleared on completion
+- **Concurrent sends are processed one at a time.** Two near-simultaneous sends to the same session (a double-send, two browser tabs, or a UI send alongside a CLI-via-proxy send) do not stream concurrently: the UI/web path serializes them on a per-session lock. The second message is never lost or falsely reported done — depending on timing, it either stays `pending` and is picked up in its own turn only after the first send fully completes, or (if it was already sent before the first turn collects pending messages) it rides along combined with the first message in that same turn. Either way, `interaction_status` reflects the genuinely-active stream throughout and never flips to idle while real work remains
 
 ### Result State Rules
 
