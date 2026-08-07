@@ -27,6 +27,9 @@ from app.models import (
     AgentApiAccessGrantPublic,
     AgentApiAccessGrantsPublic,
     AgentApiAccessGrantUpdate,
+    AgentApiKeyCreate,
+    AgentApiKeyCreated,
+    AgentApiKeysPublic,
     AgentApiProducerConnections,
     AgentApiScopeCatalog,
     AgentEnvironment,
@@ -35,6 +38,7 @@ from app.models import (
     Message,
 )
 from app.services.agent_api.agent_api_grant_service import AgentApiGrantService
+from app.services.agent_api.agent_api_key_service import AgentApiKeyService
 from app.services.agent_api.agent_api_service import (
     AgentApiError,
     AgentApiService,
@@ -419,5 +423,75 @@ async def delete_agent_api_grant(
             is_superuser=current_user.is_superuser,
         )
         return Message(message="Grant removed")
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+# ── External keys (owner-gated) ──────────────────────────────────────────────
+# Prefix: /api/v1/agents/{agent_id}/agent-api/keys
+#
+# A key is what makes this API callable from OUTSIDE the platform — a laptop
+# script, a server, a cron job. Owner-gated exactly like /grants* (404, never a
+# 403, so a non-owner cannot probe which agents exist). Minting additionally
+# requires the producer's `agent_api_external_access_enabled` opt-in.
+
+
+@router.post("/keys", response_model=AgentApiKeyCreated)
+async def create_agent_api_key(
+    agent_id: uuid.UUID,
+    body: AgentApiKeyCreate,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Mint an external API key bound to a platform user (owner-gated).
+
+    Returns the token value plus the PUBLIC ``base_url`` / ``spec_url`` the
+    holder calls. ``scopes`` (optional) upserts the ``(producer, subject)``
+    grant — scopes live there, not on the key.
+    """
+    try:
+        return await AgentApiKeyService.create_key(
+            session, agent_id, current_user.id, body,
+            is_superuser=current_user.is_superuser,
+        )
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.get("/keys", response_model=AgentApiKeysPublic)
+def list_agent_api_keys(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """List this producer's external keys (owner-gated). Never the value."""
+    try:
+        keys = AgentApiKeyService.list_keys(
+            session, agent_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+        return AgentApiKeysPublic(data=keys, count=len(keys))
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.delete("/keys/{key_id}")
+async def delete_agent_api_key(
+    agent_id: uuid.UUID,
+    key_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Message:
+    """Revoke a key immediately (owner-gated).
+
+    Deletes the bound credential, which cascade-deletes the token — the same
+    revocation path a disconnect uses. The user's scope grant is left intact.
+    """
+    try:
+        await AgentApiKeyService.revoke_key(
+            session, agent_id, key_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+        return Message(message="Key revoked")
     except AgentApiError as e:
         _handle_agent_api_error(e)

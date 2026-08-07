@@ -664,6 +664,84 @@ export type AgentApiGrantUser = {
 };
 
 /**
+ * Request to mint an external API key on a producer agent (plan D9).
+ *
+ * ``scopes`` is a convenience: it **upserts** the ``agent_api_access_grant``
+ * for ``(producer, subject_user_id)``. Scopes live on the grant, never on the
+ * key (plan D5) — the same row the producer's Access & Scopes card edits.
+ */
+export type AgentApiKeyCreate = {
+    label?: (string | null);
+    subject_user_id: string;
+    scopes?: (Array<(string)> | null);
+    read_only_override?: boolean;
+    expires_in_days?: (number | null);
+};
+
+/**
+ * Returned on mint — carries the token value plus where to call it.
+ */
+export type AgentApiKeyCreated = {
+    id: string;
+    credential_id: (string | null);
+    agent_id: string;
+    label: (string | null);
+    token_prefix: string;
+    subject: (AgentApiKeySubject | null);
+    read_only: boolean;
+    is_active: boolean;
+    is_usable: boolean;
+    expires_at: (string | null);
+    last_used_at: (string | null);
+    created_at: string;
+    token: string;
+    base_url: string;
+    spec_url: string;
+};
+
+/**
+ * One external key as listed on the producer card. Never the value.
+ */
+export type AgentApiKeyPublic = {
+    id: string;
+    credential_id: (string | null);
+    agent_id: string;
+    label: (string | null);
+    token_prefix: string;
+    subject: (AgentApiKeySubject | null);
+    read_only: boolean;
+    is_active: boolean;
+    is_usable: boolean;
+    expires_at: (string | null);
+    last_used_at: (string | null);
+    created_at: string;
+};
+
+/**
+ * The value of an external key, returned by the dedicated reveal endpoint.
+ *
+ * The **only** way to read a key back after mint (plan D4): ``with-data``
+ * deliberately strips it, so every reveal goes through one audited call.
+ */
+export type AgentApiKeyRevealResponse = {
+    token: string;
+};
+
+export type AgentApiKeysPublic = {
+    data: Array<AgentApiKeyPublic>;
+    count: number;
+};
+
+/**
+ * The platform user an external key is bound to.
+ */
+export type AgentApiKeySubject = {
+    id: string;
+    email?: (string | null);
+    full_name?: (string | null);
+};
+
+/**
  * One connection to a producer agent's API — surfaced on the producer's
  * "Agent REST API" card (where the token list used to be). Each connection is
  * one token (``token_id``) and, normally, the ``agent_api`` credential it
@@ -1276,6 +1354,7 @@ export type AgentPublic = {
     webapp_enabled?: boolean;
     agent_api_enabled?: boolean;
     agent_api_identity_enabled?: boolean;
+    agent_api_external_access_enabled?: boolean;
     has_email_integration?: boolean;
     has_mcp_connectors?: boolean;
     has_webhooks?: boolean;
@@ -1466,6 +1545,7 @@ export type AgentUpdate = {
     webapp_enabled?: (boolean | null);
     agent_api_enabled?: (boolean | null);
     agent_api_identity_enabled?: (boolean | null);
+    agent_api_external_access_enabled?: (boolean | null);
     update_mode?: (string | null);
     publish_settings?: ({
     [key: string]: unknown;
@@ -6033,6 +6113,26 @@ export type AgentApiDeleteAgentApiGrantData = {
 
 export type AgentApiDeleteAgentApiGrantResponse = (Message);
 
+export type AgentApiCreateAgentApiKeyData = {
+    agentId: string;
+    requestBody: AgentApiKeyCreate;
+};
+
+export type AgentApiCreateAgentApiKeyResponse = (AgentApiKeyCreated);
+
+export type AgentApiListAgentApiKeysData = {
+    agentId: string;
+};
+
+export type AgentApiListAgentApiKeysResponse = (AgentApiKeysPublic);
+
+export type AgentApiDeleteAgentApiKeyData = {
+    agentId: string;
+    keyId: string;
+};
+
+export type AgentApiDeleteAgentApiKeyResponse = (Message);
+
 export type AgentApiPublicConsumerSpecData = {
     agentId: string;
 };
@@ -7410,6 +7510,12 @@ export type CredentialsReadCredentialWithDataData = {
 };
 
 export type CredentialsReadCredentialWithDataResponse = (CredentialWithData);
+
+export type CredentialsRevealAgentApiKeyData = {
+    id: string;
+};
+
+export type CredentialsRevealAgentApiKeyResponse = (AgentApiKeyRevealResponse);
 
 export type CredentialsReadAgentApiConnectionData = {
     id: string;

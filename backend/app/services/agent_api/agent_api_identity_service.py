@@ -163,14 +163,37 @@ class AgentApiIdentityService:
         is never logged.
 
         Scopes (``X-Cinna-Caller-Scopes``) are intentionally NOT set here — that
-        is Phase 2 (live grant lookup).
+        is the proxy's live grant lookup.
         """
         user_id = AgentApiIdentityService.verify(identity_token)
         if user_id is None:
             return {}
+        return AgentApiIdentityService.resolve_caller_headers_for_user(
+            session, user_id
+        )
+
+    @staticmethod
+    def resolve_caller_headers_for_user(
+        session: Session, user_id: uuid.UUID
+    ) -> dict[str, str]:
+        """Build the trusted ``X-Cinna-Caller-*`` headers for a known user id.
+
+        The single place the attribution headers are shaped, so BOTH identity
+        paths produce byte-identical headers and the producer cannot tell them
+        apart (plan D2):
+
+        - a consumer container presenting the L2 ``owner_identity_token``
+          (``resolve_caller_headers`` above verifies the JWT, then delegates
+          here), and
+        - an **external key**, whose ``subject_user_id`` IS the identity — no
+          token to verify, the binding was made at mint time.
+
+        Returns an EMPTY dict when the user no longer exists (anonymous, never an
+        error). NEVER raises.
+        """
         user = session.get(User, user_id)
         if user is None:
-            # Token verified but the owner is gone — treat as anonymous.
+            # Identity resolved but the user is gone — treat as anonymous.
             return {}
         # Always set the user-id (the authoritative attribution key); only emit
         # email/username when present so we never rely on empty-header transport

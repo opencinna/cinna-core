@@ -143,7 +143,7 @@ A `bundle_id` mismatch between the remote folder and the agent is **permitted** 
 2. Direction guard: `sync_direction` must be `push` or `bidirectional`; otherwise **400**.
 3. Requires a started environment with a readable workspace; otherwise **400**.
 4. `also_publish_bundle` (optional, default `false`) requires a publisher install; validated before the push so a failed precondition never wastes the push.
-5. **Fast-forward precheck:** `ls-remote HEAD` vs `last_synced_commit`. If the remote advanced — **409** "pull first". No clone or commit is attempted.
+5. **Fast-forward precheck (subdir-aware):** `ls-remote HEAD` vs `last_synced_commit`. If the remote advanced, the precheck blocks with **409** "pull first" only when the advance is relevant to this agent — a repo-root install (no `subdir`) always blocks; a `subdir` install blocks only when the subdir tree actually changed between `last_synced_commit` and the new remote HEAD (the same `subdir_changed_between` check the Update Check section uses). An advance confined to other folders of a shared repo falls through with no block — no clone or commit is attempted for the precheck itself either way.
 6. Full-history clone (not shallow — fast-forward push needs merge-base ancestry).
 7. Delete the stale `workspace/` subtree in the clone (so deletions propagate). Capture the live `app/workspace/` tree via `RevisionFormat.write_tree` — the same denylist + symlink guards publish uses, so credentials, app-data, logs, databases, and uploads can never reach the git tree even via a symlink. Write `cinna.agent.json` and refresh `.gitignore`.
 8. Size guard: reject any individual workspace file exceeding `GIT_SOURCE_MAX_FILE_BYTES` before committing.
@@ -287,7 +287,7 @@ A `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` setting (default 30 s) is applied to all 
 | Connect with sync_direction="pull" | **400** (can't export with pull-only direction) |
 | Connect when subdir already contains a `cinna.agent.json` | **Recoverable 409** (`existing_agent_folder`) — UI offers to adopt; re-send with `adopt_existing=true` to link to the existing folder (no overwrite, records it as the baseline) |
 | Pull when prompts differ from last synced revision (DB dirty) | **409** "push or discard changes first" — source status unchanged |
-| Push when remote advanced since last_synced_commit | **409** "pull first" — no clone or commit attempted — source status unchanged |
+| Push when remote advanced since last_synced_commit | Repo-root install, or a subdir install where the advance touched the subdir → **409** "pull first" (no clone or commit attempted, source status unchanged). Subdir install where the advance touched only other folders of a shared repo → push proceeds and falls through to fast-forward-push over the unrelated commit |
 | Push rejected by remote side as non-ff | **409** via `GitNonFastForwardError` — source status unchanged |
 | Genuine clone/network/filesystem error | Source stamped `status = ERROR` + `last_error`; original exception re-raised |
 

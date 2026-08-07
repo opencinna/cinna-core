@@ -3415,6 +3415,345 @@ export const AgentApiGrantUserSchema = {
     title: 'AgentApiGrantUser'
 } as const;
 
+export const AgentApiKeyCreateSchema = {
+    properties: {
+        label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        subject_user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Subject User Id'
+        },
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        },
+        read_only_override: {
+            type: 'boolean',
+            title: 'Read Only Override',
+            default: false
+        },
+        expires_in_days: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 3650,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires In Days'
+        }
+    },
+    type: 'object',
+    required: ['subject_user_id'],
+    title: 'AgentApiKeyCreate',
+    description: `Request to mint an external API key on a producer agent (plan D9).
+
+\`\`scopes\`\` is a convenience: it **upserts** the \`\`agent_api_access_grant\`\`
+for \`\`(producer, subject_user_id)\`\`. Scopes live on the grant, never on the
+key (plan D5) — the same row the producer's Access & Scopes card edits.`
+} as const;
+
+export const AgentApiKeyCreatedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        subject: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiKeySubject'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        is_usable: {
+            type: 'boolean',
+            title: 'Is Usable'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        token: {
+            type: 'string',
+            title: 'Token'
+        },
+        base_url: {
+            type: 'string',
+            title: 'Base Url'
+        },
+        spec_url: {
+            type: 'string',
+            title: 'Spec Url'
+        }
+    },
+    type: 'object',
+    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'subject', 'read_only', 'is_active', 'is_usable', 'expires_at', 'last_used_at', 'created_at', 'token', 'base_url', 'spec_url'],
+    title: 'AgentApiKeyCreated',
+    description: 'Returned on mint — carries the token value plus where to call it.'
+} as const;
+
+export const AgentApiKeyPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        subject: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiKeySubject'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        is_usable: {
+            type: 'boolean',
+            title: 'Is Usable'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'subject', 'read_only', 'is_active', 'is_usable', 'expires_at', 'last_used_at', 'created_at'],
+    title: 'AgentApiKeyPublic',
+    description: 'One external key as listed on the producer card. Never the value.'
+} as const;
+
+export const AgentApiKeyRevealResponseSchema = {
+    properties: {
+        token: {
+            type: 'string',
+            title: 'Token'
+        }
+    },
+    type: 'object',
+    required: ['token'],
+    title: 'AgentApiKeyRevealResponse',
+    description: `The value of an external key, returned by the dedicated reveal endpoint.
+
+The **only** way to read a key back after mint (plan D4): \`\`with-data\`\`
+deliberately strips it, so every reveal goes through one audited call.`
+} as const;
+
+export const AgentApiKeySubjectSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        }
+    },
+    type: 'object',
+    required: ['id'],
+    title: 'AgentApiKeySubject',
+    description: 'The platform user an external key is bound to.'
+} as const;
+
+export const AgentApiKeysPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiKeyPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentApiKeysPublic'
+} as const;
+
 export const AgentApiProducerConnectionSchema = {
     properties: {
         token_id: {
@@ -6152,6 +6491,11 @@ export const AgentPublicSchema = {
             title: 'Agent Api Identity Enabled',
             default: false
         },
+        agent_api_external_access_enabled: {
+            type: 'boolean',
+            title: 'Agent Api External Access Enabled',
+            default: false
+        },
         has_email_integration: {
             type: 'boolean',
             title: 'Has Email Integration',
@@ -7210,6 +7554,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Agent Api Identity Enabled'
+        },
+        agent_api_external_access_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api External Access Enabled'
         },
         update_mode: {
             anyOf: [

@@ -332,7 +332,10 @@ def list_security_events(
     r = client.get(f"{_BASE}/security-events/", headers=headers, params=params)
     assert r.status_code == 200, f"security-events list failed: {r.text}"
     data = r.json()
-    return data.get("data") or data
+    # NOTE: must be `is not None`, not a truthy `or` — an empty-but-present
+    # "data" list (no events yet) is falsy and would otherwise fall through to
+    # returning the whole response dict instead of `[]`.
+    return data["data"] if "data" in data else data
 
 
 def assert_security_event_written(

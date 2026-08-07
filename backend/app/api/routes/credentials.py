@@ -10,6 +10,7 @@ from app.api.deps import CurrentUser, SessionDep
 from app.models.credentials.credential import CredentialType
 from app.models import (
     AgentApiConnectionInfo,
+    AgentApiKeyRevealResponse,
     Credential,
     CredentialBundleUsages,
     CredentialDeletionImpact,
@@ -26,6 +27,10 @@ from app.services.credentials.credentials_service import (
     CredentialInUseError,
 )
 from app.services.credentials.credential_share_service import CredentialShareService
+from app.services.agent_api.agent_api_key_service import (
+    AgentApiKeyError,
+    AgentApiKeyService,
+)
 from app.services.agent_api.agent_api_token_service import (
     AgentApiTokenError,
     AgentApiTokenService,
@@ -165,6 +170,10 @@ def read_credentials(
         owner_id=current_user.id,
         credential_ids=credential_ids,
     )
+    # Tab categories for the whole page (batched; agent_api rows are split by
+    # their bound token's kind — connections are "Automatic", external keys are
+    # "My Credentials").
+    categories = CredentialsService.classify_owned_credentials(session, credentials)
 
     # Convert to public models with share_count, category, and the batched badges.
     credentials_public = [
@@ -173,12 +182,7 @@ def read_credentials(
             c,
             agent_usage_count=usage_counts.get(c.id, 0),
             used_in_bundle=c.id in bundle_flags,
-            category=CredentialsService.classify_credential_category(
-                is_owned=True,
-                credential_type=c.type,
-                share_source=None,
-                mcp_auth_mode=c.mcp_auth_mode,
-            ),
+            category=categories.get(c.id, "mine"),
         )
         for c in credentials
     ]
@@ -234,11 +238,54 @@ def read_credential_with_data(
             session=session, credential_id=id
         )
         credential_data_dict["share_count"] = share_count
+        # An ``agent_api`` **external key** is the one credential whose value is
+        # NOT shipped on page open: this route fires on every detail-page load,
+        # so returning it here would hand the token to people who never clicked
+        # Reveal, unaudited. Keys are revealed through the dedicated, audited
+        # POST /credentials/{id}/agent-api-key/reveal instead (plan D4).
+        # Connections and every other credential type are untouched.
+        if AgentApiKeyService.is_external_key_credential(
+            session=session,
+            credential_id=id,
+            credential_type=credential_data_dict.get("type"),
+        ):
+            data = credential_data_dict.get("credential_data")
+            if isinstance(data, dict) and "token" in data:
+                credential_data_dict["credential_data"] = {
+                    key: value for key, value in data.items() if key != "token"
+                }
         return CredentialWithData(**credential_data_dict)
     except ValueError as e:
         # Service raises ValueError for not found or permission errors
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+
+
+@router.post("/{id}/agent-api-key/reveal", response_model=AgentApiKeyRevealResponse)
+async def reveal_agent_api_key(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """
+    Reveal the value of an ``agent_api`` **external key**.
+
+    The only path that returns a key's value after mint, and the only one that
+    is audited (`AGENT_API_EXTERNAL_KEY_REVEALED`, one event per call).
+
+    **Owner-gated with no superuser bypass** — reveal is disclosure, not
+    containment; see `AgentApiKeyService.reveal_external_key` for why the
+    asymmetry with `revoke_key` is deliberate. 404 when the credential does not
+    exist, is not the caller's, or the caller is an admin who is not the owner;
+    400 when it exists but is not an external key.
+    """
+    try:
+        token = await AgentApiKeyService.reveal_external_key(
+            session=session,
+            credential_id=id,
+            user_id=current_user.id,
+        )
+    except AgentApiKeyError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    return AgentApiKeyRevealResponse(token=token)
 
 
 @router.get("/{id}/agent-api-connection", response_model=AgentApiConnectionInfo)

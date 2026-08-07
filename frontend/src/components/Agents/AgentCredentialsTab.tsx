@@ -153,8 +153,10 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
   }, [availableCredentials, credentialQuery])
 
   // Group the filtered credentials by their type's registry group. Any
-  // credential whose type is not part of a registered group (e.g. agent_api)
-  // is collected into a trailing "Other" group so nothing is dropped.
+  // credential whose type is not part of a registered group (all current
+  // types are, including agent_api's "API & Access" group) is collected into
+  // a trailing "Other" group as a fallback so nothing is silently dropped if
+  // a future type is added without a group.
   const groupedCredentials = useMemo(() => {
     const assigned = new Set<string>()
     const groups: { key: string; label: string; items: AvailableCredential[] }[] =

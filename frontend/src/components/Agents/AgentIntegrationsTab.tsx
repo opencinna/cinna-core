@@ -183,6 +183,9 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
           agentId={agent.id}
           agentApiEnabled={agent.agent_api_enabled ?? false}
           agentApiIdentityEnabled={agent.agent_api_identity_enabled ?? false}
+          agentApiExternalAccessEnabled={
+            agent.agent_api_external_access_enabled ?? false
+          }
         />
 
         {/* Git Versioning Card - owner-only (connect/push/pull are developer-gated) */}

@@ -70,6 +70,11 @@ class AgentUpdate(SQLModel):
     # this producer (injects X-Cinna-Caller-Scopes from the live grant). When
     # False, callers are attributed but carry no scopes. See plan D5.
     agent_api_identity_enabled: bool | None = None
+    # Opt-in that allows minting **external API keys** for this producer — keys a
+    # human copies into a laptop script / cron job. Off by default: making the
+    # API reachable from the public internet by a copy-pasteable key must be a
+    # deliberate act. Also the proxy's cheap kill switch. See plan D1.
+    agent_api_external_access_enabled: bool | None = None
     # Install owners can update update mode for bundle updates
     update_mode: str | None = None  # "automatic" | "manual"
     # Publisher override map (Phase 5). Only meaningful on the publisher
@@ -156,6 +161,10 @@ class Agent(AgentBase, table=True):
     # Whether the agent-api proxy honors per-user identity + scope grants for
     # this producer (L2). Default off — opt-in for UI clarity (plan D5).
     agent_api_identity_enabled: bool = Field(default=False)
+    # Whether external API keys may be minted for this producer (plan D1).
+    # Default off — an external key is copy-pasteable and identity-bound, so
+    # enabling the surface is an explicit owner decision.
+    agent_api_external_access_enabled: bool = Field(default=False)
     # Status refresh pre-command (see AgentBase). Stored as VARCHAR(1024),
     # nullable, with a server default so existing rows backfill to "/run:status"
     # on migration. The Python model default governs new rows.
@@ -257,6 +266,7 @@ class AgentPublic(SQLModel):
     webapp_enabled: bool = False
     agent_api_enabled: bool = False
     agent_api_identity_enabled: bool = False
+    agent_api_external_access_enabled: bool = False
 
     # Computed capability flags — surface the agent's "purpose" on list cards
     # without per-card queries. Reflect whether each integration is actively

@@ -11,6 +11,7 @@ import {
   Inbox,
   Key,
   KeyRound,
+  KeySquare,
   Mail,
   Network,
   Plug,
@@ -20,6 +21,10 @@ import {
 } from "lucide-react"
 
 import type { CredentialType } from "@/client"
+import {
+  AGENT_API_KEY_LABEL,
+  AGENT_API_KEY_TAGLINE,
+} from "@/components/Credentials/agentApiKeyCopy"
 
 export interface CredentialTypeOption {
   type: CredentialType
@@ -27,6 +32,14 @@ export interface CredentialTypeOption {
   defaultName: string
   keywords: string
   icon: LucideIcon
+  /**
+   * Opt out of the picker's default "create a row with ``defaultName`` and open
+   * its detail page" behaviour, because this type cannot exist as an empty
+   * draft: an ``agent_api`` key is bound to a producer agent and a subject user
+   * at mint time, so it needs a dialog first. The picker branches on this and
+   * ``defaultName`` goes unused for such an entry.
+   */
+  action?: "agent_api_key"
 }
 
 export interface CredentialTypeGroup {
@@ -59,6 +72,18 @@ export const CREDENTIAL_TYPE_GROUPS: CredentialTypeGroup[] = [
         defaultName: "SSH Key",
         keywords: "ssh key git deploy private public",
         icon: KeyRound,
+      },
+      {
+        // Sits here rather than in its own row above the groups: from the
+        // outside this is just an API key for external use, not an exceptional
+        // kind of access. ``action`` routes it to the mint dialog — it has no
+        // empty-draft form. See agentApiKeyCopy.ts for the product name.
+        type: "agent_api",
+        label: AGENT_API_KEY_LABEL,
+        defaultName: AGENT_API_KEY_LABEL,
+        keywords: `agent api key external rest curl script ${AGENT_API_KEY_TAGLINE}`,
+        icon: KeySquare,
+        action: "agent_api_key",
       },
     ],
   },
@@ -165,10 +190,16 @@ export interface CredentialTypeMeta {
   badgeClass: string
 }
 
-// Display-only credential types — rendered (icon/label/badge) when present but
-// NOT offered in the "Add Credential" picker. ``agent_api`` credentials are
-// created by the "Connect Agent API" helper (which mints the proxy token and
-// wires the connection), never by hand.
+// Display overrides — the icon/label/badge used when rendering a credential of
+// this type, which is NOT always what the picker offers.
+//
+// These are applied AFTER the groups above, so for a type appearing in both the
+// override wins for display. That is deliberate for ``agent_api``: the picker
+// offers "Agent API Key" (the outward-facing half a user mints by hand), while
+// *every* agent_api credential — key or auto-created connection — renders under
+// one neutral "Agent REST API" badge. A connection is still never created by
+// hand; it comes from the "Connect Agent API" helper, which mints the proxy
+// token and wires the two agents.
 const DISPLAY_ONLY_META: CredentialTypeMeta[] = [
   {
     type: "agent_api",

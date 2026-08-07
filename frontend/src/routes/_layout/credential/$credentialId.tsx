@@ -1,16 +1,30 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { ArrowLeft, Trash2, Users, Lock } from "lucide-react"
+import { ArrowLeft, Lock, Trash2, Users } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-
-import { CredentialsService } from "@/client"
-import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import type { CredentialPublic, CredentialWithData } from "@/client"
-import PendingItems from "@/components/Pending/PendingItems"
+import { CredentialsService } from "@/client"
 import NotFound from "@/components/Common/NotFound"
+import { AgentApiCredentialDetail } from "@/components/Credentials/AgentApiCredentialDetail"
+import { OAuthCredentialFields } from "@/components/Credentials/CredentialFields"
+import {
+  ApiTokenCredentialForm,
+  GenericCredentialForm,
+  OAuthCredentialForm,
+  OdooCredentialForm,
+  ServiceAccountCredentialForm,
+  SSHKeyEditView,
+} from "@/components/Credentials/CredentialForms"
+import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
+import { CredentialTemplateSharing } from "@/components/Credentials/CredentialTemplateSharing"
+import DeleteCredential from "@/components/Credentials/DeleteCredential"
+import { McpProviderConnectionView } from "@/components/Credentials/McpProviderConnectionView"
+import PendingItems from "@/components/Pending/PendingItems"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -28,31 +42,12 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { LoadingButton } from "@/components/ui/loading-button"
-import { Badge } from "@/components/ui/badge"
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "@/components/ui/alert"
+import { Textarea } from "@/components/ui/textarea"
 import useCustomToast from "@/hooks/useCustomToast"
-import { handleError } from "@/utils"
-import DeleteCredential from "@/components/Credentials/DeleteCredential"
+import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { usePageHeader } from "@/routes/_layout"
-import { OAuthCredentialFields } from "@/components/Credentials/CredentialFields"
-import {
-  OdooCredentialForm,
-  ApiTokenCredentialForm,
-  OAuthCredentialForm,
-  GenericCredentialForm,
-  ServiceAccountCredentialForm,
-  SSHKeyEditView,
-} from "@/components/Credentials/CredentialForms"
-import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
-import { CredentialTemplateSharing } from "@/components/Credentials/CredentialTemplateSharing"
-import { AgentApiConnectionView } from "@/components/Credentials/AgentApiConnectionView"
-import { McpProviderConnectionView } from "@/components/Credentials/McpProviderConnectionView"
+import { handleError } from "@/utils"
 
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
@@ -112,15 +107,20 @@ export const Route = createFileRoute("/_layout/credential/$credentialId")({
 })
 
 // Read-only view for shared credentials
-function SharedCredentialView({ credential }: { credential: CredentialPublic }) {
+function SharedCredentialView({
+  credential,
+}: {
+  credential: CredentialPublic
+}) {
   return (
     <div className="space-y-6">
       <Alert>
         <Users className="h-4 w-4" />
         <AlertTitle>Shared Credential</AlertTitle>
         <AlertDescription>
-          This credential was shared with you by {credential.owner_email}.
-          You can use it in your agents but cannot view or edit the credential details.
+          This credential was shared with you by {credential.owner_email}. You
+          can use it in your agents but cannot view or edit the credential
+          details.
         </AlertDescription>
       </Alert>
 
@@ -133,29 +133,42 @@ function SharedCredentialView({ credential }: { credential: CredentialPublic }) 
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Name</label>
+            <label className="text-sm font-medium text-muted-foreground">
+              Name
+            </label>
             <p className="text-base">{credential.name}</p>
           </div>
 
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Type</label>
-            <p className="text-base">{getCredentialTypeLabel(credential.type)}</p>
+            <label className="text-sm font-medium text-muted-foreground">
+              Type
+            </label>
+            <p className="text-base">
+              {getCredentialTypeLabel(credential.type)}
+            </p>
           </div>
 
           {credential.notes && (
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Notes</label>
+              <label className="text-sm font-medium text-muted-foreground">
+                Notes
+              </label>
               <p className="text-base">{credential.notes}</p>
             </div>
           )}
 
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Shared by</label>
+            <label className="text-sm font-medium text-muted-foreground">
+              Shared by
+            </label>
             <p className="text-base">{credential.owner_email}</p>
           </div>
 
           <div className="flex items-center gap-2 pt-2">
-            <Badge variant="outline" className="gap-1 bg-blue-50 text-blue-700 border-blue-200">
+            <Badge
+              variant="outline"
+              className="gap-1 bg-blue-50 text-blue-700 border-blue-200"
+            >
               <Users className="h-3 w-3" />
               Shared with you
             </Badge>
@@ -219,7 +232,10 @@ function OwnedCredentialView({
 
   const mutation = useMutation({
     mutationFn: (data: FormData) =>
-      CredentialsService.updateCredential({ id: credentialId, requestBody: data }),
+      CredentialsService.updateCredential({
+        id: credentialId,
+        requestBody: data,
+      }),
     onSuccess: (_res, variables) => {
       showSuccessToast("Credential updated successfully")
       // Mark the form pristine after a save so the credential-with-data
@@ -231,7 +247,9 @@ function OwnedCredentialView({
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["credentials"] })
       queryClient.invalidateQueries({ queryKey: ["credential", credentialId] })
-      queryClient.invalidateQueries({ queryKey: ["credential-with-data", credentialId] })
+      queryClient.invalidateQueries({
+        queryKey: ["credential-with-data", credentialId],
+      })
     },
   })
 
@@ -279,24 +297,17 @@ function OwnedCredentialView({
     )
   }
 
-  // agent_api credentials are connection records: the proxy token is managed
-  // internally, so we never render an editable secret form. Name + notes are
-  // edited inside AgentApiConnectionView (its own metadata-only save). The
-  // connection panel (producer → consumers + View Spec) is read-only. Sharing
-  // stays. Template sharing is hidden — there are no user-fillable private
-  // fields for a connection credential.
+  // agent_api covers two products behind one type — a machine CONNECTION
+  // between two agents and an external KEY a human copies out. Neither renders
+  // an editable secret form (the value is minted, never typed) and neither gets
+  // a Template-sharing card. AgentApiCredentialDetail resolves which one this
+  // is and owns the rest, including whether a sharing card exists at all.
   if (credential.type === "agent_api") {
     return (
-      <div className="space-y-6">
-        <AgentApiConnectionView credential={credential} />
-
-        {/* Sharing stays half-width (left), matching the Template-card layout
-            of other types. The right half is intentionally empty — agent_api
-            connections have no Template-sharing card. */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <CredentialSharing credential={credential} />
-        </div>
-      </div>
+      <AgentApiCredentialDetail
+        credential={credential}
+        justCreated={focusNameField}
+      />
     )
   }
 
@@ -333,7 +344,10 @@ function OwnedCredentialView({
             </CardHeader>
             <CardContent>
               <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                <form
+                  onSubmit={form.handleSubmit(onSubmit)}
+                  className="space-y-4"
+                >
                   <FormField
                     control={form.control}
                     name="name"
@@ -343,7 +357,11 @@ function OwnedCredentialView({
                           Name <span className="text-destructive">*</span>
                         </FormLabel>
                         <FormControl>
-                          <Input placeholder="My Credential" type="text" {...field} />
+                          <Input
+                            placeholder="My Credential"
+                            type="text"
+                            {...field}
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -405,7 +423,10 @@ function OwnedCredentialView({
           </CardHeader>
           <CardContent>
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <form
+                onSubmit={form.handleSubmit(onSubmit)}
+                className="space-y-4"
+              >
                 {credential.type === "odoo" && (
                   <OdooCredentialForm form={form} />
                 )}
@@ -476,11 +497,27 @@ function CredentialDetail() {
   const { setHeaderContent } = usePageHeader()
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
 
-  // `?new=1` is set by AddCredential after auto-creating a default-named
-  // credential so the detail view can focus + select the name field. We latch
-  // it once on mount and then strip it from the URL so a refresh doesn't
-  // re-trigger the focus (and doesn't leave the marker in shared links).
-  const [focusNameField] = useState(() => search.new === 1)
+  // `?new=1` marks "this credential was just created": AddCredential sets it so
+  // the detail view can focus the name field, and the agent-api key flows set it
+  // so a freshly minted key reveals its value once. We latch it and then strip
+  // it from the URL so a refresh doesn't re-trigger either (and doesn't leave
+  // the marker in shared links).
+  //
+  // Latched PER CREDENTIAL, not per mount: TanStack Router reuses this
+  // component across a `credentialId` change (no `remountDeps`), so any
+  // credential → credential navigation — minting a second key from the picker,
+  // or just clicking through the credentials list — lands here without a
+  // remount. A mount-only `useState` would carry the previous credential's
+  // answer into the next one, reading "just created" as false for a key that
+  // was in fact just minted.
+  const [justCreated, setJustCreated] = useState(() => ({
+    id: credentialId,
+    value: search.new === 1,
+  }))
+  if (justCreated.id !== credentialId) {
+    setJustCreated({ id: credentialId, value: search.new === 1 })
+  }
+  const focusNameField = justCreated.value
   useEffect(() => {
     if (search.new === 1) {
       navigate({
@@ -493,17 +530,28 @@ function CredentialDetail() {
   }, [search.new, credentialId, navigate])
 
   // First, fetch credential metadata to check if it's shared
-  const { data: credentialMeta, isLoading: metaLoading, error: metaError } = useQuery({
+  const {
+    data: credentialMeta,
+    isLoading: metaLoading,
+    error: metaError,
+  } = useQuery({
     queryKey: ["credential", credentialId],
     queryFn: () => CredentialsService.readCredential({ id: credentialId }),
     enabled: !!credentialId,
   })
 
-  // If owned, fetch with data for editing
+  // If owned, fetch with data for editing.
+  //
+  // `refetchOnWindowFocus: false` is deliberate: this response carries
+  // decrypted secrets, so it should cross the wire when the page needs it and
+  // not once per tab switch. Nothing here depends on focus-refetch — every
+  // mutation that changes this data invalidates the key explicitly.
   const { data: credentialWithData, isLoading: dataLoading } = useQuery({
     queryKey: ["credential-with-data", credentialId],
-    queryFn: () => CredentialsService.readCredentialWithData({ id: credentialId }),
+    queryFn: () =>
+      CredentialsService.readCredentialWithData({ id: credentialId }),
     enabled: !!credentialId && credentialMeta?.is_shared === false,
+    refetchOnWindowFocus: false,
   })
 
   const handleDeleteSuccess = () => {
@@ -523,7 +571,12 @@ function CredentialDetail() {
       setHeaderContent(
         <>
           <div className="flex items-center gap-3 min-w-0">
-            <Button variant="ghost" size="sm" onClick={handleBack} className="shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleBack}
+              className="shrink-0"
+            >
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="min-w-0">
@@ -532,7 +585,10 @@ function CredentialDetail() {
                   {credentialMeta.name}
                 </h1>
                 {isShared && (
-                  <Badge variant="outline" className="gap-1 bg-blue-50 text-blue-700 border-blue-200 text-xs">
+                  <Badge
+                    variant="outline"
+                    className="gap-1 bg-blue-50 text-blue-700 border-blue-200 text-xs"
+                  >
                     <Users className="h-3 w-3" />
                     Shared
                   </Badge>
@@ -540,7 +596,9 @@ function CredentialDetail() {
               </div>
               <p className="text-xs text-muted-foreground">
                 {getCredentialTypeLabel(credentialMeta.type)}
-                {isShared && credentialMeta.owner_email && ` - Shared by ${credentialMeta.owner_email}`}
+                {isShared &&
+                  credentialMeta.owner_email &&
+                  ` - Shared by ${credentialMeta.owner_email}`}
               </p>
             </div>
           </div>
@@ -558,11 +616,17 @@ function CredentialDetail() {
               </Button>
             </DeleteCredential>
           )}
-        </>
+        </>,
       )
     }
     return () => setHeaderContent(null)
-  }, [credentialMeta, setHeaderContent, isDeleteOpen])
+  }, [
+    credentialMeta,
+    setHeaderContent,
+    isDeleteOpen,
+    handleBack,
+    handleDeleteSuccess,
+  ])
 
   if (metaLoading) {
     return <PendingItems />
@@ -609,7 +673,14 @@ function CredentialDetail() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
       <div className="mx-auto max-w-7xl">
+        {/* Keyed on the credential so navigating credential → credential starts
+            every sub-view from clean state — notably the key card's reveal
+            toggle, which must never carry over from one key to another. The
+            route does not remount on its own (see the latch above), so without
+            this key one key's revealed value could render under another key's
+            identity. */}
         <OwnedCredentialView
+          key={credentialId}
           credential={credentialWithData}
           focusNameField={focusNameField}
         />

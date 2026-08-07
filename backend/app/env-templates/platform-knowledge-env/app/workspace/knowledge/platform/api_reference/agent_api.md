@@ -120,3 +120,41 @@ Auto-generated from OpenAPI spec. Tag: `agent-api`
 **Response:** `Message`
 
 ---
+
+## POST `/api/v1/agents/{agent_id}/agent-api/keys`
+**Create Agent Api Key**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`AgentApiKeyCreate`):
+  - `label`: string | null
+  - `subject_user_id`: uuid (required)
+  - `scopes`: array | null
+  - `read_only_override`: boolean
+  - `expires_in_days`: integer | null
+
+**Response:** `AgentApiKeyCreated`
+
+---
+
+## GET `/api/v1/agents/{agent_id}/agent-api/keys`
+**List Agent Api Keys**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AgentApiKeysPublic`
+
+---
+
+## DELETE `/api/v1/agents/{agent_id}/agent-api/keys/{key_id}`
+**Delete Agent Api Key**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `key_id`: uuid
+
+**Response:** `Message`
+
+---

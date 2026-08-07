@@ -112,6 +112,16 @@ AGENT_API_GRANT_CREATED = "AGENT_API_GRANT_CREATED"
 AGENT_API_GRANT_UPDATED = "AGENT_API_GRANT_UPDATED"
 AGENT_API_GRANT_DELETED = "AGENT_API_GRANT_DELETED"
 
+# ── Agent-API external keys ───────────────────────────────────────────
+# Emitted by ``AgentApiKeyService``. An external key is a copy-pasteable,
+# identity-bound bearer credential for code running OUTSIDE the platform, so its
+# whole lifecycle is audited: minting (who issued it, for whom), revoking, and
+# every reveal of the value on the credential detail page. The token value and
+# its hash are NEVER logged — only the 8-char display prefix.
+AGENT_API_EXTERNAL_KEY_CREATED = "AGENT_API_EXTERNAL_KEY_CREATED"
+AGENT_API_EXTERNAL_KEY_REVOKED = "AGENT_API_EXTERNAL_KEY_REVOKED"
+AGENT_API_EXTERNAL_KEY_REVEALED = "AGENT_API_EXTERNAL_KEY_REVEALED"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

@@ -144,6 +144,16 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 
 ---
 
+## POST `/api/v1/credentials/{id}/agent-api-key/reveal`
+**Reveal Agent Api Key**
+
+**Path parameters:**
+- `id`: uuid
+
+**Response:** `AgentApiKeyRevealResponse`
+
+---
+
 ## GET `/api/v1/credentials/{id}/agent-api-connection`
 **Read Agent Api Connection**
 

@@ -291,6 +291,7 @@ class AgentService:
             webapp_enabled=agent.webapp_enabled,
             agent_api_enabled=agent.agent_api_enabled,
             agent_api_identity_enabled=agent.agent_api_identity_enabled,
+            agent_api_external_access_enabled=agent.agent_api_external_access_enabled,
             has_email_integration=capabilities.get("has_email_integration", False),
             has_mcp_connectors=capabilities.get("has_mcp_connectors", False),
             has_webhooks=capabilities.get("has_webhooks", False),

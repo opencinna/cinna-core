@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Network, Plug, Plus, Search } from "lucide-react"
+import { Plug, Plus, Search } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import {
@@ -26,7 +26,7 @@ import {
   CREDENTIAL_TYPE_GROUPS,
   type CredentialTypeOption,
 } from "@/components/Credentials/credentialTypes"
-import { ConnectAgentApiDialog } from "@/components/Credentials/ConnectAgentApiDialog"
+import { AgentApiKeyDialog } from "@/components/Credentials/AgentApiKeyDialog"
 import { ConnectMcpProviderDialog } from "@/components/Credentials/ConnectMcpProviderDialog"
 
 type CredentialTypeKey = CredentialType
@@ -40,7 +40,7 @@ const AddCredential = () => {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [pendingType, setPendingType] = useState<CredentialTypeKey | null>(null)
-  const [connectOpen, setConnectOpen] = useState(false)
+  const [agentApiKeyOpen, setAgentApiKeyOpen] = useState(false)
   const [connectMcpOpen, setConnectMcpOpen] = useState(false)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -80,6 +80,20 @@ const AddCredential = () => {
     },
   })
 
+  const handleOptionClick = (option: CredentialTypeOption) => {
+    // Most entries create an empty draft and land on its detail page. An
+    // ``agent_api`` key can't: it is bound to a producer agent and a subject
+    // user at mint time, so it opens its dialog instead. It still lives in the
+    // "API & Access" group — from the outside it is just an API key for
+    // external use, not an exceptional kind of access.
+    if (option.action === "agent_api_key") {
+      setIsOpen(false)
+      setAgentApiKeyOpen(true)
+      return
+    }
+    handleSelect(option)
+  }
+
   const handleSelect = (option: CredentialTypeOption) => {
     if (createMutation.isPending) return
     setPendingType(option.type)
@@ -115,7 +129,14 @@ const AddCredential = () => {
 
   return (
     <>
-    <ConnectAgentApiDialog open={connectOpen} onOpenChange={setConnectOpen} />
+    {/* The global picker offers the KEY, never "Connect Agent API": a connect
+        has no consumer agent to link to here, so it would only ever produce a
+        dangling "Not linked to an agent" credential. Connect stays on the
+        agent's own Credentials tab, where a consumer IS in context. */}
+    <AgentApiKeyDialog
+      open={agentApiKeyOpen}
+      onOpenChange={setAgentApiKeyOpen}
+    />
     <ConnectMcpProviderDialog
       open={connectMcpOpen}
       onOpenChange={setConnectMcpOpen}
@@ -139,20 +160,6 @@ const AddCredential = () => {
         </DialogHeader>
 
         <div className="px-6 pb-3 space-y-3">
-          <button
-            type="button"
-            onClick={() => {
-              setIsOpen(false)
-              setConnectOpen(true)
-            }}
-            className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-          >
-            <Network className="h-4 w-4 shrink-0" />
-            <span>Connect Agent API</span>
-            <span className="ml-auto text-xs text-muted-foreground">
-              another agent's REST API
-            </span>
-          </button>
           <button
             type="button"
             onClick={() => {
@@ -201,7 +208,7 @@ const AddCredential = () => {
                           key={option.type}
                           type="button"
                           disabled={createMutation.isPending}
-                          onClick={() => handleSelect(option)}
+                          onClick={() => handleOptionClick(option)}
                           className={cn(
                             "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
                             group.badgeClass,

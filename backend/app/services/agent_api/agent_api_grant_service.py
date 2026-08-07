@@ -148,6 +148,72 @@ class AgentApiGrantService:
         return grant
 
     @staticmethod
+    async def upsert_grant(
+        session: Session,
+        producer_agent_id: uuid.UUID,
+        owner_user_id: uuid.UUID,
+        subject_user_id: uuid.UUID,
+        scopes: list[str] | None,
+        is_superuser: bool = False,
+    ) -> AgentApiAccessGrant:
+        """Create or update the ``(producer, subject)`` grant (owner-gated).
+
+        The idempotent sibling of ``create_grant``, needed because scopes are
+        assigned from TWO places that address the same row (plan D5): the
+        producer's Access & Scopes card and external-key minting. A key issued to
+        a user who already has a grant must edit that grant, not 409 — the 409 in
+        ``create_grant`` is right for the card (where a duplicate is a user
+        mistake) and wrong here.
+
+        ``scopes=None`` means "leave an existing grant's scopes alone" (and
+        create an empty one if none exists), so minting a key without scopes
+        never silently clears capability the owner assigned elsewhere.
+        """
+        AgentApiGrantService._require_owner(
+            session, producer_agent_id, owner_user_id, is_superuser
+        )
+        if session.get(User, subject_user_id) is None:
+            raise AgentApiGrantError("Granted user not found", status_code=404)
+
+        grant = session.exec(
+            select(AgentApiAccessGrant).where(
+                AgentApiAccessGrant.producer_agent_id == producer_agent_id,
+                AgentApiAccessGrant.user_id == subject_user_id,
+            )
+        ).first()
+
+        if grant is None:
+            grant = AgentApiAccessGrant(
+                producer_agent_id=producer_agent_id,
+                user_id=subject_user_id,
+                scopes=_sanitize_scopes(scopes),
+                created_by=owner_user_id,
+            )
+            event_type = AGENT_API_GRANT_CREATED
+        else:
+            if scopes is None:
+                # Nothing to write. Return the existing grant untouched rather
+                # than bumping updated_at and auditing a change that never
+                # happened.
+                return grant
+            grant.scopes = _sanitize_scopes(scopes)
+            grant.updated_at = datetime.now(UTC)
+            event_type = AGENT_API_GRANT_UPDATED
+
+        session.add(grant)
+        session.commit()
+        session.refresh(grant)
+
+        await AgentApiGrantService._audit(
+            session,
+            actor_id=owner_user_id,
+            event_type=event_type,
+            agent_id=producer_agent_id,
+            grant=grant,
+        )
+        return grant
+
+    @staticmethod
     async def update_grant(
         session: Session,
         producer_agent_id: uuid.UUID,
