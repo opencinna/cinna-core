@@ -1315,6 +1315,74 @@ def test_git_connect_adopt_existing_folder(
     assert r.json()["has_env"] is True
 
 
+# ── Scenario 6c: Remote auth failure is never a 401/403 (session-logout bug) ──
+
+
+def test_git_remote_auth_failure_is_not_unauthorized(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """A remote rejecting the deploy key must NOT read as "your session died".
+
+    ``GitAuthenticationError`` means the *backend's git client* was refused by
+    the *remote host* (wrong or unselected SSH key) — it says nothing about the
+    caller's own token. It used to map to 401, and the frontend's global API
+    error handler treats 401/403 as an expired session: clicking "Connect" with
+    the wrong deploy key wiped the access token and bounced the user to /login
+    instead of showing the error.
+
+    Both the mutation (connect) and the passive read (check-updates, which the
+    Git Versioning card auto-fires) must surface a plain user-fixable 400.
+    """
+    from app.services.knowledge.git_operations import (
+        GitAuthenticationError,
+        GitOperationError,
+    )
+
+    headers = superuser_token_headers
+    rejected = GitAuthenticationError(
+        "Authentication failed. Check SSH key configuration."
+    )
+
+    # ── Connect against a remote that rejects the key ─────────────────────────
+    agent_id, _env_id = _create_agent_with_env(
+        client, headers, tree={"docs": {"workflow.md": "# Workflow"}}
+    )
+    with patch(_LS_REMOTE, side_effect=rejected):
+        r = _connect(client, headers, agent_id)
+    assert r.status_code == 400, (
+        f"Remote auth failure must be 400, got {r.status_code}: {r.text}"
+    )
+    assert r.status_code not in (401, 403), "must never log the user out"
+    # The reason still reaches the UI toast.
+    assert "SSH key" in r.json()["detail"]
+
+    # ── The same failure on the passive check-updates read ────────────────────
+    # Connect for real first (init path) so a source row exists to read.
+    with (
+        patch(_LS_REMOTE, side_effect=GitOperationError("Ref 'main' not found")),
+        patch(_INIT_REPO, return_value=MagicMock()),
+        patch(_GET_HASH, return_value=_SHA_V1),
+        patch(_COMMIT_ALL, return_value=_SHA_V2),
+        patch(_FF_PUSH, return_value=None),
+    ):
+        r = _connect(client, headers, agent_id)
+    assert r.status_code == 200, f"Setup connect failed: {r.text}"
+
+    # Now the deploy key stops working remote-side (revoked / rotated). Merely
+    # opening the Integrations tab fires this GET — it must not log the user out.
+    with patch(_LS_REMOTE, side_effect=rejected):
+        r = client.get(_check_updates_url(agent_id), headers=headers)
+    assert r.status_code == 400, (
+        f"check-updates auth failure must be 400, got {r.status_code}: {r.text}"
+    )
+    assert r.status_code not in (401, 403), "must never log the user out"
+
+    # Sanity: the session is genuinely still good — the token still authenticates.
+    r = client.post(f"{API}/login/test-token", headers=headers)
+    assert r.status_code == 200, "the caller's session must be untouched"
+
+
 # ── Scenario 7: Commit history + dirty check ──────────────────────────────────
 
 

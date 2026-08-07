@@ -19,9 +19,17 @@ Error mapping (the service never raises ``HTTPException``):
 * ``EgressBlockedError`` → 400        ``GitNonFastForwardError`` → 409
 * ``GitSourceConflictError`` → 409    ``GitSourceValidationError`` → 400
 * ``GitSourceNotFoundError`` → 404    ``RevisionFormatError`` → 422
-* ``GitAuthenticationError`` → 401    ``GitConnectionError`` → 400
+* ``GitAuthenticationError`` → 400    ``GitConnectionError`` → 400
 * ``GitBaselineUnavailableError`` → 503 (lost baseline snapshot, rebuild failed)
 * other ``GitOperationError`` → 400
+
+⚠️ ``GitAuthenticationError`` must NOT map to 401/403. It reports that *the
+backend's git client* was rejected by the *remote host* (wrong / missing deploy
+key), which says nothing about the caller's own session. The frontend's global
+API error handler treats 401/403 as "this session is dead" — mapping a remote
+git rejection there logged the user out mid-connect instead of showing the
+error. It is a user-fixable input problem, so it rides the same 400 bucket as
+``GitConnectionError``.
 """
 import logging
 import uuid
@@ -50,8 +58,6 @@ from app.services.bundles.git_source_service import (
 from app.services.bundles.revision_format import RevisionFormatError
 from app.services.common.egress_guard import EgressBlockedError
 from app.services.knowledge.git_operations import (
-    GitAuthenticationError,
-    GitConnectionError,
     GitNonFastForwardError,
     GitOperationError,
     build_web_history_url,
@@ -188,10 +194,10 @@ def _map_git_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, RevisionFormatError):
         return HTTPException(status_code=422, detail=str(exc))
-    if isinstance(exc, GitAuthenticationError):
-        return HTTPException(status_code=401, detail=str(exc))
-    # EgressBlockedError, GitConnectionError, generic GitOperationError and
-    # GitSourceValidationError all surface as a user-fixable 400.
+    # GitAuthenticationError, EgressBlockedError, GitConnectionError, generic
+    # GitOperationError and GitSourceValidationError all surface as a
+    # user-fixable 400. See the module docstring for why an auth failure against
+    # the *remote* must never become a 401/403 on *this* API.
     return HTTPException(status_code=400, detail=str(exc))
 
 

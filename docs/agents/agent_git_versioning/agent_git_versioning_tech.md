@@ -202,11 +202,22 @@ All agent-git routes are registered on `APIRouter(prefix="/agents", tags=["agent
 | `GitSourceConflictError` | 409 |
 | `GitNonFastForwardError` | 409 |
 | `RevisionFormatError` | 422 |
-| `GitAuthenticationError` | 401 |
+| `GitAuthenticationError` | 400 |
 | `EgressBlockedError` | 400 |
 | `GitConnectionError` | 400 |
 | `GitSourceValidationError` | 400 |
 | other `GitOperationError` | 400 |
+
+> ⚠️ **`GitAuthenticationError` must never map to 401 or 403.** It reports that
+> *the backend's git client* was rejected by *the remote host* (wrong or
+> unselected deploy key) — it says nothing about the caller's own session. The
+> frontend's global API error handler (`main.tsx handleApiError`) treats 401/403
+> as "this session is dead", so the original 401 mapping logged the user out and
+> bounced them to `/login` the moment they clicked **Connect** with the wrong SSH
+> key — and did the same on the passive `check-updates` read, so merely opening
+> the Integrations tab with a since-revoked key ended the session. It is a
+> user-fixable input error and rides the same 400 bucket as `GitConnectionError`.
+> Guarded by `test_git_remote_auth_failure_is_not_unauthorized`.
 
 ## Service Layer
 
@@ -506,7 +517,7 @@ Call sites: `_remote_change_is_relevant`, invoked from both `_compute_update_ava
 ### Typed errors
 
 - `GitOperationError` — base; maps to 400.
-- `GitAuthenticationError(GitOperationError)` — maps to 401.
+- `GitAuthenticationError(GitOperationError)` — maps to 400 (never 401/403 — see the error-mapping note above).
 - `GitConnectionError(GitOperationError)` — maps to 400.
 - `GitNonFastForwardError(GitOperationError)` — maps to 409.
 
