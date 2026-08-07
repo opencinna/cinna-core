@@ -257,7 +257,8 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 - `get_effective_routes_for_user(db_session, user_id, channel)` -- returns unified `EffectiveRoute` list combining assigned routes (active + enabled) and personal routes (active), filtered by channel
 - `toggle_admin_assignment(db_session, assignment_id, user_id, is_enabled)` -- allow a user to toggle their own route assignment on/off
 - `find_route_conflicts_for_agent(db_session, agent_id, user_id, threshold=None)` -- compares the agent's auto-managed route trigger prompt against all other effective routes for `user_id` using Jaccard token-overlap; excludes identity routes and routes targeting the same agent; returns `RouteConflictResponse` sorted by descending similarity; returns empty when no auto-managed route exists for the agent
-- `sync_router_trigger_prompt_from_agent(db_session, agent)` -- called after `PATCH /agents/{id}/router-trigger-prompt` saves; propagates the new value onto the agent's auto-managed route (`is_auto_managed=True`) so the router sees it immediately without waiting for an apply-update
+- `sync_router_trigger_prompt_from_agent(db_session, agent)` -- called after `PATCH /agents/{id}/router-trigger-prompt` and the generic `PUT /agents/{id}` save; propagates the new value onto the agent's auto-managed route (`is_auto_managed=True`) so the router sees it immediately without waiting for an apply-update. When no auto-managed route exists, delegates to `_create_auto_route_for_agent` instead of no-oping
+- `_create_auto_route_for_agent(*, db_session, agent, trigger_prompt)` -- backfill-on-demand counterpart to `InstallService._auto_create_app_mcp_route`, for an install whose revision carried no trigger prompt (route skipped, install degraded). Builds the identical `AppAgentRouteCreate` shape (`session_mode="conversation"`, `channel_app_mcp=True`, `is_active=True`, `activate_for_myself=True`) and calls `create_route(..., auto_managed=True)`. Returns `None` without creating when the prompt is empty, when `agent.bundle_uuid IS NULL` (standalone agents — owner manages exposure explicitly), or when the owner already has a manual `is_auto_managed=False` route on the agent. Attribution is the **agent owner**, not the caller, so a superuser edit still lands the route + enabled self-assignment on the owner
 
 ### `UserAppAgentRouteService`
 
@@ -318,10 +319,16 @@ Handles both direct MCP connector management and App MCP Server route management
 Degraded view of the MCP Connectors card rendered for the `agent-user` role via `AgentIntegrationsTab`. Hides all developer-tier affordances:
 
 - Finds the agent's auto-managed route by filtering `routes.find((r) => r.is_auto_managed)` from `GET /api/v1/agents/{agent_id}/app-mcp-routes`
-- Renders a single row: route name + trigger prompt (read-only mirror of `AppAgentRoute.trigger_prompt`) + a per-user enable/disable `Switch`
 - Toggle writes `AppAgentRouteAssignment.is_enabled` via `UserAppAgentRoutesService.toggleAdminAssignment` — the route itself stays `is_active=True`
-- When no auto-managed route exists, shows a dashed-border hint directing the user to set a Trigger Prompt on the Configuration tab
+- When no auto-managed route exists, shows a dashed-border hint leading with the consequence ("Not available in MCP clients yet") and directing the user to set a Trigger Prompt on the Configuration tab
 - Shares React Query key `["app-mcp-routes", agentId]` with `EditRouterTriggerPromptModal` so the trigger-prompt mirror refreshes after a save without a manual reload
+
+**Copy carries the feature explanation.** This card is an `agent-user`'s only exposure to App MCP routing — they never see the developer card's creation dialog, so nothing else tells them what the switch governs. The route name is deliberately **not** rendered (it is always the agent's own name, shown directly above). Instead the body is two labelled sections:
+
+1. **"Available in external MCP clients"** — the `Switch`'s explicit label, with state-dependent helper text ("Your MCP client can send messages to this agent." / "…will not see or use this agent."). When the route carries no assignment for the current user, the disabled switch is explained rather than left silently greyed
+2. **"When this agent gets picked"** — frames `AppAgentRoute.trigger_prompt` as a routing rule (quoted `blockquote`) rather than prose, names it as the agent's **Trigger Prompt**, and points at the Configuration tab to edit it
+
+A footer states the negative space (turning it off hides the agent from MCP clients only — chat, schedules, and other integrations keep working) and links to `/settings#channels` for the MCP Server URL and setup steps.
 
 ### AppAgentRoutesCard (`AppAgentRoutesCard.tsx`)
 

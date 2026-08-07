@@ -52,10 +52,14 @@ def _publish_and_install(
     superuser_headers: dict,
     installer_headers: dict,
     *,
-    trigger_prompt: str,
+    trigger_prompt: str | None,
     description: str | None = None,
 ) -> tuple[str, str]:
-    """Publish a bundle (with trigger prompt) and install it.
+    """Publish a bundle and install it.
+
+    ``trigger_prompt=None`` publishes a revision without a router trigger
+    prompt, which is what makes ``InstallService`` skip the auto-route and
+    mark the install degraded.
 
     Returns (bundle_id, install_id).
     """
@@ -72,12 +76,13 @@ def _publish_and_install(
         )
 
     # Set trigger prompt
-    r = client.patch(
-        f"{API}/agents/{agent['id']}/router-trigger-prompt",
-        headers=superuser_headers,
-        json={"router_trigger_prompt": trigger_prompt},
-    )
-    assert r.status_code == 200, r.text
+    if trigger_prompt is not None:
+        r = client.patch(
+            f"{API}/agents/{agent['id']}/router-trigger-prompt",
+            headers=superuser_headers,
+            json={"router_trigger_prompt": trigger_prompt},
+        )
+        assert r.status_code == 200, r.text
 
     # Publish
     r = client.post(f"{API}/agents/{agent['id']}/publish", headers=superuser_headers, json={})
@@ -386,3 +391,109 @@ def test_generate_router_trigger_prompt_no_description_returns_error(
     )
     assert "error" in body
     assert body["error"]  # non-empty error message
+
+
+# ---------------------------------------------------------------------------
+# Test 5: PATCH backfills the missing route on a degraded install
+# ---------------------------------------------------------------------------
+
+
+def test_patch_creates_missing_auto_route_on_degraded_install(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    A bundle published without a router trigger prompt installs with no
+    auto-managed route (``last_update_status="degraded"``). Setting the
+    prompt afterwards from the Configuration tab must create the route —
+    otherwise the MCP Connectors card sits on its "the route will appear
+    here automatically" empty state forever.
+
+      1. Publish + install a bundle with NO trigger prompt → no route.
+      2. PATCH the install's trigger prompt.
+      3. An auto-managed, active route now exists with that prompt,
+         enabled for the installer.
+      4. A second PATCH updates it in place rather than adding a duplicate.
+    """
+    _, installer_headers = _make_user_and_headers(client)
+    create_random_ai_credential(client, installer_headers, set_default=True)
+
+    _, install_id = _publish_and_install(
+        client,
+        superuser_token_headers,
+        installer_headers,
+        trigger_prompt=None,
+    )
+
+    assert _list_agent_routes(client, installer_headers, install_id) == [], (
+        "Install of a revision without a trigger prompt must start with no route"
+    )
+
+    # ── Owner sets the trigger prompt after the fact ───────────────────────
+    trigger = "Look up live BTC and crypto exchange rates"
+    r = client.patch(
+        f"{API}/agents/{install_id}/router-trigger-prompt",
+        headers=installer_headers,
+        json={"router_trigger_prompt": trigger},
+    )
+    assert r.status_code == 200, f"PATCH failed: {r.text}"
+
+    routes = _list_agent_routes(client, installer_headers, install_id)
+    assert len(routes) == 1, f"Expected the route to be created, got {routes!r}"
+    route = routes[0]
+    assert route["trigger_prompt"] == trigger
+    assert route["is_auto_managed"] is True
+    assert route["is_active"] is True
+    assert route["channel_app_mcp"] is True
+    # The installer owns the agent, so they get the enabled self-assignment
+    # the simplified MCP Connectors card toggles.
+    enabled = [a for a in route["assignments"] if a["is_enabled"]]
+    assert len(enabled) == 1, f"Installer must be assigned + enabled: {route!r}"
+
+    # ── Second PATCH updates in place ──────────────────────────────────────
+    updated = "Look up live BTC, ETH, and fiat exchange rates"
+    r = client.patch(
+        f"{API}/agents/{install_id}/router-trigger-prompt",
+        headers=installer_headers,
+        json={"router_trigger_prompt": updated},
+    )
+    assert r.status_code == 200, r.text
+
+    routes_after = _list_agent_routes(client, installer_headers, install_id)
+    assert len(routes_after) == 1, f"PATCH must not duplicate: {routes_after!r}"
+    assert routes_after[0]["id"] == route["id"]
+    assert routes_after[0]["trigger_prompt"] == updated
+
+
+# ---------------------------------------------------------------------------
+# Test 6: standalone (non-bundle) agents never get an auto route
+# ---------------------------------------------------------------------------
+
+
+def test_patch_does_not_create_route_for_standalone_agent(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    The backfill-on-demand path is scoped to bundle installs. An owner of a
+    standalone agent manages App MCP exposure explicitly from the
+    Integrations tab, so setting a trigger prompt must not silently mint a
+    route for them (same rationale as the Phase 8 backfill script skipping
+    owned non-bundle agents).
+    """
+    agent = create_agent_via_api(
+        client, superuser_token_headers, name="Standalone Trigger Agent"
+    )
+    drain_tasks()
+
+    r = client.patch(
+        f"{API}/agents/{agent['id']}/router-trigger-prompt",
+        headers=superuser_token_headers,
+        json={"router_trigger_prompt": "Handle standalone requests"},
+    )
+    assert r.status_code == 200, r.text
+
+    routes = _list_agent_routes(client, superuser_token_headers, agent["id"])
+    assert routes == [], (
+        f"Standalone agent must not get an auto-managed route, got {routes!r}"
+    )

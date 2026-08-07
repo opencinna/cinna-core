@@ -623,25 +623,30 @@ class AppAgentRouteService:
     ) -> AppAgentRoute | None:
         """Propagate ``agent.router_trigger_prompt`` to its auto-managed route.
 
-        Idempotent: skips silently when no auto-managed route exists for
-        this agent (an install where the auto-route creation was skipped
-        because the agent had no trigger prompt at install time). Updates
-        ``trigger_prompt``, ``name``, and ``updated_at`` on the route.
+        Updates ``trigger_prompt``, ``name``, and ``updated_at`` on the
+        route. When the install has no auto-managed route yet — the
+        install-time creation was skipped because the revision carried no
+        trigger prompt — this *creates* it, so setting the prompt from the
+        Configuration tab makes the agent reachable via App MCP without
+        waiting for the next apply-update.
 
         Does not touch user-edited routes (``is_auto_managed=False``) —
         those are owned by the user.
 
-        Returns the updated route or ``None`` if nothing was synced.
+        Returns the created/updated route or ``None`` if nothing was synced.
         """
+        new_prompt = (agent.router_trigger_prompt or "").strip()
+
         stmt = select(AppAgentRoute).where(
             AppAgentRoute.agent_id == agent.id,
             AppAgentRoute.is_auto_managed == True,  # noqa: E712
         )
         route = db_session.exec(stmt).first()
         if route is None:
-            return None
+            return AppAgentRouteService._create_auto_route_for_agent(
+                db_session=db_session, agent=agent, trigger_prompt=new_prompt,
+            )
 
-        new_prompt = (agent.router_trigger_prompt or "").strip()
         if not new_prompt:
             # The agent's trigger prompt was cleared. Leave the route's
             # current value alone rather than writing an empty string into
@@ -662,6 +667,70 @@ class AppAgentRouteService:
             db_session.commit()
             db_session.refresh(route)
         return route
+
+    @staticmethod
+    def _create_auto_route_for_agent(
+        *,
+        db_session: DBSession,
+        agent: Agent,
+        trigger_prompt: str,
+    ) -> AppAgentRoute | None:
+        """Mint the missing auto-managed route for a bundle install.
+
+        Backfill-on-demand counterpart to
+        ``InstallService._auto_create_app_mcp_route``: an install whose
+        revision had no ``router_trigger_prompt`` gets no route at install
+        time, and until now nothing created one when the owner later set
+        the prompt — the MCP Connectors card stayed on its "the route will
+        appear here automatically" empty state forever.
+
+        Deliberately narrow — returns ``None`` (no route) when:
+
+        - the prompt is empty (nothing to route on);
+        - the agent is not a bundle install (``bundle_uuid IS NULL``).
+          Owners of standalone agents manage App MCP exposure explicitly
+          from the Integrations tab, same rationale as the Phase 8
+          backfill script skipping them;
+        - the owner already has a manual route on this agent — their
+          override wins, mirroring
+          ``InstallService._refresh_or_create_auto_route_on_update``.
+        """
+        if not trigger_prompt or agent.bundle_uuid is None:
+            return None
+
+        manual_stmt = select(AppAgentRoute).where(
+            AppAgentRoute.agent_id == agent.id,
+            AppAgentRoute.created_by == agent.owner_id,
+            AppAgentRoute.is_auto_managed == False,  # noqa: E712
+        )
+        if db_session.exec(manual_stmt).first() is not None:
+            return None
+
+        owner = db_session.get(User, agent.owner_id)
+        if owner is None:
+            return None
+
+        public = AppAgentRouteService.create_route(
+            db_session=db_session,
+            data=AppAgentRouteCreate(
+                name=agent.name,
+                agent_id=agent.id,
+                session_mode="conversation",
+                trigger_prompt=trigger_prompt,
+                channel_app_mcp=True,
+                is_active=True,
+                auto_enable_for_users=False,
+                activate_for_myself=True,
+            ),
+            current_user=owner,
+            auto_managed=True,
+        )
+        logger.info(
+            "Created auto-managed App MCP route %s for install %s from a "
+            "later trigger-prompt edit",
+            public.id, agent.id,
+        )
+        return db_session.get(AppAgentRoute, public.id)
 
     # ── Conflict detection ───────────────────────────────────────────────
     #

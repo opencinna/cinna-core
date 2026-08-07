@@ -1254,6 +1254,12 @@ def update_router_trigger_prompt(
             db_session=session, agent=agent,
         )
     except Exception as exc:  # noqa: BLE001 — defensive
+        # A failed statement leaves the transaction aborted; every later
+        # query on this session (including the ``_agent_to_public``
+        # projection below) would raise ``InFailedSqlTransaction`` and turn
+        # this best-effort sync into a 500. Roll back so the session stays
+        # usable — the agent write is already committed above.
+        session.rollback()
         logger.warning(
             "Failed to sync router_trigger_prompt to auto-managed route for "
             "agent %s: %s",

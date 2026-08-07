@@ -146,7 +146,7 @@ The three bidirectional prompt documents (`WORKFLOW_PROMPT.md`, `ENTRYPOINT_PROM
 
 ### Trigger Prompt Scope
 
-The `router_trigger_prompt` field is agent-level metadata — it is not injected into building or conversation mode system prompts. Its only consumer is the App MCP router (`AIFunctionsService.route_to_agent`). The field is owned by the agent owner and is editable by any authenticated owner (publisher install or foreign install) via the focused `PATCH /agents/{id}/router-trigger-prompt` endpoint, which bypasses the `require_developer` gate so `agent-user` accounts can refine their install's trigger prompt without needing a role upgrade. Saving also propagates the new value to the install's auto-managed `AppAgentRoute` immediately via `AppAgentRouteService.sync_router_trigger_prompt_from_agent`
+The `router_trigger_prompt` field is agent-level metadata — it is not injected into building or conversation mode system prompts. Its only consumer is the App MCP router (`AIFunctionsService.route_to_agent`). The field is owned by the agent owner and is editable by any authenticated owner (publisher install or foreign install) via the focused `PATCH /agents/{id}/router-trigger-prompt` endpoint, which bypasses the `require_developer` gate so `agent-user` accounts can refine their install's trigger prompt without needing a role upgrade. Saving also propagates the new value to the install's auto-managed `AppAgentRoute` immediately via `AppAgentRouteService.sync_router_trigger_prompt_from_agent` — which **creates** that route when the install does not have one yet (a bundle published without a trigger prompt installs degraded and route-less), so setting the prompt is what makes the agent reachable over App MCP
 
 ## Architecture Overview
 

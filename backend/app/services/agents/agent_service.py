@@ -615,6 +615,12 @@ class AgentService:
                     db_session=session, agent=agent,
                 )
             except Exception as exc:  # noqa: BLE001 — defensive
+                # Same reasoning as the PATCH endpoint: a failed statement
+                # aborts the transaction, so without a rollback the caller's
+                # response serialization blows up with
+                # ``InFailedSqlTransaction``. The agent write is already
+                # committed above, so nothing is lost.
+                session.rollback()
                 logger.warning(
                     "Failed to sync router_trigger_prompt to auto-managed route "
                     "for agent %s after PUT: %s",
