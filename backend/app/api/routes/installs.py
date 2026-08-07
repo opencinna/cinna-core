@@ -60,10 +60,12 @@ def _resolve_install_owned(session, agent_id: uuid.UUID, current_user) -> Agent:
     return install
 
 
-# Phase 3 — publish, edit-bundle-id, and update-mode toggles are
-# developer-only.  Uninstall, apply-update, and check-updates remain
-# open to install owners regardless of role so an agent-user can keep
-# their installs current after a downgrade.
+# Phase 3 — publish and edit-bundle-id are developer-only (they act on the
+# *producing* side of a bundle).  Everything on the consuming side —
+# uninstall, apply-update, check-updates, and update-mode — stays open to
+# install owners regardless of role: the update mode is the consumer's own
+# preference for their own install, not publisher content, so an agent-user
+# must be able to set it and keep their installs current.
 
 
 # ── Publish ────────────────────────────────────────────────────

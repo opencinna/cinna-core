@@ -13,7 +13,7 @@ Version-control the durable source of an agent — scripts, internal docs, promp
 | **Canonical git tree** | `cinna.agent.json` + `workspace/` subtree + `.gitignore` — byte-for-byte the schema_version-2 bundle snapshot layout, so git is a transport/interchange layer, not a separate format |
 | **Last synced commit** | SHA of the last remote commit that was imported or pushed; the idempotency pin, analogous to `Agent.installed_revision_id` |
 | **Update available** | Whether the remote has commits that advance the agent's subdir beyond `last_synced_commit`. For repo-root installs: `ls-remote HEAD != last_synced_commit`. For subdir installs: HEAD must have advanced AND commits that actually touch `<subdir>/` must exist beyond `last_synced_commit` (verified via a tree-object hash comparison). Cheap-first: if `ls-remote HEAD == last_synced_commit` the result is always `false` with no clone. Any indeterminate outcome returns `true` conservatively. Surfaced exclusively by `GET /agents/{id}/git/check-updates` (strict) and the dirty check. `GET /agents/{id}/git` no longer computes this — it always returns `false` |
-| **Dirty** | The live workspace or DB prompt fields have diverged from the last synced revision. `GET /agents/{id}/git/dirty` reports both axes separately: `workspace_dirty` (file content) and `prompts_dirty` (DB prompt fields) |
+| **Dirty** | The live agent has diverged from the last synced revision along any of the three axes a git tree carries. `GET /agents/{id}/git/dirty` reports each separately: `workspace_dirty` (file content under `workspace/`), `prompts_dirty` (the manifest's `prompts` block) and `settings_dirty` (the rest of `cinna.agent.json` — see Agent Settings below) |
 | **GitOps webhook** | A `git_source` type `AgentWebhook` whose token a git host (GitHub, GitLab, etc.) posts to; the platform responds with a pull |
 | **Ownerless bundle** | An `AgentBundle` row with `publisher_user_id = NULL` created or reused during checkout or connect; private, unlisted, and never a catalog publish |
 | **Status** | `pending` → `connected` (after successful sync) → `error` (genuine operational failure) → `disconnected` |
@@ -181,22 +181,44 @@ Both SSH (`git@host:owner/repo.git`) and HTTPS repo URLs resolve to the same web
 
 ### Change Detection (Dirty Check)
 
-`GET /agents/{id}/git/dirty` (owner-resolved, no developer gate). Read-only comparison of the live workspace against the last synced revision. Returns:
+`GET /agents/{id}/git/dirty` (owner-resolved, no developer gate). Read-only comparison of the live agent against the last synced revision, along the three axes a git tree carries. Returns:
 
-- `dirty`: `true` if either axis is dirty.
-- `prompts_dirty`: DB prompt fields (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) differ from the last synced revision.
+- `dirty`: `true` if any axis is dirty.
+- `prompts_dirty`: the manifest's `prompts` block (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) differs from the last synced revision.
+- `settings_dirty`: any **other** `cinna.agent.json` field differs — see Agent Settings below.
 - `workspace_dirty`: live workspace file content (hash) differs from the last synced revision.
 - `has_env`: `false` if no environment exists (workspace dirty check is skipped; `workspace_dirty` will be `false`).
 - `last_synced_commit`: the SHA the comparison was made against.
 
-This endpoint is kept separate from `GET /agents/{id}/git` deliberately — the dirty check copies the entire workspace tree to a temp dir and must not slow or fail the cheap status read. The UI gates the "Commit Agent" button on `dirty=true`; the pull guard uses the same `_prompts_dirty` logic internally.
+This endpoint is kept separate from `GET /agents/{id}/git` deliberately — the dirty check copies the entire workspace tree to a temp dir and must not slow or fail the cheap status read. The UI gates the "Commit Agent" button on `dirty=true`.
+
+#### Agent Settings (`settings_dirty`)
+
+A git tree is `cinna.agent.json` **plus** `workspace/`. The workspace hash and the prompt diff between them cover only part of the manifest, so agent settings that live nowhere else — the example prompts, the description, a schedule — used to report "no local changes" even though the next commit would rewrite the manifest. `settings_dirty` closes that gap by comparing every remaining manifest field against the baseline revision:
+
+| Manifest block | Compared fields |
+|---|---|
+| `metadata` | `description`, `example_prompts`, `status_refresh_command`, `agent_api_enabled`, `agent_api_identity_enabled`, `a2a_config`, `agent_sdk_config`, `webapp_enabled` |
+| `sdk` | per-mode SDK engine + model overrides (read off the active environment; skipped when there is no env) |
+| top-level lists | `schedules`, `plugin_specs` |
+
+**Known behaviour: a one-time "SDK engine (conversation mode): added" entry on a fresh checkout.** A committer without an active environment writes `sdk.conversation = null` into the manifest (`build_manifest` reads it off `env.agent_sdk_conversation` when an env exists, `null` otherwise). Every install always has a resolved, non-null conversation SDK on its environment (`EnvironmentService.create_environment` falls back through the installer's own default to `DEFAULT_SDK` — conversation mode is never left unset), so comparing that live value against a `null` baseline classifies as `added`. This is accepted, not a bug — it is not the sign of a stray edit, and it self-heals: the checked-out install's first commit records the engine it actually runs (a non-null value), which becomes the new baseline, and the entry disappears on the next diff. Nothing is cleared or corrupted in between.
+
+`required_credential_specs` is deliberately **not** compared here. Its live collector re-reads the install-local `Credential` rows, and on any install that did not author the baseline (a `checkout`, or a `pull` from a repo another install pushed) those rows are placeholders that can never reproduce the publisher's spec values — so the comparison would report drift permanently with no user edit behind it.
+
+**Known gap: no detector covers credential-spec drift on a git-connected or checked-out install.** `PublishService.compute_credential_spec_drift` (the Bundle tab's republish nudge — see [Agent Bundles — Credential sharing drift detection and republish nudge](../agent_bundles/agent_bundles.md)) sounds like it would fill the gap `settings_dirty` leaves above, but it does not reach these installs: it returns an empty, non-stale result whenever the install is not a publisher install, and again whenever the bundle has no `latest_revision_id`. A `checkout` always creates a consumer install (`is_publisher_install=False`), so the detector is a permanent no-op for every checked-out agent. `bundle.latest_revision_id` is written only by a catalog publish — `connect` and `push` never call it — so a `connect`-based install that is never separately published to the catalog is equally uncovered. Concretely: rename a linked credential (or flip its `allow_sharing`) on a git-connected agent, and the next push *will* rewrite `required_credential_specs` in `cinna.agent.json`, but `GET /git/dirty` reports clean the whole time. This is an accepted trade-off, not an oversight — the alternative (permanently-stuck-dirty on every checkout/connect install, since their credential rows can never match the publisher's spec values) was strictly worse. The next push still captures the real change whenever the user commits for any other reason.
+
+The live side is re-collected with the **same helpers a push uses to build the manifest**, so the indicator can never disagree with what a commit actually writes. Two normalization rules avoid false positives: "unset" shapes (`null` / `""` / `[]` / `{}`) are treated as equivalent, and lists that are semantically unordered — the two spec lists, plus the tool arrays inside `agent_sdk_config` — are compared as sets. A manifest block absent from the baseline (an older snapshot) is not compared at all, so an old revision can never fabricate drift.
+
+**The pull guard is deliberately narrower than the indicator.** `POST /git/pull` blocks (409) on prompt or `metadata` drift only — exactly what a pull overwrites — and within `metadata` only on fields the publisher actually set (a non-null baseline): a field the publisher never configured is left alone by a pull, so it can't trigger the guard either. Schedules, plugin links, credential links and env SDK selections survive a pull untouched, so blocking on them would protect nothing while deadlocking the user (pull refuses, and a pull is what an advanced remote demands first). They still surface in the dirty check and the commit preview.
 
 ### Commit Status Preview (git-status Style)
 
-`GET /agents/{id}/git/status` (owner-resolved, no developer gate). The detailed sibling of the dirty check: instead of booleans it returns the actual per-prompt and per-file changes the next commit would capture, so the commit dialog can render a `git status`-style preview before the user commits. Returns:
+`GET /agents/{id}/git/status` (owner-resolved, no developer gate). The detailed sibling of the dirty check: instead of booleans it returns the actual per-prompt, per-setting and per-file changes the next commit would capture, so the commit dialog can render a `git status`-style preview before the user commits. Returns:
 
 - `dirty`, `has_env`, `last_synced_commit` (as in the dirty check).
 - `prompt_changes`: list of `{field, change_type}` for the changed prompt fields.
+- `setting_changes`: list of `{field, change_type}` for the changed agent settings (human labels — "Example prompts", "Schedules", "SDK engine (building mode)"…).
 - `file_changes`: list of `{path, change_type}` for the changed workspace files.
 
 `change_type` is `added` / `modified` / `deleted`. The workspace side compares the **same post-denylist capture a push produces** against the last synced revision's `workspace/` snapshot, so the preview matches the eventual commit exactly (e.g. `__pycache__` never appears). It is fetched lazily — only while the commit dialog is open — because it does a full workspace snapshot + per-file diff.
@@ -233,7 +255,7 @@ The card has two states:
 - Coordinates line: **subdir and branch as inline code chips** — each with a distinguishing leading icon (folder for subdir, branch for ref) — and the **sync direction as an icon** with a hover tooltip (bidirectional / pull only / push only) rather than a text label. Status is shown as a **green check icon** when `connected` (tooltip "Connected"); the `error` state still renders a red badge with `last_error` detail.
 - **Update banner** when `update_available` (driven by the `check-updates` query, not the source read) → **Pull** button.
 - **Latest commits** — the 3 most recent from `GET /agents/{id}/git/commits`: message, clickable short SHA (`commit_url`), author, relative date. A **"View history"** link (→ `web_history_url`) sits beside the section title. Both the SHA link and View history appear only when the host is supported.
-- **Card footer** holds the actions: on the left, **Commit Agent** (enabled only when `dirty=true`; clicking opens the commit dialog with the git-status preview, then `POST /agents/{id}/git/push`) with its status reason ("No local changes" / "Start the environment to commit") and a **Refresh** icon button that re-checks dirty/status/commits. On the right, an icon-only **Disconnect** button → confirm dialog → `DELETE /agents/{id}/git`. Disconnect resets the card to disabled (the cached git queries are removed, not just invalidated, so the 404 refetch can't leave stale connected state).
+- **Card footer** holds the actions: on the left, **Commit Agent** (enabled only when `dirty=true`; clicking opens the commit dialog with the git-status preview — **Prompts**, **Agent settings** and **Workspace** sections, each row tagged `A` / `M` / `D` — then `POST /agents/{id}/git/push`) with its status reason ("No local changes" / "Start the environment to commit") and a **Refresh** icon button that re-checks dirty/status/commits. On the right, an icon-only **Disconnect** button → confirm dialog → `DELETE /agents/{id}/git`. Disconnect resets the card to disabled (the cached git queries are removed, not just invalidated, so the 404 refetch can't leave stale connected state).
 
 ## Two-Writer Model
 
@@ -286,10 +308,12 @@ A `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` setting (default 30 s) is applied to all 
 | Connect when a git source already exists | **409** "disconnect first" |
 | Connect with sync_direction="pull" | **400** (can't export with pull-only direction) |
 | Connect when subdir already contains a `cinna.agent.json` | **Recoverable 409** (`existing_agent_folder`) — UI offers to adopt; re-send with `adopt_existing=true` to link to the existing folder (no overwrite, records it as the baseline) |
-| Pull when prompts differ from last synced revision (DB dirty) | **409** "push or discard changes first" — source status unchanged |
+| Pull when prompts or `metadata` settings differ from last synced revision (DB dirty) | **409** "push or discard changes first" (the settings variant names the drifted fields) — source status unchanged |
+| Pull when only schedules / plugins / env SDK differ | Pull proceeds — it never rewrites those, so blocking would deadlock. They stay reported as dirty until committed |
 | Push when remote advanced since last_synced_commit | Repo-root install, or a subdir install where the advance touched the subdir → **409** "pull first" (no clone or commit attempted, source status unchanged). Subdir install where the advance touched only other folders of a shared repo → push proceeds and falls through to fast-forward-push over the unrelated commit |
 | Push rejected by remote side as non-ff | **409** via `GitNonFastForwardError` — source status unchanged |
 | Genuine clone/network/filesystem error | Source stamped `status = ERROR` + `last_error`; original exception re-raised |
+| Credential spec changes (rename, `allow_sharing` flip) on a `checkout` or a `connect`-based install that is never separately published to the catalog | **Not detected by either signal.** `settings_dirty` excludes `required_credential_specs` (see above); `compute_credential_spec_drift` only evaluates publisher installs with a published revision, so it's a no-op for a `checkout` install (`is_publisher_install=False`) and for a `connect` install that never publishes. Accepted trade-off — the alternative (permanently-stuck-dirty on every checkout/connect install) was strictly worse. The next push still captures the change in `cinna.agent.json` whenever the user commits for any other reason |
 
 Planned but not yet implemented: 3-way reconcile for manifest/prompt fields on dirty pull (analogous to the prompt-sync `decide()` pattern). The current behavior is fail-loud only.
 

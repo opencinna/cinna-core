@@ -511,13 +511,15 @@ export class AdminEnvironmentsService {
      * List Admin Environments
      * List all agent environments across the platform (admin view).
      *
-     * Returns enriched rows with owner info, template staleness, and in-use flags.
-     * Filters for is_stale and in_use are applied after enrichment.
+     * Returns enriched rows with owner info, template staleness, in-use flags,
+     * and bundle install state. Filters for is_stale, in_use, and
+     * update_available are applied after enrichment.
      * @param data The data for the request.
      * @param data.template Filter by template name (env_name)
      * @param data.status Filter by environment status
      * @param data.isStale Filter by staleness (current_image_tag != expected)
      * @param data.inUse Filter by in-use flag
+     * @param data.updateAvailable Filter by bundle update availability (consumer install running an older revision than the bundle's latest)
      * @param data.ownerId Filter by agent owner user ID
      * @param data.search Search agent name, instance name, owner email/username
      * @param data.skip
@@ -534,6 +536,7 @@ export class AdminEnvironmentsService {
                 status: data.status,
                 is_stale: data.isStale,
                 in_use: data.inUse,
+                update_available: data.updateAvailable,
                 owner_id: data.ownerId,
                 search: data.search,
                 skip: data.skip,

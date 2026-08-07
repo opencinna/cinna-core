@@ -20,6 +20,10 @@ A separate, independent signal from image-tag staleness. An environment has a **
 
 `AdminAgentEnvironmentPublic.model_health_warning` (`bool`) appears as a column in the admin table beside `is_stale`. It is computed cheaply per row by `evaluate_environment` during `list_environments`. See [Model Freshness](../../agents/agent_environments/model_freshness.md) for the full feature description.
 
+### Bundle Update Availability
+
+A third, independent staleness axis alongside image-tag staleness and model health: whether the environment's agent is a bundle **install** running behind the bundle's latest published revision. `AdminAgentEnvironmentPublic.update_available` (`bool`) is `True` only for a consumer install (`is_publisher_install=False`) whose `installed_revision_id` differs from its bundle's `latest_revision_id`; it is always `False` for publisher installs (a publisher is the source of the revision, so it can never be "behind" it) and for agents that were never published or installed from a bundle. The remediation is **apply-update** (or waiting for the automatic-update sweep, if the install's `update_mode` is `automatic`), not a Docker rebuild — a stale row and an update-available row can be true independently and mean different things. See [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md#applying-an-update-install-owner) for the full update-convergence model.
+
 ### In-Use
 
 An environment is **in use** when any of the following is true:
@@ -71,6 +75,7 @@ Not yet present in the current table UI — individual rebuilds are triggered vi
 - Bulk rebuilds run concurrently but are throttled by `ADMIN_BULK_REBUILD_CONCURRENCY` (default 4) to avoid overwhelming the Docker daemon.
 - The endpoint returns immediately with `queued_environment_ids` and `skipped`. Real-time progress arrives via the existing `ENVIRONMENT_STATUS_CHANGED` WebSocket events already subscribed by the admin page.
 - A `SecurityEvent` row (`event_type = "admin.environment.rebuild"`) is written for every rebuild an admin triggers, recording `env_id`, `agent_id`, `initiator_user_id`, and whether it was a bulk operation.
+- The table's **Bundle** column and `update_available` filter apply the same rule as everywhere else in the bundle feature: `update_available` is computed, never stored, and is `False` for publisher installs and non-bundle agents regardless of revision state. There is no bulk "apply update" action on this page — an admin can only rebuild the Docker image here; the agent owner (or the automatic-update sweep) applies bundle content updates from the agent's own Config tab.
 
 ## Integration Points
 
@@ -80,6 +85,7 @@ Not yet present in the current table UI — individual rebuilds are triggered vi
 | [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md) | The `current_image_tag` field is written inside `_update_environment_config()` during any start or rebuild; `last_build_at` is written on rebuild completion. |
 | [Realtime Events](../realtime_events/event_bus_system.md) | The admin page subscribes to `ENVIRONMENT_STATUS_CHANGED` to update table rows in real time as rebuilds progress. |
 | [Model Freshness](../../agents/agent_environments/model_freshness.md) | The `model_health_warning` column is computed by `evaluate_environment` per row during `list_environments`. Distinct from `is_stale`: different cause, different remediation. |
+| [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) | The **Bundle** column and `update_available` filter surface each row's bundle provenance and revision drift, computed from a batched `AgentBundle`/`AgentBundleRevision` join in `list_environments`. A third staleness axis alongside image-tag staleness and model health — see "Bundle Update Availability" above. |
 | Security Events | Each admin-triggered rebuild emits a `SecurityEvent` row for audit purposes. |
 | Sidebar | The "Agent Environments" entry in `AdminMenu.tsx` (between Users and Knowledge Sources) is only rendered for superusers. |
 

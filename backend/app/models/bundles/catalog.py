@@ -198,6 +198,12 @@ class CheckUpdatesResponse(BaseModel):
     # "Update to v<latest_version>" from these, falling back to revision numbers.
     installed_version: str | None = None
     latest_version: str | None = None
+    # Release metadata of the latest available revision, read straight off the
+    # resolved revision row. Lets the Bundle Installation card show what the
+    # pending update actually contains without a second round-trip. Both are
+    # ``None`` when the install has no bundle or the bundle has no revisions.
+    latest_release_notes: str | None = None
+    latest_published_at: datetime | None = None
     last_update_status: str | None
     last_sync_at: datetime | None
     update_mode: str

@@ -452,6 +452,20 @@ class Settings(BaseSettings):
     MODEL_DISCOVERY_ENABLED: bool = True
     MODEL_DISCOVERY_INTERVAL_HOURS: int = 24
 
+    # Bundle auto-update convergence sweep.
+    # Installs with ``update_mode="automatic"`` whose environment is idle
+    # (no env at all, suspended, or stopped) are converged onto the bundle's
+    # latest revision by a dedicated background sweep — the suspension-time
+    # hook only covers the running → suspended transition, so an environment
+    # that was already suspended when a revision was published would otherwise
+    # never update. The same sweep also runs bundle-scoped right after a
+    # publish (fast path). ``RETRY_BACKOFF_HOURS`` keeps a persistently failing
+    # install from being retried on every sweep.
+    BUNDLE_AUTO_UPDATE_ENABLED: bool = True
+    BUNDLE_AUTO_UPDATE_INTERVAL_MINUTES: int = 10
+    BUNDLE_AUTO_UPDATE_BATCH_LIMIT: int = 50
+    BUNDLE_AUTO_UPDATE_RETRY_BACKOFF_HOURS: int = 6
+
     # Bundle / App Data Storage (Phase 1 — agent bundles & installs)
     # ``BUNDLE_STORAGE_DIR`` holds bundle revision snapshots:
     #   <BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>/

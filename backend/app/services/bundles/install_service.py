@@ -28,17 +28,21 @@ Key flows:
   service. Auto-promotes the publisher install into a bundle on first
   email-driven install (mirrors today's ``create_auto_share`` semantics).
 """
+import asyncio
 import copy
 import json
 import logging
 import uuid
-from datetime import datetime, UTC
+from contextlib import contextmanager
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlmodel import Session, select
 from fastapi import HTTPException
 
 from app.core.config import settings
+from app.core.db import create_session, engine
 from app.core.security import encrypt_field
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle, BundleInstallMode
@@ -65,6 +69,81 @@ from app.services.bundles.credential_spec import (
 from app.services.environments.sdk_constants import DEFAULT_SDK
 
 logger = logging.getLogger(__name__)
+
+
+# Environment statuses on which the automatic-update sweep is allowed to act.
+# Deliberately an allowlist: everything not listed here — "running", "error",
+# and every transitional status ("creating", "building", "initializing",
+# "starting", "rebuilding", "activating") — is skipped. Applying to a running
+# env would disrupt a live stream; applying to a transitional one would race the
+# lifecycle operation that currently owns the workspace directory.
+AUTO_UPDATE_ALLOWED_ENV_STATUSES = frozenset({"suspended", "stopped"})
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Interpret a possibly-naive DB timestamp as UTC.
+
+    The install bookkeeping columns (``last_update_attempt_at`` and friends)
+    are ``TIMESTAMP WITHOUT TIME ZONE`` but always written from
+    ``datetime.now(UTC)``, so a naive value read back is UTC wall-clock.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+# Stable, arbitrary 64-bit key for the Postgres advisory lock that makes the
+# auto-update sweep single-leader. Shared by BOTH entry points (the periodic
+# scheduler and the publish-time fast path) so they can never apply the same
+# install concurrently — ``apply_update`` copies a bundle snapshot into the
+# environment's instance directory, and two of those racing on one directory
+# is not something the row lock below can prevent (it is released by the
+# attempt-stamp commit that must happen before the apply).
+BUNDLE_AUTO_UPDATE_LOCK_KEY = 0x42554E444C4155  # "BUNDLAU"
+
+
+@contextmanager
+def sweep_leader_session():
+    """Yield a session that holds the sweep's leader lock, or ``None``.
+
+    ``None`` means another process already holds the lock and this run should
+    skip.
+
+    The lock has to live on the *same physical connection* for its whole life:
+    ``pg_try_advisory_lock`` is connection-scoped, while a ``Session`` bound to
+    an **engine** hands its connection back to the pool at every ``commit()``.
+    Since the sweep commits once per install, an engine-bound session would
+    strand the lock on a pooled connection — the ``pg_advisory_unlock`` then
+    returns false, the lock is never released, and every subsequent run is
+    locked out forever (i.e. the feature would silently disable itself after
+    its first productive run). Binding the ``Session`` to an explicit
+    ``engine.connect()`` pins it.
+    """
+    if settings.TESTING:
+        # Under test there is no cross-process concurrency to guard against,
+        # and the harness patches ``create_session`` to hand back the
+        # rolled-back test transaction. Checking out a real pooled connection
+        # here would escape that isolation and write to the live database.
+        with create_session() as session:
+            yield session
+        return
+
+    with engine.connect() as connection:
+        acquired = connection.execute(
+            text("SELECT pg_try_advisory_lock(:k)"),
+            {"k": BUNDLE_AUTO_UPDATE_LOCK_KEY},
+        ).scalar_one()
+        connection.commit()
+        if not acquired:
+            yield None
+            return
+        try:
+            with Session(bind=connection) as session:
+                yield session
+        finally:
+            connection.execute(
+                text("SELECT pg_advisory_unlock(:k)"),
+                {"k": BUNDLE_AUTO_UPDATE_LOCK_KEY},
+            )
+            connection.commit()
 
 
 class InstallError(Exception):
@@ -1360,7 +1439,16 @@ class InstallService:
                     )
 
             if env is not None:
-                replace_bundle_content(Path(revision.snapshot_path), env.id)
+                # Full workspace tree copy — off the event loop. The publish
+                # fast path runs this sweep as a background task on the request
+                # loop, up to BUNDLE_AUTO_UPDATE_BATCH_LIMIT times in a row,
+                # and the owner-triggered POST /apply-update route runs it
+                # inline; either way an inline copy blocks every other request
+                # on the worker. Mirrors the ``asyncio.to_thread`` treatment
+                # ``PublishService._write_snapshot_to_disk`` already gets.
+                await asyncio.to_thread(
+                    replace_bundle_content, Path(revision.snapshot_path), env.id
+                )
                 # The snapshot just overwrote the env prompt files with the new
                 # revision content. Reset the prompt-sync baselines to None so
                 # the reconcile that runs on the next env start treats the DB as
@@ -1491,6 +1579,309 @@ class InstallService:
                 pass
             raise
 
+    # ── Automatic update convergence ──────────────────────────────
+
+    @staticmethod
+    async def sweep_automatic_updates(
+        session: Session,
+        *,
+        bundle: AgentBundle | None = None,
+        limit: int = 50,
+    ) -> dict:
+        """Apply pending revisions to automatic-mode installs whose env is not live.
+
+        The suspension-time hook in ``environment_suspension_scheduler`` only
+        fires on the running → suspended transition, so an install whose
+        environment was *already* suspended when a revision was published never
+        converges. This sweep closes that gap and is the single implementation
+        shared by the periodic scheduler and the publish-time fast path.
+
+        Selection is on **revision mismatch**, not ``pending_update`` — the
+        sweep is self-healing if the publish-time notification was lost.
+
+        Args:
+            session: Database session (owned by the caller; the sweep commits).
+            bundle: Restrict the sweep to a single bundle (publish fast path).
+                ``None`` sweeps the whole fleet.
+            limit: Maximum number of installs to *attempt* in this batch. Rows
+                beyond the limit are logged and picked up by the next run.
+
+        Returns:
+            ``{"applied": int, "skipped": int, "failed": int, "deferred": int}``
+        """
+        backoff_cutoff = datetime.now(UTC) - timedelta(
+            hours=settings.BUNDLE_AUTO_UPDATE_RETRY_BACKOFF_HOURS
+        )
+
+        # Single joined query — no per-row bundle/env lookup. The LEFT JOIN on
+        # ``active_environment_id`` gives us the gating status inline; installs
+        # with no environment at all come back with ``env_id is None``.
+        #
+        # Scalar columns, not ORM entities, on purpose: the loop below commits
+        # per install, and ``expire_on_commit`` would expire every still-unvisited
+        # entity, turning the batch back into the per-row SELECT this query
+        # exists to avoid (and risking ObjectDeletedError if an install is
+        # uninstalled mid-sweep). Plain tuples are immune; the ``Agent`` row is
+        # loaded once, only for installs we are actually about to mutate.
+        query = (
+            select(
+                Agent.id,  # type: ignore[arg-type]
+                Agent.last_update_status,  # type: ignore[arg-type]
+                Agent.last_update_attempt_at,  # type: ignore[arg-type]
+                Agent.active_environment_id,  # type: ignore[arg-type]
+                AgentEnvironment.id,  # type: ignore[arg-type]
+                AgentEnvironment.status,  # type: ignore[arg-type]
+            )
+            .join(AgentBundle, AgentBundle.id == Agent.bundle_uuid)
+            .outerjoin(
+                AgentEnvironment,
+                AgentEnvironment.id == Agent.active_environment_id,
+            )
+            .where(
+                Agent.is_publisher_install == False,  # noqa: E712
+                Agent.update_mode == BundleInstallMode.AUTOMATIC,
+                AgentBundle.latest_revision_id.is_not(None),  # type: ignore[union-attr]
+                Agent.installed_revision_id.is_distinct_from(  # type: ignore[union-attr]
+                    AgentBundle.latest_revision_id
+                ),
+            )
+            .order_by(Agent.created_at)  # type: ignore[arg-type]
+        )
+        if bundle is not None:
+            query = query.where(AgentBundle.id == bundle.id)
+
+        candidates = list(session.exec(query).all())
+        if not candidates:
+            return {"applied": 0, "skipped": 0, "failed": 0, "deferred": 0}
+
+        applied = 0
+        skipped = 0
+        failed = 0
+        deferred = 0
+
+        for index, row in enumerate(candidates):
+            (
+                install_id,
+                last_update_status,
+                last_update_attempt_at,
+                active_environment_id,
+                env_id,
+                env_status,
+            ) = row
+
+            if applied + failed >= limit:
+                logger.info(
+                    "Bundle auto-update sweep hit the batch limit of %s; "
+                    "%s matching install(s) were not examined and are left "
+                    "for the next run",
+                    limit,
+                    len(candidates) - index,
+                )
+                break
+
+            try:
+                # Failure backoff — don't retry a persistently failing install
+                # on every sweep.
+                if (
+                    last_update_status == "failed"
+                    and last_update_attempt_at is not None
+                    and _as_utc(last_update_attempt_at) > backoff_cutoff
+                ):
+                    deferred += 1
+                    logger.debug(
+                        "Deferring automatic update for install %s: last "
+                        "attempt at %s failed and is inside the %sh backoff",
+                        install_id,
+                        last_update_attempt_at,
+                        settings.BUNDLE_AUTO_UPDATE_RETRY_BACKOFF_HOURS,
+                    )
+                    continue
+
+                if env_id is None:
+                    if active_environment_id is not None:
+                        # Dangling reference — apply_update degrades to the
+                        # DB-only path, which is exactly what we want here.
+                        logger.warning(
+                            "Install %s references missing environment %s; "
+                            "applying update on the DB-only path",
+                            install_id,
+                            active_environment_id,
+                        )
+                elif env_status not in AUTO_UPDATE_ALLOWED_ENV_STATUSES:
+                    skipped += 1
+                    logger.debug(
+                        "Skipping automatic update for install %s: env %s "
+                        "status '%s' is not in the allowlist %s",
+                        install_id,
+                        env_id,
+                        env_status,
+                        sorted(AUTO_UPDATE_ALLOWED_ENV_STATUSES),
+                    )
+                    continue
+
+                if env_id is not None:
+                    # Re-read the env status under a row lock. The batch query
+                    # and this apply are seconds apart and the env may have been
+                    # activated in between; this shrinks the activation race to
+                    # the workspace copy itself without introducing a new env
+                    # status value. ``skip_locked`` keeps a concurrent lifecycle
+                    # transaction from blocking the whole batch (and, in the
+                    # scheduler, from blocking it while holding the leader lock)
+                    # — a row someone else has locked is one we should not touch
+                    # anyway.
+                    locked_status = session.exec(
+                        select(AgentEnvironment.status)  # type: ignore[arg-type]
+                        .where(AgentEnvironment.id == env_id)
+                        .with_for_update(skip_locked=True)
+                    ).first()
+                    if locked_status not in AUTO_UPDATE_ALLOWED_ENV_STATUSES:
+                        session.rollback()  # release the row lock
+                        skipped += 1
+                        logger.debug(
+                            "Skipping automatic update for install %s: env %s "
+                            "is %s",
+                            install_id,
+                            env_id,
+                            (
+                                f"now in status '{locked_status}'"
+                                if locked_status is not None
+                                else "locked by another transaction or deleted"
+                            ),
+                        )
+                        continue
+
+                install = session.get(Agent, install_id)
+                if install is None:
+                    # Uninstalled between the batch query and now.
+                    session.rollback()
+                    skipped += 1
+                    logger.debug(
+                        "Skipping automatic update for install %s: row is gone",
+                        install_id,
+                    )
+                    continue
+
+                # Record the attempt BEFORE applying, so a crash mid-apply still
+                # lands in the backoff window. This commit also releases the
+                # row lock taken above.
+                install.last_update_attempt_at = datetime.now(UTC)
+                session.add(install)
+                session.commit()
+
+                await InstallService.apply_update(session, install)
+                applied += 1
+                logger.info(
+                    "Bundle auto-update applied for install %s (bundle %s)",
+                    install.id,
+                    install.bundle_id,
+                )
+            except Exception as e:  # noqa: BLE001 — one failure must not abort
+                failed += 1
+                session.rollback()
+                # apply_update stamps last_update_status="failed" itself, but
+                # only for errors raised inside its own try block — its early
+                # guard clauses (e.g. a dangling latest_revision_id) raise
+                # before that. Without a "failed" marker the backoff never
+                # engages and the install is retried on every sweep forever, so
+                # make the sweep authoritative about its own bookkeeping.
+                InstallService._mark_update_failed(session, install_id)
+                logger.error(
+                    "Bundle auto-update failed for install %s: %s",
+                    install_id,
+                    e,
+                    exc_info=True,
+                )
+
+        result = {
+            "applied": applied,
+            "skipped": skipped,
+            "failed": failed,
+            "deferred": deferred,
+        }
+        if applied or failed:
+            logger.info("Bundle auto-update sweep complete: %s", result)
+        else:
+            logger.debug("Bundle auto-update sweep complete: %s", result)
+        return result
+
+    @staticmethod
+    def _mark_update_failed(session: Session, install_id: uuid.UUID) -> None:
+        """Best-effort failure bookkeeping after a sweep error.
+
+        Stamps **both** halves the backoff gate reads — ``last_update_status``
+        and ``last_update_attempt_at`` — unconditionally, so that *every* failed
+        attempt restarts the backoff window no matter which stage it failed at.
+
+        Both writes are needed, and both must be unconditional:
+
+        - A failure raised *before* the attempt-stamp commit (from the row-lock
+          re-read, or ``session.get``) never stamped ``last_update_attempt_at``
+          at all, so without this the gate — which requires both halves — never
+          engages and the install is retried on every sweep forever.
+        - Refreshing an already-``failed`` row matters just as much. If the
+          timestamp were left at the value written by the *first* failure, the
+          row would be deferred for one backoff window and then, once that
+          window expired, be retried every sweep forever — the same hot loop,
+          merely postponed.
+
+        The redundant write on the normal path (where the sweep already stamped
+        the attempt seconds earlier) costs one UPDATE on a row that is failing
+        anyway; correctness of the gate is worth more than avoiding it.
+
+        Swallows its own errors: this runs on the failure path and must never
+        mask the original exception or abort the batch.
+        """
+        try:
+            install = session.get(Agent, install_id)
+            if install is None:
+                return
+            install.last_update_status = "failed"
+            install.last_update_attempt_at = datetime.now(UTC)
+            session.add(install)
+            session.commit()
+        except Exception as e:  # noqa: BLE001 — failure path, stay quiet
+            logger.warning(
+                "Could not mark install %s as failed after a sweep error: %s",
+                install_id, e,
+            )
+            session.rollback()
+
+    @staticmethod
+    async def sweep_bundle_updates_background(bundle_uuid: uuid.UUID) -> None:
+        """Bundle-scoped sweep for detached background use (publish fast path).
+
+        Used by ``PublishService.notify_installs`` so a publish returns
+        immediately and never fails because of a sweep. Must not reuse the
+        request session — the task outlives the request — so it takes the same
+        leader-locked session the periodic scheduler uses, which also keeps the
+        two entry points from applying the same install concurrently. If the
+        periodic sweep happens to be running, this one skips and the install
+        converges on the next scheduled run instead.
+        """
+        if not settings.BUNDLE_AUTO_UPDATE_ENABLED:
+            return
+
+        with sweep_leader_session() as session:
+            if session is None:
+                logger.info(
+                    "Publish-time auto-update sweep for bundle %s skipped: a "
+                    "sweep is already running; the periodic run will converge it",
+                    bundle_uuid,
+                )
+                return
+            bundle = session.get(AgentBundle, bundle_uuid)
+            if bundle is None:
+                logger.warning(
+                    "Publish-time auto-update sweep skipped: bundle %s not found",
+                    bundle_uuid,
+                )
+                return
+            await InstallService.sweep_automatic_updates(
+                session,
+                bundle=bundle,
+                limit=settings.BUNDLE_AUTO_UPDATE_BATCH_LIMIT,
+            )
+
     # ── Uninstall ─────────────────────────────────────────────────
 
     @staticmethod
@@ -1537,6 +1928,8 @@ class InstallService:
         latest_number: int | None = None
         installed_version: str | None = None
         latest_version: str | None = None
+        latest_release_notes: str | None = None
+        latest_published_at: datetime | None = None
         if install.installed_revision_id:
             rev = session.get(AgentBundleRevision, install.installed_revision_id)
             if rev:
@@ -1549,6 +1942,8 @@ class InstallService:
                 if latest_rev:
                     latest_number = latest_rev.revision_number
                     latest_version = latest_rev.version
+                    latest_release_notes = latest_rev.release_notes
+                    latest_published_at = latest_rev.published_at
 
         if (
             latest_number is not None
@@ -1572,6 +1967,8 @@ class InstallService:
             "latest_revision_number": latest_number,
             "installed_version": installed_version,
             "latest_version": latest_version,
+            "latest_release_notes": latest_release_notes,
+            "latest_published_at": latest_published_at,
             "last_update_status": install.last_update_status,
             "last_sync_at": install.last_sync_at,
             "update_mode": install.update_mode,

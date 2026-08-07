@@ -25,6 +25,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Copy, Check, AlertTriangle } from "lucide-react"
+import { revisionLabel } from "@/utils/bundleRevision"
 import { AdminEnvBulkRebuildDialog } from "./AdminEnvBulkRebuildDialog"
 
 // ---------------------------------------------------------------------------
@@ -121,6 +122,85 @@ function ModelHealthCell({ warning }: { warning: boolean }) {
         </p>
       </TooltipContent>
     </Tooltip>
+  )
+}
+
+/**
+ * Bundle provenance for one env row.
+ *
+ * Three shapes:
+ *  - non-bundle agent (``bundle_id`` null) → em dash
+ *  - publisher install → bundle ID only, never an update badge (a publisher is
+ *    the source of the revision, so it can't be "behind" it)
+ *  - consumer install → bundle ID + installed revision, plus an amber
+ *    ``→ v1.5`` badge when a newer bundle revision exists
+ *
+ * Deliberately amber and arrow-shaped rather than reusing the orange "Stale"
+ * badge: bundle revision drift and container image staleness are different
+ * axes (apply-update vs. rebuild) and must not read as the same problem.
+ */
+function BundleCell({ env }: { env: AdminAgentEnvironmentPublic }) {
+  if (!env.bundle_id) {
+    return <span className="text-muted-foreground text-xs">—</span>
+  }
+
+  // Publisher rows are bundle ID only: a publisher *is* the source of the
+  // revision, so neither "installed at" nor "behind" means anything there.
+  const installedLabel = env.is_publisher_install
+    ? null
+    : revisionLabel(
+        env.installed_revision_version,
+        env.installed_revision_number,
+      )
+  const latestLabel = revisionLabel(
+    env.latest_revision_version,
+    env.latest_revision_number,
+  )
+  const showUpdate = !!env.update_available && !env.is_publisher_install
+
+  return (
+    <div className="space-y-0.5">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <p className="font-mono text-xs truncate max-w-[160px] cursor-default">
+            {env.bundle_id}
+          </p>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p className="font-mono text-xs">{env.bundle_id}</p>
+          {env.is_publisher_install && (
+            <p className="text-xs">Publisher install</p>
+          )}
+          {!env.is_publisher_install && env.update_mode && (
+            <p className="text-xs">Update mode: {env.update_mode}</p>
+          )}
+        </TooltipContent>
+      </Tooltip>
+      {(installedLabel || (showUpdate && latestLabel)) && (
+        <div className="flex items-center gap-1">
+          {installedLabel && (
+            <Badge variant="outline" className="text-[10px] font-mono px-1 py-0">
+              {installedLabel}
+            </Badge>
+          )}
+          {showUpdate && latestLabel && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium font-mono bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 cursor-default">
+                  → {latestLabel}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="text-xs">
+                  A newer bundle revision has been published. Resolved by
+                  applying the update, not by rebuilding the image.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -244,6 +324,10 @@ const columns = [
         </p>
       </div>
     ),
+  }),
+  columnHelper.accessor("bundle_id", {
+    header: "Bundle",
+    cell: ({ row }) => <BundleCell env={row.original} />,
   }),
   columnHelper.accessor("instance_name", {
     header: "Instance",

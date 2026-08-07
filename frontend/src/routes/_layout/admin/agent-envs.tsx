@@ -54,6 +54,7 @@ function buildQueryFn(filters: AdminEnvFilters) {
       status: filters.status ?? undefined,
       isStale: filters.isStale ?? undefined,
       inUse: filters.inUse ?? undefined,
+      updateAvailable: filters.updateAvailable ?? undefined,
       search: filters.search || undefined,
     })
 }
@@ -73,6 +74,7 @@ function AdminAgentEnvs() {
     status: null,
     isStale: null,
     inUse: null,
+    updateAvailable: null,
     search: "",
   })
 

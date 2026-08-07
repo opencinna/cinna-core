@@ -104,6 +104,10 @@ from app.services.environments.environment_suspension_scheduler import (
     start_scheduler as start_suspension_scheduler,
     shutdown_scheduler as shutdown_suspension_scheduler
 )
+from app.services.environments.bundle_auto_update_scheduler import (
+    start_scheduler as start_bundle_auto_update_scheduler,
+    shutdown_scheduler as shutdown_bundle_auto_update_scheduler,
+)
 from app.services.tasks.task_trigger_scheduler import (
     start_scheduler as start_task_trigger_scheduler,
     shutdown_scheduler as shutdown_task_trigger_scheduler
@@ -166,6 +170,7 @@ async def lifespan(app: FastAPI):
     if not settings.TESTING:
         start_file_cleanup_scheduler()
         start_suspension_scheduler()
+        start_bundle_auto_update_scheduler()
         start_task_trigger_scheduler()
         start_agent_schedule_scheduler()
         start_email_polling_scheduler()
@@ -357,6 +362,7 @@ async def lifespan(app: FastAPI):
     if not settings.TESTING:
         shutdown_file_cleanup_scheduler()
         shutdown_suspension_scheduler()
+        shutdown_bundle_auto_update_scheduler()
         shutdown_task_trigger_scheduler()
         shutdown_agent_schedule_scheduler()
         shutdown_email_polling_scheduler()

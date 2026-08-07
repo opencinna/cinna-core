@@ -23,6 +23,8 @@ from app.core.config import settings
 from app.core.db import create_session
 from app.models import User
 from app.models.agents.agent import Agent
+from app.models.bundles.agent_bundle import AgentBundle
+from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 from app.models.environments.environment import (
     AdminAgentEnvironmentPublic,
     AdminAgentEnvironmentsPublic,
@@ -88,6 +90,7 @@ class AdminEnvironmentService:
         status: Optional[str] = None,
         is_stale: Optional[bool] = None,
         in_use: Optional[bool] = None,
+        update_available: Optional[bool] = None,
         owner_id: Optional[uuid.UUID] = None,
         search: Optional[str] = None,
         skip: int = 0,
@@ -96,8 +99,8 @@ class AdminEnvironmentService:
         """
         Return all environments enriched with admin-only metadata.
 
-        Filters are applied after enrichment because is_stale and in_use are
-        computed fields (not stored directly on the row).
+        Filters are applied after enrichment because is_stale, in_use, and
+        update_available are computed fields (not stored directly on the row).
 
         Args:
             session: Database session.
@@ -105,6 +108,7 @@ class AdminEnvironmentService:
             status: Filter by status (exact).
             is_stale: Filter by computed is_stale flag.
             in_use: Filter by computed in_use flag.
+            update_available: Filter by computed bundle update_available flag.
             owner_id: Filter by agent owner user ID.
             search: ILIKE match against agent name, instance_name, owner email/username.
             skip: Pagination offset.
@@ -116,11 +120,14 @@ class AdminEnvironmentService:
         """
         limit = min(limit, 500)
 
-        # Single query: join environment → agent → user
+        # Single query: join environment → agent → user, plus an optional
+        # bundle (NULL for standalone agents that were never published or
+        # installed from a bundle).
         query = (
-            select(AgentEnvironment, Agent, User)
+            select(AgentEnvironment, Agent, User, AgentBundle)
             .join(Agent, Agent.id == AgentEnvironment.agent_id)
             .join(User, User.id == Agent.owner_id)
+            .outerjoin(AgentBundle, AgentBundle.id == Agent.bundle_uuid)
         )
 
         # Pre-query filters (push down what we can to the DB)
@@ -164,7 +171,7 @@ class AdminEnvironmentService:
         # Batch-load recent-session counts for all envs in the result set in a
         # single aggregated query, then index by environment_id. Avoids the N+1
         # that would otherwise run _count_recent_sessions per environment.
-        env_ids = [env.id for env, _, _ in rows]
+        env_ids = [env.id for env, _, _, _ in rows]
         counts_by_env: dict[uuid.UUID, int] = {}
         if env_ids:
             threshold = datetime.now(UTC) - timedelta(minutes=_RECENT_SESSION_THRESHOLD_MINUTES)
@@ -178,8 +185,28 @@ class AdminEnvironmentService:
             ).all()
             counts_by_env = {eid: c for eid, c in counts_rows if eid is not None}
 
+        # Batch-resolve every revision referenced by the page (installed on the
+        # agent + latest on the bundle) in ONE query, indexed by id. This list
+        # is fleet-wide, so a per-row session.get would be the same N+1 that
+        # already bit the model-health roll-up.
+        referenced_revision_ids: set[uuid.UUID] = set()
+        for _, agent, _, bundle in rows:
+            if agent.installed_revision_id is not None:
+                referenced_revision_ids.add(agent.installed_revision_id)
+            if bundle is not None and bundle.latest_revision_id is not None:
+                referenced_revision_ids.add(bundle.latest_revision_id)
+
+        revisions_by_id: dict[uuid.UUID, AgentBundleRevision] = {}
+        if referenced_revision_ids:
+            revision_rows = session.exec(
+                select(AgentBundleRevision).where(
+                    AgentBundleRevision.id.in_(referenced_revision_ids)  # type: ignore[attr-defined]
+                )
+            ).all()
+            revisions_by_id = {rev.id: rev for rev in revision_rows}
+
         enriched: list[AdminAgentEnvironmentPublic] = []
-        for env, agent, user in rows:
+        for env, agent, user, bundle in rows:
             expected_tag, expected_hash = _get_expected(env.env_name)
 
             # Derive current hash from stored image tag (last 12 chars after the colon)
@@ -204,6 +231,25 @@ class AdminEnvironmentService:
             model_health_warning = evaluate_environment(
                 session, env, agent=agent
             ).has_warning
+
+            # Bundle install enrichment (revisions come from the batched dict).
+            latest_revision_id = bundle.latest_revision_id if bundle else None
+            installed_rev = (
+                revisions_by_id.get(agent.installed_revision_id)
+                if agent.installed_revision_id is not None
+                else None
+            )
+            latest_rev = (
+                revisions_by_id.get(latest_revision_id)
+                if latest_revision_id is not None
+                else None
+            )
+            computed_update_available = (
+                bundle is not None
+                and latest_revision_id is not None
+                and agent.installed_revision_id != latest_revision_id
+                and not agent.is_publisher_install
+            )
 
             row = AdminAgentEnvironmentPublic(
                 id=env.id,
@@ -241,6 +287,22 @@ class AdminEnvironmentService:
                 last_build_at=env.last_build_at,
                 sync_active=env.sync_active,
                 model_health_warning=model_health_warning,
+                bundle_id=agent.bundle_id if bundle is not None else None,
+                is_publisher_install=agent.is_publisher_install,
+                update_mode=agent.update_mode,
+                installed_revision_number=(
+                    installed_rev.revision_number if installed_rev else None
+                ),
+                installed_revision_version=(
+                    installed_rev.version if installed_rev else None
+                ),
+                latest_revision_number=(
+                    latest_rev.revision_number if latest_rev else None
+                ),
+                latest_revision_version=(
+                    latest_rev.version if latest_rev else None
+                ),
+                update_available=computed_update_available,
             )
             enriched.append(row)
 
@@ -249,6 +311,10 @@ class AdminEnvironmentService:
             enriched = [r for r in enriched if r.is_stale == is_stale]
         if in_use is not None:
             enriched = [r for r in enriched if r.in_use == in_use]
+        if update_available is not None:
+            enriched = [
+                r for r in enriched if r.update_available == update_available
+            ]
 
         total_count = len(enriched)
         stale_count = sum(1 for r in enriched if r.is_stale)

@@ -475,6 +475,14 @@ export type AdminAgentEnvironmentPublic = {
     last_build_at: (string | null);
     sync_active: boolean;
     model_health_warning?: boolean;
+    bundle_id?: (string | null);
+    is_publisher_install?: boolean;
+    update_mode?: (string | null);
+    installed_revision_number?: (number | null);
+    installed_revision_version?: (string | null);
+    latest_revision_number?: (number | null);
+    latest_revision_version?: (string | null);
+    update_available?: boolean;
 };
 
 /**
@@ -2402,6 +2410,8 @@ export type CheckUpdatesResponse = {
     latest_revision_number: (number | null);
     installed_version?: (string | null);
     latest_version?: (string | null);
+    latest_release_notes?: (string | null);
+    latest_published_at?: (string | null);
     last_update_status: (string | null);
     last_sync_at: (string | null);
     update_mode: string;
@@ -5979,6 +5989,10 @@ export type AdminEnvironmentsListAdminEnvironmentsData = {
      * Filter by template name (env_name)
      */
     template?: (string | null);
+    /**
+     * Filter by bundle update availability (consumer install running an older revision than the bundle's latest)
+     */
+    updateAvailable?: (boolean | null);
 };
 
 export type AdminEnvironmentsListAdminEnvironmentsResponse = (AdminAgentEnvironmentsPublic);

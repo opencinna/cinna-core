@@ -198,6 +198,16 @@ class Agent(AgentBase, table=True):
     pending_update_at: datetime | None = Field(default=None)
     last_sync_at: datetime | None = Field(default=None)
     last_update_status: str | None = Field(default=None)  # "synced" | "failed" | None
+    # When the automatic-update sweep last *attempted* an apply on this install.
+    # Stamped and committed BEFORE ``InstallService.apply_update`` runs, so a
+    # crash mid-apply still records the attempt. Paired with
+    # ``last_update_status == "failed"`` it drives the retry backoff in
+    # ``InstallService.sweep_automatic_updates`` (a failing install is not
+    # retried on every 10-minute sweep). Stored naive (TIMESTAMP WITHOUT TIME
+    # ZONE, like its neighbours) but always written from ``datetime.now(UTC)``,
+    # so the stored wall-clock is UTC; the read side normalises it via
+    # ``install_service._as_utc``.
+    last_update_attempt_at: datetime | None = Field(default=None)
 
     # Publisher overrides (Phase 5 of the install-experience-redesign plan).
     # Lives only on the publisher install; ignored on foreign installs. The

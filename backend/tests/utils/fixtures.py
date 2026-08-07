@@ -48,6 +48,11 @@ CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
     # CLIService.ensure_environment_running activates a suspended env via a fresh
     # session (CLI workspace/manifest auto-activation path).
     "app.services.cli.cli_service.create_session",
+    # Publish fires a bundle-scoped auto-update sweep as a detached background
+    # task, which opens its own session (``sweep_leader_session`` — under
+    # settings.TESTING it routes through create_session precisely so it lands on
+    # the test transaction instead of a real pooled connection).
+    "app.services.bundles.install_service.create_session",
 ]
 
 BACKGROUND_TASK_TARGETS_BASE = [

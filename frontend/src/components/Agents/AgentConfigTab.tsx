@@ -13,6 +13,7 @@ import {
 import { AgentSchedulesCard } from "./AgentSchedulesCard"
 import { AgentHandovers } from "./AgentHandovers"
 import { AgentStatusCard } from "./AgentStatusCard"
+import { BundleInstallationCard } from "./BundleInstallationCard"
 import { EditDescriptionModal } from "./EditDescriptionModal"
 import { EditEntrypointPromptModal } from "./EditEntrypointPromptModal"
 import { EditWorkflowPromptModal } from "./EditWorkflowPromptModal"
@@ -56,8 +57,13 @@ export function AgentConfigTab({
 
   return (
     <div className="space-y-6">
-      {/* Top Row: Information and Agent Prompts (side by side) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* One shared responsive grid for every card on the tab — two columns
+          from ``lg`` up, one below. Cards are direct grid items and flow into
+          the next free cell, so a conditionally hidden card (a null child
+          occupies no cell) closes the gap instead of stranding its neighbour
+          on a row of its own. Anything added here must therefore stay a bare
+          Card, not a card wrapped in its own grid. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {/* Information Card */}
         <Card>
           <CardHeader>
@@ -121,31 +127,30 @@ export function AgentConfigTab({
             </div>
           </CardContent>
         </Card>
-      </div>
 
-      {/* Third Row: Scheduler and Handovers (side by side) */}
-      {/* Schedules render for the agent owner (editable) and for foreign
-          installs (read-only): bundle publishers can ship schedules, and the
-          consumer may enable/disable, run, and view logs but not edit them.
-          Handovers stay owner-only — they're not bundle-propagated. */}
-      {(showOperationalSettings || readOnly) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Schedules Card — read-only on foreign installs */}
+        {/* Bundle installation — foreign installs only (the card self-hides via
+            the same ``bundle_uuid && !is_publisher_install`` rule that makes
+            this tab read-only). Intentionally NOT passed ``readOnly``: the
+            update mode is the consumer's own preference, not publisher-authored
+            content. */}
+        <BundleInstallationCard agent={agent} />
+
+        {/* Schedules render for the agent owner (editable) and for foreign
+            installs (read-only): bundle publishers can ship schedules, and the
+            consumer may enable/disable, run, and view logs but not edit them.
+            Handovers stay owner-only — they're not bundle-propagated. */}
+        {(showOperationalSettings || readOnly) && (
           <AgentSchedulesCard agentId={agent.id} readOnly={readOnly} />
+        )}
 
-          {/* Handover to Agents — owner-only, not shown on foreign installs */}
-          {showOperationalSettings && <AgentHandovers agent={agent} />}
-        </div>
-      )}
+        {/* Handover to Agents — owner-only, not shown on foreign installs */}
+        {showOperationalSettings && <AgentHandovers agent={agent} />}
 
-      {/* Agent status — self-reported health + the refresh command.
-          Owner-facing configuration (editable command), so it follows the
-          same developer-tier gate as Handovers. */}
-      {showOperationalSettings && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <AgentStatusCard agent={agent} />
-        </div>
-      )}
+        {/* Agent status — self-reported health + the refresh command.
+            Owner-facing configuration (editable command), so it follows the
+            same developer-tier gate as Handovers. */}
+        {showOperationalSettings && <AgentStatusCard agent={agent} />}
+      </div>
 
       {/* Modals */}
       <EditDescriptionModal

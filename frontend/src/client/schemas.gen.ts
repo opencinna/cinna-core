@@ -2680,6 +2680,82 @@ export const AdminAgentEnvironmentPublicSchema = {
             type: 'boolean',
             title: 'Model Health Warning',
             default: false
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        is_publisher_install: {
+            type: 'boolean',
+            title: 'Is Publisher Install',
+            default: false
+        },
+        update_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Update Mode'
+        },
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
+        },
+        installed_revision_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Version'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        latest_revision_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Version'
+        },
+        update_available: {
+            type: 'boolean',
+            title: 'Update Available',
+            default: false
         }
     },
     type: 'object',
@@ -11187,6 +11263,29 @@ export const CheckUpdatesResponseSchema = {
                 }
             ],
             title: 'Latest Version'
+        },
+        latest_release_notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Release Notes'
+        },
+        latest_published_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Published At'
         },
         last_update_status: {
             anyOf: [
