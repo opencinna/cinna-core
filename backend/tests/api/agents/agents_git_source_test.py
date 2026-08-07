@@ -38,6 +38,8 @@ from tests.utils.cli import (
     exchange_setup_token,
 )
 from tests.utils.bundle import publish_bundle
+from tests.utils.environment import get_environment
+from tests.utils.schedule import create_schedule
 from tests.utils.ssh_key import generate_random_ssh_key
 from tests.utils.user import (
     create_random_user,
@@ -108,6 +110,10 @@ def _make_agent_repo_tree(
     *,
     workflow_prompt: str = "Test workflow prompt",
     subdir: str | None = None,
+    sdk_building: str | None = None,
+    sdk_conversation: str | None = None,
+    model_override_building: str | None = None,
+    model_override_conversation: str | None = None,
 ) -> Path:
     """Build a minimal v2 agent snapshot tree that passes checkout validation.
 
@@ -118,6 +124,11 @@ def _make_agent_repo_tree(
           scripts/
             run.sh
     Returns the effective source root (base_dir/<subdir> or base_dir).
+
+    ``sdk_building`` / ``sdk_conversation`` / ``model_override_building`` /
+    ``model_override_conversation`` default to ``None`` (matching every
+    existing caller); pass explicit values to exercise the manifest's ``sdk``
+    block carrying non-null per-mode engine/model-override values.
     """
     src = base_dir / subdir if subdir else base_dir
     src.mkdir(parents=True, exist_ok=True)
@@ -136,10 +147,10 @@ def _make_agent_repo_tree(
             "router_trigger": None,
         },
         "sdk": {
-            "building": None,
-            "conversation": None,
-            "model_override_building": None,
-            "model_override_conversation": None,
+            "building": sdk_building,
+            "conversation": sdk_conversation,
+            "model_override_building": model_override_building,
+            "model_override_conversation": model_override_conversation,
         },
         "required_credential_specs": [],
         "schedules": [],
@@ -1581,6 +1592,347 @@ def test_git_status_preview(
     promote_to_developer(client, superuser_token_headers, other["id"])
     r = client.get(_git_status_url(agent_id), headers=other_headers)
     assert r.status_code == 404, f"Expected 404 for non-owner status, got {r.text}"
+
+
+# ── Scenario 7c: cinna.agent.json settings participate in the change check ────
+
+
+def test_git_settings_dirty_tracks_manifest_fields(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """
+    Agent settings live in ``cinna.agent.json``, not in ``workspace/`` — editing
+    one must light up the change check (it previously reported "no changes"):
+      1. Clean right after connect (settings_dirty=False)
+      2. Edit example_prompts → dirty=True via settings_dirty ALONE
+         (prompts_dirty / workspace_dirty stay False) + preview lists it
+      3. Add a schedule → the "Schedules" spec list is reported too
+      4. Commit (push) → the new baseline captures both → clean again
+    """
+    from app.services.knowledge.git_operations import GitOperationError
+
+    headers = superuser_token_headers
+
+    # ── Phase 1: Connect a fresh agent (init path) → clean baseline ───────────
+    agent_id, env_id = _create_agent_with_env(
+        client, headers, tree={"docs": {"workflow.md": "# Workflow"}}
+    )
+    with (
+        patch(_LS_REMOTE, side_effect=GitOperationError("Ref 'main' not found")),
+        patch(_INIT_REPO, return_value=MagicMock()),
+        patch(_GET_HASH, return_value=_SHA_V1),
+        patch(_COMMIT_ALL, return_value=_SHA_V2),
+        patch(_FF_PUSH, return_value=None),
+    ):
+        r = _connect(client, headers, agent_id, commit_message="Initial export")
+    assert r.status_code == 200, f"Connect failed: {r.text}"
+
+    dirty = client.get(_git_dirty_url(agent_id), headers=headers).json()
+    assert dirty["dirty"] is False, f"Fresh connect must be clean: {dirty}"
+    assert dirty["settings_dirty"] is False
+
+    # ── Phase 2: Edit example_prompts (manifest metadata only) ───────────────
+    r = client.put(
+        f"{API}/agents/{agent_id}",
+        headers=headers,
+        json={"example_prompts": ["Summarise my inbox", "Draft a reply"]},
+    )
+    assert r.status_code == 200, f"Agent update failed: {r.text}"
+
+    dirty2 = client.get(_git_dirty_url(agent_id), headers=headers).json()
+    assert dirty2["settings_dirty"] is True, (
+        f"example_prompts edit must set settings_dirty: {dirty2}"
+    )
+    assert dirty2["dirty"] is True
+    # The edit touched neither a prompt field nor a workspace file — settings
+    # drift alone has to carry the flag.
+    assert dirty2["prompts_dirty"] is False
+    assert dirty2["workspace_dirty"] is False
+
+    status = client.get(_git_status_url(agent_id), headers=headers).json()
+    assert status["dirty"] is True
+    setting_fields = {c["field"]: c["change_type"] for c in status["setting_changes"]}
+    assert "Example prompts" in setting_fields, (
+        f"Commit preview must list the changed setting: {status['setting_changes']}"
+    )
+    assert setting_fields["Example prompts"] in ("added", "modified")
+
+    # ── Phase 3: Add a schedule → the spec list is compared too ──────────────
+    create_schedule(
+        client, headers, agent_id, name="Nightly run", prompt="Do the thing"
+    )
+    status2 = client.get(_git_status_url(agent_id), headers=headers).json()
+    setting_fields2 = {c["field"] for c in status2["setting_changes"]}
+    assert "Schedules" in setting_fields2, (
+        f"A new schedule must show in the commit preview: {status2['setting_changes']}"
+    )
+    assert "Example prompts" in setting_fields2
+
+    # ── Phase 4: Commit → the pushed revision becomes the new baseline ───────
+    with (
+        patch(_LS_REMOTE, return_value=_SHA_V2),  # remote == last_synced → FF ok
+        patch(_CLONE_CTX, _fake_clone_ctx(tmp_path / "settings_push_clone", _SHA_V2)),
+        patch(_GET_HASH, return_value=_SHA_V2),
+        patch(_COMMIT_ALL, return_value="d" * 40),
+        patch(_FF_PUSH, return_value=None),
+    ):
+        r = client.post(
+            _git_push_url(agent_id),
+            headers=headers,
+            json={"commit_message": "Commit settings"},
+        )
+    assert r.status_code == 200, f"Push failed: {r.text}"
+
+    dirty3 = client.get(_git_dirty_url(agent_id), headers=headers).json()
+    assert dirty3["settings_dirty"] is False, (
+        f"Committed settings must clear settings_dirty: {dirty3}"
+    )
+    assert dirty3["dirty"] is False
+
+
+# ── Scenario 7c2: checked-out model overrides do not create phantom drift ─────
+
+
+def test_git_checkout_model_override_no_phantom_settings_drift(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """
+    Regression for ``InstallService._install_from_revision`` dropping the
+    revision's per-mode model overrides on install: the settings-drift check
+    compares the live environment's ``model_override_*`` against the synced
+    revision's, so a manifest carrying non-null overrides paired with an env
+    that always landed on ``None`` produced a permanent, un-editable
+    "Model override (…): deleted" diff right after checkout.
+
+    The manifest's ``sdk.conversation`` is pinned to the same value the
+    environment resolves to by default (``DEFAULT_SDK`` /
+    "claude-code/anthropic") — a manifest that leaves it ``None`` (the
+    ``_make_agent_repo_tree`` default) has its own, unrelated "SDK engine
+    (conversation mode): added" diff baked in (env falls back to
+    ``DEFAULT_SDK`` while the revision keeps ``None``), which would otherwise
+    mask the model-override-specific assertion this test is making.
+
+      1. Checkout a repo whose ``cinna.agent.json`` sdk block carries non-null
+         ``model_override_building`` / ``model_override_conversation``.
+      2. The checked-out environment actually carries both values (install
+         propagated them from the revision).
+      3. GET .../git/dirty right after checkout → settings_dirty is False.
+      4. GET .../git/status → no "Model override (…)" entry in setting_changes.
+    """
+    headers = superuser_token_headers
+    bundle_id = f"io.test.git.modeloverride.{random_lower_string()[:6]}"
+    repo_dir = tmp_path / "model_override_checkout"
+    _make_agent_repo_tree(
+        repo_dir,
+        bundle_id=bundle_id,
+        sdk_conversation="claude-code/anthropic",
+        model_override_building="claude-opus-4",
+        model_override_conversation="claude-haiku-4-5",
+    )
+
+    result = _do_checkout(
+        client,
+        headers,
+        clone_dir=repo_dir,
+        sha=_SHA_V1,
+        repo_url="https://github.com/example/model-override-checkout.git",
+    )
+    agent_id = result["agent"]["id"]
+
+    # ── Phase 1: the checked-out env actually carries the overrides ──────────
+    env_id = get_agent(client, headers, agent_id)["active_environment_id"]
+    assert env_id, "checked-out agent must have an active environment"
+    env = get_environment(client, headers, env_id)
+    assert env["model_override_building"] == "claude-opus-4", (
+        f"Checkout must propagate the manifest's building-mode override: {env}"
+    )
+    assert env["model_override_conversation"] == "claude-haiku-4-5", (
+        f"Checkout must propagate the manifest's conversation-mode override: {env}"
+    )
+
+    # ── Phase 2: clean right after checkout — no phantom drift ───────────────
+    dirty = client.get(_git_dirty_url(agent_id), headers=headers).json()
+    assert dirty["settings_dirty"] is False, (
+        f"Checked-out env must match the synced revision's model overrides "
+        f"(no phantom drift): {dirty}"
+    )
+    assert dirty["dirty"] is False
+
+    status = client.get(_git_status_url(agent_id), headers=headers).json()
+    setting_fields = {c["field"]: c["change_type"] for c in status["setting_changes"]}
+    assert "Model override (building mode)" not in setting_fields, (
+        f"Phantom 'deleted' diff for building-mode override: {status['setting_changes']}"
+    )
+    assert "Model override (conversation mode)" not in setting_fields, (
+        f"Phantom 'deleted' diff for conversation-mode override: {status['setting_changes']}"
+    )
+
+
+# ── Scenario 7d: pull dirty guard covers exactly what a pull overwrites ───────
+
+
+def test_git_pull_guard_covers_metadata_only(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """
+    The pull guard blocks on local state a pull would OVERWRITE:
+      1. A metadata edit (description) → 409 "push or discard"
+      2. After committing it, a schedules-only drift does NOT block the pull —
+         a pull leaves schedules untouched, so blocking would only deadlock.
+    """
+    from app.services.knowledge.git_operations import GitOperationError
+
+    headers = superuser_token_headers
+
+    agent_id, env_id = _create_agent_with_env(
+        client, headers, tree={"docs": {"workflow.md": "# Workflow"}}
+    )
+    # The baseline revision must capture a NON-NULL description: the pull guard
+    # skips a metadata field whose RAW baseline column is None (the field was
+    # never overwritten by ``_apply_revision_metadata`` in the first place — see
+    # ``skip_null_baseline_metadata``), so a field that started NULL would never
+    # exercise this guard.
+    r = client.put(
+        f"{API}/agents/{agent_id}",
+        headers=headers,
+        json={"description": "Original description"},
+    )
+    assert r.status_code == 200, f"Agent update failed: {r.text}"
+    with (
+        patch(_LS_REMOTE, side_effect=GitOperationError("Ref 'main' not found")),
+        patch(_INIT_REPO, return_value=MagicMock()),
+        patch(_GET_HASH, return_value=_SHA_V1),
+        patch(_COMMIT_ALL, return_value=_SHA_V2),
+        patch(_FF_PUSH, return_value=None),
+    ):
+        r = _connect(client, headers, agent_id, commit_message="Initial export")
+    assert r.status_code == 200, f"Connect failed: {r.text}"
+
+    # ── Phase 1: metadata drift blocks the pull ──────────────────────────────
+    r = client.put(
+        f"{API}/agents/{agent_id}",
+        headers=headers,
+        json={"description": "Locally edited description"},
+    )
+    assert r.status_code == 200, f"Agent update failed: {r.text}"
+
+    _SHA_REMOTE = "e" * 40
+    remote_dir = tmp_path / "guard_remote"
+    agent_row = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
+    _make_agent_repo_tree(remote_dir, bundle_id=agent_row["bundle_id"])
+
+    with (
+        patch(_LS_REMOTE, return_value=_SHA_REMOTE),
+        patch(_CLONE_CTX, _fake_clone_ctx(remote_dir, _SHA_REMOTE)),
+        patch(_GET_HASH, return_value=_SHA_REMOTE),
+    ):
+        r = client.post(_git_pull_url(agent_id), headers=headers)
+    assert r.status_code == 409, (
+        f"Expected 409 for metadata-dirty pull, got {r.status_code}: {r.text}"
+    )
+    assert "Description" in r.json()["detail"], (
+        f"The 409 should name the drifted setting: {r.json()['detail']}"
+    )
+
+    # ── Phase 2: commit it, then add a schedule — pull is NOT blocked ────────
+    with (
+        patch(_LS_REMOTE, return_value=_SHA_V2),
+        patch(_CLONE_CTX, _fake_clone_ctx(tmp_path / "guard_push_clone", _SHA_V2)),
+        patch(_GET_HASH, return_value=_SHA_V2),
+        patch(_COMMIT_ALL, return_value="d" * 40),
+        patch(_FF_PUSH, return_value=None),
+    ):
+        r = client.post(
+            _git_push_url(agent_id),
+            headers=headers,
+            json={"commit_message": "Commit description"},
+        )
+    assert r.status_code == 200, f"Push failed: {r.text}"
+
+    create_schedule(client, headers, agent_id, name="Nightly run")
+    dirty = client.get(_git_dirty_url(agent_id), headers=headers).json()
+    assert dirty["settings_dirty"] is True, (
+        f"A new schedule is still reported as a local change: {dirty}"
+    )
+
+    with (
+        patch(_LS_REMOTE, return_value=_SHA_REMOTE),
+        patch(_CLONE_CTX, _fake_clone_ctx(remote_dir, _SHA_REMOTE)),
+        patch(_GET_HASH, return_value=_SHA_REMOTE),
+    ):
+        r = client.post(_git_pull_url(agent_id), headers=headers)
+    assert r.status_code == 200, (
+        "A schedules-only drift must not block a pull (a pull never rewrites "
+        f"schedules), got {r.status_code}: {r.text}"
+    )
+
+
+def test_git_pull_guard_skips_metadata_with_null_baseline(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """
+    A metadata field whose baseline revision column is NULL is not "overwritten"
+    by a pull (``InstallService._apply_revision_metadata`` only assigns when the
+    revision column ``is not None``), so the pull guard must not block on it —
+    while the dirty indicator still flags it, since the next commit WOULD write
+    it into the manifest:
+      1. Connect without ever setting a description → baseline description=None
+      2. Set description locally → GET dirty reports settings_dirty=True
+      3. Pull still succeeds (guard skips a NULL-baseline metadata field)
+    """
+    from app.services.knowledge.git_operations import GitOperationError
+
+    headers = superuser_token_headers
+
+    agent_id, env_id = _create_agent_with_env(
+        client, headers, tree={"docs": {"workflow.md": "# Workflow"}}
+    )
+    with (
+        patch(_LS_REMOTE, side_effect=GitOperationError("Ref 'main' not found")),
+        patch(_INIT_REPO, return_value=MagicMock()),
+        patch(_GET_HASH, return_value=_SHA_V1),
+        patch(_COMMIT_ALL, return_value=_SHA_V2),
+        patch(_FF_PUSH, return_value=None),
+    ):
+        r = _connect(client, headers, agent_id, commit_message="Initial export")
+    assert r.status_code == 200, f"Connect failed: {r.text}"
+
+    # ── Local description set, baseline column is still NULL ────────────────
+    r = client.put(
+        f"{API}/agents/{agent_id}",
+        headers=headers,
+        json={"description": "Set only locally"},
+    )
+    assert r.status_code == 200, f"Agent update failed: {r.text}"
+
+    dirty = client.get(_git_dirty_url(agent_id), headers=headers).json()
+    assert dirty["settings_dirty"] is True, (
+        f"A metadata field set only locally must still show as dirty: {dirty}"
+    )
+
+    _SHA_REMOTE = "e" * 40
+    remote_dir = tmp_path / "guard_null_baseline_remote"
+    agent_row = client.get(f"{API}/agents/{agent_id}", headers=headers).json()
+    _make_agent_repo_tree(remote_dir, bundle_id=agent_row["bundle_id"])
+
+    with (
+        patch(_LS_REMOTE, return_value=_SHA_REMOTE),
+        patch(_CLONE_CTX, _fake_clone_ctx(remote_dir, _SHA_REMOTE)),
+        patch(_GET_HASH, return_value=_SHA_REMOTE),
+    ):
+        r = client.post(_git_pull_url(agent_id), headers=headers)
+    assert r.status_code == 200, (
+        "A NULL-baseline metadata field must not block the pull (a pull leaves "
+        f"it untouched), got {r.status_code}: {r.text}"
+    )
 
 
 # ── Scenario 8: GET /git is remote-free; check-updates probes remote ──────────

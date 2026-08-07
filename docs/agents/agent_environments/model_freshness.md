@@ -34,8 +34,20 @@ was updated from the stale `anthropic/claude-sonnet-4-5` to `anthropic/claude-so
 ### Model Override
 
 Users can pin a concrete model ID per mode (`model_override_conversation` /
-`model_override_building` on `AgentEnvironment`). Overrides are honored verbatim in resolution;
-detecting whether an override is still valid is the health service's job, not the resolver's.
+`model_override_building` on `AgentEnvironment`) via the environment reconfigure dialog. The same
+fields can also arrive pre-pinned: a bundle publisher's per-mode override travels with the revision
+and is applied to the environment at install time (see [Agent Bundles](../agent_bundles/agent_bundles.md)),
+so an installed agent can carry an override the installer never set directly. Overrides are honored
+verbatim in resolution regardless of origin; detecting whether an override is still valid is the
+health service's job, not the resolver's.
+
+One exception at the import boundary: a mode whose SDK resolves to the `openai_compatible` provider
+never receives an imported override in the first place — `InstallService._importable_model_override`
+drops it before the environment is created, because an `openai_compatible` model id names a model
+inside the *publisher's own* endpoint namespace and would not resolve against the consumer's
+`openai_compatible` credential. This is an install-time filter on *imported* overrides only; a user
+who pins a model on their own `openai_compatible` environment is unaffected — `resolve_model` still
+honors it verbatim, same as any other mode.
 
 ### Per-Credential Model Discovery
 
@@ -49,14 +61,16 @@ Users can also **force an immediate refresh** for a saved credential by clicking
 
 ### Admin-Curated Credential Default
 
-For credentials provisioned by an admin (see [Admin-Provisioned AI Credentials](../../application/ai_credentials/admin_ai_credential_provisioning.md)), the `AICredential` row may carry a `default_model` value set by the superuser. This value takes precedence over the catalog tier default in the effective-model resolution, **but it is still overridden by any explicit per-mode `model_override_*` the user sets** on the environment.
+For credentials provisioned by an admin (see [Admin-Provisioned AI Credentials](../../application/ai_credentials/admin_ai_credential_provisioning.md)), the `AICredential` row may carry a `default_model` value set by the superuser. This value takes precedence over the catalog tier default in the effective-model resolution, **but it is still overridden by any explicit per-mode `model_override_*` set on the environment** — whether the installer set it directly or it arrived pre-pinned from a bundle publisher.
 
 Precedence (in effect order):
 1. Environment per-mode override (`model_override_building` / `model_override_conversation`) — always wins.
 2. Admin-curated `default_model` on the linked credential — when set and the above is absent.
 3. Catalog tier default.
 
-The model-health service mirrors this same precedence so a valid admin default is never falsely flagged as `unknown_model` or `stale_default`. Additionally, `has_override` (used to distinguish `frozen_override` from `stale_default` in badge copy) is keyed only on a user-set env override — not on the credential default — so the CTA stays accurate.
+A publisher-pinned override therefore outranks an admin-curated `default_model` on the consumer's own credential, same as a manually-set one.
+
+The model-health service mirrors this same precedence so a valid admin default is never falsely flagged as `unknown_model` or `stale_default`. Additionally, `has_override` (used to distinguish `frozen_override` from `stale_default` in badge copy) is keyed only on the env's `model_override_*` column — not on the credential default — so the CTA stays accurate regardless of who set the override.
 
 Model-picker datalists (`EnvironmentConfigForm`, user `AICredentials`) prefer `available_models` over `discovered_models` for selection suggestions when the credential has a non-empty admin-curated list.
 

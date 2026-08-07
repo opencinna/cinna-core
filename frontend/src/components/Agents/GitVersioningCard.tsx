@@ -807,9 +807,10 @@ function CommitPreview({
   }
 
   const prompts = status.prompt_changes ?? []
+  const settings = status.setting_changes ?? []
   const files = status.file_changes ?? []
 
-  if (prompts.length === 0 && files.length === 0) {
+  if (prompts.length === 0 && settings.length === 0 && files.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
         No changes detected to commit.
@@ -831,6 +832,22 @@ function CommitPreview({
             {prompts.map((c) => (
               <ChangeRow
                 key={`prompt-${c.field}`}
+                label={c.field}
+                changeType={c.change_type}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+      {settings.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Agent settings
+          </p>
+          <ul className="space-y-0.5">
+            {settings.map((c) => (
+              <ChangeRow
+                key={`setting-${c.field}`}
                 label={c.field}
                 changeType={c.change_type}
               />

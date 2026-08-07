@@ -49,7 +49,7 @@ from app.models.bundles.catalog import (
     InstallRequest,
 )
 from app.models.bundles.catalog import SetupCredentialSummary
-from app.models.credentials.ai_credential import AICredential
+from app.models.credentials.ai_credential import AICredential, AICredentialType
 from app.models.credentials.credential import Credential
 from app.models.credentials.link_models import AgentCredentialLink
 from app.models.environments.environment import (
@@ -62,6 +62,7 @@ from app.services.bundles.credential_spec import (
     ParsedCredentialSpec,
     parse_credential_spec,
 )
+from app.services.environments.sdk_constants import DEFAULT_SDK
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,77 @@ class InstallService:
             install.webapp_enabled = revision.webapp_enabled
 
     @staticmethod
+    def _importable_model_override(
+        override: str | None,
+        effective_sdk: str | None,
+        context: str = "",
+    ) -> str | None:
+        """Filter a publisher-authored per-mode model override before import.
+
+        An ``openai_compatible`` model id names a model inside the *endpoint
+        owner's* namespace — it is only meaningful against the ``base_url`` of
+        the credential serving that mode. The consumer runs against their OWN
+        ``openai_compatible`` credential: a different endpoint, a different
+        model catalogue. So a model id the publisher pinned is very likely not
+        served there, and it would win anyway — ``resolve_model`` honours any
+        truthy override verbatim and returns BEFORE its ``openai_compatible``
+        branch, so an imported id outranks the consumer's own
+        ``openai_compatible_model``. The result is a hard provider error on the
+        first message, behind a green badge (``model_health_service`` reports
+        ``openai_compatible`` as always OK, on the assumption that whoever set
+        the model also owns the endpoint — exactly what importing breaks).
+
+        Therefore: for a mode that resolves to ``openai_compatible`` we drop the
+        imported override and let the installer's own fallback chain decide (see
+        below). Every other provider names models in a shared, portable
+        namespace, so the publisher's pin is kept.
+
+        This is deliberately scoped to IMPORTED (publisher-authored) overrides
+        and MUST NOT be folded into ``resolve_model``: that code path cannot
+        tell who authored an override, so the same rule there would also break
+        the legitimate case of a user deliberately pinning a model on their own
+        ``openai_compatible`` environment.
+
+        What takes the pin's place is ``EnvironmentService.create_environment``'s
+        pre-existing chain, which passing ``None`` here hands control to:
+        the installer's own ``User.default_model_override_*`` when they have one
+        set (the new-environment form pre-fills from it), and only when that is
+        NULL does the serving credential's configured ``model`` stand. So even
+        when the bundle ships the publisher's own AI credential
+        (publisher-provided credentials), the outcome is the publisher's default
+        on that endpoint only for an installer with no personal global default —
+        otherwise it is that personal default. Either way it is a model the
+        installer's own account chose, which is the point; the per-user
+        substitution itself is how every environment this user creates already
+        behaves and is not something this filter introduces.
+
+        Note this also fires on self-checkout: ``checkout`` of a Git repo you
+        authored yourself installs through the same path, so an
+        ``openai_compatible`` override you set is dropped even though publisher
+        and consumer are the same person on the same endpoint. That is accepted
+        — the override lands in a durable environment row while the credential
+        binding behind it stays mutable, so a later swap to a different
+        ``openai_compatible`` credential would carry the pin onto a foreign
+        endpoint. Keeping the suppression unconditional avoids that.
+        """
+        if not override:
+            return None
+        # Same split resolve_model / the lifecycle use: a missing SDK or a bare
+        # engine means the default ``anthropic`` provider.
+        _engine, _, provider = (effective_sdk or "").partition("/")
+        if (provider or "anthropic") != AICredentialType.OPENAI_COMPATIBLE.value:
+            return override
+        logger.info(
+            "Dropping imported model override '%s' — mode resolves to SDK '%s' "
+            "(openai_compatible model ids are endpoint-local and not portable "
+            "from publisher to consumer) [%s]",
+            override,
+            effective_sdk,
+            context,
+        )
+        return None
+
+    @staticmethod
     async def _install_from_revision(
         *,
         session: Session,
@@ -309,7 +381,53 @@ class InstallService:
             else request_build_id
         )
 
-        # 2b. Build environment (uses revision SDK selection).
+        # 2b. Decide which of the revision's per-mode model overrides may be
+        # imported. A mode's provider comes from its SDK id ("engine/provider"),
+        # so resolve the EFFECTIVE per-mode SDK first, mirroring
+        # ``EnvironmentService.create_environment``'s normalisation: a NULL
+        # conversation SDK falls back to the installer's own default, while a
+        # NULL building SDK means "building mode not needed" and stays NULL (the
+        # lifecycle then reads it as claude-code/anthropic). Each mode is judged
+        # independently — building and conversation can resolve to different
+        # providers, so one may be suppressed while the other is kept.
+        effective_sdk_conversation = (
+            revision.agent_sdk_conversation
+            or user.default_sdk_conversation
+            or DEFAULT_SDK
+        )
+        effective_sdk_building = (
+            None
+            if revision.agent_sdk_building is None
+            else (
+                revision.agent_sdk_building
+                or user.default_sdk_building
+                or DEFAULT_SDK
+            )
+        )
+        override_log_context = (
+            f"install={install.id} bundle={bundle.bundle_id} "
+            f"revision={revision.id} user={user.id}"
+        )
+        model_override_conversation = InstallService._importable_model_override(
+            revision.model_override_conversation,
+            effective_sdk_conversation,
+            context=f"mode=conversation {override_log_context}",
+        )
+        model_override_building = InstallService._importable_model_override(
+            revision.model_override_building,
+            effective_sdk_building,
+            context=f"mode=building {override_log_context}",
+        )
+
+        # 2c. Build environment (uses the revision's full SDK block).
+        # The per-mode model overrides travel with the engine selection: they are
+        # written into the manifest's ``sdk`` block by
+        # ``RevisionFormat.build_manifest`` and stored on the revision, so
+        # dropping them wholesale here would silently discard half of what the
+        # publisher pinned (only the non-portable ``openai_compatible`` case is
+        # filtered above). ``create_environment`` still falls back to the
+        # installer's own ``User.default_model_override_*`` when the revision
+        # leaves them NULL — or when the filter suppressed them.
         env_data = AgentEnvironmentCreate(
             env_name=settings.DEFAULT_AGENT_ENV_NAME,
             env_version=settings.DEFAULT_AGENT_ENV_VERSION,
@@ -318,6 +436,8 @@ class InstallService:
             config={},
             agent_sdk_conversation=revision.agent_sdk_conversation,
             agent_sdk_building=revision.agent_sdk_building,
+            model_override_conversation=model_override_conversation,
+            model_override_building=model_override_building,
             use_default_ai_credentials=False,
             conversation_ai_credential_id=conversation_ai_credential_id,
             building_ai_credential_id=building_ai_credential_id,

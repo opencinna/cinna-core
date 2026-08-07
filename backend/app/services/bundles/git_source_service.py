@@ -45,7 +45,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -109,6 +109,135 @@ _PROMPT_FIELDS: tuple[tuple[str, str], ...] = (
     ("refiner_prompt", "Refiner prompt"),
     ("router_trigger_prompt", "Router trigger prompt"),
 )
+
+
+# ── cinna.agent.json settings fields (everything in the manifest but the
+#    prompts and the captured ``workspace/`` tree) ────────────────────────
+#
+# The workspace digest covers ``workspace/`` and ``_PROMPT_FIELDS`` covers the
+# manifest's ``prompts`` block — but the rest of ``cinna.agent.json`` (the agent's
+# definitional settings) was invisible to the change check, so editing e.g. the
+# example prompts or adding a schedule reported "no local changes" even though
+# the next commit would rewrite the manifest. These registries close that gap.
+#
+# Every attribute name below is deliberately identical on the live row and on
+# ``AgentBundleRevision``, so one ``getattr`` pair covers both sides.
+
+# ``manifest["metadata"]`` — agent-row definitional fields (live: ``Agent``).
+_METADATA_FIELDS: tuple[tuple[str, str], ...] = (
+    ("description", "Description"),
+    ("example_prompts", "Example prompts"),
+    ("status_refresh_command", "Status refresh command"),
+    ("agent_api_enabled", "Agent REST API enabled"),
+    ("agent_api_identity_enabled", "Agent REST API caller identity"),
+    ("a2a_config", "A2A configuration"),
+    ("agent_sdk_config", "SDK tool configuration"),
+    ("webapp_enabled", "Webapp enabled"),
+)
+
+# ``manifest["sdk"]`` — per-mode engine + model overrides (live: the active
+# ``AgentEnvironment``). Skipped entirely when the install has no env row.
+_SDK_FIELDS: tuple[tuple[str, str], ...] = (
+    ("agent_sdk_building", "SDK engine (building mode)"),
+    ("agent_sdk_conversation", "SDK engine (conversation mode)"),
+    ("model_override_building", "Model override (building mode)"),
+    ("model_override_conversation", "Model override (conversation mode)"),
+)
+
+# Top-level manifest spec lists. The live side is re-collected with the SAME
+# helpers ``_capture_and_push`` uses to build the manifest, so the diff can
+# never disagree with what a commit would actually write.
+#
+# ``required_credential_specs`` is deliberately NOT here — do not re-add it.
+# Its live collector (``PublishService._collect_credential_specs``) reads the
+# install-local ``Credential`` rows, and on any install that did not author the
+# baseline (a ``checkout``, or a ``pull`` from a repo another install pushed)
+# those rows are placeholders: ``name="<spec> (placeholder)"``,
+# ``notes="Placeholder for required bundle credential."``, ``allow_sharing=False``
+# and a locally re-resolved ``provided_by="user"``. They can never reproduce the
+# publisher's spec values, so the comparison would report drift permanently with
+# no user edit behind it — not a trustworthy signal. Credential-spec staleness
+# already has a purpose-built detector: ``PublishService.compute_credential_spec_drift``
+# behind ``GET /bundle-credential-drift``, surfaced as the republish nudge on the
+# Bundle tab.
+_SPEC_FIELDS: tuple[tuple[str, str, Callable[[Session, "Agent"], list]], ...] = (
+    ("schedules", "Schedules", PublishService._collect_schedule_specs),
+    ("plugin_specs", "Plugins", PublishService._collect_plugin_specs),
+)
+
+# Section keys of :meth:`GitSourceService._settings_changes`.
+_SETTING_SECTIONS: tuple[str, ...] = ("metadata", "sdk", "specs")
+
+# Sections a *pull* would overwrite on the install — the only ones the pull
+# dirty guard may block on (see :meth:`GitSourceService._assert_not_dirty`).
+_PULL_OVERWRITTEN_SECTIONS: tuple[str, ...] = ("metadata",)
+
+# Manifest lists whose element ORDER carries no meaning: they are snapshots of
+# unordered DB row sets, so a re-query can legitimately return them in a
+# different order. Compared as multisets to avoid a false "modified".
+_UNORDERED_LIST_FIELDS: frozenset[str] = frozenset({"schedules", "plugin_specs"})
+
+# Dicts whose list values are semantically SETS. ``agent_sdk_config`` holds
+# ``sdk_tools`` / ``allowed_tools``, both written via ``list(set(...))`` by the
+# tool-discovery path — their order is genuinely non-deterministic.
+_SET_LIKE_DICT_FIELDS: frozenset[str] = frozenset({"agent_sdk_config"})
+
+
+def _canonical_json_value(value: object) -> object:
+    """Normalize a JSON-ish value so equivalent "empty" shapes compare equal.
+
+    ``None`` / ``""`` / ``[]`` / ``{}`` all collapse to ``None`` (they all mean
+    "unset"), and dict entries whose value is empty are dropped — so a manifest
+    that omits a key and a live row that holds an empty default do not read as a
+    change. Recurses into containers; scalars pass through untouched (``False``
+    and ``0`` are values, not emptiness).
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            item = _canonical_json_value(item)
+            if item is not None:
+                normalized[str(key)] = item
+        return normalized or None
+    if isinstance(value, (list, tuple)):
+        items = [_canonical_json_value(item) for item in value]
+        return items or None
+    return value
+
+
+def _sorted_json(items: list) -> list:
+    """Order a list deterministically by its canonical JSON encoding."""
+    return sorted(
+        items, key=lambda item: json.dumps(item, sort_keys=True, default=str)
+    )
+
+
+def _normalize_setting_value(field: str, value: object) -> object:
+    """Canonicalize one settings field for comparison (see the registries)."""
+    canonical = _canonical_json_value(value)
+    if field in _UNORDERED_LIST_FIELDS and isinstance(canonical, list):
+        return _sorted_json(canonical)
+    if field in _SET_LIKE_DICT_FIELDS and isinstance(canonical, dict):
+        return {
+            key: _sorted_json(item) if isinstance(item, list) else item
+            for key, item in canonical.items()
+        }
+    return canonical
+
+
+def _classify_change(live: object, baseline: object) -> str | None:
+    """``added`` / ``modified`` / ``deleted``, or ``None`` when unchanged."""
+    if live == baseline:
+        return None
+    if baseline is None:
+        return "added"
+    if live is None:
+        return "deleted"
+    return "modified"
 
 
 # ── Typed errors ───────────────────────────────────────────────────────
@@ -834,25 +963,43 @@ class GitSourceService:
     def compute_dirty(
         session: Session, agent_id: uuid.UUID, owner: User
     ) -> dict:
-        """Compare the live workspace + prompts against the last synced revision.
+        """Compare the live workspace + manifest against the last synced revision.
 
         Read-only — NEVER pushes. Returns ``{dirty, prompts_dirty,
-        workspace_dirty, has_env, last_synced_commit}``. Best-effort: with no env
-        or no synced revision the relevant flags stay ``False``. Owner-resolved
-        (404 for a missing source / non-owner).
+        settings_dirty, workspace_dirty, has_env, last_synced_commit}`` — the
+        three axes of a git tree: the manifest's ``prompts`` block, the rest of
+        ``cinna.agent.json`` (agent settings — see :meth:`_settings_changes`), and
+        the captured ``workspace/`` files. Best-effort: with no env or no synced
+        revision the relevant flags stay ``False``. Owner-resolved (404 for a
+        missing source / non-owner).
 
-        Pool-safety: all DB work (owner-resolve, prompt diff, resolving the synced
-        revision's snapshot path + the env workspace path) happens first, then the
-        connection is released (``session.commit()``) BEFORE the heavy workspace
-        tree copy + hash — so the slow filesystem work never holds a pooled
-        connection.
+        Pool-safety: all DB work (owner-resolve, prompt + settings diff, resolving
+        the synced revision's snapshot path + the env workspace path) happens
+        first, then the connection is released (``session.commit()``) BEFORE the
+        heavy workspace tree copy + hash — so the slow filesystem work never holds
+        a pooled connection.
         """
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
         install = session.get(Agent, agent_id)
         if install is None:
             raise GitSourceNotFoundError("Agent not found")
 
-        prompts_dirty = GitSourceService._prompts_dirty(session, source, install)
+        env = (
+            session.get(AgentEnvironment, install.active_environment_id)
+            if install.active_environment_id else None
+        )
+        # One baseline resolve for all three axes (prompts / settings /
+        # workspace) — it is a full-row SELECT carrying the manifest blob, and
+        # this endpoint is polled.
+        synced_rev = GitSourceService._resolve_synced_revision(
+            session, source, install
+        )
+        prompts_dirty = GitSourceService._prompts_changed(install, synced_rev)
+        settings_dirty = bool(
+            GitSourceService._settings_changes(
+                session, install, synced_rev, env, stop_early=True
+            )
+        )
         last_synced_commit = source.last_synced_commit
 
         # Capture the on-disk paths the workspace diff needs while still on the DB
@@ -861,18 +1008,11 @@ class GitSourceService:
         env_workspace_root: Path | None = None
         synced_workspace: Path | None = None
         rematerialize_ctx: dict | None = None
-        env = (
-            session.get(AgentEnvironment, install.active_environment_id)
-            if install.active_environment_id else None
-        )
         if env is not None:
             env_workspace_root = Path(settings.ENV_INSTANCES_DIR) / str(env.id)
             workspace_dir = env_workspace_root / WORKSPACE_ROOT_REL
             if workspace_dir.exists() and workspace_dir.is_dir():
                 has_env = True
-                synced_rev = GitSourceService._resolve_synced_revision(
-                    session, source, install
-                )
                 if synced_rev is not None and synced_rev.snapshot_path:
                     candidate = Path(synced_rev.snapshot_path) / "workspace"
                     if candidate.exists():
@@ -929,8 +1069,9 @@ class GitSourceService:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
         return {
-            "dirty": prompts_dirty or workspace_dirty,
+            "dirty": prompts_dirty or settings_dirty or workspace_dirty,
             "prompts_dirty": prompts_dirty,
+            "settings_dirty": settings_dirty,
             "workspace_dirty": workspace_dirty,
             "has_env": has_env,
             "last_synced_commit": last_synced_commit,
@@ -940,12 +1081,13 @@ class GitSourceService:
     def compute_status(
         session: Session, agent_id: uuid.UUID, owner: User
     ) -> dict:
-        """File/prompt-level preview of what a commit would capture.
+        """File/prompt/settings-level preview of what a commit would capture.
 
         The detailed sibling of :meth:`compute_dirty`: instead of booleans it
-        returns the actual changes — a per-prompt list and a per-file list of
-        ``{path, change_type}`` (``added`` / ``modified`` / ``deleted``) — so the
-        UI can render a ``git status`` style preview before the user commits.
+        returns the actual changes — a per-prompt list, a per-setting list (the
+        rest of ``cinna.agent.json``) and a per-file list of ``{path,
+        change_type}`` (``added`` / ``modified`` / ``deleted``) — so the UI can
+        render a ``git status`` style preview before the user commits.
 
         The workspace side compares the SAME post-denylist capture a push would
         produce (via :meth:`PublishService._snapshot_workspace_tree`) against the
@@ -968,6 +1110,10 @@ class GitSourceService:
             session, source, install
         )
         last_synced_commit = source.last_synced_commit
+        env = (
+            session.get(AgentEnvironment, install.active_environment_id)
+            if install.active_environment_id else None
+        )
 
         # ── Prompt changes (DB diff) ─────────────────────────────────
         prompt_changes: list[dict] = []
@@ -985,16 +1131,17 @@ class GitSourceService:
                     change_type = "modified"
                 prompt_changes.append({"field": label, "change_type": change_type})
 
+        # ── Settings changes (rest of cinna.agent.json) ──────────────
+        setting_changes = GitSourceService._settings_changes(
+            session, install, synced_rev, env
+        )
+
         # Capture the on-disk paths the workspace diff needs while still on the DB
         # connection; the heavy snapshot/hash then runs after it is released.
         has_env = False
         env_workspace_root: Path | None = None
         synced_workspace: Path | None = None
         rematerialize_ctx: dict | None = None
-        env = (
-            session.get(AgentEnvironment, install.active_environment_id)
-            if install.active_environment_id else None
-        )
         if env is not None:
             env_workspace_root = Path(settings.ENV_INSTANCES_DIR) / str(env.id)
             workspace_dir = env_workspace_root / WORKSPACE_ROOT_REL
@@ -1066,10 +1213,11 @@ class GitSourceService:
                 )
 
         return {
-            "dirty": bool(prompt_changes or file_changes),
+            "dirty": bool(prompt_changes or setting_changes or file_changes),
             "has_env": has_env,
             "last_synced_commit": last_synced_commit,
             "prompt_changes": prompt_changes,
+            "setting_changes": setting_changes,
             "file_changes": file_changes,
         }
 
@@ -1445,31 +1593,30 @@ class GitSourceService:
             )
 
     @staticmethod
-    def _mark_source_error(
-        session: Session, source_id: uuid.UUID, exc: Exception
-    ) -> None:
-        """Stamp ``status=ERROR`` + ``last_error`` on a git source (N2).
+    def _clear_poisoned_transaction(session: Session, *, context: str) -> None:
+        """Best-effort rollback of a transaction poisoned by a swallowed DB error.
 
-        Called from the pull/push failure path so the UI can surface why the
-        last sync failed. Rolls back any poisoned transaction first, re-fetches
-        the row, and swallows its own errors so it never masks (or replaces) the
-        original exception the caller is about to re-raise.
+        Once SQLAlchemy raises inside a transaction, every later statement on
+        that session — including the ``session.commit()`` the pool-safe read
+        paths use to release their connection — fails with
+        ``PendingRollbackError``. Any handler that swallows a DB error must
+        therefore clear the transaction, or it merely relocates the failure.
 
         Implementation note: SQLAlchemy 2.0's ``session.rollback()`` always
         rolls back to the root transaction (``_to_root=True``), which in the
         test framework (savepoint-based isolation) destroys all previously
-        committed test data.  We use ``get_nested_transaction().rollback()``
+        committed test data. We use ``get_nested_transaction().rollback()``
         when inside a savepoint so only the current (likely empty) savepoint
         is rolled back — this issues ``ROLLBACK TO SAVEPOINT`` rather than a
         full ``ROLLBACK``, preserving the outer transaction's committed rows.
         In production there are no active nested transactions so the fallback
         ``session.rollback()`` is used unchanged.
+
+        NEVER throws: a stale/inactive savepoint object (already released by a
+        prior commit) would otherwise raise out of a handler whose whole job is
+        to not raise. The common genuine-failure case (a non-DB clone/egress
+        failure) leaves the session clean, so this is a no-op.
         """
-        # Step 1: best-effort rollback of any poisoned transaction. This must
-        # NEVER throw out of its own block — a stale/inactive savepoint object
-        # (already released by a prior commit) would otherwise raise and skip
-        # the error stamp below. The common genuine-failure case (a non-DB
-        # clone/egress failure) leaves the session clean, so this is a no-op.
         try:
             nested = session.get_nested_transaction()
             if nested is not None and nested.is_active:
@@ -1479,11 +1626,25 @@ class GitSourceService:
                 # rollback can clear a poisoned transaction. Guarded so a
                 # stale/inactive state is a harmless no-op.
                 session.rollback()
-        except Exception as rb_exc:  # noqa: BLE001 — rollback must never block the stamp
-            logger.debug(
-                "git sync: pre-stamp rollback skipped for source %s: %s",
-                source_id, rb_exc,
-            )
+        except Exception as rb_exc:  # noqa: BLE001 — rollback must never propagate
+            logger.debug("git sync: rollback skipped for %s: %s", context, rb_exc)
+
+    @staticmethod
+    def _mark_source_error(
+        session: Session, source_id: uuid.UUID, exc: Exception
+    ) -> None:
+        """Stamp ``status=ERROR`` + ``last_error`` on a git source (N2).
+
+        Called from the pull/push failure path so the UI can surface why the
+        last sync failed. Rolls back any poisoned transaction first, re-fetches
+        the row, and swallows its own errors so it never masks (or replaces) the
+        original exception the caller is about to re-raise.
+        """
+        # Step 1: best-effort rollback of any poisoned transaction, or the error
+        # stamp below would itself fail with PendingRollbackError.
+        GitSourceService._clear_poisoned_transaction(
+            session, context=f"error stamp on source {source_id}"
+        )
 
         # Step 2: always attempt the stamp. Swallows + logs its own errors so it
         # never masks (or replaces) the original exception the caller re-raises.
@@ -1784,12 +1945,17 @@ class GitSourceService:
         the most recent sync (a checkout-then-push install's
         ``installed_revision_id`` would otherwise point at the stale checkout).
         Falls back to ``installed_revision_id``; ``None`` when no baseline exists.
+
+        ``.limit(1)`` matters: ``.first()`` alone only truncates client-side, so
+        without it every revision row of the bundle (each carrying a full
+        ``manifest`` JSON blob) is materialized on a polled read path.
         """
         if source.bundle_uuid is not None:
             rev = session.exec(
                 select(AgentBundleRevision)
                 .where(AgentBundleRevision.bundle_id == source.bundle_uuid)
                 .order_by(AgentBundleRevision.revision_number.desc())
+                .limit(1)
             ).first()
             if rev is not None:
                 return rev
@@ -1915,24 +2081,16 @@ class GitSourceService:
         return workspace
 
     @staticmethod
-    def _prompts_dirty(
-        session: Session, source: AgentGitSource, install: Agent
-    ) -> bool:
-        """Whether the install's DB prompts diverge from the last synced revision.
+    def _prompts_changed(install: Agent, rev: AgentBundleRevision | None) -> bool:
+        """Whether the install's DB prompts diverge from a resolved baseline.
 
-        Compares the four prompt fields against the SAME baseline the workspace
-        digest uses — :meth:`_resolve_synced_revision` (the latest revision on the
-        source's bundle, which connect / push / pull / checkout all append to).
-        Using ``installed_revision_id`` here instead would disagree with the
-        workspace check: it is never advanced by connect or push, so a connected
-        agent (``installed_revision_id is None``) would never report a prompt edit
-        and a checkout-then-push agent would report a false positive after a
-        push. SDK lives on the env and is not compared (env reconfigure is out of
-        scope). Returns ``False`` when there is no synced revision baseline.
-        Single source of truth shared by the pull guard (:meth:`_assert_not_dirty`)
-        and the dirty endpoint (:meth:`compute_dirty`) so they cannot disagree.
+        Pure diff against an ALREADY-resolved revision so the callers that also
+        need the baseline for the workspace / settings diff can resolve it once
+        per request instead of once per check (each resolve is a full-row SELECT
+        pulling the revision's ``manifest`` blob). SDK lives on the env and is not
+        compared here (see :meth:`_settings_changes`). ``False`` when there is no
+        synced revision baseline.
         """
-        rev = GitSourceService._resolve_synced_revision(session, source, install)
         if rev is None:
             return False
         for field, _label in _PROMPT_FIELDS:
@@ -1941,19 +2099,219 @@ class GitSourceService:
         return False
 
     @staticmethod
+    def _prompts_dirty(
+        session: Session, source: AgentGitSource, install: Agent
+    ) -> bool:
+        """Resolve the sync baseline, then run :meth:`_prompts_changed` on it.
+
+        Compares the four prompt fields against the SAME baseline the workspace
+        digest uses — :meth:`_resolve_synced_revision` (the latest revision on the
+        source's bundle, which connect / push / pull / checkout all append to).
+        Using ``installed_revision_id`` here instead would disagree with the
+        workspace check: it is never advanced by connect or push, so a connected
+        agent (``installed_revision_id is None``) would never report a prompt edit
+        and a checkout-then-push agent would report a false positive after a
+        push. Single source of truth shared by the pull guard
+        (:meth:`_assert_not_dirty`) and the dirty endpoint (:meth:`compute_dirty`)
+        so they cannot disagree.
+        """
+        return GitSourceService._prompts_changed(
+            install,
+            GitSourceService._resolve_synced_revision(session, source, install),
+        )
+
+    @staticmethod
+    def _settings_changes(
+        session: Session,
+        install: Agent,
+        rev: AgentBundleRevision | None,
+        env: AgentEnvironment | None = None,
+        *,
+        sections: tuple[str, ...] = _SETTING_SECTIONS,
+        skip_null_baseline_metadata: bool = False,
+        stop_early: bool = False,
+    ) -> list[dict]:
+        """Per-field diff of the non-prompt ``cinna.agent.json`` fields.
+
+        The manifest half of the change check that the workspace digest and
+        :meth:`_prompts_dirty` do not cover: the ``metadata`` block (description,
+        example prompts, status refresh command, feature flags, A2A / SDK-tool
+        config), the ``sdk`` block (per-mode engine + model overrides, read off
+        the active env) and the ``schedules`` / ``plugin_specs`` lists. Without
+        this, editing an agent setting that lives only in the manifest reported
+        "no local changes" even though the next commit would rewrite
+        ``cinna.agent.json``.
+
+        ``required_credential_specs`` is intentionally out of scope — see the
+        note on :data:`_SPEC_FIELDS`.
+
+        Returns ``[{field, change_type}]`` (``added`` / ``modified`` /
+        ``deleted``) using the same shape as the prompt preview; empty when there
+        is no synced baseline (``rev is None``).
+
+        ``rev`` is the ALREADY-resolved sync baseline
+        (:meth:`_resolve_synced_revision`) so a caller that also needs it for the
+        workspace / prompt diff resolves it once per request.
+
+        **Absent sections are never compared.** A baseline manifest that predates
+        a block (or a whole key) yields no changes for it — the same
+        missing-key-tolerant rule :meth:`InstallService._apply_revision_metadata`
+        applies on the restore side, so an old snapshot can't fabricate drift.
+
+        Flags (all pull-guard / hot-path narrowing; the default is the full,
+        report-everything comparison the indicator endpoints use):
+
+        - ``sections`` narrows which blocks are compared; the pull guard passes
+          :data:`_PULL_OVERWRITTEN_SECTIONS` (see :meth:`_assert_not_dirty`).
+        - ``skip_null_baseline_metadata`` additionally skips any metadata field
+          whose RAW baseline column is ``None`` — mirroring
+          :meth:`InstallService._apply_revision_metadata`'s PER-FIELD
+          ``is not None`` guard. Pull-guard only.
+        - ``stop_early`` returns as soon as the first change is found. Only valid
+          for callers that reduce the result to a bool (:meth:`compute_dirty`);
+          the returned list is then partial by design.
+
+        Touches the DB (spec collectors), so callers on the pool-safe read paths
+        must call it BEFORE releasing their connection.
+        """
+        if rev is None:
+            return []
+        manifest = rev.manifest if isinstance(rev.manifest, dict) else {}
+        changes: list[dict] = []
+
+        def _record(field: str, label: str, live: object, baseline: object) -> None:
+            change_type = _classify_change(
+                _normalize_setting_value(field, live),
+                _normalize_setting_value(field, baseline),
+            )
+            if change_type is not None:
+                changes.append({"field": label, "change_type": change_type})
+
+        def _satisfied() -> bool:
+            """Whether a ``stop_early`` caller already has its answer."""
+            return stop_early and bool(changes)
+
+        if "metadata" in sections and isinstance(manifest.get("metadata"), dict):
+            for field, label in _METADATA_FIELDS:
+                baseline = getattr(rev, field, None)
+                # Per-field missing-value tolerance for the pull guard.
+                # ``_apply_revision_metadata`` only assigns when the revision
+                # column ``is not None``, so a NULL baseline means a pull leaves
+                # the local value ALONE — blocking on it would wedge the user
+                # (pull refuses, and push demands a pull first) while protecting
+                # nothing. Matched on the RAW column, deliberately NOT on
+                # ``change_type == "added"``: a baseline of ``[]`` / ``""``
+                # normalizes to ``None`` (so it classifies as "added") yet passes
+                # the ``is not None`` check, i.e. the pull DOES overwrite it and
+                # the guard must still block.
+                if skip_null_baseline_metadata and baseline is None:
+                    continue
+                _record(
+                    field, label, getattr(install, field, None), baseline
+                )
+            if _satisfied():
+                return changes
+
+        # The SDK block is env-derived; with no env there is nothing live to
+        # compare against (a commit isn't possible in that state either).
+        if "sdk" in sections and env is not None and isinstance(
+            manifest.get("sdk"), dict
+        ):
+            for field, label in _SDK_FIELDS:
+                _record(
+                    field, label,
+                    getattr(env, field, None),
+                    getattr(rev, field, None),
+                )
+            if _satisfied():
+                return changes
+
+        if "specs" in sections:
+            for field, label, collect in _SPEC_FIELDS:
+                if field not in manifest:
+                    continue
+                # Each collector is a real query burst; skip the rest once a
+                # bool-only caller already knows the answer.
+                if _satisfied():
+                    return changes
+                try:
+                    live_specs = collect(session, install)
+                except Exception as exc:  # noqa: BLE001 — see below
+                    # Conservative-on-indeterminate, the same rule
+                    # ``subdir_changed_between`` applies: a collector that cannot
+                    # snapshot the live state (e.g. an undecryptable credential)
+                    # must not silently report "clean" — that would grey out the
+                    # commit button on a genuinely drifted agent — nor 500 a
+                    # polled read. Report it as changed and let the push surface
+                    # the real error.
+                    logger.warning(
+                        "git dirty: could not collect %s for agent %s (%s) — "
+                        "reporting it as changed",
+                        field, install.id, exc,
+                    )
+                    # A DB-level failure leaves the transaction poisoned, and
+                    # swallowing the error here would only defer the blow-up to
+                    # the caller's ``session.commit()`` (PendingRollbackError →
+                    # 500 on the very endpoint that must degrade, not fail).
+                    # Clear it with the same nested-transaction-aware discipline
+                    # ``_mark_source_error`` uses so savepoint-based test
+                    # isolation survives. ORM instances are merely expired
+                    # afterwards, so the remaining ``getattr``s re-load.
+                    GitSourceService._clear_poisoned_transaction(
+                        session,
+                        context=f"settings diff ({field}) for agent {install.id}",
+                    )
+                    changes.append({"field": label, "change_type": "modified"})
+                    continue
+                _record(field, label, live_specs, getattr(rev, field, None))
+
+        return changes
+
+    @staticmethod
     def _assert_not_dirty(
         session: Session, source: AgentGitSource, install: Agent
     ) -> None:
-        """Block pull when the install's prompts diverge from the last revision.
+        """Block pull when local state a pull would OVERWRITE has diverged.
 
-        Thin raising wrapper over :meth:`_prompts_dirty`. Raises
-        :class:`GitSourceConflictError` (→ 409) when the prompts are dirty.
+        Raises :class:`GitSourceConflictError` (→ 409) when the install's prompts
+        or its manifest ``metadata`` fields differ from the last synced revision.
+
+        Deliberately narrower than the dirty indicator: the guard exists to stop
+        a pull from silently discarding local edits, so it covers exactly what
+        :meth:`_apply_revision_to_install` rewrites — the prompt columns and the
+        definitional metadata (via
+        :meth:`InstallService._apply_revision_metadata`). Schedules, plugin
+        links, credential links and env SDK selections survive a pull untouched,
+        so blocking on them would only deadlock the user (pull refuses, and a
+        pull is exactly what an advanced remote demands first) while protecting
+        nothing. They still light up the dirty / commit-preview endpoints.
+
+        The same narrowing applies WITHIN the metadata block, per field:
+        :meth:`InstallService._apply_revision_metadata` skips any field whose
+        revision column is NULL, so those are not "overwritten" either
+        (``skip_null_baseline_metadata``). Without it a publisher who never set
+        e.g. ``status_refresh_command`` would wedge every installer who does set
+        one — a permanent 409 on both pull and push.
         """
         if GitSourceService._prompts_dirty(session, source, install):
             raise GitSourceConflictError(
                 "Local changes detected (prompts differ from the last "
                 "synced revision). Push or discard your local changes "
                 "before pulling."
+            )
+        settings_changes = GitSourceService._settings_changes(
+            session,
+            install,
+            GitSourceService._resolve_synced_revision(session, source, install),
+            sections=_PULL_OVERWRITTEN_SECTIONS,
+            skip_null_baseline_metadata=True,
+        )
+        if settings_changes:
+            fields = ", ".join(change["field"] for change in settings_changes)
+            raise GitSourceConflictError(
+                f"Local changes detected (agent settings differ from the last "
+                f"synced revision: {fields}). Push or discard your local "
+                f"changes before pulling."
             )
 
     @staticmethod

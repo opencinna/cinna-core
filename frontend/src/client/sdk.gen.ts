@@ -1496,7 +1496,7 @@ export class AgentGitService {
     
     /**
      * Get Git Dirty
-     * Whether the live workspace / prompts diverge from the last synced revision.
+     * Whether the live workspace / prompts / settings diverge from the baseline.
      *
      * Read-only (never pushes); best-effort on the env side. Owner-resolved
      * (404 for a missing source / non-owner). Gates the "Commit Agent" action in
@@ -1522,10 +1522,11 @@ export class AgentGitService {
     
     /**
      * Get Git Status
-     * File/prompt-level preview of what the next commit would capture.
+     * File/prompt/settings-level preview of what the next commit would capture.
      *
-     * The detailed sibling of ``GET /git/dirty`` — returns the actual per-prompt
-     * and per-file changes (``added`` / ``modified`` / ``deleted``) so the commit
+     * The detailed sibling of ``GET /git/dirty`` — returns the actual per-prompt,
+     * per-setting (``cinna.agent.json`` metadata / SDK / schedules / plugins) and
+     * per-file changes (``added`` / ``modified`` / ``deleted``) so the commit
      * dialog can render a ``git status`` style preview. Mirrors the post-denylist
      * capture a push produces, so the preview matches the commit exactly.
      * Read-only; owner-resolved (404 for a missing source / non-owner).
@@ -6474,8 +6475,12 @@ export class CredentialsService {
      * Reveal the value of an ``agent_api`` **external key**.
      *
      * The only path that returns a key's value after mint, and the only one that
-     * is audited (`AGENT_API_EXTERNAL_KEY_REVEALED`, one event per call). Owner-
-     * gated: 404 when the credential does not exist or is not the caller's,
+     * is audited (`AGENT_API_EXTERNAL_KEY_REVEALED`, one event per call).
+     *
+     * **Owner-gated with no superuser bypass** — reveal is disclosure, not
+     * containment; see `AgentApiKeyService.reveal_external_key` for why the
+     * asymmetry with `revoke_key` is deliberate. 404 when the credential does not
+     * exist, is not the caller's, or the caller is an admin who is not the owner;
      * 400 when it exists but is not an external key.
      * @param data The data for the request.
      * @param data.id

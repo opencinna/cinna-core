@@ -3246,6 +3246,7 @@ export type GitCommitList = {
 export type GitDirtyStatus = {
     dirty: boolean;
     prompts_dirty: boolean;
+    settings_dirty?: boolean;
     workspace_dirty: boolean;
     has_env: boolean;
     last_synced_commit?: (string | null);
@@ -3277,6 +3278,14 @@ export type GitPushRequest = {
 };
 
 /**
+ * One changed agent-settings field (``cinna.agent.json``) in the preview.
+ */
+export type GitSettingChange = {
+    field: string;
+    change_type: string;
+};
+
+/**
  * Response of ``GET /agents/{agent_id}/git/status`` — commit preview.
  */
 export type GitStatus = {
@@ -3284,6 +3293,7 @@ export type GitStatus = {
     has_env: boolean;
     last_synced_commit?: (string | null);
     prompt_changes?: Array<GitPromptChange>;
+    setting_changes?: Array<GitSettingChange>;
     file_changes?: Array<GitFileChange>;
 };
 

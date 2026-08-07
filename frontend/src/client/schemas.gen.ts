@@ -14193,6 +14193,11 @@ export const GitDirtyStatusSchema = {
             type: 'boolean',
             title: 'Prompts Dirty'
         },
+        settings_dirty: {
+            type: 'boolean',
+            title: 'Settings Dirty',
+            default: false
+        },
         workspace_dirty: {
             type: 'boolean',
             title: 'Workspace Dirty'
@@ -14282,6 +14287,23 @@ export const GitPushRequestSchema = {
     description: 'Body of ``POST /agents/{agent_id}/git/push``.'
 } as const;
 
+export const GitSettingChangeSchema = {
+    properties: {
+        field: {
+            type: 'string',
+            title: 'Field'
+        },
+        change_type: {
+            type: 'string',
+            title: 'Change Type'
+        }
+    },
+    type: 'object',
+    required: ['field', 'change_type'],
+    title: 'GitSettingChange',
+    description: 'One changed agent-settings field (``cinna.agent.json``) in the preview.'
+} as const;
+
 export const GitStatusSchema = {
     properties: {
         dirty: {
@@ -14309,6 +14331,14 @@ export const GitStatusSchema = {
             },
             type: 'array',
             title: 'Prompt Changes',
+            default: []
+        },
+        setting_changes: {
+            items: {
+                '$ref': '#/components/schemas/GitSettingChange'
+            },
+            type: 'array',
+            title: 'Setting Changes',
             default: []
         },
         file_changes: {

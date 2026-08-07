@@ -148,6 +148,10 @@ class GitDirtyStatus(SQLModel):
 
     dirty: bool
     prompts_dirty: bool
+    # Any non-prompt ``cinna.agent.json`` field (agent settings: description,
+    # example prompts, feature flags, SDK selections, schedules, plugin specs)
+    # diverging from the last synced revision.
+    settings_dirty: bool = False
     workspace_dirty: bool
     has_env: bool
     last_synced_commit: str | None = None
@@ -155,6 +159,13 @@ class GitDirtyStatus(SQLModel):
 
 class GitPromptChange(SQLModel):
     """One changed prompt field in the commit preview."""
+
+    field: str
+    change_type: str  # "added" | "modified" | "deleted"
+
+
+class GitSettingChange(SQLModel):
+    """One changed agent-settings field (``cinna.agent.json``) in the preview."""
 
     field: str
     change_type: str  # "added" | "modified" | "deleted"
@@ -174,6 +185,7 @@ class GitStatus(SQLModel):
     has_env: bool
     last_synced_commit: str | None = None
     prompt_changes: list[GitPromptChange] = []
+    setting_changes: list[GitSettingChange] = []
     file_changes: list[GitFileChange] = []
 
 
@@ -432,7 +444,7 @@ def get_git_dirty(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> GitDirtyStatus:
-    """Whether the live workspace / prompts diverge from the last synced revision.
+    """Whether the live workspace / prompts / settings diverge from the baseline.
 
     Read-only (never pushes); best-effort on the env side. Owner-resolved
     (404 for a missing source / non-owner). Gates the "Commit Agent" action in
@@ -456,10 +468,11 @@ def get_git_status(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> GitStatus:
-    """File/prompt-level preview of what the next commit would capture.
+    """File/prompt/settings-level preview of what the next commit would capture.
 
-    The detailed sibling of ``GET /git/dirty`` — returns the actual per-prompt
-    and per-file changes (``added`` / ``modified`` / ``deleted``) so the commit
+    The detailed sibling of ``GET /git/dirty`` — returns the actual per-prompt,
+    per-setting (``cinna.agent.json`` metadata / SDK / schedules / plugins) and
+    per-file changes (``added`` / ``modified`` / ``deleted``) so the commit
     dialog can render a ``git status`` style preview. Mirrors the post-denylist
     capture a push produces, so the preview matches the commit exactly.
     Read-only; owner-resolved (404 for a missing source / non-owner).

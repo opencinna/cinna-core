@@ -6,7 +6,7 @@
 - `backend/app/models/bundles/agent_git_source.py` — `AgentGitSourceBase`, `AgentGitSource` (table), `AgentGitSourcePublic`, `AgentGitSourceCreate`, `AgentGitSourceUpdate`, `GitSyncDirection`, `GitSourceStatus`
 
 ### Services
-- `backend/app/services/bundles/git_source_service.py` — `GitSourceService` (checkout / connect / disconnect / pull / push / check-updates / get-source / compute_dirty / compute_status / list_commits / `_connect_adopt_existing` / `_file_hashes`); module constant `_PROMPT_FIELDS`; typed errors `GitSourceError`, `GitSourceNotFoundError`, `GitSourceValidationError`, `GitSourceConflictError`, `GitSourceExistingAgentError` (new, subclass of conflict)
+- `backend/app/services/bundles/git_source_service.py` — `GitSourceService` (checkout / connect / disconnect / pull / push / check-updates / get-source / compute_dirty / compute_status / list_commits / `_connect_adopt_existing` / `_file_hashes` / `_settings_changes`); module constants `_PROMPT_FIELDS`, `_METADATA_FIELDS`, `_SDK_FIELDS`, `_SPEC_FIELDS`, `_SETTING_SECTIONS`, `_PULL_OVERWRITTEN_SECTIONS`; normalizers `_canonical_json_value` / `_sorted_json` / `_normalize_setting_value` / `_classify_change`; typed errors `GitSourceError`, `GitSourceNotFoundError`, `GitSourceValidationError`, `GitSourceConflictError`, `GitSourceExistingAgentError` (new, subclass of conflict)
 - `backend/app/services/bundles/revision_format.py` — `RevisionFormat` (de)serializer; `RevisionFormatError`; `generate_gitignore` (now also emits the recursive cache denylist); constants `BUNDLE_MANIFEST_FILENAME`, `GIT_MANIFEST_FILENAME`, `REVISION_SCHEMA_VERSION`, `SUPPORTED_SCHEMA_VERSIONS`
 - `backend/app/services/bundles/publish_service.py` — `PublishService._snapshot_workspace_tree`, `PublishService.hash_workspace_tree` (workspace-only stable digest for dirty check)
 - `backend/app/services/environments/workspace_classification.py` — denylist single source of truth: `NESTED_EXCLUDED_DIRS` / `NESTED_EXCLUDED_FILE_GLOBS` / `is_nested_excluded` (new — recursive cache exclusion), `safe_copytree` + `_copytree_ignore` (renamed from `_ignore_symlinks`; now drops symlinks AND nested cache artifacts), `is_bundle_owned_toplevel` (also rejects nested-excluded names)
@@ -21,7 +21,7 @@
 - `backend/app/api/routes/cli.py` — `GET /cli/git-coordinates` → `CliGitCoordinates`; auth via `CLIContextDep`
 
 ### Frontend
-- `frontend/src/components/Agents/GitVersioningCard.tsx` — the "GIT Versioning" card in the Integrations tab; manages disabled/connect-form/connected states; react-query hooks for source, dirty, status (commit preview), commits, push, pull, connect, disconnect. Takes a `gitVersioningEnabled` prop for the instant toggle state. Footer actions (Commit Agent + Refresh + icon Disconnect), Latest-commits (3) + View-history/clickable-SHA links, clickable repo name, icon-bearing code-chip coordinates (folder/branch) + sync-direction icon, green-check `connected` status icon, `CommitPreview` (git-status dialog), and the adopt-existing-folder confirm dialog. Helpers: `isExistingFolderError`, `CodeChip` (optional leading icon), `SyncDirectionIcon`, `CommitPreview`, `toGitSshUrl` (HTTP→SSH repo-URL normalizer)
+- `frontend/src/components/Agents/GitVersioningCard.tsx` — the "GIT Versioning" card in the Integrations tab; manages disabled/connect-form/connected states; react-query hooks for source, dirty, status (commit preview), commits, push, pull, connect, disconnect. Takes a `gitVersioningEnabled` prop for the instant toggle state. Footer actions (Commit Agent + Refresh + icon Disconnect), Latest-commits (3) + View-history/clickable-SHA links, clickable repo name, icon-bearing code-chip coordinates (folder/branch) + sync-direction icon, green-check `connected` status icon, `CommitPreview` (git-status dialog, three sections: Prompts / Agent settings / Workspace), and the adopt-existing-folder confirm dialog. Helpers: `isExistingFolderError`, `CodeChip` (optional leading icon), `SyncDirectionIcon`, `CommitPreview`, `toGitSshUrl` (HTTP→SSH repo-URL normalizer)
 - `frontend/src/components/Agents/DeployKeySelect.tsx` — deploy-key picker reusing `SshKeysService.listSshKeys`; generate/import open the shared `GenerateKeyModal` / `ImportKeyModal` dialogs (auto-selecting the new key via their `onGenerated`/`onImported` callbacks)
 - `frontend/src/components/UserSettings/GenerateKeyModal.tsx`, `ImportKeyModal.tsx` — the shared SSH-key dialogs; each accepts an optional `onGenerated`/`onImported` callback so callers (the deploy-key picker) can auto-select the created key
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` — mounts `<GitVersioningCard>` in the card grid (now positioned **before** the Webhooks / Local Dev / Email Integration cards); owner-gated; passes `gitVersioningEnabled={agent.git_versioning_enabled}`
@@ -144,6 +144,7 @@ Optional variants of Base fields. No `agent_id` or `owner_id` (not caller-settab
 **`GitDirtyStatus`**
 - `dirty: bool`
 - `prompts_dirty: bool`
+- `settings_dirty: bool = False` — any **non-prompt** `cinna.agent.json` field (metadata, SDK, schedules, plugins) diverging from the baseline
 - `workspace_dirty: bool`
 - `has_env: bool`
 - `last_synced_commit: str | None = None`
@@ -153,10 +154,15 @@ Optional variants of Base fields. No `agent_id` or `owner_id` (not caller-settab
 - `has_env: bool`
 - `last_synced_commit: str | None = None`
 - `prompt_changes: list[GitPromptChange] = []`
+- `setting_changes: list[GitSettingChange] = []`
 - `file_changes: list[GitFileChange] = []`
 
 **`GitPromptChange`** (new)
 - `field: str` (human label, e.g. "Workflow prompt")
+- `change_type: str` — `added` | `modified` | `deleted`
+
+**`GitSettingChange`** (new)
+- `field: str` (human label, e.g. "Example prompts", "Schedules")
 - `change_type: str` — `added` | `modified` | `deleted`
 
 **`GitFileChange`** (new)
@@ -263,11 +269,19 @@ Logic (cheap-first):
 
 **`compute_dirty(session, agent_id, owner) -> dict`** (new)
 
-Read-only comparison of live workspace + DB prompts against the last synced revision. Never pushes. Returns `{dirty, prompts_dirty, workspace_dirty, has_env, last_synced_commit}`. If no env exists: `has_env=False`, `workspace_dirty=False`. Workspace dirty: snapshots live env to temp via `PublishService._snapshot_workspace_tree`, runs `PublishService.hash_workspace_tree(temp/workspace)`, compares against `hash_workspace_tree(revision.snapshot_path/workspace)` resolved via `_resolve_synced_revision`. Prompts dirty: calls `_prompts_dirty(session, install)`. Temp dir removed in `finally`. Best-effort on both axes.
+Read-only comparison of the live install against the last synced revision across the **three axes of a git tree**. Never pushes. Returns `{dirty, prompts_dirty, settings_dirty, workspace_dirty, has_env, last_synced_commit}`; `dirty` is the OR of the three. If no env exists: `has_env=False`, `workspace_dirty=False`.
+
+Resolves the sync baseline once via `_resolve_synced_revision` and passes it to all three axis checks:
+
+- *Prompts* (`manifest["prompts"]`): `_prompts_changed(install, synced_rev)` — the pure, already-resolved-baseline variant (not `_prompts_dirty`, which would re-resolve).
+- *Settings* (the rest of `cinna.agent.json`): `bool(_settings_changes(session, install, synced_rev, env, stop_early=True))` — stops at the first detected change since only a boolean is needed here.
+- *Workspace* (`workspace/`): snapshots live env to temp via `PublishService._snapshot_workspace_tree`, runs `PublishService.hash_workspace_tree(temp/workspace)`, compares against `hash_workspace_tree(revision.snapshot_path/workspace)` resolved from the same `synced_rev`. Temp dir removed in `finally`.
+
+Best-effort on every axis.
 
 **`compute_status(session, agent_id, owner) -> dict`** (new)
 
-Detailed sibling of `compute_dirty` — the per-file/per-prompt commit preview. Returns `{dirty, has_env, last_synced_commit, prompt_changes, file_changes}` where each change is `{... , change_type}` (`added`/`modified`/`deleted`). Prompts: iterates `_PROMPT_FIELDS` comparing the install vs `_resolve_synced_revision`. Workspace: snapshots the live env via `PublishService._snapshot_workspace_tree` (same post-denylist capture a push produces, so the preview matches the commit — e.g. `__pycache__` never appears), hashes each file via `_file_hashes`, and set-diffs against the synced revision's `workspace/`. Read-only; best-effort (empty lists with no env / no baseline).
+Detailed sibling of `compute_dirty` — the per-file/per-prompt/per-setting commit preview. Returns `{dirty, has_env, last_synced_commit, prompt_changes, setting_changes, file_changes}` where each change is `{... , change_type}` (`added`/`modified`/`deleted`). Prompts: iterates `_PROMPT_FIELDS` comparing the install vs `_resolve_synced_revision`. Settings: delegates to `_settings_changes` (all sections). Workspace: snapshots the live env via `PublishService._snapshot_workspace_tree` (same post-denylist capture a push produces, so the preview matches the commit — e.g. `__pycache__` never appears), hashes each file via `_file_hashes`, and set-diffs against the synced revision's `workspace/`. Read-only; best-effort (empty lists with no env / no baseline).
 
 **`_file_hashes(workspace_root) -> dict[str, str]`** (new)
 
@@ -303,11 +317,56 @@ Extracted from the `_push_locked` capture body; also used by `connect`. Builds m
 
 Maps the four DB prompt field names to their UI labels: `("workflow_prompt", "Workflow prompt")`, `("entrypoint_prompt", "Entrypoint prompt")`, `("refiner_prompt", "Refiner prompt")`, `("router_trigger_prompt", "Router trigger prompt")`. Shared by `_prompts_dirty` (pull guard + dirty endpoint) and `compute_status` (commit preview) so neither can diverge.
 
-**`_prompts_dirty(session, source, install) -> bool`**
+**`_prompts_changed(install, rev) -> bool`** / **`_prompts_dirty(session, source, install) -> bool`**
 
-Compares the four prompt fields enumerated by `_PROMPT_FIELDS` (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) between the `Agent` row and the revision resolved by `_resolve_synced_revision(session, source, install)`. Returns `True` if any field differs, `False` when there is no synced revision baseline. Shared by `_assert_not_dirty` (pull guard) and `compute_dirty` (dirty endpoint) so they cannot disagree.
+`_prompts_changed` compares the four prompt fields enumerated by `_PROMPT_FIELDS` (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) between the `Agent` row and an **already-resolved** baseline revision. Returns `True` if any field differs, `False` when `rev is None`. `_prompts_dirty` is the resolving wrapper (`_resolve_synced_revision` → `_prompts_changed`) used by `_assert_not_dirty`. The split exists so `compute_dirty`, which also needs the baseline for the settings and workspace diffs, resolves it **once per request** instead of once per check — each resolve is a full-row `SELECT` carrying the revision's `manifest` blob, on a polled endpoint.
 
-**Known limitation — metadata-only edits do not light up dirty.** The 8 definitional metadata fields (`description`, `example_prompts`, `status_refresh_command`, etc.) are NOT compared here, and the workspace dirty check compares file content only. A git-versioned agent where the user edits only `description` or `example_prompts` (without changing any prompt file or workspace file) will show `dirty=false` and `prompts_dirty=false`. The values ARE captured correctly the next time the user pushes (via `build_manifest`), so the data is never lost — the indicator simply does not fire proactively for metadata-only changes. Future work could widen `_PROMPT_FIELDS` or add a dedicated metadata drift check.
+**`_METADATA_FIELDS` / `_SDK_FIELDS` / `_SPEC_FIELDS`** (module-level constants)
+
+The registries for the **non-prompt** half of `cinna.agent.json` — the settings drift check. Every attribute name is deliberately identical on the live row and on `AgentBundleRevision`, so one `getattr` pair covers both sides:
+
+| Registry | Manifest block | Live source | Entries |
+|---|---|---|---|
+| `_METADATA_FIELDS` | `metadata` | `Agent` row | `description`, `example_prompts`, `status_refresh_command`, `agent_api_enabled`, `agent_api_identity_enabled`, `a2a_config`, `agent_sdk_config`, `webapp_enabled` |
+| `_SDK_FIELDS` | `sdk` | active `AgentEnvironment` | `agent_sdk_building`, `agent_sdk_conversation`, `model_override_building`, `model_override_conversation` |
+| `_SPEC_FIELDS` | top-level lists | `PublishService._collect_schedule_specs` / `_collect_plugin_specs` | `schedules`, `plugin_specs` |
+
+`_SPEC_FIELDS` carries the collector callable itself, so the live side is re-collected with the **same helpers `_capture_and_push` uses to build the manifest** — the diff can never disagree with what a commit would write.
+
+`required_credential_specs` is deliberately **not** in `_SPEC_FIELDS` — do not re-add it. Its live collector (`PublishService._collect_credential_specs`) reads the install-local `Credential` rows, and on any install that did not author the baseline (a `checkout`, or a `pull` from a repo another install pushed) those rows are placeholders (`name="<spec> (placeholder)"`, locally re-resolved `provided_by="user"`) that can never reproduce the publisher's spec values — the comparison would report drift permanently with no user edit behind it, not a trustworthy signal. Credential-spec staleness already has a purpose-built detector: `PublishService.compute_credential_spec_drift` behind `GET /bundle-credential-drift`, surfaced as the republish nudge on the Bundle tab (see [Agent Bundles tech](../agent_bundles/agent_bundles_tech.md)). The manifest itself still carries `required_credential_specs` unchanged — only this diff stopped reading it.
+
+**That detector does not cover git-connected installs, so the gap left by dropping `required_credential_specs` from `_SPEC_FIELDS` has no other surface for them.** `PublishService.compute_credential_spec_drift` early-returns `BundleCredentialDrift(stale=False, drift=[])` in two cases (`publish_service.py:780-781`, `:787-788`): when `not install.is_publisher_install`, and when the bundle has no `latest_revision`. A `checkout` always creates a consumer install (`is_publisher_install=False` — `install_service.py:257`), so the detector is a permanent no-op for every checked-out agent. `bundle.latest_revision_id` is only ever written by `PublishService.push` (`publish_service.py:346`) — git `connect`/`push` deliberately never call it — so a `connect`-based install that is never separately published to the catalog is equally uncovered. Net effect: for both git install shapes that never publish to the catalog, a rename of a linked credential or an `allow_sharing` flip is invisible to both `settings_dirty` and `compute_credential_spec_drift`, even though the next push *will* rewrite `required_credential_specs` in `cinna.agent.json`. Accepted trade-off, not a bug — see the Conflict Model table in the business doc — the push still captures the change whenever the user commits for any other reason.
+
+Supporting constants: `_SETTING_SECTIONS` (`"metadata"`, `"sdk"`, `"specs"`), `_PULL_OVERWRITTEN_SECTIONS` (`("metadata",)` — see `_assert_not_dirty`), `_UNORDERED_LIST_FIELDS` (the two spec lists, compared as multisets), `_SET_LIKE_DICT_FIELDS` (`agent_sdk_config`, whose `sdk_tools` / `allowed_tools` are written via `list(set(...))` by tool discovery and therefore have non-deterministic order).
+
+**`_settings_changes(session, install, rev, env=None, *, sections=_SETTING_SECTIONS, skip_null_baseline_metadata=False, stop_early=False) -> list[dict]`**
+
+Per-field diff of the non-prompt `cinna.agent.json` fields against `rev` — the **already-resolved** baseline from `_resolve_synced_revision` (passed in, not re-resolved, so a caller resolves once). Returns `[{field, change_type}]` (the same shape as the prompt preview); `[]` when `rev is None`. Iterates the three registries above, normalizing both sides through `_normalize_setting_value` before `_classify_change`.
+
+**Absent manifest sections are never compared.** The baseline's raw `revision.manifest` is consulted: a missing `metadata` / `sdk` block, or a missing top-level spec key, skips that group entirely — the same missing-key-tolerant rule `InstallService._apply_revision_metadata` applies on the restore side, so a pre-metadata snapshot cannot fabricate drift. The `sdk` group is additionally skipped when the install has no env row.
+
+Flags (all narrow the default full comparison the indicator endpoints use):
+
+| Flag | Used by | Effect |
+|---|---|---|
+| `sections` | `_assert_not_dirty` | Restricts which registries are compared (`_PULL_OVERWRITTEN_SECTIONS`). |
+| `skip_null_baseline_metadata` | `_assert_not_dirty` | Skips a metadata field whose **raw** baseline column is `None`, mirroring `_apply_revision_metadata`'s per-field `is not None` guard. Matched on the raw column, **not** on `change_type == "added"`: a baseline of `[]` / `""` normalizes to `None` (so it classifies as `added`) yet still passes `is not None`, meaning the pull does overwrite it and the guard must still block. |
+| `stop_early` | `compute_dirty` | Returns as soon as the first change is found, skipping the remaining (query-heavy) spec collectors. The list is then partial by design — only valid for callers reducing it to a bool. |
+
+A collector that raises is reported as `modified` rather than propagating (conservative-on-indeterminate). Because a SQLAlchemy-level failure leaves the transaction poisoned — which would otherwise resurface as `PendingRollbackError` at the caller's `session.commit()` and 500 the polled endpoint — the handler first calls `_clear_poisoned_transaction`.
+
+Touches the DB (the three collectors), so the pool-safe read paths call it **before** releasing their connection.
+
+**`_clear_poisoned_transaction(session, *, context) -> None`**
+
+Shared, never-throwing rollback used by any handler that swallows a DB error (`_settings_changes`' collector guard, `_mark_source_error`). Nested-transaction-aware: `get_nested_transaction().rollback()` when inside a savepoint (`ROLLBACK TO SAVEPOINT`, preserving the outer transaction's committed rows under the test suite's savepoint isolation), plain `session.rollback()` in production where no savepoint is active.
+
+**Normalization helpers** (module-level)
+
+- `_canonical_json_value(value)` — collapses `None` / `""` / `[]` / `{}` to `None` (all mean "unset") and drops empty dict entries, recursing into containers. `False` / `0` are values, not emptiness. Stops an omitted manifest key from reading as a change against a live empty default.
+- `_sorted_json(items)` — deterministic list ordering by canonical JSON encoding.
+- `_normalize_setting_value(field, value)` — `_canonical_json_value`, then multiset ordering for `_UNORDERED_LIST_FIELDS` and per-key list ordering for `_SET_LIKE_DICT_FIELDS`.
+- `_classify_change(live, baseline)` — `added` / `modified` / `deleted`, or `None` when unchanged.
 
 **`_resolve_synced_revision(session, source, install) -> AgentBundleRevision | None`**
 
@@ -330,7 +389,9 @@ Copies `src/workspace/` into `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>
 
 **`_assert_not_dirty(session, source, install) -> None`**
 
-Thin raising wrapper over `_prompts_dirty(session, source, install)`; raises `GitSourceConflictError` (→ 409) if it returns `True`.
+The pull guard. Raises `GitSourceConflictError` (→ 409) when `_prompts_dirty` is `True`, or when `_settings_changes(..., sections=_PULL_OVERWRITTEN_SECTIONS, skip_null_baseline_metadata=True)` is non-empty (the 409 detail names the drifted settings).
+
+It is **deliberately narrower than the `settings_dirty` indicator**, on both axes: only the sections a pull actually rewrites — the prompt columns and the definitional metadata (via `InstallService._apply_revision_metadata`) — and within `metadata` only the fields `_apply_revision_metadata` actually assigns (non-NULL baseline column). Schedules, plugin links, credential links and env SDK selections survive a pull untouched, so blocking on them would protect nothing while deadlocking the user — push answers a remote advance with "pull first" while pull answers with 409, and a pull is exactly what an advanced remote demands first. A publisher who never set `status_refresh_command` must not permanently lock out every installer who does. The drift still shows in `GET /git/dirty` and `GET /git/status`.
 
 **`_apply_revision_to_install(session, install, revision) -> None`**
 
