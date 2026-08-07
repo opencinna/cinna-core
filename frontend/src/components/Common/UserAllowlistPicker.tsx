@@ -1,11 +1,16 @@
 import type { ReactNode } from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Loader2, Users, X } from "lucide-react"
 
 import { UsersService } from "@/client"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover"
 
 interface UserItem {
   id: string
@@ -66,6 +71,10 @@ export function UserAllowlistPicker({
 }: UserAllowlistPickerProps) {
   const [query, setQuery] = useState("")
   const trimmedQuery = query.trim()
+  const inputRef = useRef<HTMLInputElement>(null)
+  // Escape / click-outside dismisses the results popover without clearing what
+  // was typed; any further typing brings it back.
+  const [dismissed, setDismissed] = useState(false)
 
   // Debounce the query so we don't fire a request on every keystroke once
   // past the minimum length; the search only runs ~250ms after typing stops.
@@ -101,6 +110,8 @@ export function UserAllowlistPicker({
   // While the debounce hasn't caught up to what's typed (or the request is
   // in flight / hasn't produced data yet) we're still "searching" — without
   // this, the gap between keystroke and fetch flashes "No matching users".
+  const isOpen = trimmedQuery.length >= MIN_QUERY_LENGTH && !dismissed
+
   const isDebouncePending = trimmedQuery !== debouncedQuery
   const isLoading =
     isDebouncePending ||
@@ -141,51 +152,80 @@ export function UserAllowlistPicker({
           ))}
         </div>
       )}
-      {/* Relative wrapper so the results render as an absolute popover
-          overlaying content below the input — keeps the host layout (e.g. a
-          settings card) from jumping in height as the user types. */}
-      <div className="relative">
-        <Input
-          placeholder={searchPlaceholder}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          disabled={isAdding}
-        />
-        {trimmedQuery.length >= MIN_QUERY_LENGTH && (
-          <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border bg-popover text-popover-foreground shadow-md">
-            {isLoading ? (
-              <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Searching...
-              </div>
-            ) : results.length > 0 ? (
-              <div className="divide-y max-h-36 overflow-y-auto">
-                {results.map((u) => (
-                  <button
-                    key={u.id}
-                    type="button"
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
-                    onClick={() => {
-                      onAdd(u)
-                      setQuery("")
-                    }}
-                    disabled={isAdding}
-                  >
-                    <span className="font-medium">{u.full_name || u.email}</span>
-                    {u.full_name && (
-                      <span className="text-muted-foreground text-xs">{u.email}</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="px-3 py-2 text-xs text-muted-foreground">
-                No matching users.
-              </p>
-            )}
-          </div>
-        )}
-      </div>
+      {/* The results render in a portal anchored to the input (Radix Popover),
+          NOT as a child of the picker — so a host that clips or scrolls (a
+          dialog body with ``overflow-y-auto``, a card with ``overflow-hidden``)
+          can neither cut the list off nor gain an inner scrollbar because of
+          it. Collision detection flips the list above the input when there is
+          no room below. */}
+      <Popover
+        open={isOpen}
+        onOpenChange={(next) => {
+          if (!next) setDismissed(true)
+        }}
+      >
+        <PopoverAnchor asChild>
+          <Input
+            ref={inputRef}
+            placeholder={searchPlaceholder}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setDismissed(false)
+            }}
+            disabled={isAdding}
+          />
+        </PopoverAnchor>
+        <PopoverContent
+          align="start"
+          sideOffset={4}
+          className="w-[var(--radix-popover-trigger-width)] p-0 overflow-hidden"
+          // Keep the caret in the search input: the popover must never take
+          // focus when it opens, nor yank it back when it closes.
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          // Clicking (or tabbing back into) the input counts as "outside" for
+          // Radix since the input is the anchor, not the trigger — without this
+          // the list would close the moment the user clicks their own query.
+          onInteractOutside={(e) => {
+            const target = e.detail.originalEvent.target
+            if (target instanceof Node && inputRef.current?.contains(target)) {
+              e.preventDefault()
+            }
+          }}
+        >
+          {isLoading ? (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Searching...
+            </div>
+          ) : results.length > 0 ? (
+            <div className="divide-y max-h-60 overflow-y-auto">
+              {results.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
+                  onClick={() => {
+                    onAdd(u)
+                    setQuery("")
+                  }}
+                  disabled={isAdding}
+                >
+                  <span className="font-medium">{u.full_name || u.email}</span>
+                  {u.full_name && (
+                    <span className="text-muted-foreground text-xs">{u.email}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              No matching users.
+            </p>
+          )}
+        </PopoverContent>
+      </Popover>
       {selected.length === 0 && !trimmedQuery && emptyHint && (
         <p className="text-xs text-muted-foreground">{emptyHint}</p>
       )}
