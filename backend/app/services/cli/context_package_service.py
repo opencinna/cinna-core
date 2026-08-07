@@ -284,4 +284,12 @@ class ContextPackageService:
             "author the agent's prompts from what you actually built and rewrite its\n"
             "**description** to match the finished agent, then assign them in one\n"
             "bulk write (`cinna api PUT agents/<id> --data @agents/<name>/prompts.json`).\n"
+            "\n"
+            "When writing `example_prompts`, remember they are shown to a different\n"
+            "person, later, with different data than your build. Never freeze in\n"
+            "values from your own build session (the URL you tested, a fixture id, a\n"
+            "sample file, today's date). Each example is either universal and\n"
+            "sendable as-is (`\"What is my status today?\"`) or an obviously\n"
+            "unfinished template the user completes (`\"Investigate this URL — <paste\n"
+            "the URL here>\"`). See the guide for the full rule.\n"
         )

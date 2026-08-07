@@ -533,10 +533,25 @@ the real prompt set from what actually exists.
 |-------|---------|-------|
 | `description` | Discovery cards, A2A card; feeds router-trigger / A2A skill generation | One clear sentence. Rewrite it to match the *finished* agent. |
 | `workflow_prompt` | Conversation-mode system prompt — every conversation session | Operational: which scripts to run, how to parse output, how to present results. The agent is a *bridge* that runs scripts, parses, and rephrases. |
-| `entrypoint_prompt` | First user message for scheduled / automated runs | Conversational, **not** technical. ✅ *"What is my time-off balance?"* |
+| `entrypoint_prompt` | First user message for scheduled / automated runs | Conversational, **not** technical. ✅ *"What is my time-off balance?"* Fired automatically, so it must be self-contained — never a placeholder. |
 | `refiner_prompt` | AI task refinement, before execution | Default-fill rules and mandatory fields. |
 | `router_trigger_prompt` | App MCP router classifier only — never in any system prompt | Describes *when to route here*, not how to behave. |
-| `example_prompts` | Surfaced as MCP slash commands | Short imperative tasks: `["reconcile last week", "show failed payouts"]` |
+| `example_prompts` | Surfaced as MCP slash commands and in the external agent catalog | Short imperative **user-ready templates**: `["reconcile last week", "show failed payouts", "Reconcile payouts for account <account id>"]`. See the templates rule below. |
+
+**`example_prompts` are templates, not a replay of the build.** They are shown to
+a different person, later, with different data — so the orchestrator must never
+freeze build-session values (the URL it tested against, a fixture invoice id, a
+sample file path, today's date) into them. Two legal shapes: *universal*, sendable
+as-is (`"What is my status today?"`); or *input-required*, written as a visibly
+unfinished template with an obvious placeholder (`"Investigate this URL — <paste
+the URL here>"`). A realistic-looking fake (`https://example.com/report`,
+`ACC-12345`) is worse than a blank — users send it unchanged. One structural
+gotcha: `example_prompts` lines parse as `slug: prompt text` and the **first colon
+splits the line** (`backend/app/mcp/prompts.py`), so a slugless template must not
+end with a colon — use an em dash (`Investigate this URL — <url>`) or the explicit
+`investigate_url: Investigate this URL — <url>` form. The same rule applies to
+route-level `prompt_examples`. Full rationale, ✅/❌ table and self-check list:
+`context/guides/authoring-agent-prompts.md`.
 
 **The bulk workflow** — keep a local `agents/<name>/prompts.json` holding only the
 prompt subset, and push it in one atomic write:
@@ -549,7 +564,11 @@ prompt subset, and push it in one atomic write:
   "entrypoint_prompt": "Reconcile this week's payouts.",
   "refiner_prompt": "If no period is given, default to the current week. Always capture account id and currency.",
   "router_trigger_prompt": "Reconciles Stripe payouts and flags ledger mismatches.",
-  "example_prompts": ["reconcile last week", "show failed payouts"]
+  "example_prompts": [
+    "reconcile last week",
+    "show failed payouts",
+    "Reconcile payouts for account <account id>"
+  ]
 }
 ```
 
