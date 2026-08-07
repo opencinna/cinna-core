@@ -336,8 +336,11 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
 
                   {bundle.visibility === "users" && (
                     <p className="pl-1 text-xs text-muted-foreground">
-                      Manage who can see this bundle in the Permissions
-                      management card below.
+                      Manage who can see this bundle in the{" "}
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-medium text-foreground">
+                        Permissions management
+                      </span>{" "}
+                      card below.
                     </p>
                   )}
 
