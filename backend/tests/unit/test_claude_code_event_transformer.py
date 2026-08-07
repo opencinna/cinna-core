@@ -34,6 +34,7 @@ class TextBlock:
 @dataclass
 class ThinkingBlock:
     thinking: str
+    signature: str = ""
     type: str = "thinking"
 
 
@@ -159,6 +160,15 @@ MSG_ASSISTANT_TEXT = AssistantMessage(
 MSG_ASSISTANT_THINKING = AssistantMessage(
     content=[ThinkingBlock(thinking="Let me think about this carefully...")],
     model="claude-haiku-4-5-20251001",
+)
+
+# -- AssistantMessage: signature-only thinking block (should be skipped) -----
+# Newer Sonnet models emit a ThinkingBlock with an empty `thinking` string but
+# a valid signature — a placeholder, not visible reasoning.
+
+MSG_ASSISTANT_EMPTY_THINKING = AssistantMessage(
+    content=[ThinkingBlock(thinking="", signature="ErUBCkYIBRgCKkD...")],
+    model="claude-sonnet-4-5-20250929",
 )
 
 # -- AssistantMessage: tool use (Bash) --------------------------------------
@@ -419,11 +429,10 @@ class TestAssistantMessage:
         assert result.tool_name == "mcp__agent_task__create_task"
 
     def test_tool_result_block_skipped(self, transformer):
-        """ToolResultBlock should be skipped (produces empty ASSISTANT)."""
+        """A message holding only a ToolResultBlock has no visible content, so
+        translate() returns None instead of an empty ASSISTANT event."""
         result = transformer.translate(MSG_ASSISTANT_TOOL_RESULT, SESSION_ID)
-        assert result is not None
-        assert result.type == SDKEventType.ASSISTANT
-        assert result.content == ""
+        assert result is None
 
     def test_text_then_tool_returns_tool_event(self, transformer):
         """When text precedes tool use, the tool event should be returned
@@ -434,12 +443,17 @@ class TestAssistantMessage:
         assert result.type == SDKEventType.TOOL_USE
         assert result.tool_name == "bash"
 
-    def test_empty_content_produces_empty_assistant(self, transformer):
-        """Empty content list should produce an ASSISTANT event with empty content."""
+    def test_empty_content_skipped(self, transformer):
+        """An empty content list produces no visible content, so the message is
+        skipped rather than persisted as an empty ASSISTANT event."""
         result = transformer.translate(MSG_ASSISTANT_EMPTY, SESSION_ID)
-        assert result is not None
-        assert result.type == SDKEventType.ASSISTANT
-        assert result.content == ""
+        assert result is None
+
+    def test_signature_only_thinking_block_skipped(self, transformer):
+        """A ThinkingBlock with an empty `thinking` string is a signature-only
+        placeholder — it must not reach the UI as an empty THINKING block."""
+        result = transformer.translate(MSG_ASSISTANT_EMPTY_THINKING, SESSION_ID)
+        assert result is None
 
     def test_large_tool_input_truncated(self, transformer):
         """Tool input longer than 200 chars should be truncated in content."""
