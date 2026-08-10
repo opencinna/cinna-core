@@ -267,7 +267,10 @@ class InstallService:
 
     @staticmethod
     def _apply_revision_metadata(
-        install: Agent, revision: AgentBundleRevision
+        install: Agent,
+        revision: AgentBundleRevision,
+        *,
+        skip_fields: set[str] | None = None,
     ) -> None:
         """Copy agent-row definitional metadata from a revision onto an install.
 
@@ -279,26 +282,38 @@ class InstallService:
         install / checkout, apply-update, and git pull so all three restore paths
         stay identical. Tokens / grants / per-install UI prefs are deliberately
         NOT part of this set (see plan exclusions).
+
+        ``skip_fields`` names raw attributes to leave alone regardless of what
+        the revision carries — the git pull ``keep_local`` resolution, where the
+        user chose to keep their drifted values. It is symmetric with (and
+        applied on top of) the per-field ``is not None`` guard; ``None``
+        (the default) preserves the behavior every other caller relies on.
         """
-        if revision.description is not None:
-            install.description = revision.description
-        if revision.example_prompts is not None:
+        skip = skip_fields or frozenset()
+
+        def _restore(field: str, *, deep: bool = False) -> None:
+            # Reads through ``getattr`` on the REVISION so a misspelled name
+            # fails loud here (AttributeError) instead of silently no-op'ing —
+            # ``setattr`` on a SQLModel instance would happily create a junk
+            # attribute. Every name below must also appear in
+            # ``git_source_service._METADATA_FIELDS``, or git pull's
+            # ``keep_local`` would preserve a field this restores (or vice versa).
+            value = getattr(revision, field)
+            if value is None or field in skip:
+                return
             # Deep-copy the mutable JSON payloads so the install never aliases the
             # (immutable) revision row's object — a later in-place edit of the
             # install's config must not reach back into the snapshot it came from.
-            install.example_prompts = copy.deepcopy(revision.example_prompts)
-        if revision.status_refresh_command is not None:
-            install.status_refresh_command = revision.status_refresh_command
-        if revision.agent_api_enabled is not None:
-            install.agent_api_enabled = revision.agent_api_enabled
-        if revision.agent_api_identity_enabled is not None:
-            install.agent_api_identity_enabled = revision.agent_api_identity_enabled
-        if revision.a2a_config is not None:
-            install.a2a_config = copy.deepcopy(revision.a2a_config)
-        if revision.agent_sdk_config is not None:
-            install.agent_sdk_config = copy.deepcopy(revision.agent_sdk_config)
-        if revision.webapp_enabled is not None:
-            install.webapp_enabled = revision.webapp_enabled
+            setattr(install, field, copy.deepcopy(value) if deep else value)
+
+        _restore("description")
+        _restore("example_prompts", deep=True)
+        _restore("status_refresh_command")
+        _restore("agent_api_enabled")
+        _restore("agent_api_identity_enabled")
+        _restore("a2a_config", deep=True)
+        _restore("agent_sdk_config", deep=True)
+        _restore("webapp_enabled")
 
     @staticmethod
     def _importable_model_override(

@@ -100,10 +100,22 @@ export const handleError = function (
  * Best-effort error-message extraction for `useMutation` `onError` handlers that
  * want a custom fallback. Accepts the loosely-typed React Query error (defaults
  * to `Error`) and prefers a FastAPI `body.detail` string, then `message`.
+ *
+ * `detail` is NOT always a string: the recoverable-409 endpoints (git connect's
+ * `existing_agent_folder`, git pull's `local_changes`) return a structured
+ * object carrying `code` / `message`. Returning that object from a function
+ * typed `string` renders as `[object Object]` in a toast, so an object detail
+ * falls through to its own `message` — mirroring `extractErrorMessage` above.
  */
 export const getErrorMessage = (error: unknown, fallback: string): string => {
-  const e = error as { body?: { detail?: string }; message?: string }
-  return e?.body?.detail || e?.message || fallback
+  const e = error as { body?: { detail?: unknown }; message?: string }
+  const detail = e?.body?.detail
+  if (typeof detail === "string" && detail) return detail
+  if (detail && typeof detail === "object") {
+    const nested = (detail as { message?: unknown }).message
+    if (typeof nested === "string" && nested) return nested
+  }
+  return e?.message || fallback
 }
 
 export const getInitials = (name: string): string => {

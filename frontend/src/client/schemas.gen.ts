@@ -14282,6 +14282,46 @@ export const GitCommitListSchema = {
     description: 'Response of ``GET /agents/{agent_id}/git/commits``.'
 } as const;
 
+export const GitDiffSchema = {
+    properties: {
+        section: {
+            type: 'string',
+            title: 'Section'
+        },
+        key: {
+            type: 'string',
+            title: 'Key'
+        },
+        label: {
+            type: 'string',
+            title: 'Label'
+        },
+        change_type: {
+            type: 'string',
+            title: 'Change Type'
+        },
+        diff: {
+            type: 'string',
+            title: 'Diff',
+            default: ''
+        },
+        binary: {
+            type: 'boolean',
+            title: 'Binary',
+            default: false
+        },
+        truncated: {
+            type: 'boolean',
+            title: 'Truncated',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['section', 'key', 'label', 'change_type'],
+    title: 'GitDiff',
+    description: "Response of ``GET /agents/{agent_id}/git/diff`` — one item's diff."
+} as const;
+
 export const GitDirtyStatusSchema = {
     properties: {
         dirty: {
@@ -14337,7 +14377,12 @@ export const GitFileChangeSchema = {
     type: 'object',
     required: ['path', 'change_type'],
     title: 'GitFileChange',
-    description: 'One changed workspace file in the commit preview.'
+    description: `One changed workspace file in the commit preview.
+
+Deliberately has NO \`\`blocks_pull\`\`: workspace files never block a pull,
+they are *replaced* by it wholesale whenever an env exists. That is a
+property of the operation, not of a file, so the UI states it once as a
+section header rather than repeating a flag per row.`
 } as const;
 
 export const GitPromptChangeSchema = {
@@ -14346,15 +14391,57 @@ export const GitPromptChangeSchema = {
             type: 'string',
             title: 'Field'
         },
+        key: {
+            type: 'string',
+            title: 'Key',
+            default: ''
+        },
+        section: {
+            type: 'string',
+            title: 'Section',
+            default: 'prompt'
+        },
         change_type: {
             type: 'string',
             title: 'Change Type'
+        },
+        blocks_pull: {
+            type: 'boolean',
+            title: 'Blocks Pull',
+            default: false
         }
     },
     type: 'object',
     required: ['field', 'change_type'],
     title: 'GitPromptChange',
     description: 'One changed prompt field in the commit preview.'
+} as const;
+
+export const GitPullRequestSchema = {
+    properties: {
+        conflict_resolution: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conflict Resolution',
+            description: 'How to resolve local changes a pull would overwrite. One of: take_remote, keep_local. Omit to fail loud with a recoverable 409 instead.'
+        }
+    },
+    type: 'object',
+    title: 'GitPullRequest',
+    description: `Optional body of \`\`POST /agents/{agent_id}/git/pull\`\`.
+
+\`\`conflict_resolution\`\` is one of :data:\`GIT_PULL_RESOLUTIONS\`
+(\`\`keep_local\`\` / \`\`take_remote\`\`); omitting it — or the whole body — keeps
+the fail-loud 409 behavior the GitOps webhook path depends on. Shaped as a
+single scalar so a future per-field resolution (\`\`keep_fields: [...]\`\`) can
+be added without a breaking change. Validated in the service, not here, so
+the service stays the sole enforcement point.`
 } as const;
 
 export const GitPushRequestSchema = {
@@ -14392,9 +14479,24 @@ export const GitSettingChangeSchema = {
             type: 'string',
             title: 'Field'
         },
+        key: {
+            type: 'string',
+            title: 'Key',
+            default: ''
+        },
+        section: {
+            type: 'string',
+            title: 'Section',
+            default: ''
+        },
         change_type: {
             type: 'string',
             title: 'Change Type'
+        },
+        blocks_pull: {
+            type: 'boolean',
+            title: 'Blocks Pull',
+            default: false
         }
     },
     type: 'object',
@@ -14423,6 +14525,11 @@ export const GitStatusSchema = {
                 }
             ],
             title: 'Last Synced Commit'
+        },
+        pull_blocked: {
+            type: 'boolean',
+            title: 'Pull Blocked',
+            default: false
         },
         prompt_changes: {
             items: {

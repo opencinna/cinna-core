@@ -60,6 +60,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { DeployKeySelect } from "./DeployKeySelect"
+import { ChangeGroup, ChangeRow } from "./GitChangeList"
+import { GitDiffDialog, type GitDiffTarget } from "./GitDiffDialog"
+import {
+  type GitBlockingChange,
+  GitPullConflictDialog,
+  type GitPullResolution,
+  localChangesBlocking,
+} from "./GitPullConflictDialog"
 
 const DEFAULT_CONNECT_MESSAGE = "Initial export from Cinna"
 // Only the most recent commits are shown inline; full history lives on the
@@ -134,16 +142,29 @@ function errorStatus(error: unknown): number | undefined {
   return (error as { status?: number } | null)?.status
 }
 
-// The connect endpoint returns a 409 with detail.code === "existing_agent_folder"
-// when the target subdir already holds an agent — recoverable by adopting it.
-function isExistingFolderError(error: unknown): boolean {
+// Both connect and pull can return a *recoverable* 409 whose detail is a
+// structured object carrying a machine-readable `code`, so the UI can offer the
+// next step instead of a dead-end toast.
+function isRecoverableConflict(error: unknown, code: string): boolean {
   if (errorStatus(error) !== 409) return false
   const detail = (error as { body?: { detail?: unknown } } | null)?.body?.detail
   return (
     typeof detail === "object" &&
     detail !== null &&
-    (detail as { code?: string }).code === "existing_agent_folder"
+    (detail as { code?: string }).code === code
   )
+}
+
+// The connect endpoint returns detail.code === "existing_agent_folder" when the
+// target subdir already holds an agent — recoverable by adopting it.
+function isExistingFolderError(error: unknown): boolean {
+  return isRecoverableConflict(error, "existing_agent_folder")
+}
+
+// The pull endpoint returns detail.code === "local_changes" when local state a
+// pull would overwrite has drifted — recoverable via conflict_resolution.
+function isLocalChangesError(error: unknown): boolean {
+  return isRecoverableConflict(error, "local_changes")
 }
 
 interface GitVersioningCardProps {
@@ -186,6 +207,18 @@ export function GitVersioningCard({
   const [pushMessage, setPushMessage] = useState("")
   const [disconnectOpen, setDisconnectOpen] = useState(false)
   const [adoptOpen, setAdoptOpen] = useState(false)
+  // Per-row diff opened from the commit preview (the pull-conflict dialog owns
+  // its own instance, since it can be open independently of this one).
+  const [commitDiffTarget, setCommitDiffTarget] =
+    useState<GitDiffTarget | null>(null)
+
+  // Pull-conflict dialog. `pullConflictBlocking` seeds it from a 409's
+  // detail.blocking so the reactive path shows the fields immediately, before
+  // the dialog's own status query resolves.
+  const [pullConflictOpen, setPullConflictOpen] = useState(false)
+  const [pullConflictBlocking, setPullConflictBlocking] = useState<
+    GitBlockingChange[]
+  >([])
 
   const resetConnectForm = () => {
     setEnableRequested(false)
@@ -327,9 +360,33 @@ export function GitVersioningCard({
   })
 
   const pullMutation = useMutation({
-    mutationFn: () => AgentGitService.pullGitSource({ agentId }),
-    onSuccess: () => {
-      showSuccessToast("Pulled latest changes")
+    mutationFn: (resolution?: GitPullResolution) =>
+      AgentGitService.pullGitSource({
+        agentId,
+        // No resolution ⇒ no body at all, preserving the fail-loud semantics of
+        // the plain pull (and of the GitOps webhook path it shares).
+        requestBody: resolution ? { conflict_resolution: resolution } : undefined,
+      }),
+    onSuccess: (_data, resolution) => {
+      showSuccessToast(
+        resolution === "keep_local"
+          ? // keep_local leaves the install dirty on the preserved fields BY
+            // DESIGN (pull, then commit on top). Say so, or it reads as a
+            // failed pull the moment the card re-renders as "dirty".
+            //
+            // Names prompts/settings rather than "your local changes": the
+            // workspace is replaced on BOTH resolutions, so the broader wording
+            // would promise a locally edited file survived when it did not.
+            // The workspace snapshot is what makes that recoverable.
+            "Pulled. Your prompts and settings were kept — commit them to " +
+              "push. The previous workspace was snapshotted first."
+          : resolution === "take_remote"
+            ? "Pulled. Local changes were discarded — the previous state was " +
+              "snapshotted first."
+            : "Pulled latest changes",
+      )
+      setPullConflictOpen(false)
+      setPullConflictBlocking([])
       queryClient.invalidateQueries({ queryKey: ["git-source", agentId] })
       queryClient.invalidateQueries({ queryKey: ["git-commits", agentId] })
       queryClient.invalidateQueries({ queryKey: ["git-dirty", agentId] })
@@ -337,8 +394,22 @@ export function GitVersioningCard({
       queryClient.invalidateQueries({ queryKey: ["git-check-updates", agentId] })
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
     },
-    onError: (error) =>
-      showErrorToast(getErrorMessage(error, "Failed to pull changes")),
+    onError: (error) => {
+      // A race (someone committed between the status read and the pull) can
+      // still produce the 409 — open the same dialog, seeded from its payload,
+      // instead of a toast the user cannot act on.
+      if (isLocalChangesError(error)) {
+        setPullConflictBlocking(localChangesBlocking(error))
+        setPullConflictOpen(true)
+        // The cached status predates whatever caused this 409, and the dialog
+        // may already be open (so opening it again is a no-op that would not
+        // refetch anything). Drop it so the "will be replaced" file list is
+        // recomputed; the seeded blocking list covers the gap meanwhile.
+        queryClient.invalidateQueries({ queryKey: ["git-status", agentId] })
+        return
+      }
+      showErrorToast(getErrorMessage(error, "Failed to pull changes"))
+    },
   })
 
   const disconnectMutation = useMutation({
@@ -363,6 +434,14 @@ export function GitVersioningCard({
   })
 
   // ---- Derived UI state ----
+
+  // An advanced remote on a dirty agent is the deadlock case: a plain Pull is
+  // guaranteed to 409 (and the remedy it used to suggest — push first — is
+  // itself blocked by the remote advance). Send the user to the dialog instead.
+  // `dirty` is the broad indicator, so this can over-trigger (a workspace-only
+  // change does not block); the dialog then shows an empty "Blocks the pull"
+  // section and "Keep my changes" behaves exactly like a plain pull.
+  const pullNeedsReview = !!updateStatus?.update_available && !!dirty?.dirty
 
   const showConnectForm = enableRequested && !connected
   const toggleChecked = effectiveConnected || enableRequested
@@ -499,16 +578,28 @@ export function GitVersioningCard({
               </div>
 
               {/* Update banner — gated on the strict check-updates result (the
-                  plain source read is remote-free and never sets this). */}
+                  plain source read is remote-free and never sets this). When the
+                  agent is also dirty, a plain Pull is guaranteed to 409, so the
+                  banner pre-empts it and routes to the conflict dialog. */}
               {updateStatus?.update_available && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
                   <p className="text-xs text-amber-800 dark:text-amber-200">
-                    The remote has new commits. Pull to update this agent.
+                    {pullNeedsReview
+                      ? "The remote has new commits, but this agent has local changes."
+                      : "The remote has new commits. Pull to update this agent."}
                   </p>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => pullMutation.mutate()}
+                    className="shrink-0"
+                    onClick={() => {
+                      if (pullNeedsReview) {
+                        setPullConflictBlocking([])
+                        setPullConflictOpen(true)
+                      } else {
+                        pullMutation.mutate(undefined)
+                      }
+                    }}
                     disabled={pullMutation.isPending}
                   >
                     {pullMutation.isPending ? (
@@ -516,7 +607,7 @@ export function GitVersioningCard({
                     ) : (
                       <ArrowDownToLine className="h-4 w-4 mr-1.5" />
                     )}
-                    Pull
+                    {pullNeedsReview ? "Review & pull" : "Pull"}
                   </Button>
                 </div>
               )}
@@ -673,7 +764,16 @@ export function GitVersioningCard({
           </DialogHeader>
 
           {/* Changes to be committed — git status style preview */}
-          <CommitPreview status={status} isLoading={isLoadingStatus} />
+          <CommitPreview
+            status={status}
+            isLoading={isLoadingStatus}
+            onOpenDiff={setCommitDiffTarget}
+          />
+          <GitDiffDialog
+            agentId={agentId}
+            target={commitDiffTarget}
+            onClose={() => setCommitDiffTarget(null)}
+          />
 
           <div className="space-y-2">
             <Label htmlFor="commit-message">Commit message</Label>
@@ -704,6 +804,22 @@ export function GitVersioningCard({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Pull conflict — what blocks, what gets replaced, and the two resolutions */}
+      <GitPullConflictDialog
+        open={pullConflictOpen}
+        onOpenChange={(open) => {
+          setPullConflictOpen(open)
+          if (!open) setPullConflictBlocking([])
+        }}
+        agentId={agentId}
+        agentName={agentName}
+        remoteCommit={updateStatus?.remote_commit}
+        commits={commits}
+        seededBlocking={pullConflictBlocking}
+        onResolve={(resolution) => pullMutation.mutate(resolution)}
+        isPending={pullMutation.isPending}
+      />
 
       {/* Disconnect confirm */}
       <AlertDialog open={disconnectOpen} onOpenChange={setDisconnectOpen}>
@@ -766,36 +882,19 @@ export function GitVersioningCard({
 
 // ---------------------------------------------------------------------------
 // CommitPreview — "git status" style list of changes to be committed
+//
+// `CHANGE_META` / `ChangeRow` / `ChangeGroup` live in ./GitChangeList so this
+// preview and the pull-conflict dialog render the same change list identically.
 // ---------------------------------------------------------------------------
-
-// change_type → single-letter tag + color, mirroring `git status --short`.
-const CHANGE_META: Record<string, { tag: string; className: string }> = {
-  added: { tag: "A", className: "text-green-600 dark:text-green-400" },
-  modified: { tag: "M", className: "text-amber-600 dark:text-amber-400" },
-  deleted: { tag: "D", className: "text-red-600 dark:text-red-400" },
-}
-
-function ChangeRow({ label, changeType }: { label: string; changeType: string }) {
-  const meta = CHANGE_META[changeType] ?? {
-    tag: "?",
-    className: "text-muted-foreground",
-  }
-  return (
-    <li className="flex items-start gap-2 font-mono text-xs">
-      <span className={`w-3 shrink-0 font-semibold ${meta.className}`}>
-        {meta.tag}
-      </span>
-      <span className="break-all">{label}</span>
-    </li>
-  )
-}
 
 function CommitPreview({
   status,
   isLoading,
+  onOpenDiff,
 }: {
   status: GitStatus | undefined
   isLoading: boolean
+  onOpenDiff: (target: GitDiffTarget) => void
 }) {
   if (isLoading || !status) {
     return (
@@ -824,52 +923,75 @@ function CommitPreview({
         Changes to be committed
       </p>
       {prompts.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-            Prompts
-          </p>
-          <ul className="space-y-0.5">
-            {prompts.map((c) => (
+        <ChangeGroup title="Prompts">
+          {prompts.map((c) => {
+            // Bind to a local so the closure captures a narrowed string; the
+            // generated types make `key` optional (it has a server default).
+            const diffKey = c.key
+            return (
               <ChangeRow
                 key={`prompt-${c.field}`}
                 label={c.field}
                 changeType={c.change_type}
+                onOpenDiff={
+                  diffKey
+                    ? () =>
+                        onOpenDiff({
+                          section: c.section || "prompt",
+                          key: diffKey,
+                          label: c.field,
+                        })
+                    : undefined
+                }
               />
-            ))}
-          </ul>
-        </div>
+            )
+          })}
+        </ChangeGroup>
       )}
       {settings.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-            Agent settings
-          </p>
-          <ul className="space-y-0.5">
-            {settings.map((c) => (
+        <ChangeGroup title="Agent settings">
+          {settings.map((c) => {
+            // `section` disambiguates which registry the key belongs to;
+            // without both, the endpoint cannot resolve the live side.
+            const diffKey = c.key
+            const diffSection = c.section
+            return (
               <ChangeRow
                 key={`setting-${c.field}`}
                 label={c.field}
                 changeType={c.change_type}
+                onOpenDiff={
+                  diffKey && diffSection
+                    ? () =>
+                        onOpenDiff({
+                          section: diffSection,
+                          key: diffKey,
+                          label: c.field,
+                        })
+                    : undefined
+                }
               />
-            ))}
-          </ul>
-        </div>
+            )
+          })}
+        </ChangeGroup>
       )}
       {files.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-            Workspace
-          </p>
-          <ul className="space-y-0.5">
-            {files.map((c) => (
-              <ChangeRow
-                key={`file-${c.path}`}
-                label={c.path}
-                changeType={c.change_type}
-              />
-            ))}
-          </ul>
-        </div>
+        <ChangeGroup title="Workspace">
+          {files.map((c) => (
+            <ChangeRow
+              key={`file-${c.path}`}
+              label={c.path}
+              changeType={c.change_type}
+              onOpenDiff={() =>
+                onOpenDiff({
+                  section: "file",
+                  key: c.path,
+                  label: c.path,
+                })
+              }
+            />
+          ))}
+        </ChangeGroup>
       )}
     </div>
   )

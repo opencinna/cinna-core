@@ -1836,8 +1836,13 @@ def test_git_pull_guard_covers_metadata_only(
     assert r.status_code == 409, (
         f"Expected 409 for metadata-dirty pull, got {r.status_code}: {r.text}"
     )
-    assert "Description" in r.json()["detail"], (
-        f"The 409 should name the drifted setting: {r.json()['detail']}"
+    detail = r.json()["detail"]
+    assert isinstance(detail, dict) and detail.get("code") == "local_changes", (
+        f"Expected a structured local_changes 409, got: {detail}"
+    )
+    blocking_fields = {c["field"] for c in detail["blocking"]}
+    assert "Description" in blocking_fields, (
+        f"The 409 should name the drifted setting: {detail}"
     )
 
     # ── Phase 2: commit it, then add a schedule — pull is NOT blocked ────────

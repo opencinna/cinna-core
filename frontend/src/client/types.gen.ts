@@ -3251,6 +3251,19 @@ export type GitCommitList = {
 };
 
 /**
+ * Response of ``GET /agents/{agent_id}/git/diff`` — one item's diff.
+ */
+export type GitDiff = {
+    section: string;
+    key: string;
+    label: string;
+    change_type: string;
+    diff?: string;
+    binary?: boolean;
+    truncated?: boolean;
+};
+
+/**
  * Response of ``GET /agents/{agent_id}/git/dirty``.
  */
 export type GitDirtyStatus = {
@@ -3264,6 +3277,11 @@ export type GitDirtyStatus = {
 
 /**
  * One changed workspace file in the commit preview.
+ *
+ * Deliberately has NO ``blocks_pull``: workspace files never block a pull,
+ * they are *replaced* by it wholesale whenever an env exists. That is a
+ * property of the operation, not of a file, so the UI states it once as a
+ * section header rather than repeating a flag per row.
  */
 export type GitFileChange = {
     path: string;
@@ -3275,7 +3293,27 @@ export type GitFileChange = {
  */
 export type GitPromptChange = {
     field: string;
+    key?: string;
+    section?: string;
     change_type: string;
+    blocks_pull?: boolean;
+};
+
+/**
+ * Optional body of ``POST /agents/{agent_id}/git/pull``.
+ *
+ * ``conflict_resolution`` is one of :data:`GIT_PULL_RESOLUTIONS`
+ * (``keep_local`` / ``take_remote``); omitting it — or the whole body — keeps
+ * the fail-loud 409 behavior the GitOps webhook path depends on. Shaped as a
+ * single scalar so a future per-field resolution (``keep_fields: [...]``) can
+ * be added without a breaking change. Validated in the service, not here, so
+ * the service stays the sole enforcement point.
+ */
+export type GitPullRequest = {
+    /**
+     * How to resolve local changes a pull would overwrite. One of: take_remote, keep_local. Omit to fail loud with a recoverable 409 instead.
+     */
+    conflict_resolution?: (string | null);
 };
 
 /**
@@ -3292,7 +3330,10 @@ export type GitPushRequest = {
  */
 export type GitSettingChange = {
     field: string;
+    key?: string;
+    section?: string;
     change_type: string;
+    blocks_pull?: boolean;
 };
 
 /**
@@ -3302,6 +3343,7 @@ export type GitStatus = {
     dirty: boolean;
     has_env: boolean;
     last_synced_commit?: (string | null);
+    pull_blocked?: boolean;
     prompt_changes?: Array<GitPromptChange>;
     setting_changes?: Array<GitSettingChange>;
     file_changes?: Array<GitFileChange>;
@@ -6263,8 +6305,17 @@ export type AgentGitGetGitStatusData = {
 
 export type AgentGitGetGitStatusResponse = (GitStatus);
 
+export type AgentGitGetGitDiffData = {
+    agentId: string;
+    key: string;
+    section: string;
+};
+
+export type AgentGitGetGitDiffResponse = (GitDiff);
+
 export type AgentGitPullGitSourceData = {
     agentId: string;
+    requestBody?: (GitPullRequest | null);
 };
 
 export type AgentGitPullGitSourceResponse = (AgentPublic);

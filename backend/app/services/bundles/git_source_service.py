@@ -36,6 +36,7 @@ Security invariants (honoured here, enforced by reused primitives):
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import json
 import logging
@@ -76,6 +77,8 @@ from app.services.bundles.revision_format import (
 from app.services.environments.workspace_classification import (
     PLUGINS_DIRNAME,
     WORKSPACE_ROOT_REL,
+    is_bundle_owned_toplevel,
+    is_nested_excluded,
     iter_bundle_toplevel,
     safe_copytree,
     snapshot_layout,
@@ -101,8 +104,10 @@ logger = logging.getLogger(__name__)
 
 
 # DB prompt fields compared against the synced revision, with their UI labels.
-# Single source of truth shared by the dirty check (:meth:`_prompts_dirty`) and
-# the commit-status preview (:meth:`compute_status`) so they cannot disagree.
+# Single source of truth shared by the dirty check (:meth:`_prompts_changed`),
+# the pull guard's blocking set (:meth:`_pull_blocking_changes`), the
+# commit-status preview and the ``keep_local`` restore narrowing in
+# :meth:`_apply_revision_to_install`, so they cannot disagree.
 _PROMPT_FIELDS: tuple[tuple[str, str], ...] = (
     ("workflow_prompt", "Workflow prompt"),
     ("entrypoint_prompt", "Entrypoint prompt"),
@@ -171,6 +176,37 @@ _SETTING_SECTIONS: tuple[str, ...] = ("metadata", "sdk", "specs")
 # Sections a *pull* would overwrite on the install — the only ones the pull
 # dirty guard may block on (see :meth:`GitSourceService._assert_not_dirty`).
 _PULL_OVERWRITTEN_SECTIONS: tuple[str, ...] = ("metadata",)
+
+# Sections addressable by the per-field diff endpoint: the three settings
+# registries plus the two axes that live outside them.
+_DIFF_SECTIONS: tuple[str, ...] = ("prompt", "file", *_SETTING_SECTIONS)
+
+# Per-side content cap for a diff. Generous for prose and code, small enough
+# that a stray large file can't turn a read-only drill-down into a memory event.
+_DIFF_MAX_BYTES = 512 * 1024
+# Output cap. A rewritten file legitimately diffs to thousands of lines; the
+# modal is a review aid, not an archive, so truncate and say so.
+_DIFF_MAX_LINES = 2_000
+
+# Accepted ``conflict_resolution`` values on :meth:`GitSourceService.pull_update`.
+#
+# ``None`` (omitted) keeps the historical fail-loud behavior — a pull onto an
+# install with blocking local changes 409s. That is what the GitOps webhook
+# dispatcher relies on, so it must never gain an implicit default.
+GIT_PULL_TAKE_REMOTE = "take_remote"
+GIT_PULL_KEEP_LOCAL = "keep_local"
+GIT_PULL_RESOLUTIONS: tuple[str, ...] = (GIT_PULL_TAKE_REMOTE, GIT_PULL_KEEP_LOCAL)
+
+# The 409 message for a pull blocked by local drift. Deliberately does NOT tell
+# the user to "push or discard first": pushing is impossible in exactly this
+# state (the push precheck demands a pull), and there is no discard action
+# outside the resolution modes below. It is the fallback for any client that
+# does not understand the structured ``local_changes`` detail, so it stays a
+# complete, self-contained sentence.
+_PULL_LOCAL_CHANGES_MESSAGE = (
+    "This agent has local changes that a pull would overwrite. Review them to "
+    "choose whether to keep or discard them."
+)
 
 # Manifest lists whose element ORDER carries no meaning: they are snapshots of
 # unordered DB row sets, so a re-query can legitimately return them in a
@@ -270,6 +306,25 @@ class GitSourceExistingAgentError(GitSourceConflictError):
     remote on the existing agent and re-check status) instead of failing. Pass
     ``adopt_existing=True`` to :meth:`GitSourceService.connect` to take that path.
     """
+
+
+class GitSourceLocalChangesError(GitSourceConflictError):
+    """Pull blocked by local drift (→ 409, recoverable).
+
+    Distinct from the generic conflict so the route can surface a machine-
+    readable code plus the blocking field list: the UI opens the pull-conflict
+    dialog and offers ``conflict_resolution`` instead of showing a dead-end
+    toast. Subclasses :class:`GitSourceConflictError`, so the route must branch
+    on it BEFORE the generic conflict branch (same ordering rule as
+    :class:`GitSourceExistingAgentError` — see ``agent_git.py``).
+
+    ``blocking`` is the :meth:`GitSourceService._pull_blocking_changes` list —
+    ``[{section, field, label, change_type}]``.
+    """
+
+    def __init__(self, message: str, blocking: list[dict]) -> None:
+        super().__init__(message)
+        self.blocking = blocking
 
 
 class GitBaselineUnavailableError(GitSourceError):
@@ -1089,6 +1144,11 @@ class GitSourceService:
         change_type}`` (``added`` / ``modified`` / ``deleted``) — so the UI can
         render a ``git status`` style preview before the user commits.
 
+        Each prompt / setting change also carries ``blocks_pull``, and the result
+        carries ``pull_blocked``, from :meth:`_pull_blocking_changes` — the very
+        helper :meth:`_assert_not_dirty` raises from — so this preview and the
+        pull 409 it explains can never disagree about what blocks.
+
         The workspace side compares the SAME post-denylist capture a push would
         produce (via :meth:`PublishService._snapshot_workspace_tree`) against the
         last synced revision's ``workspace/`` snapshot, so the preview matches the
@@ -1115,26 +1175,57 @@ class GitSourceService:
             if install.active_environment_id else None
         )
 
-        # ── Prompt changes (DB diff) ─────────────────────────────────
-        prompt_changes: list[dict] = []
-        if synced_rev is not None:
-            for field, label in _PROMPT_FIELDS:
-                current = getattr(install, field) or ""
-                baseline = getattr(synced_rev, field) or ""
-                if current == baseline:
-                    continue
-                if not baseline:
-                    change_type = "added"
-                elif not current:
-                    change_type = "deleted"
-                else:
-                    change_type = "modified"
-                prompt_changes.append({"field": label, "change_type": change_type})
-
-        # ── Settings changes (rest of cinna.agent.json) ──────────────
-        setting_changes = GitSourceService._settings_changes(
+        # ── What a pull would overwrite (the pull guard's blocking set) ──
+        # Computed by the SAME helper the guard raises from, so a change flagged
+        # here as blocking is exactly a change the 409 would name.
+        #
+        # This does diff the settings twice — narrowed here, in full below — but
+        # the narrowed pass covers only ``metadata`` (plain columns on the row
+        # and the manifest), never the ``specs`` section whose collectors are the
+        # expensive part. The duplicated work is a handful of comparisons; the
+        # alternative (deriving the blocking set from the full diff) would
+        # re-implement the per-field ``skip_null_baseline_metadata`` narrowing
+        # here and re-open the drift this helper exists to close.
+        blocking = GitSourceService._pull_blocking_changes(
             session, install, synced_rev, env
         )
+        blocking_keys = {(c["section"], c["field"]) for c in blocking}
+
+        # ── Prompt changes (DB diff) ─────────────────────────────────
+        # Every prompt change blocks a pull, so the blocking list already IS the
+        # prompt-change list; project it to the wire shape rather than recomputing.
+        prompt_changes = [
+            {
+                "field": c["label"],
+                # Raw attribute name — the stable key the per-field diff
+                # endpoint addresses. A label is UI copy and can be reworded.
+                "key": c["field"],
+                "section": "prompt",
+                "change_type": c["change_type"],
+                "blocks_pull": True,
+            }
+            for c in blocking
+            if c["section"] == "prompt"
+        ]
+
+        # ── Settings changes (rest of cinna.agent.json) ──────────────
+        # ``_settings_changes`` emits the human label under ``field`` (the
+        # long-standing wire contract of ``GitSettingChange.field``) alongside the
+        # raw ``name`` / ``section`` key. The key drives the ``blocking_keys``
+        # join here AND reaches the response as ``key``/``section``, which is how
+        # the per-field diff endpoint addresses this exact setting.
+        setting_changes = [
+            {
+                "field": c["field"],
+                "key": c["name"],
+                "section": c["section"],
+                "change_type": c["change_type"],
+                "blocks_pull": (c["section"], c["name"]) in blocking_keys,
+            }
+            for c in GitSourceService._settings_changes(
+                session, install, synced_rev, env
+            )
+        ]
 
         # Capture the on-disk paths the workspace diff needs while still on the DB
         # connection; the heavy snapshot/hash then runs after it is released.
@@ -1216,10 +1307,229 @@ class GitSourceService:
             "dirty": bool(prompt_changes or setting_changes or file_changes),
             "has_env": has_env,
             "last_synced_commit": last_synced_commit,
+            # Whether a plain (bodiless) pull would 409 right now. Same source as
+            # the guard, so the banner and the error cannot disagree.
+            "pull_blocked": bool(blocking),
             "prompt_changes": prompt_changes,
             "setting_changes": setting_changes,
+            # Workspace files carry NO blocks_pull flag: they never block a pull,
+            # they are REPLACED by it wholesale whenever an env exists. That is a
+            # property of the operation, not of a file, so the UI states it once
+            # as a section header instead of per row.
             "file_changes": file_changes,
         }
+
+    @staticmethod
+    def compute_diff(
+        session: Session,
+        agent_id: uuid.UUID,
+        owner: User,
+        *,
+        section: str,
+        key: str,
+    ) -> dict:
+        """Unified diff of ONE changed prompt / setting / workspace file.
+
+        The per-item drill-down behind the change lists
+        :meth:`compute_status` returns: baseline (last synced revision) on the
+        ``-`` side, live install on the ``+`` side, rendered as ``git diff``
+        style text the UI shows verbatim in a console-style modal.
+
+        ``section`` is ``"prompt"``, one of :data:`_SETTING_SECTIONS`, or
+        ``"file"``; ``key`` is the RAW attribute name (prompt / setting) or the
+        workspace-relative POSIX path (file) — the same ``key`` the status
+        endpoint emits per change, deliberately not the human label.
+
+        Read-only. Owner-resolved (404 for a missing source / non-owner). Returns
+        ``{section, key, label, change_type, diff, binary, truncated}``; ``diff``
+        is ``""`` when the two sides are equal or the content is binary.
+        """
+        if section not in _DIFF_SECTIONS:
+            raise GitSourceValidationError(
+                f"Unknown diff section {section!r}; expected one of "
+                f"{', '.join(_DIFF_SECTIONS)}."
+            )
+
+        source = GitSourceService._resolve_source_owned(session, agent_id, owner)
+        install = session.get(Agent, agent_id)
+        if install is None:
+            raise GitSourceNotFoundError("Agent not found")
+
+        synced_rev = GitSourceService._resolve_synced_revision(
+            session, source, install
+        )
+        if synced_rev is None:
+            raise GitSourceValidationError(
+                "This agent has no synced baseline yet, so there is nothing to "
+                "diff against. Commit or pull once to establish one."
+            )
+        env = (
+            session.get(AgentEnvironment, install.active_environment_id)
+            if install.active_environment_id else None
+        )
+
+        # ── Prompts and settings: both sides are already in the DB ───────
+        if section != "file":
+            label, live, baseline = GitSourceService._diff_sides_for_field(
+                session, install, synced_rev, env, section=section, key=key
+            )
+            # Release the connection before formatting (cheap, but keeps every
+            # read path on the same discipline).
+            session.commit()
+            live_text = _render_setting_text(key, live)
+            baseline_text = _render_setting_text(key, baseline)
+            return {
+                "section": section,
+                "key": key,
+                "label": label,
+                "change_type": _classify_change(
+                    _normalize_setting_value(key, live),
+                    _normalize_setting_value(key, baseline),
+                ) or "unchanged",
+                **_unified_diff(baseline_text, live_text, key),
+            }
+
+        # ── Workspace file: live env tree vs. the baseline snapshot ──────
+        rel = _resolve_diff_file_key(key)
+        env_workspace_root = (
+            Path(settings.ENV_INSTANCES_DIR) / str(env.id) if env is not None
+            else None
+        )
+        snapshot_path = (
+            Path(synced_rev.snapshot_path) if synced_rev.snapshot_path else None
+        )
+        # Lost-baseline recovery, same contract as compute_dirty / compute_status:
+        # a synced revision whose snapshot dir was wiped is re-cloned rather than
+        # silently diffed against nothing (which would render every file as new).
+        rematerialize_ctx: dict | None = None
+        synced_workspace: Path | None = None
+        if snapshot_path is not None:
+            candidate = snapshot_path / "workspace"
+            if candidate.exists():
+                synced_workspace = candidate
+            else:
+                rematerialize_ctx = {
+                    "repo_url": source.repo_url,
+                    "ref": source.ref,
+                    "subdir": source.subdir,
+                    "last_synced_commit": source.last_synced_commit,
+                    "snapshot_dir": snapshot_path,
+                    "key_material": _read_ssh_key_material(
+                        session, source.ssh_key_id, source.owner_id
+                    ),
+                }
+
+        # Release the pooled connection before any filesystem / network work.
+        session.commit()
+
+        if rematerialize_ctx is not None:
+            synced_workspace = GitSourceService._rematerialize_baseline_snapshot(
+                **rematerialize_ctx
+            )
+
+        live_text, live_binary = _read_diff_side(
+            (env_workspace_root / WORKSPACE_ROOT_REL)
+            if env_workspace_root is not None else None,
+            rel,
+        )
+        baseline_text, baseline_binary = _read_diff_side(synced_workspace, rel)
+        if live_binary or baseline_binary:
+            return {
+                "section": section,
+                "key": key,
+                "label": key,
+                "change_type": "modified",
+                "diff": "",
+                "binary": True,
+                "truncated": False,
+            }
+        change_type = (
+            "unchanged" if live_text == baseline_text
+            else "added" if baseline_text is None
+            else "deleted" if live_text is None
+            else "modified"
+        )
+        return {
+            "section": section,
+            "key": key,
+            "label": key,
+            "change_type": change_type,
+            **_unified_diff(baseline_text or "", live_text or "", key),
+        }
+
+    @staticmethod
+    def _diff_sides_for_field(
+        session: Session,
+        install: Agent,
+        rev: AgentBundleRevision,
+        env: AgentEnvironment | None,
+        *,
+        section: str,
+        key: str,
+    ) -> tuple[str, object, object]:
+        """Resolve ``(label, live, baseline)`` for one prompt / setting field.
+
+        The live side is read through the SAME registries and collectors
+        :meth:`_settings_changes` uses, so a diff can never disagree with the
+        change row the user clicked to open it. Raises
+        :class:`GitSourceValidationError` for a key outside the registries —
+        this is user-supplied input reaching ``getattr``, so the allowlist is
+        the security boundary, not a convenience.
+        """
+        if section == "prompt":
+            labels = dict(_PROMPT_FIELDS)
+            if key not in labels:
+                raise GitSourceValidationError(f"Unknown prompt field {key!r}.")
+            return (
+                labels[key],
+                getattr(install, key, None),
+                getattr(rev, key, None),
+            )
+
+        if section == "metadata":
+            labels = dict(_METADATA_FIELDS)
+            if key not in labels:
+                raise GitSourceValidationError(f"Unknown settings field {key!r}.")
+            return (
+                labels[key],
+                getattr(install, key, None),
+                getattr(rev, key, None),
+            )
+
+        if section == "sdk":
+            labels = dict(_SDK_FIELDS)
+            if key not in labels:
+                raise GitSourceValidationError(f"Unknown SDK field {key!r}.")
+            return (
+                labels[key],
+                getattr(env, key, None) if env is not None else None,
+                getattr(rev, key, None),
+            )
+
+        # specs — the live side is re-collected with the publish helpers.
+        for field, label, collect in _SPEC_FIELDS:
+            if field != key:
+                continue
+            try:
+                live_specs = collect(session, install)
+            except Exception as exc:  # noqa: BLE001
+                # Same conservative-on-indeterminate rule _settings_changes
+                # applies: a collector that cannot snapshot the live state must
+                # not 500 a read-only drill-down. Clear the poisoned transaction
+                # and show the baseline against an explicit marker.
+                logger.warning(
+                    "git diff: could not collect %s for agent %s (%s)",
+                    field, install.id, exc,
+                )
+                GitSourceService._clear_poisoned_transaction(
+                    session, context=f"diff ({field}) for agent {install.id}"
+                )
+                raise GitSourceValidationError(
+                    f"Could not read the live {label.lower()} for this agent."
+                ) from exc
+            return label, live_specs, getattr(rev, key, None)
+
+        raise GitSourceValidationError(f"Unknown settings field {key!r}.")
 
     @staticmethod
     def _file_hashes(workspace_root: Path) -> dict[str, str]:
@@ -1247,20 +1557,60 @@ class GitSourceService:
 
     @staticmethod
     async def pull_update(
-        *, session: Session, agent_id: uuid.UUID, owner: User
+        *,
+        session: Session,
+        agent_id: uuid.UUID,
+        owner: User,
+        conflict_resolution: str | None = None,
     ) -> Agent:
-        """Pull the latest remote revision onto the install. Per-agent locked."""
+        """Pull the latest remote revision onto the install. Per-agent locked.
+
+        ``conflict_resolution`` (one of :data:`GIT_PULL_RESOLUTIONS`) decides what
+        happens when local state a pull would overwrite has drifted:
+
+        * ``None`` — fail loud with a structured 409 (today's behavior, and what
+          the GitOps webhook dispatcher relies on). Never give this a default.
+        * ``"keep_local"`` — pull, but leave the drifted prompt / metadata fields
+          at their local value. **Post-condition, by construction: the install is
+          then dirty on exactly those fields.** That is correct and git-like
+          (pull, then commit on top) but must be said in the UI, or it reads as a
+          failed pull.
+        * ``"take_remote"`` — discard the local drift.
+
+        Neither mode preserves workspace FILES: the workspace is one tree with
+        one baseline and ``replace_bundle_content`` replaces it either way.
+        Precisely because that is true of BOTH modes, both first persist the live
+        agent as a backup revision (:meth:`_capture_backup_revision`) — it is the
+        only record of a locally edited workspace file after either resolution.
+        """
         async with _lock_for(str(agent_id)):
-            return await GitSourceService._pull_locked(session, agent_id, owner)
+            return await GitSourceService._pull_locked(
+                session, agent_id, owner, conflict_resolution=conflict_resolution
+            )
 
     @staticmethod
     async def _pull_locked(
-        session: Session, agent_id: uuid.UUID, owner: User
+        session: Session,
+        agent_id: uuid.UUID,
+        owner: User,
+        *,
+        conflict_resolution: str | None = None,
     ) -> Agent:
         source = GitSourceService._resolve_source_owned(session, agent_id, owner)
         # On any failure below, stamp ERROR + last_error on the source so the UI
         # can surface it (N2), then re-raise the original error unchanged.
         try:
+            # Validated service-side (not by a route enum) so the service stays
+            # the sole enforcement point for every caller — route, webhook, CLI.
+            if (
+                conflict_resolution is not None
+                and conflict_resolution not in GIT_PULL_RESOLUTIONS
+            ):
+                raise GitSourceValidationError(
+                    f"Unknown conflict_resolution '{conflict_resolution}'. "
+                    f"Expected one of: {', '.join(GIT_PULL_RESOLUTIONS)}."
+                )
+
             if source.sync_direction not in (
                 GitSyncDirection.PULL,
                 GitSyncDirection.BIDIRECTIONAL,
@@ -1283,6 +1633,8 @@ class GitSourceService:
 
             revision: AgentBundleRevision
             pulled_sha: str
+            blocking: list[dict] = []
+            backup_revision: AgentBundleRevision | None = None
             # Deliberate scope decision: unlike the polled read paths (which release
             # the pooled connection before the remote git I/O), this write path holds
             # it across the network work. It is a low-frequency POST that legitimately
@@ -1303,12 +1655,26 @@ class GitSourceService:
                     session.commit()
                     return install
 
-                # Fail-loud dirty guard (manifest/DB side): local prompt edits
-                # since the last sync block the pull (the file side is protected
-                # by the replace_bundle_content denylist). 3-way reconcile is a
-                # documented follow-on; for now we fail loud. Runs only after the
-                # no-op short-circuit so an unchanged remote never trips it.
-                GitSourceService._assert_not_dirty(session, source, install)
+                # Dirty guard (manifest/DB side): local prompt / metadata edits
+                # since the last sync block the pull unless the caller picked a
+                # resolution. Runs only after the no-op short-circuit so an
+                # unchanged remote never trips it.
+                if conflict_resolution is None:
+                    GitSourceService._assert_not_dirty(
+                        session, source, install, env
+                    )
+                else:
+                    # Same helper, same narrowing — but the caller has already
+                    # chosen, so compute the set (keep_local needs it, the audit
+                    # log wants it) instead of raising on it.
+                    blocking = GitSourceService._pull_blocking_changes(
+                        session,
+                        install,
+                        GitSourceService._resolve_synced_revision(
+                            session, source, install
+                        ),
+                        env,
+                    )
 
                 with clone_repository_context(
                     source.repo_url, branch=source.ref, ssh_key_path=key
@@ -1326,17 +1692,73 @@ class GitSourceService:
                         raise GitSourceValidationError(
                             "The backing bundle is missing; re-checkout the agent."
                         )
-                    revision = GitSourceService._persist_revision(
-                        session,
-                        bundle=bundle,
-                        src=src,
-                        manifest=manifest,
-                        published_by_user_id=source.owner_id,
-                    )
+
+                    if conflict_resolution is not None:
+                        # Capture the live agent before anything mutates it, but
+                        # as LATE as possible: everything that can still abort
+                        # the pull (clone, tree validation, oversize check,
+                        # bundle resolve) has already run.
+                        #
+                        # Taken on BOTH resolutions, deliberately widening plan
+                        # §3.4's "no backup for keep_local: nothing is discarded
+                        # on that path". That premise is false for FILES:
+                        # ``replace_bundle_content`` replaces the whole workspace
+                        # identically either way, so ``keep_local`` preserves
+                        # prompt/metadata FIELDS while still destroying a locally
+                        # edited ``scripts/foo.py``. This snapshot is the only
+                        # record of those files, so it belongs on both paths.
+                        #
+                        # Ordering is load-bearing. The dirty-check baseline is
+                        # the HIGHEST revision_number on the bundle
+                        # (``_resolve_synced_revision``), so the backup must land
+                        # BELOW the incoming revision — otherwise a snapshot of
+                        # the live agent becomes its own baseline, the install
+                        # reports clean while holding unpushed work, and the next
+                        # (possibly webhook-driven, unguarded) pull discards it
+                        # silently. Hence: backup first, incoming second, and the
+                        # backup is rolled back if the incoming persist fails.
+                        #
+                        # Fail loud: a failed backup aborts the discard. Silently
+                        # discarding the user's work after promising a backup is
+                        # the worst outcome available on this path.
+                        backup_revision = (
+                            GitSourceService._capture_backup_revision(
+                                session,
+                                install=install,
+                                env=env,
+                                bundle=bundle,
+                                owner=owner,
+                                release_notes=(
+                                    "Automatic backup of the live agent before "
+                                    f"git pull ({conflict_resolution})"
+                                ),
+                            )
+                        )
+
+                    try:
+                        revision = GitSourceService._persist_revision(
+                            session,
+                            bundle=bundle,
+                            src=src,
+                            manifest=manifest,
+                            published_by_user_id=source.owner_id,
+                        )
+                    except Exception:
+                        # Without this the just-committed backup would be left as
+                        # the newest revision — i.e. the baseline — on a pull that
+                        # never happened. See the ordering note above.
+                        GitSourceService._discard_backup_revision(
+                            session, backup_revision
+                        )
+                        raise
 
             # Apply the new revision onto the live env (reuses replace_bundle_content).
+            preserve_fields = (
+                {change["field"] for change in blocking}
+                if conflict_resolution == GIT_PULL_KEEP_LOCAL else None
+            )
             await GitSourceService._apply_revision_to_install(
-                session, install, revision
+                session, install, revision, preserve_fields=preserve_fields
             )
 
             source.last_synced_commit = pulled_sha
@@ -1368,6 +1790,22 @@ class GitSourceService:
             "git pull: agent %s advanced to %s (rev %s)",
             agent_id, pulled_sha, revision.revision_number,
         )
+        if conflict_resolution is not None:
+            # Audit trail for a resolution the user explicitly chose. Not a
+            # SecurityEvent: this is an owner acting on their own agent, and no
+            # other git operation emits one either.
+            blocked_labels = [change["label"] for change in blocking]
+            logger.info(
+                "git pull: agent %s conflict_resolution=%s %s=%s backup_revision=%s",
+                agent_id,
+                conflict_resolution,
+                (
+                    "preserved"
+                    if conflict_resolution == GIT_PULL_KEEP_LOCAL else "discarded"
+                ),
+                blocked_labels or "none",
+                backup_revision.revision_number if backup_revision else "none",
+            )
         return install
 
     # ── Push (publish) ───────────────────────────────────────────────
@@ -1783,6 +2221,178 @@ class GitSourceService:
         return revision
 
     @staticmethod
+    def _build_live_manifest(
+        session: Session,
+        *,
+        install: Agent,
+        env: AgentEnvironment,
+        bundle: AgentBundle | None,
+        version: str | None,
+        release_notes: str | None,
+    ) -> dict:
+        """Build the ``cinna.agent.json`` manifest describing the LIVE agent.
+
+        The non-git half of a capture: allocate the next revision number, run the
+        three ``PublishService._collect_*`` spec helpers, and hand them to
+        :meth:`RevisionFormat.build_manifest`. Shared by :meth:`_capture_and_push`
+        (which then writes it into the clone and commits) and
+        :meth:`_capture_backup_revision` (which persists it straight to bundle
+        storage) so a backup can never describe the live agent differently from
+        the way a push would — a backup built off a divergent manifest shape
+        would be a broken restore point, which is the whole reason it exists.
+
+        The git half of ``_capture_and_push`` is deliberately NOT extracted with
+        it: that body writes the tree into the clone directory precisely so the
+        commit picks it up, and the revision it persists is the tree that was
+        just pushed. Reusing it for a backup would mean either a second full
+        workspace snapshot on the push path or a callback-shaped seam — more
+        disruption than the duplication it removes.
+        """
+        rev_number = (
+            GitSourceService._next_revision_number(session, bundle.id)
+            if bundle else 1
+        )
+        return RevisionFormat.build_manifest(
+            install=install,
+            env=env,
+            cred_specs=PublishService._collect_credential_specs(session, install),
+            schedule_specs=PublishService._collect_schedule_specs(session, install),
+            plugin_specs=PublishService._collect_plugin_specs(session, install),
+            revision_number=rev_number,
+            version=version,
+            release_notes=release_notes,
+        )
+
+    @staticmethod
+    def _capture_backup_revision(
+        session: Session,
+        *,
+        install: Agent,
+        env: AgentEnvironment,
+        bundle: AgentBundle,
+        owner: User,
+        release_notes: str,
+    ) -> AgentBundleRevision:
+        """Persist the live agent as an ``AgentBundleRevision`` — no git, no push.
+
+        The safety net behind BOTH pull resolutions: each replaces the whole
+        workspace, and ``take_remote`` additionally discards the drifted fields,
+        so the live state is first captured as an internal (``origin="git"``,
+        Revisions-tab-invisible) revision that can be restored from.
+        ``_capture_and_push`` minus the git half — snapshot
+        the live workspace into a temp dir, build the manifest from the live row
+        (:meth:`_build_live_manifest`), persist both through the same
+        :meth:`_persist_revision` every sync uses (denylist + symlink guards
+        included).
+
+        Taken unconditionally on any resolution, even when no FIELD blocks the
+        pull: ``replace_bundle_content`` replaces the whole workspace either way,
+        so this snapshot is also the only record of locally edited workspace
+        files. It costs one ``revision_number`` from the shared counter, widening
+        the numbering gaps the Revisions tab already tolerates.
+
+        **Never swallows.** Any failure propagates to the caller, which must call
+        this BEFORE it mutates anything: silently discarding the user's work
+        after promising a backup is the worst outcome available on this path, so
+        this is the one place in the feature where best-effort is wrong.
+
+        The caller also owns the ORDERING contract — the backup must end up
+        BELOW the incoming revision, and must be removed via
+        :meth:`_discard_backup_revision` if the pull does not complete. See the
+        note at the call site in :meth:`_pull_locked`.
+        """
+        env_workspace_root = Path(settings.ENV_INSTANCES_DIR) / str(env.id)
+        # MUST run before the snapshot, exactly as connect and push do.
+        # ``iter_bundle_toplevel`` yields nothing — and does NOT raise — when the
+        # workspace root is missing or unreadable, so without this the capture
+        # below "succeeds" with an EMPTY ``workspace/`` and the pull then
+        # replaces the real one: silent data loss behind a promised backup. A
+        # lost env instance dir is a state this codebase already knows about
+        # (it is why ``_rematerialize_baseline_snapshot`` exists).
+        try:
+            PublishService._assert_workspace_readable(env, env_workspace_root)
+        except ValueError as exc:
+            raise GitSourceValidationError(str(exc)) from exc
+
+        manifest = GitSourceService._build_live_manifest(
+            session,
+            install=install,
+            env=env,
+            bundle=bundle,
+            version=None,
+            release_notes=release_notes,
+        )
+        temp_dir = Path(tempfile.mkdtemp(prefix="git_pull_backup_"))
+        try:
+            # Same post-denylist capture compute_dirty / compute_status make, so
+            # the backup holds exactly what a commit would have preserved.
+            PublishService._snapshot_workspace_tree(env_workspace_root, temp_dir)
+            return GitSourceService._persist_revision(
+                session,
+                bundle=bundle,
+                src=temp_dir,
+                manifest=manifest,
+                published_by_user_id=owner.id,
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _discard_backup_revision(
+        session: Session, revision: AgentBundleRevision | None
+    ) -> None:
+        """Roll back a pre-discard backup whose pull then failed.
+
+        A backup revision is only safe to keep once the incoming revision lands
+        above it: it is a snapshot of the LIVE agent, so if it is left as the
+        newest revision on the bundle it becomes the dirty-check baseline
+        (:meth:`_resolve_synced_revision`) and the install reports clean while
+        still holding unpushed work — after which the next pull, including an
+        unguarded webhook one, discards that work silently. Removing it restores
+        the pre-pull baseline exactly.
+
+        Best-effort **only because it runs while an exception is already in
+        flight** and must never mask it — not because a leftover row is harmless.
+        It is not: a surviving backup is exactly the broken-baseline state
+        described above. That is why the failure path logs at WARNING with the
+        operational consequence spelled out; it is the only signal that an agent
+        may now be reporting clean while holding unpushed work.
+        """
+        if revision is None:
+            return
+        revision_number: object = "?"
+        snapshot_path: str | None = None
+        try:
+            # FIRST — before touching a single attribute. The failure that
+            # brought us here may have poisoned the transaction, and ``revision``
+            # is expired (its own ``_persist_revision`` committed), so a bare
+            # ``revision.snapshot_path`` would lazy-load and raise
+            # ``PendingRollbackError`` out of a handler whose job is to not raise.
+            GitSourceService._clear_poisoned_transaction(
+                session, context="pull backup revision rollback"
+            )
+            revision_number = revision.revision_number
+            snapshot_path = revision.snapshot_path
+            session.delete(revision)
+            session.commit()
+        except Exception as exc:  # noqa: BLE001 — must not mask the real failure
+            logger.warning(
+                "git pull: could not roll back backup revision %s (%s) — it is "
+                "now the newest revision on the bundle, so this agent will "
+                "report NO local changes while still holding unpushed work, and "
+                "the next pull will not be guarded. Delete the revision row to "
+                "restore the previous baseline.",
+                revision_number, exc,
+            )
+            return
+        if snapshot_path:
+            shutil.rmtree(Path(snapshot_path), ignore_errors=True)
+        logger.info(
+            "git pull: rolled back backup revision %s (pull did not complete)",
+            revision_number,
+        )
+
+    @staticmethod
     def _capture_and_push(
         session: Session,
         *,
@@ -1827,20 +2437,11 @@ class GitSourceService:
             session.get(AgentBundle, source_like.bundle_uuid)
             if source_like.bundle_uuid else None
         )
-        rev_number = (
-            GitSourceService._next_revision_number(session, bundle.id)
-            if bundle else 1
-        )
-        cred_specs = PublishService._collect_credential_specs(session, install)
-        schedule_specs = PublishService._collect_schedule_specs(session, install)
-        plugin_specs = PublishService._collect_plugin_specs(session, install)
-        manifest = RevisionFormat.build_manifest(
+        manifest = GitSourceService._build_live_manifest(
+            session,
             install=install,
             env=env,
-            cred_specs=cred_specs,
-            schedule_specs=schedule_specs,
-            plugin_specs=plugin_specs,
-            revision_number=rev_number,
+            bundle=bundle,
             version=version,
             release_notes=commit_message,
         )
@@ -2099,28 +2700,6 @@ class GitSourceService:
         return False
 
     @staticmethod
-    def _prompts_dirty(
-        session: Session, source: AgentGitSource, install: Agent
-    ) -> bool:
-        """Resolve the sync baseline, then run :meth:`_prompts_changed` on it.
-
-        Compares the four prompt fields against the SAME baseline the workspace
-        digest uses — :meth:`_resolve_synced_revision` (the latest revision on the
-        source's bundle, which connect / push / pull / checkout all append to).
-        Using ``installed_revision_id`` here instead would disagree with the
-        workspace check: it is never advanced by connect or push, so a connected
-        agent (``installed_revision_id is None``) would never report a prompt edit
-        and a checkout-then-push agent would report a false positive after a
-        push. Single source of truth shared by the pull guard
-        (:meth:`_assert_not_dirty`) and the dirty endpoint (:meth:`compute_dirty`)
-        so they cannot disagree.
-        """
-        return GitSourceService._prompts_changed(
-            install,
-            GitSourceService._resolve_synced_revision(session, source, install),
-        )
-
-    @staticmethod
     def _settings_changes(
         session: Session,
         install: Agent,
@@ -2134,7 +2713,7 @@ class GitSourceService:
         """Per-field diff of the non-prompt ``cinna.agent.json`` fields.
 
         The manifest half of the change check that the workspace digest and
-        :meth:`_prompts_dirty` do not cover: the ``metadata`` block (description,
+        :meth:`_prompts_changed` do not cover: the ``metadata`` block (description,
         example prompts, status refresh command, feature flags, A2A / SDK-tool
         config), the ``sdk`` block (per-mode engine + model overrides, read off
         the active env) and the ``schedules`` / ``plugin_specs`` lists. Without
@@ -2145,9 +2724,18 @@ class GitSourceService:
         ``required_credential_specs`` is intentionally out of scope — see the
         note on :data:`_SPEC_FIELDS`.
 
-        Returns ``[{field, change_type}]`` (``added`` / ``modified`` /
-        ``deleted``) using the same shape as the prompt preview; empty when there
-        is no synced baseline (``rev is None``).
+        Returns ``[{field, change_type, name, section}]`` (``added`` /
+        ``modified`` / ``deleted``); empty when there is no synced baseline
+        (``rev is None``).
+
+        ``field`` is the human LABEL — it is what the wire contract
+        (``GitSettingChange.field``) has always carried, so it is deliberately
+        not renamed. ``name`` is the raw attribute name and ``section`` the
+        registry it came from (one of :data:`_SETTING_SECTIONS`); together they
+        are the stable key :meth:`_pull_blocking_changes` joins on and the
+        ``preserve_fields`` set ``keep_local`` passes to
+        :meth:`_apply_revision_to_install`. A label is not a usable key: it is
+        UI copy and can be reworded.
 
         ``rev`` is the ALREADY-resolved sync baseline
         (:meth:`_resolve_synced_revision`) so a caller that also needs it for the
@@ -2179,13 +2767,22 @@ class GitSourceService:
         manifest = rev.manifest if isinstance(rev.manifest, dict) else {}
         changes: list[dict] = []
 
-        def _record(field: str, label: str, live: object, baseline: object) -> None:
+        def _record(
+            section: str, field: str, label: str, live: object, baseline: object
+        ) -> None:
             change_type = _classify_change(
                 _normalize_setting_value(field, live),
                 _normalize_setting_value(field, baseline),
             )
             if change_type is not None:
-                changes.append({"field": label, "change_type": change_type})
+                changes.append(
+                    {
+                        "field": label,
+                        "change_type": change_type,
+                        "name": field,
+                        "section": section,
+                    }
+                )
 
         def _satisfied() -> bool:
             """Whether a ``stop_early`` caller already has its answer."""
@@ -2207,7 +2804,8 @@ class GitSourceService:
                 if skip_null_baseline_metadata and baseline is None:
                     continue
                 _record(
-                    field, label, getattr(install, field, None), baseline
+                    "metadata", field, label,
+                    getattr(install, field, None), baseline,
                 )
             if _satisfied():
                 return changes
@@ -2219,7 +2817,7 @@ class GitSourceService:
         ):
             for field, label in _SDK_FIELDS:
                 _record(
-                    field, label,
+                    "sdk", field, label,
                     getattr(env, field, None),
                     getattr(rev, field, None),
                 )
@@ -2261,62 +2859,147 @@ class GitSourceService:
                         session,
                         context=f"settings diff ({field}) for agent {install.id}",
                     )
-                    changes.append({"field": label, "change_type": "modified"})
+                    changes.append(
+                        {
+                            "field": label,
+                            "change_type": "modified",
+                            "name": field,
+                            "section": "specs",
+                        }
+                    )
                     continue
-                _record(field, label, live_specs, getattr(rev, field, None))
+                _record(
+                    "specs", field, label, live_specs, getattr(rev, field, None)
+                )
 
         return changes
 
     @staticmethod
+    def _pull_blocking_changes(
+        session: Session,
+        install: Agent,
+        rev: AgentBundleRevision | None,
+        env: AgentEnvironment | None = None,
+    ) -> list[dict]:
+        """The changes a pull would OVERWRITE — the pull guard's blocking set.
+
+        Prompts (always, they are rewritten wholesale by
+        :meth:`_apply_revision_to_install`) plus the manifest sections a pull
+        actually rewrites (:data:`_PULL_OVERWRITTEN_SECTIONS`), narrowed
+        per-field by ``skip_null_baseline_metadata`` to mirror
+        :meth:`InstallService._apply_revision_metadata`'s ``is not None`` guard.
+
+        Each entry: ``{section, field, label, change_type}`` where ``section`` is
+        ``"prompt"`` or one of :data:`_SETTING_SECTIONS`, ``field`` is the RAW
+        attribute name (the stable key — also what ``keep_local`` passes as
+        ``preserve_fields``) and ``label`` the human string the UI renders.
+
+        **Single source of truth** for both the pull guard
+        (:meth:`_assert_not_dirty`) and the ``blocks_pull`` flags on
+        :meth:`compute_status`, so the 409 and the preview it explains can never
+        disagree — the same rule ``_remote_change_is_relevant`` enforces for the
+        update banner vs. the push guard.
+
+        Deliberately narrower than the dirty indicator: schedules, plugin links,
+        credential links and env SDK selections survive a pull untouched, so
+        blocking on them would only deadlock the user (pull refuses, and a pull
+        is exactly what an advanced remote demands first) while protecting
+        nothing. They still light up the dirty / commit-preview endpoints with
+        ``blocks_pull: false``. Do NOT widen :data:`_PULL_OVERWRITTEN_SECTIONS`.
+
+        There is deliberately NO ``stop_early`` passthrough. ``_settings_changes``
+        offers one, but a partial list is unusable here: the guard needs the full
+        set for its 409 payload and the preview needs it for the ``blocks_pull``
+        join key set. Only a caller that reduces to a bool may narrow, and this
+        helper never is one.
+
+        **Caveat on the ``is not None`` mirroring.** ``skip_null_baseline_metadata``
+        tests the BASELINE revision's column, while the overwrite is driven by the
+        INCOMING one. They are the same revision on the common path, but when the
+        baseline is NULL and the incoming carries a value the field is (correctly)
+        absent from this set, yet ``_apply_revision_metadata`` still assigns it —
+        so ``keep_local`` does not preserve it. The alternative (blocking on a NULL
+        baseline) is the documented deadlock this narrowing exists to prevent, so
+        the gap is accepted, not fixed here.
+
+        Touches the DB via :meth:`_settings_changes`, so pool-safe read paths
+        must call it BEFORE releasing their connection.
+        """
+        blocking: list[dict] = []
+        if rev is None:
+            return blocking
+
+        # Prompt half — always blocking: a pull rewrites all four columns.
+        for field, label in _PROMPT_FIELDS:
+            current = getattr(install, field) or ""
+            baseline = getattr(rev, field) or ""
+            change_type = (
+                None if current == baseline
+                else "added" if not baseline
+                else "deleted" if not current
+                else "modified"
+            )
+            if change_type is None:
+                continue
+            blocking.append(
+                {
+                    "section": "prompt",
+                    "field": field,
+                    "label": label,
+                    "change_type": change_type,
+                }
+            )
+
+        # Settings half — only the sections a pull rewrites, per-field narrowed.
+        for change in GitSourceService._settings_changes(
+            session,
+            install,
+            rev,
+            env,
+            sections=_PULL_OVERWRITTEN_SECTIONS,
+            skip_null_baseline_metadata=True,
+        ):
+            blocking.append(
+                {
+                    "section": change["section"],
+                    "field": change["name"],
+                    "label": change["field"],
+                    "change_type": change["change_type"],
+                }
+            )
+        return blocking
+
+    @staticmethod
     def _assert_not_dirty(
-        session: Session, source: AgentGitSource, install: Agent
+        session: Session,
+        source: AgentGitSource,
+        install: Agent,
+        env: AgentEnvironment | None = None,
     ) -> None:
         """Block pull when local state a pull would OVERWRITE has diverged.
 
-        Raises :class:`GitSourceConflictError` (→ 409) when the install's prompts
-        or its manifest ``metadata`` fields differ from the last synced revision.
-
-        Deliberately narrower than the dirty indicator: the guard exists to stop
-        a pull from silently discarding local edits, so it covers exactly what
-        :meth:`_apply_revision_to_install` rewrites — the prompt columns and the
-        definitional metadata (via
-        :meth:`InstallService._apply_revision_metadata`). Schedules, plugin
-        links, credential links and env SDK selections survive a pull untouched,
-        so blocking on them would only deadlock the user (pull refuses, and a
-        pull is exactly what an advanced remote demands first) while protecting
-        nothing. They still light up the dirty / commit-preview endpoints.
-
-        The same narrowing applies WITHIN the metadata block, per field:
-        :meth:`InstallService._apply_revision_metadata` skips any field whose
-        revision column is NULL, so those are not "overwritten" either
-        (``skip_null_baseline_metadata``). Without it a publisher who never set
-        e.g. ``status_refresh_command`` would wedge every installer who does set
-        one — a permanent 409 on both pull and push.
+        Thin wrapper over :meth:`_pull_blocking_changes` (the shared blocking-set
+        computation — see its docstring for what is in scope and why). Raises
+        :class:`GitSourceLocalChangesError` (→ a structured, recoverable 409)
+        carrying the blocking list, so the UI can offer ``conflict_resolution``
+        instead of a dead-end toast.
         """
-        if GitSourceService._prompts_dirty(session, source, install):
-            raise GitSourceConflictError(
-                "Local changes detected (prompts differ from the last "
-                "synced revision). Push or discard your local changes "
-                "before pulling."
-            )
-        settings_changes = GitSourceService._settings_changes(
+        blocking = GitSourceService._pull_blocking_changes(
             session,
             install,
             GitSourceService._resolve_synced_revision(session, source, install),
-            sections=_PULL_OVERWRITTEN_SECTIONS,
-            skip_null_baseline_metadata=True,
+            env,
         )
-        if settings_changes:
-            fields = ", ".join(change["field"] for change in settings_changes)
-            raise GitSourceConflictError(
-                f"Local changes detected (agent settings differ from the last "
-                f"synced revision: {fields}). Push or discard your local "
-                f"changes before pulling."
-            )
+        if blocking:
+            raise GitSourceLocalChangesError(_PULL_LOCAL_CHANGES_MESSAGE, blocking)
 
     @staticmethod
     async def _apply_revision_to_install(
-        session: Session, install: Agent, revision: AgentBundleRevision
+        session: Session,
+        install: Agent,
+        revision: AgentBundleRevision,
+        *,
+        preserve_fields: set[str] | None = None,
     ) -> None:
         """Apply a revision's snapshot onto the install's active env.
 
@@ -2324,7 +3007,17 @@ class GitSourceService:
         → reset prompt-sync baselines → DB prompts from manifest → restart) but
         targets a specific git-imported revision and never touches the catalog's
         ``bundle.latest_revision_id`` / install-notify machinery.
+
+        ``preserve_fields`` (the ``keep_local`` resolution) names RAW attributes
+        — prompt columns and/or ``metadata`` fields — to leave at their current
+        local value instead of restoring them from ``revision``. It narrows the
+        two DB-assignment groups ONLY; the workspace is still replaced wholesale
+        by ``replace_bundle_content`` (one tree, one baseline — per-file
+        resolution is out of scope), and the prompt-sync baseline reset below
+        still runs, which is what makes a preserved DB value actually win over
+        the file the snapshot just wrote.
         """
+        preserve = preserve_fields or set()
         from app.services.environments.environment_service import EnvironmentService
         from app.services.environments.workspace_copy import replace_bundle_content
 
@@ -2354,14 +3047,16 @@ class GitSourceService:
             env.refiner_prompt_synced_hash = None
             session.add(env)
 
-        install.workflow_prompt = revision.workflow_prompt
-        install.entrypoint_prompt = revision.entrypoint_prompt
-        install.refiner_prompt = revision.refiner_prompt
-        install.router_trigger_prompt = revision.router_trigger_prompt
+        for field, _label in _PROMPT_FIELDS:
+            if field in preserve:
+                continue
+            setattr(install, field, getattr(revision, field))
         # Overwrite the agent-row definitional metadata from the pulled revision
         # (publisher-authoritative), only for fields the revision carries — same
         # missing-key-tolerant rule as catalog apply-update.
-        InstallService._apply_revision_metadata(install, revision)
+        InstallService._apply_revision_metadata(
+            install, revision, skip_fields=preserve or None
+        )
         prompt_now = datetime.now(UTC)
         install.workflow_prompt_updated_at = prompt_now
         install.entrypoint_prompt_updated_at = prompt_now
@@ -2384,6 +3079,128 @@ class GitSourceService:
 
 
 # ── Module-level filesystem / git helpers ───────────────────────────────
+
+
+def _render_setting_text(field: str, value: object) -> str:
+    """Render one prompt / setting value as the text side of a diff.
+
+    Strings (prompts, description, a shell command) are shown verbatim — JSON
+    quoting a multi-line prompt would make every line of the diff unreadable.
+    Everything else is pretty-printed JSON with sorted keys so the diff is
+    stable across re-serializations rather than churning on dict ordering.
+
+    Both sides go through :func:`_normalize_setting_value` FIRST, the same
+    normalization :meth:`GitSourceService._settings_changes` classifies on — so
+    a row reported as changed always renders a non-empty diff, and an "unset"
+    shape (``None`` / ``""`` / ``[]`` / ``{}``) never diffs against its twin.
+    """
+    normalized = _normalize_setting_value(field, value)
+    if normalized is None:
+        return ""
+    if isinstance(normalized, str):
+        return normalized
+    return json.dumps(normalized, indent=2, sort_keys=True, default=str)
+
+
+def _unified_diff(baseline_text: str, live_text: str, display: str) -> dict:
+    """Build the ``git diff`` style body for two already-resolved sides.
+
+    Returns the ``{diff, binary, truncated}`` slice of the response. ``diff`` is
+    ``""`` when the sides are equal. ``a/`` is the last synced revision and
+    ``b/`` the live agent, matching git's own convention (baseline → working
+    copy), so a ``+`` line is always "what this agent has now".
+    """
+    truncated = False
+    if len(baseline_text) > _DIFF_MAX_BYTES:
+        baseline_text = baseline_text[:_DIFF_MAX_BYTES]
+        truncated = True
+    if len(live_text) > _DIFF_MAX_BYTES:
+        live_text = live_text[:_DIFF_MAX_BYTES]
+        truncated = True
+    if baseline_text == live_text:
+        return {"diff": "", "binary": False, "truncated": truncated}
+
+    lines = list(
+        difflib.unified_diff(
+            baseline_text.splitlines(),
+            live_text.splitlines(),
+            fromfile=f"a/{display}",
+            tofile=f"b/{display}",
+            lineterm="",
+        )
+    )
+    if len(lines) > _DIFF_MAX_LINES:
+        lines = lines[:_DIFF_MAX_LINES]
+        truncated = True
+    return {"diff": "\n".join(lines), "binary": False, "truncated": truncated}
+
+
+def _resolve_diff_file_key(key: str) -> str:
+    """Validate a caller-supplied workspace-relative path for the diff read.
+
+    This is untrusted input addressing the filesystem, so it is allowlisted
+    rather than sanitized. Enforced, in order: relative-only, no traversal, and
+    the SAME denylist the capture walk applies — first segment must be
+    bundle-owned (so ``credentials/``, ``app-data/``, ``logs/`` are unreachable)
+    and no segment may be a nested cache artifact. Reusing
+    ``workspace_classification``'s helpers rather than re-listing the rules is
+    what keeps this endpoint from drifting away from what a commit captures.
+
+    Containment against symlink escape is enforced separately, at read time in
+    :func:`_read_diff_side`, where the resolved path is known.
+    """
+    rel = (key or "").strip().replace("\\", "/")
+    if not rel or rel.startswith("/"):
+        raise GitSourceValidationError("File path must be workspace-relative.")
+    parts = [p for p in rel.split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        raise GitSourceValidationError(f"Invalid file path {key!r}.")
+    if not is_bundle_owned_toplevel(parts[0]):
+        raise GitSourceValidationError(
+            f"{parts[0]!r} is not a versioned workspace folder."
+        )
+    if any(is_nested_excluded(p) for p in parts):
+        raise GitSourceValidationError(f"{key!r} is not a versioned file.")
+    return "/".join(parts)
+
+
+def _read_diff_side(root: Path | None, rel: str) -> tuple[str | None, bool]:
+    """Read one side of a file diff under ``root`` → ``(text, is_binary)``.
+
+    ``(None, False)`` means the file is absent on that side — which is what
+    makes a change classify as added or deleted rather than modified, so it must
+    stay distinct from an empty file (``("", False)``).
+
+    **Containment is enforced here, on the fully resolved path**, not on the
+    path string: ``_resolve_diff_file_key`` can only reject literal traversal,
+    but a symlinked intermediate DIRECTORY (``scripts/x -> /etc``) escapes with
+    no ``..`` anywhere and with the final component a perfectly ordinary file.
+    Resolving both sides and requiring containment is the check that actually
+    holds; the per-component denylist above it is defense in depth, not the
+    boundary. A symlink is refused outright either way — the capture walk drops
+    symlinks, so one here would never be committed.
+
+    Undecodable bytes report as binary rather than raising.
+    """
+    if root is None:
+        return None, False
+    try:
+        root_resolved = root.resolve()
+        path = (root / rel).resolve()
+        if not path.is_relative_to(root_resolved):
+            logger.warning(
+                "git diff: refusing path %r — resolves outside %s", rel, root
+            )
+            return None, False
+        if (root / rel).is_symlink() or not path.is_file():
+            return None, False
+        raw = path.read_bytes()[: _DIFF_MAX_BYTES + 1]
+    except OSError:
+        return None, False
+    try:
+        return raw.decode("utf-8"), False
+    except UnicodeDecodeError:
+        return None, True
 
 
 def _read_ssh_key_material(
