@@ -2,7 +2,7 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft, Lock, Trash2, Users } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 import type { CredentialPublic, CredentialWithData } from "@/client"
@@ -554,15 +554,20 @@ function CredentialDetail() {
     refetchOnWindowFocus: false,
   })
 
-  const handleDeleteSuccess = () => {
+  // Both handlers are memoised on purpose: they are dependencies of the
+  // header effect below, which calls setHeaderContent (state living in the
+  // layout). A fresh function identity per render would make that effect
+  // re-run after every header update it itself caused — an unbounded
+  // setState loop ("Maximum update depth exceeded").
+  const handleDeleteSuccess = useCallback(() => {
     navigate({ to: "/credentials" })
-  }
+  }, [navigate])
 
   const { goBack } = useNavigationHistory()
 
-  const handleBack = () => {
+  const handleBack = useCallback(() => {
     goBack("/credentials")
-  }
+  }, [goBack])
 
   // Update header when credential loads
   useEffect(() => {
