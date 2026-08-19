@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, RefreshCw, RotateCcw, ExternalLink } from "lucide-react"
+import {
+  AlertTriangle,
+  RefreshCw,
+  RotateCcw,
+  ExternalLink,
+  HeartPulse,
+} from "lucide-react"
 
 import type { AgentPublic } from "@/client"
 import { AgentsService } from "@/client"
@@ -94,7 +100,10 @@ export function AgentStatusCard({ agent }: AgentStatusCardProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Agent status</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <HeartPulse className="h-5 w-5" />
+          Agent status
+        </CardTitle>
         <CardDescription>
           Self-reported health from STATUS.md. Configure a command to refresh it
           on demand.

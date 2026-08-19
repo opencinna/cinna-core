@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
+import { Info, ScrollText } from "lucide-react"
 import { useCallback, useState } from "react"
 
 import type { AgentPublic } from "@/client"
@@ -68,7 +69,10 @@ export function AgentConfigTab({
         {/* Information Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Information</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Info className="h-5 w-5" />
+              Information
+            </CardTitle>
             <CardDescription>
               Basic information about this agent
             </CardDescription>
@@ -94,7 +98,10 @@ export function AgentConfigTab({
         {/* Agent Prompts Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Agent Prompts</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <ScrollText className="h-5 w-5" />
+              Agent Prompts
+            </CardTitle>
             <CardDescription>
               Configure the prompts that define how this agent behaves
             </CardDescription>

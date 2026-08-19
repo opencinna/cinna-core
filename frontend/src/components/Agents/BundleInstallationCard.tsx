@@ -26,6 +26,7 @@ import {
   CheckCircle2,
   Copy,
   Download,
+  Package,
 } from "lucide-react"
 
 import type { AgentPublic } from "@/client"
@@ -181,7 +182,10 @@ export function BundleInstallationCard({ agent }: BundleInstallationCardProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Bundle installation</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <Package className="h-5 w-5" />
+          Bundle installation
+        </CardTitle>
         <CardDescription>
           This agent was installed from a bundle. Its prompts and description
           are authored by the bundle publisher; you choose how their updates
