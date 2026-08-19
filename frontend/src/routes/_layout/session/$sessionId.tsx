@@ -1,29 +1,49 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useEffect, useState, useRef, useCallback, useMemo } from "react"
-import { ArrowLeft, EllipsisVertical, Mail, Package, Loader2, ListTodo, Plug, UserCircle, Hammer, MessageCircle, User } from "lucide-react"
+import {
+  ArrowLeft,
+  EllipsisVertical,
+  Hammer,
+  ListTodo,
+  Loader2,
+  Mail,
+  MessageCircle,
+  Package,
+  Plug,
+  User,
+  UserCircle,
+} from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import { SessionsService, MessagesService, AgentsService, EnvironmentsService, OpenAPI } from "@/client"
-import { useNavigationHistory } from "@/hooks/useNavigationHistory"
-import { SubTasksPanel } from "@/components/Chat/SubTasksPanel"
-import { MessageList } from "@/components/Chat/MessageList"
+import {
+  AgentsService,
+  EnvironmentsService,
+  MessagesService,
+  OpenAPI,
+  SessionsService,
+} from "@/client"
 import { MessageInput } from "@/components/Chat/MessageInput"
-import EditSession from "@/components/Sessions/EditSession"
+import { MessageList } from "@/components/Chat/MessageList"
+import { SubTasksPanel } from "@/components/Chat/SubTasksPanel"
+import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
+import NotFound from "@/components/Common/NotFound"
+import { EnvironmentPanel } from "@/components/Environment/EnvironmentPanel"
+import PendingItems from "@/components/Pending/PendingItems"
 import DeleteSession from "@/components/Sessions/DeleteSession"
+import EditSession from "@/components/Sessions/EditSession"
+import ImproveAgentMenuItem from "@/components/Sessions/ImproveAgentMenuItem"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import PendingItems from "@/components/Pending/PendingItems"
 import useCustomToast from "@/hooks/useCustomToast"
+import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { useSessionStreaming } from "@/hooks/useSessionStreaming"
 import { usePageHeader } from "@/routes/_layout"
-import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
-import { EnvironmentPanel } from "@/components/Environment/EnvironmentPanel"
-import NotFound from "@/components/Common/NotFound"
-import { eventService, EventTypes } from "@/services/eventService"
+import { EventTypes, eventService } from "@/services/eventService"
 
 export const Route = createFileRoute("/_layout/session/$sessionId")({
   component: ChatInterface,
@@ -42,9 +62,33 @@ export const Route = createFileRoute("/_layout/session/$sessionId")({
   },
 })
 
+// Derive effective state: result_state (agent-declared) takes priority, fallback
+// to task status. Module scope, not the component body: it closes over nothing,
+// and as a per-render closure it was an unlisted dependency of the badge useMemo
+// that could not be listed without breaking the memo.
+function getEffectiveState(t: {
+  result_state?: string | null
+  status?: string
+}) {
+  if (t.result_state) return t.result_state
+  switch (t.status) {
+    case "completed":
+      return "completed"
+    case "error":
+      return "error"
+    case "pending_input":
+      return "needs_input"
+    case "new":
+      return "new"
+    default:
+      return "running"
+  }
+}
+
 function ChatInterface() {
   const { sessionId } = Route.useParams()
-  const { initialMessage, fileIds, fileObjects, pageContext } = Route.useSearch()
+  const { initialMessage, fileIds, fileObjects, pageContext } =
+    Route.useSearch()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -60,7 +104,9 @@ function ChatInterface() {
   // When a send fails, stash the message text here so MessageInput re-seeds it
   // and the user can retry. The nonce forces a fresh re-seed even when the same
   // text fails twice in a row (a bare string would be deduped by React state).
-  const [seed, setSeed] = useState<{ text: string; nonce: number } | undefined>(undefined)
+  const [seed, setSeed] = useState<{ text: string; nonce: number } | undefined>(
+    undefined,
+  )
   const seedNonceRef = useRef(0)
   const restoreMessageText = useCallback((text: string) => {
     seedNonceRef.current += 1
@@ -85,23 +131,21 @@ function ChatInterface() {
 
   // Derive streaming state from session
   useEffect(() => {
-    const streaming = session?.interaction_status === "running" || session?.interaction_status === "pending_stream"
+    const streaming =
+      session?.interaction_status === "running" ||
+      session?.interaction_status === "pending_stream"
     setIsSessionStreaming(streaming)
   }, [session?.interaction_status])
 
-  const {
-    data: messagesData,
-    isLoading: messagesLoading,
-  } = useQuery({
+  const { data: messagesData, isLoading: messagesLoading } = useQuery({
     queryKey: ["messages", sessionId],
-    queryFn: () => MessagesService.getMessages({ sessionId, offset: 0, limit: 100 }),
+    queryFn: () =>
+      MessagesService.getMessages({ sessionId, offset: 0, limit: 100 }),
     enabled: !!sessionId,
     refetchInterval: isSessionStreaming ? 2000 : undefined,
   })
 
-  const {
-    data: agent,
-  } = useQuery({
+  const { data: agent } = useQuery({
     queryKey: ["agent", session?.agent_id],
     queryFn: () => AgentsService.readAgent({ id: session!.agent_id! }),
     enabled: !!session?.agent_id,
@@ -112,11 +156,10 @@ function ChatInterface() {
   // stale (NULL if that env was deleted, or pointing at a non-active env if
   // the user activated a new one). Prefer agent.active_environment_id; fall
   // back to session.environment_id only if the agent has no active env.
-  const effectiveEnvId = resolvedEnvId || agent?.active_environment_id || session?.environment_id
+  const effectiveEnvId =
+    resolvedEnvId || agent?.active_environment_id || session?.environment_id
 
-  const {
-    data: environment,
-  } = useQuery({
+  const { data: environment } = useQuery({
     queryKey: ["environment", effectiveEnvId],
     queryFn: () => EnvironmentsService.getEnvironment({ id: effectiveEnvId! }),
     enabled: !!effectiveEnvId,
@@ -126,15 +169,19 @@ function ChatInterface() {
   const { data: subTasksData } = useQuery({
     queryKey: ["subTasksCount", sessionId],
     queryFn: async () => {
-      const token = typeof OpenAPI.TOKEN === "function"
-        ? await OpenAPI.TOKEN({} as any)
-        : OpenAPI.TOKEN || ""
-      const response = await fetch(`${OpenAPI.BASE}/api/v1/tasks/by-source-session/${sessionId}`, {
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json",
+      const token =
+        typeof OpenAPI.TOKEN === "function"
+          ? await OpenAPI.TOKEN({} as any)
+          : OpenAPI.TOKEN || ""
+      const response = await fetch(
+        `${OpenAPI.BASE}/api/v1/tasks/by-source-session/${sessionId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
         },
-      })
+      )
       if (!response.ok) return { data: [], count: 0 }
       return response.json()
     },
@@ -143,33 +190,38 @@ function ChatInterface() {
 
   const subTaskCount = subTasksData?.count || 0
 
-  // Derive effective state: result_state (agent-declared) takes priority, fallback to task status
-  const getEffectiveState = (t: { result_state?: string | null; status?: string }) => {
-    if (t.result_state) return t.result_state
-    switch (t.status) {
-      case "completed": return "completed"
-      case "error": return "error"
-      case "pending_input": return "needs_input"
-      case "new": return "new"
-      default: return "running"
-    }
-  }
-
   // Compute per-status badge counts
   const subTaskBadges = useMemo(() => {
     const tasks = subTasksData?.data || []
-    if (tasks.length === 0) return { running: 0, needsInput: 0, errors: 0, completed: 0, new: 0 }
-    const completed = tasks.filter((t: any) => getEffectiveState(t) === "completed").length
-    const needsInput = tasks.filter((t: any) => getEffectiveState(t) === "needs_input").length
-    const errors = tasks.filter((t: any) => getEffectiveState(t) === "error").length
-    const newTasks = tasks.filter((t: any) => getEffectiveState(t) === "new").length
+    if (tasks.length === 0)
+      return { running: 0, needsInput: 0, errors: 0, completed: 0, new: 0 }
+    const completed = tasks.filter(
+      (t: any) => getEffectiveState(t) === "completed",
+    ).length
+    const needsInput = tasks.filter(
+      (t: any) => getEffectiveState(t) === "needs_input",
+    ).length
+    const errors = tasks.filter(
+      (t: any) => getEffectiveState(t) === "error",
+    ).length
+    const newTasks = tasks.filter(
+      (t: any) => getEffectiveState(t) === "new",
+    ).length
     const running = tasks.length - completed - needsInput - errors - newTasks
     return { running, needsInput, errors, completed, new: newTasks }
   }, [subTasksData?.data])
 
-  const { sendMessage, stopMessage, isStreaming, streamingEvents, isInterruptPending } = useSessionStreaming({
+  const {
+    sendMessage,
+    stopMessage,
+    isStreaming,
+    streamingEvents,
+    isInterruptPending,
+  } = useSessionStreaming({
     sessionId,
-    session: session ? { interaction_status: session.interaction_status, mode: session.mode } : null,
+    session: session
+      ? { interaction_status: session.interaction_status, mode: session.mode }
+      : null,
     messagesData: messagesData ? { data: messagesData.data as any } : null,
     onSuccess: () => {
       // Messages are already refreshed by the hook
@@ -184,8 +236,13 @@ function ChatInterface() {
     async (
       content: string,
       fileIds?: string[],
-      fileObjs?: Array<{ id: string; filename: string; file_size: number; mime_type: string }>,
-      msgPageContext?: string
+      fileObjs?: Array<{
+        id: string
+        filename: string
+        file_size: number
+        mime_type: string
+      }>,
+      msgPageContext?: string,
     ) => {
       // sendMessage re-throws on failure (so the initial-message effect can
       // react). For interactive sends from MessageInput — which call this
@@ -197,7 +254,7 @@ function ChatInterface() {
         /* handled by onError */
       }
     },
-    [sendMessage]
+    [sendMessage],
   )
 
   const handleSendAnswer = useCallback(
@@ -208,7 +265,7 @@ function ChatInterface() {
         /* handled by onError */
       }
     },
-    [sendMessage]
+    [sendMessage],
   )
 
   // Simple message send without linking to another message (for tool approval, etc.)
@@ -220,7 +277,7 @@ function ChatInterface() {
         /* handled by onError */
       }
     },
-    [sendMessage]
+    [sendMessage],
   )
 
   // Send initial message if provided - wait for session and messages to load
@@ -237,9 +294,18 @@ function ChatInterface() {
       // Set the dedup guard synchronously so the effect doesn't fire twice.
       initialMessageSent.current = true
       // Parse fileIds from comma-separated string to array
-      const fileIdsArray = fileIds ? fileIds.split(',').filter(id => id.trim()) : undefined
+      const fileIdsArray = fileIds
+        ? fileIds.split(",").filter((id) => id.trim())
+        : undefined
       // Parse fileObjects JSON for optimistic display
-      let parsedFileObjects: Array<{ id: string; filename: string; file_size: number; mime_type: string }> | undefined
+      let parsedFileObjects:
+        | Array<{
+            id: string
+            filename: string
+            file_size: number
+            mime_type: string
+          }>
+        | undefined
       if (fileObjects) {
         try {
           parsedFileObjects = JSON.parse(fileObjects)
@@ -254,12 +320,23 @@ function ChatInterface() {
       // into the input so the user's message is never silently lost.
       // Call sendMessage directly (not handleSendMessage, which swallows errors
       // for the interactive path) so we can observe success/failure here.
-      sendMessage(initialMessage, undefined, fileIdsArray, parsedFileObjects, pageContext)
+      sendMessage(
+        initialMessage,
+        undefined,
+        fileIdsArray,
+        parsedFileObjects,
+        pageContext,
+      )
         .then(() => {
           navigate({
             to: "/session/$sessionId",
             params: { sessionId },
-            search: { initialMessage: undefined, fileIds: undefined, fileObjects: undefined, pageContext: undefined },
+            search: {
+              initialMessage: undefined,
+              fileIds: undefined,
+              fileObjects: undefined,
+              pageContext: undefined,
+            },
             replace: true,
           })
         })
@@ -286,6 +363,7 @@ function ChatInterface() {
     sessionId,
     navigate,
     sendMessage,
+    restoreMessageText,
   ])
 
   const { goBack } = useNavigationHistory()
@@ -312,7 +390,11 @@ function ChatInterface() {
   useEffect(() => {
     if (!environment) return
     const status = environment.status
-    if (status === "activating" || status === "starting" || status === "rebuilding") {
+    if (
+      status === "activating" ||
+      status === "starting" ||
+      status === "rebuilding"
+    ) {
       setIsEnvActivating(true)
       setIsEnvSuspended(false)
     } else if (status === "suspended" || status === "stopped") {
@@ -327,15 +409,21 @@ function ChatInterface() {
   // Send agent usage intent once we know which env to target. Prefer the
   // agent's active env (current truth) over session.environment_id (which may
   // be stale or NULL after the prior env was replaced/deleted).
-  const intentTargetEnvId = agent?.active_environment_id || session?.environment_id
+  const intentTargetEnvId =
+    agent?.active_environment_id || session?.environment_id
   useEffect(() => {
     if (intentTargetEnvId && !usageIntentSent.current) {
       usageIntentSent.current = true
       // Use the REST endpoint (not the WebSocket) so env wake-up works even when
       // the socket is permanently disconnected (e.g. after a backend deploy).
-      EnvironmentsService.registerEnvironmentUsageIntent({ id: intentTargetEnvId })
+      EnvironmentsService.registerEnvironmentUsageIntent({
+        id: intentTargetEnvId,
+      })
         .then((response) => {
-          if (response?.environment_id && response.environment_id !== intentTargetEnvId) {
+          if (
+            response?.environment_id &&
+            response.environment_id !== intentTargetEnvId
+          ) {
             setResolvedEnvId(response.environment_id)
           }
         })
@@ -355,89 +443,129 @@ function ChatInterface() {
     const subscriptions: string[] = []
 
     // Listen for activating event
-    const activatingSub = eventService.subscribe(EventTypes.ENVIRONMENT_ACTIVATING, (event) => {
-      if (event.model_id === effectiveEnvId) {
-        console.log("Environment is activating...")
-        setIsEnvActivating(true)
-        setIsEnvSuspended(false)
-        queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
-      }
-    })
+    const activatingSub = eventService.subscribe(
+      EventTypes.ENVIRONMENT_ACTIVATING,
+      (event) => {
+        if (event.model_id === effectiveEnvId) {
+          console.log("Environment is activating...")
+          setIsEnvActivating(true)
+          setIsEnvSuspended(false)
+          queryClient.invalidateQueries({
+            queryKey: ["environment", effectiveEnvId],
+          })
+        }
+      },
+    )
     subscriptions.push(activatingSub)
 
     // Listen for activated event
-    const activatedSub = eventService.subscribe(EventTypes.ENVIRONMENT_ACTIVATED, (event) => {
-      if (event.model_id === effectiveEnvId) {
-        console.log("Environment activated successfully")
-        setIsEnvActivating(false)
-        setIsEnvSuspended(false)
-        showSuccessToast("Agent environment activated")
-        queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
-      }
-    })
+    const activatedSub = eventService.subscribe(
+      EventTypes.ENVIRONMENT_ACTIVATED,
+      (event) => {
+        if (event.model_id === effectiveEnvId) {
+          console.log("Environment activated successfully")
+          setIsEnvActivating(false)
+          setIsEnvSuspended(false)
+          showSuccessToast("Agent environment activated")
+          queryClient.invalidateQueries({
+            queryKey: ["environment", effectiveEnvId],
+          })
+        }
+      },
+    )
     subscriptions.push(activatedSub)
 
     // Listen for activation failed event
-    const failedSub = eventService.subscribe(EventTypes.ENVIRONMENT_ACTIVATION_FAILED, (event) => {
-      if (event.model_id === effectiveEnvId) {
-        console.error("Environment activation failed:", event.meta)
-        setIsEnvActivating(false)
-        showErrorToast("Failed to activate agent environment")
-        queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
-      }
-    })
+    const failedSub = eventService.subscribe(
+      EventTypes.ENVIRONMENT_ACTIVATION_FAILED,
+      (event) => {
+        if (event.model_id === effectiveEnvId) {
+          console.error("Environment activation failed:", event.meta)
+          setIsEnvActivating(false)
+          showErrorToast("Failed to activate agent environment")
+          queryClient.invalidateQueries({
+            queryKey: ["environment", effectiveEnvId],
+          })
+        }
+      },
+    )
     subscriptions.push(failedSub)
 
     // Listen for suspended event
-    const suspendedSub = eventService.subscribe(EventTypes.ENVIRONMENT_SUSPENDED, (event) => {
-      if (event.model_id === effectiveEnvId) {
-        console.log("Environment was suspended")
-        setIsEnvActivating(false)
-        setIsEnvSuspended(true)
-        queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
-      }
-    })
+    const suspendedSub = eventService.subscribe(
+      EventTypes.ENVIRONMENT_SUSPENDED,
+      (event) => {
+        if (event.model_id === effectiveEnvId) {
+          console.log("Environment was suspended")
+          setIsEnvActivating(false)
+          setIsEnvSuspended(true)
+          queryClient.invalidateQueries({
+            queryKey: ["environment", effectiveEnvId],
+          })
+        }
+      },
+    )
     subscriptions.push(suspendedSub)
 
     // Listen for generic status changes (e.g. rebuilding, stopped after rebuild, error)
-    const statusChangedSub = eventService.subscribe(EventTypes.ENVIRONMENT_STATUS_CHANGED, (event) => {
-      if (event.model_id === effectiveEnvId) {
-        const status = event.meta?.status
-        console.log(`Environment status changed: ${status}`)
-        if (status === "rebuilding" || status === "activating" || status === "starting") {
-          setIsEnvActivating(true)
-          setIsEnvSuspended(false)
-        } else if (status === "running" || status === "stopped" || status === "error") {
-          setIsEnvActivating(false)
-          setIsEnvSuspended(status === "stopped")
-          if (status === "error") {
-            showErrorToast("Environment rebuild failed")
+    const statusChangedSub = eventService.subscribe(
+      EventTypes.ENVIRONMENT_STATUS_CHANGED,
+      (event) => {
+        if (event.model_id === effectiveEnvId) {
+          const status = event.meta?.status
+          console.log(`Environment status changed: ${status}`)
+          if (
+            status === "rebuilding" ||
+            status === "activating" ||
+            status === "starting"
+          ) {
+            setIsEnvActivating(true)
+            setIsEnvSuspended(false)
+          } else if (
+            status === "running" ||
+            status === "stopped" ||
+            status === "error"
+          ) {
+            setIsEnvActivating(false)
+            setIsEnvSuspended(status === "stopped")
+            if (status === "error") {
+              showErrorToast("Environment rebuild failed")
+            }
           }
+          queryClient.invalidateQueries({
+            queryKey: ["environment", effectiveEnvId],
+          })
         }
-        queryClient.invalidateQueries({ queryKey: ["environment", effectiveEnvId] })
-      }
-    })
+      },
+    )
     subscriptions.push(statusChangedSub)
 
     // Cleanup subscriptions
     return () => {
-      subscriptions.forEach(sub => eventService.unsubscribe(sub))
+      subscriptions.forEach((sub) => {
+        eventService.unsubscribe(sub)
+      })
     }
   }, [effectiveEnvId, showSuccessToast, showErrorToast, queryClient])
 
   // Listen for session_interaction_status_changed WS events
   useEffect(() => {
-    const sub = eventService.subscribe(EventTypes.SESSION_INTERACTION_STATUS_CHANGED, (event) => {
-      if (event.meta?.session_id === sessionId) {
-        // Immediately refetch session to update derived isStreaming state
-        queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
-        if (event.meta?.interaction_status === "") {
-          // Streaming ended - refetch messages for final content
-          queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+    const sub = eventService.subscribe(
+      EventTypes.SESSION_INTERACTION_STATUS_CHANGED,
+      (event) => {
+        if (event.meta?.session_id === sessionId) {
+          // Immediately refetch session to update derived isStreaming state
+          queryClient.invalidateQueries({ queryKey: ["session", sessionId] })
+          if (event.meta?.interaction_status === "") {
+            // Streaming ended - refetch messages for final content
+            queryClient.invalidateQueries({ queryKey: ["messages", sessionId] })
+          }
         }
-      }
-    })
-    return () => { eventService.unsubscribe(sub) }
+      },
+    )
+    return () => {
+      eventService.unsubscribe(sub)
+    }
   }, [sessionId, queryClient])
 
   // Listen for session state updates to refresh sub-tasks badge
@@ -446,7 +574,9 @@ function ChatInterface() {
       queryClient.invalidateQueries({ queryKey: ["subTasksCount", sessionId] })
       queryClient.invalidateQueries({ queryKey: ["subTasks", sessionId] })
     })
-    return () => { eventService.unsubscribe(sub) }
+    return () => {
+      eventService.unsubscribe(sub)
+    }
   }, [sessionId, queryClient])
 
   // Update header when session loads
@@ -456,16 +586,23 @@ function ChatInterface() {
       setHeaderContent(
         <>
           <div className="flex items-center gap-3 min-w-0">
-            <Button variant="ghost" size="sm" onClick={handleBack} className="shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleBack}
+              className="shrink-0"
+            >
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="min-w-0">
               <h1 className="text-base font-semibold truncate">
-                {session.title
-                  ? session.title
-                  : (messagesData?.data?.length ?? 0) > 0
-                    ? <AnimatedPlaceholder />
-                    : <span className="text-muted-foreground">New session</span>}
+                {session.title ? (
+                  session.title
+                ) : (messagesData?.data?.length ?? 0) > 0 ? (
+                  <AnimatedPlaceholder />
+                ) : (
+                  <span className="text-muted-foreground">New session</span>
+                )}
               </h1>
               <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                 {isBuilding ? (
@@ -501,9 +638,14 @@ function ChatInterface() {
                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300">
                     <UserCircle className="h-2.5 w-2.5" />
                     Via Identity
-                    {(session.session_metadata as Record<string, string> | null)?.identity_caller_name && (
+                    {(session.session_metadata as Record<string, string> | null)
+                      ?.identity_caller_name && (
                       <span className="ml-0.5">
-                        — {(session.session_metadata as Record<string, string>).identity_caller_name}
+                        —{" "}
+                        {
+                          (session.session_metadata as Record<string, string>)
+                            .identity_caller_name
+                        }
                       </span>
                     )}
                   </span>
@@ -511,9 +653,16 @@ function ChatInterface() {
                 {session.integration_type === "external" && (
                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300">
                     <Package className="h-2.5 w-2.5" />
-                    {(session.session_metadata as Record<string, string> | null)?.client_kind
-                      ? ((session.session_metadata as Record<string, string>).client_kind.charAt(0).toUpperCase() +
-                          (session.session_metadata as Record<string, string>).client_kind.slice(1))
+                    {(session.session_metadata as Record<string, string> | null)
+                      ?.client_kind
+                      ? (
+                          session.session_metadata as Record<string, string>
+                        ).client_kind
+                          .charAt(0)
+                          .toUpperCase() +
+                        (
+                          session.session_metadata as Record<string, string>
+                        ).client_kind.slice(1)
                       : "External"}
                   </span>
                 )}
@@ -525,12 +674,13 @@ function ChatInterface() {
                   type badge (MCP / A2A / Email / etc.) so the channel
                   is still visible.
                 */}
-                {session.caller_email && session.caller_id !== session.user_id && (
-                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
-                    <User className="h-2.5 w-2.5" />
-                    {session.caller_email}
-                  </span>
-                )}
+                {session.caller_email &&
+                  session.caller_id !== session.user_id && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
+                      <User className="h-2.5 w-2.5" />
+                      {session.caller_email}
+                    </span>
+                  )}
               </p>
             </div>
           </div>
@@ -539,7 +689,10 @@ function ChatInterface() {
               <Button
                 variant={showSubTasks ? "secondary" : "outline"}
                 size="sm"
-                onClick={() => { setShowSubTasks(!showSubTasks); setEnvPanelOpen(false) }}
+                onClick={() => {
+                  setShowSubTasks(!showSubTasks)
+                  setEnvPanelOpen(false)
+                }}
                 className="gap-1.5"
               >
                 <ListTodo className="h-4 w-4" />
@@ -589,7 +742,10 @@ function ChatInterface() {
                 size="sm"
                 className="shrink-0 text-muted-foreground"
                 title="App is suspended — it will wake up on your next message"
-                onClick={() => { setEnvPanelOpen(!envPanelOpen); setShowSubTasks(false) }}
+                onClick={() => {
+                  setEnvPanelOpen(!envPanelOpen)
+                  setShowSubTasks(false)
+                }}
               >
                 <Package className="h-4 w-4 mr-1.5 opacity-60" />
                 Suspended
@@ -599,7 +755,10 @@ function ChatInterface() {
                 variant={envPanelOpen ? "secondary" : "ghost"}
                 size="sm"
                 className="shrink-0"
-                onClick={() => { setEnvPanelOpen(!envPanelOpen); setShowSubTasks(false) }}
+                onClick={() => {
+                  setEnvPanelOpen(!envPanelOpen)
+                  setShowSubTasks(false)
+                }}
               >
                 <Package className="h-4 w-4 mr-1.5" />
                 App
@@ -612,7 +771,18 @@ function ChatInterface() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <EditSession session={session} onSuccess={() => setMenuOpen(false)} />
+                <ImproveAgentMenuItem
+                  session={session}
+                  onSuccess={() => setMenuOpen(false)}
+                />
+                <EditSession
+                  session={session}
+                  onSuccess={() => setMenuOpen(false)}
+                />
+                {/* Destructive action sits below a rule: deleting a session is
+                    not undoable and should not read as one more item in the
+                    same list as Edit. */}
+                <DropdownMenuSeparator />
                 <DeleteSession
                   id={session.id}
                   onSuccess={handleDeleteSuccess}
@@ -620,11 +790,24 @@ function ChatInterface() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-        </>
+        </>,
       )
     }
     return () => setHeaderContent(null)
-  }, [session, setHeaderContent, menuOpen, envPanelOpen, handleBack, handleDeleteSuccess, isEnvActivating, isEnvSuspended, messagesData?.data?.length, subTaskCount, subTaskBadges, showSubTasks])
+  }, [
+    session,
+    setHeaderContent,
+    menuOpen,
+    envPanelOpen,
+    handleBack,
+    handleDeleteSuccess,
+    isEnvActivating,
+    isEnvSuspended,
+    messagesData?.data?.length,
+    subTaskCount,
+    subTaskBadges,
+    showSubTasks,
+  ])
 
   if (sessionLoading || messagesLoading) {
     return <PendingItems />
@@ -646,7 +829,11 @@ function ChatInterface() {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <p className="text-destructive mb-4">Error loading session</p>
-        <button onClick={handleBack} className="text-primary hover:underline">
+        <button
+          type="button"
+          onClick={handleBack}
+          className="text-primary hover:underline"
+        >
           Back to sessions
         </button>
       </div>
@@ -668,12 +855,20 @@ function ChatInterface() {
           isStreaming={isStreaming}
           onSendAnswer={handleSendAnswer}
           onSendMessage={handleSendSimpleMessage}
-          conversationModeUi={session.mode === "building" ? "detailed" : (agent?.conversation_mode_ui || "detailed")}
+          conversationModeUi={
+            session.mode === "building"
+              ? "detailed"
+              : agent?.conversation_mode_ui || "detailed"
+          }
           agentId={session?.agent_id ?? undefined}
           integrationTyp={session?.integration_type}
           sessionId={sessionId}
         />
-        <EnvironmentPanel isOpen={envPanelOpen} environmentId={effectiveEnvId ?? undefined} agentId={session?.agent_id ?? undefined} />
+        <EnvironmentPanel
+          isOpen={envPanelOpen}
+          environmentId={effectiveEnvId ?? undefined}
+          agentId={session?.agent_id ?? undefined}
+        />
         {showSubTasks && (
           <SubTasksPanel
             sessionId={sessionId}

@@ -12,7 +12,7 @@ import { convertFileNodeToTreeItem, type FileNode } from "./utils"
 import type { TreeItem, DatabaseTableItem } from "./types"
 import useWorkspace from "@/hooks/useWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
-import { handleError } from "@/utils"
+import { handleError, saveBlobAs } from "@/utils"
 import { useGuestShare } from "@/hooks/useGuestShare"
 
 interface WorkspaceTreeResponse {
@@ -237,15 +237,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
       // Extract filename from path
       const filename = filePath.split('/').pop() || 'download'
 
-      // Create blob URL and trigger download
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
+      saveBlobAs(blob, filename)
     } catch (error) {
       console.error('Download error:', error)
     }

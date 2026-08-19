@@ -32,6 +32,7 @@ from app.api.routes import (
     external_agents,
     identity,
     identity_contacts,
+    improvement_requests,
     installs,
     mcp_connectors,
     mcp_consent,
@@ -105,6 +106,10 @@ api_router.include_router(ssh_keys.router)
 api_router.include_router(environments.router)
 api_router.include_router(environments.console_ws_router)
 api_router.include_router(sessions.router)
+# Improvement requests span /sessions/*, /agents/*, and /improvement-requests/*,
+# so the router carries no prefix. Registered after sessions/agents; neither of
+# those declares a colliding path, so nothing here is shadowed.
+api_router.include_router(improvement_requests.router)
 api_router.include_router(messages.router)
 api_router.include_router(workspace.router)
 api_router.include_router(user_dashboards.router)

@@ -47,4 +47,4 @@ class WebappCommandHandler(CommandHandler):
             lines = [f"**Web App:** [{share_url}]({share_url})"]
             if security_code:
                 lines.append(f"**Access Code:** `{security_code}`")
-            return CommandResult(content="\n".join(lines))
+            return CommandResult(content="\n".join(lines), display="document")

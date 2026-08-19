@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react"
 import { useQueryClient } from "@tanstack/react-query"
+import { useCallback, useState } from "react"
 
 import type { AgentPublic } from "@/client"
 import { Button } from "@/components/ui/button"
@@ -10,16 +10,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { AgentSchedulesCard } from "./AgentSchedulesCard"
 import { AgentHandovers } from "./AgentHandovers"
+import { AgentSchedulesCard } from "./AgentSchedulesCard"
 import { AgentStatusCard } from "./AgentStatusCard"
 import { BundleInstallationCard } from "./BundleInstallationCard"
 import { EditDescriptionModal } from "./EditDescriptionModal"
 import { EditEntrypointPromptModal } from "./EditEntrypointPromptModal"
-import { EditWorkflowPromptModal } from "./EditWorkflowPromptModal"
+import { EditExamplePromptsModal } from "./EditExamplePromptsModal"
 import { EditRefinerPromptModal } from "./EditRefinerPromptModal"
 import { EditRouterTriggerPromptModal } from "./EditRouterTriggerPromptModal"
-import { EditExamplePromptsModal } from "./EditExamplePromptsModal"
+import { EditWorkflowPromptModal } from "./EditWorkflowPromptModal"
+import { ImprovementRequestsCard } from "./ImprovementRequestsCard"
 
 interface AgentConfigTabProps {
   agent: AgentPublic
@@ -150,6 +151,19 @@ export function AgentConfigTab({
             Owner-facing configuration (editable command), so it follows the
             same developer-tier gate as Handovers. */}
         {showOperationalSettings && <AgentStatusCard agent={agent} />}
+
+        {/* Improvement requests. Deliberately NOT gated on
+            ``showOperationalSettings`` or the developer role: reading feedback
+            people sent about an agent you own is an owner capability, and a
+            plain agent-user owning a standalone agent must still see it.
+
+            Rendered on foreign installs too, but only once something has
+            arrived. Requests raised against a bundle install normally route to
+            the publisher — except when the publisher install is gone, where
+            ``resolve_target`` falls back to self and the row lands on the
+            consumer's own install. Gating that away on ``readOnly`` made those
+            requests invisible to the only person who could act on them. */}
+        <ImprovementRequestsCard agentId={agent.id} hideWhenEmpty={readOnly} />
       </div>
 
       {/* Modals */}

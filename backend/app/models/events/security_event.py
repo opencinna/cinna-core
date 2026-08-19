@@ -122,6 +122,15 @@ AGENT_API_EXTERNAL_KEY_CREATED = "AGENT_API_EXTERNAL_KEY_CREATED"
 AGENT_API_EXTERNAL_KEY_REVOKED = "AGENT_API_EXTERNAL_KEY_REVOKED"
 AGENT_API_EXTERNAL_KEY_REVEALED = "AGENT_API_EXTERNAL_KEY_REVEALED"
 
+# ── Agent improvement requests ────────────────────────────────────────
+# Written by the web and CLI archive-download routes when, and only when,
+# ``owner_user_id != requester_user_id`` — i.e. the one cross-user data path in
+# the platform, where user A's conversation content is read by user B. A
+# same-user download (an owner reading a request on their own agent) is not
+# audited. Payload carries the request id, target agent id, bundle id, requester
+# user id, acting user id, and source IP — never any snapshot content.
+IMPROVEMENT_ARCHIVE_DOWNLOADED = "IMPROVEMENT_ARCHIVE_DOWNLOADED"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

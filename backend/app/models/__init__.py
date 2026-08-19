@@ -751,6 +751,26 @@ from .notifications.user_notification_setting import (
     NotificationSettingItem,
     NotificationSettingsPublic,
 )
+from .improvement.agent_improvement_request import (
+    AgentImprovementRequest,
+    ImprovementRequestCreate,
+    ImprovementRequestPublic,
+    ImprovementRequestDetailPublic,
+    ImprovementRequestsPublic,
+    ImprovementRequestUpdate,
+    ImprovementContextPublic,
+    IMPROVEMENT_STATUSES,
+    IMPROVEMENT_STATUS_NEW,
+    IMPROVEMENT_STATUS_IN_PROGRESS,
+    IMPROVEMENT_STATUS_COMPLETED,
+    IMPROVEMENT_STATUS_DECLINED,
+    IMPROVEMENT_SOURCES,
+    IMPROVEMENT_SOURCE_WEB_UI,
+    IMPROVEMENT_SOURCE_COMMAND,
+    MAX_COMMENT_CHARS,
+    MAX_RESOLUTION_NOTE_CHARS,
+    FALLBACK_PUBLISHER_UNAVAILABLE,
+)
 
 __all__ = [
     # Core
@@ -1373,4 +1393,23 @@ __all__ = [
     "UserNotificationSettingUpdate",
     "NotificationSettingItem",
     "NotificationSettingsPublic",
+    # Agent Improvement Requests
+    "AgentImprovementRequest",
+    "ImprovementRequestCreate",
+    "ImprovementRequestPublic",
+    "ImprovementRequestDetailPublic",
+    "ImprovementRequestsPublic",
+    "ImprovementRequestUpdate",
+    "ImprovementContextPublic",
+    "IMPROVEMENT_STATUSES",
+    "IMPROVEMENT_STATUS_NEW",
+    "IMPROVEMENT_STATUS_IN_PROGRESS",
+    "IMPROVEMENT_STATUS_COMPLETED",
+    "IMPROVEMENT_STATUS_DECLINED",
+    "IMPROVEMENT_SOURCES",
+    "IMPROVEMENT_SOURCE_WEB_UI",
+    "IMPROVEMENT_SOURCE_COMMAND",
+    "MAX_COMMENT_CHARS",
+    "MAX_RESOLUTION_NOTE_CHARS",
+    "FALLBACK_PUBLISHER_UNAVAILABLE",
 ]

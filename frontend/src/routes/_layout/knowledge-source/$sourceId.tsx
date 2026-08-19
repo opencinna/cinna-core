@@ -6,6 +6,11 @@ import { ArrowLeft, EllipsisVertical, Edit, Trash, Download } from "lucide-react
 import { KnowledgeSourcesService } from "@/client"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import useCustomToast from "@/hooks/useCustomToast"
+import {
+  fetchAuthenticatedResponse,
+  filenameFromResponse,
+  saveBlobAs,
+} from "@/utils"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -53,37 +58,17 @@ function KnowledgeSourceDetailPage() {
   }
 
   const handleExport = async () => {
-    // The export is a file download (not JSON), so use a raw authenticated
-    // fetch + blob download — the generated SDK cannot stream file downloads.
-    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000"
-    const token = localStorage.getItem("access_token")
+    // The export is a file download (not JSON), so it goes through the shared
+    // authenticated-download helpers — the generated SDK cannot stream files.
     try {
-      const response = await fetch(
-        `${apiUrl}/api/v1/knowledge-sources/${sourceId}/export`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
+      const response = await fetchAuthenticatedResponse(
+        `/api/v1/knowledge-sources/${sourceId}/export`,
       )
-      if (!response.ok) {
-        throw new Error("Export failed")
-      }
-
-      // Resolve filename from Content-Disposition, fall back to a sane default.
-      const disposition = response.headers.get("content-disposition") || ""
-      const match = disposition.match(/filename="?([^"]+)"?/)
-      const filename = match?.[1] || `knowledge-source-${sourceId}.md`
-
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+      const filename = filenameFromResponse(
+        response,
+        `knowledge-source-${sourceId}.md`,
+      )
+      saveBlobAs(await response.blob(), filename)
       showSuccessToast("Knowledge source exported")
     } catch (error: any) {
       showErrorToast(error.message || "Failed to export knowledge source")

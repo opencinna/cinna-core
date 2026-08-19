@@ -76,6 +76,7 @@ import {
 import useWorkspace from "@/hooks/useWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
+import { downloadAuthenticatedFile } from "@/utils"
 import { getColorPreset } from "@/utils/colorPresets"
 import { getWorkspaceIcon } from "@/config/workspaceIcons"
 import {
@@ -242,18 +243,14 @@ function CommentItem({ comment }: { comment: TaskCommentPublic }) {
 function AttachmentChip({ attachment }: { attachment: TaskAttachmentPublic }) {
   const handleDownload = async () => {
     if (!attachment.download_url) return
-    const token = localStorage.getItem("access_token") || ""
-    const response = await fetch(`${import.meta.env.VITE_API_URL}${attachment.download_url}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (!response.ok) return
-    const blob = await response.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = attachment.file_name || "download"
-    a.click()
-    URL.revokeObjectURL(url)
+    try {
+      await downloadAuthenticatedFile(
+        attachment.download_url,
+        attachment.file_name || "download",
+      )
+    } catch (error) {
+      console.error("Failed to download attachment:", error)
+    }
   }
 
   return (

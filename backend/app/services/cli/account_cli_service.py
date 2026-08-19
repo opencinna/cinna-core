@@ -91,6 +91,7 @@ from app.services.cli.cli_service import (
     _get_platform_url,
 )
 from app.services.events.security_event_service import SecurityEventService
+from app.utils import client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -101,20 +102,6 @@ class WorkspaceNotFoundError(Exception):
     The route maps this to 404 (existence-leak discipline — a foreign workspace
     id is not confirmed to exist).
     """
-
-
-def _client_ip(request: Request | None) -> str | None:
-    """Best-effort source IP for audit. Prefers the first X-Forwarded-For hop."""
-    if request is None:
-        return None
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first[:64]
-    if request.client and request.client.host:
-        return request.client.host[:64]
-    return None
 
 
 class AccountCLIService:
@@ -227,7 +214,7 @@ class AccountCLIService:
                 agent_id=None,
                 event_type=CLI_ACCOUNT_TOKEN_CREATED,
                 severity="medium",
-                details={"machine_name": machine_name, "ip": _client_ip(request)},
+                details={"machine_name": machine_name, "ip": client_ip(request)},
             ),
         )
 
@@ -438,7 +425,7 @@ class AccountCLIService:
                     "account_token_id": str(account_token.id),
                     "child_token_id": str(child_token.id),
                     "prefix": prefix,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -586,7 +573,7 @@ class AccountCLIService:
                     "account_token_id": str(account_token.id),
                     "child_token_id": str(child.id),
                     "prefix": child.prefix,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -724,7 +711,7 @@ class AccountCLIService:
                     "producer_agent_id": str(body.producer_agent_id),
                     "credential_id": str(result.credential_id),
                     "token_prefix": result.token_prefix,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -785,7 +772,7 @@ class AccountCLIService:
                 severity="medium",
                 details={
                     "enabled": enabled,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -979,7 +966,7 @@ class AccountCLIService:
                 severity="medium",
                 details={
                     "environment_id": str(environment.id),
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1175,7 +1162,7 @@ class AccountCLIService:
                 details={
                     "schedule_id": str(schedule.id),
                     "schedule_type": schedule.schedule_type,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1226,7 +1213,7 @@ class AccountCLIService:
                 details={
                     "schedule_id": str(schedule_id),
                     "fields": sorted(fields.keys()),
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1263,7 +1250,7 @@ class AccountCLIService:
                 severity="low",
                 details={
                     "schedule_id": str(schedule_id),
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1298,7 +1285,7 @@ class AccountCLIService:
                 details={
                     "schedule_id": str(schedule_id),
                     "action": result.action,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1420,7 +1407,7 @@ class AccountCLIService:
                 severity="low",
                 details={
                     "command": command,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1503,7 +1490,7 @@ class AccountCLIService:
                 details={
                     "connector_id": str(body.connector_id),
                     "credential_id": str(result.credential_id),
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1674,7 +1661,7 @@ class AccountCLIService:
                 details={
                     "credential_id": str(credential.id),
                     "type": credential.type.value,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1728,7 +1715,7 @@ class AccountCLIService:
                 details={
                     "credential_id": str(credential_id),
                     "fields": sorted(provided.keys()),
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1769,7 +1756,7 @@ class AccountCLIService:
                 details={
                     "credential_id": str(credential_id),
                     "force": force,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -1807,7 +1794,7 @@ class AccountCLIService:
                 severity="medium",
                 details={
                     "credential_id": str(credential_id),
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )

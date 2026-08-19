@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
 import { WorkspaceService, OpenAPI } from "@/client"
+import { saveBlobAs } from "@/utils"
 import { CSVViewer } from "@/components/Environment/CSVViewer"
 import { MarkdownViewer } from "@/components/Environment/MarkdownViewer"
 import { JSONViewer } from "@/components/Environment/JSONViewer"
@@ -69,14 +70,7 @@ function GuestFileViewerPage() {
         path,
       })) as unknown as Blob
 
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement("a")
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
+      saveBlobAs(blob, filename)
     } catch (error) {
       console.error("Download error:", error)
     }

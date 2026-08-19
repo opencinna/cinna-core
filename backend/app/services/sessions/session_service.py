@@ -1577,17 +1577,29 @@ class SessionService:
                     session_id=session_id,
                     role="system",
                     content=result.content,
-                    message_metadata={"command": True, "command_name": command_name},
+                    message_metadata={
+                        "command": True,
+                        "command_name": command_name,
+                        # Presentation hint for the chat UI — "notice" renders in
+                        # the shared system block, "document" in the wide
+                        # markdown panel. See ``CommandResult.display``.
+                        "command_display": result.display,
+                    },
                     answers_to_message_id=user_msg.id,
                     sent_to_agent_status="sent",
                     status="error" if result.is_error else "",
                 )
 
-            # Emit WS events for real-time UI update
-            await event_service.emit_stream_event(session_id, "assistant", {
-                "type": "assistant",
+            # Emit WS events for real-time UI update. The event mirrors the row
+            # we just persisted, so it announces itself as ``system`` — a slash
+            # command is deterministic local output, never agent speech, and a
+            # live "assistant" event would contradict what the same message
+            # renders as after a reload.
+            await event_service.emit_stream_event(session_id, "system", {
+                "type": "system",
                 "content": result.content,
                 "event_seq": 1,
+                "metadata": {"command": True, "command_name": command_name},
             })
             await event_service.emit_stream_event(session_id, "stream_completed", {
                 "status": "completed",

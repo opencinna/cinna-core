@@ -15051,6 +15051,497 @@ export const IdentityContactPublicSchema = {
     description: 'Represents a person who has shared agents with the current user via identity.'
 } as const;
 
+export const ImprovementContextPublicSchema = {
+    properties: {
+        eligible: {
+            type: 'boolean',
+            title: 'Eligible'
+        },
+        reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reason'
+        },
+        is_shared_externally: {
+            type: 'boolean',
+            title: 'Is Shared Externally',
+            default: false
+        },
+        recipient_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Recipient Display'
+        },
+        target_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Agent Name'
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        message_count: {
+            type: 'integer',
+            title: 'Message Count',
+            default: 0
+        },
+        existing_request_count: {
+            type: 'integer',
+            title: 'Existing Request Count',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['eligible'],
+    title: 'ImprovementContextPublic',
+    description: `The consent modal's pre-flight payload.
+
+Produced by the same gate + target resolution the submission runs, so the
+modal's copy can never disagree with what submitting will actually do.`
+} as const;
+
+export const ImprovementRequestCreateSchema = {
+    properties: {
+        session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Session Id'
+        },
+        comment: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 4000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Comment'
+        },
+        include_memory: {
+            type: 'boolean',
+            title: 'Include Memory',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['session_id'],
+    title: 'ImprovementRequestCreate',
+    description: 'Submission payload — the consent action.'
+} as const;
+
+export const ImprovementRequestDetailPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        target_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Agent Id'
+        },
+        target_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Agent Name'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        source_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Name'
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        requester_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Display'
+        },
+        requester_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Email'
+        },
+        comment: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Comment'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        },
+        source: {
+            type: 'string',
+            title: 'Source'
+        },
+        snapshot_message_count: {
+            type: 'integer',
+            title: 'Snapshot Message Count'
+        },
+        snapshot_truncated: {
+            type: 'boolean',
+            title: 'Snapshot Truncated'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        status_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Changed At'
+        },
+        context: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Context'
+        },
+        session_title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Title'
+        }
+    },
+    type: 'object',
+    required: ['id', 'target_agent_id', 'status', 'source', 'snapshot_message_count', 'snapshot_truncated', 'created_at'],
+    title: 'ImprovementRequestDetailPublic',
+    description: 'Detail projection — adds the whole frozen context block.'
+} as const;
+
+export const ImprovementRequestPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        target_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Agent Id'
+        },
+        target_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Agent Name'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        source_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Name'
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        requester_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Display'
+        },
+        requester_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Email'
+        },
+        comment: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Comment'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        },
+        source: {
+            type: 'string',
+            title: 'Source'
+        },
+        snapshot_message_count: {
+            type: 'integer',
+            title: 'Snapshot Message Count'
+        },
+        snapshot_truncated: {
+            type: 'boolean',
+            title: 'Snapshot Truncated'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        status_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Changed At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'target_agent_id', 'status', 'source', 'snapshot_message_count', 'snapshot_truncated', 'created_at'],
+    title: 'ImprovementRequestPublic',
+    description: `List/row projection.
+
+\`\`requester_display\`\` / \`\`requester_email\`\` identify the person who shared
+the session. They are meaningful to the recipient; the requester's own
+projection of their submitted requests carries them too (it is their data).`
+} as const;
+
+export const ImprovementRequestUpdateSchema = {
+    properties: {
+        status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        }
+    },
+    type: 'object',
+    title: 'ImprovementRequestUpdate',
+    description: 'Recipient-only status / resolution-note edit.'
+} as const;
+
+export const ImprovementRequestsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/ImprovementRequestPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'ImprovementRequestsPublic'
+} as const;
+
 export const InputTaskCreateSchema = {
     properties: {
         original_message: {

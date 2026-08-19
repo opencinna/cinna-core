@@ -11,6 +11,7 @@ import { CSVViewer } from "@/components/Environment/CSVViewer"
 import { MarkdownViewer } from "@/components/Environment/MarkdownViewer"
 import { JSONViewer } from "@/components/Environment/JSONViewer"
 import { TextViewer } from "@/components/Environment/TextViewer"
+import { fetchAuthenticatedBlob, saveBlobAs } from "@/utils"
 
 interface AttachmentPreviewModalProps {
   open: boolean
@@ -41,37 +42,19 @@ function formatFileSize(bytes?: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
-
 /** Authenticated blob fetch against the files download endpoint. */
 async function fetchFileBlob(
   fileId: string,
   { inline }: { inline: boolean }
 ): Promise<Blob> {
-  const token = localStorage.getItem("access_token")
   const dispositionParam = inline ? "?disposition=inline" : ""
-  const response = await fetch(
-    `${API_URL}/api/v1/files/${fileId}/download${dispositionParam}`,
-    {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    }
+  return fetchAuthenticatedBlob(
+    `/api/v1/files/${fileId}/download${dispositionParam}`
   )
-  if (!response.ok) {
-    throw new Error(`Download failed (${response.status})`)
-  }
-  return response.blob()
 }
 
 async function downloadFile(fileId: string, filename: string): Promise<void> {
-  const blob = await fetchFileBlob(fileId, { inline: false })
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  window.URL.revokeObjectURL(url)
+  saveBlobAs(await fetchFileBlob(fileId, { inline: false }), filename)
 }
 
 export function AttachmentPreviewModal({

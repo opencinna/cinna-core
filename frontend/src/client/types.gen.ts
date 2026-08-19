@@ -3468,6 +3468,100 @@ export type IdentityContactPublic = {
     assignment_ids: Array<(string)>;
 };
 
+/**
+ * The consent modal's pre-flight payload.
+ *
+ * Produced by the same gate + target resolution the submission runs, so the
+ * modal's copy can never disagree with what submitting will actually do.
+ */
+export type ImprovementContextPublic = {
+    eligible: boolean;
+    reason?: (string | null);
+    is_shared_externally?: boolean;
+    recipient_display?: (string | null);
+    target_agent_name?: (string | null);
+    bundle_id?: (string | null);
+    installed_version?: (string | null);
+    message_count?: number;
+    existing_request_count?: number;
+};
+
+/**
+ * Submission payload — the consent action.
+ */
+export type ImprovementRequestCreate = {
+    session_id: string;
+    comment?: (string | null);
+    include_memory?: boolean;
+};
+
+/**
+ * Detail projection — adds the whole frozen context block.
+ */
+export type ImprovementRequestDetailPublic = {
+    id: string;
+    target_agent_id: string;
+    target_agent_name?: (string | null);
+    source_agent_id?: (string | null);
+    source_agent_name?: (string | null);
+    bundle_id?: (string | null);
+    installed_version?: (string | null);
+    requester_display?: (string | null);
+    requester_email?: (string | null);
+    comment?: (string | null);
+    status: string;
+    resolution_note?: (string | null);
+    source: string;
+    snapshot_message_count: number;
+    snapshot_truncated: boolean;
+    created_at: string;
+    status_changed_at?: (string | null);
+    context?: {
+        [key: string]: unknown;
+    };
+    session_title?: (string | null);
+};
+
+/**
+ * List/row projection.
+ *
+ * ``requester_display`` / ``requester_email`` identify the person who shared
+ * the session. They are meaningful to the recipient; the requester's own
+ * projection of their submitted requests carries them too (it is their data).
+ */
+export type ImprovementRequestPublic = {
+    id: string;
+    target_agent_id: string;
+    target_agent_name?: (string | null);
+    source_agent_id?: (string | null);
+    source_agent_name?: (string | null);
+    bundle_id?: (string | null);
+    installed_version?: (string | null);
+    requester_display?: (string | null);
+    requester_email?: (string | null);
+    comment?: (string | null);
+    status: string;
+    resolution_note?: (string | null);
+    source: string;
+    snapshot_message_count: number;
+    snapshot_truncated: boolean;
+    created_at: string;
+    status_changed_at?: (string | null);
+};
+
+export type ImprovementRequestsPublic = {
+    data: Array<ImprovementRequestPublic>;
+    count: number;
+};
+
+/**
+ * Recipient-only status / resolution-note edit.
+ */
+export type ImprovementRequestUpdate = {
+    status?: (string | null);
+    resolution_note?: (string | null);
+};
+
 export type InputTaskCreate = {
     original_message: string;
     selected_agent_id?: (string | null);
@@ -7455,6 +7549,34 @@ export type CliAccountShareCredentialWithAgentData = {
 
 export type CliAccountShareCredentialWithAgentResponse = (Message);
 
+export type CliListAccountImprovementRequestsData = {
+    agentId?: (string | null);
+    limit?: number;
+    skip?: number;
+    status?: (string | null);
+};
+
+export type CliListAccountImprovementRequestsResponse = (ImprovementRequestsPublic);
+
+export type CliGetAccountImprovementRequestData = {
+    requestId: string;
+};
+
+export type CliGetAccountImprovementRequestResponse = (ImprovementRequestDetailPublic);
+
+export type CliUpdateAccountImprovementRequestData = {
+    requestBody: ImprovementRequestUpdate;
+    requestId: string;
+};
+
+export type CliUpdateAccountImprovementRequestResponse = (ImprovementRequestDetailPublic);
+
+export type CliDownloadAccountImprovementArchiveData = {
+    requestId: string;
+};
+
+export type CliDownloadAccountImprovementArchiveResponse = (unknown);
+
 export type CliAccountApiProxyData = {
     requestBody: AccountApiProxyRequest;
 };
@@ -8246,6 +8368,60 @@ export type IdentityContactsToggleIdentityContactData = {
 };
 
 export type IdentityContactsToggleIdentityContactResponse = (Message);
+
+export type ImprovementRequestsGetImprovementContextData = {
+    sessionId: string;
+};
+
+export type ImprovementRequestsGetImprovementContextResponse = (ImprovementContextPublic);
+
+export type ImprovementRequestsCreateImprovementRequestData = {
+    requestBody: ImprovementRequestCreate;
+};
+
+export type ImprovementRequestsCreateImprovementRequestResponse = (ImprovementRequestPublic);
+
+export type ImprovementRequestsListMyImprovementRequestsData = {
+    limit?: number;
+    skip?: number;
+    status?: (string | null);
+};
+
+export type ImprovementRequestsListMyImprovementRequestsResponse = (ImprovementRequestsPublic);
+
+export type ImprovementRequestsListAgentImprovementRequestsData = {
+    agentId: string;
+    limit?: number;
+    skip?: number;
+    status?: (string | null);
+};
+
+export type ImprovementRequestsListAgentImprovementRequestsResponse = (ImprovementRequestsPublic);
+
+export type ImprovementRequestsGetImprovementRequestData = {
+    requestId: string;
+};
+
+export type ImprovementRequestsGetImprovementRequestResponse = (ImprovementRequestDetailPublic);
+
+export type ImprovementRequestsUpdateImprovementRequestData = {
+    requestBody: ImprovementRequestUpdate;
+    requestId: string;
+};
+
+export type ImprovementRequestsUpdateImprovementRequestResponse = (ImprovementRequestDetailPublic);
+
+export type ImprovementRequestsDeleteImprovementRequestData = {
+    requestId: string;
+};
+
+export type ImprovementRequestsDeleteImprovementRequestResponse = (Message);
+
+export type ImprovementRequestsDownloadImprovementArchiveData = {
+    requestId: string;
+};
+
+export type ImprovementRequestsDownloadImprovementArchiveResponse = (unknown);
 
 export type InstallsPublishAgentData = {
     agentId: string;

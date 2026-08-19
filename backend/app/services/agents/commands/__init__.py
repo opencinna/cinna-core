@@ -8,6 +8,7 @@ from app.services.agents.command_service import CommandService
 from app.services.agents.commands.files_command import FilesCommandHandler, FilesAllCommandHandler
 from app.services.agents.commands.session_recover_command import SessionRecoverCommandHandler
 from app.services.agents.commands.session_reset_command import SessionResetCommandHandler
+from app.services.agents.commands.session_improve_command import SessionImproveCommandHandler
 from app.services.agents.commands.webapp_command import WebappCommandHandler
 from app.services.agents.commands.rebuild_env_command import RebuildEnvCommandHandler
 from app.services.agents.commands.agent_status_command import AgentStatusCommandHandler
@@ -18,6 +19,7 @@ CommandService.register(FilesCommandHandler())
 CommandService.register(FilesAllCommandHandler())
 CommandService.register(SessionRecoverCommandHandler())
 CommandService.register(SessionResetCommandHandler())
+CommandService.register(SessionImproveCommandHandler())
 CommandService.register(WebappCommandHandler())
 CommandService.register(RebuildEnvCommandHandler())
 CommandService.register(AgentStatusCommandHandler())
