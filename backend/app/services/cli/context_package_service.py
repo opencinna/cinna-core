@@ -10,6 +10,7 @@ Contents (static platform knowledge only — never any user-specific secret):
 
   context/
     README.md                 # package index the orchestrator CLAUDE.md points at
+    VERSION                   # content hash of this package (staleness check)
     platform/                 # curated business-logic docs (glossary, feature map)
       README.md               #   = docs/README.md (the feature map entrypoint)
       application/ agents/    #   business-logic feature docs (no *_tech files)
@@ -36,10 +37,20 @@ Freshness: the snapshot only changes when the sync script is re-run (a deploy
 artifact, not per-request work). The built tarball is therefore cached in-process
 and keyed by the snapshot directories' newest mtime, so a redeploy that ships a
 fresh snapshot invalidates the cache automatically without per-request tar work.
+
+Staleness, on the other side of the wire, is the CLI's problem: a workspace set
+up before a guide existed has no way to notice. So the package carries a
+**content** version — ``context/VERSION``, also served as the
+``X-Context-Package-Version`` response header and by
+``GET /cli/account/context-package/version`` — that the CLI can compare against
+what is on disk. It is a hash of the packaged content, deliberately not the
+mtime-based cache key: a redeploy that ships byte-identical knowledge must not
+tell every workspace it is behind.
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import tarfile
@@ -62,12 +73,20 @@ logger = logging.getLogger(__name__)
 # and the API reference is promoted to a top-level api_reference/ tree.
 _API_REFERENCE_SUBDIR = "api_reference"
 
+# Where the package stamps its own content version, and the header that carries
+# it on the download. The CLI compares the two to decide whether an existing
+# workspace's ``context/`` tree is behind.
+CONTEXT_PACKAGE_VERSION_MEMBER = "context/VERSION"
+CONTEXT_PACKAGE_VERSION_HEADER = "X-Context-Package-Version"
+
 
 class ContextPackageService:
     """Builds (and caches) the account-CLI orchestrator context package."""
 
-    # (cache_key, tarball_bytes) — process-local memoization of the built tarball.
-    _cache: tuple[str, bytes] | None = None
+    # (cache_key, content_version, tarball_bytes) — process-local memoization of
+    # the built tarball. ``cache_key`` is the cheap mtime probe; ``content_version``
+    # is the stable hash handed to callers.
+    _cache: tuple[str, str, bytes] | None = None
     _lock = threading.Lock()
 
     # ── Public API ───────────────────────────────────────────────────────
@@ -81,7 +100,7 @@ class ContextPackageService:
         attachment disposition) so the CLI's existing tarball-extract path is
         reused verbatim.
         """
-        content = cls._build_or_cached()
+        version, content = cls._build_or_cached()
 
         async def content_iter():
             yield content
@@ -91,13 +110,27 @@ class ContextPackageService:
             media_type="application/tar+gzip",
             headers={
                 "Content-Disposition": 'attachment; filename="context-package.tar.gz"',
+                # Lets a caller that already extracted this package tell whether
+                # it is current without re-downloading it.
+                CONTEXT_PACKAGE_VERSION_HEADER: version,
+                "Access-Control-Expose-Headers": CONTEXT_PACKAGE_VERSION_HEADER,
             },
         )
+
+    @classmethod
+    def get_content_version(cls) -> str:
+        """The current package's content version (the ``context/VERSION`` value).
+
+        Building to answer this is the same work the download would do, and the
+        result is cached, so the version endpoint stays cheap after the first
+        call in a process.
+        """
+        return cls._build_or_cached()[0]
 
     # ── Build / cache ────────────────────────────────────────────────────
 
     @classmethod
-    def _build_or_cached(cls) -> bytes:
+    def _build_or_cached(cls) -> tuple[str, bytes]:
         platform_dir = platform_knowledge_dir()
         examples_dir = example_scripts_dir()
         guides_dir = guides_snapshot_dir()
@@ -105,22 +138,60 @@ class ContextPackageService:
 
         cached = cls._cache
         if cached is not None and cached[0] == cache_key:
-            return cached[1]
+            return cached[1], cached[2]
 
         with cls._lock:
             # Re-check inside the lock: another thread may have just built it.
             cached = cls._cache
             if cached is not None and cached[0] == cache_key:
-                return cached[1]
+                return cached[1], cached[2]
 
-            content = cls._build_tarball(platform_dir, examples_dir, guides_dir)
-            cls._cache = (cache_key, content)
+            index = cls._render_index()
+            content_version = cls._content_version(
+                platform_dir, examples_dir, guides_dir, index
+            )
+            content = cls._build_tarball(
+                platform_dir, examples_dir, guides_dir, index, content_version
+            )
+            cls._cache = (cache_key, content_version, content)
             logger.info(
-                "Built account context package (%d bytes, version=%s)",
+                "Built account context package (%d bytes, content_version=%s, "
+                "cache_key=%s)",
                 len(content),
+                content_version,
                 cache_key,
             )
-            return content
+            return content_version, content
+
+    @staticmethod
+    def _content_version(
+        platform_dir: Path, examples_dir: Path, guides_dir: Path, index: str
+    ) -> str:
+        """Stable hash of everything the package ships.
+
+        Path + content of every packaged file, plus the rendered index (which is
+        code, not snapshot, and changes independently of it). Paths are taken
+        relative to their source root so the digest does not move between
+        machines, and mtimes are deliberately not folded in: a rebuild that
+        ships identical knowledge must produce an identical version, or every
+        workspace is told it is stale on every deploy and the signal stops
+        meaning anything.
+        """
+        digest = hashlib.sha256()
+        for label, root in (
+            ("platform", platform_dir),
+            ("examples", examples_dir),
+            ("guides", guides_dir),
+        ):
+            if not root.is_dir():
+                continue
+            for file in sorted(p for p in root.rglob("*") if p.is_file()):
+                rel = file.relative_to(root).as_posix()
+                digest.update(f"{label}/{rel}\0".encode("utf-8"))
+                digest.update(hashlib.sha256(file.read_bytes()).digest())
+        digest.update(b"index\0")
+        digest.update(index.encode("utf-8"))
+        return digest.hexdigest()[:16]
 
     @staticmethod
     def _snapshot_version(
@@ -152,7 +223,12 @@ class ContextPackageService:
 
     @classmethod
     def _build_tarball(
-        cls, platform_dir: Path, examples_dir: Path, guides_dir: Path
+        cls,
+        platform_dir: Path,
+        examples_dir: Path,
+        guides_dir: Path,
+        index: str,
+        content_version: str,
     ) -> bytes:
         """
         Assemble the package tarball in memory.
@@ -234,10 +310,17 @@ class ContextPackageService:
                 )
 
             # 4. Package index the orchestrator CLAUDE.md points at.
-            index = cls._render_index().encode("utf-8")
+            index_bytes = index.encode("utf-8")
             info = tarfile.TarInfo(name="context/README.md")
-            info.size = len(index)
-            tar.addfile(info, io.BytesIO(index))
+            info.size = len(index_bytes)
+            tar.addfile(info, io.BytesIO(index_bytes))
+
+            # 5. The version stamp, so an extracted workspace knows which
+            #    package it holds without keeping state anywhere else.
+            version_bytes = f"{content_version}\n".encode("utf-8")
+            info = tarfile.TarInfo(name=CONTEXT_PACKAGE_VERSION_MEMBER)
+            info.size = len(version_bytes)
+            tar.addfile(info, io.BytesIO(version_bytes))
 
         return buf.getvalue()
 
@@ -265,6 +348,7 @@ class ContextPackageService:
             "| `api_reference/*.md` | Generated endpoint reference, one file per domain. |\n"
             "| `examples/` | Working API-script patterns (`platform_helper.py` + samples). |\n"
             "| `guides/` | Worked walkthroughs — stand up a delegating multi-agent network, expose an agent as a REST API, author an agent's prompts & description, and turn a user's improvement request into a fix. |\n"
+            "| `VERSION` | Content version of this package. Compare it against `GET /api/v1/cli/account/context-package/version` to find out whether this workspace is behind; `cinna account refresh-context` brings it up to date. |\n"
             "\n"
             "## How to use this\n"
             "\n"

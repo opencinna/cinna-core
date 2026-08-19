@@ -122,6 +122,18 @@ export function ImprovementRequestsCard({
   )
 
   const requests = data?.data ?? []
+
+  // Session ids that appear on more than one visible row. Computed over the
+  // page actually rendered — the marker means "and another one you can see
+  // here", which is the only claim this page can support.
+  const repeatedSessionIds = new Set(
+    requests
+      .map((r) => r.session_id)
+      .filter(
+        (id, _i, all): id is string =>
+          Boolean(id) && all.filter((other) => other === id).length > 1,
+      ),
+  )
   const newCount = newData?.count ?? 0
 
   // Stay hidden while the probe is in flight, so the card does not flash in
@@ -213,6 +225,12 @@ export function ImprovementRequestsCard({
             {requests.map((request) => {
               const statusMeta = getImprovementStatusMeta(request.status)
               const requester = request.requester_display || "Unknown requester"
+              // Two captures of the same conversation are one report, not two —
+              // usually a re-submit after the first went unanswered. Saying so
+              // here saves opening both to find out.
+              const sharesSession = Boolean(
+                request.session_id && repeatedSessionIds.has(request.session_id),
+              )
               return (
                 <button
                   key={request.id}
@@ -220,10 +238,17 @@ export function ImprovementRequestsCard({
                   onClick={() => setSelectedRequestId(request.id)}
                   aria-label={`Open improvement request from ${requester}, ${
                     statusMeta.label
-                  }, ${formatDate(request.created_at)}`}
+                  }, ${formatDate(request.created_at)}${
+                    sharesSession ? ", same session as another request" : ""
+                  }`}
                   className="w-full flex items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
                 >
                   <span className="min-w-0 flex-1 truncate">{requester}</span>
+                  {sharesSession && (
+                    <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                      same session
+                    </span>
+                  )}
                   <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
                     {formatDate(request.created_at)}
                   </span>

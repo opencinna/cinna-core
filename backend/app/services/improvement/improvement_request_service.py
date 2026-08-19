@@ -617,12 +617,21 @@ class ImprovementRequestService:
         requester = users_by_id.get(row.requester_user_id)
         return ImprovementRequestPublic(
             id=row.id,
+            session_id=row.session_id,
             target_agent_id=row.target_agent_id,
             target_agent_name=target.name if target else None,
             source_agent_id=row.source_agent_id,
             source_agent_name=source.name if source else None,
             bundle_id=agent_context.get("bundle_id"),
+            # Prefer what was captured; a request written before the context
+            # carried the flag still has ``bundle_uuid`` on the row itself.
+            is_bundle_install=bool(
+                agent_context.get("is_bundle_install")
+                if agent_context.get("is_bundle_install") is not None
+                else row.bundle_uuid
+            ),
             installed_version=agent_context.get("installed_version"),
+            installed_revision_number=agent_context.get("installed_revision_number"),
             requester_display=display_name_for_user(requester),
             requester_email=requester.email if requester else None,
             comment=row.comment,

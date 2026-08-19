@@ -11716,6 +11716,24 @@ export const ConsentResponseSchema = {
     title: 'ConsentResponse'
 } as const;
 
+export const ContextPackageVersionPublicSchema = {
+    properties: {
+        version: {
+            type: 'string',
+            title: 'Version'
+        }
+    },
+    type: 'object',
+    required: ['version'],
+    title: 'ContextPackageVersionPublic',
+    description: `Staleness probe for an already-extracted context package.
+
+The CLI reads \`\`context/VERSION\`\` out of the workspace and compares it with
+\`\`version\`\` here. Equal means the workspace is current; different means a
+\`\`cinna account refresh-context\`\` is due. A workspace that predates the
+stamp has no \`\`VERSION\`\` file at all, which is itself the answer.`
+} as const;
+
 export const CreateAgentTaskRequestSchema = {
     properties: {
         task_message: {
@@ -15175,6 +15193,18 @@ export const ImprovementRequestDetailPublicSchema = {
             format: 'uuid',
             title: 'Id'
         },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
         target_agent_id: {
             type: 'string',
             format: 'uuid',
@@ -15225,6 +15255,11 @@ export const ImprovementRequestDetailPublicSchema = {
             ],
             title: 'Bundle Id'
         },
+        is_bundle_install: {
+            type: 'boolean',
+            title: 'Is Bundle Install',
+            default: false
+        },
         installed_version: {
             anyOf: [
                 {
@@ -15235,6 +15270,17 @@ export const ImprovementRequestDetailPublicSchema = {
                 }
             ],
             title: 'Installed Version'
+        },
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
         },
         requester_display: {
             anyOf: [
@@ -15343,6 +15389,18 @@ export const ImprovementRequestPublicSchema = {
             format: 'uuid',
             title: 'Id'
         },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
         target_agent_id: {
             type: 'string',
             format: 'uuid',
@@ -15393,6 +15451,11 @@ export const ImprovementRequestPublicSchema = {
             ],
             title: 'Bundle Id'
         },
+        is_bundle_install: {
+            type: 'boolean',
+            title: 'Is Bundle Install',
+            default: false
+        },
         installed_version: {
             anyOf: [
                 {
@@ -15403,6 +15466,17 @@ export const ImprovementRequestPublicSchema = {
                 }
             ],
             title: 'Installed Version'
+        },
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
         },
         requester_display: {
             anyOf: [

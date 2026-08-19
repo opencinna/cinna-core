@@ -79,6 +79,34 @@ const asText = (value: unknown): string | null => {
   return null
 }
 
+/**
+ * Label one bundle revision.
+ *
+ * A revision with no `version` is *unversioned* (every git-origin revision is,
+ * today), which is a fact about it rather than missing data — printing a bare
+ * dash there reads as "we don't know". The origin is appended when it is not a
+ * publish, because that is what explains an install sitting above the latest
+ * published revision.
+ */
+const revisionLabel = (
+  version: unknown,
+  revisionNumber: unknown,
+  origin?: unknown,
+): string | null => {
+  const versionText = asText(version)
+  const numberText = asText(revisionNumber)
+  if (!versionText && !numberText) return null
+  const label = versionText
+    ? numberText
+      ? `${versionText} (revision ${numberText})`
+      : versionText
+    : `revision ${numberText} (unversioned)`
+  const originText = asText(origin)
+  return originText && originText !== "publish"
+    ? `${label} · from ${originText}`
+    : label
+}
+
 const formatDateTime = (value: string) =>
   new Date(value).toLocaleString(undefined, {
     year: "numeric",
@@ -232,13 +260,35 @@ export function ImprovementRequestDetailModal({
   // `context.prompts.diverged` is deliberately tri-state: `null` means there
   // was no installed revision to diff against, which is not the same answer as
   // "no". Rendering it as "no" would tell a publisher their text is intact
-  // when nothing was ever compared.
+  // when nothing was ever compared. It covers the published prompt documents
+  // only — the router trigger is routing metadata the platform writes by itself
+  // and the install's owner may set, so counting it would flag nearly every
+  // consumer install for an edit no person made.
+  const divergedFields = Array.isArray(promptsBlock.diverged_fields)
+    ? (promptsBlock.diverged_fields as string[])
+    : []
   const promptsDiverged =
     typeof promptsBlock.diverged === "boolean"
       ? promptsBlock.diverged
-        ? "yes — the install's prompts differ from the published revision"
+        ? `yes — ${divergedFields.length > 0 ? divergedFields.join(", ") : "the install's prompts"} differ from the published revision`
         : "no — matches the published revision"
       : "no baseline to compare against"
+
+  // Revision numbers are shared between published and git-origin revisions and
+  // only a publish moves the bundle's "latest published" pointer, so an install
+  // can legitimately sit above it. Both sides are labelled rather than printed
+  // as bare version strings — a git revision carries no version at all, and an
+  // em-dash there reads as missing data instead of "unversioned".
+  const installedLabel = revisionLabel(
+    agentBlock.installed_version,
+    agentBlock.installed_revision_number,
+    agentBlock.installed_revision_origin,
+  )
+  const publishedLabel = revisionLabel(
+    agentBlock.latest_published_version ?? agentBlock.latest_version,
+    agentBlock.latest_published_revision_number ??
+      agentBlock.latest_revision_number,
+  )
 
   const memorySummary = memoryBlock.available
     ? `${memoryBlock.file_count ?? 0} file(s) captured`
@@ -250,8 +300,8 @@ export function ImprovementRequestDetailModal({
     // publisher must not read this as their own agent's name.
     { label: "Agent (as installed)", value: asText(agentBlock.name) },
     { label: "Bundle", value: asText(agentBlock.bundle_id) },
-    { label: "Installed version", value: asText(agentBlock.installed_version) },
-    { label: "Latest version", value: asText(agentBlock.latest_version) },
+    { label: "Installed", value: installedLabel },
+    { label: "Latest published", value: publishedLabel },
     { label: "Update pending", value: asText(agentBlock.update_pending) },
     { label: "Session mode", value: asText(sdkBlock.session_mode) },
     { label: "SDK engine", value: asText(sdkBlock.effective_engine) },

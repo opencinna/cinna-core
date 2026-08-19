@@ -67,6 +67,7 @@ from app.models.cli.account_convenience import (
     AccountCredentialUpdateBody,
     AccountRestartEnvResult,
     AccountStatusRefreshCommandBody,
+    ContextPackageVersionPublic,
 )
 from app.models.cli.cli_device_login import (
     DeviceLoginPollRequest,
@@ -689,6 +690,26 @@ def get_account_context_package(
     workspace's ``context/`` tree.
     """
     return ContextPackageService.get_context_package()
+
+
+@router.get(
+    "/account/context-package/version", response_model=ContextPackageVersionPublic
+)
+def get_account_context_package_version(
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Content version of the current context package.
+
+    The staleness signal for an account workspace: an existing ``context/`` tree
+    carries the version it was extracted at in ``context/VERSION``, and a
+    workspace set up before a guide (or a whole verb) existed has no other way
+    to know it is missing it. Cheap enough to call on every command — the
+    package is built once per process and cached.
+    """
+    return ContextPackageVersionPublic(
+        version=ContextPackageService.get_content_version()
+    )
 
 
 @router.post("/account/knowledge/search")

@@ -196,12 +196,25 @@ class ImprovementRequestPublic(SQLModel):
     """
 
     id: uuid.UUID
+    # The session this request froze. Titles are neither unique nor stable, so
+    # without the id two captures of the same conversation are indistinguishable
+    # in a listing — the reader has to download both archives to find out they
+    # are one report, not two.
+    session_id: uuid.UUID | None = None
     target_agent_id: uuid.UUID
     target_agent_name: str | None = None
     source_agent_id: uuid.UUID | None = None
     source_agent_name: str | None = None
     bundle_id: str | None = None
+    # Whether the source install came from a bundle, stated rather than left to
+    # be inferred from two nullable strings: a git-origin revision carries no
+    # version label, so ``installed_version is None`` on a real bundle install
+    # is routine and reads as "standalone" to anyone keying off it.
+    is_bundle_install: bool = False
     installed_version: str | None = None
+    # The install's revision number — the label to fall back on when the
+    # revision has no version (``rev 9``).
+    installed_revision_number: int | None = None
     requester_display: str | None = None
     requester_email: str | None = None
     comment: str | None = None

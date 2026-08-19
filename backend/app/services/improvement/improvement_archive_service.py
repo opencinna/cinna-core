@@ -206,14 +206,9 @@ class ImprovementArchiveService:
 
         diverged = prompts.get("diverged")
         if diverged is True:
-            changed = [
-                _PROMPT_MEMBER_NAMES[key]
-                for key in _PROMPT_MEMBER_NAMES
-                if (prompts.get(key) or {}).get("diverged_from_installed_revision")
-            ]
             lines += [
                 "> **The prompts on this install differ from the revision it "
-                f"was installed from:** {', '.join(f'`{c}`' for c in changed)}. "
+                f"was installed from:** {_changed_prompt_list(prompts)}. "
                 "Reproduce the report against the text in `prompts/`, not "
                 "against your own install.",
                 "",
@@ -313,28 +308,37 @@ class ImprovementArchiveService:
                   "| --- | --- | --- | --- |"]
         for key, filename in _PROMPT_MEMBER_NAMES.items():
             field = prompts.get(key) or {}
-            diverged = field.get("diverged_from_installed_revision")
             # A field with no text has no file in this folder — say so in the
             # table rather than leaving the reader to notice the absence.
             label = f"`{filename}`" if field.get("text") else f"`{filename}` (not set)"
             lines.append(
                 f"| {label} | {field.get('chars', 0)} | "
-                f"{'unknown' if diverged is None else _yes_no(diverged)} | "
+                f"{_divergence_cell(field)} | "
                 f"{field.get('updated_at') or '—'} |"
             )
         lines.append("")
+        if _has_routing_metadata(prompts):
+            lines += [
+                "`ROUTER_TRIGGER_PROMPT.md` says *when to route to* this agent, "
+                "not how it behaves. The platform generates one for installs "
+                "that have none, and the person running the agent may set their "
+                "own — so it is listed here for information and never counted "
+                "as a difference from your published prompts.",
+                "",
+            ]
 
-        allowed = prompts.get("allowed_tools") or []
+        allowed = prompts.get("allowed_tools")
         sdk_tools = prompts.get("sdk_tools") or []
         lines += [
             "## Tool configuration",
             "",
             f"- **Tools requested by the agent:** {_join_or_dash(sdk_tools)}",
-            f"- **Tools auto-approved by the owner:** {_join_or_dash(allowed)}",
+            f"- **Tools auto-approved by the owner:** {_allowed_tools_line(allowed)}",
             "",
-            "A tool that appears in the first list but not the second prompted "
-            "the user for permission on every use — a common cause of a run "
-            "that looks stuck.",
+            "Auto-approval is the *only* thing this list controls: it never "
+            "restricts which tools exist. A tool that appears in the first list "
+            "but not the second prompted the user for permission on every use — "
+            "a common cause of a run that looks stuck.",
             "",
         ]
         if any((prompts.get(key) or {}).get("truncated") for key in _PROMPT_MEMBER_NAMES):
@@ -520,16 +524,16 @@ class ImprovementArchiveService:
         if agent_ctx.get("is_bundle_install"):
             lines += [
                 f"- **Bundle id:** `{agent_ctx.get('bundle_id') or '—'}`",
-                f"- **Installed version:** {agent_ctx.get('installed_version') or '—'} "
-                f"(revision {agent_ctx.get('installed_revision_number') or '—'})",
-                f"- **Latest published version:** "
-                f"{agent_ctx.get('latest_version') or '—'} "
-                f"(revision {agent_ctx.get('latest_revision_number') or '—'})",
+                f"- **Installed:** {_installed_revision_label(agent_ctx)}",
+                f"- **Latest published:** {_published_revision_label(agent_ctx)}",
                 f"- **Update pending at capture:** "
                 f"{_yes_no(agent_ctx.get('update_pending'))}",
                 f"- **Publisher install:** "
                 f"{_yes_no(agent_ctx.get('is_publisher_install'))}",
             ]
+            track_note = _revision_track_note(agent_ctx)
+            if track_note:
+                lines += ["", track_note]
         else:
             lines.append("- **Bundle:** not a bundle install (standalone agent)")
         lines.append("")
@@ -679,6 +683,130 @@ def _join_or_dash(values: Any) -> str:
 
 def _ensure_trailing_newline(text: str) -> str:
     return text if text.endswith("\n") else text + "\n"
+
+
+def _changed_prompt_list(prompts: dict) -> str:
+    """The published-prompt documents that differ from the installed revision.
+
+    Reads ``diverged_fields`` (schema 3) and falls back to scanning the per-field
+    flags for older captures, where the rollup still included routing metadata.
+    """
+    keys = prompts.get("diverged_fields")
+    if not isinstance(keys, list):
+        keys = [
+            key
+            for key in _PROMPT_MEMBER_NAMES
+            if (prompts.get(key) or {}).get("diverged_from_installed_revision")
+        ]
+    names = [_PROMPT_MEMBER_NAMES[k] for k in keys if k in _PROMPT_MEMBER_NAMES]
+    return ", ".join(f"`{n}`" for n in names) if names else "—"
+
+
+def _divergence_cell(field: dict) -> str:
+    """One divergence cell, stating *why* an answer is missing.
+
+    "unknown" and "not compared" are different facts and lead a publisher to
+    different next steps, so they never collapse into the same word.
+    """
+    diverged = field.get("diverged_from_installed_revision")
+    if diverged is not None:
+        return _yes_no(diverged)
+    if field.get("divergence_reason") == "platform_managed_no_baseline":
+        return "not compared (routing metadata)"
+    return "unknown"
+
+
+def _has_routing_metadata(prompts: dict) -> bool:
+    return any(
+        (prompts.get(key) or {}).get("role") == "routing_metadata"
+        for key in _PROMPT_MEMBER_NAMES
+    )
+
+
+def _allowed_tools_line(allowed: Any) -> str:
+    """Render the auto-approval list without the empty-list ambiguity.
+
+    ``[]`` and "never configured" read identically as an empty list but answer
+    "why did the agent not use that tool?" differently, so each gets a sentence
+    rather than a dash.
+    """
+    if allowed is None:
+        return "no auto-approval list configured — every tool use prompted the user"
+    if not allowed:
+        return "none — every tool use prompted the user"
+    return ", ".join(f"`{t}`" for t in allowed)
+
+
+def _revision_label(version: Any, number: Any, origin: Any = None) -> str:
+    """Human label for one revision.
+
+    Never renders a bare em-dash where a version should be: a revision with no
+    ``version`` label is *unversioned*, which is a fact about it, not missing
+    data. Git-origin revisions carry no label today, so this is the common case.
+    """
+    if number is None and not version:
+        return "—"
+    if version:
+        label = f"{version} (revision {number})" if number is not None else str(version)
+    else:
+        label = f"revision {number} (unversioned)"
+    if origin and origin != "publish":
+        label += f" · from {origin}"
+    return label
+
+
+def _installed_revision_label(agent_ctx: dict) -> str:
+    return _revision_label(
+        agent_ctx.get("installed_version"),
+        agent_ctx.get("installed_revision_number"),
+        agent_ctx.get("installed_revision_origin"),
+    )
+
+
+def _published_revision_label(agent_ctx: dict) -> str:
+    """The bundle's latest **published** revision.
+
+    Reads the schema-3 keys and falls back to the schema-2 ``latest_*`` names,
+    so an archive rebuilt from a request captured before the rename still
+    renders its numbers instead of two em-dashes.
+    """
+    return _revision_label(
+        agent_ctx.get("latest_published_version") or agent_ctx.get("latest_version"),
+        agent_ctx.get("latest_published_revision_number")
+        if agent_ctx.get("latest_published_revision_number") is not None
+        else agent_ctx.get("latest_revision_number"),
+    )
+
+
+def _revision_track_note(agent_ctx: dict) -> str | None:
+    """Explain an install sitting above the latest published revision.
+
+    Revision numbers are allocated across publish **and** git revisions, so an
+    install materialised from a git revision legitimately reads as "installed 9,
+    latest published 7". Without this line that pair looks like a regression, or
+    like ``update_pending: false`` contradicting itself.
+    """
+    installed = agent_ctx.get("installed_revision_number")
+    published = (
+        agent_ctx.get("latest_published_revision_number")
+        if agent_ctx.get("latest_published_revision_number") is not None
+        else agent_ctx.get("latest_revision_number")
+    )
+    if installed is None or published is None or installed <= published:
+        return None
+    head = agent_ctx.get("head_revision_number")
+    head_note = (
+        f" The bundle's newest revision is {head}."
+        if head is not None and head != installed
+        else ""
+    )
+    return (
+        f"> This install runs revision {installed}, which is **above** the latest "
+        f"published revision ({published}) — revision numbers are shared between "
+        "published revisions and git-origin ones, and only a publish moves the "
+        f'"latest published" pointer. Nothing is pending because there is no '
+        f"newer *published* revision to apply.{head_note}"
+    )
 
 
 def _row(label: str, value: Any) -> str:

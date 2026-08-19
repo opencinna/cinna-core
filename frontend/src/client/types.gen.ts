@@ -2584,6 +2584,18 @@ export type ConsentResponse = {
 };
 
 /**
+ * Staleness probe for an already-extracted context package.
+ *
+ * The CLI reads ``context/VERSION`` out of the workspace and compares it with
+ * ``version`` here. Equal means the workspace is current; different means a
+ * ``cinna account refresh-context`` is due. A workspace that predates the
+ * stamp has no ``VERSION`` file at all, which is itself the answer.
+ */
+export type ContextPackageVersionPublic = {
+    version: string;
+};
+
+/**
  * Request to create a task (with or without target agent).
  *
  * If target_agent_id is provided: Direct handover (task auto-executes)
@@ -3500,12 +3512,15 @@ export type ImprovementRequestCreate = {
  */
 export type ImprovementRequestDetailPublic = {
     id: string;
+    session_id?: (string | null);
     target_agent_id: string;
     target_agent_name?: (string | null);
     source_agent_id?: (string | null);
     source_agent_name?: (string | null);
     bundle_id?: (string | null);
+    is_bundle_install?: boolean;
     installed_version?: (string | null);
+    installed_revision_number?: (number | null);
     requester_display?: (string | null);
     requester_email?: (string | null);
     comment?: (string | null);
@@ -3531,12 +3546,15 @@ export type ImprovementRequestDetailPublic = {
  */
 export type ImprovementRequestPublic = {
     id: string;
+    session_id?: (string | null);
     target_agent_id: string;
     target_agent_name?: (string | null);
     source_agent_id?: (string | null);
     source_agent_name?: (string | null);
     bundle_id?: (string | null);
+    is_bundle_install?: boolean;
     installed_version?: (string | null);
+    installed_revision_number?: (number | null);
     requester_display?: (string | null);
     requester_email?: (string | null);
     comment?: (string | null);
@@ -7371,6 +7389,8 @@ export type CliAccountCreateAgentResponse = (AgentPublic);
 export type CliListAccountUserWorkspacesResponse = (UserWorkspacesPublic);
 
 export type CliGetAccountContextPackageResponse = (unknown);
+
+export type CliGetAccountContextPackageVersionResponse = (ContextPackageVersionPublic);
 
 export type CliAccountSearchKnowledgeData = {
     requestBody: KnowledgeSearchBody;

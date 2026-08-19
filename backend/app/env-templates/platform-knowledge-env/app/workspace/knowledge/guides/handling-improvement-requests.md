@@ -145,10 +145,21 @@ and the archive's `context.json`:
   "is_publisher_install": false,
   "bundle_id": "io.opencinna.cinna.a1b2c3d4",
   "installed_version": "1.3",
-  "latest_version": "1.5",
+  "installed_revision_number": 9,
+  "installed_revision_origin": "publish",       // or "git"
+  "latest_published_version": "1.5",
+  "latest_published_revision_number": 11,
+  "head_revision_number": 11,
   "update_pending": true
 }
 ```
+
+Revision numbers are allocated across **both** published revisions and git
+ones, and only a publish moves `latest_published_*`. An install can therefore
+sit above the latest published revision (`installed_revision_number: 9`,
+`latest_published_revision_number: 7`) with nothing pending — it is on the git
+track, not a regression. Compare `installed_version` against
+`latest_published_version` when you want "is this user behind", not the numbers.
 
 Note that `context.json` describes the **requester's** install (the one that
 misbehaved). The target agent — the one the request landed on, and the one you
@@ -213,14 +224,15 @@ prompt, check whether the report is explained by the environment instead:
 
 | Context signal | What it often means |
 |---|---|
-| `update_pending: true`, `installed_version` behind `latest_version` | Already fixed upstream. Verify against the latest version before writing new code |
+| `update_pending: true`, `installed_version` behind `latest_published_version` | Already fixed upstream. Verify against the latest version before writing new code |
 | `effective_model` is a small/fast tier | Instruction-following failures may be a model-tier issue, not a prompt bug |
 | `sdk.effective_engine` differs from what you build against | Behaviour differences between engines are real; reproduce on the engine in the report |
 | `image_stale: true`, or `current_image_tag` ≠ `expected_image_tag` | The env is running an old image — the workspace may not be what you think |
 | `critical_state: true` | The environment was degraded during the session; the transcript may show infrastructure symptoms, not agent defects |
 | `plugins: []` where you expected plugins | A plugin failed to install; that is an env problem, not a prompt problem |
-| `prompts.diverged: true` | The user is not running your text. Reproduce against `prompts/`, and consider whether your published prompt invited the edit |
-| A tool in `sdk_tools` but not in `allowed_tools` | The user was prompted for permission on every use — a common cause of a run that looks stuck or repetitive |
+| `prompts.diverged: true` | The user is not running your text. `prompts.diverged_fields` names which documents. Reproduce against `prompts/`, and consider whether your published prompt invited the edit |
+| `router_trigger` differs | Routing metadata, not your published text — the platform generates one for installs that have none, and the user may set their own. Never counted in `prompts.diverged` |
+| A tool in `sdk_tools` but not in `allowed_tools` | The user was prompted for permission on every use — a common cause of a run that looks stuck or repetitive. `allowed_tools: null` means no auto-approval list at all; `[]` means one exists and is empty — both prompt on every use, and neither restricts which tools exist |
 | `memory/` explains a behaviour the prompts don't | A personal note is steering the agent. Fix by making the prompt robust to it, never by asking the user to delete their notes |
 
 Say which layer you concluded it is. "Fixed the prompt" for what was a stale

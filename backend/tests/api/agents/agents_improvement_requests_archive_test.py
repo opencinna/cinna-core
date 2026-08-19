@@ -169,8 +169,10 @@ def test_archive_zip_contains_all_members_and_context_fields(
     assert context["agent"]["bundle_id"] == bundle_id
     assert context["agent"]["installed_version"] is not None
     assert context["agent"]["installed_revision_number"] is not None
-    assert context["agent"]["latest_version"] is not None
-    assert context["agent"]["latest_revision_number"] is not None
+    assert context["agent"]["latest_published_version"] is not None
+    assert context["agent"]["latest_published_revision_number"] is not None
+    assert context["agent"]["installed_revision_origin"] == "publish"
+    assert context["agent"]["head_revision_number"] is not None
     assert context["sdk"]["session_mode"] == "conversation"
     assert context["sdk"]["effective_engine"] is not None
     assert context["sdk"]["effective_model"] is not None

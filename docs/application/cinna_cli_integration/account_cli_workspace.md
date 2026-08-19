@@ -123,6 +123,16 @@ template environment.
 4. `cinna account refresh-context` re-downloads and replaces the `context/`
    tree in place. If the download fails, the command warns and exits without
    corrupting the existing `context/` content.
+5. **Staleness is detectable.** The package stamps its own content version into
+   `context/VERSION`, echoes it on the download as the
+   `X-Context-Package-Version` header, and serves it from
+   `GET /api/v1/cli/account/context-package/version`. A workspace set up before
+   a guide — or a whole set of verbs — existed otherwise has no way to know it
+   is behind, because the package is extracted once at setup and never checked
+   again; comparing the two values is what lets the CLI say so. The version is a
+   hash of the packaged **content**, not of file mtimes, so a redeploy shipping
+   identical knowledge does not tell every workspace it is stale. A workspace
+   with no `VERSION` file at all predates the stamp, which is itself the answer.
 
 The package is assembled from the committed `platform-knowledge-env`
 template snapshot inside the backend container (the only copy of this
@@ -992,6 +1002,7 @@ The backend contract these commands consume:
 |---------|-----------------|----------|
 | `cinna account setup <token_or_url>` | `POST /api/cli-setup/account/{token}` then `GET /api/v1/cli/account/context-package` | Exchange account setup token; download and extract context package into `context/`; write `account.json` + `CLAUDE.md` |
 | `cinna account refresh-context` | `GET /api/v1/cli/account/context-package` | Re-download the context package and replace `context/` in place; warns and exits cleanly on failure without corrupting existing content |
+| *(staleness probe)* | `GET /api/v1/cli/account/context-package/version` | `{"version": "<hash>"}` — compare against the workspace's `context/VERSION` to decide whether `refresh-context` is due. Cheap: the package is built once per process and cached |
 | `cinna account agents [--all]` | `GET /api/v1/cli/account/agents` | Print accessible-agents table with `can_build` / `is_foreign_install` flags; **scoped to the active workspace by default** (client-side filter on `user_workspace_id`, header names the workspace), `--all` for every workspace |
 | `cinna agent sync <agent>` | `POST /api/v1/cli/account/agents/{id}/mint` then existing per-agent bootstrap | Mint child token; write `agents/<slug>/` as a standard workspace |
 | `cinna agent unsync <agent>` | `DELETE /api/v1/cli/account/tokens/children/{child_token_id}` then local | Revokes the child token server-side (authenticated by the account token), then stops sync and removes `agents/<slug>/` from the local registry |

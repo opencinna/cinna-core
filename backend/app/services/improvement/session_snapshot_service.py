@@ -40,7 +40,7 @@ from app.models.sessions.session import Session as ChatSession, SessionMessage
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_SCHEMA_VERSION = 1
-CONTEXT_SCHEMA_VERSION = 2
+CONTEXT_SCHEMA_VERSION = 3
 
 # ── Prompts + memory caps (plan §3.3) ────────────────────────────────
 # Per-prompt-field text cap. Generous: the prompt IS the artefact under review,
@@ -70,15 +70,39 @@ MEMORY_REASON_ENV_NOT_RUNNING = "env_not_running"
 MEMORY_REASON_READ_FAILED = "read_failed"
 MEMORY_REASON_EMPTY = "empty"
 
+# What a prompt field *is*, which decides whether its divergence is a signal
+# about the publisher's text at all.
+#
+# ``published_prompt`` — the documents a publisher writes and ships. A
+#   difference against the installed revision means the consumer is not running
+#   the published text, which is exactly what the recipient needs to know.
+# ``routing_metadata`` — ``router_trigger_prompt``. It describes *when to route
+#   to* the agent rather than how the agent behaves, the platform writes it by
+#   itself on foreign installs (``scripts/backfill_router_trigger_prompts`` AI-
+#   generates one wherever an install has no auto-managed route), and
+#   ``PATCH /agents/{id}/router-trigger-prompt`` is open to ``agent-user``
+#   accounts by design. Comparing it against a publisher who never set one
+#   reports "the consumer edited your prompt" for text no person wrote, on the
+#   one field a consumer is most entitled to change — so it is reported for
+#   information and kept out of the rollup.
+PROMPT_ROLE_PUBLISHED = "published_prompt"
+PROMPT_ROLE_ROUTING = "routing_metadata"
+
 # The four prompt documents that shape a run, mapped to their ``Agent`` /
-# ``AgentBundleRevision`` column names. The same attribute name exists on both
-# models, which is what makes the divergence comparison a one-liner.
-_PROMPT_FIELDS: tuple[tuple[str, str], ...] = (
-    ("workflow", "workflow_prompt"),
-    ("entrypoint", "entrypoint_prompt"),
-    ("refiner", "refiner_prompt"),
-    ("router_trigger", "router_trigger_prompt"),
+# ``AgentBundleRevision`` column names and their role. The same attribute name
+# exists on both models, which is what makes the divergence comparison a
+# one-liner.
+_PROMPT_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("workflow", "workflow_prompt", PROMPT_ROLE_PUBLISHED),
+    ("entrypoint", "entrypoint_prompt", PROMPT_ROLE_PUBLISHED),
+    ("refiner", "refiner_prompt", PROMPT_ROLE_PUBLISHED),
+    ("router_trigger", "router_trigger_prompt", PROMPT_ROLE_ROUTING),
 )
+
+# ``divergence_reason`` vocabulary — why a field's flag is ``null``. Stable
+# codes: the archive README and the CLI both render copy off them.
+DIVERGENCE_REASON_NO_BASELINE = "no_baseline"
+DIVERGENCE_REASON_PLATFORM_MANAGED = "platform_managed_no_baseline"
 
 # ── Capture caps (plan §3.2) ─────────────────────────────────────────
 # Per-message content cap; the tail is dropped with an explicit marker.
@@ -423,8 +447,20 @@ class SessionSnapshotService:
             ),
             "installed_revision_number": None,
             "installed_version": None,
-            "latest_revision_number": None,
-            "latest_version": None,
+            # ``publish`` or ``git`` — the reason an install can sit *above*
+            # the latest published revision without being ahead of anything a
+            # consumer can get. Revision numbers are allocated across both
+            # origins, so the number alone does not order the two tracks.
+            "installed_revision_origin": None,
+            # The bundle's ``latest_revision_id`` pointer, which only the
+            # publish path advances. Named for what it is: a git-origin
+            # revision is newer without being published.
+            "latest_published_revision_number": None,
+            "latest_published_version": None,
+            # Highest revision number on the bundle whatever its origin, so
+            # "installed 9, latest published 7" reads as a track difference
+            # rather than a regression.
+            "head_revision_number": None,
             "update_pending": bool(source_agent.pending_update),
         }
         try:
@@ -435,12 +471,21 @@ class SessionSnapshotService:
                 if installed:
                     block["installed_revision_number"] = installed.revision_number
                     block["installed_version"] = installed.version
+                    block["installed_revision_origin"] = installed.origin
             bundle = getattr(resolution, "bundle", None)
-            if bundle is not None and bundle.latest_revision_id:
-                latest = db.get(AgentBundleRevision, bundle.latest_revision_id)
-                if latest:
-                    block["latest_revision_number"] = latest.revision_number
-                    block["latest_version"] = latest.version
+            if bundle is not None:
+                if bundle.latest_revision_id:
+                    latest = db.get(AgentBundleRevision, bundle.latest_revision_id)
+                    if latest:
+                        block["latest_published_revision_number"] = (
+                            latest.revision_number
+                        )
+                        block["latest_published_version"] = latest.version
+                block["head_revision_number"] = db.exec(
+                    select(func.max(AgentBundleRevision.revision_number)).where(
+                        AgentBundleRevision.bundle_id == bundle.id
+                    )
+                ).one()
         except Exception as e:  # noqa: BLE001
             logger.warning("Improvement context: bundle revision lookup failed: %s", e)
         return block
@@ -597,7 +642,16 @@ class SessionSnapshotService:
         ``AgentBundleRevision``. With no installed revision (a standalone
         agent, or a bundle row whose revision was deleted) there is no baseline
         and every ``diverged_from_installed_revision`` is ``null`` — never
-        ``false``, which would assert a match that was never checked.
+        ``false``, which would assert a match that was never checked. The same
+        restraint applies per field: where the baseline has nothing to compare
+        and the platform writes the field on its own (``router_trigger``), the
+        flag stays ``null`` with a ``divergence_reason`` rather than claiming an
+        edit nobody made.
+
+        The ``diverged`` rollup is taken over ``published_prompt`` fields only.
+        It exists to answer *is this install running my published text*, and a
+        flag that is usually wrong gets ignored — taking the genuine
+        workflow-prompt signal down with it.
 
         Hashes are taken **before** the secret scrub runs over the context, so
         they identify the text as the agent actually ran it. A field whose
@@ -614,38 +668,58 @@ class SessionSnapshotService:
     def _build_prompts_block(db: DBSession, source_agent: Agent) -> dict:
         baseline = SessionSnapshotService._installed_revision(db, source_agent)
         fields: dict[str, Any] = {}
-        any_diverged = False
+        diverged_fields: list[str] = []
 
-        for key, column in _PROMPT_FIELDS:
+        for key, column, role in _PROMPT_FIELDS:
             text = getattr(source_agent, column, None)
             baseline_text = getattr(baseline, column, None) if baseline else None
             diverged: bool | None = None
-            if baseline is not None:
+            reason: str | None = None
+            if baseline is None:
+                reason = DIVERGENCE_REASON_NO_BASELINE
+            elif role == PROMPT_ROLE_ROUTING and not _normalise(baseline_text):
+                # Nothing published to compare against, and the platform writes
+                # this field on its own — so any text here is unattributable,
+                # not an edit. Reported as unknown rather than as a difference.
+                reason = DIVERGENCE_REASON_PLATFORM_MANAGED
+            else:
                 diverged = _normalise(text) != _normalise(baseline_text)
-                any_diverged = any_diverged or diverged
+                if diverged and role == PROMPT_ROLE_PUBLISHED:
+                    diverged_fields.append(key)
             fields[key] = {
+                "role": role,
                 "chars": len(text or ""),
                 "sha256": _sha256(text),
                 "updated_at": _iso(
                     getattr(source_agent, f"{column}_updated_at", None)
                 ),
                 "diverged_from_installed_revision": diverged,
+                "divergence_reason": reason,
                 "truncated": len(text or "") > MAX_PROMPT_TEXT_CHARS,
                 "text": _truncate(text, MAX_PROMPT_TEXT_CHARS, TRUNCATION_MARKER)
                 or None,
             }
 
         sdk_config = source_agent.agent_sdk_config or {}
+        # ``[]`` and "never configured" are opposite readings of the same empty
+        # list to anyone asking why a tool was not used, so they are kept
+        # distinct: ``null`` = no auto-approval list on the agent at all.
+        allowed_tools = sdk_config.get("allowed_tools")
         return {
             "schema_version": CONTEXT_SCHEMA_VERSION,
             # ``baseline`` names what the divergence flags were measured
             # against, so a reader never has to infer it from a null.
             "baseline": "installed_revision" if baseline is not None else "none",
             "baseline_version": baseline.version if baseline is not None else None,
-            "diverged": any_diverged if baseline is not None else None,
+            # The rollup answers "is this install running my published text?",
+            # so it is taken over ``published_prompt`` fields only.
+            "diverged": bool(diverged_fields) if baseline is not None else None,
+            "diverged_fields": diverged_fields,
             **fields,
             "sdk_tools": list(sdk_config.get("sdk_tools") or []),
-            "allowed_tools": list(sdk_config.get("allowed_tools") or []),
+            "allowed_tools": (
+                list(allowed_tools) if isinstance(allowed_tools, list) else None
+            ),
             "example_prompts": list(source_agent.example_prompts or []),
         }
 
