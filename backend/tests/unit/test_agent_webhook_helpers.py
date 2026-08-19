@@ -4,7 +4,7 @@ Unit tests for ``AgentWebhookService`` pure helpers.
 Header allowlist (``filter_headers``) and session-prompt assembly
 (``_assemble_session_prompt``) operate on plain dicts / MagicMock stand-ins —
 no DB, no HTTP. The full public-endpoint fire flow is covered in
-``tests/api/agents/agents_webhooks_test.py``.
+``tests/api/agents/integrations/agents_webhooks_test.py``.
 """
 from unittest.mock import MagicMock
 

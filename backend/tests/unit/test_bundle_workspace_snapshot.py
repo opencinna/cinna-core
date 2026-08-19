@@ -18,9 +18,9 @@ Pure filesystem tests — no DB, no HTTP. Covers:
      digest.
 
 API-observable counterparts (scenarios 2, 3, 4) live in
-``tests/api/agents/agents_bundles_workspace_snapshot_test.py``.
+``tests/api/agents/bundles/agents_bundles_workspace_snapshot_test.py``.
 The API-observable dirty-check behavior is covered in
-``tests/api/agents/agents_git_source_test.py`` (Scenario 7).
+``tests/api/agents/git/agents_git_source_test.py`` (Scenario 7).
 """
 import json
 import uuid

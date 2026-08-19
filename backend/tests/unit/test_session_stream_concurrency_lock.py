@@ -43,7 +43,7 @@ behavior itself.
 
 API-observable behavior of the fixed pipeline (message never stranded,
 correct final session state) is covered end-to-end in
-``tests/api/agents/agents_session_stream_concurrency_test.py``.
+``tests/api/agents/sessions/agents_session_stream_concurrency_test.py``.
 
 This is the test that would FAIL before the fix (both calls' ``process()``
 mocks would run essentially back-to-back with no lock forcing call #2 to

@@ -28,10 +28,24 @@ Only after reading these files should you begin writing tests.
 Tests are organized by entity/domain in logical folders under `backend/tests/api/`:
 - `backend/tests/api/agents/` - Agent-related tests
 - `backend/tests/api/mcp_integration/` - MCP integration tests
-- `backend/tests/api/items/` - Items tests
+- `backend/tests/api/credentials/` - Credential tests
 - etc.
 
 When creating tests for a new entity, follow the same folder structure pattern. Place tests in the appropriate entity folder, creating it if necessary.
+
+### Split domains — topic groups
+
+A domain that has grown large is split one level deeper into **topic group** subpackages. `tests/api/agents/` is split this way today (84 files / 610 tests across 12 groups):
+
+`bundles/` · `bundles_install/` · `agent_api/` · `git/` · `improvement_requests/` · `schedules/` · `webapp/` · `sessions/` · `commands/` · `guest_shares/` · `integrations/` · `core/`
+
+Rules for a split domain:
+
+1. **Read the domain's `README.md` first** — it carries the group map describing what each group covers. Pick the group whose topic matches your feature.
+2. **Never place a test file at the root of a split domain.** `tests/api/agents/` holds only `conftest.py`, `README.md`, and `__init__.py`.
+3. **Group subdirs inherit the domain `conftest.py` automatically** (pytest walks the conftest chain by directory). Do not copy fixtures into a group and do not add a per-group `conftest.py` unless the group genuinely needs extra stubbing no other group wants.
+4. **Only create a new group** for a genuinely new topic you expect to reach ~3 files. A new group needs an `__init__.py` and a new row in the domain `README.md` group map. Otherwise use the closest existing group (`core/` is the explicit catch-all in `tests/api/agents/`).
+5. If your feature spans two groups, put each test file with the behavior it asserts — do not create a cross-cutting file that belongs to neither.
 
 ## Key Rules You Must Follow
 
@@ -58,6 +72,7 @@ When creating tests for a new entity, follow the same folder structure pattern. 
 Before finalizing any test file, verify:
 - [ ] Read `backend/tests/README.md` first
 - [ ] Read domain-specific README if it exists
+- [ ] File placed in the correct topic group of a split domain (never at the domain root)
 - [ ] Tests use API-level calls only (no direct DB access)
 - [ ] Tests follow scenario-based grouping
 - [ ] Tests use existing fixtures and utilities
@@ -78,22 +93,25 @@ Before finalizing any test file, verify:
 **After writing tests, you MUST spawn the `cinna-core-test-runner` agent to execute the following chain:**
 
 1. **Run the exact test file(s) you wrote** — if green, continue
-2. **Run the entire business domain test directory** (e.g., `tests/api/agents/`) — this is the final step
+2. **Run the topic group directory** the file lives in (e.g., `tests/api/agents/webapp/`) — this is the final step. In a domain that is *not* split into topic groups, the group directory and the domain directory are the same thing, so this step runs the domain.
 
-**Do NOT run the full backend test suite (`make test-backend`).** The full suite takes several minutes and bottlenecks feature delivery. The user runs it manually after your work is complete. Your responsibility ends at confirming the feature's domain directory is green.
+**Do NOT run the whole domain directory of a split domain** (e.g. all of `tests/api/agents/`, 610 tests) unless your change is genuinely cross-cutting — you touched the domain's `conftest.py`, `tests/utils/fixtures.py`, or a shared service (session / message / environment lifecycle) that every group exercises. A change confined to one group is regression-checked by that group.
+
+**Do NOT run the full backend test suite (`make test-backend`).** The full suite takes several minutes and bottlenecks feature delivery. The user runs it manually after your work is complete. Your responsibility ends at confirming the feature's topic group is green.
 
 Provide the test-runner agent with:
 - The exact test file path(s) you created or modified
-- The domain test directory path
-- Instruction to run the chain: exact file → domain directory, stopping on first failure
+- The topic group directory path (and the domain directory only if the change is cross-cutting, saying why)
+- Instruction to run the chain: exact file → topic group, stopping on first failure
 - Explicit instruction NOT to run the full test suite
 
 **Example Agent call:**
 ```
 Use the Agent tool with subagent_type="cinna-core-test-runner" and prompt:
 "Run the following test chain, stopping at the first failure:
-1. Run exact test: tests/api/agents/agents_new_feature_test.py
-2. If green, run domain tests: tests/api/agents/
+1. Run exact test: tests/api/agents/webapp/agents_new_feature_test.py
+2. If green, run the topic group: tests/api/agents/webapp/
+Do NOT run the whole tests/api/agents/ domain — this change is confined to the webapp group.
 Do NOT run the full backend test suite — the user runs `make test-backend` manually.
 Report a concise summary of each step."
 ```
@@ -139,6 +157,7 @@ Examples of what to record:
 - Test utility functions and helpers
 - Common patterns for setting up test data via API calls
 - Domain-specific testing conventions from entity README files
+- Which domains are split into topic groups, and which group covers which feature area
 - Authentication and authorization testing patterns
 - Patterns for testing async operations or background tasks
 - Common pitfalls or gotchas discovered in the test suite

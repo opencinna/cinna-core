@@ -299,10 +299,17 @@ Tests run inside Docker. **Before writing any backend tests, read `backend/tests
 # Run all backend tests
 make test-backend
 
-# Run a specific test file or directory
-docker compose exec backend python -m pytest tests/api/agents/agents_email_integration_test.py -v
+# Run a specific test file
+docker compose exec backend python -m pytest tests/api/agents/integrations/agents_email_integration_test.py -v
+
+# Run a topic group (preferred regression scope for a change)
+docker compose exec backend python -m pytest tests/api/agents/integrations/ -v
+
+# Run a whole domain (only for cross-cutting changes — tests/api/agents/ is 610 tests)
 docker compose exec backend python -m pytest tests/api/agents/ -v
 ```
+
+`tests/api/agents/` is split into topic group subdirectories (`bundles/`, `agent_api/`, `sessions/`, ...); see `backend/tests/api/agents/README.md` for the group map.
 
 **Prerequisites**: Docker services must be running (`make up` or `docker compose up -d`).
 

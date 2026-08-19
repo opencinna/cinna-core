@@ -515,7 +515,7 @@ No HTTP, no database.
 
 ### Integration Tests — Discovery
 
-**File:** `backend/tests/api/agents/agents_cli_commands_test.py`
+**File:** `backend/tests/api/agents/commands/agents_cli_commands_test.py`
 
 Covers the API-observable behavior:
 - No dynamic entries when cache is empty
@@ -525,7 +525,7 @@ Covers the API-observable behavior:
 
 ### Integration Tests — Execution
 
-**File:** `backend/tests/api/agents/agents_run_command_test.py`
+**File:** `backend/tests/api/agents/commands/agents_run_command_test.py`
 
 Tests:
 - `/run` list mode returns markdown table

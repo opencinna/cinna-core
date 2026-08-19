@@ -36,7 +36,7 @@
 - `backend/app/alembic/versions/b1c2d3e4f5a6_add_schedule_types_and_logs.py` — Adds `schedule_type` + `command` columns, creates `agent_schedule_log` table with indexes
 
 **Tests:**
-- `backend/tests/api/agents/agent_schedules_test.py` — Integration tests (lifecycle, CRON conversion, permissions, schedule types, execution logging)
+- `backend/tests/api/agents/schedules/agent_schedules_test.py` — Integration tests (lifecycle, CRON conversion, permissions, schedule types, execution logging)
 - `backend/tests/utils/schedule.py` — Test utilities (generate, create, list, update, delete)
 
 ### Frontend

@@ -83,7 +83,21 @@ tests/
     a2a_integration/       #   See "Rules" — these tests hit HTTP only, never app internals.
     agent_environments/
     agentic_teams/
-    agents/                # conftest.py: env stubs, background task collector, create_session patches
+    agents/                # conftest.py: env stubs, background task collector, create_session patches.
+                           #   Largest domain (84 files / 610 tests) — split into topic groups.
+                           #   Subdirs inherit agents/conftest.py; see agents/README.md for the map.
+      bundles/             #   publish: revisions, snapshots, credential specs, template sharing
+      bundles_install/     #   install/update: credential resolution, readiness gate, propagation
+      agent_api/           #   Agent REST API: proxy, policy, caller scopes, external keys
+      git/                 #   git-backed versioning: checkout/pull/push, conflicts, recovery
+      improvement_requests/#   improvement requests: targeting, lifecycle, archive, rate limits
+      schedules/           #   schedule CRUD, types + logs, manual run
+      webapp/              #   webapp shares, serving, webapp chat, interface config
+      sessions/            #   session lifecycle + streaming, message attachments
+      commands/            #   slash/CLI commands, /files, /run, agent status
+      guest_shares/        #   guest share links: CRUD, auth, security code, sessions
+      integrations/        #   email, webhooks, capability flags, router trigger
+      core/                #   create-flow, limits, prompt sync, plugins, tokens, delegation
     ai_credentials/        # conftest.py: env stubs for credential propagation tests
     app_auth/
     app_data/
@@ -163,7 +177,7 @@ discoverable:
 - In the unit test file: a docstring note that the end-to-end / API-observable path is covered in the
   corresponding `tests/api/<domain>/..._test.py`.
 
-See `tests/api/agents/agents_cli_commands_test.py` (module docstring "Notes") for the established
+See `tests/api/agents/commands/agents_cli_commands_test.py` (module docstring "Notes") for the established
 pattern.
 
 ```bash
@@ -189,6 +203,8 @@ These tests import and inspect `app` modules directly; the API-only rule does no
 ### File Placement
 
 Place test files under `tests/api/<domain>/test_<domain>.py`, mirroring the route structure in `app/api/routes/`. Create an `__init__.py` in each new directory.
+
+A domain that grows past ~20 files is split into **topic group** subpackages one level deeper (`tests/api/<domain>/<group>/`). Group subdirs inherit the domain's `conftest.py` automatically, so they need only an `__init__.py`. `tests/api/agents/` is the one domain split this way today — its `README.md` carries the group map and the placement rule. When writing into a split domain, put the file in the matching group, never at the domain root.
 
 Some domains have their own `README.md` with domain-specific testing patterns (e.g., stubs, extra fixtures, relaxed rules). **Always check for a `README.md` in the target directory before writing tests** — for example, `tests/api/agents/README.md` documents the session mocking and environment stubs required for agent tests.
 

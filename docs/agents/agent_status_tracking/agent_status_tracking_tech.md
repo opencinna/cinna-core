@@ -34,7 +34,7 @@
 - `backend/app/alembic/versions/1a43b403f066_add_agent_status_refresh_command.py` — adds `status_refresh_command VARCHAR(1024)` to `agent` (`server_default='/run:status'`, `nullable=True`); `down_revision=9675dc695735`; downgrade drops the column
 
 **Tests**
-- `backend/tests/api/agents/agents_status_test.py` — parser unit tests, timestamp resolution, severity transition, rate-limit, refresh_after_action + handle_post_action_event, REST endpoints
+- `backend/tests/api/agents/commands/agents_status_test.py` — parser unit tests, timestamp resolution, severity transition, rate-limit, refresh_after_action + handle_post_action_event, REST endpoints
 - `backend/tests/stubs/environment_adapter_stub.py` — `EnvironmentTestAdapter.workspace_files` class-level dict + `fetch_workspace_item_with_meta()` stub
 
 ### Frontend

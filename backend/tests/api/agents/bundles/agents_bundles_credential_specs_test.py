@@ -592,7 +592,7 @@ def test_catalog_entry_surfaces_publisher_ai_credential_fields(
 # Scenario I (white-box _validate_publisher_provides contract) was removed: the
 # "publisher marks a non-shareable credential as provided_by=publisher → rejected
 # at publish time" invariant is covered end-to-end via the publish flow in
-# tests/api/agents/agents_bundles_publish_settings_test.py.
+# tests/api/agents/bundles/agents_bundles_publish_settings_test.py.
 
 
 # ── Scenario J: manifest.json on disk mirrors new spec shape ──────────────────

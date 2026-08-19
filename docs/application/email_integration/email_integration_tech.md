@@ -65,8 +65,8 @@
 - `frontend/src/routes/_layout/session/$sessionId.tsx` — Email/A2A integration type badges
 
 ### Tests
-- `backend/tests/api/agents/agents_email_integration_test.py` — End-to-end: email → session → response → outgoing email
-- `backend/tests/api/agents/agents_email_task_integration_test.py` — Task mode: email → task → execute → send answer
+- `backend/tests/api/agents/integrations/agents_email_integration_test.py` — End-to-end: email → session → response → outgoing email
+- `backend/tests/api/agents/integrations/agents_email_task_integration_test.py` — Task mode: email → task → execute → send answer
 - `backend/tests/stubs/email_stubs.py` — `StubIMAPConnector`, `StubSMTPConnector`
 
 ### Migrations

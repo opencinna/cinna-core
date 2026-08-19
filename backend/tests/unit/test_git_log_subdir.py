@@ -16,7 +16,7 @@ by a context-manager stub so no internet access is required.
 
 API-observable behaviour — the list-commits endpoint, subdir scoping after
 a real connect/push, non-owner 404 — is covered in
-``tests/api/agents/agents_git_source_test.py`` (Scenario 7).
+``tests/api/agents/git/agents_git_source_test.py`` (Scenario 7).
 """
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch

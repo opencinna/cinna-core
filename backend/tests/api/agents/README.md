@@ -2,6 +2,35 @@
 
 Agent tests exercise flows that depend on Docker environments, external mail servers, LLM streaming, and background services. The `conftest.py` in this directory provides autouse fixtures that stub all of these out.
 
+## Topic Groups
+
+This is the largest test domain in the suite (84 files / 610 tests), so tests are split into **topic group** subpackages. Every group inherits the autouse fixtures from this directory's `conftest.py` automatically — there is no per-group `conftest.py` and none should be added unless a group genuinely needs extra stubbing.
+
+| Group | Covers |
+|---|---|
+| `bundles/` | Publishing: bundle + revision creation, workspace/metadata snapshots, publish settings, credential specs, template sharing, `service_uri`, per-user scope, permissions overview |
+| `bundles_install/` | Installing and updating: install context, credential resolution/matching, readiness gate, auto-update convergence, scheduler + MCP-route propagation, admin env enrichment |
+| `agent_api/` | Agent REST API: owner preview, connect helper, proxy + policy, caller identity & scopes, external keys, automatic-credential drift |
+| `git/` | Git-backed agent versioning: checkout / pull / push, conflict resolution, baseline recovery, subdir-scoped update detection |
+| `improvement_requests/` | Agent Improvement Requests: targeting, lifecycle, prompt/memory capture, signals, archive + scrubbing, rate limits, CLI surfaces |
+| `schedules/` | Agent schedules: multi-schedule CRUD, schedule types + logs, manual "Run now" |
+| `webapp/` | Agent webapp: share CRUD + public auth, serving, webapp chat (basic / actions / context), interface config, session instructions, `/webapp` command |
+| `sessions/` | Session lifecycle and streaming: context, page context, recovery, reset, delete-interrupt, env detach, stream concurrency, message attachments |
+| `commands/` | Slash / CLI command surface: `/run`, CLI command sync, autocomplete, `/files` + env wakeup, non-LLM → LLM bridging, agent status + status refresh |
+| `guest_shares/` | Guest share links: CRUD, auth flow, security code, guest session access |
+| `integrations/` | Inbound/outbound integrations: email (session + task flows), webhooks, capability flags, router trigger prompt + backfill |
+| `core/` | Everything without a better home: create-flow, creation limits, prompt sync, resilient plugins, AI-credential slot matching, credential categorization, team task delegation, env token scoping, A2A access tokens |
+
+**Placement rule.** New test files go into the group that matches their topic — never loose at the root of `tests/api/agents/`. Create a new group only for a genuinely new topic you expect to reach ~3 files; give it an `__init__.py` and add a row above. If `core/` grows past ~12 files, split it instead of letting it sprawl.
+
+**Run scope.** Run the topic group, not the whole domain:
+
+```bash
+docker compose exec backend python -m pytest tests/api/agents/bundles_install/ -v
+```
+
+Run the full `tests/api/agents/` directory only when the change is cross-cutting — this directory's `conftest.py`, `tests/utils/fixtures.py`, or a shared service (session / message / environment lifecycle) that every group exercises.
+
 ## Autouse Fixtures (conftest.py)
 
 ### `patch_create_session`
@@ -180,7 +209,8 @@ with patch("...", worker_stub):
 
 ## Adding a New Agent Test
 
-1. Create `tests/api/agents/agents_<feature>_test.py`
+1. Create `tests/api/agents/<group>/agents_<feature>_test.py` — pick the group from the
+   "Topic Groups" table above; do not place the file at the root of `tests/api/agents/`
 2. Use `client`, `superuser_token_headers`, and `db` fixtures
 3. Set up data via API using helpers from `tests/utils/`
 4. For email flows, use `process_emails_with_stub` with an `agent_env_stub`

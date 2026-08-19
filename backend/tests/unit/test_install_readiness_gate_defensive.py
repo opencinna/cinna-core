@@ -8,7 +8,7 @@ AgentCredentialLink CASCADE) or NULL the bundle reference (AICredential delete â
 SET NULL). They are exercised here with a fully mocked DB session â€” no real
 database, no TestClient. The API-observable readiness verdicts (ready /
 needs_setup / publisher_broken) are covered against ``GET /agents/{id}/setup-status``
-in ``tests/api/agents/agents_bundles_install_readiness_test.py``.
+in ``tests/api/agents/bundles_install/agents_bundles_install_readiness_test.py``.
 """
 import uuid
 from unittest.mock import MagicMock

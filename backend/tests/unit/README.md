@@ -42,7 +42,7 @@ should not depend on `db`.
 
 When a private helper is unit-tested here but its API-observable behavior is also covered by a
 scenario in `tests/api/`, leave a one-line pointer in both files so the pair stays discoverable.
-See `tests/api/agents/agents_cli_commands_test.py` (module docstring "Notes") paired with
+See `tests/api/agents/commands/agents_cli_commands_test.py` (module docstring "Notes") paired with
 `tests/unit/test_cli_commands_service.py` for the established pattern.
 
 ## Running

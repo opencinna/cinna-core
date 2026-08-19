@@ -52,8 +52,8 @@
 - `backend/app/api/main.py` - Added `credential_shares.router` import and registration
 
 ### Tests
-- `backend/tests/api/agents/agents_bundles_template_sharing_test.py` - Eight scenario tests: CRUD persistence, publish spec shape, override validation, install materialisation, completion → ready, partial fill stays needs_setup, `use_existing` opt-out, re-publish guard when consent flag is revoked
-- `backend/tests/api/agents/agents_credentials_categorization_test.py` - Categorization correctness tests: owned `agent_api`/`mcp_provider` → `"automatic"`; owned other type → `"mine"`; direct-shared → recipient `"mine"`; PBP-install-shared → recipient `"bundle"`; install idempotency + first-writer-wins; NULL source legacy → `"mine"`; agent-usage count recipient-scoped; `used_in_bundle` flag accuracy; `mcp_provider` folds into Automatic tab.
+- `backend/tests/api/agents/bundles/agents_bundles_template_sharing_test.py` - Eight scenario tests: CRUD persistence, publish spec shape, override validation, install materialisation, completion → ready, partial fill stays needs_setup, `use_existing` opt-out, re-publish guard when consent flag is revoked
+- `backend/tests/api/agents/core/agents_credentials_categorization_test.py` - Categorization correctness tests: owned `agent_api`/`mcp_provider` → `"automatic"`; owned other type → `"mine"`; direct-shared → recipient `"mine"`; PBP-install-shared → recipient `"bundle"`; install idempotency + first-writer-wins; NULL source legacy → `"mine"`; agent-usage count recipient-scoped; `used_in_bundle` flag accuracy; `mcp_provider` folds into Automatic tab.
 
 ## Database Schema
 

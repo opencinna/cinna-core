@@ -87,8 +87,8 @@ Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored togethe
 
 ### Tests
 
-- `backend/tests/api/agents/agents_agent_api_test.py` — 31 scenario-based API tests (see test coverage section below)
-- `backend/tests/api/agents/agents_agent_api_grants_test.py` — 15 caller-identity + scopes tests (see test coverage section below)
+- `backend/tests/api/agents/agent_api/agents_agent_api_test.py` — 31 scenario-based API tests (see test coverage section below)
+- `backend/tests/api/agents/agent_api/agents_agent_api_grants_test.py` — 15 caller-identity + scopes tests (see test coverage section below)
 
 ---
 
@@ -584,7 +584,7 @@ The header params are declared `include_in_schema=False`, so they never leak int
 
 ## Test Coverage
 
-`backend/tests/api/agents/agents_agent_api_test.py` — 31 scenario-based API tests. Tokens are minted via the connect helper (the raw token is read back from the created credential's data, exactly as a consumer obtains it); "revoke" = delete the credential. Covered:
+`backend/tests/api/agents/agent_api/agents_agent_api_test.py` — 31 scenario-based API tests. Tokens are minted via the connect helper (the raw token is read back from the created credential's data, exactly as a consumer obtains it); "revoke" = delete the credential. Covered:
 
 - Toggle gates routes (404 when disabled); `_status` reports `disabled` regardless
 - Connect mints a token + creates an `agent_api` credential (prefix + base_url + spec_url); raw token readable only from the credential's decrypted data
@@ -610,7 +610,7 @@ The header params are declared `include_in_schema=False`, so they never leak int
 - Multiple connections: independent disconnect
 - Owner routes (connect / connections / status / spec) reject unauthenticated
 
-`backend/tests/api/agents/agents_agent_api_grants_test.py` — 15 scenario-based tests for caller identity + producer scopes. Covered:
+`backend/tests/api/agents/agent_api/agents_agent_api_grants_test.py` — 15 scenario-based tests for caller identity + producer scopes. Covered:
 
 - Grant CRUD lifecycle (create → list → update scopes → delete)
 - Create grant to a phantom user → 404

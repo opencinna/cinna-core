@@ -2060,7 +2060,7 @@ def test_account_connect_agent_api_error_paths(
     requires the AgentApiTokenService to succeed, which in turn requires the
     producer environment to be in a state the test adapter recognizes. The
     minimal response-shape check in Phase 6 covers the path; the detailed
-    behavioral tests live in tests/api/agents/agents_agent_api_test.py.
+    behavioral tests live in tests/api/agents/agent_api/agents_agent_api_test.py.
     """
     # ── Phase 1: Bootstrap account token for superuser ────────────────────
     account_jwt, _ = bootstrap_account_token(

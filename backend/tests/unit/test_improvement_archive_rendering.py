@@ -6,7 +6,7 @@ unit-tested because the states that matter are hard to reach through the API
 (a git-origin revision, an agent whose SDK config was never written) yet each
 one produces a sentence a publisher acts on.
 
-Paired with tests/api/agents/agents_improvement_requests_signals_test.py, which
+Paired with tests/api/agents/improvement_requests/agents_improvement_requests_signals_test.py, which
 covers the API-observable half of the same behaviour.
 """
 import uuid

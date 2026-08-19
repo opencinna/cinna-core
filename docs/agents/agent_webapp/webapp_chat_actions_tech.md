@@ -21,8 +21,8 @@
 
 ### Tests
 
-- `backend/tests/api/agents/agents_webapp_chat_actions_test.py` — Integration tests for action emission and tag stripping
-- `backend/tests/api/agents/agents_webapp_chat_test.py` — Section K: webapp action tests and unit test for `_extract_webapp_actions()`
+- `backend/tests/api/agents/webapp/agents_webapp_chat_actions_test.py` — Integration tests for action emission and tag stripping
+- `backend/tests/api/agents/webapp/agents_webapp_chat_test.py` — Section K: webapp action tests and unit test for `_extract_webapp_actions()`
 
 ## Backend: Tag Parsing
 

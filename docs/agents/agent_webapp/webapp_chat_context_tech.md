@@ -22,7 +22,7 @@
 
 ### Tests
 
-- `backend/tests/api/agents/agents_webapp_chat_test.py` — Section I (context metadata storage/injection) and Section J (context diff optimization)
+- `backend/tests/api/agents/webapp/agents_webapp_chat_test.py` — Section I (context metadata storage/injection) and Section J (context diff optimization)
 
 ## Database Schema
 
