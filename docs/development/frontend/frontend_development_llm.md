@@ -168,6 +168,7 @@ For simpler items (e.g., prompt actions in `EditPromptActionsDialog.tsx`):
 const colorPreset = getColorPreset(agent.ui_color_preset)
 <div className={`rounded-lg p-3 ${colorPreset.iconBg}`}>
 ```
+- Visual **skins** (a second, orthogonal theming axis layered on top of light/dark mode) are pure CSS-variable overlays keyed off `data-skin` on `<html>` — see [Theming — tech](../../application/theming/theming_tech.md#adding-a-new-skin) for the token tiers and the step-by-step "adding a skin" recipe. Never hardcode a status/accent color that should re-tint under a skin (e.g. `bg-emerald-500`) — use the semantic token (`bg-primary`) instead.
 
 ## Dialog/Modal Pattern
 ```tsx

@@ -1,0 +1,850 @@
+/* ===========================================================================
+ * SKIN: hacker-1980
+ * ---------------------------------------------------------------------------
+ * Activated by `data-skin="hacker-1980"` on <html>. Composes with the mode class, so
+ * `.dark` still drives light/dark and every `dark:` utility in the app keeps
+ * working. This file must contain ONLY:
+ *
+ *   Tier A — semantic token overrides   (--background, --card, --primary, …)
+ *   Tier B — Tailwind palette remap     (--color-blue-500, …)
+ *   Tier C — decorative skin tokens     (--skin-*), consumed by the effects
+ *   Effects — presentational rules scoped to [data-skin="hacker-1980"]
+ *
+ * No component in the app knows this skin exists. Everything below hangs off
+ * shadcn's `data-slot` attributes, which every ui/ primitive already emits.
+ *
+ * Specificity note: base tokens live in `:root` / `.dark` (0,1,0). The blocks
+ * below are (0,2,0)+ and the light block is `:not(.dark)`-guarded, so neither
+ * mode can be out-specified by the other regardless of source order.
+ * ======================================================================== */
+
+/* ---------------------------------------------------------------------------
+ * Tier B — Tailwind palette remap (shared by both modes)
+ *
+ * Tailwind v4 compiles `text-amber-500` to `color: var(--color-amber-500)`, so
+ * redefining the scale here re-tints every hardcoded status colour in the app
+ * (~1900 call sites) without touching a single component. Tailwind's lightness
+ * ladder is preserved step-for-step; only hue and chroma move, which keeps
+ * light-on-dark contrast decisions made elsewhere in the app still valid.
+ * ------------------------------------------------------------------------ */
+[data-skin="hacker-1980"] {
+  /* Cold cyan family — every 'informational' hue collapses toward the console cyan. */
+  --color-blue-50: oklch(0.971 0.022 220);
+  --color-blue-100: oklch(0.936 0.040 220);
+  --color-blue-200: oklch(0.885 0.068 220);
+  --color-blue-300: oklch(0.828 0.098 220);
+  --color-blue-400: oklch(0.755 0.126 220);
+  --color-blue-500: oklch(0.668 0.145 220);
+  --color-blue-600: oklch(0.573 0.140 220);
+  --color-blue-700: oklch(0.478 0.118 220);
+  --color-blue-800: oklch(0.386 0.092 220);
+  --color-blue-900: oklch(0.301 0.070 220);
+  --color-blue-950: oklch(0.205 0.048 220);
+  --color-sky-50: oklch(0.971 0.022 212);
+  --color-sky-100: oklch(0.936 0.040 212);
+  --color-sky-200: oklch(0.885 0.068 212);
+  --color-sky-300: oklch(0.828 0.098 212);
+  --color-sky-400: oklch(0.755 0.126 212);
+  --color-sky-500: oklch(0.668 0.145 212);
+  --color-sky-600: oklch(0.573 0.140 212);
+  --color-sky-700: oklch(0.478 0.118 212);
+  --color-sky-800: oklch(0.386 0.092 212);
+  --color-sky-900: oklch(0.301 0.070 212);
+  --color-sky-950: oklch(0.205 0.048 212);
+  --color-cyan-50: oklch(0.971 0.022 203);
+  --color-cyan-100: oklch(0.936 0.040 203);
+  --color-cyan-200: oklch(0.885 0.068 203);
+  --color-cyan-300: oklch(0.828 0.098 203);
+  --color-cyan-400: oklch(0.755 0.126 203);
+  --color-cyan-500: oklch(0.668 0.145 203);
+  --color-cyan-600: oklch(0.573 0.140 203);
+  --color-cyan-700: oklch(0.478 0.118 203);
+  --color-cyan-800: oklch(0.386 0.092 203);
+  --color-cyan-900: oklch(0.301 0.070 203);
+  --color-cyan-950: oklch(0.205 0.048 203);
+  --color-indigo-50: oklch(0.971 0.022 236);
+  --color-indigo-100: oklch(0.936 0.040 236);
+  --color-indigo-200: oklch(0.885 0.068 236);
+  --color-indigo-300: oklch(0.828 0.098 236);
+  --color-indigo-400: oklch(0.755 0.126 236);
+  --color-indigo-500: oklch(0.668 0.145 236);
+  --color-indigo-600: oklch(0.573 0.140 236);
+  --color-indigo-700: oklch(0.478 0.118 236);
+  --color-indigo-800: oklch(0.386 0.092 236);
+  --color-indigo-900: oklch(0.301 0.070 236);
+  --color-indigo-950: oklch(0.205 0.048 236);
+  --color-violet-50: oklch(0.971 0.022 252);
+  --color-violet-100: oklch(0.936 0.040 252);
+  --color-violet-200: oklch(0.885 0.068 252);
+  --color-violet-300: oklch(0.828 0.098 252);
+  --color-violet-400: oklch(0.755 0.126 252);
+  --color-violet-500: oklch(0.668 0.145 252);
+  --color-violet-600: oklch(0.573 0.140 252);
+  --color-violet-700: oklch(0.478 0.118 252);
+  --color-violet-800: oklch(0.386 0.092 252);
+  --color-violet-900: oklch(0.301 0.070 252);
+  --color-violet-950: oklch(0.205 0.048 252);
+  --color-purple-50: oklch(0.971 0.022 266);
+  --color-purple-100: oklch(0.936 0.040 266);
+  --color-purple-200: oklch(0.885 0.068 266);
+  --color-purple-300: oklch(0.828 0.098 266);
+  --color-purple-400: oklch(0.755 0.126 266);
+  --color-purple-500: oklch(0.668 0.145 266);
+  --color-purple-600: oklch(0.573 0.140 266);
+  --color-purple-700: oklch(0.478 0.118 266);
+  --color-purple-800: oklch(0.386 0.092 266);
+  --color-purple-900: oklch(0.301 0.070 266);
+  --color-purple-950: oklch(0.205 0.048 266);
+  /* Aqua-green family — 'success' reads as a lighter, greener trace. */
+  --color-green-50: oklch(0.971 0.022 172);
+  --color-green-100: oklch(0.936 0.040 172);
+  --color-green-200: oklch(0.885 0.068 172);
+  --color-green-300: oklch(0.828 0.098 172);
+  --color-green-400: oklch(0.755 0.126 172);
+  --color-green-500: oklch(0.668 0.145 172);
+  --color-green-600: oklch(0.573 0.140 172);
+  --color-green-700: oklch(0.478 0.118 172);
+  --color-green-800: oklch(0.386 0.092 172);
+  --color-green-900: oklch(0.301 0.070 172);
+  --color-green-950: oklch(0.205 0.048 172);
+  --color-emerald-50: oklch(0.971 0.022 168);
+  --color-emerald-100: oklch(0.936 0.040 168);
+  --color-emerald-200: oklch(0.885 0.068 168);
+  --color-emerald-300: oklch(0.828 0.098 168);
+  --color-emerald-400: oklch(0.755 0.126 168);
+  --color-emerald-500: oklch(0.668 0.145 168);
+  --color-emerald-600: oklch(0.573 0.140 168);
+  --color-emerald-700: oklch(0.478 0.118 168);
+  --color-emerald-800: oklch(0.386 0.092 168);
+  --color-emerald-900: oklch(0.301 0.070 168);
+  --color-emerald-950: oklch(0.205 0.048 168);
+  --color-teal-50: oklch(0.971 0.022 190);
+  --color-teal-100: oklch(0.936 0.040 190);
+  --color-teal-200: oklch(0.885 0.068 190);
+  --color-teal-300: oklch(0.828 0.098 190);
+  --color-teal-400: oklch(0.755 0.126 190);
+  --color-teal-500: oklch(0.668 0.145 190);
+  --color-teal-600: oklch(0.573 0.140 190);
+  --color-teal-700: oklch(0.478 0.118 190);
+  --color-teal-800: oklch(0.386 0.092 190);
+  --color-teal-900: oklch(0.301 0.070 190);
+  --color-teal-950: oklch(0.205 0.048 190);
+  --color-lime-50: oklch(0.971 0.022 155);
+  --color-lime-100: oklch(0.936 0.040 155);
+  --color-lime-200: oklch(0.885 0.068 155);
+  --color-lime-300: oklch(0.828 0.098 155);
+  --color-lime-400: oklch(0.755 0.126 155);
+  --color-lime-500: oklch(0.668 0.145 155);
+  --color-lime-600: oklch(0.573 0.140 155);
+  --color-lime-700: oklch(0.478 0.118 155);
+  --color-lime-800: oklch(0.386 0.092 155);
+  --color-lime-900: oklch(0.301 0.070 155);
+  --color-lime-950: oklch(0.205 0.048 155);
+  /* Amber family — 'warning' becomes an amber counter-signal. */
+  --color-amber-50: oklch(0.971 0.022 72);
+  --color-amber-100: oklch(0.936 0.040 72);
+  --color-amber-200: oklch(0.885 0.068 72);
+  --color-amber-300: oklch(0.828 0.098 72);
+  --color-amber-400: oklch(0.755 0.126 72);
+  --color-amber-500: oklch(0.668 0.145 72);
+  --color-amber-600: oklch(0.573 0.140 72);
+  --color-amber-700: oklch(0.478 0.118 72);
+  --color-amber-800: oklch(0.386 0.092 72);
+  --color-amber-900: oklch(0.301 0.070 72);
+  --color-amber-950: oklch(0.205 0.048 72);
+  --color-yellow-50: oklch(0.971 0.022 88);
+  --color-yellow-100: oklch(0.936 0.040 88);
+  --color-yellow-200: oklch(0.885 0.068 88);
+  --color-yellow-300: oklch(0.828 0.098 88);
+  --color-yellow-400: oklch(0.755 0.126 88);
+  --color-yellow-500: oklch(0.668 0.145 88);
+  --color-yellow-600: oklch(0.573 0.140 88);
+  --color-yellow-700: oklch(0.478 0.118 88);
+  --color-yellow-800: oklch(0.386 0.092 88);
+  --color-yellow-900: oklch(0.301 0.070 88);
+  --color-yellow-950: oklch(0.205 0.048 88);
+  --color-orange-50: oklch(0.971 0.022 55);
+  --color-orange-100: oklch(0.936 0.040 55);
+  --color-orange-200: oklch(0.885 0.068 55);
+  --color-orange-300: oklch(0.828 0.098 55);
+  --color-orange-400: oklch(0.755 0.126 55);
+  --color-orange-500: oklch(0.668 0.145 55);
+  --color-orange-600: oklch(0.573 0.140 55);
+  --color-orange-700: oklch(0.478 0.118 55);
+  --color-orange-800: oklch(0.386 0.092 55);
+  --color-orange-900: oklch(0.301 0.070 55);
+  --color-orange-950: oklch(0.205 0.048 55);
+  /* Red family — 'danger' is a hot orange-red, still separable from amber. */
+  --color-red-50: oklch(0.971 0.022 30);
+  --color-red-100: oklch(0.936 0.040 30);
+  --color-red-200: oklch(0.885 0.068 30);
+  --color-red-300: oklch(0.828 0.098 30);
+  --color-red-400: oklch(0.755 0.126 30);
+  --color-red-500: oklch(0.668 0.145 30);
+  --color-red-600: oklch(0.573 0.140 30);
+  --color-red-700: oklch(0.478 0.118 30);
+  --color-red-800: oklch(0.386 0.092 30);
+  --color-red-900: oklch(0.301 0.070 30);
+  --color-red-950: oklch(0.205 0.048 30);
+  --color-rose-50: oklch(0.971 0.022 18);
+  --color-rose-100: oklch(0.936 0.040 18);
+  --color-rose-200: oklch(0.885 0.068 18);
+  --color-rose-300: oklch(0.828 0.098 18);
+  --color-rose-400: oklch(0.755 0.126 18);
+  --color-rose-500: oklch(0.668 0.145 18);
+  --color-rose-600: oklch(0.573 0.140 18);
+  --color-rose-700: oklch(0.478 0.118 18);
+  --color-rose-800: oklch(0.386 0.092 18);
+  --color-rose-900: oklch(0.301 0.070 18);
+  --color-rose-950: oklch(0.205 0.048 18);
+  --color-pink-50: oklch(0.971 0.022 352);
+  --color-pink-100: oklch(0.936 0.040 352);
+  --color-pink-200: oklch(0.885 0.068 352);
+  --color-pink-300: oklch(0.828 0.098 352);
+  --color-pink-400: oklch(0.755 0.126 352);
+  --color-pink-500: oklch(0.668 0.145 352);
+  --color-pink-600: oklch(0.573 0.140 352);
+  --color-pink-700: oklch(0.478 0.118 352);
+  --color-pink-800: oklch(0.386 0.092 352);
+  --color-pink-900: oklch(0.301 0.070 352);
+  --color-pink-950: oklch(0.205 0.048 352);
+  --color-fuchsia-50: oklch(0.971 0.022 320);
+  --color-fuchsia-100: oklch(0.936 0.040 320);
+  --color-fuchsia-200: oklch(0.885 0.068 320);
+  --color-fuchsia-300: oklch(0.828 0.098 320);
+  --color-fuchsia-400: oklch(0.755 0.126 320);
+  --color-fuchsia-500: oklch(0.668 0.145 320);
+  --color-fuchsia-600: oklch(0.573 0.140 320);
+  --color-fuchsia-700: oklch(0.478 0.118 320);
+  --color-fuchsia-800: oklch(0.386 0.092 320);
+  --color-fuchsia-900: oklch(0.301 0.070 320);
+  --color-fuchsia-950: oklch(0.205 0.048 320);
+  /* Neutrals — near-achromatic, biased cold so greys sit on the blue-black canvas. */
+  --color-slate-50: oklch(0.971 0.006 240);
+  --color-slate-100: oklch(0.936 0.008 240);
+  --color-slate-200: oklch(0.885 0.010 240);
+  --color-slate-300: oklch(0.828 0.012 240);
+  --color-slate-400: oklch(0.755 0.014 240);
+  --color-slate-500: oklch(0.668 0.016 240);
+  --color-slate-600: oklch(0.573 0.018 240);
+  --color-slate-700: oklch(0.478 0.020 240);
+  --color-slate-800: oklch(0.386 0.020 240);
+  --color-slate-900: oklch(0.301 0.018 240);
+  --color-slate-950: oklch(0.205 0.014 240);
+  --color-gray-50: oklch(0.971 0.006 240);
+  --color-gray-100: oklch(0.936 0.008 240);
+  --color-gray-200: oklch(0.885 0.010 240);
+  --color-gray-300: oklch(0.828 0.012 240);
+  --color-gray-400: oklch(0.755 0.014 240);
+  --color-gray-500: oklch(0.668 0.016 240);
+  --color-gray-600: oklch(0.573 0.018 240);
+  --color-gray-700: oklch(0.478 0.020 240);
+  --color-gray-800: oklch(0.386 0.020 240);
+  --color-gray-900: oklch(0.301 0.018 240);
+  --color-gray-950: oklch(0.205 0.014 240);
+  --color-zinc-50: oklch(0.971 0.006 240);
+  --color-zinc-100: oklch(0.936 0.008 240);
+  --color-zinc-200: oklch(0.885 0.010 240);
+  --color-zinc-300: oklch(0.828 0.012 240);
+  --color-zinc-400: oklch(0.755 0.014 240);
+  --color-zinc-500: oklch(0.668 0.016 240);
+  --color-zinc-600: oklch(0.573 0.018 240);
+  --color-zinc-700: oklch(0.478 0.020 240);
+  --color-zinc-800: oklch(0.386 0.020 240);
+  --color-zinc-900: oklch(0.301 0.018 240);
+  --color-zinc-950: oklch(0.205 0.014 240);
+  --color-neutral-50: oklch(0.971 0.006 240);
+  --color-neutral-100: oklch(0.936 0.008 240);
+  --color-neutral-200: oklch(0.885 0.010 240);
+  --color-neutral-300: oklch(0.828 0.012 240);
+  --color-neutral-400: oklch(0.755 0.014 240);
+  --color-neutral-500: oklch(0.668 0.016 240);
+  --color-neutral-600: oklch(0.573 0.018 240);
+  --color-neutral-700: oklch(0.478 0.020 240);
+  --color-neutral-800: oklch(0.386 0.020 240);
+  --color-neutral-900: oklch(0.301 0.018 240);
+  --color-neutral-950: oklch(0.205 0.014 240);
+  --color-stone-50: oklch(0.971 0.006 235);
+  --color-stone-100: oklch(0.936 0.008 235);
+  --color-stone-200: oklch(0.885 0.010 235);
+  --color-stone-300: oklch(0.828 0.012 235);
+  --color-stone-400: oklch(0.755 0.014 235);
+  --color-stone-500: oklch(0.668 0.016 235);
+  --color-stone-600: oklch(0.573 0.018 235);
+  --color-stone-700: oklch(0.478 0.020 235);
+  --color-stone-800: oklch(0.386 0.020 235);
+  --color-stone-900: oklch(0.301 0.018 235);
+  --color-stone-950: oklch(0.205 0.014 235);
+}
+
+/* ---------------------------------------------------------------------------
+ * Tier A + C — DARK (the canonical look for this skin)
+ * ------------------------------------------------------------------------ */
+:root[data-skin="hacker-1980"].dark {
+  --radius: 0.25rem;
+
+  --background: oklch(0.115 0.018 245);
+  --foreground: oklch(0.925 0.036 218);
+
+  /* Cards are rendered at bg-card/60 by the primitive, so this reads as a
+     barely-there pane floating over the grid rather than a solid surface. */
+  --card: oklch(0.155 0.024 240);
+  --card-foreground: oklch(0.925 0.036 218);
+  --popover: oklch(0.135 0.022 242);
+  --popover-foreground: oklch(0.925 0.036 218);
+
+  --primary: oklch(0.83 0.128 217);
+  --primary-foreground: oklch(0.135 0.03 235);
+
+  --secondary: oklch(0.215 0.032 235);
+  --secondary-foreground: oklch(0.9 0.04 215);
+  --muted: oklch(0.195 0.026 238);
+  --muted-foreground: oklch(0.705 0.055 220);
+  --accent: oklch(0.255 0.052 220);
+  --accent-foreground: oklch(0.93 0.05 210);
+
+  --destructive: oklch(0.68 0.2 30);
+
+  --border: oklch(0.83 0.128 217 / 26%);
+  --input: oklch(0.83 0.128 217 / 22%);
+  --ring: oklch(0.83 0.128 217 / 70%);
+
+  --chart-1: oklch(0.83 0.128 217);
+  --chart-2: oklch(0.86 0.14 170);
+  --chart-3: oklch(0.82 0.13 65);
+  --chart-4: oklch(0.72 0.13 255);
+  --chart-5: oklch(0.68 0.2 30);
+
+  --sidebar: oklch(0.1 0.018 248);
+  --sidebar-foreground: oklch(0.9 0.04 216);
+  --sidebar-primary: oklch(0.83 0.128 217);
+  --sidebar-primary-foreground: oklch(0.135 0.03 235);
+  --sidebar-accent: oklch(0.235 0.05 222);
+  --sidebar-accent-foreground: oklch(0.93 0.05 210);
+  --sidebar-border: oklch(0.83 0.128 217 / 22%);
+  --sidebar-ring: oklch(0.83 0.128 217 / 70%);
+
+  /* Tier C — decorative tokens. Default skin defines these as no-ops. */
+  --skin-line: oklch(0.83 0.128 217);
+  --skin-glow: oklch(0.83 0.128 217 / 45%);
+  --skin-glow-soft: oklch(0.83 0.128 217 / 14%);
+  --skin-grid: oklch(0.83 0.128 217 / 5%);
+  --skin-grid-size: 44px;
+  --skin-scanline: oklch(0.83 0.128 217 / 3%);
+  --skin-surface-tint: oklch(0.145 0.024 240 / 72%);
+  --skin-label-color: oklch(0.78 0.09 214);
+  --skin-sweep: oklch(0.95 0.09 210);
+}
+
+/* ---------------------------------------------------------------------------
+ * Tier A + C — LIGHT ("daylight"): the same geometry inverted. Kept in
+ * step with the dark set so switching mode never lands on an unstyled screen.
+ * ------------------------------------------------------------------------ */
+:root[data-skin="hacker-1980"]:not(.dark) {
+  --radius: 0.25rem;
+
+  --background: oklch(0.975 0.012 220);
+  --foreground: oklch(0.245 0.045 240);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.245 0.045 240);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.245 0.045 240);
+
+  --primary: oklch(0.6 0.13 220);
+  --primary-foreground: oklch(0.99 0.01 220);
+
+  --secondary: oklch(0.955 0.016 220);
+  --secondary-foreground: oklch(0.32 0.055 235);
+  --muted: oklch(0.95 0.014 222);
+  --muted-foreground: oklch(0.52 0.05 228);
+  --accent: oklch(0.93 0.038 216);
+  --accent-foreground: oklch(0.3 0.07 232);
+
+  --destructive: oklch(0.58 0.2 30);
+
+  --border: oklch(0.6 0.13 220 / 28%);
+  --input: oklch(0.6 0.13 220 / 26%);
+  --ring: oklch(0.6 0.13 220 / 60%);
+
+  --chart-1: oklch(0.6 0.13 220);
+  --chart-2: oklch(0.62 0.13 172);
+  --chart-3: oklch(0.68 0.14 62);
+  --chart-4: oklch(0.52 0.14 258);
+  --chart-5: oklch(0.58 0.2 30);
+
+  --sidebar: oklch(0.985 0.008 220);
+  --sidebar-foreground: oklch(0.245 0.045 240);
+  --sidebar-primary: oklch(0.6 0.13 220);
+  --sidebar-primary-foreground: oklch(0.99 0.01 220);
+  --sidebar-accent: oklch(0.93 0.038 216);
+  --sidebar-accent-foreground: oklch(0.3 0.07 232);
+  --sidebar-border: oklch(0.6 0.13 220 / 24%);
+  --sidebar-ring: oklch(0.6 0.13 220 / 60%);
+
+  --skin-line: oklch(0.6 0.13 220);
+  --skin-glow: oklch(0.6 0.13 220 / 22%);
+  --skin-glow-soft: oklch(0.6 0.13 220 / 8%);
+  --skin-grid: oklch(0.6 0.13 220 / 6%);
+  --skin-grid-size: 44px;
+  --skin-scanline: transparent;
+  --skin-surface-tint: oklch(1 0 0 / 78%);
+  --skin-label-color: oklch(0.5 0.09 224);
+  --skin-sweep: oklch(0.72 0.14 214);
+}
+
+/* ===========================================================================
+ * Effects
+ *
+ * Everything below is presentational and hangs off shadcn `data-slot`
+ * attributes, which every primitive in `components/ui/` already emits. No
+ * component in the app is aware of this skin, so the whole look can be added,
+ * tuned or removed without touching feature code.
+ * ======================================================================== */
+
+/* --- Canvas: grid + scanlines instead of the default gradient mesh ------- */
+
+/* The default dark theme paints a gradient-mesh photo via body::before/::after.
+   Neutralise it — this skin owns the canvas. */
+[data-skin="hacker-1980"].dark body::before,
+[data-skin="hacker-1980"].dark body::after {
+  background-image: none;
+  filter: none;
+  transform: none;
+}
+
+[data-skin="hacker-1980"] body {
+  background-color: var(--background);
+  background-image:
+    /* scanlines */
+    repeating-linear-gradient(
+      to bottom,
+      var(--skin-scanline) 0px,
+      var(--skin-scanline) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    /* horizon glow */
+    radial-gradient(
+      120% 80% at 50% 0%,
+      var(--skin-glow-soft) 0%,
+      transparent 60%
+    ),
+    /* the grid */
+    linear-gradient(var(--skin-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--skin-grid) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    100% 100%,
+    var(--skin-grid-size) var(--skin-grid-size),
+    var(--skin-grid-size) var(--skin-grid-size);
+  background-attachment: fixed;
+}
+
+/* --- Typography: technical, uppercase, monospaced labels ----------------- */
+
+[data-skin="hacker-1980"] [data-slot="card-title"],
+[data-skin="hacker-1980"] [data-slot="table-head"],
+[data-skin="hacker-1980"] [data-slot="dialog-title"],
+[data-skin="hacker-1980"] [data-slot="sheet-title"],
+[data-skin="hacker-1980"] [data-slot="alert-title"],
+[data-skin="hacker-1980"] [data-slot="sidebar-group-label"],
+[data-skin="hacker-1980"] [data-slot="dropdown-menu-label"],
+[data-skin="hacker-1980"] [data-slot="select-label"] {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 500;
+  font-size: 0.8125rem;
+  color: var(--skin-label-color);
+}
+
+/* `data-ui="button"` rather than `data-slot`: the latter is overwritten
+   whenever a Button is the child of an `asChild` trigger. */
+[data-skin="hacker-1980"] [data-ui="button"],
+[data-skin="hacker-1980"] [data-slot="tabs-trigger"] {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+}
+
+/* The app shell's sticky <header> carries a per-route <h1> + subtitle that is
+   plain JSX, not a shadcn primitive — style it explicitly so page titles speak
+   the same language as card titles. Scoped to `header` so prose/markdown
+   headings inside chat transcripts are untouched. */
+[data-skin="hacker-1980"] header h1 {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 500;
+  color: var(--skin-line);
+}
+
+[data-skin="hacker-1980"] header {
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 20px -14px var(--skin-glow);
+}
+
+/* --- Surfaces: thin luminous frames with corner brackets ----------------- */
+
+[data-skin="hacker-1980"] [data-slot="card"] {
+  background-color: var(--skin-surface-tint);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border);
+  box-shadow:
+    0 0 0 1px var(--skin-glow-soft),
+    0 0 18px -6px var(--skin-glow),
+    inset 0 0 24px -18px var(--skin-line);
+  position: relative;
+  transition:
+    box-shadow 220ms ease,
+    border-color 220ms ease;
+  animation: skin-frame-in 420ms ease-out both;
+}
+
+[data-skin="hacker-1980"] [data-slot="card"]:hover {
+  border-color: color-mix(in oklab, var(--skin-line) 55%, transparent);
+  box-shadow:
+    0 0 0 1px var(--skin-glow),
+    0 0 26px -6px var(--skin-glow),
+    inset 0 0 24px -16px var(--skin-line);
+}
+
+/* Corner brackets — two L-shaped marks drawn with gradients so they need no
+   extra DOM and cannot collide with a card's own children. */
+[data-skin="hacker-1980"] [data-slot="card"]::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(var(--skin-line), var(--skin-line)) top left / 14px 1px,
+    linear-gradient(var(--skin-line), var(--skin-line)) top left / 1px 14px,
+    linear-gradient(var(--skin-line), var(--skin-line)) bottom right / 14px 1px,
+    linear-gradient(var(--skin-line), var(--skin-line)) bottom right / 1px 14px;
+  background-repeat: no-repeat;
+  opacity: 0.85;
+}
+
+@keyframes skin-frame-in {
+  from {
+    opacity: 0;
+    box-shadow:
+      0 0 0 1px transparent,
+      0 0 0 0 transparent;
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/* --- Controls ------------------------------------------------------------ */
+
+[data-skin="hacker-1980"] [data-slot="input"],
+[data-skin="hacker-1980"] [data-slot="textarea"],
+[data-skin="hacker-1980"] [data-slot="select-trigger"],
+[data-skin="hacker-1980"] [data-slot="sidebar-input"] {
+  background-color: color-mix(in oklab, var(--skin-line) 5%, transparent);
+  border-color: var(--input);
+  transition:
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+[data-skin="hacker-1980"] [data-slot="input"]:focus-visible,
+[data-skin="hacker-1980"] [data-slot="textarea"]:focus-visible,
+[data-skin="hacker-1980"] [data-slot="select-trigger"]:focus-visible {
+  border-color: var(--skin-line);
+  box-shadow: 0 0 0 1px var(--skin-line), 0 0 14px -2px var(--skin-glow);
+}
+
+[data-skin="hacker-1980"] [data-ui="button"]:not(:disabled):hover {
+  box-shadow: 0 0 14px -4px var(--skin-glow);
+}
+
+[data-skin="hacker-1980"] [data-slot="badge"] {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  letter-spacing: 0.06em;
+  border-radius: 2px;
+}
+
+[data-skin="hacker-1980"] [role="switch"][data-state="checked"] {
+  box-shadow: 0 0 12px -2px var(--skin-glow);
+}
+
+/* --- Agent colour presets ------------------------------------------------
+ *
+ * Agents carry a colour identity from `utils/colorPresets.ts`, applied as a
+ * translucent `-900/40` fill plus a `-300` text colour. On this skin every
+ * such chip gets a hairline in its OWN hue, taken from `currentColor` — so one
+ * rule themes all twelve presets and any preset added later.
+ *
+ * The hairline is an `outline`, not a `box-shadow`, on purpose: the selected
+ * chip's `ring-2` IS a box-shadow in Tailwind v4, so painting one here would
+ * silently erase the selection indicator.
+ * ---------------------------------------------------------------------- */
+[data-skin="hacker-1980"] [data-color-preset] {
+  outline: 1px solid color-mix(in oklab, currentColor 32%, transparent);
+  outline-offset: -1px;
+  transition:
+    background-color 160ms ease,
+    outline-color 160ms ease,
+    color 160ms ease;
+}
+
+[data-skin="hacker-1980"] [data-color-preset]:hover {
+  outline-color: color-mix(in oklab, currentColor 62%, transparent);
+}
+
+/* `slate` is the fallback for agents with no colour assigned, and the one
+   preset whose dark fill is opaque and a step lighter (`bg-slate-800`) where
+   the other eleven are `-900/40`. On a near-black canvas that read as a solid
+   block among glass. Since it has no hue to be translucent IN, render it as
+   what it means: an unassigned, wireframe chip. `background-image: none`
+   clears the gradient variant used by the dashboard header's overflow and
+   credential pills, which a `background-color` alone would leave untouched. */
+[data-skin="hacker-1980"] [data-color-preset="slate"] {
+  background-color: color-mix(in oklab, var(--skin-line) 6%, transparent);
+  background-image: none;
+  color: var(--skin-label-color);
+}
+
+[data-skin="hacker-1980"] [data-color-preset="slate"]:hover {
+  background-color: color-mix(in oklab, var(--skin-line) 13%, transparent);
+  background-image: none;
+  color: var(--skin-line);
+}
+
+/* --- The "New Agent" affordance ------------------------------------------
+ *
+ * In the default skin this button is the one deliberately special thing on the
+ * dashboard — a blue→purple gradient among flat chips. It earns an equivalent
+ * here rather than being flattened into the preset treatment: an armed console
+ * key. Dark base, a bright full-strength hairline where the agent chips get a
+ * dim one, corner brackets like the cards, and a wide raking sheen that
+ * sweeps across the face once on mount and then rests — lit material that just
+ * caught the light, not motion competing for attention.
+ * ---------------------------------------------------------------------- */
+[data-skin="hacker-1980"] [data-ui="new-agent"] {
+  position: relative;
+  background-color: color-mix(in oklab, var(--skin-line) 12%, transparent);
+  /* The sheen lives in the background layer rather than a pseudo-element: a
+     pseudo would have to sit either behind the button's own background-color
+     (invisible) or in front of its text (tinting the label). A background
+     layer paints above the fill and below the text, which is exactly right.
+     It also replaces the default skin's gradient, which is a background-IMAGE
+     and would otherwise cover any background-color set here.
+     Wide and multi-stop so it reads as a soft raking light across the whole
+     face rather than a band with visible edges. */
+  background-image: linear-gradient(
+    105deg,
+    transparent 0%,
+    color-mix(in oklab, var(--skin-sweep) 6%, transparent) 18%,
+    color-mix(in oklab, var(--skin-sweep) 18%, transparent) 38%,
+    color-mix(in oklab, var(--skin-sweep) 26%, transparent) 50%,
+    color-mix(in oklab, var(--skin-sweep) 18%, transparent) 62%,
+    color-mix(in oklab, var(--skin-sweep) 6%, transparent) 82%,
+    transparent 100%
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  /* One pass on mount, then it rests — not a loop. Re-runs whenever the route
+     remounts, so returning to the dashboard lights it again. */
+  animation: skin-key-sweep 900ms ease-out both;
+  color: var(--skin-line);
+  outline: 1px solid color-mix(in oklab, var(--skin-line) 75%, transparent);
+  outline-offset: -1px;
+  box-shadow: 0 0 20px -8px var(--skin-glow);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.75rem;
+}
+
+/* Offsets are lengths, not percentages, on purpose: with background-size at
+   100% the positioning range collapses to zero, so percentage positions would
+   all resolve to the same place and the sheen would never appear to move. */
+@keyframes skin-key-sweep {
+  from {
+    background-position: -420px 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+[data-skin="hacker-1980"] [data-ui="new-agent"]:hover {
+  background-color: color-mix(in oklab, var(--skin-line) 24%, transparent);
+  box-shadow: 0 0 26px -6px var(--skin-glow);
+}
+
+/* Corner brackets, matching the card frames. */
+[data-skin="hacker-1980"] [data-ui="new-agent"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    linear-gradient(var(--skin-line), var(--skin-line)) top left / 9px 1px,
+    linear-gradient(var(--skin-line), var(--skin-line)) top left / 1px 9px,
+    linear-gradient(var(--skin-line), var(--skin-line)) bottom right / 9px 1px,
+    linear-gradient(var(--skin-line), var(--skin-line)) bottom right / 1px 9px;
+  background-repeat: no-repeat;
+}
+
+/* --- Tabs: an underlit active trace -------------------------------------- */
+
+[data-skin="hacker-1980"] [data-slot="tabs-trigger"] {
+  position: relative;
+}
+
+[data-skin="hacker-1980"] [data-slot="tabs-trigger"][data-state="active"] {
+  color: var(--skin-line);
+  box-shadow: inset 0 -2px 0 -1px var(--skin-line), 0 0 16px -6px var(--skin-glow);
+}
+
+/* --- Tables: a console readout ------------------------------------------- */
+
+[data-skin="hacker-1980"] [data-slot="table-header"] {
+  border-bottom: 1px solid var(--border);
+}
+
+[data-skin="hacker-1980"] [data-slot="table-row"] {
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+[data-skin="hacker-1980"] [data-slot="table-row"]:hover {
+  background-color: color-mix(in oklab, var(--skin-line) 7%, transparent);
+  box-shadow: inset 2px 0 0 var(--skin-line);
+}
+
+/* --- Overlays ------------------------------------------------------------ */
+
+[data-skin="hacker-1980"] [data-slot="dialog-content"],
+[data-skin="hacker-1980"] [data-slot="sheet-content"],
+[data-skin="hacker-1980"] [data-slot="popover-content"],
+[data-skin="hacker-1980"] [data-slot="dropdown-menu-content"],
+[data-skin="hacker-1980"] [data-slot="select-content"],
+[data-skin="hacker-1980"] [data-slot="tooltip-content"] {
+  border: 1px solid var(--border);
+  box-shadow:
+    0 0 0 1px var(--skin-glow-soft),
+    0 0 34px -10px var(--skin-glow);
+  backdrop-filter: blur(10px);
+}
+
+[data-skin="hacker-1980"] [data-slot="dialog-overlay"],
+[data-skin="hacker-1980"] [data-slot="sheet-overlay"] {
+  backdrop-filter: blur(2px);
+}
+
+/* --- Toasts --------------------------------------------------------------
+ *
+ * Sonner injects its own <style> at runtime, so source order against this
+ * sheet is not guaranteed. Colours are therefore driven through the CSS
+ * variables Sonner's own rules already consume (`--normal-*`, and the
+ * `richColors` set `--success-*` / `--error-*` / `--warning-*` / `--info-*`),
+ * which wins regardless of order. Only the presentational extras below use
+ * real declarations, and those are (0,3,0) so they out-specify Sonner's
+ * `[data-sonner-toast][data-styled=true]`.
+ * ---------------------------------------------------------------------- */
+[data-skin="hacker-1980"] [data-sonner-toaster] {
+  --normal-bg: var(--popover);
+  --normal-text: var(--foreground);
+  --normal-border: color-mix(in oklab, var(--skin-line) 34%, transparent);
+
+  --success-bg: color-mix(in oklab, var(--chart-2) 13%, var(--popover));
+  --success-border: color-mix(in oklab, var(--chart-2) 46%, transparent);
+  --success-text: var(--chart-2);
+
+  --info-bg: color-mix(in oklab, var(--skin-line) 13%, var(--popover));
+  --info-border: color-mix(in oklab, var(--skin-line) 46%, transparent);
+  --info-text: var(--skin-line);
+
+  --warning-bg: color-mix(in oklab, var(--chart-3) 13%, var(--popover));
+  --warning-border: color-mix(in oklab, var(--chart-3) 46%, transparent);
+  --warning-text: var(--chart-3);
+
+  --error-bg: color-mix(in oklab, var(--destructive) 13%, var(--popover));
+  --error-border: color-mix(in oklab, var(--destructive) 46%, transparent);
+  --error-text: var(--destructive);
+}
+
+/* The panel itself: glass over the grid, hairline frame, outward glow, and a
+   lit left edge whose colour comes from the toast's own type text colour. */
+[data-skin="hacker-1980"] [data-sonner-toaster] [data-sonner-toast] {
+  backdrop-filter: blur(10px);
+  border-width: 1px;
+  box-shadow:
+    0 0 0 1px var(--skin-glow-soft),
+    0 0 30px -10px var(--skin-glow);
+}
+
+[data-skin="hacker-1980"] [data-sonner-toaster] [data-sonner-toast]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+[data-skin="hacker-1980"] [data-sonner-toaster] [data-sonner-toast] [data-title] {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+
+[data-skin="hacker-1980"] [data-sonner-toaster] [data-sonner-toast] [data-description] {
+  color: var(--muted-foreground);
+}
+
+[data-skin="hacker-1980"] [data-sonner-toaster] [data-sonner-toast] [data-close-button] {
+  background: var(--popover);
+  border-color: color-mix(in oklab, var(--skin-line) 34%, transparent);
+  color: var(--skin-label-color);
+}
+
+/* --- Sidebar: a lit edge -------------------------------------------------- */
+
+[data-skin="hacker-1980"] [data-slot="sidebar-inner"] {
+  border-right: 1px solid var(--sidebar-border);
+  box-shadow: 1px 0 20px -12px var(--skin-glow);
+}
+
+[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-active="true"] {
+  box-shadow: inset 2px 0 0 var(--skin-line);
+}
+
+/* --- Scrollbars ----------------------------------------------------------- */
+
+[data-skin="hacker-1980"] * {
+  scrollbar-color: color-mix(in oklab, var(--skin-line) 45%, transparent)
+    transparent;
+  scrollbar-width: thin;
+}
+
+/* --- Motion opt-out ------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  [data-skin="hacker-1980"] [data-slot="card"],
+  [data-skin="hacker-1980"] [data-ui="new-agent"] {
+    animation: none;
+  }
+}

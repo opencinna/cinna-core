@@ -1,31 +1,7 @@
-import { useState, useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import {
-  UserWorkspacesService,
-  type UserWorkspacePublic,
-} from "@/client"
-import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { Pencil, Plus, Trash2 } from "lucide-react"
+import { useEffect, useState } from "react"
+import { type UserWorkspacePublic, UserWorkspacesService } from "@/client"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,13 +12,29 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
+import { getWorkspaceIcon, WORKSPACE_ICONS } from "@/config/workspaceIcons"
 import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
-import { WORKSPACE_ICONS, getWorkspaceIcon } from "@/config/workspaceIcons"
 import { cn } from "@/lib/utils"
-import { Pencil, Plus, Trash2 } from "lucide-react"
 
 function IconSelector({
   value,
@@ -162,7 +154,8 @@ export function WorkspaceSettings() {
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { workspacesEnabled, setWorkspacesEnabled } = useWorkspace()
   const [createOpen, setCreateOpen] = useState(false)
-  const [editWorkspace, setEditWorkspace] = useState<UserWorkspacePublic | null>(null)
+  const [editWorkspace, setEditWorkspace] =
+    useState<UserWorkspacePublic | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const { data: workspacesData, isLoading } = useQuery({
@@ -233,14 +226,16 @@ export function WorkspaceSettings() {
                 />
                 <div
                   className={`block h-6 w-11 rounded-full transition-colors ${
-                    workspacesEnabled ? "bg-emerald-500" : "bg-gray-300 dark:bg-gray-600"
+                    workspacesEnabled
+                      ? "bg-primary"
+                      : "bg-gray-300 dark:bg-gray-600"
                   }`}
-                ></div>
+                />
                 <div
                   className={`dot absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
                     workspacesEnabled ? "translate-x-5" : ""
                   }`}
-                ></div>
+                />
               </div>
             </label>
           </div>
@@ -252,7 +247,11 @@ export function WorkspaceSettings() {
               sessions, tasks, and credentials by workspace.
             </p>
           )}
-          <Button size="sm" onClick={() => setCreateOpen(true)} disabled={!workspacesEnabled}>
+          <Button
+            size="sm"
+            onClick={() => setCreateOpen(true)}
+            disabled={!workspacesEnabled}
+          >
             <Plus className="h-4 w-4 mr-1.5" />
             New Workspace
           </Button>
@@ -271,7 +270,9 @@ export function WorkspaceSettings() {
                       <TableCell className="px-2 py-1">
                         <Icon className="h-4 w-4 text-muted-foreground" />
                       </TableCell>
-                      <TableCell className="px-2 py-1 font-medium text-sm">{ws.name}</TableCell>
+                      <TableCell className="px-2 py-1 font-medium text-sm">
+                        {ws.name}
+                      </TableCell>
                       <TableCell className="px-2 py-1 text-right">
                         <div className="flex gap-1 justify-end">
                           <Button

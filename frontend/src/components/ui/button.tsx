@@ -48,11 +48,17 @@ function Button({
   }) {
   const Comp = asChild ? Slot : "button"
 
+  // `data-slot` gets clobbered whenever this Button is the child of an
+  // `asChild` trigger (DialogTrigger, DropdownMenuTrigger, …): the trigger
+  // passes its own data-slot down and the `{...props}` spread overwrites ours.
+  // `data-ui` is applied AFTER the spread, so it always survives — giving
+  // themes a reliable "this is a button" hook regardless of nesting.
   return (
     <Comp
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
+      data-ui="button"
     />
   )
 }
