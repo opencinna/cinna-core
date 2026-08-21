@@ -59,6 +59,8 @@
   --skin-surface-tint: var(--card);
   --skin-label-color: inherit;
   --skin-sweep: transparent;
+  --skin-active-fg: inherit;
+  --skin-active-text-glow: transparent;
 
   --radius: 0.625rem;
   --background: oklch(1 0 0);

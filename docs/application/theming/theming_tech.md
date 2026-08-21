@@ -12,7 +12,7 @@
 
 ### Frontend — Skin CSS
 
-- `frontend/src/index.css` — imports every skin CSS file (`@import "./styles/skins/hacker-1980.css";`) and defines the **Tier C default no-op tokens** (`--skin-line`, `--skin-glow`, `--skin-glow-soft`, `--skin-grid`, `--skin-grid-size`, `--skin-scanline`, `--skin-surface-tint`, `--skin-label-color`, `--skin-sweep`) on `:root`, alongside the existing Tier A tokens (`--background`, `--card`, `--primary`, …).
+- `frontend/src/index.css` — imports every skin CSS file (`@import "./styles/skins/hacker-1980.css";`) and defines the **Tier C default no-op tokens** (`--skin-line`, `--skin-glow`, `--skin-glow-soft`, `--skin-grid`, `--skin-grid-size`, `--skin-scanline`, `--skin-surface-tint`, `--skin-label-color`, `--skin-sweep`, `--skin-active-fg`, `--skin-active-text-glow`) on `:root`, alongside the existing Tier A tokens (`--background`, `--card`, `--primary`, …).
 - `frontend/src/styles/skins/hacker-1980.css` — the one shipped non-default skin: a self-contained overlay, described in detail below.
 
 ### Frontend — Components Touched to Support Skinning
@@ -87,7 +87,7 @@ The existing design-system tokens: `--background`, `--foreground`, `--card`, `--
 
 ### Tier C — decorative skin tokens
 
-`--skin-line`, `--skin-glow`, `--skin-glow-soft`, `--skin-grid`, `--skin-grid-size`, `--skin-scanline`, `--skin-surface-tint`, `--skin-label-color`, `--skin-sweep`. These don't correspond to any existing design-system concept — they're skin-specific decoration hooks (glow color, grid line color/size, scanline overlay, card surface tint, label color, CTA sheen color). The **default skin defines every one of these as a no-op** in `index.css` (transparent / `var(--card)` / `inherit` / `0`), so any component or skin effect that references a Tier C token is always safe under the default skin — it just renders nothing extra. A new skin gives them actual values to switch on real decoration.
+`--skin-line`, `--skin-glow`, `--skin-glow-soft`, `--skin-grid`, `--skin-grid-size`, `--skin-scanline`, `--skin-surface-tint`, `--skin-label-color`, `--skin-sweep`, `--skin-active-fg`, `--skin-active-text-glow`. These don't correspond to any existing design-system concept — they're skin-specific decoration hooks (glow color, grid line color/size, scanline overlay, card surface tint, label color, CTA sheen color, active nav-item text colour and its glow). The **default skin defines every one of these as a no-op** in `index.css` (transparent / `var(--card)` / `inherit` / `0`), so any component or skin effect that references a Tier C token is always safe under the default skin — it just renders nothing extra. A new skin gives them actual values to switch on real decoration.
 
 ## `hacker-1980.css` — Anatomy of a Skin
 

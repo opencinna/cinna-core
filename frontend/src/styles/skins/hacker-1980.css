@@ -334,6 +334,8 @@
   --skin-surface-tint: oklch(0.145 0.024 240 / 72%);
   --skin-label-color: oklch(0.78 0.09 214);
   --skin-sweep: oklch(0.95 0.09 210);
+  --skin-active-fg: oklch(1 0 0);
+  --skin-active-text-glow: oklch(0.95 0.09 210 / 26%);
 }
 
 /* ---------------------------------------------------------------------------
@@ -391,6 +393,8 @@
   --skin-surface-tint: oklch(1 0 0 / 78%);
   --skin-label-color: oklch(0.5 0.09 224);
   --skin-sweep: oklch(0.72 0.14 214);
+  --skin-active-fg: oklch(0.16 0.03 240);
+  --skin-active-text-glow: oklch(0.6 0.13 220 / 18%);
 }
 
 /* ===========================================================================
@@ -828,8 +832,103 @@
   box-shadow: 1px 0 20px -12px var(--skin-glow);
 }
 
+/* Active + hover items share one plate: the sidebar-accent fill in its usual
+   colour, but with the bottom-right corner chamfered off instead of rounded.
+   It's drawn by two pseudo-elements — ::after is the lit outline, ::before the
+   fill inset 1px inside it — both clipped to the same polygon so the bevel
+   reads as a 1px stroke. `isolation` keeps their negative z-index behind the
+   label but inside the button, and the button's own background is dropped so
+   the plate shows through. Hover gets the geometry only; active additionally
+   lights the edge, the left bar and the label. */
+
+[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"]:hover,
+[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-state="open"],
 [data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-active="true"] {
-  box-shadow: inset 2px 0 0 var(--skin-line);
+  --skin-plate-bevel: 9px;
+  --skin-plate-edge: color-mix(in oklab, var(--skin-line) 26%, transparent);
+  --skin-plate-bar: transparent;
+  --skin-plate-inset-left: 1px;
+  --skin-plate-glow: transparent;
+  position: relative;
+  isolation: isolate;
+  background: transparent;
+  box-shadow: none;
+}
+
+[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-active="true"] {
+  --skin-plate-edge: color-mix(in oklab, var(--skin-line) 55%, transparent);
+  --skin-plate-bar: var(--skin-line);
+  --skin-plate-inset-left: 2px;
+  --skin-plate-glow: var(--skin-glow);
+  color: var(--skin-active-fg);
+  text-shadow: 0 0 5px var(--skin-active-text-glow);
+}
+
+[data-skin="hacker-1980"]
+  [data-slot="sidebar-menu-button"][data-active="true"]
+  svg {
+  color: var(--skin-active-fg);
+  filter: drop-shadow(0 0 4px var(--skin-active-text-glow));
+}
+
+/* Outline layer — the bevelled edge plus, when active, the bar down the left. */
+[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"]:hover::after,
+[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-state="open"]::after,
+[data-skin="hacker-1980"]
+  [data-slot="sidebar-menu-button"][data-active="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  border-radius: 0;
+  background: linear-gradient(
+    90deg,
+    var(--skin-plate-bar) 0 2px,
+    var(--skin-plate-edge) 2px
+  );
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% calc(100% - var(--skin-plate-bevel)),
+    calc(100% - var(--skin-plate-bevel)) 100%,
+    0 100%
+  );
+}
+
+/* Fill layer — the untouched sidebar-accent, inset 1px so the outline shows
+   through as a hairline. */
+[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"]:hover::before,
+[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-state="open"]::before,
+[data-skin="hacker-1980"]
+  [data-slot="sidebar-menu-button"][data-active="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 1px 1px 1px var(--skin-plate-inset-left);
+  z-index: -1;
+  border-radius: 0;
+  background: var(--sidebar-accent);
+  box-shadow: 0 0 10px -6px var(--skin-plate-glow);
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% calc(100% - var(--skin-plate-bevel) + 1px),
+    calc(100% - var(--skin-plate-bevel) + 1px) 100%,
+    0 100%
+  );
+}
+
+/* Collapsed rail: the button is a 32px square around a bare icon, so a 9px
+   bevel would bite into it — shave it down to a hint there. */
+[data-skin="hacker-1980"]
+  [data-slot="sidebar"][data-state="collapsed"]
+  [data-slot="sidebar-menu-button"]:hover,
+[data-skin="hacker-1980"]
+  [data-slot="sidebar"][data-state="collapsed"]
+  [data-slot="sidebar-menu-button"][data-state="open"],
+[data-skin="hacker-1980"]
+  [data-slot="sidebar"][data-state="collapsed"]
+  [data-slot="sidebar-menu-button"][data-active="true"] {
+  --skin-plate-bevel: 5px;
 }
 
 /* --- Scrollbars ----------------------------------------------------------- */
