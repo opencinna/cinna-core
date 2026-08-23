@@ -86,7 +86,7 @@ Auth-relevant fields:
 - `set_password(session, user, new_password)` - Set password for OAuth-only users
 - `reset_password(session, token, new_password)` - Token-based password reset
 - `recover_password(session, email)` - Generate reset token and send email
-- `create_email_user(session, email)` - Create user from email (email integration, bypasses whitelist)
+- `create_external_user(session, email, confirmed, provenance, passwordless=False)` - Get-or-create a user from an externally-arriving sender address (email integration, server channels; bypasses whitelist)
 
 ### AuthService (`backend/app/services/users/auth_service.py`)
 - `is_email_domain_allowed(email)` - Validate against whitelist

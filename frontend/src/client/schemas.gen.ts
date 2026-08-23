@@ -9941,6 +9941,72 @@ export const ArticleListItemSchema = {
     description: 'Article metadata for discovery step.'
 } as const;
 
+export const AutoInstallBundleAddSchema = {
+    properties: {
+        bundle_uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Bundle Uuid'
+        }
+    },
+    type: 'object',
+    required: ['bundle_uuid'],
+    title: 'AutoInstallBundleAdd',
+    description: 'Admin request body for adding a bundle to the auto-install list.'
+} as const;
+
+export const AutoInstallBundlePublicSchema = {
+    properties: {
+        bundle_uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Bundle Uuid'
+        },
+        bundle_id: {
+            type: 'string',
+            title: 'Bundle Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        visibility: {
+            type: 'string',
+            title: 'Visibility'
+        },
+        has_trigger_prompt: {
+            type: 'boolean',
+            title: 'Has Trigger Prompt',
+            default: false
+        },
+        added_by: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Added By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['bundle_uuid', 'bundle_id', 'display_name', 'visibility', 'created_at'],
+    title: 'AutoInstallBundlePublic',
+    description: `Joined projection for the admin list.
+
+\`\`has_trigger_prompt\`\` is False when the bundle's latest revision carries
+no \`\`router_trigger_prompt\`\` — such a bundle can never win Pass 2, so the
+admin UI flags it.`
+} as const;
+
 export const BeginPasskeyRegistrationResponseSchema = {
     properties: {
         challenge_token: {
@@ -11195,6 +11261,311 @@ export const CatalogPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'CatalogPublic'
+} as const;
+
+export const ChannelDebugEventPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            title: 'Id'
+        },
+        at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'At'
+        },
+        direction: {
+            type: 'string',
+            title: 'Direction'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind'
+        },
+        summary: {
+            type: 'string',
+            title: 'Summary'
+        },
+        sender_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sender Email'
+        },
+        sender_display_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sender Display Name'
+        },
+        thread_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Thread Key'
+        },
+        text: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Text'
+        },
+        detail: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Detail'
+        },
+        repeat: {
+            type: 'integer',
+            title: 'Repeat',
+            default: 1
+        }
+    },
+    type: 'object',
+    required: ['id', 'at', 'direction', 'kind', 'summary'],
+    title: 'ChannelDebugEventPublic',
+    description: `One captured event in the admin debug feed.
+
+Read-only projection of the in-memory ring buffer — see
+\`\`services/server_channels/channel_debug_buffer.py\`\` for why this is not
+persisted.`
+} as const;
+
+export const ChannelDebugEventsPublicSchema = {
+    properties: {
+        events: {
+            items: {
+                '$ref': '#/components/schemas/ChannelDebugEventPublic'
+            },
+            type: 'array',
+            title: 'Events'
+        },
+        buffer_size: {
+            type: 'integer',
+            title: 'Buffer Size'
+        },
+        capturing_since: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Capturing Since'
+        }
+    },
+    type: 'object',
+    required: ['buffer_size', 'capturing_since'],
+    title: 'ChannelDebugEventsPublic',
+    description: 'The debug feed plus the bound it is subject to.'
+} as const;
+
+export const ChannelRecentSenderSchema = {
+    properties: {
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        display_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Display Name'
+        },
+        thread_key: {
+            type: 'string',
+            title: 'Thread Key'
+        },
+        last_seen: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Seen'
+        },
+        bound: {
+            type: 'boolean',
+            title: 'Bound',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['email', 'thread_key'],
+    title: 'ChannelRecentSender',
+    description: `A person this channel has seen, and the thread to reach them on.
+
+Sourced from thread bindings (durable) merged with the debug buffer (live),
+so someone who has only just messaged is selectable before their binding
+exists.`
+} as const;
+
+export const ChannelSetupInstructionsSchema = {
+    properties: {
+        channel_type: {
+            type: 'string',
+            title: 'Channel Type'
+        },
+        webhook_url: {
+            type: 'string',
+            title: 'Webhook Url'
+        },
+        details: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Details'
+        },
+        steps: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Steps'
+        }
+    },
+    type: 'object',
+    required: ['channel_type', 'webhook_url'],
+    title: 'ChannelSetupInstructions',
+    description: 'Adapter-shaped setup guidance shown after create / on demand.'
+} as const;
+
+export const ChannelTestOutboundRequestSchema = {
+    properties: {
+        email: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email'
+        },
+        thread_key: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 512,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Thread Key'
+        },
+        text: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 4000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Text'
+        }
+    },
+    type: 'object',
+    title: 'ChannelTestOutboundRequest',
+    description: `Admin "does the credential work?" probe.
+
+Exactly one target must be supplied:
+
+- \`\`email\`\` — a person the platform has already seen on this channel. It is
+  resolved *locally*, to a thread we recorded from one of their inbound
+  events, never handed to the provider. Google Chat's \`\`users/{email}\`\`
+  alias exists but is documented as user-authentication only, and this
+  adapter authenticates as an app — so an email the platform has never
+  observed cannot be turned into a destination at all. That is a real
+  limit, surfaced as an actionable error rather than a silent failure.
+- \`\`thread_key\`\` — the channel-native identity (Google Chat: \`\`spaces/AAA\`\`
+  or \`\`spaces/AAA/threads/BBB\`\`). The escape hatch, and what the debug
+  panel's "reply here" action sends.`
+} as const;
+
+export const ChannelTestOutboundResultSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        external_message_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'External Message Id'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'ChannelTestOutboundResult',
+    description: 'Outcome of a test send. ``error`` is admin-facing, never the raw secret.'
+} as const;
+
+export const ChannelTypePublicSchema = {
+    properties: {
+        channel_type: {
+            type: 'string',
+            title: 'Channel Type'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        }
+    },
+    type: 'object',
+    required: ['channel_type', 'display_name'],
+    title: 'ChannelTypePublic',
+    description: 'One registered adapter, for the admin type picker.'
 } as const;
 
 export const CheckAccessResponseSchema = {
@@ -21698,6 +22069,249 @@ export const SendAnswerResponseSchema = {
     required: ['success'],
     title: 'SendAnswerResponse',
     description: 'Response from sending an email reply'
+} as const;
+
+export const ServerChannelCreateSchema = {
+    properties: {
+        channel_type: {
+            type: 'string',
+            maxLength: 64,
+            minLength: 1,
+            title: 'Channel Type'
+        },
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: true
+        },
+        auto_register_users: {
+            type: 'boolean',
+            title: 'Auto Register Users',
+            default: false
+        },
+        config: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Config'
+        },
+        email_whitelist: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Whitelist'
+        },
+        secrets: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Secrets'
+        }
+    },
+    type: 'object',
+    required: ['channel_type', 'name'],
+    title: 'ServerChannelCreate',
+    description: 'Admin create payload.'
+} as const;
+
+export const ServerChannelPublicSchema = {
+    properties: {
+        channel_type: {
+            type: 'string',
+            maxLength: 64,
+            minLength: 1,
+            title: 'Channel Type'
+        },
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: true
+        },
+        auto_register_users: {
+            type: 'boolean',
+            title: 'Auto Register Users',
+            default: false
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        config: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Config'
+        },
+        email_whitelist: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Whitelist'
+        },
+        webhook_token: {
+            type: 'string',
+            title: 'Webhook Token'
+        },
+        webhook_url: {
+            type: 'string',
+            title: 'Webhook Url'
+        },
+        has_outbound_credentials: {
+            type: 'boolean',
+            title: 'Has Outbound Credentials'
+        },
+        created_by: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['channel_type', 'name', 'id', 'webhook_token', 'webhook_url', 'has_outbound_credentials', 'created_at', 'updated_at'],
+    title: 'ServerChannelPublic',
+    description: 'Admin read projection. Carries no secret material.'
+} as const;
+
+export const ServerChannelUpdateSchema = {
+    properties: {
+        channel_type: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Type'
+        },
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Enabled'
+        },
+        auto_register_users: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Auto Register Users'
+        },
+        config: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Config'
+        },
+        email_whitelist: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Whitelist'
+        },
+        secrets: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Secrets'
+        },
+        regenerate_webhook_token: {
+            type: 'boolean',
+            title: 'Regenerate Webhook Token',
+            default: false
+        }
+    },
+    type: 'object',
+    title: 'ServerChannelUpdate',
+    description: `Admin patch payload — every field optional.
+
+\`\`secrets\`\` is only written when a non-empty value is supplied, so a form
+round-trip that leaves the write-only field untouched keeps the stored
+credential.`
 } as const;
 
 export const ServerConfigSchema = {

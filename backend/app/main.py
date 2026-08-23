@@ -60,7 +60,10 @@ def cinna_desktop_discovery() -> dict:
     Metadata): ``authorization_endpoint``, ``token_endpoint``,
     ``userinfo_endpoint``.
     """
-    base = f"{settings.FRONTEND_HOST}{settings.API_V1_STR}/desktop-auth"
+    # Backend origin: these are API endpoints a native client calls
+    # directly (token, userinfo) or sends a browser to (authorize).
+    # On a split-host deployment the SPA origin has no /api/v1.
+    base = f"{settings.backend_base_url}{settings.API_V1_STR}/desktop-auth"
     return {
         "instance_name": settings.PROJECT_NAME,
         "authorization_endpoint": f"{base}/authorize",
@@ -83,7 +86,10 @@ def cinna_app_discovery() -> dict:
     Server Metadata): ``authorization_endpoint``, ``token_endpoint``,
     ``userinfo_endpoint``.
     """
-    base = f"{settings.FRONTEND_HOST}{settings.API_V1_STR}/app-auth"
+    # Backend origin: these are API endpoints a native client calls
+    # directly (token, userinfo) or sends a browser to (authorize).
+    # On a split-host deployment the SPA origin has no /api/v1.
+    base = f"{settings.backend_base_url}{settings.API_V1_STR}/app-auth"
     return {
         "instance_name": settings.PROJECT_NAME,
         "authorization_endpoint": f"{base}/authorize",
@@ -123,6 +129,10 @@ from app.services.email.polling_scheduler import (
 from app.services.email.sending_scheduler import (
     start_scheduler as start_email_sending_scheduler,
     shutdown_scheduler as shutdown_email_sending_scheduler
+)
+from app.services.server_channels.channel_pending_scheduler import (
+    start_scheduler as start_channel_pending_scheduler,
+    shutdown_scheduler as shutdown_channel_pending_scheduler
 )
 from app.services.environments.environment_status_scheduler import (
     start_scheduler as start_env_status_scheduler,
@@ -175,6 +185,7 @@ async def lifespan(app: FastAPI):
         start_agent_schedule_scheduler()
         start_email_polling_scheduler()
         start_email_sending_scheduler()
+        start_channel_pending_scheduler()
         start_env_status_scheduler()
         start_cli_cleanup_scheduler()
         start_device_login_cleanup_scheduler()
@@ -341,7 +352,23 @@ async def lifespan(app: FastAPI):
         handler=EmailSendingService.handle_stream_completed
     )
 
-    logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, EmailSendingService)")
+    # Server channels: deliver the agent's reply back out through the channel
+    # the message arrived on. Both handlers gate on
+    # `session.integration_type.startswith("channel_")` before doing any work.
+    from app.services.server_channels.channel_outbound_service import (
+        ChannelOutboundService,
+    )
+
+    event_service.register_handler(
+        event_type=EventType.STREAM_COMPLETED,
+        handler=ChannelOutboundService.handle_stream_completed
+    )
+    event_service.register_handler(
+        event_type=EventType.STREAM_ERROR,
+        handler=ChannelOutboundService.handle_stream_error
+    )
+
+    logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, EmailSendingService, ChannelOutboundService)")
 
     # Availability check for the platform email sender.
     if not settings.emails_enabled:
@@ -367,6 +394,7 @@ async def lifespan(app: FastAPI):
         shutdown_agent_schedule_scheduler()
         shutdown_email_polling_scheduler()
         shutdown_email_sending_scheduler()
+        shutdown_channel_pending_scheduler()
         shutdown_env_status_scheduler()
         shutdown_cli_cleanup_scheduler()
         shutdown_device_login_cleanup_scheduler()

@@ -46,6 +46,7 @@ Slash commands (`/files`, `/session-recover`, etc.) are instant, deterministic a
 - Command response messages carry metadata `{"command": true, "command_name": "/name"}` for downstream consumers including the LLM context bridging feature.
 - A2A streaming callers (`message/stream`) receive an extra `notice` event ("Starting up the agent environment, this may take a moment...") before the command result when a `requires_running_environment` command wakes the env — matching the notice already emitted for `/run:<name>` and LLM messages. The notice fires when the pre-call env status is `"suspended"`, `"activating"`, or `"starting"`. On wake-up failure, the orchestrator short-circuits with `action="error"` and a friendly message; no DB rows are created.
 - Command output with `include_in_llm_context=True` is automatically forwarded to the next LLM turn as a `<prior_commands>` XML block. This applies to `/files`, `/files-all`, `/agent-status`, and all `/run:*` commands.
+- `/session-improve` is deliberately `include_in_llm_context = False` and `requires_running_environment = False` — it reports *on* the conversation, not part of it, and forwarding it as prior-turn context would distort the very session being reported. `CommandService.list_for_session` also marks it `is_available=False` in the autocomplete popup when the session is a guest or webapp share (`guest_share_id` / `webapp_share_id` set) — the same shape as the `/rebuild-env` availability check — since those sessions have no identifiable consenting account to raise a request against. It takes one flag, `--no-memory`, which leaves the install's personal memory area out of the capture; `requires_running_environment` stays `False` because the memory read is opportunistic — a stopped environment is recorded as such rather than woken.
 
 ## Architecture Overview
 
@@ -92,6 +93,7 @@ Before each LLM turn, SessionStreamProcessor prepends <prior_commands> XML
 | `/webapp` | Return the shareable webapp URL for the agent (first active share link) | no | no | [webapp_command.md](webapp_command.md) |
 | `/rebuild-env` | Rebuild the active environment (fails if any session is streaming) | no | no | [rebuild_env_command.md](rebuild_env_command.md) |
 | `/agent-status` | Show the agent's self-reported status from `STATUS.md` — severity, summary, timestamp, and full body | no | yes | [agent_status_command.md](agent_status_command.md) |
+| `/session-improve [--no-memory] [comment]` | Share this session (frozen transcript + runtime context, incl. the agent's prompts and — unless `--no-memory` — its personal memory area) with the agent's owner as an improvement request; unavailable on guest/webapp-share sessions | no | no | [agent_improvement_requests](../../application/agent_improvement_requests/agent_improvement_requests.md) |
 | `/run` | List all declared CLI commands (from `CLI_COMMANDS.yaml`) as a markdown table | no | — | [cli_commands](../../agents/cli_commands/cli_commands.md) |
 | `/run:<name>` | Execute a declared CLI command — streams stdout/stderr; appears as a terminal-style system message | yes | yes | [cli_commands](../../agents/cli_commands/cli_commands.md) |
 

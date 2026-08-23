@@ -131,6 +131,42 @@ AGENT_API_EXTERNAL_KEY_REVEALED = "AGENT_API_EXTERNAL_KEY_REVEALED"
 # user id, acting user id, and source IP — never any snapshot content.
 IMPROVEMENT_ARCHIVE_DOWNLOADED = "IMPROVEMENT_ARCHIVE_DOWNLOADED"
 
+# ── Server channels ───────────────────────────────────────────────────
+# The channel webhook is the platform's only unauthenticated ingress that can
+# create sessions, so both its admin lifecycle and its rejections are audited.
+#
+# The two rejection events are attacker-triggerable and therefore THROTTLED at
+# the emit site (one row per source per window) — an unthrottled audit row on a
+# public endpoint is itself a denial-of-service vector. Neither payload carries
+# message text or the bearer JWT.
+#
+# Admin-action rows are attributed to the acting superuser; rejection rows are
+# attributed to the channel's creator (there is no authenticated user to blame
+# for an anonymous request), and the auto-register row to the account created.
+SERVER_CHANNEL_CREATED = "SERVER_CHANNEL_CREATED"
+# Also carries auto-install *list* mutations, distinguished by an ``action``
+# key in the payload (``auto_install_list_add`` / ``auto_install_list_remove``)
+# rather than by their own event types — they are edits to channel routing
+# configuration, and a reader filtering on this type wants to see them.
+SERVER_CHANNEL_UPDATED = "SERVER_CHANNEL_UPDATED"
+SERVER_CHANNEL_DELETED = "SERVER_CHANNEL_DELETED"
+SERVER_CHANNEL_TOKEN_REGENERATED = "SERVER_CHANNEL_TOKEN_REGENERATED"
+# Inbound request failed adapter signature verification.
+SERVER_CHANNEL_VERIFICATION_FAILED = "SERVER_CHANNEL_VERIFICATION_FAILED"
+# Verified sender was not on the channel's email whitelist (or is inactive).
+SERVER_CHANNEL_SENDER_DENIED = "SERVER_CHANNEL_SENDER_DENIED"
+# A passwordless, transport-confirmed account was created for a whitelisted
+# sender. Provenance (which channel) is in the payload.
+SERVER_CHANNEL_USER_AUTO_REGISTERED = "SERVER_CHANNEL_USER_AUTO_REGISTERED"
+# Pass-2 routing installed a catalog bundle for an external sender.
+SERVER_CHANNEL_AUTO_INSTALL = "SERVER_CHANNEL_AUTO_INSTALL"
+# A superuser sent an admin test message out through a channel. Audited
+# because the target may be a *named person's* real conversation: the
+# email-targeted form resolves to a thread belonging to an identified user, so
+# this writes arbitrary text into somewhere they read. The debug buffer records
+# it too, but that is in-memory and clearable — this is the durable record.
+SERVER_CHANNEL_TEST_SEND = "SERVER_CHANNEL_TEST_SEND"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

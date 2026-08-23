@@ -2129,6 +2129,30 @@ export type ArticleListItem = {
 };
 
 /**
+ * Admin request body for adding a bundle to the auto-install list.
+ */
+export type AutoInstallBundleAdd = {
+    bundle_uuid: string;
+};
+
+/**
+ * Joined projection for the admin list.
+ *
+ * ``has_trigger_prompt`` is False when the bundle's latest revision carries
+ * no ``router_trigger_prompt`` — such a bundle can never win Pass 2, so the
+ * admin UI flags it.
+ */
+export type AutoInstallBundlePublic = {
+    bundle_uuid: string;
+    bundle_id: string;
+    display_name: string;
+    visibility: string;
+    has_trigger_prompt?: boolean;
+    added_by?: (string | null);
+    created_at: string;
+};
+
+/**
  * Response of ``POST /users/me/mfa/passkeys/begin``.
  *
  * ``options`` is the ``PublicKeyCredentialCreationOptionsJSON`` the
@@ -2391,6 +2415,104 @@ export type CatalogInstallContext = {
 export type CatalogPublic = {
     data: Array<CatalogEntryPublic>;
     count: number;
+};
+
+/**
+ * One captured event in the admin debug feed.
+ *
+ * Read-only projection of the in-memory ring buffer — see
+ * ``services/server_channels/channel_debug_buffer.py`` for why this is not
+ * persisted.
+ */
+export type ChannelDebugEventPublic = {
+    id: string;
+    at: string;
+    direction: string;
+    kind: string;
+    summary: string;
+    sender_email?: (string | null);
+    sender_display_name?: (string | null);
+    thread_key?: (string | null);
+    text?: (string | null);
+    detail?: {
+        [key: string]: (string);
+    };
+    repeat?: number;
+};
+
+/**
+ * The debug feed plus the bound it is subject to.
+ */
+export type ChannelDebugEventsPublic = {
+    events?: Array<ChannelDebugEventPublic>;
+    buffer_size: number;
+    capturing_since: string;
+};
+
+/**
+ * A person this channel has seen, and the thread to reach them on.
+ *
+ * Sourced from thread bindings (durable) merged with the debug buffer (live),
+ * so someone who has only just messaged is selectable before their binding
+ * exists.
+ */
+export type ChannelRecentSender = {
+    email: string;
+    display_name?: (string | null);
+    thread_key: string;
+    last_seen?: (string | null);
+    bound?: boolean;
+};
+
+/**
+ * Adapter-shaped setup guidance shown after create / on demand.
+ */
+export type ChannelSetupInstructions = {
+    channel_type: string;
+    webhook_url: string;
+    details?: {
+        [key: string]: (string);
+    };
+    steps?: Array<(string)>;
+};
+
+/**
+ * Admin "does the credential work?" probe.
+ *
+ * Exactly one target must be supplied:
+ *
+ * - ``email`` — a person the platform has already seen on this channel. It is
+ * resolved *locally*, to a thread we recorded from one of their inbound
+ * events, never handed to the provider. Google Chat's ``users/{email}``
+ * alias exists but is documented as user-authentication only, and this
+ * adapter authenticates as an app — so an email the platform has never
+ * observed cannot be turned into a destination at all. That is a real
+ * limit, surfaced as an actionable error rather than a silent failure.
+ * - ``thread_key`` — the channel-native identity (Google Chat: ``spaces/AAA``
+ * or ``spaces/AAA/threads/BBB``). The escape hatch, and what the debug
+ * panel's "reply here" action sends.
+ */
+export type ChannelTestOutboundRequest = {
+    email?: (string | null);
+    thread_key?: (string | null);
+    text?: (string | null);
+};
+
+/**
+ * Outcome of a test send. ``error`` is admin-facing, never the raw secret.
+ */
+export type ChannelTestOutboundResult = {
+    success: boolean;
+    external_message_id?: (string | null);
+    error?: (string | null);
+};
+
+/**
+ * One registered adapter, for the admin type picker.
+ */
+export type ChannelTypePublic = {
+    channel_type: string;
+    display_name: string;
 };
 
 /**
@@ -4970,6 +5092,62 @@ export type SendAnswerResponse = {
     queue_entry_id?: (string | null);
     generated_reply?: (string | null);
     error?: (string | null);
+};
+
+/**
+ * Admin create payload.
+ */
+export type ServerChannelCreate = {
+    channel_type: string;
+    name: string;
+    enabled?: boolean;
+    auto_register_users?: boolean;
+    config?: {
+        [key: string]: unknown;
+    };
+    email_whitelist?: (string | null);
+    secrets?: (string | null);
+};
+
+/**
+ * Admin read projection. Carries no secret material.
+ */
+export type ServerChannelPublic = {
+    channel_type: string;
+    name: string;
+    enabled?: boolean;
+    auto_register_users?: boolean;
+    id: string;
+    config?: {
+        [key: string]: unknown;
+    };
+    email_whitelist?: (string | null);
+    webhook_token: string;
+    webhook_url: string;
+    has_outbound_credentials: boolean;
+    created_by?: (string | null);
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * Admin patch payload — every field optional.
+ *
+ * ``secrets`` is only written when a non-empty value is supplied, so a form
+ * round-trip that leaves the write-only field untouched keeps the stored
+ * credential.
+ */
+export type ServerChannelUpdate = {
+    channel_type?: (string | null);
+    name?: (string | null);
+    enabled?: (boolean | null);
+    auto_register_users?: (boolean | null);
+    config?: ({
+    [key: string]: unknown;
+} | null);
+    email_whitelist?: (string | null);
+    secrets?: (string | null);
+    regenerate_webhook_token?: boolean;
 };
 
 /**
@@ -9129,6 +9307,80 @@ export type SecurityEventsListSecurityEventsData = {
 };
 
 export type SecurityEventsListSecurityEventsResponse = (SecurityEventsPublic);
+
+export type ServerChannelsChannelInboundData = {
+    webhookToken: string;
+};
+
+export type ServerChannelsChannelInboundResponse = (unknown);
+
+export type ServerChannelsListChannelTypesResponse = (Array<ChannelTypePublic>);
+
+export type ServerChannelsListAutoInstallBundlesResponse = (Array<AutoInstallBundlePublic>);
+
+export type ServerChannelsAddAutoInstallBundleData = {
+    requestBody: AutoInstallBundleAdd;
+};
+
+export type ServerChannelsAddAutoInstallBundleResponse = (Array<AutoInstallBundlePublic>);
+
+export type ServerChannelsRemoveAutoInstallBundleData = {
+    bundleUuid: string;
+};
+
+export type ServerChannelsRemoveAutoInstallBundleResponse = (void);
+
+export type ServerChannelsListChannelsResponse = (Array<ServerChannelPublic>);
+
+export type ServerChannelsCreateChannelData = {
+    requestBody: ServerChannelCreate;
+};
+
+export type ServerChannelsCreateChannelResponse = (ServerChannelPublic);
+
+export type ServerChannelsUpdateChannelData = {
+    channelId: string;
+    requestBody: ServerChannelUpdate;
+};
+
+export type ServerChannelsUpdateChannelResponse = (ServerChannelPublic);
+
+export type ServerChannelsDeleteChannelData = {
+    channelId: string;
+};
+
+export type ServerChannelsDeleteChannelResponse = (void);
+
+export type ServerChannelsGetSetupInstructionsData = {
+    channelId: string;
+};
+
+export type ServerChannelsGetSetupInstructionsResponse = (ChannelSetupInstructions);
+
+export type ServerChannelsTestOutboundData = {
+    channelId: string;
+    requestBody: ChannelTestOutboundRequest;
+};
+
+export type ServerChannelsTestOutboundResponse = (ChannelTestOutboundResult);
+
+export type ServerChannelsListRecentSendersData = {
+    channelId: string;
+};
+
+export type ServerChannelsListRecentSendersResponse = (Array<ChannelRecentSender>);
+
+export type ServerChannelsListDebugEventsData = {
+    channelId: string;
+};
+
+export type ServerChannelsListDebugEventsResponse = (ChannelDebugEventsPublic);
+
+export type ServerChannelsClearDebugEventsData = {
+    channelId: string;
+};
+
+export type ServerChannelsClearDebugEventsResponse = (Message);
 
 export type ServerConfigGetDisclaimerResponse = (DisclaimerPublic);
 

@@ -27,7 +27,7 @@
 
 ### Backend — Updated Services
 - `backend/app/services/sharing/agent_share_service.py` — `create_auto_share()` for email sender clones
-- `backend/app/services/users/user_service.py` — `create_email_user()` for auto user provisioning
+- `backend/app/services/users/user_service.py` — `create_external_user()` for auto user provisioning
 - `backend/app/services/sessions/session_service.py` — `get_session_by_email_thread()`, email params on `create_session()`
 - `backend/app/services/sessions/message_service.py` — HMAC-signed `session_context` emission (includes `email_subject` from linked `EmailMessage`)
 - `backend/app/services/sessions/session_context_signer.py` — HMAC-SHA256 signing/verification for session context
@@ -230,7 +230,7 @@ Both schedulers registered in `backend/app/main.py` during app lifespan:
 | Existing Service | New Integration |
 |------------------|-----------------|
 | `AgentShareService` | `create_auto_share()` — creates pre-accepted share + clone in one step |
-| `UserService` | `create_email_user()` — creates user from email, bypasses domain whitelist |
+| `UserService` | `create_external_user()` — creates user from email, bypasses domain whitelist (shared with server channels) |
 | `SessionService` | `create_session()` accepts `email_thread_id`, `integration_type`, `sender_email` |
 | `SessionService` | `get_session_by_email_thread()` — finds session by thread ID |
 | `MessageService` | Emits HMAC-signed `session_context` (including `email_subject` from linked `EmailMessage`) |

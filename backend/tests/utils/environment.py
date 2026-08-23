@@ -114,6 +114,31 @@ def set_environment_status(
     db.flush()
 
 
+def set_environment_critical_state(
+    db: Session,
+    env_id: str | uuid.UUID,
+    critical_state: bool,
+) -> None:
+    """Force an agent environment's ``critical_state`` flag directly on the test DB.
+
+    Same rationale and same documented-seam pattern as ``set_environment_status``
+    above: there is no public API seam for flipping this flag (it is set by the
+    real container health-check path, which the test suite stubs out), and
+    tests that need to exercise the *coexistence* of ``critical_state=True``
+    with ``status="running"`` — e.g. the server-channels pending-flush "critical
+    state is not a failure" behavior — need a deterministic way to produce it.
+    """
+    from app.models import AgentEnvironment
+
+    if isinstance(env_id, str):
+        env_id = uuid.UUID(env_id)
+    env = db.get(AgentEnvironment, env_id)
+    assert env is not None, f"Environment {env_id} not found"
+    env.critical_state = critical_state
+    db.add(env)
+    db.flush()
+
+
 def link_ai_credential_to_environment(
     db: Session,
     environment_id: str | uuid.UUID,

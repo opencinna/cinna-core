@@ -190,7 +190,7 @@ Message Flow:
   - "Activating…" (spinner) — environment is `activating`, `starting`, or `rebuilding`
   - "Suspended" (muted static label, clickable) — environment is `suspended` or `stopped`; tooltip notes it will wake on next message
   - "App" (normal button) — environment is `running`
-- **Options menu** — Edit session (rename, change mode) and Delete session
+- **Options menu** — Improve Agent (opens the consent modal — see [Agent Improvement Requests](../agent_improvement_requests/agent_improvement_requests.md)), Edit session (rename, change mode), then a separator and Delete session. The separator is deliberate: deleting a session is not undoable, so it must not read as one more item in the same list as Edit
 
 ### Main Content Area
 
@@ -229,3 +229,4 @@ Message Flow:
 - **[Agent Handover](../../agents/agent_handover/agent_handover.md)** — Agent's `create_agent_task` tool creates sub-tasks that spawn child sessions; visible in Sub-tasks panel
 - **[Agent Activities](../agent_activities/agent_activities.md)** — Session state changes (streaming completed, result state set) generate activity feed entries
 - **[Agent Environment Data Management](../../agents/agent_environment_data_management/agent_environment_data_management.md)** — Prompt sync happens after building mode sessions complete
+- **[Agent Improvement Requests](../agent_improvement_requests/agent_improvement_requests.md)** — The session's "Improve Agent" menu item and the `/session-improve` command both take a one-time, consent-gated frozen snapshot of the session's messages (never a live read) and hand it to the agent's owner; the source session itself is never modified or re-read afterwards

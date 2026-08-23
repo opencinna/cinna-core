@@ -134,10 +134,57 @@ mcp-set-url: # sets MCP_SERVER_BASE_URL in .env and recreates backend (usage: ma
 	@if [ -z "$(URL)" ]; then echo "Usage: make mcp-set-url URL=https://xxx.a.free.pinggy.link"; exit 1; fi
 	@sed -i '' 's|^MCP_SERVER_BASE_URL=.*|MCP_SERVER_BASE_URL=$(URL)/mcp|' .env
 	@echo "Updated .env: MCP_SERVER_BASE_URL=$(URL)/mcp"
-	docker compose up -d backend
+	@# Inline for the same reason as webhook-set-url: make's stale export of the
+	@# pre-sed value would otherwise win over the freshly written .env.
+	MCP_SERVER_BASE_URL=$(URL)/mcp docker compose up -d backend
 	@echo "Backend recreated. Verifying..."
 	@sleep 3
 	@curl -sf -o /dev/null -w "" $(URL)/mcp/oauth/.well-known/oauth-authorization-server && echo "MCP OAuth endpoint is reachable!" || echo "Warning: Could not reach MCP endpoint. Check tunnel is running."
+
+.PHONY: webhook-tunnel
+webhook-tunnel: # starts a public HTTPS tunnel to the local backend for inbound webhook testing (Google Chat, task triggers, agent hooks)
+	@echo "Starting pinggy tunnel to the local backend (localhost:8000)..."
+	@echo "1) Copy the HTTPS URL from the tunnel output"
+	@echo "2) In another terminal, run:"
+	@echo "   make webhook-set-url URL=https://YOUR-TUNNEL.a.free.pinggy.link"
+	@echo "3) Reopen the channel in Admin > Server Configuration > Channels and copy the webhook URL"
+	@echo "   (keep this tunnel running for the whole test session)"
+	@echo ""
+	ssh -p 443 -R0:localhost:8000 free.pinggy.io
+
+.PHONY: webhook-set-url
+webhook-set-url: # sets BACKEND_BASE_URL in .env and recreates backend (usage: make webhook-set-url URL=https://xxx.pinggy.link)
+	@if [ -z "$(URL)" ]; then echo "Usage: make webhook-set-url URL=https://xxx.a.free.pinggy.link"; exit 1; fi
+	@if grep -q '^BACKEND_BASE_URL=' .env; then \
+		sed -i '' 's|^BACKEND_BASE_URL=.*|BACKEND_BASE_URL=$(URL)|' .env; \
+	else \
+		printf '\nBACKEND_BASE_URL=%s\n' "$(URL)" >> .env; \
+	fi
+	@# Blank the superseded former name so the two cannot disagree in a way
+	@# that is invisible (BACKEND_BASE_URL wins, but a stale value here reads
+	@# like the active setting).
+	@sed -i '' 's|^WEBHOOK_BASE_URL=.*|WEBHOOK_BASE_URL=|' .env
+	@echo "Updated .env: BACKEND_BASE_URL=$(URL)"
+	@# Passed inline on purpose: this Makefile does `-include .env` + `export` at
+	@# startup, so make already exported the OLD value, and compose prefers the
+	@# process environment over the .env file it would otherwise read.
+	BACKEND_BASE_URL=$(URL) docker compose up -d backend
+	@echo "Backend recreated. Verifying tunnel reaches the backend..."
+	@# Retry: the backend needs a few seconds to boot, and a single early probe
+	@# reports a false failure that reads like a broken tunnel.
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		if curl -sf -o /dev/null --max-time 5 $(URL)/api/v1/utils/health-check/; then \
+			echo "Backend is reachable through the tunnel!"; exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "Warning: could not reach the backend through the tunnel after 20s. Check the tunnel is still running."
+
+.PHONY: webhook-clear-url
+webhook-clear-url: # clears BACKEND_BASE_URL in .env (back to FRONTEND_HOST) and recreates backend
+	@sed -i '' 's|^BACKEND_BASE_URL=.*|BACKEND_BASE_URL=|' .env
+	@echo "Cleared .env: BACKEND_BASE_URL="
+	BACKEND_BASE_URL= WEBHOOK_BASE_URL= docker compose up -d backend
 
 .PHONY: prestart
 prestart: # run initial app/db setup

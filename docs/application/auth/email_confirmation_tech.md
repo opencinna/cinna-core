@@ -11,7 +11,7 @@
 ### Backend - Services
 
 - `backend/app/services/users/email_confirmation_service.py` — `EmailConfirmationService` (the central gate and all confirmation lifecycle methods)
-- `backend/app/services/users/user_service.py` — `recover_password` (cooldown), `create_user`/`register_user`/`create_email_user` (trigger first confirmation email, superuser auto-confirm)
+- `backend/app/services/users/user_service.py` — `recover_password` (cooldown), `create_user`/`register_user`/`create_external_user` (trigger first confirmation email, superuser auto-confirm)
 - `backend/app/services/users/auth_service.py` — Google OAuth auto-confirm at account creation and at login
 - `backend/app/services/notifications/notification_service.py` — `SystemNotificationService.notify()` (choke point for all system notifications)
 - `backend/app/services/email/sending_service.py` — `EmailSendingService.queue_outgoing_email` (enqueue-time gate) and `_send_single_email` (send-time defense)
@@ -162,7 +162,7 @@ def _cooldown_elapsed(last_sent: datetime | None, interval: timedelta) -> bool:
 
 - `register_user`: after creating the user, calls `EmailConfirmationService.send_confirmation_email(force=True)` for the first send
 - `create_user` (admin): superusers get `email_confirmed=True` + `email_confirmed_at=now()` at object construction time; non-superusers start unconfirmed and receive a confirmation email via `send_confirmation_email(force=True)`
-- `create_email_user` (email integration): user starts unconfirmed; confirmation email sent via `send_confirmation_email(force=True)`
+- `create_external_user` with `confirmed=False` (email integration): user starts unconfirmed; confirmation email sent via `send_confirmation_email(force=True)`. With `confirmed=True` (transport-verified identity, e.g. server channels) the user is marked confirmed via `mark_confirmed` and no email is sent.
 - `recover_password`: password recovery is **never** gated by `email_confirmed`. A 300-second per-user cooldown (`last_password_recovery_email_sent_at`) rate-limits repeated sends; when in cooldown, the send is skipped silently so the public response stays generic. The existing 404 for unknown email is unchanged.
 
 ### `AuthService` — Modified Methods (`backend/app/services/users/auth_service.py`)

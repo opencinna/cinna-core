@@ -28,11 +28,24 @@ Scenarios:
 
 Direct DB access via the ``db`` fixture is retained only where the API cannot
 serve the assertion: scenario J asserts the ``encrypted_data`` invariant on a
-placeholder credential (a field no projection exposes), and scenarios K/L assert
-the *absence* of an Agent row after a rejected install (the rejection's
-request-session rollback unwinds the test savepoint past the installer's own
-creation, so the installer can no longer authenticate). Everything else is
-verified via the API.
+placeholder credential (a field no projection exposes), and scenarios K/L
+assert the *absence* of an Agent row after a rejected install by reading it
+straight from the session rather than routing a negative assertion through
+``GET /agents/``.
+
+(Historical note: an earlier version of this comment claimed K/L had no
+choice but to use ``db`` because the rejected install's request-session
+rollback unwound the test's SAVEPOINT past the installer's own creation,
+leaving the installer unable to authenticate for a follow-up ``GET
+/agents/``. That was real, but it was a bug in ``tests/conftest.py``'s ``db``
+fixture — a caught ``IntegrityError`` + ``session.rollback()`` anywhere in a
+request unwound past the current SAVEPOINT instead of stopping at it — fixed
+by adding ``join_transaction_mode="create_savepoint"`` to the fixture's
+``Session`` construction. The installer authenticates fine post-fix; the
+direct-``db`` assertion is kept anyway since it's the simpler read for a
+negative check.)
+
+Everything else is verified via the API.
 """
 import uuid
 
@@ -707,12 +720,11 @@ def test_install_use_existing_rejected_for_publisher_provided_spec(
     - Response detail mentions the spec name or a friendly message.
     - No Agent row (install) created for the installer.
 
-    The "no agent created" check uses the ``db`` fixture rather than
-    ``GET /agents/``: the rejected install raises an HTTPException whose
-    request-session rollback unwinds the test savepoint past the installer's
-    own creation, so the installer can no longer authenticate. The outer
-    ``db`` session still sees committed rows and is the only reliable surface
-    for asserting absence after a failed request.
+    The "no agent created" check uses the ``db`` fixture directly rather than
+    ``GET /agents/`` — simplest read for a negative assertion. (This is NOT
+    because the installer can't authenticate after the rejection: an earlier
+    ``tests/conftest.py`` bug did break that, but it's fixed — see the module
+    docstring's historical note.)
     """
     # ── Phase 1: publish bundle with one PBP credential ───────────────────────
     agent = create_agent_via_api(
@@ -798,11 +810,9 @@ def test_install_legacy_uuid_string_payload_rejected(
 
     Assert: the install endpoint returns HTTP 422 and creates no Agent row.
 
-    The "no Agent row" check uses the ``db`` fixture (see scenario K): the
-    rejected install's request-session rollback unwinds the test savepoint past
-    the installer's creation, so ``GET /agents/`` can no longer authenticate the
-    installer. The outer ``db`` session is the only reliable surface for
-    asserting absence after a failed request.
+    The "no Agent row" check uses the ``db`` fixture directly, same as
+    scenario K — simplest read for a negative assertion (see the module
+    docstring's historical note on why this isn't a forced workaround).
     """
     # Publish a bundle with one PBU spec.
     agent = create_agent_via_api(

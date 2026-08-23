@@ -43,7 +43,7 @@ from app.services.cli.account_api_proxy_policy import (
     ApiProxyDenied,
     assert_api_proxy_allowed,
 )
-from app.services.cli.rate_limiter import RateLimiter
+from app.services.common.rate_limiter import RateLimiter
 from app.services.events.security_event_service import SecurityEventService
 from app.utils import client_ip
 

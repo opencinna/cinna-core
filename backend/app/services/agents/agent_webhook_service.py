@@ -157,7 +157,7 @@ class AgentWebhookService:
         The ``/agent-hooks/`` path is mounted at the root of the backend app
         (not under ``/api/v1``), matching the task-trigger ``/hooks/`` pattern.
         """
-        base = (settings.FRONTEND_HOST or "https://localhost").rstrip("/")
+        base = settings.webhook_base_url
         return f"{base}/agent-hooks/{webhook_id}"
 
     # ==================== Header / payload helpers ====================

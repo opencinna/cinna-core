@@ -15,7 +15,7 @@ Each file below documents one API domain.
 | Agent Api | [agent_api.md](./agent_api.md) | 14 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
 | Agent App Mcp Routes | [agent_app_mcp_routes.md](./agent_app_mcp_routes.md) | 7 |
-| Agent Git | [agent_git.md](./agent_git.md) | 10 |
+| Agent Git | [agent_git.md](./agent_git.md) | 11 |
 | Agent Hooks | [agent_hooks.md](./agent_hooks.md) | 1 |
 | Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 11 |
 | Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 9 |
@@ -27,7 +27,7 @@ Each file below documents one API domain.
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
-| Cli | [cli.md](./cli.md) | 54 |
+| Cli | [cli.md](./cli.md) | 59 |
 | Credentials | [credentials.md](./credentials.md) | 20 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Email Integration | [email_integration.md](./email_integration.md) | 6 |
@@ -40,6 +40,7 @@ Each file below documents one API domain.
 | Guest Shares | [guest_shares.md](./guest_shares.md) | 5 |
 | Identity | [identity.md](./identity.md) | 7 |
 | Identity Contacts | [identity_contacts.md](./identity_contacts.md) | 2 |
+| Improvement Requests | [improvement_requests.md](./improvement_requests.md) | 8 |
 | Installs | [installs.md](./installs.md) | 12 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
 | Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 13 |
@@ -50,6 +51,7 @@ Each file below documents one API domain.
 | Messages | [messages.md](./messages.md) | 5 |
 | Mfa | [mfa.md](./mfa.md) | 13 |
 | Notification Settings | [notification_settings.md](./notification_settings.md) | 2 |
+| Server Channels | [server_channels.md](./server_channels.md) | 14 |
 | Server Config | [server_config.md](./server_config.md) | 3 |
 | Sessions | [sessions.md](./sessions.md) | 9 |
 | Ssh Keys | [ssh_keys.md](./ssh_keys.md) | 6 |

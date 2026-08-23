@@ -44,7 +44,7 @@ from app.models.events.security_event import (
 from app.services.cli.account_cli_service import AccountCLIService
 from app.services.cli.cli_auth import CLIAuthService
 from app.services.cli.cli_service import _ensure_utc, _get_platform_url
-from app.services.cli.rate_limiter import RateLimiter
+from app.services.common.rate_limiter import RateLimiter
 from app.services.events.security_event_service import SecurityEventService
 from app.utils import client_ip
 

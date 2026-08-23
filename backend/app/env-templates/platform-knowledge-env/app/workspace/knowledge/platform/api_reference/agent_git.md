@@ -99,11 +99,26 @@ Auto-generated from OpenAPI spec. Tag: `agent-git`
 
 ---
 
+## GET `/api/v1/agents/{agent_id}/git/diff`
+**Get Git Diff**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Query parameters:**
+- `section`: string (required)
+- `key`: string (required)
+
+**Response:** `GitDiff`
+
+---
+
 ## POST `/api/v1/agents/{agent_id}/git/pull`
 **Pull Git Source**
 
 **Path parameters:**
 - `agent_id`: uuid
+
 
 **Response:** `AgentPublic`
 

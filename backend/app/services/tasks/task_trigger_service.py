@@ -108,7 +108,7 @@ class TaskTriggerService:
     @staticmethod
     def _build_webhook_url(webhook_id: str) -> str:
         """Build the full public webhook URL."""
-        base = settings.FRONTEND_HOST or "https://localhost"
+        base = settings.webhook_base_url
         # Use backend API URL pattern
         return f"{base}/api/v1/hooks/{webhook_id}"
 

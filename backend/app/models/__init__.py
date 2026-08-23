@@ -489,6 +489,32 @@ from .server_config.server_config import (
     ServerConfigUpdate,
     DisclaimerPublic,
 )
+from .server_channels.server_channel import (
+    ServerChannel,
+    ServerChannelBase,
+    ServerChannelCreate,
+    ServerChannelUpdate,
+    ServerChannelPublic,
+    ChannelSetupInstructions,
+    ChannelTypePublic,
+    ChannelDebugEventPublic,
+    ChannelDebugEventsPublic,
+    ChannelRecentSender,
+    ChannelTestOutboundRequest,
+    ChannelTestOutboundResult,
+)
+from .server_channels.server_auto_install_bundle import (
+    ServerAutoInstallBundle,
+    AutoInstallBundleAdd,
+    AutoInstallBundlePublic,
+)
+from .server_channels.channel_thread_binding import (
+    ChannelThreadBinding,
+    CHANNEL_BINDING_PENDING_INSTALL,
+    CHANNEL_BINDING_ACTIVE,
+    CHANNEL_BINDING_FAILED,
+    CHANNEL_BINDING_STATUSES,
+)
 from .email.email_message import (
     EmailMessage,
     EmailMessagePublic,
@@ -1201,6 +1227,27 @@ __all__ = [
     "ServerConfig",
     "ServerConfigUpdate",
     "DisclaimerPublic",
+    # Server Channels
+    "ServerChannel",
+    "ServerChannelBase",
+    "ServerChannelCreate",
+    "ServerChannelUpdate",
+    "ServerChannelPublic",
+    "ChannelSetupInstructions",
+    "ChannelTypePublic",
+    "ChannelDebugEventPublic",
+    "ChannelDebugEventsPublic",
+    "ChannelRecentSender",
+    "ChannelTestOutboundRequest",
+    "ChannelTestOutboundResult",
+    "ServerAutoInstallBundle",
+    "AutoInstallBundleAdd",
+    "AutoInstallBundlePublic",
+    "ChannelThreadBinding",
+    "CHANNEL_BINDING_PENDING_INSTALL",
+    "CHANNEL_BINDING_ACTIVE",
+    "CHANNEL_BINDING_FAILED",
+    "CHANNEL_BINDING_STATUSES",
     # Email Messages
     "EmailMessage",
     "EmailMessagePublic",

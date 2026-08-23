@@ -2040,15 +2040,30 @@ class GitSourceService:
         ``PendingRollbackError``. Any handler that swallows a DB error must
         therefore clear the transaction, or it merely relocates the failure.
 
-        Implementation note: SQLAlchemy 2.0's ``session.rollback()`` always
-        rolls back to the root transaction (``_to_root=True``), which in the
-        test framework (savepoint-based isolation) destroys all previously
-        committed test data. We use ``get_nested_transaction().rollback()``
-        when inside a savepoint so only the current (likely empty) savepoint
-        is rolled back — this issues ``ROLLBACK TO SAVEPOINT`` rather than a
-        full ``ROLLBACK``, preserving the outer transaction's committed rows.
-        In production there are no active nested transactions so the fallback
+        Implementation note (UPDATED — see below): this special-casing was
+        written because, under ``tests/conftest.py``'s savepoint-based test
+        isolation as it existed at the time, a plain ``session.rollback()``
+        rolled back past the current SAVEPOINT and destroyed previously
+        committed test data — using ``get_nested_transaction().rollback()``
+        when inside a savepoint (``ROLLBACK TO SAVEPOINT``) avoided that. In
+        production there are no active nested transactions, so the fallback
         ``session.rollback()`` is used unchanged.
+
+        That test-fixture behavior was itself a bug, not a SQLAlchemy
+        constant: the fixture was joining an externally-managed connection
+        without ``join_transaction_mode="create_savepoint"`` (SQLAlchemy
+        2.0's documented mode for exactly this pattern), which is what made
+        ``session.rollback()`` unwind past the SAVEPOINT. That's fixed in
+        ``tests/conftest.py`` — a plain ``session.rollback()`` now correctly
+        stays within the current SAVEPOINT there too, which would make this
+        method's nested-transaction branch redundant (harmless, but no
+        longer load-bearing for test-data preservation). Left as-is
+        deliberately: reworking this method (and ``_cleanup_orphan_bundle``,
+        which shares the pattern) to drop the special-casing is a separate,
+        tracked follow-up requiring its own review, not a side effect of a
+        documentation correction. See ``backend/tests/README.md``
+        "Transaction Isolation (Savepoint Pattern)" for the fixture-level
+        explanation.
 
         NEVER throws: a stale/inactive savepoint object (already released by a
         prior commit) would otherwise raise out of a handler whose whole job is
@@ -2505,12 +2520,16 @@ class GitSourceService:
         drop it so a failed connect leaves no half-state. Best-effort: a cleanup
         hiccup must never mask the original error.
 
-        Like :meth:`_mark_source_error`, a poisoned transaction is cleared via
-        ``get_nested_transaction().rollback()`` when inside a savepoint
-        (``ROLLBACK TO SAVEPOINT`` — preserves the outer transaction's committed
-        rows, which a full ``session.rollback()`` would destroy under the
-        savepoint-based test isolation) and a full ``session.rollback()`` only in
-        production where there is no active savepoint.
+        Like :meth:`_mark_source_error` (via :meth:`_clear_poisoned_transaction`),
+        a poisoned transaction is cleared via ``get_nested_transaction()
+        .rollback()`` when inside a savepoint (``ROLLBACK TO SAVEPOINT``) and a
+        full ``session.rollback()`` only in production where there is no active
+        savepoint. This split existed to preserve the outer transaction's
+        committed rows under the test suite's savepoint-based isolation, whose
+        ``db`` fixture had a bug making a full ``session.rollback()`` destroy
+        them — now fixed (``join_transaction_mode="create_savepoint"`` in
+        ``tests/conftest.py``; see :meth:`_clear_poisoned_transaction` for the
+        full explanation and why this method's split is left in place anyway).
         """
         try:
             nested = session.get_nested_transaction()

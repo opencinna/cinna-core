@@ -13,7 +13,6 @@ is captured on the session so the platform can reply.
 Clone mode (default): each sender gets their own per-user install of the
 agent's bundle, with a separate App Data volume keyed on (user, bundle).
 """
-import fnmatch
 import logging
 import uuid
 
@@ -23,6 +22,7 @@ from app.models.agents.agent import Agent
 from app.models.email.agent_email_integration import AgentEmailIntegration, AgentSessionMode
 from app.models.environments.environment import AgentEnvironment
 from app.models.users.user import User
+from app.services.common.email_patterns import match_email_pattern
 from app.services.email.integration_service import EmailIntegrationService
 from app.services.users.user_service import UserService
 
@@ -154,7 +154,7 @@ class EmailRoutingService:
 
         # Check auto_approve_email_pattern
         if integration.auto_approve_email_pattern:
-            if EmailRoutingService._match_email_pattern(
+            if match_email_pattern(
                 sender_email, integration.auto_approve_email_pattern
             ):
                 return True
@@ -162,19 +162,22 @@ class EmailRoutingService:
         return False
 
     @staticmethod
-    def _match_email_pattern(email: str, pattern_string: str) -> bool:
-        """Match email against comma-separated glob patterns (case-insensitive)."""
-        email = email.lower()
-        patterns = [p.strip().lower() for p in pattern_string.split(",") if p.strip()]
-        return any(fnmatch.fnmatch(email, pattern) for pattern in patterns)
-
-    @staticmethod
     def _ensure_user_exists(
         session: Session,
         sender_email: str,
     ) -> uuid.UUID:
-        """Ensure a user account exists for the sender email. Creates one if needed."""
-        user = UserService.create_email_user(session=session, email=sender_email)
+        """Ensure a user account exists for the sender email. Creates one if needed.
+
+        Auto-created senders start unconfirmed: an inbound ``From`` header is
+        not proof the address belongs to the sender, so they get a
+        confirmation email rather than an auto-confirmed account.
+        """
+        user = UserService.create_external_user(
+            session=session,
+            email=sender_email,
+            confirmed=False,
+            provenance="email_integration",
+        )
         return user.id
 
     @staticmethod

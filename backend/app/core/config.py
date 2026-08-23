@@ -37,6 +37,23 @@ class Settings(BaseSettings):
     # 60 minutes * 24 hours * 8 days = 8 days
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     FRONTEND_HOST: str = "http://localhost:5173"
+    # Publicly reachable origin of THIS backend. Every absolute URL that points
+    # at the API and is handed to something outside the platform is built from
+    # it: inbound webhook URLs (server channels, task triggers, agent hooks),
+    # the consumer-facing Agent REST API base, and signed A2A attachment
+    # download links. It is deliberately separate from FRONTEND_HOST — in a
+    # real deployment the SPA is on dashboard.example.com while the API answers
+    # on api.example.com, and a URL pointing at the SPA origin 404s. For local
+    # testing against an external provider, point it at the HTTPS tunnel in
+    # front of the backend (see `make webhook-tunnel`).
+    # Empty = fall back to FRONTEND_HOST, preserving the single-origin
+    # behaviour deployments had before this setting existed.
+    BACKEND_BASE_URL: str = ""
+    # Former name, still honoured. It was introduced for the webhook URLs only,
+    # then the same bug turned up on the agent-api and A2A file URLs, so the
+    # setting outgrew its name. Deployments that already set it keep working;
+    # BACKEND_BASE_URL wins when both are present.
+    WEBHOOK_BASE_URL: str = ""
     MCP_SERVER_BASE_URL: str = ""
     # Internal/container-reachable MCP origin. The public MCP_SERVER_BASE_URL is
     # not always routable from inside the agent network, so for agent2agent
@@ -119,6 +136,30 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def backend_base_url(self) -> str:
+        """Public origin for API URLs handed outside the platform, no trailing slash.
+
+        Single resolution point, so an operator has one knob to turn and the
+        URLs cannot drift apart from each other. Covers inbound webhooks
+        (task triggers, agent hooks, server channels), the consumer-facing
+        Agent REST API base, and signed A2A attachment links.
+        """
+        base = (
+            self.BACKEND_BASE_URL
+            or self.WEBHOOK_BASE_URL
+            or self.FRONTEND_HOST
+            or "https://localhost"
+        )
+        return base.rstrip("/")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def webhook_base_url(self) -> str:
+        """Alias of :attr:`backend_base_url`, kept for the webhook call sites."""
+        return self.backend_base_url
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -369,6 +410,23 @@ class Settings(BaseSettings):
     ACCOUNT_API_PROXY_MAX_BODY_BYTES: int = 1_048_576  # 1 MiB request cap → 413
     ACCOUNT_API_PROXY_MAX_RESPONSE_BYTES: int = 8_388_608  # 8 MiB response cap → 502
     ACCOUNT_API_PROXY_RATE_LIMIT_PER_MIN: int = 120  # per-account-token backstop
+
+    # ── Server channels (inbound webhook) ───────────────────────────────
+    # The channel webhook is unauthenticated at the platform layer — the
+    # unguessable token in the path plus the adapter's signature check are the
+    # gate. These two limits bound what an unverified caller can cost us
+    # BEFORE verification runs: the body cap applies to the read itself, and
+    # the rate limit is keyed on the webhook token so one channel being probed
+    # cannot starve the others.
+    SERVER_CHANNEL_WEBHOOK_MAX_BODY_BYTES: int = 262_144  # 256 KiB → 413
+    SERVER_CHANNEL_WEBHOOK_RATE_LIMIT_PER_MIN: int = 120
+
+    # Admin debug panel: recent inbound/outbound events held per channel, in
+    # process memory only (see channel_debug_buffer.py). Bounded twice — a ring
+    # buffer per channel, and a clamp on captured message text — so a busy or
+    # hostile channel cannot grow it without limit. Never persisted.
+    SERVER_CHANNEL_DEBUG_BUFFER_SIZE: int = 50
+    SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS: int = 2_000
 
     # ── Two-Factor Authentication (MFA) ────────────────────────────────
     # Settings that govern the WebAuthn passkey + TOTP authenticator-app

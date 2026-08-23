@@ -54,6 +54,12 @@ if TYPE_CHECKING:
 # - "anonymous": guest-share anonymous caller (no User row). `platform_user_id`
 #   is always None; the route supplies `session_owner_id=agent.owner_id` so the
 #   session is still created in the owner's space.
+# - "channel_caller": external person reaching the platform through an
+#   admin-configured server channel (Google Chat, …). The transport verified
+#   their identity, and a platform `User` row was resolved (or auto-created)
+#   from the verified email — so `platform_user_id` is that user and the
+#   session is owned by them, exactly like `task_executor`. An external caller
+#   can therefore only ever reach their own installs.
 SessionSenderKind = Literal[
     "platform_user",
     "a2a_caller",
@@ -62,6 +68,7 @@ SessionSenderKind = Literal[
     "task_executor",
     "system_trigger",
     "anonymous",
+    "channel_caller",
 ]
 
 
@@ -231,6 +238,35 @@ class SessionSender:
             external_id=f"task:{task_id}",
             display_name=task_name,
             platform_user_id=user_id,
+        )
+
+    @classmethod
+    def from_channel(
+        cls,
+        *,
+        channel_type: str,
+        external_user_id: str,
+        platform_user_id: UUID,
+        display_name: str | None = None,
+    ) -> SessionSender:
+        """
+        Build a SessionSender for an inbound server-channel message.
+
+        `platform_user_id` is the *sender's own* platform user (resolved
+        from the transport-verified email, auto-registered when the channel
+        allows it) — never the agent publisher. The session is created in
+        that user's space, so a channel caller can only reach their own
+        installs.
+
+        `external_id` is namespaced by channel type
+        (`"google_chat:users/1234"`) so the same person on two transports
+        never collides.
+        """
+        return cls(
+            kind="channel_caller",
+            external_id=f"{channel_type}:{external_user_id}",
+            display_name=display_name,
+            platform_user_id=platform_user_id,
         )
 
     @classmethod
@@ -413,6 +449,25 @@ def get_session_sender(session: "Session") -> SessionSender:
         return SessionSender(
             kind="system_trigger",
             external_id=external_id,
+            display_name=None,
+            platform_user_id=session.user_id,
+        )
+
+    # Server channels — `integration_type` is `channel_<channel_type>`
+    # (e.g. "channel_google_chat"). The session is owned by the external
+    # sender's own platform user, so `platform_user_id` is `session.user_id`.
+    # `external_id` is best-effort from the metadata stamped at create time
+    # by the channel inbound pipeline.
+    if integration_type is not None and integration_type.startswith("channel_"):
+        metadata = session.session_metadata or {}
+        sender_external_id = metadata.get("sender_external_id")
+        return SessionSender(
+            kind="channel_caller",
+            external_id=(
+                str(sender_external_id)
+                if sender_external_id
+                else str(session.user_id)
+            ),
             display_name=None,
             platform_user_id=session.user_id,
         )

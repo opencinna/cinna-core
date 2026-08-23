@@ -54,6 +54,7 @@ from app.api.routes import (
     private,
     security_events,
     server_config,
+    server_channels,
     sessions,
     shared_workspace,
     ssh_keys,
@@ -123,6 +124,7 @@ api_router.include_router(knowledge_sources.router)
 api_router.include_router(admin_environments.router)
 api_router.include_router(admin_llm_providers.router)
 api_router.include_router(server_config.router)
+api_router.include_router(server_channels.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)

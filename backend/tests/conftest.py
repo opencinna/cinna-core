@@ -75,9 +75,57 @@ def db() -> Generator[Session, None, None]:
     engine = _ensure_test_engine()
     connection = engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection)
+    # join_transaction_mode="create_savepoint" is SQLAlchemy 2.0's documented
+    # mode for exactly this pattern (a Session joining an externally-managed
+    # connection/transaction via SAVEPOINTs). Without it, a caught
+    # IntegrityError followed by session.rollback() (the standard "unique
+    # constraint race -> catch -> rollback -> re-read" idiom used by several
+    # services, e.g. ServerConfigService.get_or_create and
+    # ChannelInboundService._upsert_binding) rolls back past the current
+    # SAVEPOINT and expires/detaches objects committed earlier in the SAME
+    # test — a bare `session.get()` on them then raises ObjectDeletedError,
+    # even though their rows are still present in the real transaction.
+    #
+    # Why this wasn't already covered by the default: SQLAlchemy's default
+    # join mode, "conditional_savepoint", picks "create_savepoint" only when
+    # the Session is joining a SAVEPOINT-capable *nested* transaction; here we
+    # hand it a plain `connection.begin()` (an outer, non-nested transaction),
+    # so the condition can never be satisfied and it silently falls back to
+    # "rollback_only" — the mode that produced the bug. A future refactor of
+    # this fixture that swaps `connection.begin()` for `connection.
+    # begin_nested()` (or otherwise changes what's passed to `bind=`) would
+    # put this back in "conditional_savepoint" territory and needs the same
+    # scrutiny.
+    #
+    # The `session.begin_nested()` + `after_transaction_end` listener below is
+    # now redundant with `create_savepoint` — SQLAlchemy 2.0's documented
+    # recipe for this pattern is the constructor parameter alone, which
+    # already manages the SAVEPOINT lifecycle across commits. Left in place
+    # rather than removed: two production methods
+    # (`GitSourceService._clear_poisoned_transaction` /
+    # `_cleanup_orphan_bundle`) were written against the old (buggy) fixture
+    # behavior and currently branch on `session.get_nested_transaction()`
+    # being non-None, which the listener is what keeps true. Removing the
+    # listener is a separate, tracked follow-up that needs its own review
+    # alongside those two methods, not a side effect of a comment edit.
+    #
+    # Regression scope actually run for this change (not "everything"):
+    # tests/api/{auth,credentials,identity,app_mcp}/, tests/api/agents/{core,
+    # sessions,git,bundles,bundles_install}/, tests/unit/, tests/architecture/,
+    # and tests/api/server_channels/ (the domain that found the bug — see
+    # server_channels_security_invariants_test.py::
+    # test_lost_race_ingest_branch_declines_the_loser, whose two-webhook-race
+    # setup is what first hit it). All green, including a case the reviewer
+    # flagged as at-risk (a compensating-delete path in
+    # agents_bundles_install_context_test.py that had never actually executed
+    # under the old, buggy rollback behavior). Domains with the heaviest
+    # `session.rollback()`-after-`IntegrityError` usage
+    # (`git_source_service.py`, `install_service.py`) were deliberately
+    # included, not assumed safe by analogy to lighter-usage domains.
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
 
-    # Start a nested savepoint
+    # Start a nested savepoint (redundant with join_transaction_mode above;
+    # see the comment on the Session(...) construction for why it stays).
     session.begin_nested()
 
     # After each commit (which releases the savepoint), start a new one

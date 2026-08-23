@@ -17,7 +17,7 @@
 - `backend/app/services/sessions/message_service.py` — HMAC-signed `session_context` emission with `email_subject` from linked `EmailMessage`
 - `backend/app/services/sessions/session_context_signer.py` — HMAC-SHA256 signing/verification
 - `backend/app/services/sharing/agent_share_service.py` — `create_auto_share()` for email senders
-- `backend/app/services/users/user_service.py` — `create_email_user()` for auto user provisioning
+- `backend/app/services/users/user_service.py` — `create_external_user()` for auto user provisioning
 - `backend/app/services/tasks/input_task_service.py` — `send_email_answer()` for task-originated replies
 - `backend/app/services/ai_functions/ai_functions_service.py` — `generate_email_reply()` wrapper
 
@@ -82,7 +82,7 @@
   - **Clone mode**: Find existing clone → if found: check readiness → if not found: check access → check `max_clones` → ensure user → auto-share + clone
 - `_find_existing_clone()` — Looks for accepted share + clone for sender+agent combo
 - `_check_access_allowed()` — Validates: `allowed_domains`, `access_mode`, `auto_approve_email_pattern`
-- `_ensure_user_exists()` — Calls `UserService.create_email_user()` if no account
+- `_ensure_user_exists()` — Calls `UserService.create_external_user(confirmed=False, provenance="email_integration")` if no account
 - `_auto_create_share_and_clone()` — Creates auto-share + clone via `AgentShareService.create_auto_share()`
 - `_auto_accept_pending_share()` — Auto-accepts pending shares for incoming email senders
 - `_is_clone_ready()` — Checks clone's environment is active and running

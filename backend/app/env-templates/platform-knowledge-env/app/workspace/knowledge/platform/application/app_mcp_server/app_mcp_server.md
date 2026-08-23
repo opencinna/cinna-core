@@ -35,7 +35,19 @@ When a user installs a bundle whose latest revision has a non-empty `router_trig
 - `activate_for_myself = True` — the installer is auto-assigned with `is_enabled = True`
 - `is_auto_managed = True` — signals that apply-update is permitted to refresh `trigger_prompt` and `name` from future revisions
 
-If the revision has no `router_trigger_prompt`, the route creation is skipped and the install is marked `last_update_status = "degraded"`. The installer can set or regenerate the trigger prompt from the Configuration tab's Agent Prompts card.
+If the revision has no `router_trigger_prompt`, the route creation is skipped and the install is marked `last_update_status = "degraded"`. The installer can set or regenerate the trigger prompt from the Configuration tab's Agent Prompts card — saving it creates the missing route on the spot (see **Backfill-on-Demand** below), so the agent becomes reachable without waiting for the next apply-update.
+
+### Backfill-on-Demand: Setting the Trigger Prompt Later
+
+`AppAgentRouteService.sync_router_trigger_prompt_from_agent` runs whenever `router_trigger_prompt` is saved (the focused `PATCH /agents/{id}/router-trigger-prompt` and the generic `PUT /agents/{id}`). It updates the install's auto-managed route — and when there is no such route yet, it **creates** one with exactly the install-time shape above. Without this, a degraded install stayed unreachable until an apply-update happened to run, while the MCP Connectors card promised the route would "appear here automatically".
+
+Creation is deliberately narrow. Nothing is created when:
+
+- the trigger prompt is empty — there is nothing to route on;
+- the agent is **not a bundle install** (`bundle_uuid IS NULL`) — owners of standalone agents manage App MCP exposure explicitly from the Integrations tab, the same reason the Phase 8 backfill script skips them;
+- the owner already has a **manual** route (`is_auto_managed=False`) on the agent — their override wins, mirroring `InstallService._refresh_or_create_auto_route_on_update`.
+
+The route is attributed to the **agent owner**, not the caller, so a superuser editing someone else's install creates the route and the enabled self-assignment for the owner.
 
 After install, a non-blocking conflict toast appears on the install page if the new route's trigger prompt closely overlaps (by lowercased token / Jaccard similarity) with an existing effective route the installer already has.
 
@@ -81,7 +93,7 @@ Superusers retain full management capabilities via the preserved admin API endpo
 
 - **Any user** can create App MCP routes for agents they own
 - **Superusers** can create routes for any agent regardless of ownership
-- **Bundle installs** auto-create a route via `InstallService._auto_create_app_mcp_route` — the route has `is_auto_managed=True` and is owned by the installer
+- **Bundle installs** auto-create a route via `InstallService._auto_create_app_mcp_route` — the route has `is_auto_managed=True` and is owned by the installer. When install-time creation was skipped for want of a trigger prompt, `AppAgentRouteService._create_auto_route_for_agent` mints the same route the moment the owner saves one
 - Non-superusers cannot set `auto_enable_for_users=True` — this is superuser-only
 - Non-superusers can assign other users to their routes, but assignments are created with `is_enabled=False` (users must manually enable)
 - Superusers assigning users to routes with `auto_enable_for_users=True` create assignments with `is_enabled=True`
@@ -90,7 +102,7 @@ Superusers retain full management capabilities via the preserved admin API endpo
 
 ### `is_auto_managed` Flag
 
-The `is_auto_managed` boolean column on `AppAgentRoute` marks routes that were created by `InstallService` (and the Phase 8 backfill script `backend/app/scripts/backfill_router_trigger_prompts.py`). The backfill targets **foreign bundle installs only** (`is_publisher_install=False AND bundle_uuid IS NOT NULL`); owned non-bundle agents are intentionally skipped because the owner manages App MCP exposure manually via the Integrations tab. Its semantics:
+The `is_auto_managed` boolean column on `AppAgentRoute` marks routes that were created by `InstallService` (including the backfill-on-demand path in `AppAgentRouteService`, and the Phase 8 backfill script `backend/app/scripts/backfill_router_trigger_prompts.py`). The backfill targets **foreign bundle installs only** (`is_publisher_install=False AND bundle_uuid IS NOT NULL`); owned non-bundle agents are intentionally skipped because the owner manages App MCP exposure manually via the Integrations tab. Its semantics:
 
 - **`True`** — the route was bundle-created. `apply_update` is permitted to refresh `trigger_prompt` and `name` from the new revision's `router_trigger_prompt`. The flag is not settable from the public `POST /api/v1/agents/{agent_id}/app-mcp-routes/` body; `InstallService` sets it via the internal `auto_managed=True` kwarg on `AppAgentRouteService.create_route`
 - **`False`** — default for routes created via the UI. Any user edit via `PUT /api/v1/agents/{agent_id}/app-mcp-routes/{route_id}` also flips an auto-managed route to `False`, after which `apply_update` will never overwrite it again

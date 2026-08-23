@@ -93,8 +93,13 @@ class AgentApiTokenService:
 
     @staticmethod
     def build_base_url(agent_id: uuid.UUID) -> str:
-        """Absolute consumer-facing base URL for the producer's proxy."""
-        host = settings.FRONTEND_HOST.rstrip("/")
+        """Absolute consumer-facing base URL for the producer's proxy.
+
+        Built from the backend origin, not FRONTEND_HOST: this URL is handed to
+        other people's code, and on a split-host deployment (SPA on
+        dashboard.example.com, API on api.example.com) the SPA origin 404s.
+        """
+        host = settings.backend_base_url
         return f"{host}{settings.API_V1_STR}/agent-api/{agent_id}"
 
     @staticmethod

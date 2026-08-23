@@ -123,6 +123,16 @@ template environment.
 4. `cinna account refresh-context` re-downloads and replaces the `context/`
    tree in place. If the download fails, the command warns and exits without
    corrupting the existing `context/` content.
+5. **Staleness is detectable.** The package stamps its own content version into
+   `context/VERSION`, echoes it on the download as the
+   `X-Context-Package-Version` header, and serves it from
+   `GET /api/v1/cli/account/context-package/version`. A workspace set up before
+   a guide — or a whole set of verbs — existed otherwise has no way to know it
+   is behind, because the package is extracted once at setup and never checked
+   again; comparing the two values is what lets the CLI say so. The version is a
+   hash of the packaged **content**, not of file mtimes, so a redeploy shipping
+   identical knowledge does not tell every workspace it is stale. A workspace
+   with no `VERSION` file at all predates the stamp, which is itself the answer.
 
 The package is assembled from the committed `platform-knowledge-env`
 template snapshot inside the backend container (the only copy of this
@@ -805,6 +815,55 @@ the `POST /api/v1/cli/account/files/upload` route. Everything else — session
 creation, message sending, polling, and file download — reaches existing platform
 infrastructure through the api-proxy.
 
+### 7f. Improvement Requests (`cinna improve`)
+
+Turns a user's feedback on a bad agent response into something a local coding
+agent can act on. When a session owner shares a session via a session's
+**Improve Agent** menu item or `/session-improve` — see
+[Agent Improvement Requests](../agent_improvement_requests/agent_improvement_requests.md)
+— it lands as a request on the agent's owner (the bundle publisher for a
+consumer install, or the requester themselves otherwise). These verbs are the
+CLI-side surface for that owner to triage and close the loop.
+
+```
+cinna improve list --status new              # everything you own, across all agents
+cinna improve show <id>                      # full detail incl. the frozen runtime context
+cinna improve download <id>                  # → improvements/<short-id>/README.md, session/*, context.json, prompts/*, memory/*
+cinna improve status <id> in_progress
+cinna improve status <id> completed --note "Fixed in v1.4 — no longer re-asks for the file."
+```
+
+| Command | Backend endpoint | Behavior |
+|---|---|---|
+| `cinna improve list [--status S] [--agent A]` | `GET /api/v1/cli/account/improvement-requests` | Table across every agent you own: id, agent, requester, version, date, status |
+| `cinna improve show <id>` | `GET /api/v1/cli/account/improvement-requests/{id}` | Full detail including the frozen `context` block |
+| `cinna improve download <id> [--out DIR]` | `GET /api/v1/cli/account/improvement-requests/{id}/archive` | Saves + extracts the ZIP into `improvements/<short-id>/`, prints the path |
+| `cinna improve status <id> <status> [--note N]` | `PATCH /api/v1/cli/account/improvement-requests/{id}` | Sets status (`new` / `in_progress` / `completed` / `declined`) and the resolution note, which is shown to the requester |
+
+**These verbs live in the separate `cinna-cli` repository** — what exists in
+this backend is the four `/account/improvement-requests*` routes above (all
+delegating to the same `ImprovementRequestService` the web UI uses, so
+ownership rules cannot drift between transports) and the shipped guide,
+`context/guides/handling-improvement-requests.md`, which walks the loop:
+discover → read → establish ownership (standalone agent vs. publisher install
+vs. a foreign install a fallback landed on) → decide how much to change without
+asking → fix → close the loop. The guide's read step now leads with
+`prompts/README.md`: it tells the agent to diff the archive's prompt documents
+against its own install before debugging, since a diverged consumer install is
+not running the publisher's text, and to treat `memory/` as the reporter's
+personal content — read to understand the run, never adopted into a workspace. The `improvement-requests` prefix is not on the
+`/account/api-proxy` denylist, so `cinna api GET improvement-requests/mine` also
+reaches the requester-side listing.
+
+Behavioural notes:
+
+- **Archive download is audited when cross-user.** The archive route writes the
+  same `IMPROVEMENT_ARCHIVE_DOWNLOADED` security event the web route writes,
+  whenever the recipient is not the requester.
+- **`status` and `download` are the only mutations.** There is no `create` or
+  `delete` verb — consent to share is final, raised only from the web UI or
+  `/session-improve`, and only the recipient can act on a request once raised.
+
 ### 8. Managing Account Sessions (UI)
 
 1. Settings → Security → Local Development card lists active account sessions.
@@ -943,6 +1002,7 @@ The backend contract these commands consume:
 |---------|-----------------|----------|
 | `cinna account setup <token_or_url>` | `POST /api/cli-setup/account/{token}` then `GET /api/v1/cli/account/context-package` | Exchange account setup token; download and extract context package into `context/`; write `account.json` + `CLAUDE.md` |
 | `cinna account refresh-context` | `GET /api/v1/cli/account/context-package` | Re-download the context package and replace `context/` in place; warns and exits cleanly on failure without corrupting existing content |
+| *(staleness probe)* | `GET /api/v1/cli/account/context-package/version` | `{"version": "<hash>"}` — compare against the workspace's `context/VERSION` to decide whether `refresh-context` is due. Cheap: the package is built once per process and cached |
 | `cinna account agents [--all]` | `GET /api/v1/cli/account/agents` | Print accessible-agents table with `can_build` / `is_foreign_install` flags; **scoped to the active workspace by default** (client-side filter on `user_workspace_id`, header names the workspace), `--all` for every workspace |
 | `cinna agent sync <agent>` | `POST /api/v1/cli/account/agents/{id}/mint` then existing per-agent bootstrap | Mint child token; write `agents/<slug>/` as a standard workspace |
 | `cinna agent unsync <agent>` | `DELETE /api/v1/cli/account/tokens/children/{child_token_id}` then local | Revokes the child token server-side (authenticated by the account token), then stops sync and removes `agents/<slug>/` from the local registry |
@@ -1145,3 +1205,11 @@ This document covers **Phases 1 through 5** — all phases are now shipped:
   messages via the api-proxy. `GET files/{id}/download` is also proxied (binary
   1:1 mirroring, 8 MiB cap). No dedicated integration doc; the file-upload feature
   is documented in the files feature area.
+- **agent_improvement_requests** (flow 7f) — the four `/account/improvement-requests*`
+  routes delegate straight into `ImprovementRequestService`, the same service the
+  web `/improvement-requests*` routes use, so ownership rules (recipient-or-requester
+  read, recipient-only mutate, 404-not-403 for inaccessible ids) cannot drift
+  between the two transports. The archive route is dedicated (not `api-proxy`)
+  because the escape hatch is JSON-only and cannot carry a binary body — the same
+  reason `/account/files/upload` is a dedicated route. See
+  [agent_improvement_requests.md](../agent_improvement_requests/agent_improvement_requests.md)

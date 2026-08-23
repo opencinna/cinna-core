@@ -256,6 +256,37 @@ class ChannelIngestionService:
                 )
             return
 
+        if kind == "channel_caller":
+            # Same trust shape as `task_executor`: the channel pipeline resolved
+            # the sender to their own platform user, and the session must be
+            # created/resumed under exactly that user. Never a fast-path — a
+            # channel that mis-resolves the sender is denied here.
+            if policy.expected_owner_id is None:
+                raise PermissionError(
+                    "channel_caller requires policy.expected_owner_id"
+                )
+            # Three-way structural invariant, deliberately stricter than
+            # `task_executor`: the agent must be the SENDER'S OWN install.
+            # Channel routing resolves agents two ways — the caller's installed
+            # agents, or a fresh auto-install for the caller — so a legitimate
+            # channel agent is always owned by the sender. Asserting it here
+            # (rather than trusting the routing layer) means a router that can
+            # return someone else's agent — e.g. App MCP identity routes — can
+            # never hand an external caller a session inside another user's
+            # workspace.
+            if not (
+                agent.owner_id
+                == policy.expected_owner_id
+                == sender.platform_user_id
+            ):
+                raise PermissionError(
+                    "channel_caller invariant violated: "
+                    f"agent.owner_id={agent.owner_id}, "
+                    f"expected_owner_id={policy.expected_owner_id}, "
+                    f"sender.platform_user_id={sender.platform_user_id}"
+                )
+            return
+
         if kind == "a2a_caller":
             # Scope checks for resume run in `_verify_resume_sender`; new-session
             # token-to-agent allowance is enforced by the routing layer before
@@ -332,6 +363,14 @@ class ChannelIngestionService:
                 raise ValueError("task_executor sender must carry platform_user_id")
             return sender.platform_user_id
 
+        if kind == "channel_caller":
+            # The external sender's own account. No override is honored — a
+            # channel session owned by anyone but the sender would let one
+            # external caller reach another user's installs.
+            if sender.platform_user_id is None:
+                raise ValueError("channel_caller sender must carry platform_user_id")
+            return sender.platform_user_id
+
         if kind == "a2a_caller":
             # External A2A target types (e.g. identity_mcp, external) own
             # the session under a non-owner user; honor an explicit override
@@ -372,7 +411,10 @@ class ChannelIngestionService:
         """
         kind = sender.kind
 
-        if kind in ("webui_user", "task_executor", "platform_user"):
+        # `channel_caller` resumes like `task_executor`: the bound session must
+        # belong to the sender's own user. The channel's thread binding already
+        # pins the session id, so this is the second gate on the same fact.
+        if kind in ("webui_user", "task_executor", "platform_user", "channel_caller"):
             if existing.user_id != sender.platform_user_id:
                 raise PermissionError(
                     f"session.user_id={existing.user_id} does not match "

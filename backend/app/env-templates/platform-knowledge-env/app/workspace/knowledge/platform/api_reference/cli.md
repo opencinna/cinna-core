@@ -143,6 +143,13 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## GET `/api/v1/cli/account/context-package/version`
+**Get Account Context Package Version**
+
+**Response:** `ContextPackageVersionPublic`
+
+---
+
 ## POST `/api/v1/cli/account/knowledge/search`
 **Account Search Knowledge**
 
@@ -476,6 +483,51 @@ Auto-generated from OpenAPI spec. Tag: `cli`
   - `agent_id`: uuid (required)
 
 **Response:** `Message`
+
+---
+
+## GET `/api/v1/cli/account/improvement-requests`
+**List Account Improvement Requests**
+
+**Query parameters:**
+- `status`: string | null
+- `agent_id`: string | null
+- `skip`: integer, default: `0`
+- `limit`: integer, default: `50`
+
+**Response:** `ImprovementRequestsPublic`
+
+---
+
+## GET `/api/v1/cli/account/improvement-requests/{request_id}`
+**Get Account Improvement Request**
+
+**Path parameters:**
+- `request_id`: uuid
+
+**Response:** `ImprovementRequestDetailPublic`
+
+---
+
+## PATCH `/api/v1/cli/account/improvement-requests/{request_id}`
+**Update Account Improvement Request**
+
+**Path parameters:**
+- `request_id`: uuid
+
+**Request body** (`ImprovementRequestUpdate`):
+  - `status`: string | null
+  - `resolution_note`: string | null
+
+**Response:** `ImprovementRequestDetailPublic`
+
+---
+
+## GET `/api/v1/cli/account/improvement-requests/{request_id}/archive`
+**Download Account Improvement Archive**
+
+**Path parameters:**
+- `request_id`: uuid
 
 ---
 

@@ -221,7 +221,7 @@ Class in `backend/app/services/agents/agent_webhook_service.py`. Static-method s
 |--------|---------|
 | `generate_webhook_credentials()` | Returns `(webhook_id, plaintext_token, encrypted_token, token_prefix)`. Uses `secrets.token_urlsafe(8)` for slug, `secrets.token_urlsafe(32)` for token. |
 | `_generate_unique_webhook_id(db_session, max_attempts=5)` | Retries slug generation to handle (extremely unlikely) collisions; raises `RuntimeError` after `max_attempts`. |
-| `build_webhook_url(webhook_id)` | Returns `f"{settings.FRONTEND_HOST}/agent-hooks/{webhook_id}"`. Uses `FRONTEND_HOST` setting (not `BACKEND_BASE_URL`). |
+| `build_webhook_url(webhook_id)` | Returns `f"{settings.webhook_base_url}/agent-hooks/{webhook_id}"`. `webhook_base_url` is an alias of `settings.backend_base_url`, which resolves `BACKEND_BASE_URL` (former name `WEBHOOK_BASE_URL` still honoured), falling back to `FRONTEND_HOST` — the single resolution point shared with task-trigger and server-channel webhook URLs, the Agent REST API base, A2A attachment links and the native-client OAuth discovery endpoints (see `docs/application/server_channels/server_channels_tech.md` → Configuration). |
 
 ### CRUD Methods
 

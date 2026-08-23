@@ -63,16 +63,31 @@ This ensures the test database schema is always up to date with the latest migra
 Every test runs inside a database transaction that is **rolled back** after the test completes. This is implemented using the SQLAlchemy savepoint pattern:
 
 1. `db` fixture opens a connection and begins an outer transaction
-2. A nested savepoint is created inside that transaction
-3. When app code calls `session.commit()`, it commits the savepoint (not the outer transaction)
-4. An `after_transaction_end` event listener re-creates the savepoint after each commit
-5. After the test, the outer transaction is rolled back, undoing **all** changes
+2. The `Session` is constructed with `join_transaction_mode="create_savepoint"` — SQLAlchemy 2.0's documented mode for a `Session` joining an externally-managed connection/transaction via SAVEPOINTs (see the comment on the `Session(...)` construction in `conftest.py` for the bug this fixes and why the default mode doesn't pick it automatically here)
+3. A nested savepoint is created inside that transaction
+4. When app code calls `session.commit()`, it commits the savepoint (not the outer transaction)
+5. An `after_transaction_end` event listener re-creates the savepoint after each commit
+6. After the test, the outer transaction is rolled back, undoing **all** changes
 
 This means:
 - Every test starts with a clean slate (only the seeded superuser exists)
 - Tests never affect each other, regardless of execution order
 - No manual cleanup is needed
 - The `client` fixture overrides FastAPI's `get_db` dependency to inject the test session
+
+**What `session.rollback()` means inside a test.** Several services catch a unique-constraint
+`IntegrityError` and call `session.rollback()` to recover and re-read the winning row (e.g.
+`ServerConfigService.get_or_create`, `ChannelInboundService._upsert_binding`,
+`GitSourceService._clear_poisoned_transaction` / `_cleanup_orphan_bundle`). Under this fixture,
+that rollback unwinds to the current SAVEPOINT — established by step 2 — not to the outer
+transaction, so data committed earlier in the same test survives. This only holds because of
+`join_transaction_mode="create_savepoint"` in step 2: without it, that same `session.rollback()`
+unwinds past the SAVEPOINT and expires/detaches objects committed earlier in the test, and the
+next `session.get()` on them raises `ObjectDeletedError` even though their rows are still present
+in the real transaction. A test that exercises an `IntegrityError`-recovery race
+(`tests/api/server_channels/server_channels_security_invariants_test.py::
+test_lost_race_ingest_branch_declines_the_loser` is the one that found this) is exactly the case
+that depends on this mode being set correctly.
 
 ## Directory Structure
 
