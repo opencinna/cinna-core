@@ -105,7 +105,14 @@ export function diagnosisTone(code: string): "ok" | "warn" | "bad" | "neutral" {
   if (code === "error" || code === "unavailable") return "bad"
   if (code === "expected_agent_looks_reachable") return "neutral"
   if (code.startsWith("expected_agent_") || code === "no_match") return "warn"
-  if (code === "no_candidates" || code === "all_candidates_skipped") return "warn"
+  // The `no_candidates_*` codes are variants of `no_candidates`, not new
+  // outcomes: channel policy narrowed the ballot to nothing (`_channel_scope`)
+  // or forbade the catalog pass (`_auto_install_off`). Matched by prefix so a
+  // later variant inherits the tone instead of silently falling through to
+  // neutral, which is what an exact-equality check on `no_candidates` did to
+  // these two when Phase 2 added them.
+  if (code.startsWith("no_candidates") || code === "all_candidates_skipped")
+    return "warn"
   return "neutral"
 }
 

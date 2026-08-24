@@ -17,6 +17,7 @@ import PasswordCard from "@/components/UserSettings/PasswordCard"
 import { SecurityTab } from "@/components/UserSettings/Security/SecurityTab"
 import { SSHKeys } from "@/components/UserSettings/SSHKeys"
 import { ThemeAndColors } from "@/components/UserSettings/ThemeAndColors"
+import { UserChannelsCard } from "@/components/UserSettings/UserChannelsCard"
 import { UserDetailsSettings } from "@/components/UserSettings/UserDetailsSettings"
 import UserInformation from "@/components/UserSettings/UserInformation"
 import UserPreferences from "@/components/UserSettings/UserPreferences"
@@ -103,10 +104,17 @@ function UserSettings() {
       value: "channels",
       title: "Channels",
       content: (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <MailServerSettings />
-          <AppAgentRoutesCard />
-          <IdentityServerCard />
+        <div className="space-y-6">
+          {/* The replacement for the three cards below: one place where every
+              channel an administrator has connected is listed with the user's
+              own settings. Mail Servers / MCP Server / Identity Server are
+              folded into it in phases 4-5 and disappear from here then. */}
+          <UserChannelsCard />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <MailServerSettings />
+            <AppAgentRoutesCard />
+            <IdentityServerCard />
+          </div>
         </div>
       ),
     },

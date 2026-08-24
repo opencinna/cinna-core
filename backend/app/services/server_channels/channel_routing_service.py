@@ -45,6 +45,18 @@ This list is not to be extended without extending the test in the same change
 — it was written claiming four while the test enforced three, which put the
 fact a reader most needed in the one place nothing would catch it.
 
+**Channel policy arrives as a value, and is never looked up here.** ``decide``
+takes a ``ResolvedChannelPolicy`` — the sender's agent scope, their pinned
+agent, and whether the auto-install pass may run — resolved by
+``ChannelPolicyService`` in the caller, which has a session and a
+``ServerChannel`` row. Only the frozen dataclass crosses into this module, and
+that is fact 1 restated in the shape this feature needed it: importing
+``ChannelPolicyService`` here would put a resolution — three ``SELECT``s — on
+the far side of a boundary whose whole guarantee is that it holds no caller
+session, and the row it resolves from would then have to cross too. Every
+inherit rule lives in exactly one place (that service's docstring says so),
+and this module deliberately cannot re-derive one.
+
 The only write the routing pass makes is the routing trace itself, and on the
 **happy path** it is deliberately outside ``decide``: the caller persists,
 because only the caller knows whether Pass 1 was the whole decision or its first
@@ -80,6 +92,7 @@ from typing import TYPE_CHECKING, Any
 from sqlmodel import Session as DBSession, select
 
 from app.models import (
+    CHANNEL_AGENT_SCOPE_ALL,
     Agent,
     AgentBundle,
     AgentBundleRevision,
@@ -92,6 +105,9 @@ from app.services.routing.routing_trace_service import RoutingTraceService
 
 if TYPE_CHECKING:  # pragma: no cover — annotations only, see PEP 563
     from app.services.routing.agent_classifier import Candidate
+    from app.services.server_channels.channel_policy_service import (
+        ResolvedChannelPolicy,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +131,74 @@ CATALOG_AVAILABILITY_ONLY_NOTE = (
     "had a single eligible candidate, so the catalog was scanned to find out "
     "whether there was anything to choose between it and an auto-install "
     "bundle. The rows below are that scan."
+)
+
+#: ``StageTrace.reason`` written on a Pass-2 stage that **could not run at
+#: all**, because this sender's channel policy forbids auto-installing a bundle
+#: for them (``ServerChannel.allow_auto_install``).
+#:
+#: Same field, same gating caveat and same reasoning as
+#: :data:`CATALOG_AVAILABILITY_ONLY_NOTE`: ``reason`` is absent from
+#: ``routing_trace.SAFE_STAGE_FIELDS``, so with ``ROUTING_TRACE_STORE_MESSAGE_
+#: TEXT`` off this note is withheld along with every other free-text stage
+#: field. That is the allowlist working as designed — a missing diagnostic
+#: rather than a widened exposure — and one server-authored string does not
+#: earn a place on it.
+PASS_2_NOT_ALLOWED_NOTE = (
+    "Pass 2 (auto-install from the catalog) did not run: installing a bundle "
+    "for this sender is switched off for this channel. No catalog bundle was "
+    "scanned, offered or classified — the absence of rows here is a policy "
+    "decision, not an empty auto-install list."
+)
+
+#: ``StageTrace.reason`` for the second policy bar, and the one that is a
+#: **product decision rather than a switch read literally**: the sender has
+#: restricted this channel to specific agents (``agent_scope`` is ``"list"`` or
+#: ``"none"``), so Pass 2 does not run even with ``allow_auto_install`` on.
+#:
+#: See :meth:`ChannelRoutingService._catalog_may_run` for the reasoning. The
+#: short version, which is the part a reader of a trace needs: an agent arriving
+#: from the catalog is out of scope by construction, so the install would
+#: succeed and the binding would still dead-end.
+#:
+#: **Deliberately says nothing about whose setting it is.** ``agent_scope``
+#: inherits — a sender with no ``channel_user_setting`` row follows the admin's
+#: ``default_agent_scope``, which is the normal state for an auto-registered
+#: sender — and the provenance bit is not on ``ResolvedChannelPolicy``, because
+#: that dataclass carries what routing needs to decide and nothing a router
+#: could misread as a UI hint. So this note states the fact and leaves the
+#: attribution to the reachability verdict on the same trace, which resolves it
+#: from ``ChannelPolicyService.describe``. Guessing here would be an
+#: attribution nothing in this module can check.
+#:
+#: Worded for ``"none"`` as much as for ``"list"``: under ``"none"`` the chosen
+#: set is empty rather than absent, and an unknown stored scope normalises to
+#: ``"none"`` too, so "an explicitly chosen set" is true of all three where
+#: "restricted to specific agents" would imply a list that may not exist.
+#:
+#: Same field and same gating caveat as the two notes around it.
+PASS_2_SCOPE_RESTRICTED_NOTE = (
+    "Pass 2 (auto-install from the catalog) did not run: routing on this "
+    "channel is limited to an explicitly chosen set of this sender's own "
+    "agents, and an agent installed from the catalog would not be in that set "
+    "from the moment it arrived. No catalog bundle was scanned, offered or "
+    "classified — the absence of rows here is a policy decision, not an empty "
+    "auto-install list. Whether that limit is this sender's own choice or the "
+    "channel's admin default is not recorded here; the verdict on this trace "
+    "resolves it."
+)
+
+#: The third reason Pass 2 can be barred, and the one a reader is least likely
+#: to guess: the sender pinned an agent, and the pin did not resolve. Its own
+#: note rather than a shared "policy said no", because the two send the reader
+#: to different controls — an admin's channel setting versus this sender's own
+#: pin — and a decision carrying ``match_method=pinned`` with a dangling agent
+#: is confusing enough without the trace implying the catalog was consulted.
+PASS_2_PINNED_NOTE = (
+    "Pass 2 (auto-install from the catalog) did not run: this sender has "
+    "pinned an agent to this channel, so the routing question was already "
+    "answered and no catalog bundle was scanned, offered or classified. "
+    "Installing a bundle over an explicit pin would overrule the sender."
 )
 
 
@@ -254,6 +338,7 @@ class ChannelRoutingService:
         *,
         user_id: uuid.UUID,
         text: str,
+        policy: ResolvedChannelPolicy,
         include_catalog: bool = True,
         origin: str = routing_trace.ORIGIN_SERVER_CHANNEL,
         channel_id: uuid.UUID | None = None,
@@ -296,18 +381,42 @@ class ChannelRoutingService:
         data (see :class:`CatalogBallot`), and ``None`` on every branch where
         Pass 1 did not scan — in which case Pass 2 scans for itself exactly as
         it always has.
+
+        **``policy`` is required, and it is not the door.** It carries three
+        things into the decision — the sender's agent scope, their pinned
+        agent, and whether Pass 2 may run — each consumed below or in
+        :meth:`_route_installed`. The scope is the one read **twice**, and
+        deliberately: it narrows the Pass-1 ballot in
+        ``ChannelCandidateProvider``, and it separately bars Pass 2 in
+        :meth:`_catalog_may_run`, which is a product decision rather than a
+        second application of the same filter — that method's docstring is
+        where it is argued. What it does **not** do here is
+        gate on ``is_available``. That term is the inbound pipeline's, checked
+        in ``ChannelInboundService.handle_inbound`` before routing is ever
+        scheduled, and it produces a *reply* rather than a route. Two reasons
+        it is not re-checked here, and the second is the one that decides it:
+        this function has no way to express "declined" (its whole vocabulary is
+        an agent id, a bundle id, or neither), and an admin running
+        ``POST /admin/routing/simulate`` against a user whose channel is
+        currently switched off is asking how the message *would* route once it
+        is switched back on — which is exactly the question the tuning surface
+        exists for, and is separately answerable through
+        ``GET /users/me/channels``.
         """
         agent_id, pass1_trace, ballot = await ChannelRoutingService.run_in_thread(
             ChannelRoutingService._route_installed_in_thread,
             user_id,
             text,
+            policy,
             channel_id,
             thread_key,
             origin,
             actor_user_id,
             include_catalog,
         )
-        if agent_id is not None or not include_catalog:
+        if agent_id is not None or not ChannelRoutingService._catalog_may_run(
+            policy, include_catalog=include_catalog
+        ):
             return RoutingDecisionResult(agent_id=agent_id, pass1_trace=pass1_trace)
 
         bundle_uuid, pass2_trace = await ChannelRoutingService.run_in_thread(
@@ -326,6 +435,88 @@ class ChannelRoutingService:
             pass1_trace=pass1_trace,
             pass2_trace=pass2_trace,
             catalog_ran=True,
+        )
+
+    @staticmethod
+    def _catalog_may_run(
+        policy: ResolvedChannelPolicy, *, include_catalog: bool
+    ) -> bool:
+        """May Pass 2 run at all? The conjunction of four unrelated switches.
+
+        They are genuinely different things and are kept apart everywhere but
+        here. ``include_catalog`` is the *admin's diagnostic* toggle on
+        simulate — "would this have matched something they already have?" —
+        and is ``True`` on every real inbound message.
+        ``policy.allow_auto_install`` is the *channel's* configuration, an
+        admin default a user cannot override, and it is what makes
+        auto-installing a bundle for a whitelisted stranger something a server
+        opts into rather than something Google Chat does implicitly.
+
+        **The agent scope is the third term, and it is a decided product semantic
+        rather than an implementation convenience.** Pass 2 does not
+        run unless the resolved ``agent_scope`` is ``"all"``.
+
+        ``agent_scope="none"`` or ``"list"`` with ``allow_auto_install=True`` is
+        otherwise a dead configuration: Pass 2 installs a bundle whose agent is
+        out of scope **by construction** — ``ChannelCandidateProvider._in_scope``
+        admits an installed agent only under ``"all"``, or under ``"list"`` if
+        the sender goes and adds it — so the first message installs and every
+        later thread dead-ends on an agent that can never be a candidate again.
+
+        The reasoning, stated here because a future reader will meet the term
+        before they meet the argument: a sender who restricted their channel to
+        specific agents has said *"nothing routes here but these"*. Performing
+        an install and a binding attempt on a path that cannot succeed violates
+        least-surprise and this feature's fail-closed ethos, and the one defence
+        of the old behaviour — that the install is useful later, once the sender
+        manually adds the new agent to their list — is speculative about an
+        action nothing prompts them to take. So the restriction is read as the
+        instruction it is.
+
+        **A pin is the fourth term, and it is the one that is easy to lose.**
+        :meth:`_route_pinned_agent` argues at length that a pinned channel
+        never auto-installs — installing a bundle over an explicit instruction
+        is the router overruling the person it routes for — and the pin
+        short-circuit alone does *not* deliver that. Its two failure branches
+        (the agent was deleted, the agent changed hands) return ``None``, which
+        is indistinguishable at :meth:`decide` from "Pass 1 found nothing", so
+        without this term the sender whose pinned agent vanished between the
+        policy resolution and the background routing task would silently be
+        auto-installed a catalog bundle and bound to it. That window is a task
+        hop plus an LLM cascade wide, not a microsecond. The gate is written
+        off ``pinned_agent_id`` — what the sender asked for — rather than off
+        whether the pin resolved, because the sender's instruction stands
+        whether or not the platform could honour it.
+
+        One function because the conjunction is read in two places that must
+        not disagree: here, deciding whether to run Pass 2 at all, and inside
+        Pass 1, deciding whether the single-candidate short-circuit may skip
+        the classifier. A Pass 1 that thought the catalog was live while
+        ``decide`` knew it was not would classify where the real path routes
+        directly, which is the divergence ``include_catalog``'s own reach into
+        Pass 1 was added to prevent (see :meth:`decide`). The pin term is inert
+        on that second reading — a pinned decision returns before the probe is
+        reached — and is included anyway so the two readings stay one rule.
+
+        **What the scope term does to that second reading, which is a real
+        behaviour change and not a side effect.** On a scope-restricted channel
+        the short-circuit now fires where it previously classified: a sender
+        with exactly one in-scope eligible agent takes it directly, because
+        this function answers ``False`` and :meth:`_catalog_ballot` returns
+        ``scanned=False``, whose ``offers_an_alternative`` is ``False``. That is
+        correct under the short-circuit's own governing rule — *sound only when
+        there is no alternative to choose between* — and it is now **provably**
+        so rather than approximately so: Pass 2 cannot run on this channel, so
+        the choice space is one by construction, not one by an empty catalog
+        that could fill up tomorrow. The scan is also skipped entirely, which
+        removes a per-message catalog read that could never have changed the
+        answer.
+        """
+        return (
+            include_catalog
+            and policy.allow_auto_install
+            and policy.agent_scope == CHANNEL_AGENT_SCOPE_ALL
+            and policy.pinned_agent_id is None
         )
 
     @staticmethod
@@ -386,6 +577,7 @@ class ChannelRoutingService:
     def _route_installed_in_thread(
         user_id: uuid.UUID,
         text: str,
+        policy: ResolvedChannelPolicy,
         channel_id: uuid.UUID | None = None,
         thread_key: str | None = None,
         origin: str = routing_trace.ORIGIN_SERVER_CHANNEL,
@@ -398,6 +590,13 @@ class ChannelRoutingService:
         candidate set when the single-candidate probe computed one *and* Pass 2
         is still going to run — see :class:`CatalogBallot` and the recording
         rule below.
+
+        ``policy`` is positional and third rather than tacked on the end with a
+        default: ``run_in_thread`` forwards positional arguments only, so
+        appending it would have meant giving it a default, and the only
+        available default is a permissive one. A scope restriction with a
+        permissive default is a restriction that stops applying silently the
+        first time somebody adds a call site.
 
         The routing capture is opened **here**, not around the offload.
         ``anyio.to_thread.run_sync`` propagates a *copy* of the caller's
@@ -427,9 +626,23 @@ class ChannelRoutingService:
                     stage=routing_trace.STAGE_PASS_1,
                 ) as trace:
                     agent, ballot = ChannelRoutingService._route_installed(
-                        db, user, text, include_catalog=include_catalog
+                        db, user, text, policy=policy, include_catalog=include_catalog
                     )
                     agent_id = agent.id if agent is not None else None
+                    if agent_id is None and include_catalog:
+                        # Pass 1 found nothing, so ``decide`` is about to reach
+                        # for Pass 2 — and this sender's policy may stop it.
+                        # Said here, inside Pass 1's capture, because by the
+                        # time ``decide`` applies the gate this is the only
+                        # recorder still open and Pass 2 will never open one of
+                        # its own.
+                        #
+                        # Gated on ``include_catalog`` so a simulate that asked
+                        # for no catalog pass is not told about a *second*
+                        # reason it did not run: the admin who unticked the box
+                        # already knows why, and reporting the policy underneath
+                        # their own toggle answers a question nobody asked.
+                        ChannelRoutingService._record_pass_2_not_run(policy)
                     if agent_id is not None:
                         trace.record_outcome(
                             routing_trace.OUTCOME_ROUTED, selected_agent_id=agent_id
@@ -567,7 +780,12 @@ class ChannelRoutingService:
 
     @staticmethod
     def _route_installed(
-        db: DBSession, user: User, text: str, *, include_catalog: bool = True
+        db: DBSession,
+        user: User,
+        text: str,
+        *,
+        policy: ResolvedChannelPolicy,
+        include_catalog: bool = True,
     ) -> tuple[Agent | None, CatalogBallot | None]:
         """Pass 1 — route the message over the agents the sender **owns**.
 
@@ -575,6 +793,11 @@ class ChannelRoutingService:
         the single-candidate probe below computed one, and ``None`` otherwise;
         the caller is responsible for recording it exactly once (see
         :class:`CatalogBallot`).
+
+        **The pin is answered before anything else runs** — see
+        :meth:`_route_pinned_agent` for why it outranks both short-circuits and
+        Pass 2, and what that costs. Everything below this paragraph describes
+        the unpinned path, which is every sender who has not made that choice.
 
         **The candidate set is constructed, not filtered.** This used to call
         ``AppMCPRoutingService.route_message``, whose candidates answer *"what
@@ -649,8 +872,17 @@ class ChannelRoutingService:
           longer paid on every message (a single-candidate sender with an empty
           catalog now pays none), and a single-agent sender's off-topic message
           can no longer be quietly redirected into a catalog install, because
-          with an empty catalog there is no install to redirect it to and with a
-          non-empty one the classifier still gets to answer *"none of mine"*.
+          with an empty catalog there is no install to redirect it to.
+
+          What it does still cost, stated because :meth:`_catalog_may_run` now
+          has more ways to answer ``False``: whenever Pass 2 cannot run **as a
+          matter of policy** — the channel's ``allow_auto_install`` is off, or
+          its agent scope is restricted — a single-candidate sender's off-topic
+          message routes to that sole agent without the classifier being given
+          the chance to answer *"none of mine"*. That is the short-circuit's own
+          rule applied honestly rather than a regression: there is genuinely no
+          alternative to choose between, because the only other pass is barred.
+          It is worth knowing it is what a scope restriction buys.
 
         The ``agent.owner_id != user.id`` guard below is kept as a
         defence-in-depth postcondition and is **unreachable by construction**:
@@ -677,7 +909,15 @@ class ChannelRoutingService:
         # users' text, and the routing trace carries what they were read for.
         ballot: CatalogBallot | None = None
         try:
-            candidates = ChannelCandidateProvider.build(db, user.id)
+            if policy.pinned_agent_id is not None:
+                return (
+                    ChannelRoutingService._route_pinned_agent(
+                        db, user, policy.pinned_agent_id
+                    ),
+                    None,
+                )
+
+            candidates = ChannelCandidateProvider.build(db, user.id, policy=policy)
             if not candidates:
                 # Zero eligible candidates: no probe, straight to Pass 2, which
                 # is the onboarding path this state exists for. Unchanged.
@@ -691,7 +931,11 @@ class ChannelRoutingService:
                 # runs, and paying for the scan would be pure cost on the
                 # common path.
                 ballot = ChannelRoutingService._catalog_ballot(
-                    db, user, include_catalog=include_catalog
+                    db,
+                    user,
+                    include_catalog=ChannelRoutingService._catalog_may_run(
+                        policy, include_catalog=include_catalog
+                    ),
                 )
                 if not ballot.offers_an_alternative:
                     return (
@@ -789,6 +1033,149 @@ class ChannelRoutingService:
         return agent, ballot
 
     @staticmethod
+    def _route_pinned_agent(
+        db: DBSession, user: User, pinned_agent_id: uuid.UUID
+    ) -> Agent | None:
+        """The sender pinned an agent to this channel. Use it, ask nothing.
+
+        **Ordering, which is the whole design of this method.** It runs before
+        the candidate provider, before the ``only_one`` short-circuit and
+        before Pass 2, and each of those three is a separate decision:
+
+        - **Before the provider.** A pin has already answered the question the
+          ballot exists to ask. Building one anyway would cost a query and fill
+          the trace with candidates that were never in contention, and it could
+          not change the answer — a trace listing four agents under
+          ``match_method=pinned`` invites the reader to wonder which of them
+          lost, when none of them ran.
+        - **Before ``only_one``.** The two look alike from outside (both route
+          without a model) and mean opposite things. ``only_one`` is an
+          inference from a choice space that happens to hold one thing; a pin
+          is an instruction that holds however many agents the sender owns. If
+          they could ever disagree the pin must win, and it does — by never
+          reaching that branch.
+        - **Before Pass 2.** Auto-install exists to onboard a sender who owns
+          nothing that matches. A sender who pinned an agent has said where
+          their messages go, and installing a catalog bundle over that would be
+          the router overruling the person it is routing for. So a pinned
+          channel never auto-installs, including for a message the pinned agent
+          is a poor fit for — "everything I send here goes to this one" is what
+          the pin means, and a router that quietly made exceptions to it would
+          be worse than one that never offered it.
+
+        **The scope is deliberately not consulted.** A pin can name an agent
+        that the sender's own ``agent_scope`` would exclude, and it still wins.
+        Both settings come from the same person on the same screen, and the pin
+        is the more specific of the two statements; a pin that lost to its
+        neighbour on the same card would be a self-contradiction with nothing
+        to show the sender why. It costs nothing in reach: the pin is
+        ownership-checked twice (see below), so the widest thing it can do is
+        route the sender to an agent they own.
+
+        **It does not skip the trace**, which is the rule this codebase has
+        already had to fix once. A pinned decision records the match method,
+        the winning candidate and the terminal outcome (settled by the caller),
+        so a reader can tell "the classifier never ran because there was a pin"
+        from "the classifier ran and chose this". The candidate row is recorded
+        as **eligible**, unlike the availability-only Pass-2 rows: it was the
+        ballot, in full, and it won — ``eligible=True`` feeds the "chosen from
+        N eligible candidates" arithmetic and here N genuinely is one.
+
+        **Ownership is re-checked, though it was already checked.**
+        ``ChannelPolicyService._owned_pin`` nulls a pin whose agent the sender
+        no longer owns, so this guard is unreachable through that path — the
+        same status as the ``owner_id`` guard in :meth:`_route_installed`, and
+        kept for the same reason: this hands an external sender a session
+        inside a workspace, and two lines of assertion is a cheap price for the
+        one that is not reachable *yet*. Unlike that guard, this one protects
+        an id that came in as **data on a settings row** rather than out of a
+        ``WHERE owner_id = :user_id``, so the property it asserts is one hop
+        further from where it is established.
+        """
+        from app.services.routing.channel_candidate_provider import (
+            SOURCE_OWNED,
+            example_prompt_text,
+        )
+
+        routing_trace.record_match(method=routing_trace.MATCH_PINNED)
+
+        agent = db.get(Agent, pinned_agent_id)
+        if agent is None:
+            # ``record_skip``, not ``mark_candidate_skipped``: no provider ran,
+            # so there is no recorded candidate to flip and the flip would be a
+            # silent no-op — a pinned decision that failed with an empty trace,
+            # which is the exact shape this method's docstring refuses. The
+            # name is blank because the row is gone; the id is the diagnosis.
+            routing_trace.record_skip(
+                kind=routing_trace.KIND_AGENT,
+                ref_id=pinned_agent_id,
+                name="",
+                reason=routing_trace.SKIP_AGENT_MISSING,
+                source=SOURCE_OWNED,
+            )
+            routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
+            logger.info(
+                "%s Pinned agent %s for user %s no longer exists — no match",
+                _LOG_PREFIX,
+                pinned_agent_id,
+                user.id,
+            )
+            return None
+
+        # Read every attribute once, off the instance ``db.get`` just
+        # materialised, before any of them reaches a recorder's argument list.
+        # §11a Rule 2 — the same sweep the candidate provider and Pass 2 apply.
+        agent_id = agent.id
+        agent_name = agent.name or ""
+        agent_owner_id = agent.owner_id
+        trigger = (agent.router_trigger_prompt or "").strip()
+        examples = example_prompt_text(agent.example_prompts)
+
+        if agent_owner_id != user.id:
+            routing_trace.record_skip(
+                kind=routing_trace.KIND_AGENT,
+                ref_id=agent_id,
+                name=agent_name,
+                reason=routing_trace.SKIP_FOREIGN_OWNER,
+                source=SOURCE_OWNED,
+                trigger_prompt=trigger,
+                prompt_examples=examples,
+            )
+            routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
+            logger.error(
+                "%s Pinned agent %s is owned by %s, not by sender %s — rejected. "
+                "ChannelPolicyService._owned_pin should already have cleared "
+                "this pin; reaching here means the pin's ownership check and "
+                "routing's have come apart",
+                _LOG_PREFIX,
+                agent_id,
+                agent_owner_id,
+                user.id,
+            )
+            return None
+
+        # The ballot, in full: one candidate, and it is the answer. Recorded
+        # with its wording so the trace shows what the pinned agent actually
+        # carries — useful precisely when the pin is the thing being questioned
+        # ("it went here again even though I asked about X").
+        routing_trace.record_candidate(
+            kind=routing_trace.KIND_AGENT,
+            ref_id=agent_id,
+            name=agent_name,
+            source=SOURCE_OWNED,
+            trigger_prompt=trigger,
+            prompt_examples=examples,
+        )
+        logger.info(
+            "%s Pass 1 routed to pinned agent %s for user %s without "
+            "classifying (the sender pinned it to this channel)",
+            _LOG_PREFIX,
+            agent_id,
+            user.id,
+        )
+        return agent
+
+    @staticmethod
     def _route_only_candidate(
         db: DBSession, user: User, candidate: Candidate
     ) -> Agent | None:
@@ -853,7 +1240,7 @@ class ChannelRoutingService:
 
         logger.info(
             "%s Pass 1 routed to sole eligible agent %s for user %s without "
-            "classifying (no auto-install bundle available to choose against)",
+            "classifying (Pass 2 had nothing to offer, or policy barred it)",
             _LOG_PREFIX,
             agent.id,
             user.id,
@@ -877,6 +1264,15 @@ class ChannelRoutingService:
         cannot run, so the choice space *is* one, and there is no scan to report.
         That is what keeps simulate's ``include_catalog=False`` form answering
         the same question the real path does rather than diverging from it.
+
+        Note the parameter is narrower than its name: what the caller passes is
+        :meth:`_catalog_may_run`'s answer — the admin's toggle **and** the
+        channel's ``allow_auto_install`` **and** its agent scope — not
+        ``decide``'s raw flag. They stopped being the same value when channel
+        policy landed, and it is the whole conjunction that has to reach here:
+        a probe that saw only the toggle would report a choice space of two on
+        a channel where Pass 2 can never run, and the short-circuit would
+        classify where the real path routes directly.
 
         Note what is **not** here: no second copy of the eligibility rule. This
         and Pass 2 share :meth:`_gather_catalog_candidates`, because a probe and
@@ -1064,6 +1460,79 @@ class ChannelRoutingService:
                 )
             return
         ChannelRoutingService._record_catalog_rows(ballot)
+
+    @staticmethod
+    def _record_pass_2_not_run(policy: ResolvedChannelPolicy) -> None:
+        """Write *why* Pass 2 will not run into the trace, when policy is why.
+
+        A no-op unless one of the three policy terms in :meth:`_catalog_may_run`
+        is what stops it, so the call site stays one unconditional line and
+        every condition lives with the reason it belongs to.
+
+        **One note per cause, and the causes must stay distinguishable.** The
+        three are fixed on different screens — the sender's own pin, the agent
+        scope, and the admin's ``allow_auto_install`` — so a shared "policy
+        said no" would be a diagnosis that names no control. Checked
+        narrowest-first: a pin answers the routing question outright, an agent
+        scope narrows this channel for this sender, and ``allow_auto_install``
+        is the channel-wide admin default underneath both.
+
+        Note that only the first and last of those have a single owner. The
+        agent scope **inherits**, so it is the sender's own setting or the
+        channel's admin default depending on whether a
+        ``channel_user_setting`` row says so, and this module cannot tell:
+        ``ResolvedChannelPolicy`` deliberately carries no provenance. Hence
+        :data:`PASS_2_SCOPE_RESTRICTED_NOTE` states the fact without claiming
+        an owner, and the reachability verdict — which has a session and calls
+        ``ChannelPolicyService.describe`` — is where the screen gets named.
+
+        Scope is reported ahead of ``allow_auto_install`` when both bar the
+        pass, and that order is the diagnosis rather than a coin toss. A
+        restricted scope invalidates the *other* remedy too: under it, giving
+        this sender a new agent with a trigger prompt does not make them
+        routable either, because the new agent would be out of scope as well.
+        Naming the auto-install switch first would send the reader to fix one
+        thing and come back to a channel that still routes nothing.
+
+        **Silent when Pass 1 already recorded an error.** On that branch the
+        pass blew up before it decided anything, and the truthful answer to
+        "why did Pass 2 not run" is "Pass 1 failed first" — stamping a policy
+        note over it would assert a reason that was never reached. The error is
+        the story; this note would be a second, quieter claim competing with it.
+
+        **Why this writes a stage for a pass that never ran**, which
+        :meth:`_record_catalog_ballot` refuses to do a few lines up and which
+        ``routing_trace``'s docstring makes a rule of ("a pass that ran always
+        leaves a stage"). The refusal there is about *noise*: an empty
+        ``pass_2`` heading on every message from every sender on a server with
+        an empty auto-install list, saying only that there was nothing to look
+        at. This one is the opposite — it is written only when Pass 1 found
+        nothing *and* this sender's own policy is what stopped the catalog,
+        which is precisely the trace somebody is reading to find out why they
+        were never offered anything, and the answer is not visible anywhere
+        else on the row. The stage is the finding, not a heading over one.
+
+        The honest cost, stated rather than discovered later: with
+        ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` off the note is withheld (see
+        :data:`PASS_2_NOT_ALLOWED_NOTE`), and this stage then becomes
+        indistinguishable from a Pass 2 that ran over an empty catalog. Both
+        mean "no bundle was offered and none could be", so what is lost with
+        the gate closed is which switch to go and look at, not whether
+        something went wrong.
+        """
+        trace = routing_trace.current()
+        if trace is not None and trace.error:
+            return
+        if policy.pinned_agent_id is not None:
+            note = PASS_2_PINNED_NOTE
+        elif policy.agent_scope != CHANNEL_AGENT_SCOPE_ALL:
+            note = PASS_2_SCOPE_RESTRICTED_NOTE
+        elif not policy.allow_auto_install:
+            note = PASS_2_NOT_ALLOWED_NOTE
+        else:
+            return
+        with routing_trace.stage_scope(routing_trace.STAGE_PASS_2):
+            routing_trace.record_parse_outcome(reason=note)
 
     @staticmethod
     def _record_catalog_rows(

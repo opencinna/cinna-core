@@ -491,6 +491,13 @@ from .server_config.server_config import (
     DisclaimerPublic,
 )
 from .server_channels.server_channel import (
+    CHANNEL_VISIBILITY_PUBLIC,
+    CHANNEL_VISIBILITY_RESTRICTED,
+    CHANNEL_VISIBILITIES,
+    CHANNEL_AGENT_SCOPE_ALL,
+    CHANNEL_AGENT_SCOPE_LIST,
+    CHANNEL_AGENT_SCOPE_NONE,
+    CHANNEL_AGENT_SCOPES,
     ServerChannel,
     ServerChannelBase,
     ServerChannelCreate,
@@ -515,6 +522,17 @@ from .server_channels.channel_thread_binding import (
     CHANNEL_BINDING_ACTIVE,
     CHANNEL_BINDING_FAILED,
     CHANNEL_BINDING_STATUSES,
+)
+from .server_channels.server_channel_user_grant import (
+    ServerChannelUserGrant,
+    ChannelGrantPublic,
+    ChannelGrantsUpdate,
+)
+from .server_channels.channel_user_setting import (
+    ChannelUserSetting,
+    ChannelUserAgent,
+    UserChannelPublic,
+    UserChannelUpdate,
 )
 from .email.email_message import (
     EmailMessage,
@@ -1265,6 +1283,20 @@ __all__ = [
     "CHANNEL_BINDING_ACTIVE",
     "CHANNEL_BINDING_FAILED",
     "CHANNEL_BINDING_STATUSES",
+    "CHANNEL_VISIBILITY_PUBLIC",
+    "CHANNEL_VISIBILITY_RESTRICTED",
+    "CHANNEL_VISIBILITIES",
+    "CHANNEL_AGENT_SCOPE_ALL",
+    "CHANNEL_AGENT_SCOPE_LIST",
+    "CHANNEL_AGENT_SCOPE_NONE",
+    "CHANNEL_AGENT_SCOPES",
+    "ServerChannelUserGrant",
+    "ChannelGrantPublic",
+    "ChannelGrantsUpdate",
+    "ChannelUserSetting",
+    "ChannelUserAgent",
+    "UserChannelPublic",
+    "UserChannelUpdate",
     # Email Messages
     "EmailMessage",
     "EmailMessagePublic",

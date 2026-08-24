@@ -26,6 +26,14 @@ silent — which is exactly the inventory failure the allowlist exists to preven
 one layer down. If this ever stops calling ``RoutingTraceService.get``, the
 guarantee stops being a guarantee and becomes a comment.
 
+**A simulate decides under the real channel policy.** Where the run names a
+channel — always, on a replay of a channel trace — the sender's resolved policy
+is read from the live row and handed to ``decide``, so the scope, the pin and
+the auto-install gate are the ones the webhook would apply. Only a hand-typed
+simulate with no channel gets the explicit no-channel policy. See
+:meth:`RoutingTuningService._policy_for`; a permissive default there would make
+this module's central claim — that it reproduces the real path — quietly false.
+
 **Note what ``decide`` *does* write.** On its error path — and only there —
 each routing pass persists its own ``outcome=error`` trace before re-raising,
 because a trace the caller never receives is otherwise the one outcome no code
@@ -60,8 +68,13 @@ from app.models.routing.routing_decision import (
     RoutingRecommendationPublic,
     RoutingReplayDiff,
 )
+from app.models import ServerChannel
 from app.services.routing import routing_trace
 from app.services.routing.routing_trace_service import RoutingTraceService
+from app.services.server_channels.channel_policy_service import (
+    ChannelPolicyService,
+    ResolvedChannelPolicy,
+)
 from app.services.server_channels.channel_routing_service import (
     ChannelRoutingService,
 )
@@ -135,11 +148,20 @@ class RoutingTuningService:
         when ``ROUTING_TRACE_ENABLED`` is off — with no row there is nothing to
         read back, and inventing a response for that case would mean building
         the second projection this docstring exists to forbid.
+
+        The channel policy is resolved **before** the run and from the real
+        row, whenever a channel is named — see :meth:`_policy_for`. A simulate
+        that routed over a different candidate set than the webhook would is
+        not a simulation of anything.
         """
+        policy = RoutingTuningService._policy_for(
+            db, user_id=user_id, channel_id=channel_id
+        )
         try:
             decision = await ChannelRoutingService.decide(
                 user_id=user_id,
                 text=message,
+                policy=policy,
                 include_catalog=include_catalog,
                 origin=routing_trace.ORIGIN_SIMULATE,
                 channel_id=channel_id,
@@ -194,6 +216,51 @@ class RoutingTuningService:
                 "The simulation ran and was stored but could not be read back.",
             )
         return result
+
+    @staticmethod
+    def _policy_for(
+        db: DBSession, *, user_id: uuid.UUID, channel_id: uuid.UUID | None
+    ) -> ResolvedChannelPolicy:
+        """The channel policy this run must decide under.
+
+        **Resolved, never assumed.** Simulate and replay exist to reproduce the
+        real path, and the policy is now part of what the real path decides
+        with: the sender's agent scope, their pinned agent, and whether the
+        auto-install pass may run. A simulate that took a permissive default
+        would show an admin a candidate set the webhook would never build, and
+        the divergence would be invisible — the trace it returns looks exactly
+        like a real one. This is the same reasoning that put
+        ``include_catalog`` inside Pass 1 rather than only around Pass 2 (see
+        ``ChannelRoutingService.decide``): a reproduction that quietly answers
+        an easier question is worse than no reproduction.
+
+        Three cases, and only the first is a policy this module invents:
+
+        - **No channel named.** A hand-typed ``POST /admin/routing/simulate``
+          has no ``ServerChannel`` to resolve against; that is the one case
+          ``ResolvedChannelPolicy.for_no_channel`` exists for, and its
+          docstring is the argument for why it is not spelled as a default.
+        - **A channel that resolves.** The real policy, for this target user —
+          the identical call the webhook makes.
+        - **A channel id with no row behind it.** A pure race, and a narrow
+          one: ``RoutingDecision.channel_id`` is ``ON DELETE CASCADE``, so a
+          deleted channel takes its traces with it and ``replay_source`` would
+          have 404'd on the row first. Degraded to the no-channel policy and
+          logged, rather than raised: the run is a diagnostic, the sender's
+          account and agents are still real, and refusing outright would turn a
+          millisecond-wide race into an error an admin cannot act on.
+        """
+        if channel_id is None:
+            return ResolvedChannelPolicy.for_no_channel()
+        channel = db.get(ServerChannel, channel_id)
+        if channel is None:
+            logger.warning(
+                "Routing simulate/replay names channel %s, which no longer "
+                "exists; deciding without a channel policy",
+                channel_id,
+            )
+            return ResolvedChannelPolicy.for_no_channel()
+        return ChannelPolicyService.resolve(db, channel, user_id)
 
     # ── Replay ───────────────────────────────────────────────────────
 

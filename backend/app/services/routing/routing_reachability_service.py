@@ -63,8 +63,19 @@ Three reasons, and the third is the one that matters:
 router actually considered; the database records what is configured *now*. The
 trace wins whenever it has an answer, because it describes the decision being
 diagnosed — the route may well have been fixed since. The database is consulted
-only for an agent the trace never mentions, which is precisely the case the
-trace cannot explain: it has no row for something that was never a candidate.
+only where the trace has no answer, which is precisely the case the trace cannot
+explain: it has no row for something that was never a candidate.
+
+There are two such places, and the second was added by channel policy. The
+first is an **expected agent the trace never mentions**
+(:func:`_verdict_from_configuration` and its channel half). The second is **why
+Pass 2 never ran** (:func:`_channel_pass_2_block`) — the router does record
+that, but into ``StageTrace.reason``, which the message-text gate withholds, so
+the trace's answer is unavailable on exactly the servers that need it most. Both
+therefore describe **configuration as it stands now**, not as it stood at
+decision time. That is deliberate for a surface whose question is "what do I
+change to fix this", and it is said out loud in the sentences themselves rather
+than left for a reader to infer.
 
 **What this reads about the expected agent is an allowlist**, and the split
 added to it deliberately rather than by drift. Two fields are *quoted*: the
@@ -106,7 +117,7 @@ from typing import Any
 
 from sqlmodel import Session as DBSession, select
 
-from app.models import Agent, User
+from app.models import CHANNEL_AGENT_SCOPE_ALL, Agent, ServerChannel, User
 from app.models.app_mcp.app_agent_route import (
     AppAgentRoute,
     AppAgentRouteAssignment,
@@ -119,7 +130,8 @@ from app.models.routing.routing_decision import (
 )
 from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
 from app.services.routing import routing_trace
-from app.services.routing.channel_candidate_provider import _example_text
+from app.services.routing.channel_candidate_provider import example_prompt_text
+from app.services.server_channels.channel_policy_service import ChannelPolicyService
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +152,26 @@ logger = logging.getLogger(__name__)
 # same answer on both surfaces. (``frontend/.../routingCopy.ts`` tones every
 # ``expected_agent_*`` code by prefix, so a new one needs no client change.) A
 # code is added only for a finding with no counterpart on the other surface,
-# which today is exactly two — the pair below marked "channel origins only".
+# which today is **four**, in two pairs, each marked "channel origins only"
+# where it is declared: the ``no_candidates`` split by why Pass 2 never ran,
+# and the ``expected_agent_*`` pair further down.
+#
+# **A code may carry more than one sentence**, and two of them now do. The rule
+# is the one above restated: the code names the finding, so a second sentence
+# is right exactly when the finding is unchanged and only the *remedy's
+# subject* moves — and a remedy is the half that must never be wrong.
+#
+# - ``CODE_ROUTED`` reads differently when the decision matched on a pin,
+#   because there the generic remedy (tighten the winner's trigger prompt) is
+#   inert: no classifier ran. Unlike the ``expected_agent_*`` family,
+#   ``"routed"`` is toned by the client *by name*, so a new code beside it
+#   would render a success as an unrecognised value.
+# - ``CODE_NO_CANDIDATES_CHANNEL_SCOPE`` reads differently depending on whether
+#   the restricting scope is the sender's own or the channel's admin default,
+#   because ``agent_scope`` is inheritable and the two live on different
+#   people's screens. Same finding, two owners.
+#
+# See ``_general_verdict``.
 
 #: No expected agent named.
 CODE_ROUTED = "routed"
@@ -148,6 +179,36 @@ CODE_ERROR = "error"
 CODE_NO_CANDIDATES = "no_candidates"
 CODE_ALL_CANDIDATES_SKIPPED = "all_candidates_skipped"
 CODE_NO_MATCH = "no_match"
+
+#: Channel origins only, and the two of them are :data:`CODE_NO_CANDIDATES`
+#: split by *why Pass 2 never ran*. The base sentence ends "…or add its bundle
+#: to the auto-install list", which is a remedy that names a control that would
+#: not change the outcome when the sender's channel policy bars the catalog
+#: pass — the one thing this module treats as worse than a coarse answer.
+#:
+#: Their finding genuinely has no App MCP counterpart: channel policy is not
+#: read on that surface at all, so this is the second *pair* under the rule the
+#: comment above states, not an exception to it.
+#:
+#: :data:`CODE_NO_CANDIDATES_CHANNEL_SCOPE` carries **two** sentences, split on
+#: whether the restricting scope is the sender's own or the channel's admin
+#: default. Same finding, different screen to go and fix it on. See
+#: :data:`_PASS_2_BLOCK_SCOPE_USER`.
+#:
+#: **Both are computed from the policy as it stands NOW**, not as it stood when
+#: the decision ran — see :func:`_channel_pass_2_block`, which is where that
+#: semantic is argued and where the sentences' "as they stand right now" clause
+#: comes from.
+#:
+#: **Client tone is handled.** ``frontend/.../routingCopy.ts``'s
+#: ``diagnosisTone`` matches ``no_candidates`` codes by *prefix*
+#: (``code.startsWith("no_candidates")``), so these two land in the same
+#: ``warn`` arm as the base ``"no_candidates"`` without needing their own
+#: entries — and a later ``no_candidates_*`` variant inherits the tone too. The
+#: verdict text — which is the feature — was never affected either way: the
+#: card renders ``verdict`` and never picks a sentence out of that map.
+CODE_NO_CANDIDATES_CHANNEL_SCOPE = "no_candidates_channel_scope"
+CODE_NO_CANDIDATES_AUTO_INSTALL_OFF = "no_candidates_auto_install_off"
 
 #: An expected agent was named and the trace has a row for it.
 CODE_EXPECTED_SELECTED = "expected_agent_selected"
@@ -227,6 +288,39 @@ NEAR_MISS_NO_CANDIDATES_NOTICE = (
     "Nothing to rank: this decision considered no candidate with a trigger "
     "prompt or example messages."
 )
+
+#: Appended to both channel-policy verdicts' **actions**, so the read-time
+#: semantic is stated in one place and the two sentences cannot drift about it.
+#: On the action rather than the problem because it qualifies the remedy — "go
+#: and look at this switch" is the claim that is time-sensitive — and because
+#: ``action`` is a substring of ``verdict`` by construction, so it reaches both
+#: renderings either way.
+READ_TIME_POLICY_CAVEAT = (
+    "Note that this names the channel's settings as they stand right now, not "
+    "as they stood when the decision ran — a verdict answers what to change "
+    "today."
+)
+
+#: :func:`_channel_pass_2_block`'s answers. Named constants rather than the
+#: verdict codes themselves so the "why" and the sentence stay separable: the
+#: same finding is reported by a different code the day another branch needs it,
+#: and — as the two scope answers below already show — one code can need more
+#: than one of them.
+#:
+#: **The agent scope splits by provenance, and it has to.** ``agent_scope`` is
+#: an *inheritable* field: a sender with no ``channel_user_setting`` row follows
+#: ``channel.default_agent_scope``, which is the admin's, and that is the normal
+#: state for the auto-registered senders this whole feature exists for (see
+#: ``ChannelPolicyService``'s docstring). A single sentence saying "this sender
+#: has restricted it" would therefore blame an external Google Chat user — who
+#: may have no account UI at all — for an admin's default, and send a superuser
+#: to a screen where nothing is set. The provenance bit is free:
+#: ``ChannelPolicyView.agent_scope_inherited`` already computes it and
+#: ``ChannelPolicyService.resolve`` merely discards it, which is why
+#: :func:`_channel_pass_2_block` calls ``describe`` instead.
+_PASS_2_BLOCK_SCOPE_USER = "scope_user"
+_PASS_2_BLOCK_SCOPE_DEFAULT = "scope_default"
+_PASS_2_BLOCK_AUTO_INSTALL = "auto_install"
 
 #: How many near-misses to return. The card shows a short list and the tail of
 #: a Jaccard ranking is noise — every unrelated agent scores a little above zero
@@ -312,6 +406,20 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
         "lookup that follows it",
         "Re-run this decision. Nothing is wrong with the routing rules: the "
         "bundle that matched simply stopped existing mid-decision.",
+    ),
+    # Lives in this base table rather than in the channel override below, for
+    # the same reason SKIP_PASS_1_MATCHED does: only a channel decision can
+    # record it (its producer is ``ChannelCandidateProvider``), and its remedy
+    # already names a channel control — so there is no App MCP wording here for
+    # an override to correct, and an entry in both tables would be one entry
+    # twice.
+    routing_trace.SKIP_NOT_IN_CHANNEL_SCOPE: (
+        "this sender owns it, but it is not one of the agents they have "
+        "switched on for this channel, so it was never put to the classifier",
+        "Add it to their agent list for this channel in Settings > Channels, "
+        "or set that channel back to using every agent they own. Nothing on "
+        "the agent itself will help — its trigger prompt is not what excluded "
+        "it.",
     ),
     routing_trace.SKIP_PASS_1_MATCHED: (
         "the auto-install pass could have offered it, but Pass 1 matched one "
@@ -487,7 +595,7 @@ def _diagnose(
 
     if expected_agent_id is None:
         code, problem, action = _general_verdict(
-            trace, eligible, candidates, channel=channel
+            db, trace, eligible, candidates, channel=channel
         )
         name = owner_email = None
     else:
@@ -519,6 +627,7 @@ def _diagnose(
 
 
 def _general_verdict(
+    db: DBSession,
     trace: RoutingDecisionPublic,
     eligible: list[dict],
     candidates: list[dict],
@@ -531,6 +640,22 @@ def _general_verdict(
     agent that won, the other names the provider cascade, and neither mentions
     a route or a trigger prompt. The three negative branches all do, so all
     three are written twice.
+
+    A pinned decision splits twice more, and **not by origin**: once under
+    ``routed``, because the generic remedy (tighten the winner's trigger
+    prompt) is inert against a pin, and once below the terminal-verdict
+    branches, because a pin that *failed* would otherwise be diagnosed as a
+    candidate scan whose winner was rejected — a scan that never happened.
+    Both are splits by ``match_method``, which is a fact about what the router
+    did rather than about which surface it ran on, so neither needs a
+    counterpart in the App MCP half: nothing there records ``pinned``.
+
+    ``db`` is here for exactly one branch — the channel ``no_candidates`` one,
+    which asks :func:`_channel_pass_2_block` whether this sender's channel
+    policy is what kept Pass 2 from running. The lookup is made **inside** that
+    branch rather than up front deliberately: it is two to five ``SELECT``s
+    depending on the channel's shape, this function runs on every trace read,
+    and every other branch has its answer already.
     """
     if trace.outcome == routing_trace.OUTCOME_ERROR:
         return (
@@ -548,6 +673,32 @@ def _general_verdict(
             or trace.selected_bundle_name
             or "the selected agent"
         )
+        if trace.match_method == routing_trace.MATCH_PINNED:
+            # Same code, second sentence — the one place this file does that,
+            # and the reasoning is the comment above the codes: a code names a
+            # *finding*, and the finding here is the same one ("it routed, and
+            # here is what to"). What differs is the remedy's subject, and a
+            # remedy is the half that must never be wrong. The generic sentence
+            # below tells the reader to tighten a trigger prompt, which is inert
+            # against a pin: no classifier ran, so no wording could have changed
+            # the answer. That is a confidently wrong instruction, which this
+            # module treats as worse than a coarse one.
+            #
+            # Not given a code of its own on purpose. ``frontend/.../
+            # routingCopy.ts`` tones ``"routed"`` explicitly and everything
+            # unrecognised neutrally, so a new code would arrive grey in a card
+            # this change does not touch — the client would render a successful
+            # routing as though it were unclassifiable.
+            return (
+                CODE_ROUTED,
+                f"This message went to {chosen} because this sender has "
+                f"pinned it to this channel: no classifier ran, and no other "
+                f"agent was considered.",
+                "Nothing to fix here. If their messages should be routed by "
+                "content instead, clear the pinned agent in their Settings > "
+                "Channels — while a pin is set, trigger prompts and example "
+                "prompts have no effect on this channel.",
+            )
         return (
             CODE_ROUTED,
             f"This message routed to {chosen}, chosen from "
@@ -557,8 +708,100 @@ def _general_verdict(
             "so it stops claiming this kind of message.",
         )
 
+    if trace.match_method == routing_trace.MATCH_PINNED:
+        # The mirror of the routed-by-pin sentence above, and it needs saying
+        # for the same reason. A pin that failed — its agent deleted, or moved
+        # to another account, between the policy resolution and the routing
+        # task — settles ``no_match`` with a single skipped candidate, which
+        # walks straight into CODE_ALL_CANDIDATES_SKIPPED below and is
+        # diagnosed as though a candidate scan had run and a winner had been
+        # rejected. Every word of that is wrong here: no scan ran, nothing won,
+        # and "re-run this decision" will not reproduce it, because the next
+        # resolution clears the dangling pin (``ChannelPolicyService._owned_pin``).
+        # The one control that matters — the pin itself — appears nowhere in
+        # that verdict.
+        #
+        # Placed above the candidate-shape branches rather than inside them:
+        # what makes this decision explicable is *how it matched*, not how many
+        # rows it left behind, and the two failure branches (agent gone,
+        # foreign owner) want the same sentence.
+        return (
+            CODE_ALL_CANDIDATES_SKIPPED,
+            "This sender has an agent pinned to this channel, and routing "
+            "could not use it: the pinned agent no longer exists, or it is no "
+            "longer theirs. No classifier ran and no other agent was "
+            "considered, because a pin is an instruction rather than a "
+            "preference.",
+            "Clear or re-point the pinned agent in their Settings > Channels. "
+            "Nothing else will change this outcome — a pin is consulted before "
+            "the candidate list is even built, and the auto-install pass is "
+            "skipped for a pinned channel too.",
+        )
+
     if not candidates:
         if channel:
+            # Before the base sentence, because the base sentence's remedy
+            # ("…or add its bundle to the auto-install list") is only true when
+            # Pass 2 could actually have run for this sender. On a channel
+            # whose policy bars the catalog pass it names a control that would
+            # change nothing — a confidently wrong instruction, which this
+            # module treats as worse than a coarse one.
+            blocked = _channel_pass_2_block(db, trace)
+            # One code, two sentences, keyed on whose setting it is. The
+            # finding is identical — the channel's agent scope barred Pass 2 —
+            # and only the remedy's subject differs, which is the same shape
+            # (and the same justification) as ``CODE_ROUTED``'s pinned variant
+            # above: a remedy is the half that must never be wrong.
+            if blocked == _PASS_2_BLOCK_SCOPE_USER:
+                return (
+                    CODE_NO_CANDIDATES_CHANNEL_SCOPE,
+                    "This user had no routing candidates at all: they own no "
+                    "agent the classifier could consider, and the auto-install "
+                    "pass could not offer them one either — as this channel's "
+                    "settings stand right now, this sender has limited it to "
+                    "an explicitly chosen set of their own agents, and an "
+                    "agent installed from the catalog would not be in that "
+                    "set.",
+                    "Set this channel back to using every agent they own, in "
+                    "their Settings > Channels, and then give them an agent "
+                    "with a router trigger prompt (or example prompts). "
+                    "Nothing on an agent alone will help while the limit "
+                    "stands: a newly created agent would be outside the chosen "
+                    "set too. " + READ_TIME_POLICY_CAVEAT,
+                )
+            if blocked == _PASS_2_BLOCK_SCOPE_DEFAULT:
+                return (
+                    CODE_NO_CANDIDATES_CHANNEL_SCOPE,
+                    "This user had no routing candidates at all: they own no "
+                    "agent the classifier could consider, and the auto-install "
+                    "pass could not offer them one either — as this channel's "
+                    "settings stand right now, its admin default limits every "
+                    "sender to an explicitly chosen set of their own agents, "
+                    "and an agent installed from the catalog would not be in "
+                    "that set. This sender has set nothing of their own, so "
+                    "they follow that default.",
+                    "Set this channel's default agent scope back to every "
+                    "agent a user owns, in its admin settings — there is "
+                    "nothing to change on this sender's side, because they "
+                    "have overridden nothing. Nothing on an agent alone will "
+                    "help while the default stands: a newly created agent "
+                    "would be outside the chosen set too. "
+                    + READ_TIME_POLICY_CAVEAT,
+                )
+            if blocked == _PASS_2_BLOCK_AUTO_INSTALL:
+                return (
+                    CODE_NO_CANDIDATES_AUTO_INSTALL_OFF,
+                    "This user had no routing candidates at all: they own no "
+                    "agent the classifier could consider, and the auto-install "
+                    "pass never ran — as this channel's settings stand right "
+                    "now, installing a bundle for its senders is switched off.",
+                    "Give this user an agent with a router trigger prompt (or "
+                    "example prompts) on its Configuration tab, or switch "
+                    "auto-installing bundles back on for this channel in its "
+                    "admin settings. Adding a bundle to the auto-install list "
+                    "will not help on its own — while that switch is off the "
+                    "list is never read. " + READ_TIME_POLICY_CAVEAT,
+                )
             return (
                 CODE_NO_CANDIDATES,
                 "This user had no routing candidates at all: they own no agent "
@@ -670,6 +913,11 @@ def _verdict_from_trace(
     :func:`_channel_verdict_from_configuration`. The override table is the live
     path for that case; the configuration branch is the one for an agent the
     decision genuinely never saw.
+
+    The same now goes for an agent excluded by the channel's ``agent_scope``:
+    it arrives here as ``SKIP_NOT_IN_CHANNEL_SCOPE`` rather than as an absence,
+    which is the entire reason the candidate provider records it instead of
+    filtering it out.
     """
     if not row.get("eligible"):
         reason = str(row.get("skip_reason") or "")
@@ -713,15 +961,31 @@ def _channel_verdict_from_configuration(
 ) -> tuple[str, str, str]:
     """As :func:`_verdict_from_configuration`, for a channel decision.
 
-    Three branches against the two facts a channel candidate is made of — **who
-    owns it** and **whether its owner wrote anything for the classifier to match
-    on** — and no fourth, because there is no fourth thing to check. That is the
-    whole shape of the fix: the App MCP version below asks four questions about
-    routes before it reaches ownership, and every one of those questions is
-    about a switch a channel does not read (plan §2.2, §3).
+    Three branches against the two facts that make a channel candidate out of
+    an ``Agent`` — **who owns it** and **whether its owner wrote anything for
+    the classifier to match on**. That is the whole shape of the fix: the App
+    MCP version below asks four questions about routes before it reaches
+    ownership, and every one of those questions is about a switch a channel
+    does not read (plan §2.2, §3).
 
     Reads ``Agent`` and nothing else, so this function cannot drift back into
     prescribing a route: there is nothing here to prescribe one *from*.
+
+    **There is now a third fact, and it is deliberately not asked here.** Since
+    channel policy landed, an agent the sender owns and has written wording for
+    can still be excluded because it is not in that channel's ``agent_scope``.
+    That exclusion is answered where it is recorded — the candidate provider
+    writes a ``SKIP_NOT_IN_CHANNEL_SCOPE`` row, so :func:`_verdict_from_trace`
+    handles it and control never arrives here. Asking again from configuration
+    would mean loading the channel and re-resolving the policy on a read path
+    whose contract is "reads ``Agent`` and nothing else", to answer a case that
+    already has a better answer from the trace.
+    What that leaves imprecise is the last branch below, for an agent the
+    decision genuinely never saw: if it is out of scope *now*, "the re-run will
+    show it as a candidate" overstates — the re-run will show it as a skip,
+    with the right reason on it. A reader who follows the instruction gets the
+    correct diagnosis one step later, which is the acceptable failure of the
+    two available here.
 
     **When this is reached at all**, which is narrower than it looks and is the
     reason the middle branch is not the live path for its own finding. The
@@ -1085,6 +1349,126 @@ def _skip_explanation(reason: str, *, kind: str, channel: bool) -> tuple[str, st
     )
 
 
+def _channel_pass_2_block(
+    db: DBSession, trace: RoutingDecisionPublic
+) -> str | None:
+    """Which channel setting stops Pass 2 for this sender — **as it stands now**.
+
+    Returns :data:`_PASS_2_BLOCK_SCOPE_USER`,
+    :data:`_PASS_2_BLOCK_SCOPE_DEFAULT`, :data:`_PASS_2_BLOCK_AUTO_INSTALL`, or
+    ``None`` for "nothing in the channel's policy bars the catalog pass, or the
+    policy cannot be resolved at all".
+
+    ``ChannelPolicyService.describe`` rather than ``.resolve``, for one field:
+    ``agent_scope_inherited``. ``agent_scope`` is inheritable, so a restricted
+    scope is the admin's default about as often as it is the sender's own
+    choice, and a remedy naming the wrong screen is the confidently-wrong
+    diagnosis this module exists to refuse. ``describe`` computes that bit
+    already and ``resolve`` throws it away, so this costs nothing beyond the
+    call.
+
+    ``allow_auto_install`` needs no such split: it is a column on
+    ``ServerChannel`` with no per-user override at all, so there is only ever
+    one screen to name.
+
+    **The fact comes from the resolved policy, not from the trace.**
+    ``ChannelRoutingService._record_pass_2_not_run`` writes a perfectly good
+    note saying exactly this, into ``StageTrace.reason`` — and ``reason`` is
+    deliberately absent from ``routing_trace.SAFE_STAGE_FIELDS``, so with
+    ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` off the note never reaches the
+    projection this module reads. A verdict that depended on it would be
+    correct on some servers and silently generic on others, which is the worst
+    of the three available behaviours. Giving ``StageTrace`` an allowlisted,
+    server-authored "this pass did not run" code is the right structural fix
+    and it is Phase 6's; until then this re-reads the source.
+
+    **What that costs, stated rather than assumed.** A verdict is computed when
+    somebody *reads* a trace, which can be long after the decision. Re-resolving
+    the policy here therefore describes the configuration **as it stands now**,
+    not as it stood at decision time — so a channel whose auto-install was on
+    when the message arrived and has since been switched off is diagnosed as
+    "switched off", and a Pass 2 that genuinely ran and found nothing is
+    reported as a Pass 2 that could not run.
+
+    That is judged correct for a *diagnosis*: this verdict's job is "what do I
+    change to fix this", and the answer to that question is about today's
+    configuration, not about a state nobody can act on any more. It is not
+    left as a silent assumption — the sentences themselves say "as this
+    channel's settings stand right now", and both actions carry
+    :data:`READ_TIME_POLICY_CAVEAT`. The reader is told which clock they are
+    reading.
+
+    **Four ways the policy cannot be resolved, all answered ``None``** (the
+    base sentence, i.e. the behaviour before this branch existed):
+
+    - ``channel_id is None`` — a hand-typed ``POST /admin/routing/simulate``
+      that named no channel. There is no ``ServerChannel`` row to resolve
+      against, and that run really did decide under
+      ``ResolvedChannelPolicy.for_no_channel`` — whose ``allow_auto_install``
+      is ``True`` and whose scope is ``"all"`` — so the base sentence's
+      auto-install remedy is *true* for it. This branch is checked first, and
+      it is why nothing here defaults to a permissive policy of its own
+      invention; see that classmethod's docstring on why a default would be a
+      second, silently permissive policy source.
+    - ``user_id is None`` — the sender's account was deleted
+      (``RoutingDecision.user_id`` is ``SET NULL``). A policy is a fact about a
+      person and a channel; with no person there is nothing to resolve.
+    - The channel row is gone. ``RoutingDecision.channel_id`` is
+      ``ON DELETE CASCADE``, so this is near-unreachable — the trace would have
+      gone with it — but a read path does not get to assume that.
+    - The resolution raised. Caught here rather than left to
+      :meth:`RoutingReachabilityService.diagnose`'s catch-all, which would cost
+      the whole diagnosis (the candidate table and its skip reasons included)
+      to lose one clause of one sentence. Degrading to the base sentence is the
+      pre-existing behaviour, which is coarse but never wrong.
+
+    Scope is checked **before** ``allow_auto_install``, and the order is the
+    diagnosis. Both bar Pass 2 identically, so either sentence would be true
+    when both are set — but a restricted scope also invalidates the *other*
+    verdict's remedy, because under it giving this sender a new agent with a
+    trigger prompt does not make them routable either. Reporting the
+    auto-install switch first would send the reader to fix one thing and come
+    back to a channel that still routes nothing. Same order, same reason, as
+    ``ChannelRoutingService._record_pass_2_not_run``'s note vocabulary.
+
+    A pin is **not** an answer here, and the reason is the one seam in an
+    otherwise read-time argument, so it is stated rather than glossed. A
+    *pinned decision* never reaches this branch — it is settled above by
+    :func:`_general_verdict`'s ``MATCH_PINNED`` branch, and it leaves a
+    candidate row behind besides, so ``not candidates`` is false for it. But
+    that is a fact about the decision, and this function is otherwise about
+    *now*: a pin set **since** the decision is a read-time state with no answer
+    here, and the verdict will tell an admin to widen a scope on a channel that
+    would today route by pin. Accepted, because the pin is visible on the same
+    settings screen both remedies already send the reader to, and because
+    inventing a fourth sentence for it would describe a decision nobody is
+    looking at.
+    """
+    if trace.channel_id is None or trace.user_id is None:
+        return None
+    try:
+        channel = db.get(ServerChannel, trace.channel_id)
+        if channel is None:
+            return None
+        view = ChannelPolicyService.describe(db, channel, trace.user_id)
+    except Exception:  # noqa: BLE001 — one clause is not worth the diagnosis
+        logger.warning(
+            "Could not resolve channel policy for trace diagnosis (channel=%s)",
+            trace.channel_id,
+            exc_info=True,
+        )
+        return None
+    if view.policy.agent_scope != CHANNEL_AGENT_SCOPE_ALL:
+        return (
+            _PASS_2_BLOCK_SCOPE_DEFAULT
+            if view.agent_scope_inherited
+            else _PASS_2_BLOCK_SCOPE_USER
+        )
+    if not view.policy.allow_auto_install:
+        return _PASS_2_BLOCK_AUTO_INSTALL
+    return None
+
+
 def _is_channel_origin(origin: str | None) -> bool:
     """Did this decision route over the sender's own agents?
 
@@ -1113,16 +1497,21 @@ def _candidate_noun(channel: bool) -> str:
 def _has_router_wording(agent: Agent) -> bool:
     """Anything for the classifier to match on — the channel eligibility test.
 
-    ``_example_text`` is **called**, not restated: it is the same predicate
-    ``ChannelCandidateProvider`` applies when it builds a ballot, including the
-    parts that are not obvious (a non-list column yields nothing; ``[""]`` is
-    not examples). A second copy would drift the first time either side was
-    tuned, and it would drift *silently* — this module would go on saying "it
-    has neither" about an agent the provider was happily admitting, which is
-    precisely the class of wrong-but-confident diagnosis the module docstring
-    exists to forbid. Reaching for a private name is flagged rather than
-    laundered, the same way the Jaccard reach above is; if a third caller
-    appears, promote it.
+    ``example_prompt_text`` is **called**, not restated: it is the same
+    predicate ``ChannelCandidateProvider`` applies when it builds a ballot,
+    including the parts that are not obvious (a non-list column yields nothing;
+    ``[""]`` is not examples). A second copy would drift the first time either
+    side was tuned, and it would drift *silently* — this module would go on
+    saying "it has neither" about an agent the provider was happily admitting,
+    which is precisely the class of wrong-but-confident diagnosis the module
+    docstring exists to forbid.
+
+    It used to be ``_example_text``, reached across a service boundary and
+    flagged here as borrowed rather than laundered, with the standing condition
+    "if a third caller appears, promote it". Channel policy produced that third
+    caller — ``ChannelRoutingService._route_pinned_agent`` needs the identical
+    predicate for the pinned agent's trace row — so it was promoted in the same
+    change, rather than leaving this paragraph instructing against the tree.
 
     The agent-level pair, never a route's copy: ``Agent.example_prompts`` is the
     SSOT channel routing reads, and borrowing examples from whatever route
@@ -1131,7 +1520,7 @@ def _has_router_wording(agent: Agent) -> bool:
     """
     return bool(
         (agent.router_trigger_prompt or "").strip()
-        or _example_text(agent.example_prompts)
+        or example_prompt_text(agent.example_prompts)
     )
 
 

@@ -1,4 +1,4 @@
-"""Admin-side channel management: CRUD, secrets, tokens, auto-install list.
+"""Admin-side channel management: CRUD, secrets, tokens, auto-install, grants.
 
 Everything here is superuser-facing. The inbound pipeline only borrows one
 method from this service — ``get_by_webhook_token`` — and that method is the
@@ -9,6 +9,12 @@ Secret discipline: ``ServerChannel.encrypted_secrets`` is written here and
 read only by the adapter. It is never projected into a DTO, never logged, and
 an update that omits the field leaves the stored value untouched (so an admin
 editing the whitelist doesn't have to re-paste a service-account key).
+
+Policy discipline: this service owns the admin-set *defaults* — the four
+policy columns and the ``server_channel_user_grant`` allowlist. It does not
+resolve them against a user. That is ``ChannelPolicyService``, and keeping the
+two apart is what stops a second copy of the inheritance rules appearing on
+the admin side.
 """
 from __future__ import annotations
 
@@ -17,15 +23,19 @@ import secrets as secrets_module
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import func
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.core.security import encrypt_field
 from app.models import (
+    CHANNEL_AGENT_SCOPES,
+    CHANNEL_VISIBILITIES,
     AgentBundle,
     AgentBundleRevision,
     AutoInstallBundlePublic,
+    ChannelGrantPublic,
     ChannelRecentSender,
     ChannelSetupInstructions,
     ChannelThreadBinding,
@@ -34,6 +44,7 @@ from app.models import (
     ServerChannelCreate,
     ServerChannelPublic,
     ServerChannelUpdate,
+    ServerChannelUserGrant,
     User,
 )
 from app.services.server_channels.adapters.base import ChannelError
@@ -74,6 +85,16 @@ class ChannelNotFoundError(ChannelError):
 
 class DuplicateChannelNameError(ChannelError):
     """Channel names are unique — the admin list is keyed on them visually."""
+
+
+class InvalidChannelPolicyError(ChannelError):
+    """``visibility`` / ``default_agent_scope`` was not a value we know.
+
+    The columns are plain ``VARCHAR`` so that adding a value never needs a
+    migration, and *readers* tolerate anything (see ``ChannelPolicyService``).
+    The write boundary is stricter on purpose: a typo from the admin API would
+    otherwise be stored, silently degrade to the conservative branch, and read
+    back as a legitimate setting."""
 
 
 class ServerChannelService:
@@ -139,6 +160,10 @@ class ServerChannelService:
             name=channel.name,
             enabled=channel.enabled,
             auto_register_users=channel.auto_register_users,
+            visibility=channel.visibility,
+            default_enabled_for_users=channel.default_enabled_for_users,
+            default_agent_scope=channel.default_agent_scope,
+            allow_auto_install=channel.allow_auto_install,
             config=channel.config or {},
             email_whitelist=channel.email_whitelist,
             webhook_token=channel.webhook_token,
@@ -268,6 +293,9 @@ class ServerChannelService:
         adapter = get_adapter(data.channel_type)  # raises UnknownChannelTypeError
         config = data.config or {}
         adapter.validate_config(config)
+        ServerChannelService._validate_policy(
+            visibility=data.visibility, agent_scope=data.default_agent_scope
+        )
 
         name = (data.name or "").strip()
         if ServerChannelService._name_taken(session, name):
@@ -280,6 +308,10 @@ class ServerChannelService:
             name=name,
             enabled=data.enabled,
             auto_register_users=data.auto_register_users,
+            visibility=data.visibility,
+            default_enabled_for_users=data.default_enabled_for_users,
+            default_agent_scope=data.default_agent_scope,
+            allow_auto_install=data.allow_auto_install,
             config=config,
             email_whitelist=ServerChannelService._clean_whitelist(data.email_whitelist),
             encrypted_secrets=(
@@ -338,6 +370,33 @@ class ServerChannelService:
         if "email_whitelist" in patch:
             patch["email_whitelist"] = ServerChannelService._clean_whitelist(
                 patch["email_whitelist"]
+            )
+
+        # The four policy fields are ordinary columns and ride ``sqlmodel_update``
+        # below, so nothing between here and the commit would catch a bad value.
+        #
+        # An explicit ``null`` has to be rejected by KEY PRESENCE, not by value.
+        # All four are NOT NULL columns declared ``X | None`` on the DTO, and
+        # ``exclude_unset`` keeps an explicitly-null field in the patch — so
+        # ``{"visibility": null}``, which is exactly what a client sends meaning
+        # "reset this", would be assigned straight onto the column (SQLModel
+        # table models do not validate on assignment) and surface as an
+        # unhandled IntegrityError at commit instead of a 422.
+        for field in (
+            "visibility",
+            "default_enabled_for_users",
+            "default_agent_scope",
+            "allow_auto_install",
+        ):
+            if field in patch and patch[field] is None:
+                raise InvalidChannelPolicyError(f"{field} cannot be null")
+
+        if "visibility" in patch or "default_agent_scope" in patch:
+            ServerChannelService._validate_policy(
+                visibility=patch.get("visibility", channel.visibility),
+                agent_scope=patch.get(
+                    "default_agent_scope", channel.default_agent_scope
+                ),
             )
 
         if patch:
@@ -471,8 +530,137 @@ class ServerChannelService:
         session.commit()
 
     # ------------------------------------------------------------------
+    # Grants — the per-user allowlist for a restricted channel
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def list_grants(
+        session: Session, channel: ServerChannel
+    ) -> list[ChannelGrantPublic]:
+        """Everyone granted this channel, joined with enough to render a row.
+
+        Ordered by the name the admin actually sees —
+        ``coalesce(nullif(full_name, ''), email)``, then ``User.id`` — the
+        convention Phase 1 pinned for identity candidates and which every
+        rendered person-list in this refactor follows. The ``nullif`` is not
+        decoration: ``full_name`` is nullable *and* unconstrained against the
+        empty string, so both ``NULL`` and ``''`` reach the database and both
+        render as the email. Plain ``coalesce`` would catch only the ``NULL``
+        half and leave ``''`` sorting ahead of every real name.
+
+        Grants are returned even when the channel is currently ``public``. The
+        rows are not consulted then, but they are the admin's saved allowlist
+        and silently hiding them would lose the list on a visibility round-trip.
+        """
+        rows = session.exec(
+            select(ServerChannelUserGrant, User)
+            .join(User, User.id == ServerChannelUserGrant.user_id)  # type: ignore[arg-type]
+            .where(ServerChannelUserGrant.server_channel_id == channel.id)
+            .order_by(
+                func.coalesce(func.nullif(User.full_name, ""), User.email),
+                User.id,
+            )
+        ).all()
+        return [
+            ChannelGrantPublic(
+                user_id=user.id,
+                email=user.email,
+                full_name=user.full_name,
+                granted_by=grant.granted_by,
+                created_at=grant.created_at,
+            )
+            for grant, user in rows
+        ]
+
+    @staticmethod
+    def replace_grants(
+        session: Session,
+        channel: ServerChannel,
+        user_ids: list[uuid.UUID],
+        granted_by: User,
+    ) -> list[ChannelGrantPublic]:
+        """Set the grant list to exactly ``user_ids``.
+
+        Replace, not merge: the admin UI edits a picker whose state *is* the
+        whole list, and a delta API against a multi-admin form silently loses a
+        concurrent revocation.
+
+        Rows that survive the replace are **left alone** rather than deleted and
+        re-inserted, so ``granted_by`` and ``created_at`` keep naming who first
+        granted access and when — re-saving an unchanged form must not rewrite
+        the audit trail to say the last person to touch the page granted
+        everyone.
+
+        Ids that do not resolve to a user are dropped rather than rejected: the
+        picker sources them from ``GET /users/search``, so an unresolvable id
+        means the account was deleted between picking and saving, and failing
+        the whole save over it would strand the admin on a form they cannot
+        submit.
+        """
+        wanted = list(dict.fromkeys(user_ids))  # de-dupe, keep order
+        existing_users = (
+            set(
+                session.exec(select(User.id).where(User.id.in_(wanted))).all()  # type: ignore[union-attr]
+            )
+            if wanted
+            else set()
+        )
+        target = {uid for uid in wanted if uid in existing_users}
+
+        current = session.exec(
+            select(ServerChannelUserGrant).where(
+                ServerChannelUserGrant.server_channel_id == channel.id
+            )
+        ).all()
+        current_by_user = {grant.user_id: grant for grant in current}
+
+        for user_id, grant in current_by_user.items():
+            if user_id not in target:
+                session.delete(grant)
+
+        for user_id in target:
+            if user_id in current_by_user:
+                continue
+            session.add(
+                ServerChannelUserGrant(
+                    server_channel_id=channel.id,
+                    user_id=user_id,
+                    granted_by=granted_by.id,
+                )
+            )
+
+        session.commit()
+        logger.info(
+            "Replaced grants on channel %s: %d user(s), by %s",
+            channel.id,
+            len(target),
+            granted_by.id,
+        )
+        return ServerChannelService.list_grants(session, channel)
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_policy(*, visibility: str | None, agent_scope: str | None) -> None:
+        """Reject policy strings this build does not know about.
+
+        Only non-``None`` values are checked. This is safe **because the caller
+        has already rejected an explicitly-null policy field by key presence** —
+        by the time a ``None`` reaches here it can only mean "not supplied", and
+        the caller has resolved it against the stored value. Do not make this
+        the sole guard: it cannot tell an omitted field from a null one.
+        """
+        if visibility is not None and visibility not in CHANNEL_VISIBILITIES:
+            raise InvalidChannelPolicyError(
+                f"visibility must be one of {', '.join(CHANNEL_VISIBILITIES)}"
+            )
+        if agent_scope is not None and agent_scope not in CHANNEL_AGENT_SCOPES:
+            raise InvalidChannelPolicyError(
+                "default_agent_scope must be one of "
+                f"{', '.join(CHANNEL_AGENT_SCOPES)}"
+            )
 
     @staticmethod
     def _name_taken(
@@ -507,4 +695,5 @@ __all__ = [
     "ServerChannelService",
     "ChannelNotFoundError",
     "DuplicateChannelNameError",
+    "InvalidChannelPolicyError",
 ]

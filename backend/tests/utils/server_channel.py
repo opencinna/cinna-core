@@ -221,6 +221,45 @@ def remove_auto_install_bundle(
 
 
 # ---------------------------------------------------------------------------
+# Admin — per-channel user grants (Phase 2, `visibility="restricted"`)
+# ---------------------------------------------------------------------------
+
+
+def list_channel_grants(
+    client: TestClient, token_headers: dict[str, str], channel_id: str
+) -> list[dict]:
+    """GET /admin/server-channels/{channel_id}/grants."""
+    r = client.get(f"{_ADMIN_BASE}/{channel_id}/grants", headers=token_headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def replace_channel_grants(
+    client: TestClient,
+    token_headers: dict[str, str],
+    channel_id: str,
+    user_ids: list[str],
+    *,
+    expected_status: int = 200,
+) -> list[dict]:
+    """PUT /admin/server-channels/{channel_id}/grants — the complete grant set.
+
+    Replace-the-set, not a delta: pass every user who should be granted, and
+    an empty list withdraws every grant on the channel (used to test the
+    revocation half of the decline gate).
+    """
+    r = client.put(
+        f"{_ADMIN_BASE}/{channel_id}/grants",
+        headers=token_headers,
+        json={"user_ids": user_ids},
+    )
+    assert r.status_code == expected_status, (
+        f"Replace channel grants failed: {r.status_code} {r.text}"
+    )
+    return r.json() if r.status_code == expected_status else None
+
+
+# ---------------------------------------------------------------------------
 # Google Chat webhook event payloads
 # ---------------------------------------------------------------------------
 
@@ -398,7 +437,7 @@ def flush_pending_bindings(db: Session) -> int:
 # ---------------------------------------------------------------------------
 
 
-def route_installed(db: Session, user, text: str):
+def route_installed(db: Session, user, text: str, *, policy=None):
     """Directly invoke ``ChannelRoutingService._route_installed``.
 
     EXEMPTION — same shape as ``flush_pending_bindings`` above: this is a
@@ -420,12 +459,29 @@ def route_installed(db: Session, user, text: str):
     ``decide``'s plumbing for scanning the catalog at most once per decision
     and is not what any caller of this helper is asking about. A test that
     wants the ballot calls the method directly and says so.
+
+    ``policy`` defaults to ``ResolvedChannelPolicy.for_no_channel()`` — every
+    agent in scope, no pin, catalog allowed — which is exactly how this pass
+    behaved before channel policy existed, so the ownership and failure-mode
+    assertions this helper serves keep asserting what they always did. A test
+    about scope, a pin, or the auto-install gate passes its own policy; that
+    is what this parameter is for, and it is the reason the default is spelled
+    out here rather than inside the routing service, where a permissive default
+    would apply to production call sites too.
     """
+    from app.services.server_channels.channel_policy_service import (
+        ResolvedChannelPolicy,
+    )
     from app.services.server_channels.channel_routing_service import (
         ChannelRoutingService,
     )
 
-    agent, _ballot = ChannelRoutingService._route_installed(db, user, text)
+    agent, _ballot = ChannelRoutingService._route_installed(
+        db,
+        user,
+        text,
+        policy=policy if policy is not None else ResolvedChannelPolicy.for_no_channel(),
+    )
     return agent
 
 

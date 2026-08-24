@@ -49,8 +49,10 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
+from app.models import ChannelUserSetting
 from tests.utils.agent import (
     create_agent_via_api,
     set_router_trigger_prompt,
@@ -67,11 +69,19 @@ from tests.utils.bundle import (
 from tests.utils.routing import (
     classification,
     get_routing_trace,
+    list_routing_traces,
     patched_routing_externals,
+    post_channel_message,
     seed_routing_trace,
     simulate_routing,
 )
-from tests.utils.server_channel import add_auto_install_bundle
+from tests.utils.server_channel import (
+    GoogleChatJWTSigner,
+    add_auto_install_bundle,
+    build_message_event,
+    create_server_channel,
+    update_server_channel,
+)
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
 from tests.utils.utils import random_lower_string
 
@@ -202,6 +212,204 @@ def test_verdict_when_the_user_has_no_candidates_at_all(
     assert diagnosis["eligible_candidate_count"] == 0
     # The remedy is a substring of the sentence by construction, so a client
     # rendering them separately cannot show two different answers.
+    assert diagnosis["action"] in diagnosis["verdict"]
+
+
+def _no_candidate_channel(
+    client: TestClient,
+    superuser_headers: dict[str, str],
+    **admin_defaults: object,
+) -> dict:
+    """A channel any sender may reach, with the given admin-owned defaults."""
+    channel = create_server_channel(
+        client, superuser_headers, auto_register_users=True, email_whitelist="*"
+    )
+    if admin_defaults:
+        update_server_channel(
+            client, superuser_headers, channel["id"], **admin_defaults
+        )
+    return channel
+
+
+def _deliver_from_a_sender_who_owns_nothing(
+    client: TestClient,
+    superuser_headers: dict[str, str],
+    channel: dict,
+    *,
+    sender_email: str | None = None,
+) -> dict:
+    """One real webhook delivery, and the `no_match` trace it leaves.
+
+    Driven through the **webhook**, not through simulate, and that is forced
+    rather than stylistic: `RoutingSimulateRequest` carries no `channel_id`, so
+    every simulate decides under `ResolvedChannelPolicy.for_no_channel` and
+    stores a trace whose `channel_id` is NULL — which is exactly the branch the
+    verdicts below are *not* about. A channel-policy verdict needs a decision
+    that genuinely belonged to a channel.
+
+    No classifier answer is named, on purpose: the sender owns nothing, so the
+    ballot is empty and `post_channel_message`'s stub raises if it is ever
+    reached (see its docstring for the two shapes allowed to name none).
+    """
+    signer = GoogleChatJWTSigner()
+    event = build_message_event(
+        thread_key=f"spaces/AAA/threads/{random_lower_string()}",
+        text="please do the thing",
+        sender_email=sender_email or f"{random_lower_string()}@example.com",
+    )
+    resp, _ = post_channel_message(client, channel, signer, event)
+    assert resp.status_code == 200
+
+    page = list_routing_traces(client, superuser_headers, channel_id=channel["id"])
+    assert page["count"] == 1, page
+    trace = page["data"][0]
+    assert trace["outcome"] == "no_match", trace
+    return trace
+
+
+def _set_sender_scope(db: Session, channel_id: str, user_id: str, scope: str) -> None:
+    """Give this sender their OWN `channel_user_setting`, with `agent_scope` set.
+
+    Written through the session rather than through
+    `PUT /users/me/channels/{channel_id}` — which is the only production creator
+    of this row — as a focused setup shortcut. What this test needs from the row
+    is one bit, that `agent_scope` is the SENDER'S and not inherited, and the row
+    is exactly what expresses it; the route itself is covered in
+    `tests/api/server_channels/server_channels_user_settings_test.py`.
+
+    This used to be a workaround rather than a choice: while `_create_setting`
+    wrapped its insert in `session.begin_nested()`, the inner savepoint's commit
+    fired `after_transaction_end` inside the suite's `restart_savepoint` listener
+    and the route could not create a row under these fixtures at all. The insert
+    is a native upsert now, so the shortcut is a preference again.
+    """
+    setting = ChannelUserSetting(
+        server_channel_id=uuid.UUID(channel_id),
+        user_id=uuid.UUID(user_id),
+        agent_scope=scope,
+    )
+    db.add(setting)
+    db.commit()
+
+
+def test_verdict_when_no_candidates_and_the_sender_restricted_the_scope(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """`no_candidates` split by why Pass 2 never ran — the sender's own scope.
+
+    The base sentence ends "…or add its bundle to the auto-install list", and on
+    a scope-restricted channel that names a control which would change nothing:
+    `_catalog_may_run` gates Pass 2 on `agent_scope == "all"`, because an agent
+    arriving from the catalog is out of the chosen set by construction.
+
+    Reported ahead of the auto-install half when both bar the pass, because a
+    restricted scope also invalidates the *other* remedy — a newly created agent
+    would be outside the chosen set too.
+    """
+    channel = _no_candidate_channel(client, superuser_token_headers)
+    sender, _ = create_random_user_with_headers(client)
+    _set_sender_scope(db, channel["id"], sender["id"], "list")
+
+    trace = _deliver_from_a_sender_who_owns_nothing(
+        client, superuser_token_headers, channel, sender_email=sender["email"]
+    )
+
+    diagnosis = _diagnosis(client, superuser_token_headers, trace)
+    assert diagnosis["code"] == "no_candidates_channel_scope"
+    assert diagnosis["verdict"] == (
+        "This user had no routing candidates at all: they own no agent the "
+        "classifier could consider, and the auto-install pass could not offer "
+        "them one either — as this channel's settings stand right now, this "
+        "sender has limited it to an explicitly chosen set of their own "
+        "agents, and an agent installed from the catalog would not be in that "
+        "set. Set this channel back to using every agent they own, in their "
+        "Settings > Channels, and then give them an agent with a router "
+        "trigger prompt (or example prompts). Nothing on an agent alone will "
+        "help while the limit stands: a newly created agent would be outside "
+        "the chosen set too. Note that this names the channel's settings as "
+        "they stand right now, not as they stood when the decision ran — a "
+        "verdict answers what to change today."
+    )
+    assert diagnosis["action"] in diagnosis["verdict"]
+
+
+def test_verdict_when_no_candidates_and_the_admin_default_restricts_the_scope(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The same finding, the other owner — and the reason this pair exists.
+
+    `agent_scope` **inherits**: a sender with no `channel_user_setting` row
+    follows `channel.default_agent_scope`, which is the normal state for the
+    auto-registered senders this whole feature is built for. Telling a superuser
+    that "this sender has restricted it" would blame an external Google Chat
+    user, who may have no account UI at all, for an admin's default — and send
+    the reader to a screen where nothing is set.
+
+    Same code as the test above (the finding is identical); a different remedy,
+    because the control lives elsewhere.
+    """
+    channel = _no_candidate_channel(
+        client, superuser_token_headers, default_agent_scope="none"
+    )
+    trace = _deliver_from_a_sender_who_owns_nothing(
+        client, superuser_token_headers, channel
+    )
+
+    diagnosis = _diagnosis(client, superuser_token_headers, trace)
+    assert diagnosis["code"] == "no_candidates_channel_scope"
+    assert diagnosis["verdict"] == (
+        "This user had no routing candidates at all: they own no agent the "
+        "classifier could consider, and the auto-install pass could not offer "
+        "them one either — as this channel's settings stand right now, its "
+        "admin default limits every sender to an explicitly chosen set of "
+        "their own agents, and an agent installed from the catalog would not "
+        "be in that set. This sender has set nothing of their own, so they "
+        "follow that default. Set this channel's default agent scope back to "
+        "every agent a user owns, in its admin settings — there is nothing to "
+        "change on this sender's side, because they have overridden nothing. "
+        "Nothing on an agent alone will help while the default stands: a newly "
+        "created agent would be outside the chosen set too. Note that this "
+        "names the channel's settings as they stand right now, not as they "
+        "stood when the decision ran — a verdict answers what to change today."
+    )
+    assert diagnosis["action"] in diagnosis["verdict"]
+
+
+def test_verdict_when_no_candidates_and_auto_install_is_switched_off(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """`no_candidates`, split by why Pass 2 never ran — the auto-install half.
+
+    The defect this branch fixes: with `allow_auto_install=False` the base
+    sentence advised adding a bundle to the auto-install list, a list that is
+    never read while the switch is off.
+
+    Note the verdict is computed from the channel policy **as it stands when
+    the trace is read**, which is stated in the sentence itself rather than
+    left as a silent assumption — see `_channel_pass_2_block`.
+    """
+    channel = _no_candidate_channel(
+        client, superuser_token_headers, allow_auto_install=False
+    )
+    trace = _deliver_from_a_sender_who_owns_nothing(
+        client, superuser_token_headers, channel
+    )
+
+    diagnosis = _diagnosis(client, superuser_token_headers, trace)
+    assert diagnosis["code"] == "no_candidates_auto_install_off"
+    assert diagnosis["verdict"] == (
+        "This user had no routing candidates at all: they own no agent the "
+        "classifier could consider, and the auto-install pass never ran — as "
+        "this channel's settings stand right now, installing a bundle for its "
+        "senders is switched off. Give this user an agent with a router "
+        "trigger prompt (or example prompts) on its Configuration tab, or "
+        "switch auto-installing bundles back on for this channel in its admin "
+        "settings. Adding a bundle to the auto-install list will not help on "
+        "its own — while that switch is off the list is never read. Note that "
+        "this names the channel's settings as they stand right now, not as "
+        "they stood when the decision ran — a verdict answers what to change "
+        "today."
+    )
     assert diagnosis["action"] in diagnosis["verdict"]
 
 

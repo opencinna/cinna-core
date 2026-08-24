@@ -27,10 +27,11 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.models import User
+from app.models import ChannelUserAgent, ChannelUserSetting, User
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.agent import (
     create_agent_via_api,
+    list_agents,
     set_router_trigger_prompt,
     update_agent,
 )
@@ -56,6 +57,7 @@ from tests.utils.server_channel import (
     create_server_channel,
     post_webhook,
     route_installed,
+    update_server_channel,
 )
 from tests.utils.routing import (
     classification,
@@ -768,3 +770,162 @@ def test_session_deleted_recovers_with_a_fresh_session_on_next_message(
     assert sessions_after[0]["id"] != old_session_id  # fresh session, same agent
     user_msgs = [m for m in list_messages(client, headers, sessions_after[0]["id"]) if m["role"] == "user"]
     assert any("round two" in (m["content"] or "") for m in user_msgs)
+
+
+# ---------------------------------------------------------------------------
+# Pass 2 — the agent-scope gate (`_catalog_may_run`)
+# ---------------------------------------------------------------------------
+
+
+def _pass_2_stage(client, superuser_headers, channel) -> dict | None:
+    """This channel's single trace's `pass_2` stage, or None if it has none."""
+    page = list_routing_traces(client, superuser_headers, channel_id=channel["id"])
+    assert page["count"] == 1, page
+    detail = get_routing_trace(client, superuser_headers, page["data"][0]["id"])
+    stages = [st for st in detail["stages"] if st["stage"] == "pass_2"]
+    return stages[0] if stages else None
+
+
+def test_pass2_does_not_run_when_the_channel_scope_is_restricted(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """A decided product semantic, not an implementation convenience.
+
+    `agent_scope` restricted + `allow_auto_install=True` used to be a dead
+    configuration: Pass 2 installed a bundle whose agent is out of scope **by
+    construction** (`ChannelCandidateProvider._in_scope` admits an installed
+    agent only under `"all"`, or under `"list"` once the sender adds it), so the
+    first message installed and every later thread dead-ended.
+
+    The assertion is the absence of the install, plus the trace saying so: a
+    `pass_2` stage carrying `PASS_2_SCOPE_RESTRICTED_NOTE` and no candidate
+    rows, which is the difference between "policy stopped it" and "the
+    auto-install list was empty".
+    """
+    channel = _channel(client, superuser_token_headers)
+    update_server_channel(
+        client, superuser_token_headers, channel["id"], default_agent_scope="none"
+    )
+    signer = GoogleChatJWTSigner()
+
+    consumer, consumer_headers = make_user_and_headers(client)
+    publisher, publisher_headers = make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, publisher["id"])
+    bundle = _publish_public_bundle(
+        client,
+        publisher_headers,
+        trigger_prompt="Handle scope-gate requests",
+        name_prefix="ScopeGate",
+    )
+    add_auto_install_bundle(client, superuser_token_headers, bundle["bundle_uuid"])
+
+    event = build_message_event(
+        thread_key=f"spaces/AAA/threads/{random_lower_string()}",
+        text="please help",
+        sender_email=consumer["email"],
+    )
+    # No classifier answer named, so `classify` is patched to raise: neither
+    # pass may reach it. Pass 1 has an empty ballot; Pass 2 must not run at all.
+    resp, _ = _post(client, channel, signer, event)
+    assert resp.status_code == 200
+
+    # Nothing was installed for the consumer — the whole point of the gate.
+    owned = list_agents(client, consumer_headers)["data"]
+    assert all(a["bundle_uuid"] != bundle["bundle_uuid"] for a in owned), owned
+
+    stage = _pass_2_stage(client, superuser_token_headers, channel)
+    assert stage is not None, "policy barred Pass 2 but the trace does not say so"
+    assert stage["candidates"] == []
+    assert "limited to an explicitly chosen set" in (stage["reason"] or "")
+
+
+def _scope_list_containing(db: Session, channel: dict, user: dict, agent: dict) -> None:
+    """The sender's own settings row: `agent_scope="list"`, holding one agent.
+
+    Written through the session rather than through
+    `PUT /users/me/channels/{channel_id}` — the only production creator of this
+    row — as a focused setup shortcut: what this test needs is a routing input,
+    not a round trip through the settings API, which owns its own coverage in
+    `server_channels_user_settings_test.py`.
+
+    This used to be a workaround rather than a choice: the route could not
+    create a row under these fixtures at all while `_create_setting` wrapped
+    its insert in `session.begin_nested()`. That is fixed — the insert is now
+    a native upsert — so the shortcut stands on its own terms or not at all.
+    """
+    setting = ChannelUserSetting(
+        server_channel_id=uuid.UUID(channel["id"]),
+        user_id=uuid.UUID(user["id"]),
+        agent_scope="list",
+    )
+    db.add(setting)
+    db.flush()
+    db.add(
+        ChannelUserAgent(
+            channel_user_setting_id=setting.id, agent_id=uuid.UUID(agent["id"])
+        )
+    )
+    db.commit()
+
+
+def test_only_one_short_circuits_when_the_scope_bars_pass_2(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """The other reading of `_catalog_may_run`, and its behaviour change.
+
+    `_catalog_may_run` is read in two places that must not disagree: `decide`
+    (whether Pass 2 runs) and Pass 1's single-candidate probe (whether the
+    `only_one` short-circuit may skip the classifier). With the scope term
+    added, a sender with exactly one in-scope agent short-circuits even though
+    the auto-install list is non-empty — correct under the short-circuit's own
+    rule (*sound only when there is no alternative to choose between*), because
+    Pass 2 provably cannot run here.
+
+    The classifier is patched to raise, so "the short-circuit fired" is
+    asserted by the delivery succeeding at all.
+    """
+    channel = _channel(client, superuser_token_headers)
+    update_server_channel(
+        client, superuser_token_headers, channel["id"], default_agent_scope="none"
+    )
+    signer = GoogleChatJWTSigner()
+
+    consumer, consumer_headers = make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, consumer["id"])
+    create_random_ai_credential(client, consumer_headers, set_default=True)
+    agent = create_agent_via_api(
+        client, consumer_headers, name=f"OnlyOne-{random_lower_string()[:6]}"
+    )
+    drain_tasks()
+    set_router_trigger_prompt(client, consumer_headers, agent["id"], "Handle anything")
+
+    publisher, publisher_headers = make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, publisher["id"])
+    bundle = _publish_public_bundle(
+        client,
+        publisher_headers,
+        trigger_prompt="Handle short-circuit requests",
+        name_prefix="ShortCircuit",
+    )
+    add_auto_install_bundle(client, superuser_token_headers, bundle["bundle_uuid"])
+
+    # The sender's own list, containing exactly their one agent: scope is
+    # restricted (so Pass 2 is barred) while Pass 1 still has one candidate.
+    _scope_list_containing(db, channel, consumer, agent)
+
+    event = build_message_event(
+        thread_key=f"spaces/AAA/threads/{random_lower_string()}",
+        text="please help",
+        sender_email=consumer["email"],
+    )
+    resp, _ = _post(client, channel, signer, event)
+    assert resp.status_code == 200
+
+    sessions = [
+        s for s in list_sessions(client, consumer_headers) if s["agent_id"] == agent["id"]
+    ]
+    assert len(sessions) == 1, "the sole in-scope agent should have been routed to"
+
+    page = list_routing_traces(client, superuser_token_headers, channel_id=channel["id"])
+    detail = get_routing_trace(client, superuser_token_headers, page["data"][0]["id"])
+    assert detail["match_method"] == "only_one", detail

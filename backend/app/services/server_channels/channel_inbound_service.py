@@ -11,12 +11,24 @@ so the ordering below is load-bearing, not stylistic:
     4. whitelist            NULL/empty denies everyone; "*" is the only
                             blanket allow
     5. resolve user         auto-register only if the channel opted in
-    6. binding / routing    session work, off the request path
+    6. channel policy       admin kill switch AND access grant AND the user's
+                            own toggle; resolved once, here, and carried into
+                            routing as plain data
+    7. binding / routing    session work, off the request path
 
-Steps 1–5 are cheap and run inline. Everything from 6 on can be slow (an LLM
+Steps 1–6 are cheap and run inline. Everything from 7 on can be slow (an LLM
 routing call, an install, an environment build), so it runs as a background
 task and the webhook answers immediately with a short static acknowledgement.
 The real reply arrives asynchronously through ``ChannelOutboundService``.
+
+**Step 6 gates every path below it, not only new threads.** A sender whose
+access was revoked — the admin disabled the channel, withdrew their grant, or
+they switched the channel off themselves — is declined on their *existing*
+thread too. An already-bound conversation that keeps answering after access is
+taken away is a security surprise, and ``ServerChannel.enabled`` is documented
+as an absolute kill switch, which it would not be if the threads it had already
+opened went on working. The decline uses the whitelist miss's reply verbatim;
+see ``REPLY_DENIED``.
 
 Trust model: the sender's email comes from a payload the adapter verified was
 signed by the platform. That is the same trust tier the email integration
@@ -74,6 +86,10 @@ from app.services.server_channels.adapters.base import (
 from app.services.server_channels.adapters.registry import get_adapter
 from app.services.server_channels.channel_outbound_service import (
     ChannelOutboundService,
+)
+from app.services.server_channels.channel_policy_service import (
+    ChannelPolicyService,
+    ResolvedChannelPolicy,
 )
 from app.services.server_channels.channel_routing_service import (
     ChannelRoutingService,
@@ -442,7 +458,72 @@ class ChannelInboundService:
             )
             return adapter.build_sync_response(REPLY_DENIED)
 
-        # ---- 6. Binding dispatch ----
+        # ---- 6. Channel policy — resolved once, for every path below ----
+        #
+        # ``describe`` rather than ``resolve``: it is the same work (``resolve``
+        # delegates to it) and it hands back *which* of the three terms failed,
+        # which the debug entry below is allowed to say and the sender's reply
+        # is not. Routing takes ``.policy`` and nothing else, per that view's
+        # own docstring.
+        #
+        # Necessarily **after** user resolution, which means a restricted
+        # channel can auto-register an account and then decline it: a grant is
+        # keyed by user id, so there is no user to ask about until one exists.
+        # The blast radius is unchanged — one empty passwordless account for a
+        # sender who was already through the whitelist.
+        policy_view = ChannelPolicyService.describe(db, channel, user.id)
+        policy = policy_view.policy
+        if not policy.is_available:
+            # Audited on the same throttled bucket as the whitelist miss, and
+            # under the same event type: from the outside these are one event —
+            # "a verified sender was turned away" — and splitting them would
+            # mean an admin hunting a denial had two feeds to search. The
+            # ``reason`` field is what tells them apart.
+            await ChannelInboundService._audit_throttled(
+                db=db,
+                key=f"unavailable:{channel.id}:{user.id}",
+                user_id=channel.created_by,
+                event_type=security_event_constants.SERVER_CHANNEL_SENDER_DENIED,
+                severity="medium",
+                details={
+                    "server_channel_id": str(channel.id),
+                    "sender_email": inbound.sender_email,
+                    "reason": "channel_unavailable",
+                },
+            )
+            ChannelDebugBuffer.record(
+                channel_id=channel.id,
+                direction="inbound",
+                kind=DEBUG_REJECTED,
+                summary=(
+                    "This sender may not use this channel right now — denied. "
+                    "The detail says which of the three terms failed: the "
+                    "channel's own switch, their access to it, or their "
+                    "per-user toggle."
+                ),
+                sender_email=inbound.sender_email,
+                sender_display_name=inbound.sender_display_name,
+                thread_key=inbound.thread_key,
+                # Every value here is a plain bool off a frozen dataclass, so
+                # nothing in this argument list can reach the database (§11a
+                # Rule 2). The feed is superuser-only, which is why it may be
+                # specific where the reply must not be.
+                detail={
+                    "stage": "channel_policy",
+                    "channel_enabled": str(policy_view.channel_enabled),
+                    "is_granted": str(policy_view.is_granted),
+                    "is_enabled_for_user": str(policy_view.is_enabled_for_user),
+                    "is_enabled_inherited": str(policy_view.is_enabled_inherited),
+                },
+            )
+            # The whitelist miss's reply, verbatim and deliberately. "You are
+            # not granted this channel", "you are not whitelisted" and "this
+            # channel is switched off" must be one answer to an unauthenticated
+            # sender, or the reply becomes an oracle that enumerates a server's
+            # channel configuration one probe at a time.
+            return adapter.build_sync_response(REPLY_DENIED)
+
+        # ---- 7. Binding dispatch ----
         if binding is not None:
             # A thread belongs to exactly one person. In a group space another
             # whitelisted member can post into a thread already bound to
@@ -490,11 +571,18 @@ class ChannelInboundService:
             db.delete(binding)
             db.commit()
 
-        # ---- 7-9. New thread: route (and possibly install) off-request ----
+        # ---- 8-10. New thread: route (and possibly install) off-request ----
         ChannelInboundService._schedule(
             ChannelInboundService._route_new_thread(
                 channel_id=channel.id,
                 user_id=user.id,
+                # Carried, not re-resolved. The background task opens its own
+                # session and could resolve again, and must not: the decline
+                # gate above and the routing below have to be answering from
+                # one reading of this person's settings, or a message declined
+                # by one and routed by the other becomes a state nobody can
+                # reproduce. Plain frozen data, so it survives the hop.
+                policy=policy,
                 thread_key=inbound.thread_key,
                 text=inbound.text,
                 external_message_id=inbound.external_message_id,
@@ -660,7 +748,7 @@ class ChannelInboundService:
                 db.commit()
 
     # ==================================================================
-    # Steps 7-9 — routing for a brand-new thread
+    # Steps 8-10 — routing for a brand-new thread
     # ==================================================================
 
     @staticmethod
@@ -668,6 +756,7 @@ class ChannelInboundService:
         *,
         channel_id: uuid.UUID,
         user_id: uuid.UUID,
+        policy: ResolvedChannelPolicy,
         thread_key: str,
         text: str,
         external_message_id: str | None,
@@ -685,6 +774,12 @@ class ChannelInboundService:
         That split is what makes ``POST /admin/routing/simulate`` safe by
         construction: simulate calls ``decide`` and stops, so there is no
         ``simulate`` flag in this method to get a branch wrong about.
+
+        ``policy`` is the resolution ``handle_inbound`` already made — the same
+        one its decline gate consulted — carried in rather than resolved again
+        here. It is a frozen dataclass of scalars, so it crosses into this
+        background task the way ids and text do, and this method's
+        freshly-opened session is never asked to re-derive an inherit rule.
         """
         from app.core.db import create_session
 
@@ -736,6 +831,7 @@ class ChannelInboundService:
                 decision = await ChannelRoutingService.decide(
                     user_id=user_id,
                     text=text,
+                    policy=policy,
                     channel_id=channel_id,
                     thread_key=thread_key,
                 )

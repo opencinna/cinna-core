@@ -62,6 +62,7 @@ from app.api.routes import (
     task_agent_api,
     task_triggers,
     user_app_agent_routes,
+    user_channels,
     users,
     user_dashboards,
     user_workspaces,
@@ -127,6 +128,10 @@ api_router.include_router(admin_llm_providers.router)
 api_router.include_router(admin_routing.router)
 api_router.include_router(server_config.router)
 api_router.include_router(server_channels.router)
+# Per-user channel settings on /users/me/channels/*. Separate router from
+# server_channels: that one is superuser-only and its projections carry the
+# webhook token, so the two must not share a response model by accident.
+api_router.include_router(user_channels.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)

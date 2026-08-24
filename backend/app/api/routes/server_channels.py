@@ -28,6 +28,8 @@ from app.models import (
     AutoInstallBundlePublic,
     ChannelDebugEventPublic,
     ChannelDebugEventsPublic,
+    ChannelGrantPublic,
+    ChannelGrantsUpdate,
     ChannelRecentSender,
     ChannelSetupInstructions,
     ChannelTestOutboundRequest,
@@ -62,6 +64,7 @@ from app.services.server_channels.channel_inbound_service import (
 from app.services.server_channels.server_channel_service import (
     ChannelNotFoundError,
     DuplicateChannelNameError,
+    InvalidChannelPolicyError,
     ServerChannelService,
 )
 
@@ -266,7 +269,7 @@ async def create_channel(
         channel = ServerChannelService.create_channel(session, data, current_user)
     except UnknownChannelTypeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except ChannelConfigError as exc:
+    except (ChannelConfigError, InvalidChannelPolicyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except DuplicateChannelNameError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -298,7 +301,7 @@ async def update_channel(
         channel = ServerChannelService.update_channel(session, channel, data)
     except UnknownChannelTypeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except ChannelConfigError as exc:
+    except (ChannelConfigError, InvalidChannelPolicyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except DuplicateChannelNameError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -486,6 +489,64 @@ def clear_debug_events(
     channel = _get_channel_or_404(session, channel_id)
     ChannelDebugBuffer.clear(channel.id)
     return Message(message="Debug events cleared")
+
+
+# ===========================================================================
+# Admin — per-channel user grants
+# ===========================================================================
+
+
+@router.get(
+    "/admin/server-channels/{channel_id}/grants",
+    response_model=list[ChannelGrantPublic],
+)
+def list_channel_grants(
+    *, session: SessionDep, current_user: SuperUser, channel_id: uuid.UUID
+) -> Any:
+    """Who may use this channel when its visibility is ``restricted``.
+
+    Returned for public channels too: the rows are the admin's saved allowlist,
+    inert while the channel is public, and hiding them would lose the list on a
+    visibility round-trip.
+    """
+    channel = _get_channel_or_404(session, channel_id)
+    return ServerChannelService.list_grants(session, channel)
+
+
+@router.put(
+    "/admin/server-channels/{channel_id}/grants",
+    response_model=list[ChannelGrantPublic],
+)
+async def replace_channel_grants(
+    *,
+    session: SessionDep,
+    current_user: SuperUser,
+    channel_id: uuid.UUID,
+    data: ChannelGrantsUpdate,
+) -> Any:
+    """Replace the grant list with exactly the supplied users.
+
+    Returns the resulting list so the picker re-renders from one response,
+    including the names and ``granted_by`` attribution the service resolves.
+    """
+    channel = _get_channel_or_404(session, channel_id)
+    grants = ServerChannelService.replace_grants(
+        session, channel, data.user_ids, current_user
+    )
+    await _audit(
+        session,
+        current_user,
+        security_event_constants.SERVER_CHANNEL_UPDATED,
+        {
+            "action": "grants_replaced",
+            "server_channel_id": str(channel_id),
+            # The resulting membership, not the request: ids the service
+            # dropped as unresolvable were never granted, and an audit that
+            # records the request would claim otherwise.
+            "user_ids": sorted(str(g.user_id) for g in grants),
+        },
+    )
+    return grants
 
 
 # ===========================================================================

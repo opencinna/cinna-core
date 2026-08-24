@@ -11389,6 +11389,78 @@ export const ChannelDebugEventsPublicSchema = {
     description: 'The debug feed plus the bound it is subject to.'
 } as const;
 
+export const ChannelGrantPublicSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        email: {
+            type: 'string',
+            format: 'email',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        },
+        granted_by: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Granted By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'email', 'created_at'],
+    title: 'ChannelGrantPublic',
+    description: `One grant, joined with enough of the user to render a row.
+
+The picker needs a name, not a UUID. This is the same minimal projection
+\`\`UserSearchResult\`\` uses — id, email, full name — and nothing more: a
+grant list is an admin-only view of *who may use a channel*, not a user
+directory.`
+} as const;
+
+export const ChannelGrantsUpdateSchema = {
+    properties: {
+        user_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'User Ids'
+        }
+    },
+    type: 'object',
+    title: 'ChannelGrantsUpdate',
+    description: `Admin PUT body — the complete grant set, not a delta.
+
+Replace-the-set rather than add/remove verbs: the admin UI edits a picker
+whose state *is* the whole list, and a delta API against a multi-admin form
+silently loses a concurrent revocation.`
+} as const;
+
 export const ChannelRecentSenderSchema = {
     properties: {
         email: {
@@ -23111,6 +23183,28 @@ export const ServerChannelCreateSchema = {
             title: 'Auto Register Users',
             default: false
         },
+        visibility: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Visibility',
+            default: 'public'
+        },
+        default_enabled_for_users: {
+            type: 'boolean',
+            title: 'Default Enabled For Users',
+            default: true
+        },
+        default_agent_scope: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Default Agent Scope',
+            default: 'all'
+        },
+        allow_auto_install: {
+            type: 'boolean',
+            title: 'Allow Auto Install',
+            default: true
+        },
         config: {
             additionalProperties: true,
             type: 'object',
@@ -23168,6 +23262,28 @@ export const ServerChannelPublicSchema = {
             type: 'boolean',
             title: 'Auto Register Users',
             default: false
+        },
+        visibility: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Visibility',
+            default: 'public'
+        },
+        default_enabled_for_users: {
+            type: 'boolean',
+            title: 'Default Enabled For Users',
+            default: true
+        },
+        default_agent_scope: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Default Agent Scope',
+            default: 'all'
+        },
+        allow_auto_install: {
+            type: 'boolean',
+            title: 'Allow Auto Install',
+            default: true
         },
         id: {
             type: 'string',
@@ -23280,6 +23396,52 @@ export const ServerChannelUpdateSchema = {
                 }
             ],
             title: 'Auto Register Users'
+        },
+        visibility: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 32
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Visibility'
+        },
+        default_enabled_for_users: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Enabled For Users'
+        },
+        default_agent_scope: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 32
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Agent Scope'
+        },
+        allow_auto_install: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Auto Install'
         },
         config: {
             anyOf: [
@@ -26298,6 +26460,174 @@ export const UserAppAgentRoutesResponseSchema = {
     required: ['personal_routes', 'shared_routes'],
     title: 'UserAppAgentRoutesResponse',
     description: "Combined response for user's personal + shared routes."
+} as const;
+
+export const UserChannelPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        channel_type: {
+            type: 'string',
+            title: 'Channel Type'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        is_available: {
+            type: 'boolean',
+            title: 'Is Available'
+        },
+        is_enabled: {
+            type: 'boolean',
+            title: 'Is Enabled'
+        },
+        is_enabled_inherited: {
+            type: 'boolean',
+            title: 'Is Enabled Inherited'
+        },
+        channel_default_enabled: {
+            type: 'boolean',
+            title: 'Channel Default Enabled'
+        },
+        agent_scope: {
+            type: 'string',
+            title: 'Agent Scope'
+        },
+        agent_scope_inherited: {
+            type: 'boolean',
+            title: 'Agent Scope Inherited'
+        },
+        channel_default_agent_scope: {
+            type: 'string',
+            title: 'Channel Default Agent Scope'
+        },
+        agent_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Agent Ids'
+        },
+        pinned_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Agent Id'
+        },
+        allow_identity_routing: {
+            type: 'boolean',
+            title: 'Allow Identity Routing',
+            default: false
+        },
+        has_settings: {
+            type: 'boolean',
+            title: 'Has Settings',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['id', 'channel_type', 'name', 'is_available', 'is_enabled', 'is_enabled_inherited', 'channel_default_enabled', 'agent_scope', 'agent_scope_inherited', 'channel_default_agent_scope'],
+    title: 'UserChannelPublic',
+    description: `One channel as its user sees it: resolved policy plus provenance.
+
+Every value here is already resolved — the client never re-applies the
+inherit rules, because a second implementation of them is exactly how the
+UI and the router come to disagree about whether a channel is on.
+
+The \`\`*_inherited\`\` flags exist so the UI can be honest about *why* a value
+is what it is. A setting the user has never touched must render as
+"following the admin default (on)", not as a plain switch that looks
+user-owned; the corresponding \`\`channel_default_*\`\` field carries the value
+being followed, so the label can name it without a second request.`
+} as const;
+
+export const UserChannelUpdateSchema = {
+    properties: {
+        is_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Enabled'
+        },
+        agent_scope: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 32
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Scope'
+        },
+        agent_ids: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'uuid'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Ids'
+        },
+        pinned_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Agent Id'
+        },
+        allow_identity_routing: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Identity Routing'
+        }
+    },
+    type: 'object',
+    title: 'UserChannelUpdate',
+    description: `User PUT body. Omitted field = unchanged; explicit \`\`null\`\` = inherit.
+
+The distinction is read with \`\`model_dump(exclude_unset=True)\`\`, and it is
+the only way a nullable-meaning-inherit column can be *cleared* through an
+API whose "unset" marker is also \`\`None\`\`. A body of \`\`{}\`\` changes
+nothing; \`\`{"is_enabled": null}\`\` reverts that one field to the channel
+default while keeping the rest of the row.
+
+\`\`allow_identity_routing\`\` has no inherited state (master plan §3.4), so an
+explicit \`\`null\`\` for it is rejected rather than quietly ignored.`
 } as const;
 
 export const UserCreateSchema = {

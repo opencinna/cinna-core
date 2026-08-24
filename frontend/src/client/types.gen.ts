@@ -2451,6 +2451,33 @@ export type ChannelDebugEventsPublic = {
 };
 
 /**
+ * One grant, joined with enough of the user to render a row.
+ *
+ * The picker needs a name, not a UUID. This is the same minimal projection
+ * ``UserSearchResult`` uses — id, email, full name — and nothing more: a
+ * grant list is an admin-only view of *who may use a channel*, not a user
+ * directory.
+ */
+export type ChannelGrantPublic = {
+    user_id: string;
+    email: string;
+    full_name?: (string | null);
+    granted_by?: (string | null);
+    created_at: string;
+};
+
+/**
+ * Admin PUT body — the complete grant set, not a delta.
+ *
+ * Replace-the-set rather than add/remove verbs: the admin UI edits a picker
+ * whose state *is* the whole list, and a delta API against a multi-admin form
+ * silently loses a concurrent revocation.
+ */
+export type ChannelGrantsUpdate = {
+    user_ids?: Array<(string)>;
+};
+
+/**
  * A person this channel has seen, and the thread to reach them on.
  *
  * Sourced from thread bindings (durable) merged with the debug buffer (live),
@@ -5313,6 +5340,10 @@ export type ServerChannelCreate = {
     name: string;
     enabled?: boolean;
     auto_register_users?: boolean;
+    visibility?: string;
+    default_enabled_for_users?: boolean;
+    default_agent_scope?: string;
+    allow_auto_install?: boolean;
     config?: {
         [key: string]: unknown;
     };
@@ -5328,6 +5359,10 @@ export type ServerChannelPublic = {
     name: string;
     enabled?: boolean;
     auto_register_users?: boolean;
+    visibility?: string;
+    default_enabled_for_users?: boolean;
+    default_agent_scope?: string;
+    allow_auto_install?: boolean;
     id: string;
     config?: {
         [key: string]: unknown;
@@ -5353,6 +5388,10 @@ export type ServerChannelUpdate = {
     name?: (string | null);
     enabled?: (boolean | null);
     auto_register_users?: (boolean | null);
+    visibility?: (string | null);
+    default_enabled_for_users?: (boolean | null);
+    default_agent_scope?: (string | null);
+    allow_auto_install?: (boolean | null);
     config?: ({
     [key: string]: unknown;
 } | null);
@@ -5988,6 +6027,56 @@ export type UserAppAgentRouteUpdate = {
     message_patterns?: (string | null);
     channel_app_mcp?: (boolean | null);
     is_active?: (boolean | null);
+};
+
+/**
+ * One channel as its user sees it: resolved policy plus provenance.
+ *
+ * Every value here is already resolved — the client never re-applies the
+ * inherit rules, because a second implementation of them is exactly how the
+ * UI and the router come to disagree about whether a channel is on.
+ *
+ * The ``*_inherited`` flags exist so the UI can be honest about *why* a value
+ * is what it is. A setting the user has never touched must render as
+ * "following the admin default (on)", not as a plain switch that looks
+ * user-owned; the corresponding ``channel_default_*`` field carries the value
+ * being followed, so the label can name it without a second request.
+ */
+export type UserChannelPublic = {
+    id: string;
+    channel_type: string;
+    name: string;
+    is_available: boolean;
+    is_enabled: boolean;
+    is_enabled_inherited: boolean;
+    channel_default_enabled: boolean;
+    agent_scope: string;
+    agent_scope_inherited: boolean;
+    channel_default_agent_scope: string;
+    agent_ids?: Array<(string)>;
+    pinned_agent_id?: (string | null);
+    allow_identity_routing?: boolean;
+    has_settings?: boolean;
+};
+
+/**
+ * User PUT body. Omitted field = unchanged; explicit ``null`` = inherit.
+ *
+ * The distinction is read with ``model_dump(exclude_unset=True)``, and it is
+ * the only way a nullable-meaning-inherit column can be *cleared* through an
+ * API whose "unset" marker is also ``None``. A body of ``{}`` changes
+ * nothing; ``{"is_enabled": null}`` reverts that one field to the channel
+ * default while keeping the rest of the row.
+ *
+ * ``allow_identity_routing`` has no inherited state (master plan §3.4), so an
+ * explicit ``null`` for it is rejected rather than quietly ignored.
+ */
+export type UserChannelUpdate = {
+    is_enabled?: (boolean | null);
+    agent_scope?: (string | null);
+    agent_ids?: (Array<(string)> | null);
+    pinned_agent_id?: (string | null);
+    allow_identity_routing?: (boolean | null);
 };
 
 export type UserCreate = {
@@ -9644,6 +9733,19 @@ export type ServerChannelsClearDebugEventsData = {
 
 export type ServerChannelsClearDebugEventsResponse = (Message);
 
+export type ServerChannelsListChannelGrantsData = {
+    channelId: string;
+};
+
+export type ServerChannelsListChannelGrantsResponse = (Array<ChannelGrantPublic>);
+
+export type ServerChannelsReplaceChannelGrantsData = {
+    channelId: string;
+    requestBody: ChannelGrantsUpdate;
+};
+
+export type ServerChannelsReplaceChannelGrantsResponse = (Array<ChannelGrantPublic>);
+
 export type ServerConfigGetDisclaimerResponse = (DisclaimerPublic);
 
 export type ServerConfigGetServerConfigResponse = (ServerConfig);
@@ -10024,6 +10126,21 @@ export type UserAppAgentRoutesToggleAdminAssignmentData = {
 };
 
 export type UserAppAgentRoutesToggleAdminAssignmentResponse = (AppAgentRouteAssignmentPublic);
+
+export type UserChannelsListMyChannelsResponse = (Array<UserChannelPublic>);
+
+export type UserChannelsUpdateMyChannelData = {
+    channelId: string;
+    requestBody: UserChannelUpdate;
+};
+
+export type UserChannelsUpdateMyChannelResponse = (UserChannelPublic);
+
+export type UserChannelsResetMyChannelData = {
+    channelId: string;
+};
+
+export type UserChannelsResetMyChannelResponse = (UserChannelPublic);
 
 export type UsersReadUsersData = {
     limit?: number;

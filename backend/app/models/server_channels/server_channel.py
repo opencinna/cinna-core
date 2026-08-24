@@ -13,6 +13,19 @@ value container so new adapters need no schema change.
 Secrets discipline: ``encrypted_secrets`` is Fernet-encrypted at rest and is
 **write-only**. No response DTO carries it; ``ServerChannelPublic`` exposes
 only ``has_outbound_credentials``.
+
+Availability discipline: the four policy columns on ``ServerChannelBase``
+(``visibility``, ``default_enabled_for_users``, ``default_agent_scope``,
+``allow_auto_install``) are the admin-owned **defaults**. What a given person
+actually gets is the *resolution* of those defaults against their optional
+``channel_user_setting`` row, and that resolution lives in exactly one place:
+``app.services.server_channels.channel_policy_service.ChannelPolicyService``.
+Nothing else may re-derive it — a second copy of the inherit rules is how a
+channel ends up on for a user the admin switched off.
+
+``ServerChannelPublic`` is the **admin** projection and carries
+``webhook_token``, ``config`` and ``email_whitelist``. The user-facing routes
+must never return it; see ``UserChannelPublic`` in ``channel_user_setting.py``.
 """
 import uuid
 from datetime import UTC, datetime
@@ -20,6 +33,41 @@ from datetime import UTC, datetime
 from pydantic import model_validator
 from sqlalchemy import JSON, Text, UniqueConstraint
 from sqlmodel import Column, Field, SQLModel
+
+
+# ---------------------------------------------------------------------------
+# Policy value strings
+#
+# Plain ``VARCHAR`` columns, not Postgres enums — the same status-string
+# convention ``channel_type``, ``ChannelThreadBinding.status`` and
+# ``RoutingDecision.origin`` already follow. Adding a value is a code change,
+# not a migration, and a reader that meets an unrecognised value must degrade
+# conservatively rather than raise. See ``ChannelPolicyService`` for the one
+# place those degradation rules live.
+# ---------------------------------------------------------------------------
+
+#: Every platform user may use the channel.
+CHANNEL_VISIBILITY_PUBLIC = "public"
+#: Only users with a ``server_channel_user_grant`` row may use the channel.
+CHANNEL_VISIBILITY_RESTRICTED = "restricted"
+
+CHANNEL_VISIBILITIES = (
+    CHANNEL_VISIBILITY_PUBLIC,
+    CHANNEL_VISIBILITY_RESTRICTED,
+)
+
+#: Every agent the user owns is a routing candidate.
+CHANNEL_AGENT_SCOPE_ALL = "all"
+#: Only the agents on the user's ``channel_user_agent`` list are candidates.
+CHANNEL_AGENT_SCOPE_LIST = "list"
+#: No agent is a candidate — the user must opt agents in before anything routes.
+CHANNEL_AGENT_SCOPE_NONE = "none"
+
+CHANNEL_AGENT_SCOPES = (
+    CHANNEL_AGENT_SCOPE_ALL,
+    CHANNEL_AGENT_SCOPE_LIST,
+    CHANNEL_AGENT_SCOPE_NONE,
+)
 
 
 class ServerChannelBase(SQLModel):
@@ -34,6 +82,31 @@ class ServerChannelBase(SQLModel):
     # Create a passwordless, confirmed account for a whitelisted sender that
     # has no platform user yet. Off by default.
     auto_register_users: bool = Field(default=False)
+
+    # --- Admin-owned availability policy -------------------------------
+    #
+    # These four are the *defaults* a user with no ``channel_user_setting``
+    # row inherits. They are not the user's stored settings: the inherit
+    # rules live in ``ChannelPolicyService.resolve`` and nowhere else.
+    #
+    # Every default below reproduces the behaviour this feature had before
+    # the policy model existed, so an existing channel is unchanged by the
+    # migration that adds them.
+
+    #: ``"public"`` (default) or ``"restricted"``. When restricted, a
+    #: ``server_channel_user_grant`` row is required. Any value that is not
+    #: exactly ``"public"`` is treated as restricted — the permissive branch
+    #: is the narrow one, so an unrecognised value fails closed.
+    visibility: str = Field(default=CHANNEL_VISIBILITY_PUBLIC, max_length=32)
+    #: Whether a user who has never touched their settings is switched on.
+    default_enabled_for_users: bool = Field(default=True)
+    #: ``"all"`` / ``"list"`` / ``"none"`` — the agent scope inherited by a
+    #: user with no explicit ``agent_scope``.
+    default_agent_scope: str = Field(default=CHANNEL_AGENT_SCOPE_ALL, max_length=32)
+    #: Whether routing Pass 2 (classify against the auto-install catalog and
+    #: install the winner) may run for this channel. Google Chat did this
+    #: unconditionally before the flag existed, hence the ``True`` default.
+    allow_auto_install: bool = Field(default=True)
 
 
 class ServerChannel(ServerChannelBase, table=True):
@@ -105,6 +178,12 @@ class ServerChannelUpdate(SQLModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     enabled: bool | None = None
     auto_register_users: bool | None = None
+    # Availability policy. All optional; an omitted field is left untouched,
+    # like every other field on this DTO.
+    visibility: str | None = Field(default=None, max_length=32)
+    default_enabled_for_users: bool | None = None
+    default_agent_scope: str | None = Field(default=None, max_length=32)
+    allow_auto_install: bool | None = None
     config: dict | None = None
     email_whitelist: str | None = None
     secrets: str | None = None

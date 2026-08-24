@@ -5,7 +5,7 @@ admin-configured channels (Google Chat first) that let external people reach
 platform agents from outside the platform, routed and bound per-thread to a
 session.
 
-Not split into topic groups — small enough (6 files) that the domain root is
+Not split into topic groups — small enough (8 files) that the domain root is
 the right home; see `tests/README.md` for the split-domain threshold (~20
 files, `tests/api/agents/` is the one example today).
 
@@ -18,7 +18,9 @@ files, `tests/api/agents/` is the one example today).
 | `server_channels_webhook_test.py` | 404 on unknown/disabled token, ignored/added_to_space event handling, the whitelist matrix (patterns, fail-closed, case-insensitivity), auto-register on/off + idempotency, redelivery dedup. |
 | `server_channels_routing_test.py` | Pass 1 (the sender's own agents) match, candidate scoping (`ChannelCandidateProvider`: foreign agents absent from the ballot, identity contacts absent from the ballot entirely, ineligible owned agents recorded as skips), Pass 2 (auto-install catalog) candidate filtering, no-match reply, binding self-heal (`failed` → re-route), session-deleted recovery. |
 | `server_channels_debug_test.py` | The admin debug feed (pipeline decision visible per event, verification failures captured with no payload detail, superuser-only) and the test-send targeting rework (exactly-one-target validation, the unseen-email explanation, email → observed thread end to end). |
+| `server_channels_user_settings_test.py` | The per-user settings routes (`GET/PUT/DELETE /users/me/channels`). `PUT` is the only thing in the codebase that creates a `channel_user_setting` row, so lazy creation on first edit is the headline fact here. Also: the inherit/override provenance matrix (an admin default flip is followed by an inheriting user, not by one with an explicit value, in both directions), `DELETE` reverting to pure inheritance and a later admin default change then being followed, cross-user ownership isolation on all three verbs, and the user projection's secret-adjacent-field defence (checked as an allowlist of actual response keys, not a blocklist of known secret names). |
 | `server_channels_pending_outbound_test.py` | `flush_pending_bindings` parking/flush/env-failure paths, `STREAM_COMPLETED` outbound gating + binding lookup. |
+| `server_channels_policy_test.py` | `ChannelPolicyService` observed through a real routing decision (Phase 2 of the channels/identity refactor): no-settings-row inheritance for an auto-registered sender who can never have one, `visibility="restricted"` declining with the same reply shape as a whitelist miss and routing once granted, `channel.enabled=False` overriding an explicit user `is_enabled=True` (proved as total invisibility — the webhook 404s and the user-facing routes 404/omit, since a disabled channel is filtered out before `ChannelPolicyService` is ever consulted), `agent_scope="list"`/`"none"` recording out-of-scope owned agents as skips rather than absences, `pinned_agent_id` skipping classification while still leaving a `match_method="pinned"` trace row (and self-healing when the pinned agent is deleted or changes hands), `allow_auto_install=False` and a raced pin both barring Pass 2 with their own trace note (`PASS_2_NOT_ALLOWED_NOTE` / `PASS_2_PINNED_NOTE`), that note being suppressed when Pass 1 already recorded an error, and the decline gate applying to an already-bound thread on all three revocation shapes (admin disables the channel, admin withdraws a grant, user switches it off). |
 
 Chunking (`GoogleChatAdapter._chunk`) is pure text-splitting logic with no I/O
 and is unit-tested instead: `tests/unit/test_google_chat_adapter_chunk.py`.

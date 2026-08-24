@@ -49,6 +49,10 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
   - `name`: string (required)
   - `enabled`: boolean
   - `auto_register_users`: boolean
+  - `visibility`: string
+  - `default_enabled_for_users`: boolean
+  - `default_agent_scope`: string
+  - `allow_auto_install`: boolean
   - `config`: object
   - `email_whitelist`: string | null
   - `secrets`: string | null
@@ -68,6 +72,10 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
   - `name`: string | null
   - `enabled`: boolean | null
   - `auto_register_users`: boolean | null
+  - `visibility`: string | null
+  - `default_enabled_for_users`: boolean | null
+  - `default_agent_scope`: string | null
+  - `allow_auto_install`: boolean | null
   - `config`: object | null
   - `email_whitelist`: string | null
   - `secrets`: string | null
@@ -135,5 +143,24 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 - `channel_id`: uuid
 
 **Response:** `Message`
+
+---
+
+## GET `/api/v1/admin/server-channels/{channel_id}/grants`
+**List Channel Grants**
+
+**Path parameters:**
+- `channel_id`: uuid
+
+---
+
+## PUT `/api/v1/admin/server-channels/{channel_id}/grants`
+**Replace Channel Grants**
+
+**Path parameters:**
+- `channel_id`: uuid
+
+**Request body** (`ChannelGrantsUpdate`):
+  - `user_ids`: uuid[]
 
 ---

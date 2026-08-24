@@ -44,7 +44,12 @@ that docstring so a failure names the fact a reader can go and read:
    attributes.
 4. **It returns plain data.** ``decide`` returns a ``RoutingDecisionResult``,
    and every field on it is plain data — an id, a recorder, or a flag. Never an
-   ORM instance, whose session is closed by the time the caller sees it.
+   ORM instance, whose session is closed by the time the caller sees it. Since
+   Phase 2 of the channels/identity refactor, the same checker also walks
+   ``ResolvedChannelPolicy`` (``channel_policy_service.py``) — the value
+   ``decide`` takes IN across the identical thread boundary — because "plain
+   data" is a property of the boundary in both directions, not just the
+   outbound one.
 
 HOW IT IS STRUCTURED, AND WHY THAT SHAPE
 ----------------------------------------
@@ -121,6 +126,12 @@ _BACKEND_ROOT = _HERE.parent.parent.parent  # backend/
 _ROUTING_MODULE = (
     _BACKEND_ROOT / "app" / "services" / "server_channels" / "channel_routing_service.py"
 )
+#: `decide()` also takes a `ResolvedChannelPolicy` value across the exact same
+#: thread boundary `RoutingDecisionResult` crosses back over — see the
+#: extended docstring on `_check_decide_returns_only_plain_data` below.
+_POLICY_MODULE = (
+    _BACKEND_ROOT / "app" / "services" / "server_channels" / "channel_policy_service.py"
+)
 
 #: Names that perform, or are the gateway to, an effect the routing decision
 #: must not have. Each maps to the effect it would introduce, so a failure says
@@ -168,6 +179,11 @@ _PLAIN_DATA_ANNOTATIONS = {
     "str",
     "int",
     "float",
+    # ``ResolvedChannelPolicy.allowed_agent_ids`` — an immutable id set built
+    # once by ``ChannelPolicyService.resolve`` and read, never mutated, by the
+    # candidate provider. Plain data in the same sense a ``frozenset`` of ids
+    # always is: no ORM instance, no session, nothing lazily loaded.
+    "frozenset",
 }
 
 #: Session methods that write. ``_FORBIDDEN`` above catches effect-performing
@@ -191,9 +207,9 @@ _FORBIDDEN_SESSION_WRITES = {"add", "add_all", "commit", "delete", "flush", "mer
 _DOCSTRING_FACT_RE = re.compile(r"^(\d+)\.\s+\*\*(.+?)\*\*")
 
 
-def _module_tree() -> ast.Module:
-    assert _ROUTING_MODULE.is_file(), f"Expected {_ROUTING_MODULE} to exist"
-    return ast.parse(_ROUTING_MODULE.read_text(encoding="utf-8"))
+def _module_tree(path: pathlib.Path = _ROUTING_MODULE) -> ast.Module:
+    assert path.is_file(), f"Expected {path} to exist"
+    return ast.parse(path.read_text(encoding="utf-8"))
 
 
 def _referenced_identifiers(tree: ast.Module) -> set[str]:
@@ -352,6 +368,27 @@ def _check_nothing_effectful_is_imported(tree: ast.Module) -> None:
     )
 
 
+def _plain_data_offenders(cls: ast.ClassDef) -> dict[str, list[str]]:
+    """Every field on ``cls`` whose annotation names a type outside the
+    plain-data allowlist, keyed by field name. Shared by both halves of fact
+    4 below — one mechanism, applied to two dataclasses on two sides of the
+    same thread boundary.
+    """
+    offenders: dict[str, list[str]] = {}
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.AnnAssign) or not isinstance(stmt.target, ast.Name):
+            continue
+        used = {
+            n.id if isinstance(n, ast.Name) else n.attr
+            for n in ast.walk(stmt.annotation)
+            if isinstance(n, (ast.Name, ast.Attribute))
+        }
+        disallowed = sorted(used - _PLAIN_DATA_ANNOTATIONS)
+        if disallowed:
+            offenders[stmt.target.id] = disallowed
+    return offenders
+
+
 def _check_decide_returns_only_plain_data(tree: ast.Module) -> None:
     """Fact 4 — ids, recorders and flags, never an ORM row.
 
@@ -366,6 +403,27 @@ def _check_decide_returns_only_plain_data(tree: ast.Module) -> None:
     ``agent: Agent`` field added later is the failure being bought — the module
     already imports ``Agent`` in order to read it, so nothing but this check
     stands between "loaded a row" and "returned it".
+
+    **Extended to the same boundary's other direction.** ``decide`` does not
+    only return plain data — it also *takes* a ``ResolvedChannelPolicy``
+    across the identical thread boundary, resolved by ``ChannelPolicyService``
+    in the caller (which has a session) and read inside the worker threads
+    ``run_in_thread`` schedules. An ORM field added to that dataclass is the
+    exact same hazard in the other direction: the worker thread's first
+    attribute read on it would be a lazy reload against whatever session
+    ``ChannelPolicyService.resolve`` used, already closed by the time
+    ``decide`` runs. ``ResolvedChannelPolicy`` says so in its own docstring
+    ("ids, bools, strings, and a frozenset. No ORM instances..."), and this is
+    that claim executed too — the same technique this checker already uses
+    for ``RoutingDecisionResult``, pointed at a second class in a second
+    module.
+
+    Folded into fact 4 rather than added as a fifth fact: "returns/carries
+    only plain data" is one property applied to both directions of one
+    boundary, not two properties, and this file's own docstring (the
+    "HOW IT IS STRUCTURED" section) argues against growing ``_FACTS`` for
+    something a stronger existing checker already covers -- see master plan
+    §2.14.
     """
     returns = _function_def(tree, "decide").returns
     assert isinstance(returns, ast.Name) and returns.id == "RoutingDecisionResult", (
@@ -376,31 +434,35 @@ def _check_decide_returns_only_plain_data(tree: ast.Module) -> None:
     )
 
     result_cls = _class_def(tree, "RoutingDecisionResult")
-    offenders: dict[str, list[str]] = {}
-    for stmt in result_cls.body:
-        if not isinstance(stmt, ast.AnnAssign) or not isinstance(stmt.target, ast.Name):
-            continue
-        used = {
-            n.id if isinstance(n, ast.Name) else n.attr
-            for n in ast.walk(stmt.annotation)
-            if isinstance(n, (ast.Name, ast.Attribute))
+    offenders = {
+        f"RoutingDecisionResult.{field}": types
+        for field, types in _plain_data_offenders(result_cls).items()
+    }
+
+    policy_tree = _module_tree(_POLICY_MODULE)
+    policy_cls = _class_def(policy_tree, "ResolvedChannelPolicy")
+    offenders.update(
+        {
+            f"ResolvedChannelPolicy.{field}": types
+            for field, types in _plain_data_offenders(policy_cls).items()
         }
-        disallowed = sorted(used - _PLAIN_DATA_ANNOTATIONS)
-        if disallowed:
-            offenders[stmt.target.id] = disallowed
+    )
 
     assert not offenders, (
-        "RoutingDecisionResult carries a field that is not plain data: "
+        "A field crossing the routing thread boundary is not plain data: "
         + ", ".join(
             f"{field} ({', '.join(types)})" for field, types in sorted(offenders.items())
         )
         + ".\n\nThe routing passes load their rows in worker threads whose "
-        "sessions are closed before decide() returns, so an ORM instance "
-        "reaching a caller turns its next attribute read into a lazy reload "
-        "against a dead session. Return the id and let the caller load it in "
-        "its own session -- that is what agent_id and bundle_uuid are. If the "
-        "new field really is plain data (an id, a flag, a recorder, a string), "
-        "add its type to _PLAIN_DATA_ANNOTATIONS above."
+        "sessions are closed before decide() returns (and ResolvedChannelPolicy "
+        "is read INSIDE those same worker threads), so an ORM instance crossing "
+        "either direction of that boundary turns the next attribute read into a "
+        "lazy reload against a dead session. Return/carry the id and let the "
+        "reader load it in its own session -- that is what agent_id and "
+        "bundle_uuid are on RoutingDecisionResult, and what pinned_agent_id / "
+        "allowed_agent_ids are on ResolvedChannelPolicy. If the new field "
+        "really is plain data (an id, a flag, a recorder, a string, a "
+        "frozenset of ids), add its type to _PLAIN_DATA_ANNOTATIONS above."
     )
 
 

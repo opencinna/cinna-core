@@ -137,6 +137,20 @@ OUTCOME_PARKED_INSTALL = "parked_install"
 MATCH_PATTERN = "pattern"
 MATCH_AI = "ai"
 MATCH_ONLY_ONE = "only_one"
+#: The sender pinned one of their own agents to this channel
+#: (``channel_user_setting.pinned_agent_id``), so no classifier ran and no
+#: candidate set was built: the routing question had already been answered by
+#: the person whose message it is.
+#:
+#: Deliberately not folded into ``MATCH_ONLY_ONE``, which looks similar from
+#: the outside — both mean "matched without asking a model" — and is a
+#: different fact. ``only_one`` is an *inference* the router draws when the
+#: choice space happens to hold exactly one thing, and it disappears the moment
+#: the sender installs a second agent. A pin is a *standing instruction* that
+#: holds however many agents they own, which is also why the two produce
+#: different remedies: widening a trigger prompt is the answer to a bad
+#: ``only_one`` and is inert against a pin.
+MATCH_PINNED = "pinned"
 
 SKIP_ALREADY_INSTALLED = "already_installed"
 SKIP_NOT_INSTALLABLE = "not_installable"
@@ -186,6 +200,26 @@ SKIP_NO_ASSIGNMENT = "no_assignment"
 #: describes a person who never became a candidate. Reusing it would make the
 #: two indistinguishable in exactly the diagnosis they are read for.
 SKIP_IDENTITY_UNAVAILABLE = "identity_unavailable"
+#: Channel Pass 1 only: the sender **owns** this agent, and their settings for
+#: this channel do not include it — the resolved ``agent_scope`` is ``"list"``
+#: and the agent is not on their list, or it is ``"none"``, under which nothing
+#: they own is in scope.
+#:
+#: Recorded rather than filtered out, and that is the whole reason it exists.
+#: "You own three agents and none of them is switched on for this channel" is
+#: the question a confused sender actually asks, and a candidate set that
+#: merely came back shorter cannot answer it: the agent they expected would be
+#: absent from the trace in exactly the way an agent that never existed is
+#: absent (master plan §3.5, which this rule already cost one incident).
+#:
+#: **Not ``SKIP_NO_TRIGGER_PROMPT``**, and where an agent is both out of scope
+#: and has no wording this reason is the one written (see
+#: ``ChannelCandidateProvider.build``). The two send the reader to different
+#: screens: that one says the owner has written nothing for the classifier to
+#: match on and is fixed on the agent's Configuration tab, this one says the
+#: agent is fine and this channel is not where it is enabled, and is fixed in
+#: Settings > Channels.
+SKIP_NOT_IN_CHANNEL_SCOPE = "not_in_channel_scope"
 
 KIND_AGENT = "agent"
 KIND_BUNDLE = "bundle"
@@ -1259,12 +1293,14 @@ __all__ = [
     "MATCH_AI",
     "MATCH_ONLY_ONE",
     "MATCH_PATTERN",
+    "MATCH_PINNED",
     "SKIP_AGENT_MISSING",
     "SKIP_ALREADY_INSTALLED",
     "SKIP_FOREIGN_OWNER",
     "SKIP_IDENTITY_ROUTE",
     "SKIP_NOT_INSTALLABLE",
     "SKIP_NO_REVISION",
+    "SKIP_NOT_IN_CHANNEL_SCOPE",
     "SKIP_NO_TRIGGER_PROMPT",
     "SKIP_ROUTE_INACTIVE",
     "KIND_AGENT",
