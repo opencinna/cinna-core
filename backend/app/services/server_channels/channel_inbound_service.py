@@ -33,15 +33,28 @@ see ``REPLY_DENIED``.
 Trust model: the sender's email comes from a payload the adapter verified was
 signed by the platform. That is the same trust tier the email integration
 extends to IMAP, and it is what lets a whitelisted address be treated as an
-identity. Sessions are always owned by the sender's own platform user, so the
-blast radius of a whitelist mistake is one empty auto-created account.
+identity. Sessions are owned by the sender's own platform user, so the blast
+radius of a whitelist mistake is one empty auto-created account.
+
+**One deliberate exception to that last sentence, since Phase 3 of
+``docs/plans/channels_identity_unification/``: identity routing.** When a
+sender has switched ``allow_identity_routing`` on and addresses a person who
+shared an identity with them, routing may select *that person's* agent, and the
+session is then owned by the identity owner rather than by the sender — it is
+their agent, their space, their credentials, and their session list. It is
+opt-in on both sides (the owner shares the identity and assigns it; the sender
+turns identity routing on for the channel and keeps the per-person toggle), and
+every message re-verifies the grant, so revocation bites immediately rather than
+at the next thread. What does **not** change is the thread binding: it stays the
+sender's, because "this thread belongs to this person" is what stops one member
+of a group space from posting into another's conversation.
 """
 from __future__ import annotations
 
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Request
 from sqlalchemy.exc import IntegrityError
@@ -57,6 +70,7 @@ from app.models import (
     CHANNEL_BINDING_PENDING_INSTALL,
     ChannelAccessPolicy,
     ChannelThreadBinding,
+    IdentityGrant,
     SecurityEventCreate,
     ServerChannel,
     SessionSender,
@@ -96,6 +110,9 @@ from app.services.server_channels.channel_routing_service import (
 )
 from app.services.server_channels.server_channel_service import ServerChannelService
 from app.services.users.user_service import UserService
+
+if TYPE_CHECKING:  # pragma: no cover — typing only
+    from app.models import Session as ChatSession
 
 logger = logging.getLogger(__name__)
 
@@ -548,6 +565,13 @@ class ChannelInboundService:
                         binding_id=binding.id,
                         text=inbound.text,
                         external_message_id=inbound.external_message_id,
+                        # Carried, not re-resolved — the same reasoning as the
+                        # new-thread hop below. An existing identity thread is
+                        # re-checked against ``allow_identity_routing`` on every
+                        # message (see ``_ingest``), and it has to be checked
+                        # against *this* message's reading of the sender's
+                        # settings, which the decline gate above already made.
+                        policy=policy,
                     ),
                     "channel_continue_thread",
                 )
@@ -678,9 +702,23 @@ class ChannelInboundService:
 
     @staticmethod
     async def _continue_thread(
-        *, binding_id: uuid.UUID, text: str, external_message_id: str | None = None
+        *,
+        binding_id: uuid.UUID,
+        text: str,
+        policy: ResolvedChannelPolicy,
+        external_message_id: str | None = None,
     ) -> None:
-        """Feed a message into the session an active binding already owns."""
+        """Feed a message into the session an active binding already owns.
+
+        ``policy`` is ``handle_inbound``'s resolution, carried in rather than
+        re-read here. **One reading per message, and on this path the carried
+        one is the only one** — the decline gate that let the message through
+        and the identity-consent check in ``_ingest`` are answering from the
+        same frozen value, so they cannot disagree about a channel edited
+        mid-flight. (The scheduler's drain path has no live resolution to
+        carry, so ``_flush_one`` makes its own, and that one is likewise the
+        only reading for the messages it delivers.)
+        """
         from app.core.db import create_session
 
         with create_session() as db:
@@ -697,7 +735,12 @@ class ChannelInboundService:
             # conversation stays in order.
             if binding.pending_messages:
                 await ChannelInboundService._drain_parked(
-                    db=db, channel=channel, binding=binding, agent=agent, user=user
+                    db=db,
+                    channel=channel,
+                    binding=binding,
+                    agent=agent,
+                    user=user,
+                    policy=policy,
                 )
                 # `_drain_parked` stops on the first failure and leaves the rest
                 # parked. Ingesting the new message now would let it overtake
@@ -733,6 +776,7 @@ class ChannelInboundService:
                 text=text,
                 external_message_id=external_message_id,
                 external_user_id=None,
+                policy=policy,
             )
 
             # Record the delivered id only now. Stamping it at webhook time
@@ -872,7 +916,19 @@ class ChannelInboundService:
                         channel_id=debug_channel_id,
                         direction="inbound",
                         kind=DEBUG_ROUTED,
-                        summary=f"Routed to installed agent '{agent_name}'",
+                        # Two sentences, because "installed agent" is false on
+                        # the identity branch — that agent is someone else's,
+                        # and the single most useful thing this line can say
+                        # about such a message is that it left the sender's own
+                        # workspace. Both operands are plain reads (a local
+                        # string, a frozen-dataclass attribute), so this
+                        # argument list still cannot raise (§11a Rule 2).
+                        summary=(
+                            f"Routed via identity to '{agent_name}' in another "
+                            "user's workspace"
+                            if decision.identity_grant is not None
+                            else f"Routed to installed agent '{agent_name}'"
+                        ),
                         sender_email=sender_email,
                         thread_key=thread_key,
                         detail={
@@ -904,6 +960,7 @@ class ChannelInboundService:
                             text=text,
                             external_message_id=external_message_id,
                             external_user_id=external_user_id,
+                            policy=policy,
                         )
                         return
                     await ChannelInboundService._ingest_or_fail(
@@ -915,6 +972,15 @@ class ChannelInboundService:
                         text=text,
                         external_message_id=external_message_id,
                         external_user_id=external_user_id,
+                        # Set only when Stage 1 chose a *person* and Stage 2
+                        # picked one of their agents (plan §2.3). It is what
+                        # permits a session on an agent this sender does not
+                        # own — and it is a claim, re-read in full by
+                        # ``assert_access`` before anything is created.
+                        # ``None`` on every other branch, which leaves the
+                        # channel invariant exactly as strict as it was.
+                        identity_grant=decision.identity_grant,
+                        policy=policy,
                     )
                     return
 
@@ -1094,6 +1160,7 @@ class ChannelInboundService:
         text: str,
         external_message_id: str | None,
         external_user_id: str | None,
+        policy: ResolvedChannelPolicy,
     ) -> None:
         """Deliver this message via the binding that won the creation race.
 
@@ -1154,6 +1221,10 @@ class ChannelInboundService:
             text=text,
             external_message_id=external_message_id,
             external_user_id=external_user_id,
+            # The loser's own reading, which is the reading for this message —
+            # the winner's binding decides which agent answers, never whose
+            # consent applies.
+            policy=policy,
         )
 
     @staticmethod
@@ -1167,12 +1238,25 @@ class ChannelInboundService:
         text: str,
         external_message_id: str | None,
         external_user_id: str | None,
+        policy: ResolvedChannelPolicy,
+        identity_grant: IdentityGrant | None = None,
     ) -> None:
         """Ingest, leaving the binding in a coherent state on every outcome.
 
         Without this, a Pass 1 ingest failure would leave an ``active`` binding
         with no session and no error — a state the self-heal path (which only
         triggers on ``failed``) never cleans up.
+
+        ``identity_grant`` is forwarded verbatim and defaults to ``None``: only
+        the first message of a freshly-routed thread has a routing decision
+        behind it. Every later message reconstructs its own grant from the
+        session row (see :meth:`_ingest`), because a stale claim carried across
+        turns is exactly what re-verification exists to prevent.
+
+        ``policy`` is required, not defaulted: it is the sender's reading for
+        *this* message and there is no safe value to invent for a caller that
+        forgot it — a permissive default would silently re-open identity
+        routing for a person who has switched it off.
         """
         try:
             await ChannelInboundService._ingest(
@@ -1183,6 +1267,8 @@ class ChannelInboundService:
                 user=user,
                 text=text,
                 sender_external_id=external_user_id,
+                identity_grant=identity_grant,
+                policy=policy,
             )
         except NoActiveEnvironmentError:
             # Terminal, not transient: `SessionService.create_session` returns
@@ -1340,6 +1426,16 @@ class ChannelInboundService:
         if channel is None or agent is None or user is None:
             return False
 
+        # The scheduler reaches here with no live resolution to carry — this
+        # tick is not downstream of any webhook — so it legitimately makes its
+        # own. **One reading per message still holds**: this fresh value is the
+        # only reading for every parked message drained below, exactly as the
+        # webhook's carried value is the only reading on ``_continue_thread``.
+        # Neither path ever holds two, so there is nothing for a channel edited
+        # mid-flight to make disagree; the edit simply lands on the next
+        # message, or the next tick.
+        policy = ChannelPolicyService.resolve(db, channel, user.id)
+
         env = ChannelInboundService._agent_environment(db, agent)
         status = env.status if env else None
         failure: str | None = None
@@ -1389,7 +1485,12 @@ class ChannelInboundService:
         db.commit()
 
         await ChannelInboundService._drain_parked(
-            db=db, channel=channel, binding=binding, agent=agent, user=user
+            db=db,
+            channel=channel,
+            binding=binding,
+            agent=agent,
+            user=user,
+            policy=policy,
         )
         return True
 
@@ -1410,6 +1511,7 @@ class ChannelInboundService:
         binding: ChannelThreadBinding,
         agent: Agent,
         user: User,
+        policy: ResolvedChannelPolicy,
     ) -> None:
         """Deliver parked messages in arrival order, exactly once each.
 
@@ -1437,6 +1539,7 @@ class ChannelInboundService:
                         user=user,
                         text=text,
                         sender_external_id=entry.get("external_user_id"),
+                        policy=policy,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.exception(
@@ -1479,7 +1582,9 @@ class ChannelInboundService:
         agent: Agent,
         user: User,
         text: str,
+        policy: ResolvedChannelPolicy,
         sender_external_id: str | None = None,
+        identity_grant: IdentityGrant | None = None,
     ) -> None:
         """Hand the message to the canonical ingestion service.
 
@@ -1493,9 +1598,75 @@ class ChannelInboundService:
         identity is ``user.id`` — so when it is unavailable (a resume, or a
         parked message from before this field was recorded) the constructor
         falls back to the platform user id.
+
+        **``user`` is always the binding's user — and this method now enforces
+        that rather than merely asserting it.** Every caller already satisfies
+        it (``_route_new_thread`` passes the sender it just bound;
+        ``_continue_thread``, ``_handle_lost_race`` and the drain paths all
+        load ``db.get(User, binding.user_id)``), but "every caller today" is
+        not something a downstream guard can rest on, and Phase 4 adds a second
+        poller into these helpers. The check at the top of the body makes
+        ``sender.platform_user_id == binding.user_id`` true by construction.
+
+        What that buys, precisely: it protects the **unchanged, non-identity**
+        arm of ``ChannelIngestionService._verify_resume_sender``
+        (``existing.user_id == sender.platform_user_id``). The binding pins
+        ``session_id`` and the sender is the binding's user, so an ordinary
+        channel session can only ever be resumed by the person the thread
+        belongs to. It is **not** what makes that method's identity exception
+        safe: that arm compares ``existing.identity_caller_id`` against the
+        sender on the session row itself, and refuses a deliberately
+        mismatched ``(binding, user)`` pair without any help from here. And
+        neither arm is the authorization — ``assert_access`` runs first, on
+        every message, and re-reads the whole grant.
+
+        **Identity: the session may be owned by someone other than the
+        sender.** Two sources, never mixed:
+
+        - *First message of a routed thread* — ``identity_grant`` is the claim
+          Stage 2 produced (plan §2.3). The identity ids are stamped onto the
+          new session, and ``session.user_id`` becomes the identity owner.
+        - *Every later message* — the claim is rebuilt from the session row
+          itself, which carries all three ids. Rebuilding rather than caching
+          is the point: ``assert_access`` re-reads and re-verifies all six
+          conditions on **every** message, so an owner who revokes mid-thread
+          is honored on the next turn rather than at the next thread. That
+          extends Phase 2's decided semantic — a revoked sender is declined on
+          an existing thread exactly as on a new one — and, like it, the
+          decline is detail-free: the ``PermissionError`` is caught by
+          ``_ingest_or_fail``, which sends the same generic reply every other
+          failure gets.
+
+        **The sender's own consent is re-read on every message too**, from
+        ``policy`` — which is this message's single reading of their channel
+        settings, carried in from the webhook or made fresh by the scheduler
+        drain, never both. Turning ``allow_identity_routing`` off (or resetting
+        the channel, which drops the row and returns the column to its ``false``
+        default) therefore stops the *existing* identity thread on its next
+        message, not only the next new one. A consent switch that could not be
+        withdrawn on the very conversation it authorized would be no consent at
+        all; and this is the same semantic already decided for a revoked grant,
+        applied to the other side of the same permission. An ordinary channel
+        thread has no grant, so it never consults the flag.
+
+        ``integration_type`` stays ``channel_<type>`` on the identity path.
+        ``ChannelOutboundService._resolve_channel_session`` gates on that
+        prefix, so a session stamped ``identity_mcp`` here would route
+        correctly, run correctly, and never deliver a reply.
         """
         from app.core.db import create_session
         from app.models import Session as ChatSession
+
+        # The invariant this method's contract is written on, enforced at the
+        # only place all of its callers meet. A mismatched pair here would put
+        # one person's text into another's thread; refusing it costs one
+        # comparison and cannot be forgotten by a future caller the way a
+        # docstring can.
+        if user.id != binding.user_id:
+            raise PermissionError(
+                "channel ingest sender does not own the binding: "
+                f"user.id={user.id}, binding.user_id={binding.user_id}"
+            )
 
         sender = SessionSender.from_channel(
             channel_type=channel.channel_type,
@@ -1507,19 +1678,83 @@ class ChannelInboundService:
         # Resume only if the session still exists. The FK nulls `session_id` on
         # delete, but a delete racing this read would leave a stale pointer that
         # `resolve_or_create_session` would reject with "Session not found".
+        existing: ChatSession | None = None
         thread_key: uuid.UUID | None = binding.session_id
-        if thread_key is not None and db.get(ChatSession, thread_key) is None:
-            thread_key = None
+        if thread_key is not None:
+            existing = db.get(ChatSession, thread_key)
+            if existing is None:
+                thread_key = None
+
+        if existing is not None:
+            # Resume: the row is the only admissible source. A grant handed in
+            # by a caller would be describing a different message.
+            grant = ChannelInboundService._resume_identity_grant(existing)
+        else:
+            # Create. On the recovery branch — the binding's session was
+            # deleted, so `thread_key` was just cleared — a continue/drain call
+            # arrives with no grant, and if the bound agent is a foreign one
+            # `assert_access` refuses. That is deliberate rather than repaired
+            # here: nothing in this call is evidence the identity is still
+            # shared, and re-deriving one from the binding would be inventing
+            # an authorization the routing layer never issued. The refusal
+            # fails the binding, which self-heals — the next message deletes it
+            # and re-routes, producing a fresh, freshly-verified grant.
+            grant = identity_grant
+
+        # Consent, re-read per message from THIS message's single reading (see
+        # the docstring). Short-circuited on `grant is None`, so an ordinary
+        # channel thread never reaches the flag and is unaffected.
+        #
+        # Raised bare and detail-free on purpose: `_ingest_or_fail` turns it
+        # into the one generic reply every other refusal gets, so this decline
+        # is indistinguishable from a revoked grant, a vanished binding, or a
+        # failed environment. A reply that named it would be an oracle telling
+        # an external sender which gate closed.
+        if grant is not None and not policy.allow_identity_routing:
+            raise PermissionError(
+                "identity routing is switched off for this sender on this "
+                "channel"
+            )
 
         extra_session_kwargs: dict[str, Any] | None = None
         if thread_key is None:
-            extra_session_kwargs = {
-                "session_metadata_extra": {
-                    "server_channel_id": str(channel.id),
-                    "thread_key": binding.thread_key,
-                    "sender_external_id": sender.external_id,
-                }
+            session_metadata_extra: dict[str, Any] = {
+                "server_channel_id": str(channel.id),
+                "thread_key": binding.thread_key,
+                "sender_external_id": sender.external_id,
             }
+            extra_session_kwargs = {
+                "session_metadata_extra": session_metadata_extra
+            }
+            if grant is not None:
+                # Attribution for the person who did not start this
+                # conversation. The session opens in the identity OWNER's
+                # space, so it appears in their list containing a stranger's
+                # message; without a name the only identification is a raw uuid
+                # in a column nothing renders. Same key App MCP's identity path
+                # stamps (`external_a2a_context_handler`), so the session view
+                # needs one branch for both, not two.
+                #
+                # `identity_owner_name` — the other half of that pair — is
+                # deliberately NOT stamped: on this path the owner is the
+                # session's own user, so it would be telling the reader their
+                # own name.
+                session_metadata_extra["identity_caller_name"] = (
+                    (user.full_name or "").strip() or user.email
+                )
+                extra_session_kwargs.update(
+                    {
+                        # Consumed by `_select_session_owner_id`: the session is
+                        # the identity owner's, not the sender's.
+                        "identity_owner_id": grant.owner_id,
+                        # Post-create stamps; all three are already in
+                        # `ChannelIngestionService._STAMPABLE_COLUMNS`, and all
+                        # three are what the resume path above reads back.
+                        "identity_caller_id": user.id,
+                        "identity_binding_id": grant.binding_id,
+                        "identity_binding_assignment_id": grant.assignment_id,
+                    }
+                )
 
         result = await ChannelIngestionService.ingest_inbound_message(
             db=db,
@@ -1528,7 +1763,15 @@ class ChannelInboundService:
             thread_key=thread_key,
             content=text,
             integration_type=f"channel_{channel.channel_type}",
-            access_policy=ChannelAccessPolicy(expected_owner_id=user.id),
+            access_policy=ChannelAccessPolicy(
+                # The owner the three-way invariant is checked against. On the
+                # identity path that is the identity owner (which is also
+                # `agent.owner_id`), not the sender — the sender is the
+                # `identity_caller_id`, and the grant beside it is what makes
+                # the mismatch legitimate.
+                expected_owner_id=grant.owner_id if grant is not None else user.id,
+                identity_grant=grant,
+            ),
             get_fresh_db_session=create_session,
             extra_session_kwargs=extra_session_kwargs,
         )
@@ -1538,6 +1781,45 @@ class ChannelInboundService:
             binding.updated_at = datetime.now(UTC)
             db.add(binding)
             db.commit()
+
+    @staticmethod
+    def _resume_identity_grant(session: "ChatSession") -> IdentityGrant | None:
+        """Rebuild the identity claim for a session being resumed.
+
+        ``None`` for an ordinary channel session — every column below is NULL
+        there, and the caller then uses the sender's own id as the expected
+        owner exactly as before.
+
+        The three ids were stamped when the session was created and are re-read
+        rather than remembered, which is the whole point: this produces a
+        *claim*, and ``ChannelIngestionService.assert_access`` re-verifies all
+        six conditions behind it against the database on this message. A row
+        whose ids no longer describe a live, enabled, correctly-linked binding
+        is refused, so revocation takes effect on the very next message.
+
+        ``owner_id`` comes from ``session.user_id`` because that is what
+        identity ownership *means* here (the session lives in the owner's
+        space). It is not trusted: condition 6 pins
+        ``binding.owner_id == agent.owner_id == owner_id``, so a row whose
+        ``user_id`` disagrees with its own binding is rejected rather than
+        honored.
+
+        All three columns are required. A partially-stamped row cannot be
+        completed by guessing — the missing piece is precisely the linkage the
+        six conditions exist to check — so it degrades to "no grant" and is
+        refused by the ordinary invariant.
+        """
+        if (
+            session.identity_caller_id is None
+            or session.identity_binding_id is None
+            or session.identity_binding_assignment_id is None
+        ):
+            return None
+        return IdentityGrant(
+            owner_id=session.user_id,
+            binding_id=session.identity_binding_id,
+            assignment_id=session.identity_binding_assignment_id,
+        )
 
     # ==================================================================
     # Binding helpers

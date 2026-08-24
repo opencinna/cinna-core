@@ -52,7 +52,7 @@ def list_my_channels(session: SessionDep, current_user: CurrentUser) -> Any:
 
 
 @router.put("/{channel_id}", response_model=UserChannelPublic)
-def update_my_channel(
+async def update_my_channel(
     *,
     session: SessionDep,
     current_user: CurrentUser,
@@ -68,12 +68,17 @@ def update_my_channel(
     for ``is_enabled`` and ``agent_scope`` means reverting that one field to the
     channel default. ``allow_identity_routing`` has no inherited state, so an
     explicit ``null`` for it is a 422 rather than a silent no-op.
+
+    ``async`` for one reason: flipping ``allow_identity_routing`` writes a
+    ``SecurityEvent``, and the audit belongs in the service (which is the only
+    place the old and new values exist together), not here. The request shape
+    is unchanged.
     """
     try:
         channel = UserChannelService.get_accessible_channel(
             session, channel_id, current_user.id
         )
-        return UserChannelService.upsert_settings(
+        return await UserChannelService.upsert_settings(
             session, channel, current_user.id, data
         )
     except ChannelNotAvailableError:

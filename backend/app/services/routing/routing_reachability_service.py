@@ -362,6 +362,46 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
         "Route to the contact rather than to their agent, or give this user "
         "their own install of it.",
     ),
+    # ── Unservable copy, deliberately kept ───────────────────────────
+    # Two facts about two different layers, and conflating them is what
+    # makes this entry look like working code when it is not.
+    #
+    # The skip **row** is genuinely produced. Whenever an identity owner
+    # has named this caller on a binding whose binding or assignment is
+    # switched off, ``IdentityCandidateProvider.build`` records
+    # ``SKIP_IDENTITY_UNAVAILABLE``; a test in
+    # ``tests/api/server_channels/server_channels_identity_trace_test.py``
+    # drives one over the webhook and asserts it.
+    #
+    # The **explanation below is never served**. It renders only through
+    # :func:`_verdict_from_trace`, which is reached only when
+    # :func:`_find_candidate` matches, and that match compares
+    # ``str(expected_agent_id)`` against ``candidate["ref_id"]``.
+    # ``expected_agent_id`` is annotated ``uuid.UUID`` on both
+    # :meth:`RoutingReachabilityService.diagnose` and the route behind it
+    # (``admin_routing.get_routing_trace``), while an identity candidate
+    # always writes the namespaced ``identity:{owner_id}``. The type
+    # annotation is the specific obstacle: a UUID cannot name an identity
+    # candidate, so neither this entry nor its channel override below can
+    # be reached, whatever the trace contains.
+    #
+    # Known and deferred, not an oversight. The real fix is to widen
+    # ``expected_agent_id`` to ``str`` — which would also let an admin ask
+    # "why was this *person* not reachable", a question the surface cannot
+    # currently phrase — and Phase 6 of the channels & identity
+    # unification owns it, because it is one gap with two faces: ``POST
+    # /admin/routing/simulate`` carries no ``channel_id`` and so can never
+    # name a channel either. The diagnostic surface is UUID- and
+    # agent-shaped while identity candidates are person-shaped. One
+    # diagnostic-layer change and one client regeneration, rather than two.
+    #
+    # The consequence, stated plainly because this file treats an
+    # unverifiable claim about coverage as a defect: **no test covers this
+    # copy.** A test written today would have to forge a candidate row
+    # carrying a bare-UUID identity ref, which no producer emits — it
+    # would assert the instrument rather than the system, and would keep
+    # passing after the real path broke. Deliberately not written; the
+    # wording gets its first test when Phase 6 makes it reachable.
     routing_trace.SKIP_IDENTITY_UNAVAILABLE: (
         "this person shared an agent with the sender, but none of what they "
         "shared is switched on right now, so they were not on the ballot at all",
@@ -450,12 +490,23 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
 #:   split carry it and are still read. The explanation stays: it is what
 #:   happened. The action cannot, because switching that route back on would not
 #:   make the agent a channel candidate now.
-#: **No ``SKIP_IDENTITY_UNAVAILABLE`` entry, and that is correct today:** only
-#: App MCP Stage 1 records it, so a channel decision cannot carry it. The moment
-#: identity candidates enter a channel ballot, one belongs here — the base entry
-#: is written in App MCP's voice and would send a channel user to an MCP card.
-#: Adding the reason to a surface and adding its override for that surface is
-#: one change, per this file's convention.
+#: ``SKIP_IDENTITY_UNAVAILABLE`` is the fourth, and it arrived exactly as this
+#: comment predicted it would. It used to say "no entry here, and that is
+#: correct today" because only App MCP Stage 1 recorded the reason; Phase 3 of
+#: the channels & identity unification put ``IdentityCandidateProvider`` on the
+#: channel ballot, so a channel decision can now carry it, and the base entry —
+#: written in App MCP's voice — would send a channel user to an MCP card. The
+#: entry below landed in the same change, per this file's convention: adding the
+#: reason to a surface and adding its override for that surface are one change.
+#:
+#: What that entry does **not** do is reach a reader, and this comment should
+#: not be read as claiming it does. The reason is now recorded on this surface;
+#: the wording below is still unservable, because the only branch that renders
+#: a skip explanation is keyed by a ``uuid.UUID`` ``expected_agent_id`` and an
+#: identity candidate's ``ref_id`` is ``identity:{owner_id}``. So "the fourth"
+#: means *a channel decision can now carry the reason*, not *a channel user can
+#: now read this sentence*. The entry's own comment and the base table's give
+#: the mechanism, the Phase 6 deferral, and why no test covers the copy.
 _CHANNEL_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
     routing_trace.SKIP_ALREADY_INSTALLED: (
         "this user already has it installed, so the auto-install pass passed "
@@ -493,6 +544,36 @@ _CHANNEL_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
         "Give this user their own install of the agent and set a router "
         "trigger prompt (or example prompts) on it — a channel routes over the "
         "sender's own agents and reads no identity contact at all.",
+    ),
+    # ── Unservable copy, for the same reason as the base entry ───────
+    # Repeated here rather than cross-referenced, because it is the half
+    # of the story that reads as done: what Phase 3 made live is the skip
+    # **row** on a channel, not this **sentence**. The sentence renders
+    # only on the ``?expected_agent_id=`` branch, which is typed
+    # ``uuid.UUID`` and therefore can never name an ``identity:{owner_id}``
+    # candidate. Producible and explainable are facts about different
+    # layers, and only the first one is true today. Deferred to Phase 6
+    # together with simulate's missing ``channel_id``; untested for the
+    # same reason, since the only test that could reach it would forge a
+    # bare-UUID identity ref and assert the instrument. See the base
+    # table's entry for the full argument.
+    routing_trace.SKIP_IDENTITY_UNAVAILABLE: (
+        # The base entry says the same thing and then sends the reader to "the "
+        # Identity Contacts section of the MCP Server card", which is an App MCP
+        # control a channel does not read. The finding is unchanged; only the
+        # remedy's subject moves — the shape this file's docstring describes.
+        "this person had named the sender on an identity binding, so they were "
+        "recorded on this decision, but nothing they shared was reachable when "
+        "the message arrived — they were on the trace and never on the ballot",
+        "The switch that fixes this is the identity owner's, not the sender's, "
+        "in two of the three cases: on the owner's Settings > Channels > "
+        "Identity Server card, either the binding itself is inactive or this "
+        "sender's assignment to it is. The third is the sender's own contact "
+        "toggle for that person, in their Settings > Channels. Check the "
+        "owner's two first — a sender cannot enable a contact nobody has "
+        "shared with them. What this is NOT is the sender's channel-level "
+        "identity-routing switch: with that off, no identity appears on a "
+        "channel trace at all, so this row is evidence it was already on.",
     ),
 }
 

@@ -7,9 +7,11 @@ identity's agents are agents, never further identities, and that is the
 intended guard.
 
 **This module is written to the four structural facts in
-``channel_routing_service.py``'s module docstring**, because the channels &
-identity unification calls this from inside ``ChannelRoutingService.decide``,
-which ``tests/architecture/channel_routing_purity_test.py`` holds to them:
+``channel_routing_service.py``'s module docstring**, because
+``ChannelRoutingService.decide`` calls this from inside itself: Stage 1 puts a
+person on the ballot, and a person winning hands off here. A violation of any
+of the four *here* is therefore a violation *there*, one call deeper, on a
+route documented as having no side effects. Same four, same numbering:
 
 1. **No caller session crosses the boundary.** ``route_within_identity`` takes
    ids and text. It cannot add to, commit, or roll back a transaction the
@@ -18,21 +20,29 @@ which ``tests/architecture/channel_routing_purity_test.py`` holds to them:
 2. **The session it opens is read-only in practice.** One short-lived session,
    ``SELECT``s only, closed on the way out. No ``add`` / ``commit`` /
    ``delete`` anywhere in this module.
-3. **It returns plain data.** ``IdentityRoutingResult`` carries ids and two
+3. **Nothing effectful is imported here.** No binding model, no ingestion,
+   install or outbound service. Those names are not in this module's namespace,
+   so no branch added later can reach one by accident — it would have to add
+   the import, which is visible in a diff.
+4. **It returns plain data.** ``IdentityRoutingResult`` carries ids and two
    strings read off rows *inside* that session — never an ORM instance, whose
    session is closed by the time the caller sees it and whose next attribute
    read would be a lazy reload against a dead connection.
-4. The trace it writes is the ambient ``RoutingTrace`` recorder, which is a
-   no-op when nobody opened a capture.
 
-**These four are held by review here, not by a test.** That purity test parses
-one module path, ``channel_routing_service.py``; it does not walk this one. So
-this list is a claim, and its own file's warning applies — a claim about
-coverage is the one thing a reader cannot spot as false. Two ways to close it,
-whichever comes first: parameterize ``_ROUTING_MODULE`` over both modules (this
-docstring's fact list is already in the shape that test's regex parses), or let
-the change that calls Stage 2 from inside ``decide`` do it, since that is the
-point at which a violation here becomes a violation there.
+**These four are executed, not reviewed.**
+``tests/architecture/channel_routing_purity_test.py`` used to parse one module
+path and this list was a claim — the one kind of claim a reader has no way to
+spot as false. That test is now parameterized over both modules, closing it the
+second of the two ways this docstring proposed: the change that calls Stage 2
+from inside ``decide`` did it, because that is the point at which a violation
+here becomes a violation there. As with the list over there, do not extend this
+one without extending that test in the same change.
+
+Not a structural fact and stated separately for that reason: the trace this
+module writes is the ambient ``RoutingTrace`` recorder, which is a no-op when
+nobody opened a capture. Before the channels & identity unification nobody ever
+did on this path, so every recorder call here was dead instrumentation; the
+channel Pass-1 capture is now open around it.
 
 **Glob pre-matching is gone.** ``IdentityAgentBinding.message_patterns`` is no
 longer read here (settled decision §2.9 of the channels/identity unification
@@ -105,15 +115,17 @@ class IdentityRoutingService:
 
         Opens its own database session — see fact 1 in the module docstring.
 
-        **Cost, stated because it is not free.** On the App MCP path the caller
-        still holds its own session across this call, so an identity request
-        occupies two pooled connections instead of one while Stage 2 runs. That
-        is the same shape ``ChannelRoutingService`` has, with one difference
-        worth knowing: there ``decide`` runs *before* any caller transaction,
-        whereas here it runs inside one. Holding a connection while waiting for
-        a second is the classic pool-exhaustion deadlock, and identity routing
-        is not a hot path today — but if it becomes one, this is the line to
-        revisit, not the pool size.
+        **Cost, stated because it is not free.** Both callers hold a session
+        across this call, so an identity request occupies two pooled
+        connections instead of one while Stage 2 runs — App MCP holds the
+        request's own session, and the channel path holds Pass 1's worker-thread
+        session (``ChannelRoutingService._route_identity`` runs inside
+        ``_route_installed``, which owns one). The difference between them is
+        which transaction is outstanding: App MCP's is the caller's own unit of
+        work, the channel's is a read-only pass that commits nothing. Holding a
+        connection while waiting for a second is the classic pool-exhaustion
+        deadlock, and identity routing is not a hot path today — but if it
+        becomes one, this is the line to revisit, not the pool size.
         """
         # Debug, not info: Stage 2 can carry EXTERNAL, non-platform users'
         # message text. Same reasoning as the [Stage1]/[AIRouter] downgrades.

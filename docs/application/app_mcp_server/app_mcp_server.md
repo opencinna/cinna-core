@@ -124,7 +124,7 @@ The Stage 1 ballot is **composed** from two candidate providers: the user's effe
 3. **AI classification** -- call LLM with the message and the whole ballot; each candidate is passed as `{id, name, trigger_prompt, prompt_examples}`; `agent_name` is included so the classifier can disambiguate near-duplicate trigger prompts (e.g. "Calendar Planner" vs "Vacation Planner"); LLM picks the best candidate or returns "NONE"
 4. **No match** -- return error asking user to be more specific
 
-When the winner is an identity candidate, Stage 2 picks the agent from that person's portfolio.
+When the winner is an identity candidate, Stage 2 picks the agent from that person's portfolio. App MCP is **not** the only consumer of that provider: since Phase 3 of the channels & identity unification, [Server Channels](../server_channels/server_channels.md) composes the same identity candidates into its own Pass-1 ballot (gated on the sender's per-channel `allow_identity_routing` opt-in). Providers compose; neither surface borrows the other's candidate set or enablement toggles.
 
 ### Message Transformation
 

@@ -14075,6 +14075,11 @@ export class UserChannelsService {
      * for ``is_enabled`` and ``agent_scope`` means reverting that one field to the
      * channel default. ``allow_identity_routing`` has no inherited state, so an
      * explicit ``null`` for it is a 422 rather than a silent no-op.
+     *
+     * ``async`` for one reason: flipping ``allow_identity_routing`` writes a
+     * ``SecurityEvent``, and the audit belongs in the service (which is the only
+     * place the old and new values exist together), not here. The request shape
+     * is unchanged.
      * @param data The data for the request.
      * @param data.channelId
      * @param data.requestBody

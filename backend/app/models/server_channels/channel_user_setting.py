@@ -45,14 +45,25 @@ candidates join their ballot (``phase_3_identity_over_channels.md`` §2.1). So
 this column says "I accept that a message I send on this channel may be routed
 into somebody else's workspace, where they can read it" — the consent the §2.5
 UI copy asks for. It is emphatically **not** the receiving person's control
-over who may reach them: that is ``IdentityBindingAssignment.is_enabled``, one
-person-level toggle governing every surface.
+over who may reach them; that is ``IdentityAgentBinding.is_active`` and
+``IdentityBindingAssignment.is_active``, both written by the owner.
+
+Its neighbour ``IdentityBindingAssignment.is_enabled`` is a *third* thing again,
+and points the same way this column does: it is the **caller's** per-person
+opt-out of addressing one identity owner (the row is keyed by
+``target_user_id``, and ``IdentityService.toggle_identity_contact`` filters on
+``target_user_id == current_user.id``). One person-level toggle, governing every
+surface. So this column and that one are both the sender's switches, at
+different granularity — the channel, and the person.
 
 Resolving this from the receiver's row instead would be a real security change
 wearing the clothes of a comment cleanup. Do not "fix" it in that direction.
 
-Phase 3 reads this column; until then it is written and stored but not
-consulted.
+This column is read when ``ChannelRoutingService._route_installed`` composes
+the channel routing ballot, and it is re-read on every message of an
+already-bound identity thread by ``ChannelInboundService._ingest`` — so
+withdrawing consent takes effect on the sender's very next message, not only
+on threads that have not started yet.
 
 CASCADES
 --------

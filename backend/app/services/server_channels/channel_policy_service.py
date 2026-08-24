@@ -119,9 +119,11 @@ class ResolvedChannelPolicy:
     #: agent exists, never that it belongs to this user.
     pinned_agent_id: uuid.UUID | None
 
-    #: Phase 3 reads this. Never inherited from the channel — master plan §3.4.
-    #: Resolved for the **sender**: their consent to a message of theirs being
-    #: routed into another person's workspace. Not the receiver's gate — see
+    #: The routing pass consults this when composing the candidate ballot, and
+    #: the ingest path re-reads it per message on an existing identity thread.
+    #: Never inherited from the channel — master plan §3.4. Resolved for the
+    #: **sender**: their consent to a message of theirs being routed into
+    #: another person's workspace. Not the receiver's gate — see
     #: ``ChannelUserSetting``'s docstring.
     allow_identity_routing: bool
 

@@ -650,6 +650,34 @@ function ChatInterface() {
                     )}
                   </span>
                 )}
+                {/*
+                  An identity-routed SERVER CHANNEL session. Its
+                  `integration_type` is `channel_<type>` and must stay that way
+                  — `ChannelOutboundService._resolve_channel_session` gates the
+                  reply on that prefix, so stamping `identity_mcp` to reuse the
+                  badge above would route and answer correctly and then never
+                  deliver a word. The attribution therefore hangs off the
+                  metadata the ingest stamps, under the same key the App MCP
+                  identity path uses.
+
+                  It matters because this session opens in the identity
+                  OWNER's space: they find a conversation in their list that
+                  they never started, containing a stranger's message. Without
+                  this chip the only trace of who is talking is a uuid in a
+                  column nothing renders.
+                */}
+                {session.integration_type?.startsWith("channel_") &&
+                  (session.session_metadata as Record<string, string> | null)
+                    ?.identity_caller_name && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300">
+                      <UserCircle className="h-2.5 w-2.5" />
+                      Via Identity —{" "}
+                      {
+                        (session.session_metadata as Record<string, string>)
+                          .identity_caller_name
+                      }
+                    </span>
+                  )}
                 {session.integration_type === "external" && (
                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[10px] font-medium bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300">
                     <Package className="h-2.5 w-2.5" />

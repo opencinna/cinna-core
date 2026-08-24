@@ -57,9 +57,13 @@ if TYPE_CHECKING:
 # - "channel_caller": external person reaching the platform through an
 #   admin-configured server channel (Google Chat, …). The transport verified
 #   their identity, and a platform `User` row was resolved (or auto-created)
-#   from the verified email — so `platform_user_id` is that user and the
-#   session is owned by them, exactly like `task_executor`. An external caller
-#   can therefore only ever reach their own installs.
+#   from the verified email — so `platform_user_id` is always that user,
+#   exactly like `task_executor`. The session is normally owned by them too;
+#   the exception is identity routing, where the sender addressed another
+#   person and the session is owned by that person instead, with the sender
+#   recorded as `Session.identity_caller_id`. The kind names the *transport*,
+#   which is still a channel either way — see
+#   `ChannelIngestionService._select_session_owner_id`.
 SessionSenderKind = Literal[
     "platform_user",
     "a2a_caller",
@@ -254,8 +258,12 @@ class SessionSender:
 
         `platform_user_id` is the *sender's own* platform user (resolved
         from the transport-verified email, auto-registered when the channel
-        allows it) — never the agent publisher. The session is created in
-        that user's space, so a channel caller can only reach their own
+        allows it) — never the agent publisher. It says who is talking, not
+        whose space answers: the session is created in the sender's own space
+        unless routing selected another person's identity, in which case it is
+        created in that person's space and the sender is stamped as
+        `identity_caller_id`. Only a verified identity grant can produce that
+        second shape; without one the sender still reaches only their own
         installs.
 
         `external_id` is namespaced by channel type
@@ -411,7 +419,16 @@ def get_session_sender(session: "Session") -> SessionSender:
     `integration_type` -> `kind` mapping (plan §3.2) lives. Used for
     surfacing the sender on API responses, structured logging, and
     debugging — never for access control (the channels build their own
-    `SessionSender` via the constructors above).
+    `SessionSender` via the constructors above). Still true after the
+    identity work, and verifiable: no module outside `app/models/` calls this
+    function at all today.
+
+    That is exactly why the identity branches below matter anyway. A reader
+    whose only job is to answer "who sent this?" has no second gate behind it
+    to catch a wrong answer, so on the two integration types where the session
+    owner and the sender are different people (`identity_mcp`, and a
+    `channel_*` session that was identity-routed) it reports the caller, not
+    the owner.
 
     Forward-compatible: unknown `integration_type` values fall back to
     a best-effort `"platform_user"` mapping rather than raising. Channels
@@ -480,22 +497,32 @@ def get_session_sender(session: "Session") -> SessionSender:
         )
 
     # Server channels — `integration_type` is `channel_<channel_type>`
-    # (e.g. "channel_google_chat"). The session is owned by the external
-    # sender's own platform user, so `platform_user_id` is `session.user_id`.
+    # (e.g. "channel_google_chat").
+    #
+    # `identity_caller_id` first, and `session.user_id` only as the fallback.
+    # An ordinary channel session leaves that column NULL and the two are the
+    # same value; an identity-routed one is owned by the *identity owner*,
+    # while the person who actually sent the message is the identity caller.
+    # Reading `user_id` there would name the wrong human — reporting HR as the
+    # sender of a message HR never wrote — which is the shape of mistake this
+    # reader exists to prevent, whatever it is being read for.
+    #
     # `external_id` is best-effort from the metadata stamped at create time
-    # by the channel inbound pipeline.
+    # by the channel inbound pipeline; it already records the real sender, so
+    # it needs no identity branch of its own.
     if integration_type is not None and integration_type.startswith("channel_"):
         metadata = session.session_metadata or {}
         sender_external_id = metadata.get("sender_external_id")
+        caller = session.identity_caller_id or session.user_id
         return SessionSender(
             kind="channel_caller",
             external_id=(
                 str(sender_external_id)
                 if sender_external_id
-                else str(session.user_id)
+                else str(caller)
             ),
             display_name=None,
-            platform_user_id=session.user_id,
+            platform_user_id=caller,
         )
 
     # Default (None / unknown integration_type — web-UI created today, or

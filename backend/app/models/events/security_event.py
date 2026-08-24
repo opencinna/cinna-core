@@ -160,6 +160,20 @@ SERVER_CHANNEL_SENDER_DENIED = "SERVER_CHANNEL_SENDER_DENIED"
 SERVER_CHANNEL_USER_AUTO_REGISTERED = "SERVER_CHANNEL_USER_AUTO_REGISTERED"
 # Pass-2 routing installed a catalog bundle for an external sender.
 SERVER_CHANNEL_AUTO_INSTALL = "SERVER_CHANNEL_AUTO_INSTALL"
+# A user turned identity routing on or off for themselves on one channel
+# (``channel_user_setting.allow_identity_routing``). Attributed to that user —
+# this is the one channel row written by an ordinary person about their own
+# settings rather than by an admin or the webhook.
+#
+# Audited because of what the "on" state permits, which no other per-user
+# channel setting does: a message of theirs can open a session inside ANOTHER
+# person's workspace, owned by that person and readable by them. It is opt-in,
+# per person, and it never inherits from a channel default (master plan §3.4) —
+# so it is only ever true because somebody deliberately made it true, and that
+# is exactly the fact worth being able to establish afterwards. The payload
+# carries the channel and the new value; it never carries message text, in
+# keeping with every other row in this section.
+SERVER_CHANNEL_IDENTITY_ROUTING_CHANGED = "SERVER_CHANNEL_IDENTITY_ROUTING_CHANGED"
 # A superuser sent an admin test message out through a channel. Audited
 # because the target may be a *named person's* real conversation: the
 # email-targeted form resolves to a thread belonging to an identified user, so

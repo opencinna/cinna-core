@@ -31,14 +31,29 @@ logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[ChannelIngestion]"
 
-#: Sender kinds ``create_identity_session`` will build a session for. An
-#: allowlist rather than a comment, because the failure mode of the wrong kind
-#: is a *committed* session owned by the wrong user — see that method's
-#: docstring. Grows in **Phase 3** of
-#: ``docs/plans/channels_identity_unification/`` — the same change that teaches
-#: ``ChannelIngestionService._select_session_owner_id`` how a
-#: ``channel_caller`` sender owns an identity session, never ahead of it.
-_IDENTITY_SESSION_SENDER_KINDS: frozenset[str] = frozenset({"mcp_caller"})
+#: Sender kinds that may own a session inside another user's workspace, and so
+#: the kinds ``create_identity_session`` will build one for. An allowlist rather
+#: than a comment, because the failure mode of the wrong kind is a *committed*
+#: session owned by the wrong user — see that method's docstring.
+#:
+#: ``channel_caller`` joined in **Phase 3** of
+#: ``docs/plans/channels_identity_unification/``, in the same change that taught
+#: :meth:`ChannelIngestionService._select_session_owner_id` how a
+#: ``channel_caller`` sender owns an identity session. Those two halves are one
+#: edit by construction, and the reason is not symmetry: the allowlist without
+#: the owner arm rejects a legitimate sender, while the owner arm without the
+#: allowlist leaves a guard still claiming a rationale that has silently
+#: expired — which is the worse of the two, because it reads as correct.
+#:
+#: The channel path does not actually *enter* through
+#: ``create_identity_session``; it goes through ``ingest_inbound_message``,
+#: the door that also carries the message and supports resume (plan §2.3). This
+#: set is therefore not what admits it. It is kept in agreement with
+#: ``_select_session_owner_id`` so the two can never disagree about which kinds
+#: may own a session in somebody else's workspace.
+_IDENTITY_SESSION_SENDER_KINDS: frozenset[str] = frozenset(
+    {"mcp_caller", "channel_caller"}
+)
 
 
 class NoActiveEnvironmentError(RuntimeError):
@@ -95,6 +110,10 @@ class ChannelIngestionService:
             thread_key=thread_key,
             integration_type=integration_type,
             extra_session_kwargs=extra_session_kwargs,
+            # The same policy step 1 just gated on. ``_select_session_owner_id``
+            # needs the grant object itself, not the fact that a check passed —
+            # see its ``channel_caller`` arm.
+            access_policy=access_policy,
         )
 
         # Step 3: delegate message creation + stream initiation. For A2A
@@ -152,6 +171,7 @@ class ChannelIngestionService:
         thread_key: UUID | None,
         integration_type: str | None,
         extra_session_kwargs: dict[str, Any] | None = None,
+        access_policy: ChannelAccessPolicy | None = None,
     ) -> tuple[Session, bool]:
         """Resolve an existing session or create a new one (plan §4.2).
 
@@ -159,6 +179,14 @@ class ChannelIngestionService:
         sender matches the existing session per the §4.2 sender-kind table.
         On create, picks the owner and stamps post-create extras (caller_id,
         identity_caller_id, session_metadata) per the same table.
+
+        ``access_policy`` is the same object the caller gated on, forwarded to
+        :meth:`_select_session_owner_id`. It is **not** a second access check
+        and does not re-run one; it is the evidence a single owner arm needs to
+        see before it will honour an ``identity_owner_id`` override. Optional
+        because most callers have no identity story at all — and safe to omit,
+        because omitting it can only make that arm *refuse*: no policy means no
+        grant, and no grant means the override is rejected.
         """
         extra_kwargs = dict(extra_session_kwargs or {})
 
@@ -170,7 +198,10 @@ class ChannelIngestionService:
             return existing, False
 
         session_owner_id = ChannelIngestionService._select_session_owner_id(
-            agent=agent, sender=sender, extra_session_kwargs=extra_kwargs
+            agent=agent,
+            sender=sender,
+            extra_session_kwargs=extra_kwargs,
+            policy=access_policy,
         )
 
         session_data = SessionCreate(
@@ -259,38 +290,33 @@ class ChannelIngestionService:
         identity sessions stay ``"identity_mcp"``.
 
         **Where the grant is actually verified.** ``assert_access`` consults
-        ``policy.identity_grant`` on its ``channel_caller`` arm only. The one
-        sender kind that reaches here today is ``mcp_caller``, whose arm does
-        **not** consult it — App MCP re-verifies identity per message on resume
-        instead, which is what it has always done, and this refactor does not
-        add a second gate on the create path. So on today's only live caller
-        the grant is carried and stamped but not re-read; it becomes a live
-        check the moment a ``channel_caller`` sender uses this method.
+        ``policy.identity_grant`` on its ``channel_caller`` arm only. App MCP's
+        ``mcp_caller`` arm does **not** consult it — App MCP re-verifies
+        identity per message on resume instead, which is what it has always
+        done, and the extraction did not add a second gate on its create path.
+        So for an ``mcp_caller`` the grant is carried and stamped but not
+        re-read. For a ``channel_caller`` it is a live check, performed by the
+        ``assert_access`` call below.
 
         Raises ``PermissionError`` when the sender kind is unsupported or a
         consulted grant does not re-verify, and ``NoActiveEnvironmentError``
         when the agent has no live environment.
 
-        **Only ``mcp_caller`` is supported, and the check is up front.**
-        ``_select_session_owner_id`` consumes ``identity_owner_id`` on the
-        ``mcp_caller`` arm only; its ``channel_caller`` arm deliberately honors
-        no owner override — "a channel session owned by anyone but the sender
-        would let one external caller reach another user's installs". A channel
-        sender reaching the body would therefore create and **commit** a
-        session owned by the external caller and only then trip
+        **The supported kinds are named in ``_IDENTITY_SESSION_SENDER_KINDS``,
+        and the check is up front.** ``_select_session_owner_id`` consumes
+        ``identity_owner_id`` on the ``mcp_caller`` and ``channel_caller`` arms
+        only. A sender whose arm honors no owner override would reach the body,
+        create and **commit** a session owned by the caller, and only then trip
         ``_stamp_new_session``'s unknown-key ``ValueError``: a wrong session
         that already exists, plus an unhandled error. Rejecting the kind before
-        any write turns that tripwire into a guard. Widening the
-        ``channel_caller`` owner arm is a security decision that belongs in
-        **Phase 3** of ``docs/plans/channels_identity_unification/``, the change
-        which turns identity candidates on for channels — not here. Lifting
-        ``_IDENTITY_SESSION_SENDER_KINDS`` must happen in that *same* change,
-        the one that teaches ``_select_session_owner_id`` how a
-        ``channel_caller`` sender owns an identity session. Either half alone is
-        the bug: the allowlist without the owner arm rejects a legitimate
-        sender, the owner arm without the allowlist is unreachable, and lifting
-        the allowlist first re-opens the committed-wrong-owner path this guard
-        closes.
+        any write turns that tripwire into a guard — which is why that set and
+        the owner arms are edited together, never one without the other.
+
+        **The channel path does not come through here.** Phase 3 routes an
+        identity-selected channel message through ``ingest_inbound_message``
+        (plan §2.3), the door that also carries the message text and supports
+        resume — neither of which this method does. ``channel_caller`` is on
+        the allowlist so the two lists agree, not because a channel calls this.
         """
         if sender.kind not in _IDENTITY_SESSION_SENDER_KINDS:
             raise PermissionError(
@@ -304,15 +330,20 @@ class ChannelIngestionService:
                 "identity session requires a sender with a platform_user_id"
             )
 
+        # One policy object, handed to both steps. ``assert_access`` decides
+        # whether the grant is live; ``_select_session_owner_id`` needs the very
+        # same grant to let the owner override through. Building it twice would
+        # let the two disagree about which claim is being honoured.
+        policy = ChannelAccessPolicy(
+            expected_owner_id=agent.owner_id,
+            require_caller_in_route=True,
+            identity_grant=grant,
+        )
         ChannelIngestionService.assert_access(
             db=db,
             agent=agent,
             sender=sender,
-            policy=ChannelAccessPolicy(
-                expected_owner_id=agent.owner_id,
-                require_caller_in_route=True,
-                identity_grant=grant,
-            ),
+            policy=policy,
         )
         session, _ = ChannelIngestionService.resolve_or_create_session(
             db=db,
@@ -320,6 +351,7 @@ class ChannelIngestionService:
             sender=sender,
             thread_key=None,
             integration_type=integration_type,
+            access_policy=policy,
             extra_session_kwargs={
                 "mode": mode,
                 # Owner of the session is the identity owner, not the agent
@@ -520,8 +552,14 @@ class ChannelIngestionService:
         agent: Agent,
         sender: SessionSender,
         extra_session_kwargs: dict[str, Any],
+        policy: ChannelAccessPolicy | None = None,
     ) -> UUID:
-        """Pick `Session.user_id` per the §4.2 sender-kind table."""
+        """Pick `Session.user_id` per the §4.2 sender-kind table.
+
+        ``policy`` is the caller's access policy, and the ``channel_caller``
+        arm below requires the grant on it before it will place a session in
+        anyone but the sender's space. Nothing else reads it.
+        """
         kind = sender.kind
 
         if kind == "webui_user":
@@ -536,12 +574,60 @@ class ChannelIngestionService:
             return sender.platform_user_id
 
         if kind == "channel_caller":
-            # The external sender's own account. No override is honored — a
-            # channel session owned by anyone but the sender would let one
-            # external caller reach another user's installs.
+            # Normally the external sender's own account: a channel session
+            # owned by anyone but the sender would let one external caller
+            # reach another user's installs.
             if sender.platform_user_id is None:
                 raise ValueError("channel_caller sender must carry platform_user_id")
-            return sender.platform_user_id
+
+            # The one exception, added in Phase 3 of
+            # ``docs/plans/channels_identity_unification/``: identity routing.
+            # The agent belongs to the identity OWNER and runs in their space on
+            # their credentials, so the session is theirs — the sender is
+            # recorded as ``identity_caller_id`` instead. Session ownership is
+            # the inversion the whole feature turns on; see
+            # ``create_identity_session``.
+            #
+            # **The override is admitted only in the presence of the grant that
+            # authorizes it, and that is a structural requirement, not a
+            # convention.** An earlier version reasoned that ``assert_access``
+            # must already have run and therefore the ``== agent.owner_id`` tie
+            # was enough. That was true of the callers of the day and of no
+            # caller in particular: ``resolve_or_create_session`` is public, has
+            # callers outside the channel pipeline, and a future one that built
+            # a ``channel_caller`` sender with ``identity_owner_id ==
+            # agent.owner_id`` and skipped the access check would have got a
+            # *committed* session inside the agent owner's space with nothing
+            # verified. Requiring the grant object here means the arm cannot be
+            # satisfied without the thing that authorizes it — the same reason
+            # ``_IDENTITY_SESSION_SENDER_KINDS`` and this method are edited as
+            # one halves-that-move-together pair, applied one level further out.
+            #
+            # The three ids are pinned to each other, not merely present:
+            # ``grant.owner_id == agent.owner_id == identity_owner_id``. A grant
+            # naming a different owner than the agent's is not evidence for this
+            # override, and ``assert_access`` — which re-reads all six identity
+            # conditions, including ``binding.owner_id == agent.owner_id ==
+            # grant.owner_id`` — is still what makes it live rather than merely
+            # well-shaped.
+            identity_owner_id = extra_session_kwargs.pop("identity_owner_id", None)
+            if identity_owner_id is None:
+                return sender.platform_user_id
+            grant = policy.identity_grant if policy is not None else None
+            if grant is None:
+                raise PermissionError(
+                    "channel_caller identity_owner_id requires an identity "
+                    "grant on the access policy: "
+                    f"identity_owner_id={identity_owner_id}"
+                )
+            if not (grant.owner_id == agent.owner_id == identity_owner_id):
+                raise PermissionError(
+                    "channel_caller identity owner mismatch: "
+                    f"identity_owner_id={identity_owner_id}, "
+                    f"agent.owner_id={agent.owner_id}, "
+                    f"grant.owner_id={grant.owner_id}"
+                )
+            return identity_owner_id
 
         if kind == "a2a_caller":
             # External A2A target types (e.g. identity_mcp, external) own
@@ -588,11 +674,51 @@ class ChannelIngestionService:
         # pins the session id, so this is the second gate on the same fact.
         if kind in ("webui_user", "task_executor", "platform_user", "channel_caller"):
             if existing.user_id != sender.platform_user_id:
-                raise PermissionError(
-                    f"session.user_id={existing.user_id} does not match "
-                    f"sender.platform_user_id={sender.platform_user_id} "
-                    f"(kind={kind})"
-                )
+                # **One narrow exception, and only for ``channel_caller``.** An
+                # identity-routed channel session is owned by the identity
+                # OWNER by design (plan §2.3), so this mismatch is the normal
+                # shape of every message after the first — without the
+                # exception the second message in an HR thread is refused,
+                # permanently. It is permitted only when the session names this
+                # very sender as its identity caller; nothing wider, and in
+                # particular never "the session has an identity caller".
+                #
+                # This is a *linkage* check, not the authorization. The
+                # authorization is `assert_access`, which runs BEFORE this
+                # method on every message (`ingest_inbound_message` step 1,
+                # ahead of `resolve_or_create_session`) and re-reads the whole
+                # grant reconstructed from this row — so a revoked sender is
+                # refused regardless of what this arm concludes.
+                #
+                # **Two independent gates, and it is worth being exact about
+                # which covers what — an under-claiming comment on a security
+                # boundary invites the wrong one being removed.** The exception
+                # is self-standing: its condition compares
+                # `existing.identity_caller_id` against the sender on the
+                # session row itself, so a deliberately mismatched
+                # `(binding, user)` pair — binding owned by X, session owned by
+                # HR with `identity_caller_id = X`, called with a sender whose
+                # `platform_user_id` is Z — fails the comparison and raises
+                # here, with no help from anything upstream.
+                #
+                # The upstream thread-ownership invariant is what protects the
+                # **unchanged non-identity arm** above (`existing.user_id ==
+                # sender.platform_user_id`), where the binding pinning
+                # `session_id` plus "the sender is the binding's user" is the
+                # whole argument. That invariant is enforced, not merely
+                # assumed: `ChannelInboundService._ingest` refuses a
+                # `user.id != binding.user_id` pair at its own entry, which is
+                # where every channel path into this method meets.
+                if not (
+                    kind == "channel_caller"
+                    and existing.identity_caller_id is not None
+                    and existing.identity_caller_id == sender.platform_user_id
+                ):
+                    raise PermissionError(
+                        f"session.user_id={existing.user_id} does not match "
+                        f"sender.platform_user_id={sender.platform_user_id} "
+                        f"(kind={kind})"
+                    )
             return
 
         if kind == "mcp_caller":

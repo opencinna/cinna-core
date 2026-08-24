@@ -44,7 +44,7 @@
 | `owner_id` | UUID | FK > user.id, CASCADE, indexed | Identity owner; also acts as the identity's primary key for callers |
 | `agent_id` | UUID | FK > agent.id, CASCADE, indexed | Agent exposed through this binding |
 | `trigger_prompt` | Text | NOT NULL | Describes when Stage 2 should select this agent |
-| `message_patterns` | Text | nullable | Newline-separated fnmatch patterns for Stage 2 pattern matching |
+| `message_patterns` | Text | nullable | **Dead column.** Newline-separated fnmatch patterns; Stage 2 stopped reading it in Phase 1 of the channels & identity unification (glob pre-matching deleted). Still stored and editable in the UI; dropped by a later phase |
 | `session_mode` | str(20) | default: "conversation" | Session mode for routing to this agent |
 | `is_active` | bool | default: true | Owner toggle — disable agent for all callers at once |
 | `created_at` | datetime | default: now | |
@@ -82,11 +82,11 @@ Three nullable columns added to the existing `session` table:
 Identity sessions additionally store non-queryable display data in `session_metadata`:
 - `identity_caller_name` — caller's full name (for session header label)
 - `identity_owner_name` — identity owner's full name (returned as `agent_name` in MCP response)
-- `identity_match_method` — Stage 2 match method: `"only_one"`, `"pattern"`, or `"ai"`
+- `identity_match_method` — Stage 2 match method: `"only_one"` or `"ai"`. `"pattern"` is no longer producible — glob pre-matching was deleted in Phase 1 of the channels & identity unification
 - `app_mcp_route_type` — fixed value `"identity"`
 - `app_mcp_match_method` — Stage 1 match method
 
-`integration_type` is set to `"identity_mcp"` for identity sessions (distinct from `"app_mcp"`).
+`integration_type` is `"identity_mcp"` for identity sessions **created on the App MCP path** (distinct from `"app_mcp"`). It is **not** the marker of "an identity session" in general: since Phase 3 of the channels & identity unification an identity-routed *channel* session keeps `integration_type = "channel_<type>"`, because `ChannelOutboundService._resolve_channel_session` gates reply delivery on that prefix — stamping such a session `identity_mcp` would route correctly, run correctly, and never deliver a reply. The reliable cross-surface markers are the three identity columns (`identity_caller_id` / `identity_binding_id` / `identity_binding_assignment_id`). The channel path also stamps `identity_caller_name` into `session_metadata` (same key, so one UI branch serves both) but deliberately not `identity_owner_name`, since there the owner is the session's own user.
 
 ## Pydantic Schemas
 
@@ -257,6 +257,20 @@ binding_assignment_id: uuid.UUID
 match_method: str  # "only_one" | "ai"
 ```
 
+## Consumers
+
+Identity is a routing-layer concept; `IdentityCandidateProvider` (Stage 1 candidates) and `IdentityRoutingService` (Stage 2) are shared, and each surface composes them into its own ballot:
+
+| Consumer | Composes Stage 1 | Calls Stage 2 from | Extra gate | Session |
+|---|---|---|---|---|
+| App MCP Server | `AppMCPRoutingService.route_message` (routes + identities) | `_route_identity` in the same service | none beyond the per-person contact toggle | `ChannelIngestionService.create_identity_session`, `integration_type="identity_mcp"` |
+| Server Channels (Phase 3) | `ChannelRoutingService._route_installed` (owned agents + identities) | `ChannelRoutingService._route_identity`, inside `decide` | the sender's `channel_user_setting.allow_identity_routing` | `ChannelInboundService._ingest` → `ingest_inbound_message`, `integration_type="channel_<type>"` |
+
+The channel path differs in two further respects worth pinning here:
+
+- **Authorization crosses a thread hop.** Stage 2 returns an `IdentityGrant` (owner/binding/assignment) on `RoutingDecisionResult.identity_grant`; `ChannelIngestionService.assert_access`'s `channel_caller` arm re-reads all six conditions via `IdentityService.verify_identity_access` before any session exists, and does so again on every subsequent message (the grant is rebuilt from the session row by `_resume_identity_grant`, never cached). The App MCP `mcp_caller` arm carries the grant but does not consult it — its per-message check is the liveness-only resume check.
+- **Session vs. thread ownership diverge.** `session.user_id` is the identity owner; `ChannelThreadBinding.user_id` stays the sender.
+
 ## Integration with App MCP Routing
 
 ### `EffectiveRoute` (extended)
@@ -382,7 +396,7 @@ Extended with a third option in the type selector step of the creation dialog: "
 
 ### Session Header Label
 
-For sessions with `integration_type = "identity_mcp"`, the session header shows: "Via Identity — initiated by {identity_caller_name}" (sourced from `session_metadata.identity_caller_name`).
+For sessions with `integration_type = "identity_mcp"`, the session header shows a "Via Identity" badge, suffixed with `{identity_caller_name}` from `session_metadata` when present. A **second** branch covers the channel path: `integration_type.startsWith("channel_")` **and** `session_metadata.identity_caller_name` renders "Via Identity — {caller}". Two branches rather than one because the channel session must keep its `channel_` prefix for the reply to deliver, so the badge cannot key off `integration_type` alone.
 
 ## Query Key Summary
 

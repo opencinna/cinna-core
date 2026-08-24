@@ -60,10 +60,25 @@ class ChannelThreadBinding(SQLModel, table=True):
     )
     # Channel-native thread identity. Unique per channel (see __table_args__).
     thread_key: str = Field(max_length=512)
-    # The resolved platform user — the external sender's own account. Sessions
-    # for this binding are owned by this user, never by the agent publisher.
+    # The resolved platform user — the external sender's own account. This is
+    # **thread ownership**: "this thread belongs to this person", the fact that
+    # stops another member of a group space from posting into a conversation
+    # that is not theirs. It is re-checked on the synchronous path and again in
+    # `_handle_lost_race`, and it never changes for the life of the row.
+    #
+    # It is NOT session ownership, and since Phase 3 of the channels & identity
+    # unification the two genuinely diverge. On an identity-routed thread
+    # `agent_id` is an agent belonging to somebody else — the identity owner —
+    # and the session runs in *their* space, so `session.user_id` is the owner
+    # while this column stays the sender. `session.identity_caller_id` is then
+    # the sender, and it is what the resume path matches against. Read this
+    # column for "whose thread is this"; read the session for "whose workspace
+    # is answering". Any consumer that treats them as one value is asking a
+    # question one of them cannot answer.
     user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", index=True)
     # Uninstalling the agent cascades the binding away ⇒ next message re-routes.
+    # On an identity thread that is the *identity owner's* agent, so the owner
+    # deleting it ends the thread as surely as a revocation would.
     agent_id: uuid.UUID = Field(foreign_key="agent.id", ondelete="CASCADE")
     # NULL while pending_install, or after the session was deleted.
     session_id: uuid.UUID | None = Field(

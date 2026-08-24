@@ -30,11 +30,11 @@ The four numbered structural facts in the module docstring of
 ``channel_routing_service.py``, one parameterized case each, numbered to match
 that docstring so a failure names the fact a reader can go and read:
 
-1. **No caller session crosses the boundary.** ``ChannelRoutingService.decide``
-   takes no database session parameter. A caller session crossing that boundary
-   is what would let the decision commit, roll back, or add to somebody else's
-   transaction; keeping ids and text on the signature is the same rule
-   ``run_in_thread`` already enforces one level down.
+1. **No caller session crosses the boundary.** The module's entry point
+   (``ChannelRoutingService.decide``) takes no database session parameter. A
+   caller session crossing that boundary is what would let the decision commit,
+   roll back, or add to somebody else's transaction; keeping ids and text on the
+   signature is the same rule ``run_in_thread`` already enforces one level down.
 2. **The sessions it opens are read-only in practice.** The module calls no
    session-writing method (``add``/``commit``/``delete``/...), so a direct write
    cannot slip past the name blocklist in #3, which is a list of nouns and blind
@@ -51,25 +51,67 @@ that docstring so a failure names the fact a reader can go and read:
    data" is a property of the boundary in both directions, not just the
    outbound one.
 
+OVER WHICH MODULES, AND WHY TWO
+-------------------------------
+Every fact above runs over **two** modules, listed in ``_GUARDED`` below:
+``channel_routing_service.py`` and ``app/services/identity/
+identity_routing_service.py``.
+
+The second one arrived with Phase 3 of the channels & identity unification,
+which made ``decide`` call ``IdentityRoutingService.route_within_identity``
+(identity Stage 2) from inside itself when the classifier picks a person. From
+that moment a caller session accepted there, a write made there, an effect
+imported there, or an ORM row returned from there is a violation of the *same*
+four facts, one call deeper, underneath a route documented as having no side
+effects. That module's own docstring had stated the four and said in as many
+words that they were "held by review here, not by a test", naming this exact
+change as one of the two ways to close it. This is that closure.
+
+The two are **not identical in shape**, and the differences are data on the
+``_GuardedModule`` record rather than branches inside the checkers: the entry
+point is ``decide`` in one and ``route_within_identity`` in the other, the
+plain-data result class is ``RoutingDecisionResult`` versus
+``IdentityRoutingResult``, and only the routing module takes a second
+plain-data value (``ResolvedChannelPolicy``) IN across the same boundary.
+Fact 4's checker therefore reads its class names off the record and walks the
+extra classes the record names, instead of hard-coding either.
+
 HOW IT IS STRUCTURED, AND WHY THAT SHAPE
 ----------------------------------------
 Each fact is a ``_StructuralFact`` record in ``_FACTS`` below — number, id,
-description, and the callable that checks it — and a single parameterized test
-runs one fact per case. They are **not** collapsed into one shared assertion
-body: the four use genuinely different mechanisms (a name/import blocklist, a
-call-verb blocklist, a signature check, a return-annotation allowlist), and a
-common body would have to be generic enough to describe none of them. What is
-shared is the parameter list, the module parse, and the pytest id — not the
-reasoning. Each checker keeps its own failure message, naming which guarantee
-broke and where the code belongs instead.
+description, and the callable that checks it — and a single test is
+parameterized over ``_FACTS`` × ``_GUARDED``, one case per (fact, module) pair.
+They are **not** collapsed into one shared assertion body: the four use
+genuinely different mechanisms (a name/import blocklist, a call-verb blocklist,
+a signature check, a return-annotation allowlist), and a common body would have
+to be generic enough to describe none of them. What is shared is the parameter
+list, the module parse, and the pytest id — not the reasoning. Each checker
+keeps its own failure message, naming which guarantee broke and where the code
+belongs instead.
+
+**Two parametrize decorators, not a second copy of the checkers.** Master plan
+§2.14 of the channels & identity unification settles that this file gets
+*restructured* into parameterized sub-tests rather than grown ad hoc, and the
+second module is the first test of that: a duplicated ``_check_*`` family
+pointed at a different path would drift from this one within a phase, and the
+count meta-check below would then be asserting the shape of a list nobody kept
+in step. One family of checkers, two module records.
 
 **``_FACTS`` is the list of facts**, and its length is asserted against the
-count of numbered facts parsed out of ``channel_routing_service.py``'s module
-docstring (``test_fact_list_matches_the_service_module_docstring``). That test
-is the meta-check, not a fifth fact. It also asserts the checkers are distinct:
-parameterization costs the property that a missing checker was a missing test,
-because a record whose ``check=`` was copied from its neighbour still collects,
-still passes, and still counts — so that is checked rather than assumed.
+count of numbered facts parsed out of **each** guarded module's docstring
+(``test_fact_list_matches_the_service_module_docstring``, itself parameterized
+over ``_GUARDED``). That test is the meta-check, not a fifth fact. It also
+asserts the checkers are distinct: parameterization costs the property that a
+missing checker was a missing test, because a record whose ``check=`` was copied
+from its neighbour still collects, still passes, and still counts — so that is
+checked rather than assumed.
+
+Requiring *both* docstrings to state the same four is what keeps the second
+module a peer rather than a passenger. It is why ``identity_routing_service``'s
+list was renumbered in the change that added it here: it used to state three of
+these four plus a note about the ambient trace recorder, which is an
+implementation detail and not a structural fact, and a list that only mostly
+matches is exactly the shape this file exists to refuse.
 
 The count is asserted rather than merely asserted-in-prose because this file's
 own history is the argument for it: it claimed four structural facts while
@@ -101,8 +143,10 @@ SEE ALSO
 ``channel_routing_scope_test.py``, a sibling rather than an extension of this
 file. It guards a different property — that channel routing does not import the
 App MCP candidate set — over a module set that includes the candidate provider.
-The "four facts, four cases" pairing above is load-bearing, so a fifth fact in
-here about something else would blunt exactly the invariant it holds.
+The "four facts, one case per module" pairing above is load-bearing, so a fifth
+fact in here about something else would blunt exactly the invariant it holds.
+Growing the *module* list is the axis this file is built to grow along; growing
+the *fact* list is not.
 
 It does deliberately NOT try to be a reachability analysis. ``decide`` calls
 ``ChannelCandidateProvider`` and ``CatalogService``, which are read-only today
@@ -126,11 +170,52 @@ _BACKEND_ROOT = _HERE.parent.parent.parent  # backend/
 _ROUTING_MODULE = (
     _BACKEND_ROOT / "app" / "services" / "server_channels" / "channel_routing_service.py"
 )
+#: Identity Stage 2, called from inside `decide` since Phase 3 of the channels &
+#: identity unification — so the same four facts are facts about it. See the
+#: "OVER WHICH MODULES" section above.
+_IDENTITY_MODULE = (
+    _BACKEND_ROOT / "app" / "services" / "identity" / "identity_routing_service.py"
+)
 #: `decide()` also takes a `ResolvedChannelPolicy` value across the exact same
 #: thread boundary `RoutingDecisionResult` crosses back over — see the
-#: extended docstring on `_check_decide_returns_only_plain_data` below.
+#: extended docstring on `_check_returns_only_plain_data` below.
 _POLICY_MODULE = (
     _BACKEND_ROOT / "app" / "services" / "server_channels" / "channel_policy_service.py"
+)
+
+
+class _GuardedModule(NamedTuple):
+    """One module the four facts are enforced over, and how it is shaped.
+
+    The per-module differences live here as *data* so the checkers stay one
+    family. ``entry_point`` and ``result_class`` are the two things that
+    genuinely differ between the routing module and identity Stage 2;
+    ``also_plain_data`` is the extra classes fact 4 must walk for this module
+    (the value it takes IN across the same boundary), empty for a module that
+    takes none.
+    """
+
+    id: str
+    path: pathlib.Path
+    entry_point: str
+    result_class: str
+    also_plain_data: tuple[tuple[pathlib.Path, str], ...] = ()
+
+
+_GUARDED: tuple[_GuardedModule, ...] = (
+    _GuardedModule(
+        id="channel-routing",
+        path=_ROUTING_MODULE,
+        entry_point="decide",
+        result_class="RoutingDecisionResult",
+        also_plain_data=((_POLICY_MODULE, "ResolvedChannelPolicy"),),
+    ),
+    _GuardedModule(
+        id="identity-stage-2",
+        path=_IDENTITY_MODULE,
+        entry_point="route_within_identity",
+        result_class="IdentityRoutingResult",
+    ),
 )
 
 #: Names that perform, or are the gateway to, an effect the routing decision
@@ -184,6 +269,22 @@ _PLAIN_DATA_ANNOTATIONS = {
     # candidate provider. Plain data in the same sense a ``frozenset`` of ids
     # always is: no ORM instance, no session, nothing lazily loaded.
     "frozenset",
+    # ``RoutingDecisionResult.identity_grant`` — added deliberately in Phase 3
+    # of the channels & identity unification, which is the response that plan
+    # prescribes for a new field (§2.2): extend this allowlist, never loosen the
+    # assertion below.
+    #
+    # It qualifies on the same terms every other entry does. ``IdentityGrant``
+    # is a frozen dataclass of three UUIDs (``app/models/sessions/
+    # session_sender.py``) — an owner, a binding and an assignment id. Not a
+    # ``table=True`` model despite living in ``app/models``, so there is no ORM
+    # instance, no session behind it and nothing to lazily reload when the
+    # worker thread's session closes. Its own docstring makes the point this
+    # entry depends on: it carries *ids only*, and
+    # ``ChannelIngestionService.assert_access`` re-reads every one of them
+    # rather than trusting the object — which is precisely why it can afford to
+    # be plain data.
+    "IdentityGrant",
 }
 
 #: Session methods that write. ``_FORBIDDEN`` above catches effect-performing
@@ -207,7 +308,7 @@ _FORBIDDEN_SESSION_WRITES = {"add", "add_all", "commit", "delete", "flush", "mer
 _DOCSTRING_FACT_RE = re.compile(r"^(\d+)\.\s+\*\*(.+?)\*\*")
 
 
-def _module_tree(path: pathlib.Path = _ROUTING_MODULE) -> ast.Module:
+def _module_tree(path: pathlib.Path) -> ast.Module:
     assert path.is_file(), f"Expected {path} to exist"
     return ast.parse(path.read_text(encoding="utf-8"))
 
@@ -237,7 +338,9 @@ def _referenced_identifiers(tree: ast.Module) -> set[str]:
     return found
 
 
-def _function_def(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+def _function_def(
+    tree: ast.Module, name: str, path: pathlib.Path
+) -> ast.FunctionDef | ast.AsyncFunctionDef:
     found = next(
         (
             node
@@ -247,11 +350,11 @@ def _function_def(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFun
         ),
         None,
     )
-    assert found is not None, f"ChannelRoutingService.{name} not found"
+    assert found is not None, f"{name}() not found in {path.name}"
     return found
 
 
-def _class_def(tree: ast.Module, name: str) -> ast.ClassDef:
+def _class_def(tree: ast.Module, name: str, path: pathlib.Path) -> ast.ClassDef:
     found = next(
         (
             node
@@ -260,11 +363,11 @@ def _class_def(tree: ast.Module, name: str) -> ast.ClassDef:
         ),
         None,
     )
-    assert found is not None, f"{name} not found in {_ROUTING_MODULE.name}"
+    assert found is not None, f"{name} not found in {path.name}"
     return found
 
 
-def _docstring_facts(tree: ast.Module) -> list[tuple[int, str]]:
+def _docstring_facts(tree: ast.Module, path: pathlib.Path) -> list[tuple[int, str]]:
     """The ``(number, title)`` of every numbered fact the module docstring claims.
 
     Scoped to the **first contiguous run** numbered from 1, not to every match in
@@ -276,7 +379,7 @@ def _docstring_facts(tree: ast.Module) -> list[tuple[int, str]]:
     prose anchor is the thing a docstring edit changes.
     """
     docstring = ast.get_docstring(tree)
-    assert docstring, f"{_ROUTING_MODULE.name} has no module docstring"
+    assert docstring, f"{path.name} has no module docstring"
     facts: list[tuple[int, str]] = []
     for line in docstring.splitlines():
         match = _DOCSTRING_FACT_RE.match(line)
@@ -298,8 +401,10 @@ def _docstring_facts(tree: ast.Module) -> list[tuple[int, str]]:
 # --------------------------------------------------------------------------
 
 
-def _check_no_caller_session_crosses_the_boundary(tree: ast.Module) -> None:
-    """Fact 1 — ``decide``'s signature carries ids and text, never a session.
+def _check_no_caller_session_crosses_the_boundary(
+    tree: ast.Module, module: _GuardedModule
+) -> None:
+    """Fact 1 — the entry point carries ids and text, never a session.
 
     A ``Session`` argument is how a 'pure' function starts committing: it can
     add to, flush, commit or roll back a transaction the caller is holding, and
@@ -307,19 +412,28 @@ def _check_no_caller_session_crosses_the_boundary(tree: ast.Module) -> None:
     database access is through short-lived sessions its own worker threads open
     and close — which is also what lets the callers release their pooled
     connection for the whole cascade.
+
+    Identity Stage 2 is held to this for the same reason it is held to the rest:
+    it is reached from ``decide``, so a session parameter there would let a
+    routing decision move a transaction one call further down than anybody
+    reading ``decide``'s signature would look. Its own private ``_select``
+    takes an open session, deliberately — the fact is about the entry point,
+    which is the only thing a caller can reach.
     """
-    args = _function_def(tree, "decide").args
+    args = _function_def(tree, module.entry_point, module.path).args
     names = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
     offenders = names & _FORBIDDEN_DECIDE_PARAMS
     assert not offenders, (
-        f"ChannelRoutingService.decide takes {sorted(offenders)}. It must not: "
-        "a caller session crossing that boundary is what would let a routing "
-        "decision move somebody else's transaction. Pass ids and text; the "
-        "worker targets open their own sessions."
+        f"{module.path.name}::{module.entry_point} takes {sorted(offenders)}. "
+        "It must not: a caller session crossing that boundary is what would let "
+        "a routing decision move somebody else's transaction. Pass ids and "
+        "text; the worker targets open their own sessions."
     )
 
 
-def _check_sessions_it_opens_are_read_only(tree: ast.Module) -> None:
+def _check_sessions_it_opens_are_read_only(
+    tree: ast.Module, module: _GuardedModule
+) -> None:
     """Fact 2 — no ``add``/``commit``/``delete``/``flush``/``merge`` in the module.
 
     "The sessions it opens are read-only in practice" stated as an assertion
@@ -339,7 +453,7 @@ def _check_sessions_it_opens_are_read_only(tree: ast.Module) -> None:
     }
     offenders = called & _FORBIDDEN_SESSION_WRITES
     assert not offenders, (
-        f"app/services/server_channels/channel_routing_service.py calls "
+        f"{module.path.relative_to(_BACKEND_ROOT)} calls "
         f"{sorted(offenders)} on a session. A routing decision must not write: "
         "POST /api/v1/admin/routing/simulate runs this code over another "
         "account's routing state and is documented as having no effects. The "
@@ -349,12 +463,14 @@ def _check_sessions_it_opens_are_read_only(tree: ast.Module) -> None:
     )
 
 
-def _check_nothing_effectful_is_imported(tree: ast.Module) -> None:
-    """Fact 3 — no effect-performing name appears anywhere in the routing module."""
+def _check_nothing_effectful_is_imported(
+    tree: ast.Module, module: _GuardedModule
+) -> None:
+    """Fact 3 — no effect-performing name appears anywhere in the module."""
     referenced = _referenced_identifiers(tree)
     offenders = {name: why for name, why in _FORBIDDEN.items() if name in referenced}
     assert not offenders, (
-        "app/services/server_channels/channel_routing_service.py references "
+        f"{module.path.relative_to(_BACKEND_ROOT)} references "
         f"{sorted(offenders)}, which breaks the guarantee that a routing "
         "decision has no side effects.\n\n"
         + "\n".join(f"  - {name}: {why}" for name, why in sorted(offenders.items()))
@@ -389,7 +505,9 @@ def _plain_data_offenders(cls: ast.ClassDef) -> dict[str, list[str]]:
     return offenders
 
 
-def _check_decide_returns_only_plain_data(tree: ast.Module) -> None:
+def _check_returns_only_plain_data(
+    tree: ast.Module, module: _GuardedModule
+) -> None:
     """Fact 4 — ids, recorders and flags, never an ORM row.
 
     The passes run in worker threads that open a session, load rows and close
@@ -424,29 +542,46 @@ def _check_decide_returns_only_plain_data(tree: ast.Module) -> None:
     "HOW IT IS STRUCTURED" section) argues against growing ``_FACTS`` for
     something a stronger existing checker already covers -- see master plan
     §2.14.
+
+    **The class names come off the** ``_GuardedModule`` **record, not from
+    this function.** Identity Stage 2 returns ``IdentityRoutingResult | None``
+    where ``decide`` returns a bare ``RoutingDecisionResult``, so the return
+    annotation is compared as a *set of type names* rather than as a single
+    ``ast.Name``: ``X | None`` walks to ``{"X"}`` because ``None`` is a
+    constant, and ``-> tuple[Agent, ...]`` walks to something bigger and
+    fails. The extra classes on the other side of the boundary
+    (``ResolvedChannelPolicy``, today only the routing module's) are named on
+    the record too, so a module that takes no such value simply lists none.
     """
-    returns = _function_def(tree, "decide").returns
-    assert isinstance(returns, ast.Name) and returns.id == "RoutingDecisionResult", (
-        "ChannelRoutingService.decide must be annotated as returning "
-        "RoutingDecisionResult. It is the only return type whose fields are "
-        "pinned as plain data below, so annotating decide with anything else "
-        "silently drops structural fact #4 of the module docstring."
+    returns = _function_def(tree, module.entry_point, module.path).returns
+    returned = {
+        n.id if isinstance(n, ast.Name) else n.attr
+        for n in ast.walk(returns)
+        if isinstance(n, (ast.Name, ast.Attribute))
+    } if returns is not None else set()
+    assert returned == {module.result_class}, (
+        f"{module.path.name}::{module.entry_point} must be annotated as "
+        f"returning {module.result_class} (optionally `| None`), not "
+        f"{sorted(returned) or 'nothing'}. It is the only return type whose "
+        "fields are pinned as plain data below, so annotating the entry point "
+        "with anything else silently drops structural fact #4 of the module "
+        "docstring."
     )
 
-    result_cls = _class_def(tree, "RoutingDecisionResult")
+    result_cls = _class_def(tree, module.result_class, module.path)
     offenders = {
-        f"RoutingDecisionResult.{field}": types
+        f"{module.result_class}.{field}": types
         for field, types in _plain_data_offenders(result_cls).items()
     }
 
-    policy_tree = _module_tree(_POLICY_MODULE)
-    policy_cls = _class_def(policy_tree, "ResolvedChannelPolicy")
-    offenders.update(
-        {
-            f"ResolvedChannelPolicy.{field}": types
-            for field, types in _plain_data_offenders(policy_cls).items()
-        }
-    )
+    for extra_path, extra_name in module.also_plain_data:
+        extra_cls = _class_def(_module_tree(extra_path), extra_name, extra_path)
+        offenders.update(
+            {
+                f"{extra_name}.{field}": types
+                for field, types in _plain_data_offenders(extra_cls).items()
+            }
+        )
 
     assert not offenders, (
         "A field crossing the routing thread boundary is not plain data: "
@@ -476,7 +611,7 @@ class _StructuralFact(NamedTuple):
     number: int
     id: str
     description: str
-    check: Callable[[ast.Module], None]
+    check: Callable[[ast.Module, _GuardedModule], None]
 
 
 #: **The list of facts.** Not a convenience grouping of four tests that happen
@@ -505,38 +640,52 @@ _FACTS: tuple[_StructuralFact, ...] = (
     _StructuralFact(
         number=4,
         id="returns-only-plain-data",
-        description="decide() returns RoutingDecisionResult, all fields plain data",
-        check=_check_decide_returns_only_plain_data,
+        description="the entry point returns its result type, all fields plain data",
+        check=_check_returns_only_plain_data,
     ),
 )
 
 _FACT_IDS = [f"fact-{fact.number}-{fact.id}" for fact in _FACTS]
+_MODULE_IDS = [module.id for module in _GUARDED]
 
 
+@pytest.mark.parametrize("module", _GUARDED, ids=_MODULE_IDS)
 @pytest.mark.parametrize("fact", _FACTS, ids=_FACT_IDS)
-def test_routing_decision_module_has_no_side_effects(fact: _StructuralFact) -> None:
-    """Run one structural fact's checker over ``channel_routing_service.py``.
+def test_routing_decision_module_has_no_side_effects(
+    fact: _StructuralFact, module: _GuardedModule
+) -> None:
+    """Run one structural fact's checker over one guarded module.
 
-    One case per fact the service docstring claims. The checkers are separate
-    functions on purpose — each has its own mechanism and its own failure
-    message, and what is shared here is the parse and the parametrization, not
-    the reasoning.
+    One case per (fact, module) pair — the four facts each module's docstring
+    claims, over each module that ``decide`` runs code from. The checkers are
+    separate functions on purpose: each has its own mechanism and its own
+    failure message, and what is shared here is the parse and the
+    parametrization, not the reasoning.
     """
-    fact.check(_module_tree())
+    fact.check(_module_tree(module.path), module)
 
 
-def test_fact_list_matches_the_service_module_docstring() -> None:
-    """``_FACTS`` and the service docstring's numbered list are the same list.
+@pytest.mark.parametrize("module", _GUARDED, ids=_MODULE_IDS)
+def test_fact_list_matches_the_service_module_docstring(
+    module: _GuardedModule,
+) -> None:
+    """``_FACTS`` and each guarded module's numbered list are the same list.
 
-    The meta-check, not a fifth fact. ``channel_routing_service.py`` states its
-    structural facts in prose and says they are each executed by this file; it
-    was once written claiming four while this file enforced three, so that
-    pairing is asserted rather than trusted. A fifth fact over there fails here
-    until a fifth checker lands in the same change.
+    The meta-check, not a fifth fact. Both guarded modules state these
+    structural facts in prose and say they are each executed by this file;
+    ``channel_routing_service.py`` was once written claiming four while this
+    file enforced three, and ``identity_routing_service.py`` said outright that
+    its own four were "held by review here, not by a test" — so the pairing is
+    asserted rather than trusted, for both. A fifth fact in either docstring
+    fails here until a fifth checker lands in the same change.
+
+    Run per module rather than over the routing module alone because a fact
+    list that only *mostly* matches is the failure this file exists to refuse:
+    the second module is a peer, and a peer states the same four.
     """
-    claimed = _docstring_facts(_module_tree())
+    claimed = _docstring_facts(_module_tree(module.path), module.path)
     assert claimed, (
-        f"No numbered structural fact parsed out of {_ROUTING_MODULE.name}'s "
+        f"No numbered structural fact parsed out of {module.path.name}'s "
         "module docstring. That most likely means the list changed shape rather "
         "than that the facts were deleted: this file looks for "
         "``N. **Title.** ...`` starting at column 0, numbered contiguously from "
@@ -545,7 +694,7 @@ def test_fact_list_matches_the_service_module_docstring() -> None:
         "there to the checkers here."
     )
     assert len(claimed) == len(_FACTS), (
-        f"{_ROUTING_MODULE.name}'s module docstring claims {len(claimed)} "
+        f"{module.path.name}'s module docstring claims {len(claimed)} "
         f"structural facts but _FACTS has {len(_FACTS)} checkers.\n\n"
         "claimed: "
         + "; ".join(f"{n}. {title}" for n, title in claimed)

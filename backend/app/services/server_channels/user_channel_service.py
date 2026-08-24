@@ -47,10 +47,12 @@ from app.models import (
     Agent,
     ChannelUserAgent,
     ChannelUserSetting,
+    SecurityEventCreate,
     ServerChannel,
     UserChannelPublic,
     UserChannelUpdate,
 )
+from app.models.events import security_event as security_event_constants
 from app.services.server_channels.adapters.base import ChannelError
 from app.services.server_channels.channel_policy_service import (
     ChannelPolicyService,
@@ -181,7 +183,7 @@ class UserChannelService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def upsert_settings(
+    async def upsert_settings(
         session: DBSession,
         channel: ServerChannel,
         user_id: uuid.UUID,
@@ -199,6 +201,14 @@ class UserChannelService:
         The middle case is why this cannot be a plain ``if value is not None``
         loop: ``None`` is both "not supplied" and "inherit", and collapsing them
         would make an inheritable field impossible to un-set through the API.
+
+        **Async only because one field is audited.** Nothing here awaits a
+        database call — ``SecurityEventService.create_event`` is an ``async
+        def``, and ``allow_identity_routing`` earns a ``SecurityEvent`` (see
+        :meth:`_audit_identity_routing`). The audit is written *in the service*
+        rather than in the route, following ``ChannelInboundService._audit``:
+        the transition it records is old-value-to-new-value, and this is the
+        only place both values exist at once.
         """
         patch = data.model_dump(exclude_unset=True)
 
@@ -244,8 +254,17 @@ class UserChannelService:
         for field in ("is_enabled", "agent_scope", "pinned_agent_id"):
             if field in patch:
                 setattr(setting, field, patch[field])
+
+        # ``(before, after)`` for the audit below, and ``None`` when this
+        # request did not touch the field at all. Captured here because a fresh
+        # row from ``_create_setting`` already carries the column default
+        # (``False``), so "what it was" is readable in both the create and the
+        # patch case — and it stops being readable one line further down.
+        identity_transition: tuple[bool, bool] | None = None
         if "allow_identity_routing" in patch:
-            setting.allow_identity_routing = bool(patch["allow_identity_routing"])
+            after = bool(patch["allow_identity_routing"])
+            identity_transition = (bool(setting.allow_identity_routing), after)
+            setting.allow_identity_routing = after
 
         if agent_ids is not None:
             UserChannelService._replace_agent_list(session, setting.id, agent_ids)
@@ -253,6 +272,14 @@ class UserChannelService:
         setting.updated_at = datetime.now(UTC)
         session.add(setting)
         session.commit()
+        if identity_transition is not None:
+            await UserChannelService._audit_identity_routing(
+                session,
+                channel=channel,
+                user_id=user_id,
+                before=identity_transition[0],
+                after=identity_transition[1],
+            )
         session.refresh(channel)
         return UserChannelService.to_public(session, channel, user_id)
 
@@ -282,6 +309,93 @@ class UserChannelService:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _audit_identity_routing(
+        session: DBSession,
+        *,
+        channel: ServerChannel,
+        user_id: uuid.UUID,
+        before: bool,
+        after: bool,
+    ) -> None:
+        """Record a change to this person's identity-routing consent.
+
+        **Why this field and none of its neighbours.** ``is_enabled``,
+        ``agent_scope``, ``pinned_agent_id`` and the agent list all narrow or
+        widen what the sender can reach among *their own* agents; switching
+        them costs the sender nothing they did not already have. Turning
+        ``allow_identity_routing`` on is the one per-user channel setting that
+        changes whose workspace a message can end up in: a session opened this
+        way is owned by the identity owner, appears in *their* session list,
+        and its content is readable by them. It never inherits from a channel
+        default (master plan §3.4), so it is only ever true because this person
+        made it true — which is precisely the fact worth being able to
+        establish later, and cannot be reconstructed from the settings row,
+        which holds only the current value.
+
+        **Transitions only.** A save that leaves the value where it was is not
+        a change and writes nothing; a settings form that submits every field
+        would otherwise write a row on every save. The event answers "when did
+        this become true, and who made it so", and a no-op write has no answer
+        to contribute.
+
+        Best-effort, like every other audit in this domain
+        (``ChannelInboundService._audit``): the setting is already committed by
+        the time this runs, and failing the caller's request because the audit
+        write failed would turn a logging fault into a user-visible error on a
+        change that did land.
+        """
+        if before == after:
+            return
+        try:
+            from app.services.events.security_event_service import (
+                SecurityEventService,
+            )
+
+            await SecurityEventService.create_event(
+                session=session,
+                user_id=user_id,
+                data=SecurityEventCreate(
+                    event_type=(
+                        security_event_constants.SERVER_CHANNEL_IDENTITY_ROUTING_CHANGED
+                    ),
+                    # Not "low", which is what the admin channel-config rows
+                    # carry: those change what a channel offers, this changes
+                    # who may read the sender's conversations. Same level the
+                    # agent-API grant audit uses, for the same kind of fact.
+                    severity="medium",
+                    details={
+                        "channel_id": str(channel.id),
+                        "channel_type": channel.channel_type,
+                        "allow_identity_routing": after,
+                        "previous": before,
+                    },
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to write identity-routing security event for user %s "
+                "on channel %s",
+                user_id,
+                channel.id,
+            )
+            # Without this the promise two paragraphs up is false.
+            # ``SecurityEventService.create_event`` commits on **this** session,
+            # so a failure inside it leaves the transaction needing a rollback,
+            # and the caller's very next statement (``session.refresh(channel)``
+            # in ``update_settings``) would raise ``PendingRollbackError`` out
+            # of the route — the audit failing the request it was written never
+            # to fail. Best-effort has to include cleaning up after itself.
+            try:
+                session.rollback()
+            except Exception:  # noqa: BLE001 — never mask the real error
+                logger.exception(
+                    "Could not roll back after the identity-routing audit "
+                    "write for user %s on channel %s",
+                    user_id,
+                    channel.id,
+                )
 
     @staticmethod
     def _create_setting(

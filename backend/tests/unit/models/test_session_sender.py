@@ -896,6 +896,84 @@ class TestGetSessionSender:
         )
         assert get_session_sender(session).kind == "channel_caller"
 
+    # ── channel_* + identity routing (channels & identity unification, ph. 3) ──
+    #
+    # The API-observable end of this pair — an identity-routed Google Chat
+    # session appearing in the OWNER's session list while the reply goes back
+    # to the SENDER's thread — is covered in
+    # `tests/api/server_channels/server_channels_identity_routing_test.py`.
+
+    def test_channel_with_identity_caller_reports_the_caller_not_the_owner(
+        self,
+    ) -> None:
+        """An identity-routed channel session is owned by the identity OWNER.
+
+        `session.user_id` is HR; the human who actually wrote the message is
+        `identity_caller_id`. This reader answers "who sent this?", and it has
+        no second gate behind it to catch a wrong answer, so naming HR as the
+        sender of a message HR never wrote is exactly the mistake it exists to
+        prevent.
+        """
+        owner = uuid.uuid4()
+        caller = uuid.uuid4()
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            identity_caller_id=caller,
+            session_metadata={"sender_external_id": "google_chat:users/999"},
+        )
+        sender = get_session_sender(session)
+        assert sender.kind == "channel_caller"
+        assert sender.platform_user_id == caller
+        assert sender.platform_user_id != owner
+        # `external_id` already records the real sender at create time, so it
+        # needs no identity branch of its own.
+        assert sender.external_id == "google_chat:users/999"
+
+    def test_channel_with_identity_caller_and_no_metadata_uses_the_caller_id(
+        self,
+    ) -> None:
+        """The fallback follows the caller too, not the owner.
+
+        With no `sender_external_id` stamped, `external_id` falls back to the
+        same person `platform_user_id` names — which on this branch is the
+        identity caller. Falling back to `session.user_id` here would surface
+        HR's id as the external sender's identifier.
+        """
+        owner = uuid.uuid4()
+        caller = uuid.uuid4()
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            identity_caller_id=caller,
+            session_metadata={},
+        )
+        sender = get_session_sender(session)
+        assert sender.kind == "channel_caller"
+        assert sender.external_id == str(caller)
+        assert sender.platform_user_id == caller
+
+    def test_channel_without_identity_caller_still_reports_the_owner(self) -> None:
+        """The other direction, so the branch above cannot be over-applied.
+
+        An ordinary channel session leaves `identity_caller_id` NULL, and there
+        the session owner IS the external sender's platform user. Asserted
+        explicitly because the `or` fallback makes the two branches one
+        expression: a change that reversed the operands would break only this
+        case, and only this test would say so.
+        """
+        owner = uuid.uuid4()
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            identity_caller_id=None,
+            session_metadata={},
+        )
+        sender = get_session_sender(session)
+        assert sender.kind == "channel_caller"
+        assert sender.external_id == str(owner)
+        assert sender.platform_user_id == owner
+
     def test_channel_round_trip_with_from_channel(self) -> None:
         """The constructor's external_id survives a round-trip through the reader."""
         owner = uuid.uuid4()

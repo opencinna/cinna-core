@@ -20,9 +20,12 @@ deliberately —
    already enforced for the worker targets, applied one level up.)
 2. **The sessions it opens are read-only in practice.** Both thread targets
    open a short-lived session, issue ``SELECT``s through
-   ``ChannelCandidateProvider`` / ``CatalogService``, and close it. Neither
-   calls ``add``/``commit``/``delete``, and ``create_session`` does not commit
-   on exit. Note the pairing is not one service per pass: Pass 1 reads the
+   ``ChannelCandidateProvider`` / ``IdentityCandidateProvider`` /
+   ``CatalogService``, and close it. Neither calls ``add``/``commit``/
+   ``delete``, and ``create_session`` does not commit on exit. Identity
+   Stage 2 opens a third such session of its own, under the same rule and for
+   the same reason — see the identity paragraph below. Note the pairing is
+   not one service per pass: Pass 1 reads the
    catalog too, through the same ``CatalogService``, when its single-candidate
    short-circuit needs to know whether Pass 2 could offer this sender anything
    (see ``_catalog_ballot``). That read is an availability probe — it selects,
@@ -44,6 +47,25 @@ them: a structural fact asserted only in prose is a claim, not a guarantee.
 This list is not to be extended without extending the test in the same change
 — it was written claiming four while the test enforced three, which put the
 fact a reader most needed in the one place nothing would catch it.
+
+**Identity Stage 2 runs inside this boundary, and inherits all four.** When
+Stage 1's ballot puts a *person* on it (``IdentityCandidateProvider``, gated on
+``policy.allow_identity_routing``) and that person wins, ``decide`` hands off to
+``IdentityRoutingService.route_within_identity``, which resolves *which of that
+person's agents* takes the message. It is called from inside ``decide``, so the
+four facts above are facts about it too: a caller session it accepted, a write
+it made, an effect it imported, or an ORM row it returned would each be that
+violation one call deeper — and would land on a route documented as having no
+side effects. ``identity_routing_service.py``'s own module docstring states the
+same four; the purity test is parameterized over both modules, so that
+statement is executed there rather than reviewed.
+
+What crosses back from Stage 2 is ``IdentityGrant`` — three UUIDs on a frozen
+dataclass — carried on :class:`RoutingDecisionResult` for the caller to hand to
+``ChannelIngestionService.assert_access``, which **re-reads and re-verifies**
+every one of them. This module never treats the grant as a conclusion, and
+nothing downstream may either: the decision and the session are separated by a
+thread hop, and the identity owner may have revoked in between.
 
 **Channel policy arrives as a value, and is never looked up here.** ``decide``
 takes a ``ResolvedChannelPolicy`` — the sender's agent scope, their pinned
@@ -96,6 +118,7 @@ from app.models import (
     Agent,
     AgentBundle,
     AgentBundleRevision,
+    IdentityGrant,
     ServerAutoInstallBundle,
     User,
 )
@@ -264,6 +287,28 @@ class CatalogBallot:
 
 
 @dataclass(frozen=True)
+class IdentitySelection:
+    """Stage 1 chose a **person**, and what Stage 2 then made of that.
+
+    Plain data — one UUID and a frozen dataclass of three more — because it
+    crosses the worker-thread boundary alongside :class:`CatalogBallot`. No
+    ``IdentityAgentBinding`` row: the session Stage 2 read it in is closed
+    before ``decide`` returns.
+
+    ``grant is None`` means **Stage 2 ran and selected nothing** — every
+    binding this sender could reach was switched off, or the classifier picked
+    none of them. It does not mean Stage 2 was skipped; this object exists only
+    on the branch where it ran. That distinction is the whole reason the object
+    is returned at all instead of just the grant: *"the sender addressed a
+    person"* is a fact about the decision that outlives Stage 2's answer, and
+    it is what bars Pass 2 (see :meth:`ChannelRoutingService.decide`).
+    """
+
+    owner_id: uuid.UUID
+    grant: IdentityGrant | None = None
+
+
+@dataclass(frozen=True)
 class RoutingDecisionResult:
     """What routing decided, plus the recorders that explain it.
 
@@ -283,6 +328,18 @@ class RoutingDecisionResult:
     pass1_trace: RoutingTrace | None = None
     pass2_trace: RoutingTrace | None = None
     catalog_ran: bool = False
+    #: Set only when routing crossed into another person's workspace: Stage 1
+    #: picked an identity and Stage 2 selected one of that person's agents.
+    #: ``agent_id`` is then an agent the **sender does not own**, and this is
+    #: the only thing that permits a session on it — the caller passes it to
+    #: ``ChannelIngestionService.assert_access`` as
+    #: ``ChannelAccessPolicy.identity_grant``.
+    #:
+    #: A *claim*, never a conclusion. ``assert_access`` re-reads all six facts
+    #: behind it; nothing here or downstream may skip that (see
+    #: ``IdentityGrant``'s own docstring). ``None`` on every other branch,
+    #: which leaves the three-way owner invariant exactly as strict as it was.
+    identity_grant: IdentityGrant | None = None
 
     @property
     def persist_args(self) -> tuple[RoutingTrace | None, RoutingTrace | None]:
@@ -382,6 +439,15 @@ class ChannelRoutingService:
         Pass 1 did not scan — in which case Pass 2 scans for itself exactly as
         it always has.
 
+        **Identity is an outcome of Pass 1, and it is terminal.** When
+        ``policy.allow_identity_routing`` is on, Pass 1's ballot also carries
+        the people this sender may address, and a person winning it hands off
+        to Stage 2 (:meth:`_route_identity`). Both of Stage 2's answers end the
+        decision: an agent, returned with the :class:`IdentityGrant` that
+        permits a session on it, or nothing, which is an ordinary ``no_match``.
+        Neither falls through to Pass 2 — see the gate below for why, and
+        :meth:`_route_installed` for how the two ballots compose.
+
         **``policy`` is required, and it is not the door.** It carries three
         things into the decision — the sender's agent scope, their pinned
         agent, and whether Pass 2 may run — each consumed below or in
@@ -403,7 +469,12 @@ class ChannelRoutingService:
         exists for, and is separately answerable through
         ``GET /users/me/channels``.
         """
-        agent_id, pass1_trace, ballot = await ChannelRoutingService.run_in_thread(
+        (
+            agent_id,
+            pass1_trace,
+            ballot,
+            identity,
+        ) = await ChannelRoutingService.run_in_thread(
             ChannelRoutingService._route_installed_in_thread,
             user_id,
             text,
@@ -414,10 +485,26 @@ class ChannelRoutingService:
             actor_user_id,
             include_catalog,
         )
-        if agent_id is not None or not ChannelRoutingService._catalog_may_run(
-            policy, include_catalog=include_catalog
+        if (
+            agent_id is not None
+            # Stage 1 picked a *person*. Pass 2 does not run, whether or not
+            # Stage 2 then found one of their agents: auto-installing a catalog
+            # bundle is not an answer to "ask HR about my time off", and a
+            # sender whose addressee turned out to be unreachable is owed
+            # ``no_match`` — the existing "couldn't find an agent" reply —
+            # rather than an install they never asked for. Pass 1 was the whole
+            # decision on this branch, which is also what makes
+            # ``persist_args`` write it as one row.
+            or identity is not None
+            or not ChannelRoutingService._catalog_may_run(
+                policy, include_catalog=include_catalog
+            )
         ):
-            return RoutingDecisionResult(agent_id=agent_id, pass1_trace=pass1_trace)
+            return RoutingDecisionResult(
+                agent_id=agent_id,
+                pass1_trace=pass1_trace,
+                identity_grant=identity.grant if identity is not None else None,
+            )
 
         bundle_uuid, pass2_trace = await ChannelRoutingService.run_in_thread(
             ChannelRoutingService._route_catalog_in_thread,
@@ -583,13 +670,21 @@ class ChannelRoutingService:
         origin: str = routing_trace.ORIGIN_SERVER_CHANNEL,
         actor_user_id: uuid.UUID | None = None,
         include_catalog: bool = True,
-    ) -> tuple[uuid.UUID | None, RoutingTrace | None, CatalogBallot | None]:
+    ) -> tuple[
+        uuid.UUID | None,
+        RoutingTrace | None,
+        CatalogBallot | None,
+        IdentitySelection | None,
+    ]:
         """Thread target for Pass 1. Owns its session.
 
-        Returns ``(agent id, trace, ballot)``. The third element is Pass 2's
-        candidate set when the single-candidate probe computed one *and* Pass 2
-        is still going to run — see :class:`CatalogBallot` and the recording
-        rule below.
+        Returns ``(agent id, trace, ballot, identity)``. The third element is
+        Pass 2's candidate set when the single-candidate probe computed one
+        *and* Pass 2 is still going to run — see :class:`CatalogBallot` and the
+        recording rule below. The fourth is set only when Stage 1 picked a
+        person; it is plain data for the same reason everything else here is
+        (:class:`IdentitySelection`), and ``decide`` reads it both for the
+        grant and for the fact that Pass 2 must not run.
 
         ``policy`` is positional and third rather than tacked on the end with a
         default: ``run_in_thread`` forwards positional arguments only, so
@@ -612,9 +707,10 @@ class ChannelRoutingService:
         with create_session() as db:
             user = db.get(User, user_id)
             if user is None:
-                return None, None, None
+                return None, None, None, None
             trace: RoutingTrace | None = None
             ballot: CatalogBallot | None = None
+            identity: IdentitySelection | None = None
             try:
                 with RoutingTrace.capture(
                     origin=origin,
@@ -625,11 +721,11 @@ class ChannelRoutingService:
                     message=text,
                     stage=routing_trace.STAGE_PASS_1,
                 ) as trace:
-                    agent, ballot = ChannelRoutingService._route_installed(
+                    agent, ballot, identity = ChannelRoutingService._route_installed(
                         db, user, text, policy=policy, include_catalog=include_catalog
                     )
                     agent_id = agent.id if agent is not None else None
-                    if agent_id is None and include_catalog:
+                    if agent_id is None and include_catalog and identity is None:
                         # Pass 1 found nothing, so ``decide`` is about to reach
                         # for Pass 2 — and this sender's policy may stop it.
                         # Said here, inside Pass 1's capture, because by the
@@ -642,17 +738,33 @@ class ChannelRoutingService:
                         # reason it did not run: the admin who unticked the box
                         # already knows why, and reporting the policy underneath
                         # their own toggle answers a question nobody asked.
+                        #
+                        # Also gated on ``identity is None``: when Stage 1
+                        # picked a person, policy is not why Pass 2 will not
+                        # run — the identity decision is (see ``decide``) —
+                        # and the three notes this writes each name a control
+                        # that is not the one to go and look at.
                         ChannelRoutingService._record_pass_2_not_run(policy)
                     if agent_id is not None:
                         trace.record_outcome(
                             routing_trace.OUTCOME_ROUTED, selected_agent_id=agent_id
                         )
-                        # Pass 1 routed, so ``decide`` will not run Pass 2 —
-                        # this is the ballot's only chance to be recorded, and
-                        # the scan behind it genuinely happened. Written under
-                        # the ``pass_2`` stage (not ``pass_1``: they are Pass 2's
-                        # candidates) and marked as an availability check, so it
-                        # cannot be read as a Pass 2 that classified.
+                    if agent_id is not None or identity is not None:
+                        # Pass 1 was terminal, so ``decide`` will not run
+                        # Pass 2 — this is the ballot's only chance to be
+                        # recorded, and the scan behind it genuinely happened.
+                        # Written under the ``pass_2`` stage (not ``pass_1``:
+                        # they are Pass 2's candidates) and marked as an
+                        # availability check, so it cannot be read as a Pass 2
+                        # that classified.
+                        #
+                        # ``identity is not None`` belongs in this condition
+                        # for exactly the reason the ``agent_id`` half does:
+                        # Stage 1 picking a person also ends the decision, and
+                        # a ballot dropped here would lose every skip reason on
+                        # it — "each skip is recorded exactly once on every
+                        # path" is the rule :class:`CatalogBallot` states, and
+                        # it does not have a Stage-2-shaped exception.
                         ChannelRoutingService._record_catalog_ballot(
                             ballot, availability_only=True
                         )
@@ -710,7 +822,7 @@ class ChannelRoutingService:
             # ``ballot`` reaching the caller un-recorded is the same rule in the
             # other direction: Pass 2 is about to run and will record it there,
             # exactly once.
-            return agent_id, trace, ballot
+            return agent_id, trace, ballot, identity
 
     @staticmethod
     def _route_catalog_in_thread(
@@ -786,13 +898,14 @@ class ChannelRoutingService:
         *,
         policy: ResolvedChannelPolicy,
         include_catalog: bool = True,
-    ) -> tuple[Agent | None, CatalogBallot | None]:
-        """Pass 1 — route the message over the agents the sender **owns**.
+    ) -> tuple[Agent | None, CatalogBallot | None, IdentitySelection | None]:
+        """Pass 1 — route the message over what the sender may address.
 
-        Returns ``(agent, ballot)``. The ballot is Pass 2's candidate set when
-        the single-candidate probe below computed one, and ``None`` otherwise;
-        the caller is responsible for recording it exactly once (see
-        :class:`CatalogBallot`).
+        Returns ``(agent, ballot, identity)``. The ballot is Pass 2's candidate
+        set when the single-candidate probe below computed one, and ``None``
+        otherwise; the caller is responsible for recording it exactly once (see
+        :class:`CatalogBallot`). ``identity`` is set only when the winning
+        candidate named a *person* — see :meth:`_route_identity`.
 
         **The pin is answered before anything else runs** — see
         :meth:`_route_pinned_agent` for why it outranks both short-circuits and
@@ -812,13 +925,24 @@ class ChannelRoutingService:
         ``ChannelCandidateProvider`` builds the right set instead — see its
         module docstring, and ``docs/plans/channel_routing_scope_split_plan.md``.
 
-        Two consequences worth stating, because both are deliberate:
+        **Identities are a second provider, composed — not the old branch
+        restored.** ``IdentityCandidateProvider.build`` appends one candidate
+        per *person* this sender may address, and only when
+        ``policy.allow_identity_routing`` says so. Read the difference
+        carefully, because the two look alike from a distance and one of them
+        was an incident: the deleted branch inherited *somebody else's ballot*
+        — ``AppAgentRouteService.get_effective_routes_for_user`` — complete with
+        three App MCP enablement toggles, and then tried to reject the parts it
+        did not want downstream of the classifier. This adds a set built for
+        this surface, gated on this sender's own consent, *before* the
+        classifier, and a winner from it goes to Stage 2 rather than to a
+        rejection. Providers compose; surfaces do not borrow (master plan §3.1).
+        ``SKIP_IDENTITY_ROUTE`` still has no producer here — it is the old
+        branch's rejection reason, and rows written before the split still
+        carry it, so the admin UI goes on rendering it.
 
-        - **No identity branch.** An identity contact cannot be a candidate
-          here any more, so there is nothing left to reject.
-          ``SKIP_IDENTITY_ROUTE`` stays in ``routing_trace`` regardless — rows
-          written before this change still carry it, and the admin UI has to go
-          on rendering them.
+        Two further consequences worth stating, because both are deliberate:
+
         - **No route-supplied ``session_mode``.** Nothing on the channel path
           ever read it; ``ChannelIngestionService`` opens ``mode="conversation"``
           sessions by default, which is what those sessions already were.
@@ -840,10 +964,18 @@ class ChannelRoutingService:
           session inside somebody else's workspace. Eliminating that class is
           exactly what ``ChannelCandidateProvider`` did. Over the corrected set
           the short-circuit is safer than it has ever been: the one candidate is
-          the sender's own agent by construction. Nothing about it re-breaks
-          either property the scope split bought — the set is still the sender's
-          own agents, and ineligible candidates are still filtered *before* the
-          classifier rather than after it.
+          either one of the sender's own agents or a person this sender
+          consented to address, by construction, and ineligible candidates are
+          still filtered *before* the classifier rather than after it.
+
+          **A lone identity candidate short-circuits too, and that branch is
+          the HR story's simplest shape rather than a corner case.** A sender
+          who owns no agents and can reach exactly one identity owner produces
+          a one-candidate ballot, and on a server with an empty auto-install
+          list it takes this path with no classifier call at all. So
+          :meth:`_route_only_candidate` runs Stage 2 as well — the difference
+          between the two branches is only whether a model was asked *which*
+          candidate, never what happens to the one that wins.
 
           What is genuinely load-bearing is the Pass-2 condition, and the
           sharpened version of the objection is decisive: a newly
@@ -884,17 +1016,33 @@ class ChannelRoutingService:
           alternative to choose between, because the only other pass is barred.
           It is worth knowing it is what a scope restriction buys.
 
-        The ``agent.owner_id != user.id`` guard below is kept as a
-        defence-in-depth postcondition and is **unreachable by construction**:
-        every candidate came out of a ``WHERE owner_id = :user_id``. It is the
-        same invariant ``ChannelIngestionService.assert_access`` asserts for
+        The ``agent.owner_id != user.id`` guard below is a defence-in-depth
+        postcondition on the **non-identity** path, and on that path it remains
+        unreachable by construction: every candidate the channel provider
+        builds came out of a ``WHERE owner_id = :user_id``. It is the same
+        invariant ``ChannelIngestionService.assert_access`` asserts for
         ``channel_caller`` sessions, and a cheap assertion is worth more than
         the two lines it costs on a path that hands an external sender a
         session inside a workspace.
+
+        **The identity path is foreign by design, and is dispatched before
+        that guard is reached** — in both the classifier branch and
+        :meth:`_route_only_candidate`. This is not the guard being relaxed: an
+        identity-selected agent is permitted precisely because Stage 2 produced
+        an :class:`IdentityGrant` naming the binding and assignment behind it,
+        which ``assert_access`` then re-reads and re-verifies before any session
+        opens. What the guard forbids — a foreign agent with *nothing*
+        authorising it — is still forbidden, and :meth:`_route_identity` adds
+        its own postcondition in the same shape (the agent must belong to the
+        identity owner Stage 1 chose).
         """
         from app.services.routing.agent_classifier import AgentClassifier
         from app.services.routing.channel_candidate_provider import (
             ChannelCandidateProvider,
+        )
+        from app.services.routing.identity_candidate_provider import (
+            IdentityCandidateProvider,
+            parse_identity_ref,
         )
 
         # One try block around candidate building *and* classification: a
@@ -915,14 +1063,38 @@ class ChannelRoutingService:
                         db, user, policy.pinned_agent_id
                     ),
                     None,
+                    None,
                 )
 
             candidates = ChannelCandidateProvider.build(db, user.id, policy=policy)
+            if policy.allow_identity_routing:
+                # Owned agents first, identities after. That ordering is for
+                # the trace and the prompt to read top-down — the common case
+                # (my own agents) before the exceptional one (another person's)
+                # — and nothing turns on it: both providers sort internally,
+                # and the classifier is given a set, not a priority list.
+                candidates += IdentityCandidateProvider.build(db, user.id)
+            # DELIBERATE INVERSION of master plan §3.5 ("a candidate excluded
+            # without a skip_reason cannot diagnose the failure that actually
+            # bites"), and the only one in the feature. With the toggle off the
+            # provider is simply not called, so identity owners this sender
+            # *could* have reached leave no trace rows at all — not even skips.
+            #
+            # It reads like an oversight, so: recording them would publish the
+            # existence of other people's identities into a trace an external
+            # sender can trigger at will, one row per person who has ever named
+            # them on a binding. The §3.5 rule buys a diagnosis; here it would
+            # sell an enumeration. The diagnosis is not lost, only moved — the
+            # sender's own Settings > Channels page says whether the switch is
+            # on, and that is the one control that changes this outcome.
+            #
+            # Structurally this falls out for free (no call, no rows). Do not
+            # "fix" it by building the candidates and filtering them after.
             if not candidates:
                 # Zero eligible candidates: no probe, straight to Pass 2, which
                 # is the onboarding path this state exists for. Unchanged.
                 routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
-                return None, None
+                return None, None, None
 
             if len(candidates) == 1:
                 # The ONLY branch that probes. See the docstring: with two or
@@ -938,23 +1110,21 @@ class ChannelRoutingService:
                     ),
                 )
                 if not ballot.offers_an_alternative:
-                    return (
-                        ChannelRoutingService._route_only_candidate(
-                            db, user, candidates[0]
-                        ),
-                        ballot,
+                    agent, identity = ChannelRoutingService._route_only_candidate(
+                        db, user, candidates[0], message=text
                     )
+                    return agent, ballot, identity
 
             result = AgentClassifier.classify(candidates, text)
         except Exception as exc:  # noqa: BLE001 — router outage must not 500 the webhook
             logger.exception("%s Pass 1 routing failed", _LOG_PREFIX)
             routing_trace.record_error(exc)
-            return None, None
+            return None, None, None
 
         if result is None or not result.agent_id:
             # ``classify`` already recorded *which* negative outcome this was.
             routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
-            return None, ballot
+            return None, ballot, None
 
         # Recorded HERE, above the guards below, not after them.
         # ``note_match_method`` is documented to survive a later rejection on
@@ -973,7 +1143,29 @@ class ChannelRoutingService:
                 reason="classifier picked an agent that is not among the candidates"
             )
             routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
-            return None, ballot
+            return None, ballot, None
+
+        # **Before the UUID parse below, and that ordering is load-bearing.**
+        # An identity ref is ``identity:{owner_id}`` — deliberately not a UUID
+        # (``identity_candidate_provider``'s module docstring says why), so
+        # ``uuid.UUID(result.agent_id)`` would raise on every identity win and
+        # the decision would come back as "the classifier returned a value that
+        # is not a UUID". The ``except ValueError`` below stays regardless: it
+        # is the backstop for a *malformed* ref, not for this one.
+        owner_id = parse_identity_ref(result.agent_id)
+        if owner_id is not None:
+            agent, identity = ChannelRoutingService._route_identity(
+                db,
+                user,
+                owner_id,
+                # Stage 1's transformed message, not the raw text: when the
+                # classifier stripped a routing prefix ("hey, ask HR ...") the
+                # rewrite is what Stage 2 must classify over, or the prefix
+                # naming the *person* competes with the wording naming their
+                # *agent*. ``None`` whenever nothing was stripped.
+                message=result.transformed_message or text,
+            )
+            return agent, ballot, identity
 
         try:
             agent_uuid = uuid.UUID(result.agent_id)
@@ -995,7 +1187,7 @@ class ChannelRoutingService:
                 reason="classifier returned a value that is not a UUID"
             )
             routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
-            return None, ballot
+            return None, ballot, None
 
         agent = db.get(Agent, agent_uuid)
         if agent is None:
@@ -1005,32 +1197,40 @@ class ChannelRoutingService:
                 ref_id=result.agent_id, reason=routing_trace.SKIP_AGENT_MISSING
             )
             routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
-            return None, ballot
+            return None, ballot, None
         if agent.owner_id != user.id:
-            # Unreachable — see the docstring. ``result.agent_id`` rather than
-            # ``agent.id``: identical values (the ``db.get`` above used it), but
-            # a plain dataclass attribute instead of an ORM one, so no argument
-            # in this guarded call can reach the database at all.
+            # Unreachable on THIS path — see the docstring. Every candidate
+            # that reaches here came from ``WHERE owner_id = :user_id``; the
+            # one candidate class that is foreign by design returned above,
+            # carrying an ``IdentityGrant``, before this guard was reached. So
+            # the guard still means what it always meant: a foreign agent with
+            # nothing authorising it.
+            #
+            # ``result.agent_id`` rather than ``agent.id``: identical values
+            # (the ``db.get`` above used it), but a plain dataclass attribute
+            # instead of an ORM one, so no argument in this guarded call can
+            # reach the database at all.
             routing_trace.mark_candidate_skipped(
                 ref_id=result.agent_id, reason=routing_trace.SKIP_FOREIGN_OWNER
             )
             routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
             logger.error(
                 "%s Pass 1 matched agent %s owned by %s for sender %s — rejected. "
-                "This postcondition is unreachable by construction (candidates "
-                "come from WHERE owner_id = sender); reaching it means the "
+                "This postcondition is unreachable by construction (non-identity "
+                "candidates come from WHERE owner_id = sender, and an identity "
+                "candidate returns before this guard); reaching it means the "
                 "candidate provider stopped scoping to the sender's own agents",
                 _LOG_PREFIX,
                 agent.id,
                 agent.owner_id,
                 user.id,
             )
-            return None, ballot
+            return None, ballot, None
 
         logger.info(
             "%s Pass 1 matched own agent %s for user %s", _LOG_PREFIX, agent.id, user.id
         )
-        return agent, ballot
+        return agent, ballot, None
 
     @staticmethod
     def _route_pinned_agent(
@@ -1177,8 +1377,8 @@ class ChannelRoutingService:
 
     @staticmethod
     def _route_only_candidate(
-        db: DBSession, user: User, candidate: Candidate
-    ) -> Agent | None:
+        db: DBSession, user: User, candidate: Candidate, *, message: str
+    ) -> tuple[Agent | None, IdentitySelection | None]:
         """Route to the one eligible candidate without asking a model.
 
         Reached only when :meth:`_catalog_ballot` has already established that
@@ -1194,26 +1394,54 @@ class ChannelRoutingService:
         quiet would take the diagnosis away precisely when routing was easy,
         which is the trace an admin least expects to be missing.
 
+        **The sole candidate can be an identity, and this is not the rare
+        shape.** A sender who owns no agents and can reach exactly one identity
+        owner produces a one-candidate ballot, and with an empty auto-install
+        list the probe short-circuits here without the classifier ever running
+        — which is the HR story at its simplest. So Stage 2 is dispatched from
+        here as well as from the classifier branch, over the raw ``message``:
+        no classifier ran, so there is no transformed message to prefer.
+
         Re-loads the agent by id in this session rather than trusting the
         candidate: the ballot is a projection built moments ago, and this is the
         same ``db.get`` the classifier branch does. The two guards below are the
         same two it applies, for the same reasons — a concurrent delete is
         genuinely reachable, and the ownership check is defence in depth against
-        a candidate provider that stopped scoping.
+        a candidate provider that stopped scoping. Both are on the
+        **non-identity** path only; the identity dispatch above them carries its
+        own postcondition (:meth:`_route_identity`).
         """
+        from app.services.routing.identity_candidate_provider import (
+            parse_identity_ref,
+        )
+
         routing_trace.record_match(method=routing_trace.MATCH_ONLY_ONE)
+
+        # Before the parse below, for the reason the classifier branch states:
+        # an identity ref is not a UUID, so parsing it as one would report the
+        # HR story as a malformed classifier answer. Stage 2 may record a match
+        # method of its own over the ``only_one`` just written, which is the
+        # documented behaviour — the trace's decision-level ``match_method``
+        # reports how the *last* stage matched.
+        owner_id = parse_identity_ref(candidate.ref_id)
+        if owner_id is not None:
+            return ChannelRoutingService._route_identity(
+                db, user, owner_id, message=message
+            )
+
         try:
             agent_uuid = uuid.UUID(candidate.ref_id)
         except ValueError:
-            # Unreachable — the provider builds every ``ref_id`` from an
-            # ``Agent.id``. Carries a reason anyway, matching the classifier
-            # path's guard: a bare ``no_match`` under ``match_method=only_one``
-            # would be the one outcome shape with nothing at all explaining it.
+            # Unreachable — the provider builds every non-identity ``ref_id``
+            # from an ``Agent.id``. Carries a reason anyway, matching the
+            # classifier path's guard: a bare ``no_match`` under
+            # ``match_method=only_one`` would be the one outcome shape with
+            # nothing at all explaining it.
             routing_trace.record_parse_outcome(
                 reason="the sole candidate's id is not a UUID"
             )
             routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
-            return None
+            return None, None
 
         agent = db.get(Agent, agent_uuid)
         if agent is None:
@@ -1221,7 +1449,7 @@ class ChannelRoutingService:
                 ref_id=candidate.ref_id, reason=routing_trace.SKIP_AGENT_MISSING
             )
             routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
-            return None
+            return None, None
         if agent.owner_id != user.id:
             routing_trace.mark_candidate_skipped(
                 ref_id=candidate.ref_id, reason=routing_trace.SKIP_FOREIGN_OWNER
@@ -1229,14 +1457,15 @@ class ChannelRoutingService:
             routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
             logger.error(
                 "%s Pass 1 short-circuited to agent %s owned by %s for sender %s "
-                "— rejected. Unreachable by construction (candidates come from "
-                "WHERE owner_id = sender)",
+                "— rejected. Unreachable by construction (non-identity candidates "
+                "come from WHERE owner_id = sender, and an identity candidate "
+                "returns before this guard)",
                 _LOG_PREFIX,
                 agent.id,
                 agent.owner_id,
                 user.id,
             )
-            return None
+            return None, None
 
         logger.info(
             "%s Pass 1 routed to sole eligible agent %s for user %s without "
@@ -1245,7 +1474,133 @@ class ChannelRoutingService:
             agent.id,
             user.id,
         )
-        return agent
+        return agent, None
+
+    @staticmethod
+    def _route_identity(
+        db: DBSession, user: User, owner_id: uuid.UUID, *, message: str
+    ) -> tuple[Agent | None, IdentitySelection]:
+        """Stage 2 — Stage 1 chose a person; pick one of *their* agents.
+
+        Always returns an :class:`IdentitySelection`, because "the sender
+        addressed a person" is true of every branch here and is what stops
+        ``decide`` reaching for Pass 2. The ``Agent`` beside it is ``None``
+        whenever Stage 2 selected nothing, which is an ordinary ``no_match``
+        for the whole decision rather than an error: the sender gets the
+        existing "couldn't find an agent" reply, and auto-installing a catalog
+        bundle for somebody who asked to speak to a colleague is not a better
+        answer.
+
+        **Two stages, and the second one does not recurse.** Stage 2 chooses
+        among *agents* — an identity's bindings name agents, never further
+        identities — so there is no depth to count and no cycle to guard
+        (master plan §2.10). A counter here would imply chains are supported.
+
+        **Written under its own stage.** ``stage_scope`` rather than
+        ``begin_stage``: this is a handoff that returns, and a latched stage
+        would file everything recorded afterwards — including this method's own
+        rejections, which are Pass-1 facts — under ``identity_stage2``. Same
+        call shape the App MCP path uses, for the same reason its comment gives.
+
+        **Total, like Pass 1's own catch-all.** Stage 2 ends in a blocking LLM
+        call whenever the caller can reach two or more of the owner's agents,
+        so it has exactly the outage exposure ``_route_installed`` wraps its
+        candidate build and classification in — and this method is reached from
+        the classifier branch, which is *outside* that try. An outage here is
+        recorded on the trace and declines; it does not 500 an externally
+        triggerable webhook.
+
+        **Its postcondition is the identity twin of the ownership guard.** A
+        channel session may run on a foreign agent only when a grant names the
+        binding behind it, so the agent Stage 2 returns must belong to the
+        person Stage 1 chose. ``IdentityService`` enforces that on write and
+        ``ChannelIngestionService.assert_access`` re-reads it before any session
+        opens; this is the middle check, and it is what keeps
+        :class:`RoutingDecisionResult`'s ``agent_id`` and ``identity_grant``
+        describing the same person.
+        """
+        from app.services.identity.identity_routing_service import (
+            IdentityRoutingService,
+        )
+
+        selection = IdentitySelection(owner_id=owner_id)
+        try:
+            with routing_trace.stage_scope(routing_trace.STAGE_IDENTITY_STAGE2):
+                result = IdentityRoutingService.route_within_identity(
+                    owner_id=owner_id,
+                    caller_user_id=user.id,
+                    message=message,
+                )
+        except Exception as exc:  # noqa: BLE001 — see "Total" above
+            logger.exception(
+                "%s Identity Stage 2 failed for owner %s (sender %s)",
+                _LOG_PREFIX,
+                owner_id,
+                user.id,
+            )
+            routing_trace.record_error(exc)
+            return None, selection
+
+        if result is None:
+            # Stage 2 recorded its own ballot and skips; what it cannot record
+            # is that the decision ended here, because it does not know it was
+            # the last stage.
+            logger.info(
+                "%s Identity Stage 2 selected nothing for owner %s (sender %s)",
+                _LOG_PREFIX,
+                owner_id,
+                user.id,
+            )
+            routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
+            return None, selection
+
+        agent = db.get(Agent, result.agent_id)
+        if agent is None:
+            # Stage 2 read this row in a session of its own that is already
+            # closed; only a delete in between gets here.
+            routing_trace.mark_candidate_skipped(
+                ref_id=str(result.agent_id), reason=routing_trace.SKIP_AGENT_MISSING
+            )
+            routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
+            return None, selection
+        if agent.owner_id != owner_id:
+            # Unreachable by construction — ``IdentityService.create_binding``
+            # refuses an agent the owner does not own, and ``assert_access``
+            # re-asserts ``binding.owner_id == agent.owner_id == owner_id``.
+            # Kept for the same reason its sibling guards are: this is the path
+            # that hands an external sender a session inside somebody else's
+            # workspace, and the grant below would name a binding that does not
+            # describe the agent beside it.
+            routing_trace.mark_candidate_skipped(
+                ref_id=str(result.agent_id), reason=routing_trace.SKIP_FOREIGN_OWNER
+            )
+            routing_trace.record_outcome(routing_trace.OUTCOME_NO_MATCH)
+            logger.error(
+                "%s Identity Stage 2 selected agent %s owned by %s, but Stage 1 "
+                "chose identity owner %s — rejected. Unreachable by construction "
+                "(a binding may only name its owner's own agent)",
+                _LOG_PREFIX,
+                agent.id,
+                agent.owner_id,
+                owner_id,
+            )
+            return None, selection
+
+        logger.info(
+            "%s Identity routing: sender %s reached agent %s in %s's workspace",
+            _LOG_PREFIX,
+            user.id,
+            agent.id,
+            owner_id,
+        )
+        return agent, IdentitySelection(
+            owner_id=owner_id,
+            grant=IdentityGrant(
+                owner_id=owner_id,
+                binding_id=result.binding_id,
+                assignment_id=result.binding_assignment_id,
+            ),
+        )
 
     @staticmethod
     def _catalog_ballot(

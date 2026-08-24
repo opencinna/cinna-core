@@ -288,13 +288,24 @@ def test_pass1_candidates_never_include_an_identity_contact(
     to lose), and the identity agent never appears as a candidate — eligible
     or skipped — on any stage that does run.
 
-    The identity binding is set up exactly as
-    `routing_identity_stage2_capture_test.py` proves one is genuinely
-    reachable: assigned to the sender by its owner, then switched on by the
-    sender themself (`toggle_identity_contact` — there is no superuser-free
+    The identity binding is set up so that it is genuinely reachable on the
+    identity surface: assigned to the sender by its owner, then switched on by
+    the sender themself (`toggle_identity_contact` — there is no superuser-free
     switch on this surface, unlike the App MCP admin route above). The point
     of this test is that "reachable" on the identity surface must still mean
     "absent" on the channel one.
+
+    **Read the precondition, which became load-bearing in phase 3 of the
+    channels & identity unification and was merely incidental before it.** This
+    sender has no `channel_user_setting` row, so `allow_identity_routing`
+    resolves to its `false` default and `ChannelRoutingService` does not call
+    `IdentityCandidateProvider` at all. Identity *can* now reach a channel
+    ballot — that is the feature — and what stays true here is the narrower
+    statement this test was always making: nothing on the identity surface
+    alone puts a person on a channel ballot; only the sender's own
+    channel-level opt-in does. The switched-on counterpart, and the trace-level
+    proof that the switch is what decides it, are in
+    `server_channels_identity_trace_test.py`.
     """
     channel = _channel(client, superuser_token_headers)
     signer = GoogleChatJWTSigner()

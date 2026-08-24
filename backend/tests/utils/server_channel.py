@@ -455,10 +455,11 @@ def route_installed(db: Session, user, text: str, *, policy=None):
     ``_route_installed`` reads ``user.id`` for the ownership comparison.
 
     Returns the **agent only**. ``_route_installed`` also hands back the
-    Pass-2 ``CatalogBallot`` its single-candidate probe computed, which is
-    ``decide``'s plumbing for scanning the catalog at most once per decision
-    and is not what any caller of this helper is asking about. A test that
-    wants the ballot calls the method directly and says so.
+    Pass-2 ``CatalogBallot`` its single-candidate probe computed — ``decide``'s
+    plumbing for scanning the catalog at most once per decision — and the
+    ``IdentitySelection`` naming the person Stage 1 chose, when it chose one.
+    Neither is what any caller of this helper is asking about. A test that
+    wants either calls the method directly and says so.
 
     ``policy`` defaults to ``ResolvedChannelPolicy.for_no_channel()`` — every
     agent in scope, no pin, catalog allowed — which is exactly how this pass
@@ -476,13 +477,49 @@ def route_installed(db: Session, user, text: str, *, policy=None):
         ChannelRoutingService,
     )
 
-    agent, _ballot = ChannelRoutingService._route_installed(
+    agent, _ballot, _identity = ChannelRoutingService._route_installed(
         db,
         user,
         text,
         policy=policy if policy is not None else ResolvedChannelPolicy.for_no_channel(),
     )
     return agent
+
+
+# ---------------------------------------------------------------------------
+# Resume-sender linkage check — Rule-1 exemption
+# ---------------------------------------------------------------------------
+
+
+def verify_resume_sender(session_row, sender) -> None:
+    """Directly invoke ``ChannelIngestionService._verify_resume_sender``.
+
+    EXEMPTION — same shape as ``route_installed`` above. This is a private
+    linkage check with no HTTP surface of its own, and the one condition worth
+    pinning here **cannot** be reached through one: it is the narrow identity
+    exception (``existing.identity_caller_id == sender.platform_user_id``),
+    and every production path into it passes through
+    ``ChannelInboundService._ingest``, which refuses a
+    ``user.id != binding.user_id`` pair at its own entry. That upstream
+    invariant is a *different* guard, and the whole point of this exception's
+    comment in ``channel_ingestion_service.py`` is that it stands on its own —
+    "a deliberately mismatched ``(binding, user)`` pair … fails the comparison
+    and raises here, with no help from anything upstream". A claim of that
+    shape is exactly the kind a reader has no way to check, so it is executed
+    instead: forging the third-party sender is the only way to reach it.
+
+    ``session_row`` must be a real, persisted ``app.models.Session`` row — the
+    check reads ``user_id`` and ``identity_caller_id`` off it — and ``sender``
+    a ``SessionSender`` (build one with ``SessionSender.from_channel``).
+
+    Raises ``PermissionError`` on a mismatch, exactly as the service does;
+    returns ``None`` when the sender is admissible.
+    """
+    from app.services.sessions.channel_ingestion_service import (
+        ChannelIngestionService,
+    )
+
+    ChannelIngestionService._verify_resume_sender(session_row, sender)
 
 
 def build_channel_candidate(
@@ -537,6 +574,7 @@ __all__ = [
     "GoogleChatJWTSigner",
     "flush_pending_bindings",
     "route_installed",
+    "verify_resume_sender",
     "build_channel_candidate",
     "CHAT_ISSUER",
 ]

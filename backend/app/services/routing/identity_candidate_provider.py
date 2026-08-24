@@ -40,11 +40,24 @@ boundary is deliberate: an owner who never named this caller produces no row
 here, because nobody expected to reach them and a list of every identity owner
 on the platform is not a diagnosis.
 
-Those rows are **not yet visible anywhere.** ``RoutingTrace.capture()`` opens
-only on the two Server Channels sites, and the App MCP request handler opens
-none, so today every recorder call in this module is a no-op. The skips are
-written now, rather than when a capture exists, because the alternative is
-adding instrumentation to a provider after somebody has already needed it.
+Those rows are **visible on the channel path and nowhere else.** Since Phase 3
+of the channels & identity unification ``ChannelRoutingService._route_installed``
+calls this provider inside Pass 1's ``RoutingTrace.capture()``, so a channel
+decision carries both the eligible identity candidates and the
+``SKIP_IDENTITY_UNAVAILABLE`` rows (the reachability verdict has a channel-voiced
+explanation for that reason, added in the same change). The App MCP request
+handler still opens no capture, so on that surface every recorder call here is
+still a no-op — which is what the skips being written before a capture existed
+bought: the instrumentation was already correct on the day a capture appeared,
+rather than being added after somebody needed it.
+
+**One thing is deliberately NOT recorded**, and it is the feature's single
+inversion of master plan §3.5: when the sender has not switched identity
+routing on for the channel, ``ChannelRoutingService`` does not call this
+provider at all, so the identity owners they *could* have reached leave no rows
+— not even skips. Recording them would publish the existence of other people's
+identities into a trace an external sender can trigger at will. The reasoning
+is at the call site, which is where somebody would otherwise "fix" it.
 
 **Ordering is fixed here, and it was not before.** The arm this replaces ran
 its owner query and its per-owner example query with no ``ORDER BY`` at all, so
