@@ -23,6 +23,16 @@ def parse_cors(v: Any) -> list[str] | str:
     raise ValueError(v)
 
 
+#: The one value of ``ROUTING_TRACE_RETENTION_DAYS`` that means "never expire
+#: routing traces". Deliberately ``-1`` and not ``0``: an operator typing ``0``
+#: into a retention window means "keep nothing", and a knob whose most natural
+#: "off" value silently meant *unbounded* retention would invert the exposure
+#: argument that permits storing message text at all (plan §4/§7). ``0`` is
+#: therefore rejected outright rather than reinterpreted. Shared with
+#: ``RoutingTraceService.purge`` so both ends agree on the sentinel.
+ROUTING_TRACE_RETENTION_FOREVER = -1
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         # Use top level .env file (one level above ./backend/)
@@ -427,6 +437,159 @@ class Settings(BaseSettings):
     # hostile channel cannot grow it without limit. Never persisted.
     SERVER_CHANNEL_DEBUG_BUFFER_SIZE: int = 50
     SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS: int = 2_000
+
+    # ── Routing traces (auto-routing tuning) ────────────────────────────
+    # Durable, superuser-only record of each routing decision — candidates
+    # (including rejected ones), rendered prompt, provider attempts, verdict.
+    # See ``docs/plans/auto_routing_tuning_plan.md`` §4/§7.
+    #
+    # RULE FOR EVERY SETTING BELOW — **the dangerous state must not be able to
+    # look routine.** These knobs govern how much external users' message text
+    # this platform keeps and for how long, so a value that means "retain more"
+    # must not be reachable by typing something innocuous, and must not render
+    # as an unremarkable number. Two instances to copy: this feature's most
+    # dangerous configuration is unbounded retention, so
+    # ``ROUTING_TRACE_RETENTION_DAYS`` REJECTS ``0`` at startup instead of
+    # reading it as keep-forever (``-1`` is the only spelling, and you have to
+    # mean it), and ``routing_trace_scheduler`` logs that ``-1`` as "retention
+    # DISABLED" rather than "retention -1 days". Adding a setting here: name its
+    # most dangerous value, then make reaching it loud.
+    # Gates PERSISTENCE AND ADMIN READS, not in-process capture. Deliberately
+    # narrower than "master switch" sounds: the recorder cannot read settings (it
+    # must stay free of ``app.*`` imports so ``app/agents/`` can import it), and
+    # the live channel debug feed's one-line no-match diagnosis is built from a
+    # capture, so short-circuiting capture here would silently degrade a feature
+    # that has nothing to do with storage. Off means no rows are written; the
+    # per-request recording still runs and still feeds the debug panel.
+    #
+    # A READ gate as well. It was once consulted in exactly one place — the
+    # persist path — so turning it off left the admin API happily serving up to
+    # ``ROUTING_TRACE_RETENTION_DAYS`` of stored rows, message text included,
+    # with no notice: the same asymmetry deliberately rejected for the text flag
+    # below. Now the trace list comes back empty and a detail fetch 404s, each
+    # carrying ``TRACING_DISABLED_NOTICE``.
+    #
+    # **It hides; it does not erase**, and ``DELETE /api/v1/admin/routing/traces``
+    # deliberately KEEPS WORKING while this is off — otherwise the obvious first
+    # move under privacy pressure would also remove the only way to delete the
+    # rows already written.
+    ROUTING_TRACE_ENABLED: bool = True
+    # The one genuinely policy-bearing switch here. Server Channels otherwise
+    # keeps inbound message text out of the database; a routing trace without
+    # the message is close to useless for tuning, so it is stored — clamped,
+    # TTL'd, superuser-only, and behind this flag. With it off, the trace still
+    # carries ``message_sha256`` plus the candidate set and the verdict, which
+    # is the diagnosis that matters most.
+    #
+    # **It reaches further than ``message_text``, and it is enforced by an
+    # allowlist rather than an inventory.** With the flag off, the ``stages``
+    # payload is projected through a list of explicitly-named safe fields
+    # (``routing_trace.SAFE_STAGE_FIELDS``) on the write path *and* the read
+    # path, from one definition so the two cannot drift. Anything not named
+    # there is withheld by default — including fields added after this gate was
+    # written, and including fields nobody realised had started carrying the
+    # sender's words.
+    #
+    # That polarity is the whole design. This gate was enforced three times by
+    # enumerating the tainted fields, and three times the enumeration turned out
+    # to be one field short; sender text is a taint that *propagates* into new
+    # fields through ordinary, reviewable-looking changes. An allowlist inverts
+    # the question from "did we remember every field" — unanswerable — to "is
+    # this field safe", which whoever adds a field can answer as they add it.
+    # It also removed a privacy property that rested on the byte length of a
+    # markdown template: gating on write means template length cannot create a
+    # leak in either direction.
+    #
+    # Do not re-describe this gate by listing the fields it covers, here or
+    # anywhere else. A list is a promise with an expiry date — that is precisely
+    # what this comment used to be. Describe the mechanism; read
+    # ``SAFE_STAGE_FIELDS`` for the current contents.
+    #
+    # A READ gate as well as a write gate: with it off the admin API stops
+    # serving the gated fields on rows already written, because an operator
+    # turning this off means "stop showing me this text", not "stop appending to
+    # the pile".
+    #
+    # **It hides; it does not erase.** Text captured before the flag went off
+    # stays in the database. Exactly two things remove it: waiting out
+    # ``ROUTING_TRACE_RETENTION_DAYS``, or calling
+    # ``DELETE /api/v1/admin/routing/traces``. Flipping this flag does NOT purge,
+    # and that is deliberate — an accidental toggle would irreversibly destroy
+    # diagnostic data, and a privacy control whose misfire is unrecoverable is
+    # its own hazard. Hide on flip, erase on explicit request.
+    ROUTING_TRACE_STORE_MESSAGE_TEXT: bool = True
+    # Retention window enforced by ``routing_trace_scheduler`` (hourly purge).
+    #
+    # Must be ``>= 1``. ``-1`` — and only ``-1`` — means "keep forever", the
+    # escape hatch for a debugging session that must outlive the window. ``0``
+    # and every other negative value are **rejected at startup** by
+    # ``_validate_routing_trace_retention`` below, which names ``-1`` in the
+    # error so an operator who wanted unbounded retention is told how to ask
+    # for it, and an operator who typed ``0`` meaning "don't keep this" is told
+    # they were about to get the opposite.
+    ROUTING_TRACE_RETENTION_DAYS: int = 14
+    # Clamp applied at persist time to the free-text *columns* on
+    # ``routing_decision`` (``message_text``, ``error``). Free text *inside*
+    # ``stages`` never passes through here: the recorder clamps every free-text
+    # field it captures as it captures it, using its own ``TRACE_TEXT_MAX_CHARS``
+    # constant, which cannot read settings because ``routing_trace.py`` must stay
+    # free of ``app.*`` imports. Keep the two in step. Which stage fields those
+    # are is the recorder's business and changes as it grows — see ``clamp()``'s
+    # call sites rather than trusting a list written here. The default matches
+    # ``SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS`` deliberately: the two surfaces
+    # show the same text to the same audience and should truncate alike.
+    ROUTING_TRACE_TEXT_MAX_CHARS: int = 2_000
+    # NOTE — ``ROUTING_TRACE_APP_MCP_MODE`` (``off`` | ``metadata`` | ``full``)
+    # used to sit here and has been **removed**. ``RoutingTrace.capture()`` is
+    # opened at exactly two sites, both ``origin="server_channel"``, so the
+    # setting was unreachable at every value including ``off`` — an operator who
+    # set it would have believed they had disabled a capture that was never
+    # running. That is the rule above in a different guise: a control must not
+    # appear to do more than it does.
+    #
+    # The policy it encoded still stands and applies the moment the origin
+    # exists: App MCP routes *every* message, not just thread openings, so its
+    # write volume is unbounded in a way the channel path's is not (that one
+    # sits behind the webhook rate limit), and it must default to metadata-only.
+    # Reintroduce this setting **in the same change that adds
+    # ``origin="app_mcp"`` capture**, not before (plan §4).
+
+    # Per-admin cap on the routing-tuning calls that spend real LLM budget:
+    # POST /admin/routing/simulate, .../traces/{id}/replay and
+    # .../traces/{id}/recommendation share ONE bucket per admin, so rotating
+    # between the three routes cannot spend three times this. Process-local like
+    # every other consumer of the shared limiter — with N workers the effective
+    # ceiling is N x this — because it is a backstop against a stuck UI, not a
+    # billing control. The accountability half of the §12 exposure ruling is the
+    # ROUTING_SIMULATE_RUN audit row; this is the non-bulk half.
+    ROUTING_SIMULATE_RATE_LIMIT_PER_MIN: int = 10
+
+    @model_validator(mode="after")
+    def _validate_routing_trace_retention(self) -> Self:
+        """Reject a retention window that would silently keep traces forever.
+
+        Rejecting rather than clamping to the default is the point. A startup
+        failure costs an operator seconds and tells them exactly what to fix;
+        substituting ``14`` for someone who typed ``0`` meaning "don't retain
+        this" leaves them believing something false about their own deployment,
+        and the thing they are wrong about is how long external users' message
+        text sits in their database. It fails toward keeping *more* text than
+        intended, which is the one direction this knob must not fail in.
+        """
+        days = self.ROUTING_TRACE_RETENTION_DAYS
+        if days == ROUTING_TRACE_RETENTION_FOREVER or days >= 1:
+            return self
+        raise ValueError(
+            f"ROUTING_TRACE_RETENTION_DAYS must be at least 1, or exactly "
+            f"{ROUTING_TRACE_RETENTION_FOREVER} to keep routing traces forever "
+            f"(got {days}). Routing traces can hold external senders' message "
+            f"text, so a retention window is not optional: "
+            f"{ROUTING_TRACE_RETENTION_FOREVER} is the only way to disable "
+            f"expiry, and it is deliberately not spelled 0. If you meant "
+            f"'store nothing', set ROUTING_TRACE_STORE_MESSAGE_TEXT=False to "
+            f"keep traces without the message text, or "
+            f"ROUTING_TRACE_ENABLED=False to stop writing traces entirely."
+        )
 
     # ── Two-Factor Authentication (MFA) ────────────────────────────────
     # Settings that govern the WebAuthn passkey + TOTP authenticator-app

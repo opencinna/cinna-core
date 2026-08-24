@@ -166,6 +166,10 @@ from app.services.credentials.model_discovery_scheduler import (
     start_scheduler as start_model_discovery_scheduler,
     shutdown_scheduler as shutdown_model_discovery_scheduler,
 )
+from app.services.routing.routing_trace_scheduler import (
+    start_scheduler as start_routing_trace_scheduler,
+    shutdown_scheduler as shutdown_routing_trace_scheduler,
+)
 
 
 @asynccontextmanager
@@ -194,6 +198,7 @@ async def lifespan(app: FastAPI):
         start_app_data_gc_scheduler()
         start_mfa_cleanup_scheduler()
         start_model_discovery_scheduler()
+        start_routing_trace_scheduler()
 
     # Register backend event handlers
     from app.models.events.event import EventType
@@ -403,6 +408,7 @@ async def lifespan(app: FastAPI):
         shutdown_app_data_gc_scheduler()
         shutdown_mfa_cleanup_scheduler()
         shutdown_model_discovery_scheduler()
+        shutdown_routing_trace_scheduler()
     event_service.shutdown()
     logger.info("Application shutdown complete")
 

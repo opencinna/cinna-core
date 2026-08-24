@@ -5,6 +5,7 @@ from app.api.routes import (
     access_tokens,
     admin_environments,
     admin_llm_providers,
+    admin_routing,
     agent_api,
     agent_api_public,
     agent_app_mcp_routes,
@@ -123,6 +124,7 @@ api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)
 api_router.include_router(admin_environments.router)
 api_router.include_router(admin_llm_providers.router)
+api_router.include_router(admin_routing.router)
 api_router.include_router(server_config.router)
 api_router.include_router(server_channels.router)
 api_router.include_router(files.router)

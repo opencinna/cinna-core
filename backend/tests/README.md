@@ -58,6 +58,40 @@ Before any test runs, the session-scoped `setup_db` fixture in `conftest.py`:
 
 This ensures the test database schema is always up to date with the latest migrations. Alembic's `env.py` respects a `sqlalchemy.url` set on the config object, which the fixture sets to the test DB URI before calling `command.upgrade`.
 
+**`caplog` assertions are vacuous for the rest of the session.** `app/alembic/env.py` calls
+`logging.config.fileConfig(config.config_file_name)` on every `command.upgrade` run, and that
+call's default is `disable_existing_loggers=True`. Every application logger that already existed
+at that point comes back with `disabled = True` — for the remaining life of the test session, not
+just for the migration. Since `setup_db` runs this before anything else, an assertion like
+`assert "some message" in caplog.text` is comparing against `""` and passes whether or not the
+message was ever logged. This was caught when a draft assertion failed to fail — same detection
+mode as a mutation check. Exposure drifts as files are added, so don't trust a number recorded
+here — re-measure it yourself: `grep -rl caplog backend/tests/` for which files touch `caplog` at
+all, then `grep -rn "in caplog\.\(text\|records\)" backend/tests/` for which of those actually
+assert on it (an `at_level(...)` block with no following `caplog.text`/`caplog.records` check is
+inert, not exposed). A clean grep is a statement about the past tense only — it says no one has
+hit the trap *yet*, not that no one can; treat it as a reason to re-check before adding the next
+`caplog` assertion, not as a guarantee. If you need to assert on a log, don't use `caplog`: attach a
+handler directly to the logger under test and set `logger.disabled = False` first — see
+`_swallowed_failures` in the file above for a working pattern. Better still, avoid log-text
+assertions altogether and assert on observable behavior instead (a returned value, a persisted
+row, the *type* of an exception a guard swallowed) — log assertions are brittle even when they
+technically work.
+
+**Under this trap, positive caplog assertions fail honestly; negative ones lie.**
+`assert x in caplog.text` against `""` fails, loudly and immediately — annoying, but
+self-announcing, and that is exactly how three assertions of this shape in
+`tests/unit/test_channel_reply_instrumentation.py` were caught (they passed alone, then failed the
+moment a file exercising `setup_db`, such as anything under `tests/architecture/`, ran first in the
+same session). `assert x not in caplog.text` against `""` **passes vacuously, in every scope,
+forever** — there is no run in which it can fail, whether or not the code it claims to guard is
+even present. It reads in review as a careful test proving something is absent, and it is proving
+nothing. The three failures above were only caught because the author happened to write the
+positive form; a negative form of the same mistake would still be green today. Treat this as a
+rule, not a coincidence: never write `not in caplog.text` (or `not in caplog.records`) as a
+regression guard, and be suspicious of any existing one — it cannot have failed a mutation check,
+so its presence proves nothing about whether it was ever checked.
+
 ### Transaction Isolation (Savepoint Pattern)
 
 Every test runs inside a database transaction that is **rolled back** after the test completes. This is implemented using the SQLAlchemy savepoint pattern:
@@ -395,6 +429,11 @@ def test_password_recovery(client: TestClient) -> None:
 5. **Use random data.** Use `random_email()` and `random_lower_string()` for test data to avoid collisions.
 6. **Mock external calls.** Patch SMTP, OAuth, and any external HTTP calls.
 7. **Extract repeated API calls into `tests/utils/` helpers.** If the same endpoint call appears in multiple tests as setup (not as the thing being tested), wrap it in a utility function. Compose common multi-step sequences via parameters (e.g., `set_default=True`).
+8. **Snapshot with `cp` before a mutation check; restore from the snapshot and verify with `diff`. Never revert a mutation check with `git`.** Concretely: `cp app/services/foo.py app/services/foo.py.bak` before mutating, `cp app/services/foo.py.bak app/services/foo.py` to restore, then `diff app/services/foo.py app/services/foo.py.bak` to confirm the restore is byte-identical before deleting the backup. `git checkout -- <file>` fails two different ways in this tree, and both report success:
+   - On a tracked file, the working tree here has been dirty since before the current feature, so it reverts *past* your mutation to the last commit — discarding other people's uncommitted work. The reverted state is a coherent older version, so the suite goes green on it. You are told everything is fine while work is gone.
+   - On a path that includes untracked files — a directory or glob, which most in-flight feature directories mix — it exits 0 and silently skips them: no error, no mention. Naming a bare untracked file errors loudly instead (exit 1), so the dangerous form is the *scoped* one that partially succeeds. You are told the restore succeeded while your mutation is still in place, and the next run measures the mutated tree.
+
+   Partial success is worse than either total failure or total success: the tree ends in a state nobody intended, and the exit code describes neither half. So the rule is not "avoid a `git checkout --` footgun" — it is `cp` first, restore from the copy, `diff` to confirm byte-identity. Verify the effect, never the exit code. If a mutation-check revert ever looks off (an unexpectedly empty `git diff HEAD`, a file shorter than you left it), say so immediately rather than quietly restoring and moving on — a near-miss that gets silently corrected teaches nobody.
 
 ## Testing Session-Driven Flows (Tasks, Agents, Streaming)
 

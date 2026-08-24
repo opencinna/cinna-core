@@ -41,6 +41,7 @@ from tests.utils.server_channel import (
     post_webhook,
     route_installed,
 )
+from tests.utils.routing import enter_classifier_patch
 from tests.utils.session import list_sessions
 from tests.utils.message import list_messages
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
@@ -50,7 +51,6 @@ API = settings.API_V1_STR
 _SEND_TARGET = "app.services.server_channels.adapters.google_chat.GoogleChatAdapter.send_message"
 _ROUTE_MESSAGE_TARGET = "app.services.app_mcp.app_mcp_routing_service.AppMCPRoutingService.route_message"
 _STREAM_TARGET = "app.services.sessions.message_service.agent_env_connector"
-_CLASSIFY_TARGET = "app.services.ai_functions.ai_functions_service.AIFunctionsService.route_to_agent"
 
 
 def _channel(client, superuser_headers, **overrides) -> dict:
@@ -59,17 +59,41 @@ def _channel(client, superuser_headers, **overrides) -> dict:
     return create_server_channel(client, superuser_headers, **defaults)
 
 
-def _post(client, channel, signer, event, *, stub=None, classify_result=None, classify_side_effect=None):
+def _post(
+    client,
+    channel,
+    signer,
+    event,
+    *,
+    stub=None,
+    classify_result=None,
+    classify_no_match=False,
+    classify_side_effect=None,
+    classify_via_provider=False,
+):
+    """One verified webhook delivery, background work drained.
+
+    The classifier stub comes from `enter_classifier_patch`, the same seam
+    `tests.utils.routing`'s two helpers use, rather than a fourth inline copy
+    of the same decision. That copy is how this helper ended up with the
+    pre-fix default — name no answer and `AgentClassifier.classify` was left
+    live, i.e. calling a real model. Naming an answer is now mandatory; a
+    scenario that must NOT classify says so by naming nothing, and finds out
+    loudly if it does.
+    """
     token = signer.token(audience=channel["config"]["project_number"])
     stream_stub = stub or StubAgentEnvConnector(response_text="ok")
     with ExitStack() as stack:
         stack.enter_context(signer.patched())
         stack.enter_context(patch(_STREAM_TARGET, stream_stub))
         send_mock = stack.enter_context(patch(_SEND_TARGET, AsyncMock(return_value="fake-ext-id")))
-        if classify_side_effect is not None:
-            stack.enter_context(patch(_CLASSIFY_TARGET, side_effect=classify_side_effect))
-        elif classify_result is not None:
-            stack.enter_context(patch(_CLASSIFY_TARGET, return_value=classify_result))
+        enter_classifier_patch(
+            stack,
+            classify_result=classify_result,
+            classify_no_match=classify_no_match,
+            classify_side_effect=classify_side_effect,
+            classify_via_provider=classify_via_provider,
+        )
         resp = post_webhook(client, channel["webhook_token"], event, bearer_token=token)
         drain_tasks()
     return resp, send_mock
@@ -240,8 +264,11 @@ def test_pass2_excludes_private_bundle_from_candidates(
     thread_key = f"spaces/AAA/threads/{random_lower_string()}"
     event = build_message_event(thread_key=thread_key, text="please help", sender_email=consumer["email"])
 
-    with patch(_CLASSIFY_TARGET, return_value=None) as classify_mock:
-        resp, send_mock = _post(client, channel, signer, event)
+    # No classifier answer is named, so the classifier is patched to RAISE. That
+    # is the assertion: the private bundle never becomes a candidate, so with no
+    # other candidate the pass short-circuits and the classifier is never asked.
+    # If it ever is, this fails at the call with a message saying so.
+    resp, send_mock = _post(client, channel, signer, event)
     assert resp.status_code == 200
     # The no-match reply is delivered asynchronously (via _reply/adapter
     # .send_message), NOT in the webhook's own sync response — a new-thread
@@ -249,12 +276,6 @@ def test_pass2_excludes_private_bundle_from_candidates(
     # routing eventually resolves.
     reply_texts = [c.args[-1] for c in send_mock.await_args_list]
     assert any("couldn't find an assistant" in t for t in reply_texts), reply_texts
-    # The classifier was never even asked — the private bundle never became
-    # a candidate. If it HAD been called, that would itself be the bug this
-    # test exists to catch (a leaked non-public candidate).
-    if classify_mock.called:
-        candidates = classify_mock.call_args.args[1]
-        assert all(c["id"] != str(private_bundle_uuid) for c in candidates)
 
     assert list_sessions(client, consumer_headers) == []
 
@@ -291,10 +312,12 @@ def test_pass2_excludes_already_installed_bundle(
     # "already installed" means Pass 1 handles it, Pass 2 is never consulted.
     thread_key = f"spaces/AAA/threads/{random_lower_string()}"
     event = build_message_event(thread_key=thread_key, text="please help", sender_email=consumer["email"])
-    with patch(_CLASSIFY_TARGET, return_value=None) as classify_mock:
-        resp, _ = _post(client, channel, signer, event)
+    # Naming no classifier answer patches it to raise, which is a stronger form
+    # of the `assert_not_called()` this used to end with: it fails at the moment
+    # of the call rather than afterwards. Pass 1 handles it via the `only_one`
+    # short-circuit; Pass 2 never runs.
+    resp, _ = _post(client, channel, signer, event)
     assert resp.status_code == 200
-    classify_mock.assert_not_called()  # Pass 1 handled it; Pass 2 never ran.
 
     sessions = [s for s in list_sessions(client, consumer_headers) if s["agent_id"] == install_resp.json()["id"]]
     assert len(sessions) == 1
@@ -323,14 +346,13 @@ def test_pass2_excludes_bundle_missing_trigger_prompt(
 
     thread_key = f"spaces/AAA/threads/{random_lower_string()}"
     event = build_message_event(thread_key=thread_key, text="please help", sender_email=consumer["email"])
-    with patch(_CLASSIFY_TARGET, return_value=None) as classify_mock:
-        resp, send_mock = _post(client, channel, signer, event)
+    # As above: no answer named means the classifier raises if it is reached.
+    # A candidate with nothing to classify against must never be offered, so
+    # the pass finds no candidates at all and short-circuits before the model.
+    resp, send_mock = _post(client, channel, signer, event)
     assert resp.status_code == 200
     reply_texts = [c.args[-1] for c in send_mock.await_args_list]
     assert any("couldn't find an assistant" in t for t in reply_texts), reply_texts
-    if classify_mock.called:
-        candidates = classify_mock.call_args.args[1]
-        assert all(c["id"] != str(bundle["bundle_uuid"]) for c in candidates)
 
 
 def test_no_match_reply_when_pass1_and_pass2_both_miss(

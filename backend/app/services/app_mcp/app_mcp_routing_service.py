@@ -17,6 +17,7 @@ from app.services.app_mcp.app_agent_route_service import (
     AppAgentRouteService,
     EffectiveRoute,
 )
+from app.services.routing import routing_trace
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +72,15 @@ class AppMCPRoutingService:
             logger.debug("No effective routes for user %s", user_id)
             return None
 
-        logger.info(
+        # Debug, not info: this line and the per-route dump below carry EXTERNAL
+        # users' message text and every candidate's trigger prompt. The routing
+        # trace is where that detail belongs now.
+        logger.debug(
             "[Stage1] Routing message for user=%s | message=%r | %d effective routes:",
             user_id, message[:120], len(effective_routes),
         )
         for i, r in enumerate(effective_routes):
-            logger.info(
+            logger.debug(
                 "[Stage1]   route[%d] source=%s agent=%s (%s) trigger=%r patterns=%r",
                 i, r.source, r.agent_name, r.agent_id,
                 (r.trigger_prompt or "")[:80],
@@ -90,6 +94,7 @@ class AppMCPRoutingService:
             route = effective_routes[0]
             selected = route
             stage1_method = "only_one"
+            routing_trace.record_match(method=routing_trace.MATCH_ONLY_ONE)
             logger.info("[Stage1] Single route — using directly: %s (%s)", selected.agent_name, selected.agent_id)
         else:
             # 1. Try pattern matching (identity routes have no patterns)
@@ -105,7 +110,7 @@ class AppMCPRoutingService:
                 if ai_result:
                     selected, stage1_transformed_message = ai_result
                     stage1_method = "ai"
-                    logger.info(
+                    logger.debug(
                         "[Stage1] AI selected: %s (%s) | transformed_message=%r",
                         selected.agent_name, selected.agent_id,
                         stage1_transformed_message[:120] if stage1_transformed_message else None,
@@ -122,22 +127,32 @@ class AppMCPRoutingService:
 
         # Stage 2: If the selected route is an identity contact, invoke identity routing
         if selected.source == "identity" and selected.identity_owner_id:
-            logger.info(
+            logger.debug(
                 "[Stage1→Stage2] Identity route detected — handing off to Stage 2 | "
                 "identity_owner=%s (%s) | stage2_input=%r",
                 selected.identity_owner_name, selected.identity_owner_id,
                 (stage1_transformed_message or message)[:120],
             )
-            result = AppMCPRoutingService._route_identity(
-                db_session=db_session,
-                selected_route=selected,
-                caller_user_id=user_id,
-                message=message,
-                stage1_method=stage1_method,
-                transformed_message=stage1_transformed_message,
-            )
+            # ``stage_scope``, not ``begin_stage``. Stage 2 is a handoff that
+            # RETURNS, and ``begin_stage`` latches: it used to leave
+            # ``identity_stage2`` current for everything recorded after this
+            # call, including the caller's own Pass-1 rejection of the identity
+            # route (``ChannelRoutingService._route_installed``'s
+            # ``SKIP_IDENTITY_ROUTE`` candidate, a pass_1 fact). Confirmed by
+            # running the sequence, not by reading it. Phase 4 groups candidates
+            # by stage and would have rendered that row under the wrong heading
+            # with nothing in the payload to give it away.
+            with routing_trace.stage_scope(routing_trace.STAGE_IDENTITY_STAGE2):
+                result = AppMCPRoutingService._route_identity(
+                    db_session=db_session,
+                    selected_route=selected,
+                    caller_user_id=user_id,
+                    message=message,
+                    stage1_method=stage1_method,
+                    transformed_message=stage1_transformed_message,
+                )
             if result:
-                logger.info(
+                logger.debug(
                     "[Stage1→Stage2] Final routing result: agent=%s (%s) | "
                     "stage1_method=%s stage2_method=%s | final_message=%r",
                     result.agent_name, result.agent_id,
@@ -238,6 +253,10 @@ class AppMCPRoutingService:
             ]
             for pattern in patterns:
                 if fnmatch.fnmatch(message_lower, pattern.lower()):
+                    routing_trace.record_match(
+                        method=routing_trace.MATCH_PATTERN,
+                        matched_pattern=pattern,
+                    )
                     logger.debug(
                         "Pattern match: route=%s pattern=%r message=%r",
                         route.route_id,
@@ -252,29 +271,29 @@ class AppMCPRoutingService:
         message: str,
         routes: list[EffectiveRoute],
     ) -> tuple[EffectiveRoute, str | None] | None:
-        """Call AI function to classify message against available routes.
+        """Classify the message against the available routes.
 
-        Builds a list of agent dicts with trigger_prompt descriptions
-        and asks the LLM to pick the best match.
+        Builds :class:`Candidate` objects — the one candidate shape every
+        routing consumer uses — and hands them to ``AgentClassifier``, which
+        owns prompt rendering (``prompt_examples`` included), parsing and trace
+        emission.
+
         Returns (matched_route, transformed_message) or None.
         The transformed_message is None when the AI did not strip a routing prefix.
         """
-        from app.services.ai_functions.ai_functions_service import AIFunctionsService
+        from app.services.routing.agent_classifier import AgentClassifier, Candidate
 
-        available_agents = [
-            {
-                "id": str(route.agent_id),
-                "name": route.agent_name,
-                "trigger_prompt": route.trigger_prompt,
-                "prompt_examples": route.prompt_examples or "",
-            }
+        candidates = [
+            Candidate(
+                ref_id=str(route.agent_id),
+                name=route.agent_name,
+                trigger_prompt=route.trigger_prompt,
+                prompt_examples=route.prompt_examples,
+            )
             for route in routes
         ]
 
-        routing_result = AIFunctionsService.route_to_agent(
-            message=message,
-            available_agents=available_agents,
-        )
+        routing_result = AgentClassifier.classify(candidates, message)
 
         if not routing_result:
             return None
@@ -284,11 +303,18 @@ class AppMCPRoutingService:
             agent_id = uuid.UUID(routing_result.agent_id)
         except ValueError:
             logger.warning("AI router returned invalid UUID: %r", routing_result.agent_id)
+            routing_trace.record_parse_outcome(
+                reason="classifier returned a value that is not a UUID"
+            )
             return None
 
         for route in routes:
             if route.agent_id == agent_id:
+                routing_trace.record_match(method=routing_trace.MATCH_AI)
                 return route, routing_result.transformed_message
 
         logger.warning("AI router returned agent_id %s not in effective routes", routing_result.agent_id)
+        routing_trace.record_parse_outcome(
+            reason="classifier picked an agent that is not among the effective routes"
+        )
         return None

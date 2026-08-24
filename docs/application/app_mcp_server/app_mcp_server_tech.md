@@ -35,10 +35,10 @@
 
 ### Backend -- AI Router
 
-- `backend/app/agents/app_agent_router.py` -- `RouteToAgentResult` dataclass and `route_to_agent(message, available_agents)` function; `available_agents` list of `{id, name, trigger_prompt, prompt_examples}` dicts; returns both agent ID and optional transformed message (routing prefix stripped); validates transformation: discards empty, identical-to-original, or exceeding-2x-length results
+- `backend/app/agents/app_agent_router.py` -- since [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5, a thin `list[dict]`-in adapter over `backend/app/services/routing/agent_classifier.py`'s `AgentClassifier.classify` — see that feature's tech doc for the actual prompt rendering, parsing, and trace emission. `RouteToAgentResult` is an alias of `ClassificationResult`, not a second dataclass; `route_to_agent(message, available_agents, provider_kwargs=None)` still takes `available_agents` as `{id, name, trigger_prompt, prompt_examples}` dicts (kept because this function and `AIFunctionsService.route_to_agent` publish that shape to callers outside routing) and returns both agent ID and optional transformed message (routing prefix stripped); validates transformation: discards empty, identical-to-original, or exceeding-2x-length results
 - `backend/app/agents/router_trigger_prompt_generator.py` -- `generate_router_trigger_prompt(agent_name, description, provider_kwargs)` function; model `gemini-2.5-flash-lite`; target output ~120–150 chars, single capability-verb sentence; on any generation failure returns a fallback string `"Handles tasks related to: <description snippet>"`
-- `backend/app/agents/prompts/app_agent_router_prompt.md` -- prompt template instructing the LLM to return JSON `{"agent_id": "...", "message": "..."}` with routing prefix stripping rules
-- `backend/app/services/ai_functions/ai_functions_service.py` -- `route_to_agent()` method returns `RouteToAgentResult | None`; `generate_router_trigger_prompt(agent_name, description, user, db)` method wraps the generator, honours the user's `default_ai_functions_sdk` preference
+- `backend/app/agents/prompts/app_agent_router_prompt.md` -- prompt template instructing the LLM to return JSON `{"agent_id": "...", "message": "...", "confidence": 0.0, "reason": "...", "runner_up": "<uuid>|NONE"}`, with routing-prefix-stripping rules and an "Example messages" sub-list per candidate (rendered from `prompt_examples`) that the model is told to weigh at least as heavily as the trigger-prompt description. `confidence` / `reason` / `runner_up` are advisory only — see [Auto Routing Tuning](../routing_tuning/routing_tuning.md#phase-5--classifier-unification-prompt_examples-and-confidence)
+- `backend/app/services/ai_functions/ai_functions_service.py` -- `route_to_agent()` method returns `RouteToAgentResult | None` by delegating to the adapter above; `generate_router_trigger_prompt(agent_name, description, user, db)` method wraps the generator, honours the user's `default_ai_functions_sdk` preference
 
 ### Backend -- OAuth Extensions
 
@@ -272,7 +272,7 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 
 - `route_message(db, user_id, message, channel)` -- main entry: gets effective routes, tries pattern match, falls back to AI, returns `RoutingResult` (with optional `transformed_message`) or None
 - `_try_pattern_match(message, routes)` -- fnmatch-based glob matching against `message_patterns`
-- `_ai_classify(message, routes)` -- builds candidate list as `[{id, name, trigger_prompt, prompt_examples}]` (one dict per effective route; `prompt_examples` included so the LLM can use example phrasing for disambiguation); calls `AIFunctionsService.route_to_agent()`; returns `(EffectiveRoute, transformed_message)` tuple or None
+- `_ai_classify(message, routes)` -- builds a `Candidate` (`ref_id`, `name`, `trigger_prompt`, `prompt_examples`) per effective route and calls `AgentClassifier.classify(candidates, message)` directly (`backend/app/services/routing/agent_classifier.py`, not `AIFunctionsService.route_to_agent()` — routing_tuning's Phase 5 collapsed this and two other near-copies onto one classifier); returns `(EffectiveRoute, transformed_message)` tuple or None
 - `_route_identity(db, selected_route, caller_user_id, message, stage1_method, transformed_message)` -- Stage 2 delegation; passes Stage 1's transformed message to identity router; applies cascade logic (Stage 2 wins > Stage 1 fallback > None)
 
 ### `AppMCPRequestHandler`

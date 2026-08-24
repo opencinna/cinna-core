@@ -46,17 +46,17 @@ patch to stay on the test thread/transaction.
 - **Deterministic Pass 1 setup.** Give the sender exactly one personal
   `app-mcp` route (`tests/utils/app_agent_route.py::create_user_route`) so
   `AppMCPRoutingService.route_message` takes the `only_one` path — no LLM
-  classification call needed, no `AIFunctionsService` mock required for Pass 1.
-- **Pass 2 needs a mocked classifier.** `AIFunctionsService.route_to_agent` is
+  classification call needed, no classifier mock required for Pass 1.
+- **Pass 2 needs a mocked classifier.** `AgentClassifier.classify` is
   patched per-test (`app.services.ai_functions.ai_functions_service
-  .AIFunctionsService.route_to_agent`) to hand back a chosen bundle
+  .agent_classifier.AgentClassifier.classify`) to hand back a chosen bundle
   deterministically — there is no LLM in the test environment.
 - **Lost-race "park branch" without real concurrency.** `drain_tasks()` runs
   collected background tasks strictly sequentially (no interleaving), so a
   genuine two-in-flight race can't be reproduced directly. The park branch
   (`ChannelInboundService._handle_lost_race`, same-user + `pending_install`)
   is instead driven deterministically: queue two webhook deliveries for the
-  *same* user/thread before draining, and give `route_to_agent` two different
+  *same* user/thread before draining, and give `AgentClassifier.classify` two different
   `side_effect` answers (different bundles) so the second delivery's Pass 2
   isn't excluded by "already installed" when it loses the binding race. See
   the test docstring in `server_channels_security_invariants_test.py` for the

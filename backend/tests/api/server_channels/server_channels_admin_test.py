@@ -309,3 +309,63 @@ def test_auto_install_list_crud_and_flags(
         ).status_code
         == 403
     )
+
+
+def test_auto_install_list_returns_the_trigger_prompt_text_not_only_the_flag(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """`AutoInstallBundlePublic.router_trigger_prompt` — the Phase 4 widening.
+
+    The Auto Routing Tuning card diagnoses a Pass-2 `no_match` by comparing the
+    message against the wording that failed to claim it, and `has_trigger_prompt`
+    is a boolean that cannot be compared against anything. So the projection
+    carries the text.
+
+    **This asserts the text arrives, not that the field exists on the model.**
+    Adding a field to a projection is inert until its builder populates it, and
+    a model-shape assertion passes against exactly that bug — this codebase has
+    shipped it before. The exact published prompt is pinned here, so a builder
+    that stopped setting it (or set it from the wrong revision) fails.
+
+    The companion property is that the flag and the text cannot disagree: they
+    are derived from one local in
+    `ServerChannelService.list_auto_install_bundles`, and both directions are
+    checked below.
+    """
+    prompt = f"Handle {random_lower_string()[:10]} routing questions"
+
+    publisher, publisher_headers = make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, publisher["id"])
+
+    with_prompt = create_agent_via_api(
+        client, publisher_headers, name=f"PromptText-{random_lower_string()[:6]}"
+    )
+    drain_tasks()
+    r = client.patch(
+        f"{API}/agents/{with_prompt['id']}/router-trigger-prompt",
+        headers=publisher_headers,
+        json={"router_trigger_prompt": prompt},
+    )
+    assert r.status_code == 200, r.text
+    bundle_uuid = publish_bundle(client, publisher_headers, with_prompt["id"])[
+        "bundle_uuid"
+    ]
+
+    without_prompt = create_agent_via_api(
+        client, publisher_headers, name=f"NoPromptText-{random_lower_string()[:6]}"
+    )
+    drain_tasks()
+    bare_uuid = publish_bundle(client, publisher_headers, without_prompt["id"])[
+        "bundle_uuid"
+    ]
+
+    add_auto_install_bundle(client, superuser_token_headers, bundle_uuid)
+    listed = add_auto_install_bundle(client, superuser_token_headers, bare_uuid)
+
+    entry = next(b for b in listed if b["bundle_uuid"] == bundle_uuid)
+    assert entry["router_trigger_prompt"] == prompt
+    assert entry["has_trigger_prompt"] is True
+
+    bare = next(b for b in listed if b["bundle_uuid"] == bare_uuid)
+    assert bare["router_trigger_prompt"] is None
+    assert bare["has_trigger_prompt"] is False

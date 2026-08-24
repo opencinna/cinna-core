@@ -9,7 +9,7 @@ instead of Docker/a real LLM.
 
 One addition beyond the ``agents/`` stack: ``patch_anyio_to_thread``. The
 channel pipeline offloads both routing passes via ``anyio.to_thread.run_sync``
-(``ChannelInboundService._in_thread``), not ``asyncio.to_thread`` — the
+(``ChannelRoutingService.run_in_thread``), not ``asyncio.to_thread`` — the
 existing ``patch_asyncio_to_thread`` fixture (imported below) does not cover
 it. Left unpatched, routing would genuinely run on a separate OS thread
 against the same SQLAlchemy test session, which is not supported. Patching it

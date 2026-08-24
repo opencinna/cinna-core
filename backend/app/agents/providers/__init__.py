@@ -10,7 +10,7 @@ Supported providers:
 - openai: Direct OpenAI Chat Completions API via httpx
 - anthropic: Direct Anthropic Messages API via httpx (personal key routing)
 """
-from .base import BaseAIProvider, ProviderResponse, ProviderError
+from .base import BaseAIProvider, ProviderAttempt, ProviderResponse, ProviderError
 from .gemini import GeminiProvider
 from .openai_compatible import OpenAICompatibleProvider
 from .anthropic_provider import AnthropicProvider
@@ -18,6 +18,7 @@ from .openai_provider import OpenAIProvider
 
 __all__ = [
     "BaseAIProvider",
+    "ProviderAttempt",
     "ProviderResponse",
     "ProviderError",
     "GeminiProvider",

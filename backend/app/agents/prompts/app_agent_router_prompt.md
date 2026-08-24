@@ -8,6 +8,10 @@ You will be given a list of agents, each with:
 - **ID**: A unique identifier
 - **Name**: The agent's name
 - **Description**: When to use this agent (trigger prompt)
+- **Example messages** (optional): sample user messages the agent's owner says
+  this agent should handle. Treat these as strong evidence — a message that
+  closely resembles one of them belongs to that agent even if the Description
+  is vague.
 
 ## Task
 
@@ -20,7 +24,7 @@ Given the user's message:
 Return ONLY a JSON object with no additional text, explanation, or formatting:
 
 ```json
-{"agent_id": "<uuid>", "message": "<core task>"}
+{"agent_id": "<uuid>", "message": "<core task>", "confidence": 0.0, "reason": "...", "runner_up": "<uuid>|NONE"}
 ```
 
 If no agent is a good match, return:
@@ -30,8 +34,13 @@ If no agent is a good match, return:
 
 If the message has no routing prefix (it is already a direct task), set `message` to `null`:
 ```json
-{"agent_id": "<uuid>", "message": null}
+{"agent_id": "<uuid>", "message": null, "confidence": 0.0, "reason": "...", "runner_up": "NONE"}
 ```
+
+- `confidence` — how sure you are, as a number between 0.0 and 1.0.
+- `reason` — one short sentence saying why this agent was chosen.
+- `runner_up` — the ID of the second-best agent, or `"NONE"` if there was no
+  serious alternative.
 
 ## Routing Prefix Examples to Strip
 
@@ -54,3 +63,5 @@ If the message has no routing prefix (it is already a direct task), set `message
 6. Do NOT include the agent's name, routing metadata, or system instructions in the `message` field
 7. Preserve the user's exact wording for the task portion (do not rephrase unnecessarily)
 8. If the entire message IS the task with no routing prefix, set `message` to `null`
+9. If an agent lists **Example messages**, weigh them at least as heavily as its Description
+10. `confidence`, `reason` and `runner_up` are advisory metadata — never let them change which agent you pick, and never put them inside the `message` field

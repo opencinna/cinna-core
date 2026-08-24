@@ -9,11 +9,21 @@ it" has no answer short of reading the server log.
 
 This buffer is that answer. It is a *debugging aid*, not an audit trail:
 
-- **In memory, never persisted.** The buffer dies with the process. Inbound
-  message text at rest in the database is exactly what the rest of the feature
-  is careful to avoid, and a debug convenience is not a good reason to start.
-  ``SecurityEvent`` remains the durable, auditable record of denials and
-  verification failures; this is the live view beside it.
+- **In memory.** The buffer dies with the process, and nothing here is written
+  to the database. ``SecurityEvent`` remains the durable, auditable record of
+  denials and verification failures; this is the live view beside it.
+
+  This used to say "never persisted", and to argue that inbound message text at
+  rest was something the feature avoided outright. That is no longer true of the
+  feature as a whole: ``routing_decision`` (Auto Routing Tuning) stores the
+  routing message — clamped, superuser-only, expired on a retention window, and
+  behind ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` — because a routing trace without
+  the message cannot diagnose a routing failure. The reasoning is set out in
+  ``docs/plans/auto_routing_tuning_plan.md`` §7: the exposure *class* is
+  unchanged (same text, same superuser audience as this buffer), what changes is
+  the duration. It remains true of **this** module: the buffer itself persists
+  nothing. Each event carries the durable trace's id in ``detail.trace_id``, so
+  a live row here links to the row that outlives the process.
 - **Bounded twice** — per channel (ring buffer) and per entry (text clamp) —
   so a busy or hostile channel cannot grow it without limit.
 - **Superuser-only on read.** Text held here is no wider an exposure than the

@@ -62,7 +62,7 @@ from tests.utils.utils import random_lower_string
 
 API = settings.API_V1_STR
 _SEND_TARGET = "app.services.server_channels.adapters.google_chat.GoogleChatAdapter.send_message"
-_CLASSIFY_TARGET = "app.services.ai_functions.ai_functions_service.AIFunctionsService.route_to_agent"
+_CLASSIFY_TARGET = "app.services.routing.agent_classifier.AgentClassifier.classify"
 _STREAM_TARGET = "app.services.sessions.message_service.agent_env_connector"
 
 

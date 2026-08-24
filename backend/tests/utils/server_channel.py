@@ -399,11 +399,11 @@ def flush_pending_bindings(db: Session) -> int:
 
 
 def route_installed(db: Session, user, text: str):
-    """Directly invoke ``ChannelInboundService._route_installed``.
+    """Directly invoke ``ChannelRoutingService._route_installed``.
 
     EXEMPTION — same shape as ``flush_pending_bindings`` above: this is a
     private routing-filter step with no HTTP surface of its own (it only
-    runs inside ``_route_new_thread``, reachable otherwise only via a full
+    runs inside ``ChannelRoutingService.decide``, reachable otherwise only via a full
     webhook round trip with a real Pass-1 route set up per case). It is also
     the load-bearing security boundary documented on the method itself
     ("channel sessions must run on the sender's own install" — the same
@@ -415,11 +415,11 @@ def route_installed(db: Session, user, text: str):
     ``db.get(User, ...)`` after creating the account through the API) —
     ``_route_installed`` reads ``user.id`` for the ownership comparison.
     """
-    from app.services.server_channels.channel_inbound_service import (
-        ChannelInboundService,
+    from app.services.server_channels.channel_routing_service import (
+        ChannelRoutingService,
     )
 
-    return ChannelInboundService._route_installed(db, user, text)
+    return ChannelRoutingService._route_installed(db, user, text)
 
 
 def build_routing_result(

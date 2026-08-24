@@ -2148,6 +2148,7 @@ export type AutoInstallBundlePublic = {
     display_name: string;
     visibility: string;
     has_trigger_prompt?: boolean;
+    router_trigger_prompt?: (string | null);
     added_by?: (string | null);
     created_at: string;
 };
@@ -4999,6 +5000,216 @@ export type RouterTriggerPromptUpdate = {
 };
 
 /**
+ * Full detail — the summary plus the stage trace.
+ */
+export type RoutingDecisionPublic = {
+    id: string;
+    created_at: string;
+    origin: string;
+    channel_id?: (string | null);
+    channel_name?: (string | null);
+    user_id?: (string | null);
+    user_email?: (string | null);
+    actor_user_id?: (string | null);
+    thread_key?: (string | null);
+    message_text?: (string | null);
+    message_sha256?: (string | null);
+    message_text_hidden?: boolean;
+    message_text_notice?: (string | null);
+    outcome: string;
+    match_method?: (string | null);
+    selected_agent_id?: (string | null);
+    selected_agent_name?: (string | null);
+    selected_bundle_uuid?: (string | null);
+    selected_bundle_name?: (string | null);
+    confidence?: (number | null);
+    latency_ms?: number;
+    error?: (string | null);
+    candidate_count?: number;
+    skipped_count?: number;
+    provider?: (string | null);
+    model?: (string | null);
+    stages?: Array<unknown>;
+    diagnosis?: (RoutingDiagnosisPublic | null);
+};
+
+/**
+ * Paginated list envelope.
+ */
+export type RoutingDecisionsPublic = {
+    data: Array<RoutingDecisionSummary>;
+    count: number;
+    notice?: (string | null);
+};
+
+/**
+ * List-row projection — everything the table needs, without ``stages``.
+ *
+ * ``stages`` is the large field and the only one a list view never reads;
+ * keeping it out means a page of 50 rows does not haul 50 rendered prompts
+ * and raw LLM responses across the wire.
+ */
+export type RoutingDecisionSummary = {
+    id: string;
+    created_at: string;
+    origin: string;
+    channel_id?: (string | null);
+    channel_name?: (string | null);
+    user_id?: (string | null);
+    user_email?: (string | null);
+    actor_user_id?: (string | null);
+    thread_key?: (string | null);
+    message_text?: (string | null);
+    message_sha256?: (string | null);
+    message_text_hidden?: boolean;
+    message_text_notice?: (string | null);
+    outcome: string;
+    match_method?: (string | null);
+    selected_agent_id?: (string | null);
+    selected_agent_name?: (string | null);
+    selected_bundle_uuid?: (string | null);
+    selected_bundle_name?: (string | null);
+    confidence?: (number | null);
+    latency_ms?: number;
+    error?: (string | null);
+    candidate_count?: number;
+    skipped_count?: number;
+    provider?: (string | null);
+    model?: (string | null);
+};
+
+/**
+ * Why this decision went the way it did, in a sentence, plus near-misses.
+ *
+ * **Computed on the backend on purpose** (plan §10, Phase 4): the wording is
+ * the feature for the motivating case, so it has to be testable and it has to
+ * live next to the rules it describes. In a component it could be neither —
+ * nothing would fail when the rule it paraphrases changed.
+ *
+ * ``verdict`` is the sentence; ``code`` is the branch that produced it, so a
+ * client can style or group without parsing prose and a test can pin both
+ * independently. Every branch names a remedy: a diagnosis that says only what
+ * is wrong leaves the reader exactly where they started.
+ *
+ * **What this exposes about the expected agent is an allowlist of two fields**
+ * — ``expected_agent_name`` and ``expected_agent_owner_email`` — chosen by the
+ * same standard §7 applies to ``candidates[].trigger_prompt``: they are the
+ * agent owner's own configuration, not sender-derived, and already visible to
+ * a superuser. Nothing else about the agent is read into the response, and a
+ * field wanted here later has to clear that bar when it is added.
+ */
+export type RoutingDiagnosisPublic = {
+    code: string;
+    verdict: string;
+    action: string;
+    eligible_candidate_count?: number;
+    skipped_by_reason?: {
+        [key: string]: (number);
+    };
+    expected_agent_id?: (string | null);
+    expected_agent_name?: (string | null);
+    expected_agent_owner_email?: (string | null);
+    near_misses?: Array<RoutingNearMiss>;
+    near_miss_notice?: (string | null);
+};
+
+/**
+ * One candidate ranked by token overlap against the routed message.
+ *
+ * A *hint*, explicitly not a rule: the classifier is an LLM and there is no
+ * similarity cut-off anywhere in routing. This is the same Jaccard overlap
+ * ``AppAgentRouteService`` already uses for install-time route-conflict
+ * detection, borrowed to answer the question an admin actually asks about a
+ * ``no_match`` — "how close did it come?". Saying "0.31, below the threshold"
+ * would be a claim the router does not implement; the wording says "closest",
+ * not "just missed".
+ */
+export type RoutingNearMiss = {
+    ref_id: string;
+    kind: string;
+    name: string;
+    similarity: number;
+    eligible?: boolean;
+    skip_reason?: (string | null);
+};
+
+/**
+ * A copyable trigger-prompt draft for one candidate. Writes nothing.
+ */
+export type RoutingRecommendationPublic = {
+    trace_id: string;
+    ref_id: string;
+    kind: string;
+    name: string;
+    owner_email?: (string | null);
+    current_trigger_prompt?: (string | null);
+    suggested_trigger_prompt?: (string | null);
+    success?: boolean;
+    error?: (string | null);
+    notice?: string;
+};
+
+/**
+ * Ask for a drafted trigger prompt for one candidate from a trace.
+ */
+export type RoutingRecommendationRequest = {
+    ref_id?: (string | null);
+};
+
+/**
+ * What changed between a stored decision and its re-run.
+ *
+ * Field-by-field rather than a text blob: the card renders the changed rows,
+ * and a test can assert on one property without parsing prose. ``summary`` is
+ * server-authored so the wording lives with the rules it describes (same call
+ * as the reachability verdict in plan §9).
+ */
+export type RoutingReplayDiff = {
+    changed?: boolean;
+    outcome_changed?: boolean;
+    original_outcome?: (string | null);
+    replay_outcome?: (string | null);
+    selection_changed?: boolean;
+    original_selection?: (string | null);
+    replay_selection?: (string | null);
+    match_method_changed?: boolean;
+    original_match_method?: (string | null);
+    replay_match_method?: (string | null);
+    original_confidence?: (number | null);
+    replay_confidence?: (number | null);
+    original_candidate_count?: number;
+    replay_candidate_count?: number;
+    candidates_added?: Array<(string)>;
+    candidates_removed?: Array<(string)>;
+    summary?: string;
+};
+
+/**
+ * Re-run a stored trace's message against current state.
+ */
+export type RoutingReplayRequest = {
+    include_catalog?: boolean;
+};
+
+/**
+ * The original decision, the re-run, and the diff between them.
+ */
+export type RoutingReplayResult = {
+    original: RoutingDecisionPublic;
+    replay: RoutingDecisionPublic;
+    diff: RoutingReplayDiff;
+};
+
+/**
+ * Run one message through routing for another user, with no effects.
+ */
+export type RoutingSimulateRequest = {
+    message: string;
+    as_user_id: string;
+    include_catalog?: boolean;
+};
+
+/**
  * Request to generate schedule from natural language.
  */
 export type ScheduleRequest = {
@@ -6396,6 +6607,57 @@ export type AdminLlmProvidersTestManagedAiCredentialConnectionData = {
 };
 
 export type AdminLlmProvidersTestManagedAiCredentialConnectionResponse = (AICredentialTestResult);
+
+export type AdminRoutingListRoutingTracesData = {
+    channelId?: (string | null);
+    limit?: number;
+    origin?: (string | null);
+    outcome?: (string | null);
+    skip?: number;
+    userId?: (string | null);
+};
+
+export type AdminRoutingListRoutingTracesResponse = (RoutingDecisionsPublic);
+
+export type AdminRoutingClearRoutingTracesData = {
+    /**
+     * Required to clear every channel's traces. Without it, and without channel_id, the request is rejected rather than run unscoped.
+     */
+    all?: boolean;
+    channelId?: (string | null);
+};
+
+export type AdminRoutingClearRoutingTracesResponse = (Message);
+
+export type AdminRoutingGetRoutingTraceData = {
+    /**
+     * Narrow the reachability verdict to one agent: 'why was THIS one not a candidate'. Optional — without it the verdict describes the decision as a whole.
+     */
+    expectedAgentId?: (string | null);
+    traceId: string;
+};
+
+export type AdminRoutingGetRoutingTraceResponse = (RoutingDecisionPublic);
+
+export type AdminRoutingSimulateRoutingData = {
+    requestBody: RoutingSimulateRequest;
+};
+
+export type AdminRoutingSimulateRoutingResponse = (RoutingDecisionPublic);
+
+export type AdminRoutingReplayRoutingTraceData = {
+    requestBody?: (RoutingReplayRequest | null);
+    traceId: string;
+};
+
+export type AdminRoutingReplayRoutingTraceResponse = (RoutingReplayResult);
+
+export type AdminRoutingDraftRoutingRecommendationData = {
+    requestBody?: (RoutingRecommendationRequest | null);
+    traceId: string;
+};
+
+export type AdminRoutingDraftRoutingRecommendationResponse = (RoutingRecommendationPublic);
 
 export type AgentApiGetAgentApiStatusData = {
     agentId: string;

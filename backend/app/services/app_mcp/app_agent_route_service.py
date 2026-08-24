@@ -27,6 +27,7 @@ from app.models.app_mcp.app_agent_route import (
     UserAppAgentRoutePublic,
     SharedRoutePublic,
 )
+from app.services.routing import routing_trace
 
 logger = logging.getLogger(__name__)
 
@@ -461,10 +462,39 @@ class AppAgentRouteService:
         Returns unified EffectiveRoute objects. Only includes routes where:
         - Assigned route: is_active=True AND assignment is_enabled=True AND channel enabled
         - Personal route (UserAppAgentRoute): is_active=True AND channel enabled
+
+        **``is_active`` is filtered in Python, not in SQL** — for the assigned
+        and personal route sets. It used to be a ``WHERE`` predicate, so a route
+        the user had switched off was dropped before anything could observe it,
+        and the routing trace showed no sign the agent had ever existed. That is
+        exactly what the plan's "single highest-value rule" forbids: a candidate
+        excluded without a ``skip_reason`` cannot diagnose the failure mode that
+        actually bites — *the expected agent was never a candidate at all*. The
+        alternative, re-querying the inactive rows to describe them, would add a
+        whole extra round of queries to a routing hot path. Dropping the
+        predicate instead leaves the two route queries exactly as they were and
+        returns marginally more rows; the only added cost is ``_get_agent_name``
+        running for an inactive route too, one primary-key ``get`` that usually
+        hits the session's identity map. A user's route set is small, and a route
+        being switched off is the exception.
+
+        Excluded routes never reach ``results`` — they are recorded as
+        ``SKIP_ROUTE_INACTIVE`` candidates and discarded.
+
+        The identity contact set below is deliberately **not** converted the same
+        way: its ``is_active`` predicates sit on the *join* side of a
+        one-to-many collapsed by ``DISTINCT`` (one EffectiveRoute per owner, not
+        per binding), so dropping them would not yield "the same owners plus the
+        inactive ones" — it would yield owners with at least one inactive
+        binding, indistinguishable from owners whose bindings are all inactive,
+        without restructuring the select. Left alone rather than guessed at.
         """
         results: list[EffectiveRoute] = []
+        # Recorded as skipped candidates after ``results``, so the trace lists
+        # the eligible set first and then what was dropped and why.
+        inactive: list[EffectiveRoute] = []
 
-        logger.info(
+        logger.debug(
             "[EffectiveRoutes] Building routes for user=%s channel=%s",
             user_id, channel,
         )
@@ -479,38 +509,39 @@ class AppAgentRouteService:
             .where(
                 AppAgentRouteAssignment.user_id == user_id,
                 AppAgentRouteAssignment.is_enabled == True,  # noqa: E712
-                AppAgentRoute.is_active == True,  # noqa: E712
+                # ``AppAgentRoute.is_active`` is filtered below, in Python — see
+                # the docstring.
             )
         )
         if channel == "app_mcp":
             stmt = stmt.where(AppAgentRoute.channel_app_mcp == True)  # noqa: E712
 
         assigned_rows = db_session.exec(stmt).all()
-        logger.info("[EffectiveRoutes]   Assigned routes: %d", len(assigned_rows))
+        logger.debug("[EffectiveRoutes]   Assigned routes: %d", len(assigned_rows))
         for route, _assignment in assigned_rows:
             agent_name = _get_agent_name(db_session, route.agent_id)
-            logger.info(
+            logger.debug(
                 "[EffectiveRoutes]     - %s (agent=%s, route=%s)",
                 agent_name, route.agent_id, route.id,
             )
-            results.append(
-                EffectiveRoute(
-                    route_id=route.id,
-                    agent_id=route.agent_id,
-                    agent_name=agent_name,
-                    name=route.name,
-                    session_mode=route.session_mode,
-                    trigger_prompt=route.trigger_prompt,
-                    message_patterns=route.message_patterns,
-                    source="admin",
-                    prompt_examples=route.prompt_examples,
-                )
+            effective = EffectiveRoute(
+                route_id=route.id,
+                agent_id=route.agent_id,
+                agent_name=agent_name,
+                name=route.name,
+                session_mode=route.session_mode,
+                trigger_prompt=route.trigger_prompt,
+                message_patterns=route.message_patterns,
+                source="admin",
+                prompt_examples=route.prompt_examples,
             )
+            (results if route.is_active else inactive).append(effective)
 
         # Personal routes (soft-deprecated UserAppAgentRoute table)
+        # ``is_active`` filtered in Python below, same reason as the assigned
+        # routes above.
         user_stmt = select(UserAppAgentRoute).where(
             UserAppAgentRoute.user_id == user_id,
-            UserAppAgentRoute.is_active == True,  # noqa: E712
         )
         if channel == "app_mcp":
             user_stmt = user_stmt.where(
@@ -518,20 +549,19 @@ class AppAgentRouteService:
             )
 
         personal_rows = db_session.exec(user_stmt).all()
-        logger.info("[EffectiveRoutes]   Personal routes: %d", len(personal_rows))
+        logger.debug("[EffectiveRoutes]   Personal routes: %d", len(personal_rows))
         for user_route in personal_rows:
             agent_name = _get_agent_name(db_session, user_route.agent_id)
-            results.append(
-                EffectiveRoute(
-                    route_id=user_route.id,
-                    agent_id=user_route.agent_id,
-                    agent_name=agent_name,
-                    session_mode=user_route.session_mode,
-                    trigger_prompt=user_route.trigger_prompt,
-                    message_patterns=user_route.message_patterns,
-                    source="user",
-                )
+            effective = EffectiveRoute(
+                route_id=user_route.id,
+                agent_id=user_route.agent_id,
+                agent_name=agent_name,
+                session_mode=user_route.session_mode,
+                trigger_prompt=user_route.trigger_prompt,
+                message_patterns=user_route.message_patterns,
+                source="user",
             )
+            (results if user_route.is_active else inactive).append(effective)
 
         # Identity contacts — distinct owners who have active+enabled assignments for this user
         # One EffectiveRoute per person (not per binding). Stage 2 handles agent selection.
@@ -545,13 +575,13 @@ class AppAgentRouteService:
             IdentityBindingAssignment.target_user_id == user_id,
         )
         raw_assignments = db_session.exec(raw_assignments_stmt).all()
-        logger.info(
+        logger.debug(
             "[EffectiveRoutes]   Identity assignments (raw, all states): %d",
             len(raw_assignments),
         )
         for ra in raw_assignments:
             binding = db_session.get(IdentityAgentBinding, ra.binding_id)
-            logger.info(
+            logger.debug(
                 "[EffectiveRoutes]     - assignment=%s binding=%s "
                 "assign.is_active=%s assign.is_enabled=%s "
                 "binding.is_active=%s binding.owner=%s",
@@ -581,9 +611,9 @@ class AppAgentRouteService:
         )
 
         identity_owners = db_session.exec(identity_stmt).all()
-        logger.info("[EffectiveRoutes]   Identity contacts (filtered): %d", len(identity_owners))
+        logger.debug("[EffectiveRoutes]   Identity contacts (filtered): %d", len(identity_owners))
         for owner in identity_owners:
-            logger.info(
+            logger.debug(
                 "[EffectiveRoutes]     - owner=%s (%s)",
                 owner.full_name or owner.email, owner.id,
             )
@@ -613,7 +643,22 @@ class AppAgentRouteService:
                 )
             )
 
-        logger.info("[EffectiveRoutes] Total effective routes: %d", len(results))
+        logger.debug(
+            "[EffectiveRoutes] Total effective routes: %d (%d inactive)",
+            len(results),
+            len(inactive),
+        )
+        # The candidate set, for whoever opened a routing capture. No-ops
+        # otherwise, and it is what the [EffectiveRoutes] log lines above used
+        # to be for — those are now debug-level.
+        routing_trace.record_effective_routes(results)
+        # ...and the routes that WERE the user's, but are switched off. Recorded
+        # rather than dropped silently: "your agent has a route, it is just not
+        # active" is a different answer from "your agent has no route", and only
+        # this row can tell them apart.
+        routing_trace.record_effective_routes(
+            inactive, skip_reason=routing_trace.SKIP_ROUTE_INACTIVE
+        )
         return results
 
     @staticmethod

@@ -1,0 +1,175 @@
+# Auto Routing Tuning — Technical Reference
+
+Implementation reference for [Auto Routing Tuning](routing_tuning.md). Parent/sibling features: [Server Channels](../server_channels/server_channels_tech.md) (the only wired producer today), [App MCP Server](../app_mcp_server/app_mcp_server_tech.md), [Identity MCP Server](../identity_mcp_server/identity_mcp_server_tech.md).
+
+**Phases 1–5 are implemented and tested.** Phase 5 added `AgentClassifier` (one renderer and one parser for all four routing consumers), rendered `prompt_examples` into the classifier prompt, and added the model's `confidence` / `reason` / `runner_up` plus identity Stage-2 candidate capture.
+
+**Still not built, and deliberately so:** `origin="app_mcp"` / `origin="identity"` capture. Phase 5 unified the *classifier*, not the set of places that open a `RoutingTrace.capture()` — those remain the two `server_channel` sites plus simulate. `ROUTING_TRACE_APP_MCP_MODE` therefore stays removed; reintroduce it in the same change that starts emitting `ORIGIN_APP_MCP`, never before (see Configuration below).
+
+## File Locations
+
+### Backend — models
+- `backend/app/models/routing/routing_decision.py` — `RoutingDecision` (table), `RoutingDecisionSummary`, `RoutingDecisionPublic`, `RoutingDecisionsPublic`, `RoutingDiagnosisPublic`, `RoutingNearMiss`, `RoutingSimulateRequest`, `RoutingReplayRequest`, `RoutingReplayDiff`, `RoutingReplayResult`, `RoutingRecommendationRequest`, `RoutingRecommendationPublic`, plus the two server-authored notice constants `MESSAGE_TEXT_HIDDEN_NOTICE` and `TRACING_DISABLED_NOTICE`
+- Re-exported from `backend/app/models/__init__.py`
+
+### Backend — services
+- `backend/app/services/routing/agent_classifier.py` — `AgentClassifier.classify(candidates, message)`, the `Candidate` / `ClassificationResult` dataclasses, `render_prompt()`, and the defensive `_parse_confidence` / `_parse_reason` / `_parse_runner_up` extractors. **The one place the classifier prompt is rendered and the one place a model reply is parsed**, for Channel Pass 1, Channel Pass 2, App MCP Stage 1 and Identity Stage 2 alike — which is what makes a candidate field either reach all four or none. Holds a module-level `get_provider_manager()` wrapper: it breaks the `app.agents` import cycle *and* keeps the provider seam patchable at classifier depth, which the message-text gating tests depend on.
+- `backend/app/services/routing/routing_trace.py` — the in-process recorder: `RoutingTrace` (a `ContextVar`-backed span object), `CandidateTrace` / `LLMAttempt` / `StageTrace` dataclasses, the `record_*` / `begin_stage` / `stage_scope` instrumentation API, `clamp()`, `describe_exception()`, and the `SAFE_CANDIDATE_FIELDS` / `SAFE_LLM_ATTEMPT_FIELDS` / `SAFE_STAGE_FIELDS` allowlists. **Imports nothing from `app.*`** — enforced by an architecture test, because `app/agents/app_agent_router.py` imports this module directly and sits below `app/services/`.
+- `backend/app/services/routing/routing_trace_service.py` — `RoutingTraceService`: `persist` / `list` / `get` / `purge` / `clear`, plus the write-and-read stage projection (`_project_safe_stages`, `_project_object`) and a batched `_NameResolver` for list-page display names. The seam between the in-memory recorder and the database; must never be imported back into `routing_trace.py`.
+- `backend/app/services/routing/routing_reachability_service.py` — `RoutingReachabilityService.diagnose()`: the reachability verdict and near-miss ranking. Reuses `AppAgentRouteService._tokens_for_similarity` / `_jaccard_similarity` by calling them (not copying them).
+- `backend/app/services/routing/routing_tuning_service.py` — `RoutingTuningService.simulate` / `replay_source` / `diff` / `recommend`, and the `RoutingSimulationError` / `ReplaySource` types.
+- `backend/app/services/routing/routing_trace_scheduler.py` — `run_purge()` / `start_scheduler()` / `shutdown_scheduler()`; hourly `BackgroundScheduler` job, `TESTING`-gated, registered alongside the platform's other schedulers.
+- `backend/app/services/server_channels/channel_routing_service.py` — `ChannelRoutingService`: the pure `decide()` split (no binding/session/install/reply reachable from it), `run_in_thread()` (the shared worker-thread offload also used by `channel_inbound_service.py` and `routing_tuning_service.py`), and the two thread targets `_route_installed_in_thread` / `_route_catalog_in_thread` that open the `RoutingTrace.capture()` spans.
+- `backend/app/services/server_channels/channel_inbound_service.py` — the only caller of `ChannelRoutingService.decide()` on the real path; `_decision_detail()` builds the `{"trace_id": ...}` fragment the live debug feed shows, populated only when `persist()` actually wrote a row.
+- `backend/app/services/server_channels/channel_debug_buffer.py` — unchanged in structure, but its events now carry `detail.trace_id` linking a live row to its durable counterpart.
+- `backend/app/agents/app_agent_router.py` — since Phase 5 a thin **adapter**: `list[dict]` in, `ClassificationResult` out, over `AgentClassifier.classify`. It kept the dict shape because `AIFunctionsService.route_to_agent` and `app.agents`'s own export publish it; `RouteToAgentResult` is an alias of `ClassificationResult`, not a second dataclass. New routing consumers build `Candidate` objects and call the classifier directly.
+- `backend/app/services/identity/identity_routing_service.py` — `_binding_candidates()` is the **single** Stage-2 candidate builder, feeding both `AgentClassifier.classify` and `_record_candidates()`'s trace capture (a binding with no assignment for this caller is recorded as a `no_assignment` skip, not dropped). `_try_pattern_match` records `record_match`, and the `only_one` branch does too — before Phase 5 a Stage-2 pattern hit persisted as `match_method=None`.
+- `backend/app/services/app_mcp/app_mcp_routing_service.py` — `_ai_classify` builds `Candidate`s for the classifier; `_try_pattern_match` records `record_match` / `record_parse_outcome`; opens `routing_trace.stage_scope(STAGE_IDENTITY_STAGE2)` around the call into `IdentityRoutingService` for the Stage-2 handoff.
+- `backend/app/services/app_mcp/app_agent_route_service.py` — `_create_auto_route_for_agent`, `_tokens_for_similarity`, `_jaccard_similarity` — the two conditions the reachability verdict's standalone/bundle branching restates, and the tokenizer the near-miss ranking reuses.
+
+### Backend — routes
+- `backend/app/api/routes/admin_routing.py` — all superuser-only, prefix `/admin/routing`, `tags=["admin-routing"]`: `GET /traces`, `GET /traces/{id}`, `DELETE /traces`, `POST /simulate`, `POST /traces/{id}/replay`, `POST /traces/{id}/recommendation`. Registered in `backend/app/api/main.py`.
+
+### Backend — other
+- `backend/app/models/events/security_event.py` — `ROUTING_SIMULATE_RUN` (simulate and replay share this event type, discriminated by a `mode` field in `details`), `ROUTING_TRACES_CLEARED`
+- `backend/app/core/config.py` — `ROUTING_TRACE_ENABLED`, `ROUTING_TRACE_STORE_MESSAGE_TEXT`, `ROUTING_TRACE_RETENTION_DAYS`, `ROUTING_TRACE_TEXT_MAX_CHARS`, `ROUTING_SIMULATE_RATE_LIMIT_PER_MIN`, `ROUTING_TRACE_RETENTION_FOREVER` (module-level constant, `-1`), and the `_validate_routing_trace_retention` model validator
+- `backend/app/services/common/rate_limiter.py` — pre-existing `RateLimiter`, reused for the per-admin simulate/replay/recommendation bucket
+
+### Migration
+- `backend/app/alembic/versions/1f9f81b0bb79_add_routing_decision_table.py` — creates `routing_decision` and its four indexes. Additive only; no existing table touched. `down_revision` is `1a17557c0311` (the Server Channels tables migration).
+
+### Frontend
+- `frontend/src/components/Admin/ServerChannels/AutoRoutingTuningCard.tsx` — the card itself: recent-decisions table (filterable by channel/outcome), row expansion, "Try a message" entry point
+- `frontend/src/components/Admin/ServerChannels/RoutingTraceDetail.tsx` — one trace's detail panel
+- `frontend/src/components/Admin/ServerChannels/RoutingStagesView.tsx` — candidate table + LLM-attempt list + rendered prompt / raw response disclosures, per stage
+- `frontend/src/components/Admin/ServerChannels/RoutingDiagnosisPanel.tsx` — renders the reachability verdict and near-miss ranking
+- `frontend/src/components/Admin/ServerChannels/RoutingSimulateDialog.tsx` — the "Try a message" form: message box, user picker, include-catalog toggle
+- `frontend/src/components/Admin/ServerChannels/RoutingReplayPanel.tsx` — re-run + before/after diff view
+- `frontend/src/components/Admin/ServerChannels/RoutingRecommendationPanel.tsx` — the copyable drafted trigger prompt, with the advisory notice
+- `frontend/src/components/Admin/ServerChannels/RoutingStateBlocks.tsx` — shared empty/error/disabled-notice state rendering (every state has an explicit `isError` branch — see Security below)
+- `frontend/src/components/Admin/ServerChannels/routingCopy.ts` — shared copy strings
+- `frontend/src/components/Admin/ServerChannels/routingStages.ts` — stage/outcome/match-method display helpers, tolerant of unknown vocabulary values
+- `frontend/src/components/Admin/ServerChannels/routingRateLimit.ts` — 429/`Retry-After` handling for the shared rate-limit bucket
+- `frontend/src/routes/_layout/admin/server-configuration.tsx` — renders `<AutoRoutingTuningCard />` inside the `channels` `HashTabs` entry, alongside `ServerChannelsCard` and `AutoInstallAgentsCard`
+
+### Tests
+- `backend/tests/api/routing/` — not split into topic groups (small enough for the domain root); see `backend/tests/api/routing/README.md` for the full file-by-file map. Files: `conftest.py`, `routing_access_control_test.py`, `routing_traces_list_and_detail_test.py`, `routing_error_outcome_test.py`, `routing_message_text_gating_test.py`, `routing_trace_debug_link_test.py`, `routing_trace_retention_test.py`, `routing_trace_clear_lifecycle_test.py`, `routing_trace_disabled_read_gate_test.py`, `routing_simulate_no_side_effects_test.py`, `routing_replay_and_recommendation_test.py`, `routing_reachability_verdict_test.py`, `routing_persist_session_ownership_test.py`
+- `backend/tests/api/routing/routing_identity_stage2_capture_test.py` — the Stage-2 ballot is recorded, and a Stage-2 pattern hit reports `match_method="pattern"` rather than `None`
+- `backend/tests/unit/test_agent_classifier_parsing.py` — the Phase 5 prompt contract's parse: a reply omitting (or garbling) `confidence` / `reason` / `runner_up` still routes, the per-field extractors, the confidence lift to the decision level, and `reason`'s absence from `SAFE_STAGE_FIELDS`
+- `backend/tests/unit/test_router_classification_agent_name.py` — what the classifier is *told*: name and `prompt_examples` asserted against the **rendered prompt**, not against a payload dict (the payload-level version of this test passed for the entire life of Bug 1)
+- `backend/tests/unit/test_routing_trace.py` — recorder semantics: totality of `clamp()` / `describe_exception()` / `_sha256()` / `_str_or_none()`, the eager stage-materialization property, the `stage_scope` restore-on-exit behaviour
+- `backend/tests/unit/test_routing_reachability.py` — unit-level properties of `RoutingReachabilityService` (totality, the shared Jaccard-helper reuse, candidate de-duplication) that don't need a full API round trip
+- `backend/tests/unit/test_channel_outbound_instrumentation.py` — not part of this feature's own capture path, but the home of `test_a_failed_write_makes_the_error_reportable_but_not_durable`, which pins the "guard makes a failure reportable, not durable" distinction this feature's own `persist()` relies on for the identical reason (see the business doc's "What This Feature Taught")
+- `backend/tests/architecture/routing_trace_layering_test.py` — enforces that `routing_trace.py` imports nothing from `app.*`, and (per `channel_routing_service.py`'s own docstring) that nothing effectful is importable from the pure `decide()` module
+- `backend/tests/utils/routing.py` — HTTP-level test helpers for the admin read/clear API, `post_channel_message`, and the two documented Rule-1-exempt backdoors (`purge_routing_traces`, `seed_routing_trace`) for functionality with no HTTP surface
+
+## Database Schema
+
+### `routing_decision`
+
+One row per persisted routing decision. Key fields (see `routing_decision.py`'s column comments for the full reasoning behind each):
+
+- `id` (UUID PK) — reuses the in-memory `RoutingTrace.trace_id`, so the id the live debug feed shows (`detail.trace_id`) is a real key into this table.
+- `created_at` (`timestamptz`, not naive) — for a merged Pass-1+Pass-2 decision, this is the **earlier** pass's start time.
+- `origin` (`VARCHAR(32)`) — `server_channel` | `simulate` today; `app_mcp` / `identity` reserved, unreachable — no code path opens a capture with either value yet (see the header note above).
+- `channel_id` (FK `server_channel.id`, `ON DELETE CASCADE`, nullable) — NULL for a hand-typed simulate.
+- `user_id` (FK `user.id`, `ON DELETE SET NULL`, nullable) — the sender being routed for.
+- `actor_user_id` (FK `user.id`, `ON DELETE SET NULL`, nullable) — the admin who ran a simulate/replay; NULL on the real path.
+- `thread_key` (`VARCHAR(512)`, nullable)
+- `message_text` (`Text`, nullable) — written only when `ROUTING_TRACE_STORE_MESSAGE_TEXT` is on; clamped to `ROUTING_TRACE_TEXT_MAX_CHARS`.
+- `message_sha256` (`VARCHAR(64)`, indexed) — **always** written regardless of the text gate; the replay/dedupe key when text is off. Written via `_fit_exact`, not `_fit` — an over-long hash is dropped, never prefix-truncated, because a truncated hash would silently match nothing in the index.
+- `outcome` (`VARCHAR(32)`) — `routed` | `no_match` | `error` | `parked_install`.
+- `match_method` (`VARCHAR(32)`, nullable) — `pattern` | `ai` | `only_one`. Deliberately survives a `no_match`: see the business doc.
+- `selected_agent_id` / `selected_bundle_uuid` (both `SET NULL`)
+- `confidence` (`Float`, nullable) — the model's own score, lifted from the winning stage by `routing_trace.record_confidence` (a `note_`-style write that does **not** settle the outcome, so `_settle_locked` clears it on any non-positive verdict, exactly as it clears the selection). **Recorded, never acted on** — routing is not gated on it. Measured against this project's default cascade at Phase 5 time, the model returned 1.0 on 26 of 29 answers and omitted the field entirely on 7 of 36: uncalibrated, and not yet a signal anything should depend on.
+- `latency_ms` (`Integer`, default `0`) — sum of both passes when merged.
+- `stages` (`JSONB`, default `'[]'::jsonb`) — `[StageTrace]` as produced by `RoutingTrace.stages_payload()`, projected through `SAFE_STAGE_FIELDS` when the text gate is off. **Plain assignment only** — `row.stages.append(...)` is not dirty-tracked and a commit silently drops it.
+- `error` (`Text`, nullable)
+
+Indexes: `ix_routing_decision_created` (`created_at DESC`, unfiltered admin list), `ix_routing_decision_channel_created` (`channel_id, created_at DESC`), `ix_routing_decision_user_created` (`user_id, created_at DESC`), `ix_routing_decision_message_sha256`.
+
+**Why `stages` is JSONB, not child tables:** read whole, never queried by an inner field, and its shape follows the router's two-pass structure, which is expected to keep changing (Phase 5 unified the classifier without changing that structure). Same call as `InputTask.refinement_history` and `AgentEnvironment.config`.
+
+No changes to any pre-existing table. `RoutingDecision` rows are disposable diagnostics — nothing else in the schema references one, and losing a row loses a diagnosis, never state.
+
+## API Endpoints
+
+All routes in `backend/app/api/routes/admin_routing.py`, prefix `/admin/routing`, `get_current_active_superuser` on every route — there is no partial/role-based access, because a trace can name another account's installed agents and (with the text gate on) an external sender's message.
+
+- `GET /api/v1/admin/routing/traces` → `RoutingDecisionsPublic` — filters: `channel_id`, `origin`, `outcome`, `user_id` (all free-form strings, tolerant of unknown vocabulary values — no 422 for a value this build has never heard of); `skip`/`limit` (`limit` capped at 200). Returns an empty page **plus `notice=TRACING_DISABLED_NOTICE`** while `ROUTING_TRACE_ENABLED` is off, never a bare empty page.
+- `GET /api/v1/admin/routing/traces/{trace_id}` → `RoutingDecisionPublic` — full `stages` (message-text-gated) plus the computed `diagnosis`. Optional `?expected_agent_id=` narrows the verdict to "why was *this* agent not a candidate." 404 (with the disabled notice as detail) both for a missing id and for `ROUTING_TRACE_ENABLED=False`, so the gate leaks no existence information.
+- `DELETE /api/v1/admin/routing/traces` → `Message` — `channel_id` scopes to one channel; the unscoped form requires `?all=true` explicitly (a bare unscoped DELETE is a 400, not a wipe). Works even while `ROUTING_TRACE_ENABLED` is off — this is one of the two documented erasure paths. Audited as `ROUTING_TRACES_CLEARED` with the channel id and deleted count, never message content.
+- `POST /api/v1/admin/routing/simulate` (`RoutingSimulateRequest`: `message`, `as_user_id`, `include_catalog`) → `RoutingDecisionPublic` — rejects an empty message (400); rate-limited (429 + `Retry-After`) *before* the target-user lookup (so the existence check itself can't be probed at an unbounded rate); 404 if `as_user_id` doesn't resolve; audited (`ROUTING_SIMULATE_RUN`, `mode="simulate"`, never the message body) **before** the run, since the LLM spend and the access to another account's routing state have already happened by the time a response could be built.
+- `POST /api/v1/admin/routing/traces/{trace_id}/replay` (`RoutingReplayRequest`: `include_catalog`) → `RoutingReplayResult` (`original`, `replay`, `diff`) — 409 if the original trace's message text isn't available (gate off now, or was off at capture time); stores the replay as its own `origin="simulate"` row, leaving the original untouched.
+- `POST /api/v1/admin/routing/traces/{trace_id}/recommendation` (`RoutingRecommendationRequest`: optional `ref_id`) → `RoutingRecommendationPublic` — 409 if the trace has no stored message text; not audited (exposes nothing the caller didn't already have from `GET /traces/{id}`, and writes nothing at all).
+
+`_require_tracing_enabled()` refuses simulate/replay/recommendation with a 503 before spending anything when `ROUTING_TRACE_ENABLED` is off — since a simulate's entire result *is* the trace it would produce, there is nothing to return.
+
+## Services & Key Methods
+
+### `RoutingTrace` (`routing_trace.py`)
+- `RoutingTrace.capture(origin=…, user_id=…, channel_id=…, actor_user_id=…, thread_key=…, message=…, stage=…)` — context manager; sets a `ContextVar`, eagerly materializes the named stage via `begin_stage()` on entry, records `outcome="error"` and re-raises on an exception, always calls `finish()` (settles a still-`None` outcome to `no_match` and stamps `latency_ms`).
+- `RoutingTrace.current()` / module-level `current()` — the active capture, or `None`; every `record_*` helper no-ops on `None` so an un-instrumented caller pays one `ContextVar` read.
+- `record_effective_routes` / `record_candidate` / `record_skip` / `mark_candidate_skipped` — candidate capture, including the "add as excluded" and "flip an already-recorded candidate to excluded" shapes.
+- `record_match` / `record_prompt` / `record_raw_response` / `record_parse_outcome` / `record_llm_attempt` — per-stage detail.
+- `record_outcome` / `record_error` — the only two ways to settle the trace's terminal verdict (`_settle_locked` is the single settler; a non-positive outcome always clears any recorded selection, and a trace carrying an `error` always settles as `error`, even if a later call tries to set a softer outcome).
+- `stage_scope(stage)` — a scoped (restoring) variant of `begin_stage()`, used around the identity-routing handoff so un-addressed records made after control returns don't keep landing on `identity_stage2`.
+- `clamp()` / `describe_exception()` / `_sha256()` / `_str_or_none()` — total (never-raising) helpers; every record-site's argument-building happens *inside* the helper's own guard, not in the caller's argument expression, because Python evaluates arguments before entering a function.
+
+### `RoutingTraceService` (`routing_trace_service.py`)
+- `persist(trace, *, preceded_by=None)` — opens its **own** short-lived session (never the caller's), so a failed diagnostic write can never commit or roll back the caller's transaction. Merges a Pass-1 `preceded_by` trace into the terminal Pass-2 trace: stages concatenate, latency sums, `created_at` comes from the earlier pass, an error on either pass promotes the merged outcome to `error`. Never raises.
+- `list()` / `get()` — both gate on `ROUTING_TRACE_ENABLED` (read gate, not just a write gate); `get()` additionally projects `stages` through `SAFE_STAGE_FIELDS` when `ROUTING_TRACE_STORE_MESSAGE_TEXT` is off, and attaches the computed `diagnosis` via `RoutingReachabilityService.diagnose`.
+- `purge(retention_days=None)` — bulk `DELETE` past the cutoff; `ROUTING_TRACE_RETENTION_FOREVER` (`-1`) short-circuits to a no-op; anything else `< 1` raises (settings validation makes this unreachable from configuration, so a raise here means a caller passed a bad value directly).
+- `clear(channel_id=None)` — bulk `DELETE`, optionally channel-scoped; deliberately **not** gated by `ROUTING_TRACE_ENABLED`, since this is one of the two documented erasure paths and must keep working while tracing is "off."
+- `_project_safe_stages` / `_project_object` — the allowlist projection, used identically on the write path (inside `persist`) and the read path (inside `get`), from the one `SAFE_STAGE_FIELDS` definition.
+
+### `RoutingReachabilityService` (`routing_reachability_service.py`)
+- `diagnose(db, trace, *, expected_agent_id=None)` — total (catches everything, returns `CODE_UNAVAILABLE` rather than propagating, since a diagnosis failure must not take the whole trace-detail response down with it). Operates on the **projected** `RoutingDecisionPublic`, not the raw row, so it can never quote a field the message-text gate withheld.
+- General verdicts (no `expected_agent_id`): `CODE_ROUTED`, `CODE_ERROR`, `CODE_NO_CANDIDATES`, `CODE_ALL_CANDIDATES_SKIPPED`, `CODE_NO_MATCH`.
+- Verdicts about a named agent found in the trace: `CODE_EXPECTED_SELECTED`, `CODE_EXPECTED_CONSIDERED`, `CODE_EXPECTED_SKIPPED`.
+- Verdicts about a named agent **not** found in the trace (answered from current configuration instead): `CODE_EXPECTED_UNKNOWN`, `CODE_EXPECTED_STANDALONE_NO_ROUTE`, `CODE_EXPECTED_BUNDLE_NO_ROUTE`, `CODE_EXPECTED_NO_TRIGGER_PROMPT`, `CODE_EXPECTED_FOREIGN_OWNER`, `CODE_EXPECTED_ROUTE_INACTIVE`, `CODE_EXPECTED_ROUTE_NOT_APP_MCP`, `CODE_EXPECTED_ROUTE_UNASSIGNED`, `CODE_EXPECTED_LOOKS_REACHABLE`.
+- `CODE_UNAVAILABLE` — the diagnosis itself failed.
+- That is **18** verdict codes in the current build (`grep -c "^CODE_" routing_reachability_service.py`), each with its own test in `routing_reachability_verdict_test.py` pinning both the code and its exact sentence; the test file has 22 test functions because several codes (e.g. the "route added/removed after the decision" pair, and the near-miss-ranking behaviour) are covered by more than one scenario.
+- `_rank_near_misses` — calls `AppAgentRouteService._tokens_for_similarity` / `_jaccard_similarity` (not a second copy of the tokenizer); ranks on `trigger_prompt` **and** `prompt_examples`, joined into one scored document. Both fields, because both are what the classifier now receives — the ranking moved in the same change as Bug 1's fix on purpose, since a card scoring a strict subset of what the model saw is this feature misreporting the system on its own diagnostic surface.
+
+### `RoutingTuningService` (`routing_tuning_service.py`)
+- `simulate(db, *, user_id, actor_user_id, message, include_catalog, channel_id=None, thread_key=None)` → `RoutingDecisionPublic` — calls `ChannelRoutingService.decide(origin=ORIGIN_SIMULATE, actor_user_id=…)`, persists via the shared `run_in_thread` offload, and returns `RoutingTraceService.get(db, trace_id)` **verbatim** — the same function `GET /traces/{id}` calls, so a simulate response is structurally guaranteed to expose exactly what a stored trace exposes, never more.
+- `replay_source(db, trace_id)` → `ReplaySource` — the one place that deliberately bypasses the read projection to recover the original message text (needed to re-run it); raises `RoutingSimulationError` (409) when the text gate is off, when the row has no stored text, or when the sender's account no longer exists.
+- `diff(original, replay)` → `RoutingReplayDiff` — field-by-field comparison plus a server-authored `summary` sentence (says "nothing changed" explicitly rather than rendering an empty diff).
+- `recommend(db, *, trace, message, ref_id, actor)` → `RoutingRecommendationPublic` — picks a candidate from the trace (`ref_id` explicit, or the trace's own selection, or the sole candidate; anything ambiguous is a 400/404 rather than a guess), calls `AIFunctionsService.generate_router_trigger_prompt`, returns `success=False` + `error` (not a raised exception) on a provider failure.
+
+### `ChannelRoutingService` (`channel_routing_service.py`)
+- `decide(*, user_id, text, include_catalog=True, origin=ORIGIN_SERVER_CHANNEL, channel_id=None, thread_key=None, actor_user_id=None)` → `RoutingDecisionResult` — pure; no `Session` parameter, no effectful import in the module.
+- `run_in_thread(fn, *args)` — public (three modules call it); the shared `anyio.to_thread.run_sync` offload for both routing passes and for `RoutingTraceService.persist` itself (persist is a synchronous INSERT+COMMIT and must not run on the event loop).
+- `_route_installed_in_thread` / `_route_catalog_in_thread` — the two thread targets; each opens its own `RoutingTrace.capture()` **inside** the thread (not around the offload), owns its own DB session, and on an exception persists its own `outcome="error"` trace before re-raising — because `capture()` re-raises unchanged, so without this write the calling coroutine's exception handler would never see the recorder that explains why routing failed.
+- `RoutingDecisionResult.persist_args` / `.persist_call()` — the one place the "which trace is terminal, which folds in behind it" rule is expressed, so the real path (four call sites) and simulate (a fifth) cannot persist differently-shaped rows for the same kind of decision.
+
+## Frontend Components
+
+- `AutoRoutingTuningCard` — top-level card; owns the filtered/paginated decisions query and expansion state.
+- `RoutingTraceDetail` + `RoutingStagesView` — per-trace detail: candidate table (name, owner, source, trigger prompt, eligible/skip-reason, chosen marker), LLM attempts, rendered prompt / raw response behind a disclosure (absent with a notice when the text gate is off).
+- `RoutingDiagnosisPanel` — renders `diagnosis.verdict` and the near-miss ranking; goes quiet with `near_miss_notice` rather than an empty list when ranking isn't possible (no message text, or no candidate has a trigger prompt).
+- `RoutingSimulateDialog` — message box + `UserAllowlistPicker`-style user search + include-catalog toggle.
+- `RoutingReplayPanel` — before/after diff rendering, keyed on `RoutingReplayDiff`'s explicit `*_changed` booleans rather than deep-diffing the two trace objects itself.
+- `RoutingRecommendationPanel` — copyable drafted prompt plus `RECOMMENDATION_ADVISORY_NOTICE`.
+- `RoutingStateBlocks` — shared loading/error/disabled-notice rendering; every query branch has an explicit `isError` case so a failed request cannot render as a lying "no traces" empty state.
+
+## Configuration
+
+- `ROUTING_TRACE_ENABLED` (default `True`) — master switch; gates **persistence and reads**, never the in-process capture the live debug feed's summary reads from.
+- `ROUTING_TRACE_STORE_MESSAGE_TEXT` (default `True`) — the message-text gate; write **and** read; enforced by the `SAFE_STAGE_FIELDS` allowlist, not a field inventory. See the business doc.
+- `ROUTING_TRACE_RETENTION_DAYS` (default `14`) — must be `>= 1`, or exactly `ROUTING_TRACE_RETENTION_FOREVER` (`-1`, module-level constant in `config.py`, imported by both `routing_trace_service.py` and the scheduler so the sentinel can't drift between them). `0` and other negatives raise at settings validation (`_validate_routing_trace_retention`).
+- `ROUTING_TRACE_TEXT_MAX_CHARS` (default `2_000`) — clamp applied at persist time to `message_text`/`error`; matches `SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS` by design (same text, same audience). Stage-internal free text is clamped separately by the recorder's own `TRACE_TEXT_MAX_CHARS` constant (also `2_000`), which cannot read settings because `routing_trace.py` may not import `app.*`.
+- `ROUTING_SIMULATE_RATE_LIMIT_PER_MIN` (default `10`) — one bucket per admin, shared across simulate, replay, and recommendation.
+- `ROUTING_TRACE_APP_MCP_MODE` — **removed**, not merely unset. It used to gate App MCP's write volume, but no code opens a capture with `origin="app_mcp"`, so the setting was unreachable at every value including `off` — an operator setting it would have believed they'd disabled a capture that was never running. Reintroduce it **in the same change** that starts emitting `ORIGIN_APP_MCP`, never before; App MCP routes every message (not just thread openings), so that default must be metadata-only.
+
+## Security
+
+- **Every route is superuser-only**, uniformly — no role-based partial access, because a trace can name another account's installed agents, their owners' trigger prompts, and (gate on) an external sender's own words.
+- **Simulate and replay are deliberately wide-reaching, and that reach is made accountable rather than narrowed.** Both let an admin enumerate a user's routing-relevant state — including a user who has *never* sent a real message through a channel, which is genuinely new information a stored trace could never have produced. The plan considered and rejected narrowing simulate to users who already have a channel binding, because that would defeat the tool's main use (diagnosing exactly the user whose *first* message never routed). Instead: superuser-only, rate-limited, and audited per call with both the acting admin and the target user id/email — never the message body.
+- **The recommendation draft is not audited**, unlike simulate/replay — it exposes nothing the caller didn't already have from `GET /traces/{id}`, and it writes nothing at all, so there's no effect to record.
+- **`stages[].reason` was removed from the allowlist in the same change that started populating it from the model.** It sat there for Phases 1–4 holding nothing but our own parse literals, and was safe on those terms. Phase 5's prompt contract asks the classifier for a `reason`, and a model explaining its choice reproduces the sender's wording — measured, not assumed: 7 of 32 reasons in the Phase 5 before/after run contained a verbatim three-word-or-longer run from the sender's message, several of them quoted outright. This is the case the allowlist exists for — a field safe now and unsafe later, where the default must be that somebody has to think — and moving it in a *different* commit than the population would have meant the mechanism failed on its first real outing. The cost is accepted: with the gate off, "the classifier chose NONE" is no longer served.
+- **`ROUTING_TRACE_STORE_MESSAGE_TEXT` is a read gate, not only a write gate**, enforced identically on both paths from the one `SAFE_STAGE_FIELDS` definition — see `_project_safe_stages` in `routing_trace_service.py`. Turning the flag off stops the API from serving gated fields on rows already written, not only on rows written after the flip.
+- **Simulate's audit write happens before the run's outcome is known**, not after — the LLM spend and the access to the target's routing state have already occurred by the time any response could be built, so the audit is ordered to record the access itself rather than a successful result.
+- **`persist()` never raises and owns its own database session** — a failed diagnostic write can neither commit nor roll back the caller's (real routing pipeline's) transaction, and it cannot leave the caller holding an expired ORM instance. See `routing_persist_session_ownership_test.py`, which deliberately escapes the domain's autouse session-proxy fixture, because under that fixture `persist()` would receive the caller's session — exactly the defect the current implementation exists to prevent — so folding that test back into the standard fixtures would silently destroy the property it proves.
+- **`clear()` is deliberately not gated by `ROUTING_TRACE_ENABLED`** — it is one of the two erasure paths the hidden-state notices name to operators, and gating it would mean "turn tracing off" also removed the only way to delete rows already written.

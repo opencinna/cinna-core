@@ -39,7 +39,6 @@ from sqlmodel import Session as DBSession, select
 from app.models import (
     Agent,
     AgentBundle,
-    AgentBundleRevision,
     AgentEnvironment,
     CHANNEL_BINDING_ACTIVE,
     CHANNEL_BINDING_FAILED,
@@ -47,7 +46,6 @@ from app.models import (
     ChannelAccessPolicy,
     ChannelThreadBinding,
     SecurityEventCreate,
-    ServerAutoInstallBundle,
     ServerChannel,
     SessionSender,
     User,
@@ -64,6 +62,7 @@ from app.services.server_channels.channel_debug_buffer import (
     DEBUG_SEND_FAILED,
     ChannelDebugBuffer,
 )
+from app.services.routing import routing_trace
 from app.services.sessions.channel_ingestion_service import (
     ChannelIngestionService,
     NoActiveEnvironmentError,
@@ -76,12 +75,97 @@ from app.services.server_channels.adapters.registry import get_adapter
 from app.services.server_channels.channel_outbound_service import (
     ChannelOutboundService,
 )
+from app.services.server_channels.channel_routing_service import (
+    ChannelRoutingService,
+)
 from app.services.server_channels.server_channel_service import ServerChannelService
 from app.services.users.user_service import UserService
 
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[ChannelInbound]"
+
+
+def _decision_detail(decision_id: uuid.UUID | None) -> dict[str, str]:
+    """``{"trace_id": ...}`` — but only when a durable row was actually written.
+
+    The live debug feed publishes this so an admin can jump from "no match" to
+    the full routing trace. Emitting the id unconditionally would advertise a
+    link that ``GET /admin/routing/traces/{id}`` 404s on whenever tracing is
+    switched off, the origin is filtered out, or a persist was swallowed — a
+    dead link in a diagnostic panel is worse than no link.
+    """
+    return {"trace_id": str(decision_id)} if decision_id else {}
+
+
+def _debug_channel_key(channel: ServerChannel) -> str | None:
+    """``channel``'s debug-buffer key, or ``None``. **Total by construction.**
+
+    §11a Rule 2 in its narrowest useful form. ``channel.id`` looks like a field
+    read and is not: every caller that reaches ``_reply`` does so after a
+    ``db.commit()``, which expires the instance, so the read is a lazy reload
+    and a reload of a concurrently deleted row raises ``ObjectDeletedError``.
+
+    ``_route_and_bind`` solves the same problem by reading the id *before* the
+    commit, while the instance is fresh. That is the better fix and it is not
+    available here: the commit lives in the caller — six different callers,
+    several frames up. So the read is made total instead, which is the same
+    contract :func:`app.services.routing.routing_trace.clamp` and
+    :func:`~app.services.routing.routing_trace.describe_exception` hold, for
+    the same reason: it is evaluated as a bare argument expression, and
+    ``ChannelDebugBuffer.record``'s own never-raises guard cannot reach back
+    out to cover it.
+
+    Returning ``None`` (rather than a placeholder key) is deliberate. An event
+    filed under a key no channel has is unreachable through
+    ``list_events(channel_id)``: it would look recorded while being invisible,
+    and it would let a hostile or churning workload accrete buffers nobody can
+    read. The caller drops the event instead — and this logs, so the drop is
+    itself observable rather than silent.
+    """
+    try:
+        return str(channel.id)
+    except Exception:  # noqa: BLE001 — a debug aid must never break delivery
+        logger.warning(
+            "%s Could not identify a channel for the debug buffer (instance "
+            "expired and its row is gone?) — dropping the event rather than "
+            "filing it under a key no panel reads",
+            _LOG_PREFIX,
+            exc_info=True,
+        )
+        return None
+
+
+def _log_detail(exc: BaseException) -> str:
+    """``exc``'s full text for the application **log**. Total by construction.
+
+    Deliberately not :func:`~app.services.routing.routing_trace.describe_exception`,
+    and the split is about audience. The debug buffer is a superuser *read*
+    surface, so what goes there is de-tainted down to type and status; the
+    application log is an operator surface where the adapter's actual complaint
+    ("permission denied for space X") is the whole diagnosis. Dropping it in
+    both places would leave nobody able to answer why a notice failed.
+
+    Nor is it :func:`~app.services.routing.routing_trace.clamp`, which reaches
+    ``if not text`` before its own guard and so is not total against a raising
+    ``__bool__`` — one of the shapes §11a Rule 2 names.
+
+    Why pre-format at all, when ``logging`` interpolates lazily and swallows
+    its own formatting errors: pytest's ``LogCaptureHandler`` overrides
+    ``handleError`` to *re-raise*. Passing a raw ``exc`` therefore behaves one
+    way in production and another under test — and the way it behaves under
+    test is "destroys the exception this handler was recording". A guard whose
+    correctness depends on which logging handler is installed is not a guard.
+    Found by firing the poison object, not by reading this code.
+    """
+    try:
+        return str(exc)[:2000]
+    except Exception:  # noqa: BLE001 — the point of the helper
+        try:
+            return f"<unprintable {type(exc).__name__}>"
+        except Exception:  # noqa: BLE001 — poisoned metaclass; still total
+            return "<unprintable>"
+
 
 # Environment statuses that mean "ready to take a message now".
 _ENV_READY = {"running"}
@@ -589,7 +673,19 @@ class ChannelInboundService:
         external_message_id: str | None,
         external_user_id: str | None,
     ) -> None:
-        """Pass 1 (installed agents) then Pass 2 (auto-install catalog)."""
+        """``decide()`` → bind → ingest.
+
+        The decision itself — Pass 1 over the sender's installed agents, then
+        Pass 2 over the auto-install catalog — lives in
+        :meth:`ChannelRoutingService.decide` and has no effects of its own. What
+        remains here is everything that *does* have effects: the thread binding,
+        the session ingest, the install-and-park, the outbound reply, the debug
+        feed entry, and the durable trace write.
+
+        That split is what makes ``POST /admin/routing/simulate`` safe by
+        construction: simulate calls ``decide`` and stops, so there is no
+        ``simulate`` flag in this method to get a branch wrong about.
+        """
         from app.core.db import create_session
 
         with create_session() as db:
@@ -598,32 +694,96 @@ class ChannelInboundService:
             if channel is None or user is None:
                 return
 
+            # Every scalar the diagnostic records below need, read HERE — while
+            # both instances are freshly loaded, and before the first
+            # ``db.commit()``. §11a Rule 2: the test for an instrumentation
+            # point is not "is the recorder guarded" but "can anything in the
+            # caller's argument list raise".
+            #
+            # Hoisting these to just above their ``ChannelDebugBuffer.record``
+            # call would not have been enough. That commit expires every
+            # instance in this session, so ``channel.id`` / ``user.email`` are
+            # lazy reloads wherever they are read afterwards, and a reload of a
+            # row deleted concurrently raises ``ObjectDeletedError`` into the
+            # broad ``except`` at the bottom of this method — REPLY_SETUP_FAILED
+            # to a sender whose message routed perfectly. Moving the read a few
+            # lines up its own block only relocates that raise inside the same
+            # handler. Read before the commit and there is no reload at all:
+            # from here on these are plain Python values that cannot touch the
+            # database, whatever happens to the session or to the rows.
+            debug_channel_id = channel.id
+            sender_email = user.email
+
             try:
-                # ---- Pass 1: the sender's OWN installed agents ----
-                # Offloaded: routing ends in a blocking LLM HTTP call, and this
-                # coroutine runs on the main event loop. Left inline it would
-                # stall every other request and stream in the process for the
-                # duration of the provider cascade.
-                # Release the outer connection for the duration of the LLM
-                # cascade. The worker opens its own, and the pool is 15 wide
+                # ---- Decide ----
+                # Release the outer connection for the whole decision. The
+                # worker threads open their own, and the pool is 15 wide
                 # against a 40-thread limiter — holding one idle-in-transaction
                 # here would let a burst of new threads stall unrelated
                 # requests behind QueuePool timeouts. Nothing below depends on
                 # outer-transaction continuity across the offload.
+                #
+                # One commit now covers both passes, where there used to be one
+                # per pass: ``decide`` holds no session of ours, so between Pass
+                # 1 and Pass 2 this session touches nothing and its connection
+                # stays back in the pool for the whole cascade rather than being
+                # re-taken for the interleaved ``db.get``.
                 db.commit()
-                agent_id = await ChannelInboundService._in_thread(
-                    ChannelInboundService._route_installed_in_thread, user.id, text
+                # ``user_id`` / ``channel_id``, not ``user.id`` / ``channel.id``:
+                # same values, but this method already holds them as plain
+                # parameters, so reading them off the just-expired instances was
+                # a database round trip that could raise — for nothing.
+                decision = await ChannelRoutingService.decide(
+                    user_id=user_id,
+                    text=text,
+                    channel_id=channel_id,
+                    thread_key=thread_key,
                 )
-                agent = db.get(Agent, agent_id) if agent_id else None
+                pass1_trace = decision.pass1_trace
+                pass2_trace = decision.pass2_trace
+                agent = db.get(Agent, decision.agent_id) if decision.agent_id else None
                 if agent is not None:
+                    # ``agent`` was just loaded by the ``db.get`` above, so
+                    # these two are in-memory reads rather than the lazy
+                    # reloads ``channel``/``user`` would be — but they are
+                    # hoisted anyway, because §11a Rule 2 is a rule about the
+                    # *shape* of an argument list, not about which reads happen
+                    # to be safe today. An earlier version hoisted ``agent.name``
+                    # alone, with a comment explaining exactly this hazard, and
+                    # left ``channel.id`` / ``user.email`` / ``agent.id`` inline
+                    # — which is why the rule is written as "sweep the pattern",
+                    # not "guard the one that bit".
+                    agent_name = agent.name
+                    agent_ref = str(agent.id)
+                    # Pass 1 was terminal, so this trace is the whole decision —
+                    # ``persist_args`` says so rather than this call site
+                    # deciding it a second time (simulate persists the same
+                    # decision through the same rule; two call sites applying it
+                    # by hand is how the admin list ends up comparing rows of
+                    # different shapes).
+                    #
+                    # Offloaded, like the routing passes above. ``persist`` is
+                    # synchronous and does an INSERT+COMMIT; run inline it does
+                    # that ON THE EVENT LOOP, stalling every other request and
+                    # stream in the process for the duration of the round trip.
+                    # (It takes a second pooled connection either way — a worker
+                    # thread needs one too. What the offload buys is that the
+                    # loop is not the thing waiting on it.)
+                    decision_id = await ChannelRoutingService.run_in_thread(
+                        decision.persist_call()
+                    )
                     ChannelDebugBuffer.record(
-                        channel_id=channel.id,
+                        channel_id=debug_channel_id,
                         direction="inbound",
                         kind=DEBUG_ROUTED,
-                        summary=f"Routed to installed agent '{agent.name}'",
-                        sender_email=user.email,
+                        summary=f"Routed to installed agent '{agent_name}'",
+                        sender_email=sender_email,
                         thread_key=thread_key,
-                        detail={"pass": "1", "agent_id": str(agent.id)},
+                        detail={
+                            "pass": "1",
+                            "agent_id": agent_ref,
+                            **_decision_detail(decision_id),
+                        },
                     )
                     binding, created = ChannelInboundService._upsert_binding(
                         db=db,
@@ -662,48 +822,159 @@ class ChannelInboundService:
                     )
                     return
 
-                # ---- Pass 2: server-wide auto-install catalog ----
-                # Same offload rationale as Pass 1.
-                db.commit()  # same rationale as Pass 1
-                bundle_uuid = await ChannelInboundService._in_thread(
-                    ChannelInboundService._route_catalog_in_thread, user.id, text
-                )
+                # ---- Pass 2 outcome: server-wide auto-install catalog ----
+                # Already run inside ``decide`` above; from here on this method
+                # only turns its verdict into effects.
+                bundle_uuid = decision.bundle_uuid
                 bundle = db.get(AgentBundle, bundle_uuid) if bundle_uuid else None
+                bundle_display_name = bundle.display_name if bundle is not None else ""
+                bundle_id = bundle.id if bundle is not None else None
+                # ``debug_channel_id`` / ``sender_email`` come from the top of
+                # this method, read before the first commit. Found by the Rule 2
+                # sweep: this block hoisted its *bundle* reads but left
+                # ``channel.id`` and ``user.email`` inline in both ``record``
+                # calls below, exactly as Pass 1 did — two adjacent blocks
+                # contradicting each other on the same question.
+                #
+                # **Persisted AFTER the effect it describes, in every branch.**
+                # The single ``persist`` used to sit here, above both branches —
+                # so a trace already settled as ``parked_install`` (Pass 2's
+                # classifier settles it the moment it picks a bundle) became a
+                # durable row claiming an install that had not been attempted
+                # yet, and might never be: the bundle can vanish between the
+                # classifier's pick and the ``db.get`` above, and
+                # ``_install_and_park`` can fail outright. Either way the row
+                # read ``outcome=parked_install, error=NULL`` — invisible to
+                # ``?outcome=error``, the one filter that exists to find it.
+                # Same defect class as the omitted Pass-2 stage: the trace
+                # asserting something about execution that did not happen.
+                #
+                # Deliberately NOT solved by writing a provisional row and
+                # correcting it — a corrected row is worse than a late one, and
+                # the correction is the write most likely to be the one that
+                # fails. Each branch persists once, after it knows what really
+                # happened, and the ``ChannelDebugBuffer`` record follows the
+                # persist because it is the ``decision_id`` link that wanted the
+                # early write, not the buffer entry.
                 if bundle is None:
-                    ChannelDebugBuffer.record(
-                        channel_id=channel.id,
-                        direction="inbound",
-                        kind=DEBUG_NO_MATCH,
-                        summary=(
+                    if decision.agent_id is not None and pass1_trace is not None:
+                        # Pass 1 picked an agent that vanished before we could
+                        # bind it — the mirror of the bundle case below, and the
+                        # ONLY way control reaches here with an agent selected.
+                        #
+                        # Without this the row is the worst shape this table can
+                        # hold: ``outcome=routed, selected_agent_id=<deleted>,
+                        # error=NULL`` — invisible to ``?outcome=error`` AND to
+                        # ``?outcome=no_match``, while the sender was told no
+                        # match and the live feed logged one. A durable record
+                        # contradicting both the reply and the feed, and looking
+                        # like the most ordinary success the table has. §11a
+                        # Rule 1, on the write path.
+                        #
+                        # It arrived with the ``decide()`` split: Pass 2 is now
+                        # gated on Pass 1 returning no agent, so the vanished
+                        # agent no longer falls through to a Pass 2 whose own
+                        # trace would have supplied the verdict. ``record_error``
+                        # settles the trace as ``error`` and clears the stale
+                        # selection through the same settler the bundle branch
+                        # uses. ``decision.agent_id`` is a plain frozen-dataclass
+                        # attribute, so this argument list cannot raise.
+                        pass1_trace.record_error(
+                            f"selected agent {decision.agent_id} no longer exists"
+                        )
+                    if bundle_uuid is not None and pass2_trace is not None:
+                        # The classifier picked a bundle that no longer exists —
+                        # a data-integrity failure between the pick and this
+                        # read, not "nothing matched". Recorded so the row
+                        # settles as ``error`` instead of keeping a
+                        # ``parked_install`` verdict for an install nobody
+                        # attempted. ``bundle_uuid`` is a plain value returned by
+                        # the thread target, so this argument cannot raise.
+                        pass2_trace.record_error(
+                            f"selected bundle {bundle_uuid} no longer exists"
+                        )
+                    # ONE row for the whole decision: Pass 1's stages are folded
+                    # in rather than written as their own ``no_match`` row, which
+                    # would otherwise appear on the ``?outcome=no_match`` filter
+                    # for every message Pass 2 went on to handle.
+                    decision_id = await ChannelRoutingService.run_in_thread(
+                        decision.persist_call()
+                    )
+                    # "Nothing matched" is the least actionable line the panel
+                    # can show. `summarize` turns both passes into one sentence
+                    # naming the candidates and why each was dropped; it never
+                    # raises and returns "" when it has nothing to add.
+                    diagnosis = routing_trace.summarize(pass1_trace, pass2_trace)
+                    # Both hoisted to plain locals before the record call, and
+                    # both describe what actually happened rather than the
+                    # common case. ``pass`` used to be the literal "2" here,
+                    # which since the ``decide()`` split can be a pass that
+                    # never ran; and the vanished-agent branch above reaches
+                    # this record having selected something, so "nothing
+                    # matched" would be flatly untrue.
+                    reached_pass = "2" if decision.catalog_ran else "1"
+                    if decision.agent_id is not None:
+                        headline = (
+                            "Routing picked an agent that no longer exists — "
+                            "nothing to bind"
+                        )
+                    else:
+                        headline = (
                             "No installed agent and no auto-install catalog "
                             "candidate matched this message"
-                        ),
-                        sender_email=user.email,
+                        )
+                    ChannelDebugBuffer.record(
+                        channel_id=debug_channel_id,
+                        direction="inbound",
+                        kind=DEBUG_NO_MATCH,
+                        summary=headline + (f" — {diagnosis}" if diagnosis else ""),
+                        sender_email=sender_email,
                         thread_key=thread_key,
-                        detail={"pass": "2"},
+                        detail={
+                            "pass": reached_pass,
+                            **_decision_detail(decision_id),
+                        },
                     )
                     await ChannelInboundService._reply(db, channel, thread_key, REPLY_NO_MATCH)
                     return
 
+                try:
+                    await ChannelInboundService._install_and_park(
+                        db=db,
+                        channel=channel,
+                        user=user,
+                        bundle=bundle,
+                        thread_key=thread_key,
+                        text=text,
+                        external_message_id=external_message_id,
+                        external_user_id=external_user_id,
+                    )
+                except Exception as exc:
+                    # The park is what ``parked_install`` asserts, so a failed
+                    # park must not persist as one. Recorded and written here
+                    # rather than left to the handler below, which knows nothing
+                    # about traces; then re-raised unchanged so the sender still
+                    # gets REPLY_SETUP_FAILED exactly as before.
+                    if pass2_trace is not None:
+                        pass2_trace.record_error(exc)
+                    await ChannelRoutingService.run_in_thread(decision.persist_call())
+                    raise
+
+                decision_id = await ChannelRoutingService.run_in_thread(
+                    decision.persist_call()
+                )
                 ChannelDebugBuffer.record(
-                    channel_id=channel.id,
+                    channel_id=debug_channel_id,
                     direction="inbound",
                     kind=DEBUG_INSTALLING,
-                    summary=f"Auto-installing '{bundle.display_name}' — message parked",
-                    sender_email=user.email,
+                    summary=f"Auto-installing '{bundle_display_name}' — message parked",
+                    sender_email=sender_email,
                     thread_key=thread_key,
-                    detail={"pass": "2", "bundle_uuid": str(bundle.id)},
-                )
-
-                await ChannelInboundService._install_and_park(
-                    db=db,
-                    channel=channel,
-                    user=user,
-                    bundle=bundle,
-                    thread_key=thread_key,
-                    text=text,
-                    external_message_id=external_message_id,
-                    external_user_id=external_user_id,
+                    detail={
+                        "pass": "2",
+                        "bundle_uuid": str(bundle_id),
+                        **_decision_detail(decision_id),
+                    },
                 )
             except Exception:  # noqa: BLE001
                 logger.exception(
@@ -715,57 +986,6 @@ class ChannelInboundService:
                 await ChannelInboundService._reply(
                     db, channel, thread_key, REPLY_SETUP_FAILED
                 )
-
-    @staticmethod
-    async def _in_thread(fn: Any, *args: Any) -> Any:
-        """Run a blocking callable off the event loop.
-
-        Both routing passes end in a synchronous LLM HTTP call (and the
-        provider manager cascades through providers sequentially). This
-        coroutine runs on the main loop, so calling them inline would block
-        the whole process — externally triggerable, since any whitelisted
-        sender can open a new thread.
-
-        ``fn`` must NOT close over the caller's DB session: ``run_sync`` cannot
-        interrupt a running thread, so a cancelled task would close the session
-        out from under a mid-query worker. The thread targets below each open
-        their own session and return plain ids (the pattern at
-        ``message_service.py`` ``_run_in_thread``).
-
-        Capacity note: anyio's default thread limiter is 40. With a webhook
-        rate limit of 120/min per token, a burst of new threads queues here
-        rather than growing unbounded — queueing is the intended degradation,
-        and it is bounded by the limiter rather than by memory.
-        """
-        import functools
-
-        import anyio.to_thread
-
-        return await anyio.to_thread.run_sync(functools.partial(fn, *args))
-
-    @staticmethod
-    def _route_installed_in_thread(user_id: uuid.UUID, text: str) -> uuid.UUID | None:
-        """Thread target for Pass 1. Owns its session; returns an agent id."""
-        from app.core.db import create_session
-
-        with create_session() as db:
-            user = db.get(User, user_id)
-            if user is None:
-                return None
-            agent = ChannelInboundService._route_installed(db, user, text)
-            return agent.id if agent is not None else None
-
-    @staticmethod
-    def _route_catalog_in_thread(user_id: uuid.UUID, text: str) -> uuid.UUID | None:
-        """Thread target for Pass 2. Owns its session; returns a bundle id."""
-        from app.core.db import create_session
-
-        with create_session() as db:
-            user = db.get(User, user_id)
-            if user is None:
-                return None
-            bundle = ChannelInboundService._route_catalog(db, user, text)
-            return bundle.id if bundle is not None else None
 
     @staticmethod
     async def _handle_lost_race(
@@ -900,142 +1120,6 @@ class ChannelInboundService:
             await ChannelOutboundService.notify_progress(
                 db=db, channel=channel, binding=binding, text=REPLY_SETUP_FAILED
             )
-
-    @staticmethod
-    def _route_installed(db: DBSession, user: User, text: str) -> Agent | None:
-        """Pass 1 — route over the sender's installed agents.
-
-        **Ownership filter.** ``AppMCPRoutingService.route_message`` answers with
-        every route *effective for* the user, which is a broader set than the
-        agents they own: identity routes deliberately resolve to another user's
-        agent, and an admin-created route can point anywhere. Handing an
-        external caller one of those would put their session inside somebody
-        else's workspace, so two filters apply:
-
-          1. reject ``is_identity`` outright — by construction someone else's
-             agent, and the identity flow's own consent model doesn't cover an
-             anonymous external sender;
-          2. require ``agent.owner_id == user.id`` — the authoritative check,
-             which also catches admin routes pointing at a foreign agent.
-
-        This is the same invariant ``ChannelIngestionService.assert_access``
-        asserts for ``channel_caller``; enforcing it here means the pipeline
-        declines cleanly (falls through to Pass 2) instead of raising.
-        """
-        from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
-
-        # DEFERRED (known gap): this router logs the message text at INFO
-        # (`app_mcp_routing_service` "[Stage1] Routing message ..." and
-        # `app_agent_router.py`). Plan §4 requires message text never be logged
-        # at info level. Not changed here because the logger is shared with the
-        # live App MCP feature — but note the content class has changed: it is
-        # now EXTERNAL, non-platform users' text, not the internal traffic
-        # those lines were written for. Downgrade to debug when that log can be
-        # touched safely.
-        try:
-            result = AppMCPRoutingService.route_message(db, user.id, text)
-        except Exception:  # noqa: BLE001 — router outage must not 500 the webhook
-            logger.exception("%s Pass 1 routing failed", _LOG_PREFIX)
-            return None
-
-        if result is None:
-            return None
-
-        if result.is_identity:
-            logger.info(
-                "%s Pass 1 matched identity route for user %s — not eligible for "
-                "channel routing (agent is not the sender's own install)",
-                _LOG_PREFIX,
-                user.id,
-            )
-            return None
-
-        agent = db.get(Agent, result.agent_id)
-        if agent is None:
-            return None
-        if agent.owner_id != user.id:
-            logger.warning(
-                "%s Pass 1 matched agent %s owned by %s for sender %s — rejected "
-                "(channel sessions must run on the sender's own install)",
-                _LOG_PREFIX,
-                agent.id,
-                agent.owner_id,
-                user.id,
-            )
-            return None
-
-        logger.info(
-            "%s Pass 1 matched own install %s for user %s", _LOG_PREFIX, agent.id, user.id
-        )
-        return agent
-
-    @staticmethod
-    def _route_catalog(db: DBSession, user: User, text: str) -> AgentBundle | None:
-        """Pass 2 — classify against the server-wide auto-install list.
-
-        Candidates must satisfy all three: not already installed by this user,
-        installable *by this user* per catalog visibility (list membership is
-        not a grant), and carrying a router trigger prompt to classify on.
-        """
-        from app.services.ai_functions.ai_functions_service import AIFunctionsService
-        from app.services.bundles.catalog_service import CatalogService
-
-        entries = db.exec(select(ServerAutoInstallBundle)).all()
-        if not entries:
-            return None
-
-        candidates: list[dict[str, Any]] = []
-        by_id: dict[str, AgentBundle] = {}
-
-        for entry in entries:
-            bundle = db.get(AgentBundle, entry.bundle_uuid)
-            if bundle is None or bundle.latest_revision_id is None:
-                continue
-
-            # Already installed → Pass 1 would have handled it if it matched.
-            # Publisher installs count as installed: a publisher whose own
-            # bundle is on the list should not get a second consumer copy
-            # provisioned behind their back by a chat message.
-            already = db.exec(
-                select(Agent.id).where(
-                    Agent.bundle_uuid == bundle.id,
-                    Agent.owner_id == user.id,
-                )
-            ).first()
-            if already is not None:
-                continue
-
-            # Visibility gate — the auto-install list never bypasses it.
-            if not CatalogService.user_can_install(db, bundle, user):
-                logger.debug(
-                    "%s Bundle %s not installable by user %s — skipping",
-                    _LOG_PREFIX,
-                    bundle.id,
-                    user.id,
-                )
-                continue
-
-            revision = db.get(AgentBundleRevision, bundle.latest_revision_id)
-            trigger = (revision.router_trigger_prompt or "").strip() if revision else ""
-            if not trigger:
-                continue
-
-            candidates.append(
-                {
-                    "id": str(bundle.id),
-                    "name": bundle.display_name,
-                    "trigger_prompt": trigger,
-                }
-            )
-            by_id[str(bundle.id)] = bundle
-
-        if not candidates:
-            return None
-
-        result = AIFunctionsService.route_to_agent(text, candidates)
-        if result is None or not result.agent_id:
-            return None
-        return by_id.get(str(result.agent_id))
 
     @staticmethod
     async def _install_and_park(
@@ -1542,32 +1626,77 @@ class ChannelInboundService:
         db: DBSession, channel: ServerChannel, thread_key: str, text: str
     ) -> None:
         """Post a standalone message into a thread that may have no binding."""
+        # §11a Rule 2, at the one instrumentation point in this file that sits
+        # INSIDE an ``except`` — which is why it is fixed ahead of its known
+        # siblings rather than with them. Everywhere else an unguarded argument
+        # expression becomes a 500 that the platform retries; here it would
+        # *replace* the exception it was recording. The delivery failure this
+        # panel exists to show would vanish, and the caller would be handed a
+        # database error in its place. Losing the diagnosis is categorically
+        # worse than failing loudly, so this one does not wait.
+        #
+        # Two expressions were exposed, not one: ``channel.id`` and the
+        # ``f"...{exc}"`` summary. Python evaluates both *before* entering
+        # ``ChannelDebugBuffer.record``, so the buffer's never-raises guard
+        # covered neither. The test is not "is the recorder guarded" but "can
+        # anything in the caller's argument list raise".
+        #
+        # ``channel.id`` is resolved once, above the ``try``, through a total
+        # helper: hoisting it a few lines up inside the same handler would only
+        # relocate the raise, and reading it unguarded above the ``try`` would
+        # trade a swallowed diagnosis for a notice that is never even attempted.
+        debug_channel_id = _debug_channel_key(channel)
         try:
             adapter = get_adapter(channel.channel_type)
             await adapter.send_message(channel, thread_key, text)
-            ChannelDebugBuffer.record(
-                channel_id=channel.id,
-                direction="outbound",
-                kind=DEBUG_REPLIED,
-                summary="Pipeline notice delivered",
-                thread_key=thread_key,
-                text=text,
-            )
+            if debug_channel_id is not None:
+                ChannelDebugBuffer.record(
+                    channel_id=debug_channel_id,
+                    direction="outbound",
+                    kind=DEBUG_REPLIED,
+                    summary="Pipeline notice delivered",
+                    thread_key=thread_key,
+                    text=text,
+                )
         except Exception as exc:  # noqa: BLE001 — best effort
-            ChannelDebugBuffer.record(
-                channel_id=channel.id,
-                direction="outbound",
-                kind=DEBUG_SEND_FAILED,
-                summary=f"Notice delivery failed: {exc}",
-                thread_key=thread_key,
-                text=text,
-            )
+            # ``describe_exception`` rather than ``f"{exc}"``. It is total by
+            # construction — an exception with a raising ``__str__`` comes back
+            # as ``"unavailable"`` instead of detonating in this handler — and
+            # it is already this file's answer to "stringify an exception
+            # inside an argument list", so the fix reuses the established tool
+            # rather than growing a second local one.
+            #
+            # It drops the exception's message body, and that is a gain here
+            # rather than a cost: an adapter's HTTP error routinely echoes the
+            # request it just made, and the request this method makes carries
+            # the channel's service-account credentials into a buffer that is a
+            # read surface. What diagnoses a delivery failure — the exception
+            # type and the HTTP status — is exactly what survives. The full
+            # message is not lost either: the ``logger.warning`` below still
+            # carries it, where formatting is lazy and inside ``logging``'s own
+            # error handling.
+            failure = routing_trace.describe_exception(exc)
+            if debug_channel_id is not None:
+                ChannelDebugBuffer.record(
+                    channel_id=debug_channel_id,
+                    direction="outbound",
+                    kind=DEBUG_SEND_FAILED,
+                    summary=f"Notice delivery failed: {failure}",
+                    thread_key=thread_key,
+                    text=text,
+                )
             logger.warning(
                 "%s Could not deliver notice to channel=%s thread=%s: %s",
                 _LOG_PREFIX,
-                channel.id,
+                # The same hoisted value: this argument list is evaluated
+                # eagerly too, so an inline ``channel.id`` here would destroy
+                # the original exception just as surely as the one above.
+                debug_channel_id or "unknown",
                 thread_key,
-                exc,
+                # ``_log_detail(exc)``, not ``exc``: see that helper. The
+                # interpolation ``logging`` would do later is not covered by
+                # anything this handler controls.
+                _log_detail(exc),
             )
 
     @staticmethod

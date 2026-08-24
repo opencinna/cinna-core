@@ -15,6 +15,8 @@ from sqlmodel import Session as DBSession
 from app.models import Agent
 from app.services.identity.identity_service import IdentityService
 from app.models.identity.identity_models import IdentityAgentBinding, IdentityBindingAssignment
+from app.services.routing import routing_trace
+from app.services.routing.agent_classifier import AgentClassifier, Candidate
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +59,11 @@ class IdentityRoutingService:
 
         Returns IdentityRoutingResult or None if no agent available.
         """
-        logger.info(
+        # Debug, not info: Stage 2 runs before the channel pipeline's Pass 1
+        # ownership filter gets a chance to reject an identity route, so this
+        # line can carry EXTERNAL, non-platform users' message text. Same
+        # reasoning as the [Stage1]/[AIRouter] downgrades.
+        logger.debug(
             "[Stage2] Identity routing: owner=%s caller=%s | message=%r",
             owner_id, caller_user_id, message[:120],
         )
@@ -93,6 +99,15 @@ class IdentityRoutingService:
             db_session, bindings, caller_user_id
         )
 
+        # Record the ballot before anything narrows it. Phase 1 left this stage
+        # capturing a prompt and a raw response with **zero candidates**,
+        # because the binding list is built here rather than by a shared
+        # builder — a documented deferral that reads, on the tuning card, as a
+        # broken recorder. It is closed here now that ``_binding_candidates``
+        # is the one builder both the capture and the classifier use.
+        candidates = IdentityRoutingService._binding_candidates(db_session, bindings)
+        IdentityRoutingService._record_candidates(candidates, binding_assignments, bindings)
+
         # Single binding — use directly
         if len(bindings) == 1:
             binding = bindings[0]
@@ -106,6 +121,7 @@ class IdentityRoutingService:
                 "[Stage2] Single binding — using directly: %s (%s)",
                 agent_name, binding.agent_id,
             )
+            routing_trace.record_match(method=routing_trace.MATCH_ONLY_ONE)
             return IdentityRoutingResult(
                 agent_id=binding.agent_id,
                 agent_name=agent_name,
@@ -148,7 +164,8 @@ class IdentityRoutingService:
             if not assignment_id:
                 logger.info("[Stage2] AI matched binding but no assignment — aborting")
                 return None
-            logger.info(
+            # transformed_message is a rewrite of the user's text — see above.
+            logger.debug(
                 "[Stage2] AI selected: %s (%s) | transformed_message=%r",
                 agent_name, ai_matched.agent_id,
                 ai_transformed_message[:120] if ai_transformed_message else None,
@@ -193,6 +210,72 @@ class IdentityRoutingService:
         return {a.binding_id: a.id for a in db_session.exec(stmt).all()}
 
     @staticmethod
+    def _binding_candidates(
+        db_session: DBSession,
+        bindings: list[IdentityAgentBinding],
+    ) -> list[Candidate]:
+        """The Stage-2 ballot: one :class:`Candidate` per accessible binding.
+
+        The **single** builder for this stage. It feeds both the classifier and
+        the trace's candidate capture, which is the point: a second builder is
+        how ``prompt_examples`` came to be collected on the App MCP path and
+        silently not on this one, even though ``IdentityAgentBinding`` has
+        carried the field all along.
+        """
+        candidates: list[Candidate] = []
+        for binding in bindings:
+            agent = db_session.get(Agent, binding.agent_id)
+            candidates.append(
+                Candidate(
+                    ref_id=str(binding.agent_id),
+                    name=agent.name if agent else str(binding.agent_id),
+                    trigger_prompt=binding.trigger_prompt or "",
+                    prompt_examples=binding.prompt_examples,
+                )
+            )
+        return candidates
+
+    @staticmethod
+    def _record_candidates(
+        candidates: list[Candidate],
+        binding_assignments: dict[uuid.UUID, uuid.UUID],
+        bindings: list[IdentityAgentBinding],
+    ) -> None:
+        """Put the Stage-2 ballot on the active trace, skips included.
+
+        A binding with no assignment for this caller is recorded as an excluded
+        candidate rather than dropped: every one of the three paths below aborts
+        on a missing assignment, and "the agent you expected has no assignment
+        for this caller" is precisely the diagnosis the tuning card exists to
+        give. Wrapped whole because it builds its arguments from ORM objects —
+        the recorder guards the *recording*, never the caller's expressions
+        (plan §11a, Rule 2).
+        """
+        try:
+            for candidate, binding in zip(candidates, bindings):
+                if binding_assignments.get(binding.id):
+                    routing_trace.record_candidate(
+                        kind=routing_trace.KIND_AGENT,
+                        ref_id=candidate.ref_id,
+                        name=candidate.name,
+                        source="identity",
+                        trigger_prompt=candidate.trigger_prompt,
+                        prompt_examples=candidate.prompt_examples,
+                    )
+                else:
+                    routing_trace.record_skip(
+                        kind=routing_trace.KIND_AGENT,
+                        ref_id=candidate.ref_id,
+                        name=candidate.name,
+                        reason=routing_trace.SKIP_NO_ASSIGNMENT,
+                        source="identity",
+                        trigger_prompt=candidate.trigger_prompt,
+                        prompt_examples=candidate.prompt_examples,
+                    )
+        except Exception:  # noqa: BLE001
+            logger.debug("[Stage2] Candidate capture failed", exc_info=True)
+
+    @staticmethod
     def _try_pattern_match(
         message: str,
         bindings: list[IdentityAgentBinding],
@@ -209,6 +292,14 @@ class IdentityRoutingService:
             ]
             for pattern in patterns:
                 if fnmatch.fnmatch(message_lower, pattern.lower()):
+                    # Without this the stage reported ``match_method=None`` on a
+                    # pattern hit — a lying field, not a missing one: the trace
+                    # said "nothing matched this way" about a match that had
+                    # just happened. Its App MCP twin has always recorded it.
+                    routing_trace.record_match(
+                        method=routing_trace.MATCH_PATTERN,
+                        matched_pattern=pattern,
+                    )
                     logger.debug(
                         "[IdentityRouting] Pattern match: binding=%s pattern=%r",
                         binding.id,
@@ -227,23 +318,14 @@ class IdentityRoutingService:
 
         Returns (matched_binding, transformed_message) or None.
         The transformed_message is None when the AI did not strip a routing prefix.
+
+        Candidates come from ``_binding_candidates`` — the same builder the
+        stage's candidate capture uses, so the tuning card can never show a
+        ballot the classifier did not actually receive.
         """
-        from app.agents.app_agent_router import route_to_agent
+        candidates = IdentityRoutingService._binding_candidates(db_session, bindings)
 
-        available_agents = []
-        for binding in bindings:
-            agent = db_session.get(Agent, binding.agent_id)
-            agent_name = agent.name if agent else str(binding.agent_id)
-            available_agents.append({
-                "id": str(binding.agent_id),
-                "name": agent_name,
-                "trigger_prompt": binding.trigger_prompt,
-            })
-
-        routing_result = route_to_agent(
-            message=message,
-            available_agents=available_agents,
-        )
+        routing_result = AgentClassifier.classify(candidates, message)
 
         if not routing_result:
             return None

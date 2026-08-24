@@ -53,6 +53,12 @@ CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
     # settings.TESTING it routes through create_session precisely so it lands on
     # the test transaction instead of a real pooled connection).
     "app.services.bundles.install_service.create_session",
+    # RoutingTraceService.persist deliberately opens its OWN short-lived session
+    # rather than borrowing the caller's (a diagnostic write must never commit or
+    # roll back the routing transaction it observes). Under tests that own session
+    # still has to land on the test transaction, or persisted traces are invisible
+    # to the assertions and survive the rollback.
+    "app.services.routing.routing_trace_service.create_session",
 ]
 
 BACKGROUND_TASK_TARGETS_BASE = [
@@ -112,6 +118,85 @@ def setup_default_credentials(request, client, superuser_token_headers):
         yield None
         return
     yield create_default_ai_credential(client, superuser_token_headers)
+
+
+# ── Classifier provider guard (routing tests cannot reach a real model) ─────
+#
+# `AgentClassifier.classify` is the single classifier behind every routing
+# consumer (Channel Pass 1 / Pass 2, App MCP Stage 1, Identity Stage 2), and it
+# calls a REAL provider cascade unless a test stubs it. The test environment has
+# a live, configured cascade (`get_provider_manager().is_available()` is True in
+# the container), so "unstubbed" means "dials out", not "fails fast".
+#
+# It has already cost a run: a Phase-5 measurement exhausted a Gemini quota, and
+# the resulting 429s read as an unrelated suite going red — the failure mode
+# that teaches people to re-run instead of investigate.
+#
+# The guard is installed globally (see the `block_llm_provider` autouse fixture
+# in `tests/conftest.py`) at the classifier's own provider seam, so a test that
+# forgets to stub fails with an explanation instead of making a network call —
+# in a domain nobody has thought to protect yet as much as in this one.
+#
+# **Scope, stated precisely because it is narrower than it looks.** This patches
+# ONE name: `agent_classifier.get_provider_manager`. The classifier is guardable
+# by a single patch only because Phase 5 gave it that wrapper. The other twelve
+# AI functions (`title_generator`, `description_generator`, `agent_generator`,
+# `router_trigger_prompt_generator`, ...) each do
+# `from .provider_manager import get_provider_manager` at import time, so they
+# hold their own binding and patching the source module is a no-op for them —
+# `AIFunctionsService.generate_router_trigger_prompt` in particular is still
+# documented as reaching a live provider if a test lets it (use
+# `tests.utils.routing.patched_trigger_prompt_draft`). The single chokepoint
+# that would cover all of them is `ProviderManager.generate_content`; extending
+# the guard there is a strictly larger change than this one, because it would
+# turn every currently-unstubbed AI-function test red at once and needs a
+# full-suite run to size. Deliberately not done here.
+
+
+class UnstubbedLLMProvider(BaseException):
+    """Raised when a test reaches the classifier's real provider cascade.
+
+    **Deliberately a `BaseException`, not an `Exception`.** Every caller on the
+    routing path swallows `Exception` by design so a router outage cannot 500 a
+    webhook (`ChannelRoutingService._route_installed`'s
+    ``except Exception ... # noqa: BLE001``, and `AgentClassifier.classify`'s
+    own catch-all). An `Exception` here would therefore be caught by the code
+    under test, recorded as a routing error, and reported to the test as an
+    ordinary no-match — the failure would be invisible, which is the exact
+    condition this guard exists to end. `BaseException` passes straight through
+    those handlers to the test runner.
+    """
+
+
+#: Shown when the guard fires. Names the fix, because the person reading it is
+#: usually writing a new test rather than debugging this one.
+UNSTUBBED_LLM_MESSAGE = (
+    "Test reached the REAL LLM provider through AgentClassifier.classify. "
+    "Tests must never call a model: it needs network, costs money, and makes "
+    "the suite fail on somebody else's quota. Stub it — "
+    "`patched_routing_externals(classify_result=...)` / `(classify_no_match=True)` "
+    "or `post_channel_message(classify_result=...)` from tests.utils.routing "
+    "for the classifier boundary, or patch "
+    "`app.services.routing.agent_classifier.get_provider_manager` yourself if "
+    "the test needs the real render/parse path to run."
+)
+
+#: The classifier's provider seam. Patched (rather than `AgentClassifier
+#: .classify`) so tests that legitimately stub `classify` are untouched, and so
+#: the guard fires at the last point before the network.
+CLASSIFIER_PROVIDER_TARGET = "app.services.routing.agent_classifier.get_provider_manager"
+
+
+def refuse_llm_provider(*args, **kwargs):
+    """Patch target for the provider seam — always raises."""
+    raise UnstubbedLLMProvider(UNSTUBBED_LLM_MESSAGE)
+
+
+@contextmanager
+def blocked_llm_provider():
+    """Make the classifier's provider cascade unreachable for the duration."""
+    with patch(CLASSIFIER_PROVIDER_TARGET, refuse_llm_provider):
+        yield
 
 
 # ── Context managers (for parameterized conftest fixtures) ──────────────────

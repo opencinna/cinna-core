@@ -238,7 +238,7 @@ User Settings:   Settings > Channels tab > "MCP Server" card (read view + toggle
 
 - **[MCP Integration](../mcp_integration/agent_mcp_architecture.md)** -- reuses the shared OAuth AS, MCPServerRegistry, and session infrastructure
 - **[Agent Sessions](../agent_sessions/agent_sessions.md)** -- App MCP sessions use the same Session model with `integration_type = "app_mcp"` and `agent_id` for direct agent resolution
-- **[AI Functions](../../development/backend/ai_functions_development.md)** -- the AI router uses `AIFunctionsService.route_to_agent()` with `gemini-2.5-flash-lite` for message classification
+- **[AI Functions](../../development/backend/ai_functions_development.md)** -- the AI router classifies via `AgentClassifier.classify()` (`backend/app/services/routing/agent_classifier.py`), the classifier shared by every routing consumer since [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5; `AIFunctionsService.route_to_agent()` is a thin adapter kept for callers outside routing. The underlying provider cascade still defaults to `gemini-2.5-flash-lite`.
 - **[Agent Management](../agent_management/agent_management.md)** -- routes reference agents by ID; any user can create routes for their own agents, superusers for any agent
 
 ## Error Handling

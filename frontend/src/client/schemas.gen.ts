@@ -9979,6 +9979,17 @@ export const AutoInstallBundlePublicSchema = {
             title: 'Has Trigger Prompt',
             default: false
         },
+        router_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Router Trigger Prompt'
+        },
         added_by: {
             anyOf: [
                 {
@@ -21511,6 +21522,1011 @@ export const RouterTriggerPromptUpdateSchema = {
     type: 'object',
     title: 'RouterTriggerPromptUpdate',
     description: 'Owner-only update payload for ``Agent.router_trigger_prompt``.'
+} as const;
+
+export const RoutingDecisionPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        origin: {
+            type: 'string',
+            title: 'Origin'
+        },
+        channel_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Id'
+        },
+        channel_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Name'
+        },
+        user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Id'
+        },
+        user_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Email'
+        },
+        actor_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Actor User Id'
+        },
+        thread_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Thread Key'
+        },
+        message_text: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Text'
+        },
+        message_sha256: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Sha256'
+        },
+        message_text_hidden: {
+            type: 'boolean',
+            title: 'Message Text Hidden',
+            default: false
+        },
+        message_text_notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Text Notice'
+        },
+        outcome: {
+            type: 'string',
+            title: 'Outcome'
+        },
+        match_method: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Match Method'
+        },
+        selected_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Agent Id'
+        },
+        selected_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Agent Name'
+        },
+        selected_bundle_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Bundle Uuid'
+        },
+        selected_bundle_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Bundle Name'
+        },
+        confidence: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Confidence'
+        },
+        latency_ms: {
+            type: 'integer',
+            title: 'Latency Ms',
+            default: 0
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        candidate_count: {
+            type: 'integer',
+            title: 'Candidate Count',
+            default: 0
+        },
+        skipped_count: {
+            type: 'integer',
+            title: 'Skipped Count',
+            default: 0
+        },
+        provider: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        stages: {
+            items: {},
+            type: 'array',
+            title: 'Stages'
+        },
+        diagnosis: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/RoutingDiagnosisPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    required: ['id', 'created_at', 'origin', 'outcome'],
+    title: 'RoutingDecisionPublic',
+    description: 'Full detail — the summary plus the stage trace.'
+} as const;
+
+export const RoutingDecisionSummarySchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        origin: {
+            type: 'string',
+            title: 'Origin'
+        },
+        channel_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Id'
+        },
+        channel_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Name'
+        },
+        user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Id'
+        },
+        user_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Email'
+        },
+        actor_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Actor User Id'
+        },
+        thread_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Thread Key'
+        },
+        message_text: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Text'
+        },
+        message_sha256: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Sha256'
+        },
+        message_text_hidden: {
+            type: 'boolean',
+            title: 'Message Text Hidden',
+            default: false
+        },
+        message_text_notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Text Notice'
+        },
+        outcome: {
+            type: 'string',
+            title: 'Outcome'
+        },
+        match_method: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Match Method'
+        },
+        selected_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Agent Id'
+        },
+        selected_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Agent Name'
+        },
+        selected_bundle_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Bundle Uuid'
+        },
+        selected_bundle_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Bundle Name'
+        },
+        confidence: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Confidence'
+        },
+        latency_ms: {
+            type: 'integer',
+            title: 'Latency Ms',
+            default: 0
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        candidate_count: {
+            type: 'integer',
+            title: 'Candidate Count',
+            default: 0
+        },
+        skipped_count: {
+            type: 'integer',
+            title: 'Skipped Count',
+            default: 0
+        },
+        provider: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        }
+    },
+    type: 'object',
+    required: ['id', 'created_at', 'origin', 'outcome'],
+    title: 'RoutingDecisionSummary',
+    description: `List-row projection — everything the table needs, without \`\`stages\`\`.
+
+\`\`stages\`\` is the large field and the only one a list view never reads;
+keeping it out means a page of 50 rows does not haul 50 rendered prompts
+and raw LLM responses across the wire.`
+} as const;
+
+export const RoutingDecisionsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/RoutingDecisionSummary'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Notice'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'RoutingDecisionsPublic',
+    description: 'Paginated list envelope.'
+} as const;
+
+export const RoutingDiagnosisPublicSchema = {
+    properties: {
+        code: {
+            type: 'string',
+            title: 'Code'
+        },
+        verdict: {
+            type: 'string',
+            title: 'Verdict'
+        },
+        action: {
+            type: 'string',
+            title: 'Action'
+        },
+        eligible_candidate_count: {
+            type: 'integer',
+            title: 'Eligible Candidate Count',
+            default: 0
+        },
+        skipped_by_reason: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Skipped By Reason'
+        },
+        expected_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Agent Id'
+        },
+        expected_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Agent Name'
+        },
+        expected_agent_owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Agent Owner Email'
+        },
+        near_misses: {
+            items: {
+                '$ref': '#/components/schemas/RoutingNearMiss'
+            },
+            type: 'array',
+            title: 'Near Misses'
+        },
+        near_miss_notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Near Miss Notice'
+        }
+    },
+    type: 'object',
+    required: ['code', 'verdict', 'action'],
+    title: 'RoutingDiagnosisPublic',
+    description: `Why this decision went the way it did, in a sentence, plus near-misses.
+
+**Computed on the backend on purpose** (plan §10, Phase 4): the wording is
+the feature for the motivating case, so it has to be testable and it has to
+live next to the rules it describes. In a component it could be neither —
+nothing would fail when the rule it paraphrases changed.
+
+\`\`verdict\`\` is the sentence; \`\`code\`\` is the branch that produced it, so a
+client can style or group without parsing prose and a test can pin both
+independently. Every branch names a remedy: a diagnosis that says only what
+is wrong leaves the reader exactly where they started.
+
+**What this exposes about the expected agent is an allowlist of two fields**
+— \`\`expected_agent_name\`\` and \`\`expected_agent_owner_email\`\` — chosen by the
+same standard §7 applies to \`\`candidates[].trigger_prompt\`\`: they are the
+agent owner's own configuration, not sender-derived, and already visible to
+a superuser. Nothing else about the agent is read into the response, and a
+field wanted here later has to clear that bar when it is added.`
+} as const;
+
+export const RoutingNearMissSchema = {
+    properties: {
+        ref_id: {
+            type: 'string',
+            title: 'Ref Id'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        similarity: {
+            type: 'number',
+            title: 'Similarity'
+        },
+        eligible: {
+            type: 'boolean',
+            title: 'Eligible',
+            default: true
+        },
+        skip_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skip Reason'
+        }
+    },
+    type: 'object',
+    required: ['ref_id', 'kind', 'name', 'similarity'],
+    title: 'RoutingNearMiss',
+    description: `One candidate ranked by token overlap against the routed message.
+
+A *hint*, explicitly not a rule: the classifier is an LLM and there is no
+similarity cut-off anywhere in routing. This is the same Jaccard overlap
+\`\`AppAgentRouteService\`\` already uses for install-time route-conflict
+detection, borrowed to answer the question an admin actually asks about a
+\`\`no_match\`\` — "how close did it come?". Saying "0.31, below the threshold"
+would be a claim the router does not implement; the wording says "closest",
+not "just missed".`
+} as const;
+
+export const RoutingRecommendationPublicSchema = {
+    properties: {
+        trace_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Trace Id'
+        },
+        ref_id: {
+            type: 'string',
+            title: 'Ref Id'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
+        },
+        current_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Trigger Prompt'
+        },
+        suggested_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Suggested Trigger Prompt'
+        },
+        success: {
+            type: 'boolean',
+            title: 'Success',
+            default: false
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        notice: {
+            type: 'string',
+            title: 'Notice',
+            default: "Draft only — nothing has been changed. This endpoint never edits an agent, a trigger prompt or a bundle, including ones you own. Send this wording to the agent's owner, who can apply it themselves; for a bundle, the owner applies it and republishes."
+        }
+    },
+    type: 'object',
+    required: ['trace_id', 'ref_id', 'kind', 'name'],
+    title: 'RoutingRecommendationPublic',
+    description: 'A copyable trigger-prompt draft for one candidate. Writes nothing.'
+} as const;
+
+export const RoutingRecommendationRequestSchema = {
+    properties: {
+        ref_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ref Id'
+        }
+    },
+    type: 'object',
+    title: 'RoutingRecommendationRequest',
+    description: 'Ask for a drafted trigger prompt for one candidate from a trace.'
+} as const;
+
+export const RoutingReplayDiffSchema = {
+    properties: {
+        changed: {
+            type: 'boolean',
+            title: 'Changed',
+            default: false
+        },
+        outcome_changed: {
+            type: 'boolean',
+            title: 'Outcome Changed',
+            default: false
+        },
+        original_outcome: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Original Outcome'
+        },
+        replay_outcome: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Replay Outcome'
+        },
+        selection_changed: {
+            type: 'boolean',
+            title: 'Selection Changed',
+            default: false
+        },
+        original_selection: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Original Selection'
+        },
+        replay_selection: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Replay Selection'
+        },
+        match_method_changed: {
+            type: 'boolean',
+            title: 'Match Method Changed',
+            default: false
+        },
+        original_match_method: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Original Match Method'
+        },
+        replay_match_method: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Replay Match Method'
+        },
+        original_confidence: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Original Confidence'
+        },
+        replay_confidence: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Replay Confidence'
+        },
+        original_candidate_count: {
+            type: 'integer',
+            title: 'Original Candidate Count',
+            default: 0
+        },
+        replay_candidate_count: {
+            type: 'integer',
+            title: 'Replay Candidate Count',
+            default: 0
+        },
+        candidates_added: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Candidates Added'
+        },
+        candidates_removed: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Candidates Removed'
+        },
+        summary: {
+            type: 'string',
+            title: 'Summary',
+            default: ''
+        }
+    },
+    type: 'object',
+    title: 'RoutingReplayDiff',
+    description: `What changed between a stored decision and its re-run.
+
+Field-by-field rather than a text blob: the card renders the changed rows,
+and a test can assert on one property without parsing prose. \`\`summary\`\` is
+server-authored so the wording lives with the rules it describes (same call
+as the reachability verdict in plan §9).`
+} as const;
+
+export const RoutingReplayRequestSchema = {
+    properties: {
+        include_catalog: {
+            type: 'boolean',
+            title: 'Include Catalog',
+            default: true
+        }
+    },
+    type: 'object',
+    title: 'RoutingReplayRequest',
+    description: "Re-run a stored trace's message against current state."
+} as const;
+
+export const RoutingReplayResultSchema = {
+    properties: {
+        original: {
+            '$ref': '#/components/schemas/RoutingDecisionPublic'
+        },
+        replay: {
+            '$ref': '#/components/schemas/RoutingDecisionPublic'
+        },
+        diff: {
+            '$ref': '#/components/schemas/RoutingReplayDiff'
+        }
+    },
+    type: 'object',
+    required: ['original', 'replay', 'diff'],
+    title: 'RoutingReplayResult',
+    description: 'The original decision, the re-run, and the diff between them.'
+} as const;
+
+export const RoutingSimulateRequestSchema = {
+    properties: {
+        message: {
+            type: 'string',
+            maxLength: 8000,
+            title: 'Message'
+        },
+        as_user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'As User Id'
+        },
+        include_catalog: {
+            type: 'boolean',
+            title: 'Include Catalog',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['message', 'as_user_id'],
+    title: 'RoutingSimulateRequest',
+    description: 'Run one message through routing for another user, with no effects.'
 } as const;
 
 export const SSHKeyGenerateSchema = {

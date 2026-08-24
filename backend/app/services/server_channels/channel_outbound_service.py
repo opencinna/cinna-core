@@ -33,6 +33,7 @@ from app.models import (
     Session as ChatSession,
     SessionMessage,
 )
+from app.services.routing import routing_trace
 from app.services.server_channels.adapters.base import ChannelError
 from app.services.server_channels.adapters.registry import get_adapter
 from app.services.server_channels.channel_debug_buffer import (
@@ -44,6 +45,38 @@ from app.services.server_channels.channel_debug_buffer import (
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[ChannelOutbound]"
+
+
+def _binding_thread_key(binding: ChannelThreadBinding) -> str | None:
+    """``binding``'s thread key, or ``None``. **Total by construction.**
+
+    The binding-shaped sibling of
+    ``channel_inbound_service._debug_channel_key``, and it exists rather than
+    reusing it for one reason: that helper reads ``channel.id``, and there is
+    no total reader for a *binding* attribute to reuse. The hazard is
+    identical — ``binding.thread_key`` looks like a field read and is not.
+    Every path into ``_deliver`` arrives after a ``db.commit()`` (the inbound
+    pipeline commits between every progress notice; the event handlers commit
+    while resolving the session), which expires the instance, so the read is a
+    lazy reload and reloading a concurrently deleted binding raises
+    ``ObjectDeletedError``.
+
+    ``None`` means "this message cannot be addressed", and the caller declines
+    to send rather than posting to a null thread — the same bargain
+    ``_debug_channel_key`` strikes, for the same reason: a delivery aimed at
+    nothing is worse than an honest, logged non-delivery.
+    """
+    try:
+        return str(binding.thread_key)
+    except Exception:  # noqa: BLE001 — see the docstring
+        logger.warning(
+            "%s Could not read a thread key from the binding (instance expired "
+            "and its row is gone?)",
+            _LOG_PREFIX,
+            exc_info=True,
+        )
+        return None
+
 
 # Prefix used for the integration_type stamped on channel sessions.
 CHANNEL_INTEGRATION_PREFIX = "channel_"
@@ -222,59 +255,146 @@ class ChannelOutboundService:
         binding: ChannelThreadBinding,
         text: str,
     ) -> bool:
-        """Send through the adapter, recording failure on the binding."""
+        """Send through the adapter, recording failure on the binding.
+
+        §11a Rule 2, and the worse twin of ``ChannelInboundService._reply``:
+        this is the **agent-reply** path, so it carries the traffic the notice
+        path does not. Five expressions were exposed inside the one ``except``
+        — ``channel.id`` twice, ``binding.thread_key`` twice, and the
+        ``f"...{exc}"`` summary, plus ``str(exc)`` in the ``_record_error``
+        call and a lazily-interpolated ``exc`` in the log. Python evaluates
+        every one of them *before* entering the callee, so neither
+        ``ChannelDebugBuffer.record``'s never-raises guard nor
+        ``_record_error``'s reached any of them. A raise in any one replaced
+        the delivery exception, skipped the remaining statements, and left the
+        failure invisible in the debug buffer **and** on the binding row — the
+        two places an operator looks. Confirmed by firing poison objects, with
+        ``logging`` disabled so the result is production behaviour and not
+        pytest's re-raising capture handler.
+
+        The success branch was exposed too, and had no ``try`` over it at all:
+        ``channel_id=channel.id`` on a delivery that had already *succeeded*
+        raised out of ``_deliver`` and turned a delivered reply into an error
+        for the caller.
+
+        Both reads are hoisted through total helpers and resolved once. The
+        exception is rendered twice on purpose, by audience:
+        ``describe_exception`` for the debug buffer, which is a superuser read
+        surface an adapter's credential-echoing HTTP error must not reach, and
+        ``_log_detail`` for the application log and the binding column, where
+        the adapter's actual complaint is the whole diagnosis. Neither can
+        raise; ``f"{exc}"`` and ``str(exc)`` both can.
+        """
+        from app.services.server_channels.channel_inbound_service import (
+            _debug_channel_key,
+            _log_detail,
+        )
+
+        # Imported inside the function, not at module scope:
+        # ``channel_inbound_service`` imports *this* module at import time, so
+        # the reverse edge would be circular. Resolved here rather than in the
+        # ``except`` for the same reason the reads are hoisted — an
+        # ``ImportError`` raised inside the handler would destroy the exception
+        # just as surely as an attribute reload.
+        debug_channel_id = _debug_channel_key(channel)
+        thread_key = _binding_thread_key(binding)
+        if thread_key is None:
+            # Nothing to address the message to. Sending anyway would post to a
+            # null thread; the warning is already logged by the helper.
+            return False
         try:
             adapter = get_adapter(channel.channel_type)
-            await adapter.send_message(channel, binding.thread_key, text)
+            await adapter.send_message(channel, thread_key, text)
         except Exception as exc:  # noqa: BLE001 — delivery is best-effort
+            failure = routing_trace.describe_exception(exc)
+            detail = _log_detail(exc)
             logger.warning(
                 "%s Delivery failed for channel=%s thread=%s: %s",
                 _LOG_PREFIX,
-                channel.id,
-                binding.thread_key,
-                exc,
+                # The hoisted values: this argument list is evaluated eagerly
+                # too, so an inline ``channel.id`` here would destroy the
+                # original exception just as surely as the one below. And
+                # ``detail``, not ``exc``: ``logging`` interpolates lazily and
+                # swallows its own formatting errors in production while
+                # pytest's ``LogCaptureHandler`` re-raises them, so a raw
+                # ``exc`` here is a guard whose correctness depends on which
+                # handler is installed.
+                debug_channel_id or "unknown",
+                thread_key,
+                detail,
             )
+            if debug_channel_id is not None:
+                ChannelDebugBuffer.record(
+                    channel_id=debug_channel_id,
+                    direction="outbound",
+                    kind=DEBUG_SEND_FAILED,
+                    summary=f"Delivery failed: {failure}",
+                    thread_key=thread_key,
+                    text=text,
+                )
+            ChannelOutboundService._record_error(db, binding, detail)
+            return False
+        if debug_channel_id is not None:
             ChannelDebugBuffer.record(
-                channel_id=channel.id,
+                channel_id=debug_channel_id,
                 direction="outbound",
-                kind=DEBUG_SEND_FAILED,
-                summary=f"Delivery failed: {exc}",
-                thread_key=binding.thread_key,
+                kind=DEBUG_REPLIED,
+                summary="Agent reply delivered",
+                thread_key=thread_key,
                 text=text,
             )
-            ChannelOutboundService._record_error(db, binding, str(exc))
-            return False
-        ChannelDebugBuffer.record(
-            channel_id=channel.id,
-            direction="outbound",
-            kind=DEBUG_REPLIED,
-            summary="Agent reply delivered",
-            thread_key=binding.thread_key,
-            text=text,
-        )
         return True
 
     @staticmethod
     def _record_error(
         db: DBSession, binding: ChannelThreadBinding, error: str
     ) -> None:
-        """Record a delivery failure — but never over a diagnosis.
+        """Record a delivery failure — but never over a diagnosis. Never raises.
 
         A binding that already failed carries WHY it failed, which is far more
         useful than "and we also couldn't tell them about it". The delivery
         failure is still logged by the caller.
+
+        **It could raise, and it is called from inside an ``except``** — so a
+        raise here replaced the delivery exception exactly like an unguarded
+        argument expression would, and hoisting ``_deliver``'s arguments alone
+        would not have stopped it. Two paths, both confirmed by firing:
+
+        1. ``binding.status`` and ``binding.last_error`` were read *above* the
+           ``try``. They are the same expired-instance lazy reload
+           :func:`_binding_thread_key` exists for, and this call site is
+           reached only after a delivery has already failed — which is
+           precisely when a concurrently-torn-down binding is plausible.
+        2. ``db.rollback()`` sat unguarded inside the handler. A session
+           rolled back into an unusable state raises again from the very call
+           meant to clean it up.
+
+        **What this does not fix, and must not be read as fixing:** when the
+        ``commit`` genuinely fails, the rollback discards ``last_error`` and
+        the binding row keeps no record of the delivery failure. Guarding the
+        write makes the failure *reportable*; it cannot make it *durable*.
+        Durability needs the persistent outbound queue named in the module
+        docstring, which is a listed future enhancement — until then the
+        application log is the only surviving copy, which is why the caller
+        logs before it calls this.
         """
         from app.models import CHANNEL_BINDING_FAILED
 
-        if binding.status == CHANNEL_BINDING_FAILED and binding.last_error:
-            return
         try:
+            if binding.status == CHANNEL_BINDING_FAILED and binding.last_error:
+                return
             binding.last_error = error[:2000]
             db.add(binding)
             db.commit()
         except Exception:
             logger.exception("%s Could not record delivery error", _LOG_PREFIX)
-            db.rollback()
+            try:
+                db.rollback()
+            except Exception:
+                logger.exception(
+                    "%s Rollback after a failed error-record also failed",
+                    _LOG_PREFIX,
+                )
 
 
 __all__ = ["ChannelOutboundService", "CHANNEL_INTEGRATION_PREFIX"]

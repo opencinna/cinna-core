@@ -385,10 +385,15 @@ class ServerChannelService:
     def list_auto_install_bundles(session: Session) -> list[AutoInstallBundlePublic]:
         """Joined projection of the server-wide auto-install list.
 
-        ``has_trigger_prompt`` is resolved from each bundle's latest revision:
-        a bundle without a ``router_trigger_prompt`` can never win Pass 2, and
-        the admin UI flags it rather than leaving the operator to wonder why
-        nothing routes.
+        ``router_trigger_prompt`` and ``has_trigger_prompt`` are both resolved
+        from each bundle's latest revision: a bundle without a
+        ``router_trigger_prompt`` can never win Pass 2, and the admin UI flags
+        it rather than leaving the operator to wonder why nothing routes.
+
+        The two are derived from **one** local, not computed twice. They cannot
+        disagree that way, and the Auto Routing Tuning card reads the text while
+        the auto-install card reads the flag — two readers of the same fact is
+        exactly where a second computation drifts.
         """
         rows = session.exec(
             select(ServerAutoInstallBundle, AgentBundle)
@@ -407,21 +412,24 @@ class ServerChannelService:
             ).all()
             prompts = {rev_id: prompt for rev_id, prompt in revisions}
 
-        return [
-            AutoInstallBundlePublic(
+        def _project(entry, bundle) -> AutoInstallBundlePublic:
+            prompt = (
+                (prompts.get(bundle.latest_revision_id) or "").strip() or None
+                if bundle.latest_revision_id
+                else None
+            )
+            return AutoInstallBundlePublic(
                 bundle_uuid=bundle.id,
                 bundle_id=bundle.bundle_id,
                 display_name=bundle.display_name,
                 visibility=bundle.visibility,
-                has_trigger_prompt=bool(
-                    bundle.latest_revision_id
-                    and (prompts.get(bundle.latest_revision_id) or "").strip()
-                ),
+                router_trigger_prompt=prompt,
+                has_trigger_prompt=prompt is not None,
                 added_by=entry.added_by,
                 created_at=entry.created_at,
             )
-            for entry, bundle in rows
-        ]
+
+        return [_project(entry, bundle) for entry, bundle in rows]
 
     @staticmethod
     def add_auto_install_bundle(

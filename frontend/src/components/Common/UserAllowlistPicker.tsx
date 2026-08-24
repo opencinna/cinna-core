@@ -87,7 +87,11 @@ export function UserAllowlistPicker({
   // Server-side search via GET /users/search — available to any authenticated
   // user (unlike the admin-only GET /users/), so non-admin owners can find
   // recipients. The current user is excluded server-side unless ``includeSelf``.
-  const { data: searchData, isFetching: isSearching } = useQuery({
+  const {
+    data: searchData,
+    isFetching: isSearching,
+    isError: isSearchError,
+  } = useQuery({
     queryKey: ["user-search", debouncedQuery, includeSelf],
     queryFn: () =>
       UsersService.searchUsers({
@@ -116,7 +120,12 @@ export function UserAllowlistPicker({
   const isLoading =
     isDebouncePending ||
     isSearching ||
-    (debouncedQuery.length >= MIN_QUERY_LENGTH && searchData === undefined)
+    // `searchData` also stays undefined after a failure, so without the error
+    // term this "still loading" heuristic would spin forever and the error
+    // branch below would be unreachable.
+    (debouncedQuery.length >= MIN_QUERY_LENGTH &&
+      searchData === undefined &&
+      !isSearchError)
 
   const headerNode =
     label === null
@@ -199,6 +208,16 @@ export function UserAllowlistPicker({
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Searching...
             </div>
+          ) : isSearchError ? (
+            /* Without this branch a failed search renders as "No matching
+               users." — the picker would report a fact about the directory
+               when what actually happened is that the request failed, and the
+               user would conclude the person they are looking for does not
+               exist. */
+            <p className="px-3 py-2 text-xs text-destructive" role="alert">
+              Couldn't search users. This is a failed request, not an empty
+              directory — try again.
+            </p>
           ) : results.length > 0 ? (
             <div className="divide-y max-h-60 overflow-y-auto">
               {results.map((u) => (

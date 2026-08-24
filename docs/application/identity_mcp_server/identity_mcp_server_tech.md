@@ -222,7 +222,7 @@ Stage 2 routing — selects an agent from the owner's bindings accessible to the
   2. If none → returns `None`
   3. If one → uses directly (`match_method = "only_one"`)
   4. Tries `_try_pattern_match()` — fnmatch against each binding's `message_patterns`
-  5. Falls back to `_ai_classify()` — uses `route_to_agent()` from `app.agents.app_agent_router` with binding trigger prompts
+  5. Falls back to `_ai_classify()` — builds a `Candidate` per binding (via the shared `_binding_candidates()` builder) and calls `AgentClassifier.classify()` (`backend/app/services/routing/agent_classifier.py`) directly, not `route_to_agent()` — routing_tuning's Phase 5 collapsed this and two other near-copies onto one classifier
   6. Returns `IdentityRoutingResult(agent_id, agent_name, session_mode, binding_id, binding_assignment_id, match_method)`
 
 `IdentityRoutingResult` dataclass:

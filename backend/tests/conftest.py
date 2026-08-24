@@ -19,6 +19,7 @@ settings.TESTING = True
 from app.api.deps import get_db  # noqa: E402
 from app.core.db import init_db  # noqa: E402
 from app.main import app  # noqa: E402
+from tests.utils.fixtures import blocked_llm_provider  # noqa: E402
 from tests.utils.user import authentication_token_from_email  # noqa: E402
 from tests.utils.utils import get_superuser_token_headers  # noqa: E402
 
@@ -44,6 +45,36 @@ def _ensure_test_engine():
     if _test_engine is None:
         _test_engine = _get_test_engine()
     return _test_engine
+
+
+@pytest.fixture(autouse=True)
+def block_llm_provider() -> Generator[None, None, None]:
+    """No test may reach a real LLM provider through the routing classifier.
+
+    `AgentClassifier.classify` backs every routing consumer and calls a live
+    provider cascade unless the test stubs it — and the container has a real
+    cascade configured, so an unstubbed call goes to the network. Sixteen
+    routing call sites defaulted to exactly that; the cost showed up as a
+    provider quota running out mid-run, which is the worst way to learn it: the
+    suite went red for a reason that had nothing to do with the code, and the
+    natural response to that is to re-run rather than investigate.
+
+    Global and autouse on purpose. Stubbing the call sites we happened to audit
+    fixes today's instances and leaves the next file to rediscover the problem;
+    the property worth having is that a *forgotten* stub fails loudly, in any
+    domain, on the first run. Tests that patch the same seam themselves (the
+    message-text-gating tests, `tests/unit/test_agent_classifier_parsing.py`)
+    simply patch over this one and are unaffected.
+
+    Two limits, so nobody reads more into it than it does. It is **function
+    scoped**, so anything a session- or module-scoped fixture does at collection
+    or setup time runs outside it (there is no such caller today — the only
+    session fixtures here are `setup_db` and the token helper). And it guards
+    the **classifier's** provider seam only, not every AI function; see the
+    scope note in `tests/utils/fixtures.py`.
+    """
+    with blocked_llm_provider():
+        yield
 
 
 @pytest.fixture(scope="session", autouse=True)

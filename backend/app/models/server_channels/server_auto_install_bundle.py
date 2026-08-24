@@ -56,5 +56,24 @@ class AutoInstallBundlePublic(SQLModel):
     display_name: str
     visibility: str
     has_trigger_prompt: bool = False
+    #: The latest revision's ``router_trigger_prompt`` itself, not just whether
+    #: there is one. Widened deliberately for the Auto Routing Tuning card
+    #: (plan §6): a Pass-2 ``no_match`` is diagnosed by comparing the message
+    #: against the wording that failed to claim it, and a boolean cannot be
+    #: compared against anything. ``None`` when the revision carries none —
+    #: exactly when ``has_trigger_prompt`` is False, because the builder derives
+    #: one from the other rather than computing them separately.
+    #:
+    #: Not a new exposure class: superuser-only, and it is the bundle
+    #: publisher's own routing configuration — the same standard §7 applies to
+    #: ``candidates[].trigger_prompt`` on a routing trace.
+    #:
+    #: **A field here is inert until the builder sets it.** This one is
+    #: populated in ``ServerChannelService.list_auto_install_bundles``, which is
+    #: the only place that constructs this model, and pinned by a test that
+    #: asserts the *text* comes back rather than that the attribute exists —
+    #: this codebase has shipped a widened projection whose builder never
+    #: learned about the new field, and the model read as though it worked.
+    router_trigger_prompt: str | None = None
     added_by: uuid.UUID | None = None
     created_at: datetime

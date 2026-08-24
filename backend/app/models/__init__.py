@@ -797,6 +797,21 @@ from .improvement.agent_improvement_request import (
     MAX_RESOLUTION_NOTE_CHARS,
     FALLBACK_PUBLISHER_UNAVAILABLE,
 )
+from .routing.routing_decision import (
+    RoutingDecision,
+    RoutingDecisionSummary,
+    RoutingDecisionPublic,
+    RoutingDecisionsPublic,
+    RoutingDiagnosisPublic,
+    RoutingNearMiss,
+    RoutingSimulateRequest,
+    RoutingReplayRequest,
+    RoutingReplayDiff,
+    RoutingReplayResult,
+    RoutingRecommendationRequest,
+    RoutingRecommendationPublic,
+    RECOMMENDATION_ADVISORY_NOTICE,
+)
 
 __all__ = [
     # Core
@@ -1459,4 +1474,18 @@ __all__ = [
     "MAX_COMMENT_CHARS",
     "MAX_RESOLUTION_NOTE_CHARS",
     "FALLBACK_PUBLISHER_UNAVAILABLE",
+    # Routing decisions (auto-routing tuning)
+    "RoutingDecision",
+    "RoutingDecisionSummary",
+    "RoutingDecisionPublic",
+    "RoutingDecisionsPublic",
+    "RoutingDiagnosisPublic",
+    "RoutingNearMiss",
+    "RoutingSimulateRequest",
+    "RoutingReplayRequest",
+    "RoutingReplayDiff",
+    "RoutingReplayResult",
+    "RoutingRecommendationRequest",
+    "RoutingRecommendationPublic",
+    "RECOMMENDATION_ADVISORY_NOTICE",
 ]

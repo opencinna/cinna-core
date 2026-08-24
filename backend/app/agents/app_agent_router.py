@@ -1,148 +1,67 @@
 """
-App Agent Router — classifies a user message and selects the best matching agent.
+App Agent Router — the dict-shaped adapter over the one classifier.
 
-Uses the provider manager for cascade provider selection.
+The rendering, parsing and trace emission this module used to own now live in
+``app.services.routing.agent_classifier``, so that Channel Pass 1, Channel
+Pass 2, App MCP Stage 1 and Identity Stage 2 share a single implementation
+instead of three near-copies (plan §8 — and Bug 1, which was one of those copies
+dropping ``prompt_examples`` before the prompt was rendered).
+
+What is left here is the **adapter**: ``list[dict]`` in, ``RouteToAgentResult``
+out. It exists because ``available_agents`` as a list of dicts is the published
+shape of ``AIFunctionsService.route_to_agent`` and of ``app.agents``'s own
+export, and both have callers outside routing. New routing consumers should
+build :class:`~app.services.routing.agent_classifier.Candidate` objects and call
+``AgentClassifier.classify`` directly — the dict form cannot be type-checked and
+is exactly how a field goes missing in one caller and not in the others.
 """
-import json
 import logging
-from dataclasses import dataclass
-from pathlib import Path
 
-from .provider_manager import get_provider_manager
+from app.services.routing.agent_classifier import (
+    AgentClassifier,
+    Candidate,
+    ClassificationResult,
+)
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).parent / "prompts"
-APP_AGENT_ROUTER_PROMPT = PROMPTS_DIR / "app_agent_router_prompt.md"
+#: The router's result **is** the classification result — one class under two
+#: names, not two dataclasses kept in step. A second definition would be one
+#: field behind the first the next time the prompt contract grows, which is the
+#: same failure this whole module was collapsed to avoid.
+RouteToAgentResult = ClassificationResult
 
 
-@dataclass
-class RouteToAgentResult:
-    """Result of routing a user message to an agent."""
-
-    agent_id: str
-    transformed_message: str | None = None  # None means "use original message"
-
-
-def _load_prompt_template(file_path: Path) -> str:
-    """Load prompt template from file."""
-    try:
-        return file_path.read_text(encoding="utf-8")
-    except Exception as e:
-        raise RuntimeError(f"Failed to load prompt template from {file_path}: {e}")
+def _as_candidate(agent: dict) -> Candidate:
+    """One ``available_agents`` dict as a :class:`Candidate`."""
+    return Candidate(
+        ref_id=str(agent.get("id") or ""),
+        name=str(agent.get("name") or ""),
+        trigger_prompt=str(agent.get("trigger_prompt") or ""),
+        prompt_examples=agent.get("prompt_examples") or None,
+    )
 
 
 def route_to_agent(
     message: str,
     available_agents: list[dict],
     provider_kwargs: dict | None = None,
-) -> RouteToAgentResult | None:
+) -> ClassificationResult | None:
     """Classify a user message and pick the best matching agent.
 
     Args:
         message: The user's message to classify.
-        available_agents: List of dicts with keys: id, name, trigger_prompt.
+        available_agents: List of dicts with keys: id, name, trigger_prompt and
+            optionally prompt_examples.
         provider_kwargs: Optional kwargs passed to the provider manager.
 
     Returns:
-        RouteToAgentResult with agent_id and optional transformed_message,
-        or None if no agent fits or on parse failure.
+        RouteToAgentResult with agent_id, optional transformed_message and the
+        advisory confidence / reason / runner_up_id, or None if no agent fits or
+        on parse failure.
     """
-    if not available_agents:
-        return None
-
-    try:
-        template = _load_prompt_template(APP_AGENT_ROUTER_PROMPT)
-
-        # Build agent list section
-        agents_section = "\n".join(
-            f"- **ID**: {agent['id']}\n  **Name**: {agent['name']}\n  **Description**: {agent['trigger_prompt']}"
-            for agent in available_agents
-        )
-
-        prompt = f"""{template}
-
----
-
-## Available Agents
-
-{agents_section}
-
----
-
-## User Message
-
-{message}
-
----
-
-Return JSON only:
-"""
-
-        logger.info(
-            "[AIRouter] Classifying message=%r | %d candidates: %s",
-            message[:120],
-            len(available_agents),
-            ", ".join(f"{a['name']} ({a['id'][:8]}…)" for a in available_agents),
-        )
-
-        manager = get_provider_manager()
-        response = manager.generate_content(prompt, **(provider_kwargs or {}))
-
-        raw = response.text.strip()
-        logger.info("[AIRouter] LLM raw response: %r", raw[:300])
-
-        # Strip markdown code fences if present
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            raw = "\n".join(
-                line for line in lines
-                if not line.startswith("```")
-            ).strip()
-
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            logger.warning("[AIRouter] Non-JSON response: %r", raw)
-            return None
-
-        agent_id = data.get("agent_id", "")
-        if not agent_id or agent_id == "NONE":
-            logger.info("[AIRouter] LLM returned NONE — no agent matched")
-            return None
-
-        # Validate it looks like a UUID (basic check)
-        if not (len(agent_id) == 36 and agent_id.count("-") == 4):
-            logger.warning("[AIRouter] Unexpected agent_id format: %r", agent_id)
-            return None
-
-        # Extract and validate transformed_message
-        raw_transformed = data.get("message")
-        transformed_message: str | None = None
-        if raw_transformed and isinstance(raw_transformed, str):
-            stripped = raw_transformed.strip()
-            if (
-                stripped
-                and stripped != message
-                and len(stripped) <= 2 * len(message)
-            ):
-                transformed_message = stripped
-
-        # Find matched agent name for logging
-        matched_name = next(
-            (a["name"] for a in available_agents if a["id"] == agent_id), "?"
-        )
-        logger.info(
-            "[AIRouter] Result: agent=%s (%s) | transformed_message=%r",
-            matched_name, agent_id,
-            transformed_message[:120] if transformed_message else None,
-        )
-
-        return RouteToAgentResult(
-            agent_id=agent_id,
-            transformed_message=transformed_message,
-        )
-
-    except Exception as e:
-        logger.error("[AIRouter] Routing failed: %s", e, exc_info=True)
-        return None
+    return AgentClassifier.classify(
+        [_as_candidate(agent) for agent in available_agents],
+        message,
+        provider_kwargs=provider_kwargs,
+    )

@@ -137,6 +137,16 @@ async def list_security_events(
     Optional filters: agent_id, environment_id, session_id, event_type.
 
     Auth: User JWT (for frontend audit view)
+
+    **Self-scoped, and a test elsewhere depends on that.** The ``user_id=
+    current_user.id`` below is not only an access rule — it is the only reason
+    ``tests/api/routing/routing_simulate_no_side_effects_test.py`` can prove
+    *which* admin a ``ROUTING_SIMULATE_RUN`` audit row was attributed to.
+    Nothing in that test reads the event's ``user_id``; it leans on a
+    wrongly-attributed event being invisible in the querying admin's own feed.
+    Widen this endpoint to "superuser sees all" and that assertion keeps
+    passing while proving nothing — silently, with no failure to notice. If you
+    widen it, strengthen that test first to assert the actor id directly.
     """
     events, count = await SecurityEventService.list_events(
         session=session,

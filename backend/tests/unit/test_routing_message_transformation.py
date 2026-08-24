@@ -60,7 +60,7 @@ def _call_route_to_agent(llm_response_text: str, message: str = "ask cinna to do
     """Call route_to_agent() with a mocked LLM response."""
     from app.agents.app_agent_router import route_to_agent
 
-    with patch("app.agents.app_agent_router.get_provider_manager") as mock_pm:
+    with patch("app.services.routing.agent_classifier.get_provider_manager") as mock_pm:
         mock_pm.return_value.generate_content.return_value = _make_provider_response(llm_response_text)
         return route_to_agent(message=message, available_agents=AGENTS)
 
@@ -242,9 +242,11 @@ class TestAppMCPRoutingServiceAiClassify:
     def test_returns_tuple_with_transformed_message(self):
         # Import the service module first so its lazy imports are resolved
         import app.services.app_mcp.app_mcp_routing_service  # noqa: F401
-        from app.services.ai_functions.ai_functions_service import AIFunctionsService
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
-        from app.agents.app_agent_router import RouteToAgentResult
+        from app.services.routing.agent_classifier import (
+            AgentClassifier,
+            ClassificationResult as RouteToAgentResult,
+        )
 
         agent_id = uuid.uuid4()
         route = self._make_route(agent_id)
@@ -253,7 +255,7 @@ class TestAppMCPRoutingServiceAiClassify:
             transformed_message="core task",
         )
 
-        with patch.object(AIFunctionsService, "route_to_agent", return_value=routing_result):
+        with patch.object(AgentClassifier, "classify", return_value=routing_result):
             result = AppMCPRoutingService._ai_classify("ask cinna to core task", [route])
 
         assert result is not None
@@ -263,9 +265,11 @@ class TestAppMCPRoutingServiceAiClassify:
 
     def test_returns_none_transformed_when_ai_returns_no_message(self):
         import app.services.app_mcp.app_mcp_routing_service  # noqa: F401
-        from app.services.ai_functions.ai_functions_service import AIFunctionsService
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
-        from app.agents.app_agent_router import RouteToAgentResult
+        from app.services.routing.agent_classifier import (
+            AgentClassifier,
+            ClassificationResult as RouteToAgentResult,
+        )
 
         agent_id = uuid.uuid4()
         route = self._make_route(agent_id)
@@ -274,7 +278,7 @@ class TestAppMCPRoutingServiceAiClassify:
             transformed_message=None,
         )
 
-        with patch.object(AIFunctionsService, "route_to_agent", return_value=routing_result):
+        with patch.object(AgentClassifier, "classify", return_value=routing_result):
             result = AppMCPRoutingService._ai_classify("direct task", [route])
 
         assert result is not None
@@ -284,27 +288,29 @@ class TestAppMCPRoutingServiceAiClassify:
 
     def test_returns_none_when_ai_returns_no_match(self):
         import app.services.app_mcp.app_mcp_routing_service  # noqa: F401
-        from app.services.ai_functions.ai_functions_service import AIFunctionsService
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
+        from app.services.routing.agent_classifier import AgentClassifier
 
         route = self._make_route(uuid.uuid4())
 
-        with patch.object(AIFunctionsService, "route_to_agent", return_value=None):
+        with patch.object(AgentClassifier, "classify", return_value=None):
             result = AppMCPRoutingService._ai_classify("unrelated message", [route])
 
         assert result is None
 
     def test_returns_none_when_agent_id_not_in_routes(self):
         import app.services.app_mcp.app_mcp_routing_service  # noqa: F401
-        from app.services.ai_functions.ai_functions_service import AIFunctionsService
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
-        from app.agents.app_agent_router import RouteToAgentResult
+        from app.services.routing.agent_classifier import (
+            AgentClassifier,
+            ClassificationResult as RouteToAgentResult,
+        )
 
         route = self._make_route(uuid.uuid4())
         # AI returns a different agent_id not in routes
         routing_result = RouteToAgentResult(agent_id=str(uuid.uuid4()))
 
-        with patch.object(AIFunctionsService, "route_to_agent", return_value=routing_result):
+        with patch.object(AgentClassifier, "classify", return_value=routing_result):
             result = AppMCPRoutingService._ai_classify("message", [route])
 
         assert result is None
@@ -323,7 +329,10 @@ class TestIdentityRoutingServiceAiClassify:
 
     def test_returns_tuple_with_transformed_message(self):
         from app.services.identity.identity_routing_service import IdentityRoutingService
-        from app.agents.app_agent_router import RouteToAgentResult
+        from app.services.routing.agent_classifier import (
+            AgentClassifier,
+            ClassificationResult as RouteToAgentResult,
+        )
 
         agent_id = uuid.uuid4()
         binding = self._make_binding(agent_id)
@@ -337,10 +346,7 @@ class TestIdentityRoutingServiceAiClassify:
         mock_db.get.return_value = mock_agent
 
         # route_to_agent is imported inside the method body; patch at its source
-        with patch(
-            "app.agents.app_agent_router.route_to_agent",
-            return_value=routing_result,
-        ):
+        with patch.object(AgentClassifier, "classify", return_value=routing_result):
             result = IdentityRoutingService._ai_classify("ask john to final task", [binding], mock_db)
 
         assert result is not None
@@ -350,7 +356,10 @@ class TestIdentityRoutingServiceAiClassify:
 
     def test_returns_none_transformed_when_ai_returns_no_message(self):
         from app.services.identity.identity_routing_service import IdentityRoutingService
-        from app.agents.app_agent_router import RouteToAgentResult
+        from app.services.routing.agent_classifier import (
+            AgentClassifier,
+            ClassificationResult as RouteToAgentResult,
+        )
 
         agent_id = uuid.uuid4()
         binding = self._make_binding(agent_id)
@@ -360,10 +369,7 @@ class TestIdentityRoutingServiceAiClassify:
         mock_agent.name = "Agent"
         mock_db.get.return_value = mock_agent
 
-        with patch(
-            "app.agents.app_agent_router.route_to_agent",
-            return_value=routing_result,
-        ):
+        with patch.object(AgentClassifier, "classify", return_value=routing_result):
             result = IdentityRoutingService._ai_classify("direct task", [binding], mock_db)
 
         assert result is not None
@@ -373,14 +379,12 @@ class TestIdentityRoutingServiceAiClassify:
 
     def test_returns_none_when_ai_returns_no_match(self):
         from app.services.identity.identity_routing_service import IdentityRoutingService
+        from app.services.routing.agent_classifier import AgentClassifier
 
         binding = self._make_binding(uuid.uuid4())
         mock_db = MagicMock()
 
-        with patch(
-            "app.agents.app_agent_router.route_to_agent",
-            return_value=None,
-        ):
+        with patch.object(AgentClassifier, "classify", return_value=None):
             result = IdentityRoutingService._ai_classify("unrelated", [binding], mock_db)
 
         assert result is None

@@ -166,6 +166,34 @@ SERVER_CHANNEL_AUTO_INSTALL = "SERVER_CHANNEL_AUTO_INSTALL"
 # this writes arbitrary text into somewhere they read. The debug buffer records
 # it too, but that is in-memory and clearable — this is the durable record.
 SERVER_CHANNEL_TEST_SEND = "SERVER_CHANNEL_TEST_SEND"
+# A superuser cleared stored routing traces (one channel's, or all of them).
+# Audited because this is not merely destructive: it is one of the two paths
+# that actually ERASE external senders' stored message text, and the one the
+# admin UI names to an operator who has just turned the text gate off (the other
+# being retention expiry). A privacy control that leaves no record of having
+# been used cannot be shown to have been used. Payload carries the scope and the
+# row count — never a message body, as with SERVER_CHANNEL_TEST_SEND above.
+ROUTING_TRACES_CLEARED = "ROUTING_TRACES_CLEARED"
+# A superuser ran routing simulate or replay against ANOTHER account's routing
+# state (`details.mode` says which). Audited because of what the response
+# contains: which agents and bundles that user has installed, their names, and
+# their owners' trigger prompts. Nearly all of that is already visible in a
+# stored routing_decision row the moment the user sends one message — what
+# simulate adds is that it does not have to wait for them to send one, so an
+# admin can enumerate a user who has never touched the channel. That reach is
+# deliberate (the tool's main use is diagnosing a first message that failed to
+# route, which by definition has no trace), so this row plus the per-admin rate
+# limit are what keep it accountable and non-bulk rather than narrowing it.
+#
+# Payload names BOTH ends — the acting admin (SecurityEvent.user_id) and the
+# target (details.target_user_id / target_user_email). An audit row saying only
+# "an admin ran a simulate" does not answer the question anybody would later
+# ask, which is "against whom". Never the message body, following
+# SERVER_CHANNEL_TEST_SEND: these rows are broadly readable, and the message
+# lives on the routing_decision row behind the superuser-only trace API and the
+# ROUTING_TRACE_STORE_MESSAGE_TEXT gate. Written BEFORE the run, not after, so
+# a simulate that spends LLM budget and then fails still leaves a record.
+ROUTING_SIMULATE_RUN = "ROUTING_SIMULATE_RUN"
 
 
 class SecurityEvent(SQLModel, table=True):

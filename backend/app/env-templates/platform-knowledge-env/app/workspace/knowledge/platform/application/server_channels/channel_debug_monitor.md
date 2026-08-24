@@ -86,6 +86,7 @@ outbound delivery ──────────────▶  in-memory captu
 
 - **[Server Channels](server_channels.md)** — the parent feature. The monitor observes its inbound pipeline and outbound delivery; it adds no routing behaviour of its own.
 - **[Agent Activities & Security Events](../agent_activities/agent_activities.md)** — the durable counterpart. Verification failures, whitelist denials, auto-registration, auto-install and admin test sends are recorded there and survive restarts; the monitor is the live view beside it.
+- **[Auto Routing Tuning](../routing_tuning/routing_tuning.md)** — the other durable counterpart, specifically for routing: each captured event carries `detail.trace_id` linking this live row to its persisted `routing_decision`, which survives a restart and carries the full candidate list and verdict this feed only summarizes.
 - **Adapters** — the monitor reads only adapter-agnostic pipeline values, so a new channel type is covered without touching it.
 
 ## Technical Details
