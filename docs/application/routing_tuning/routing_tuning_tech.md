@@ -2,9 +2,9 @@
 
 Implementation reference for [Auto Routing Tuning](routing_tuning.md). Parent/sibling features: [Server Channels](../server_channels/server_channels_tech.md) (the only wired producer today), [App MCP Server](../app_mcp_server/app_mcp_server_tech.md), [Identity MCP Server](../identity_mcp_server/identity_mcp_server_tech.md).
 
-**Phases 1–5 are implemented and tested.** Phase 5 added `AgentClassifier` (one renderer and one parser for all four routing consumers), rendered `prompt_examples` into the classifier prompt, and added the model's `confidence` / `reason` / `runner_up` plus identity Stage-2 candidate capture.
+**Phases 1–5 are implemented and tested.** Phase 5 added `AgentClassifier` (one renderer and one parser for all four routing consumers), rendered `prompt_examples` into the classifier prompt, and added the model's `confidence` / `reason` / `runner_up` plus identity Stage-2 candidate capture (implemented, currently unreachable — see below).
 
-**Still not built, and deliberately so:** `origin="app_mcp"` / `origin="identity"` capture. Phase 5 unified the *classifier*, not the set of places that open a `RoutingTrace.capture()` — those remain the two `server_channel` sites plus simulate. `ROUTING_TRACE_APP_MCP_MODE` therefore stays removed; reintroduce it in the same change that starts emitting `ORIGIN_APP_MCP`, never before (see Configuration below).
+**Still not built, and deliberately so:** `origin="app_mcp"` / `origin="identity"` capture. Phase 5 unified the *classifier*, not the set of places that open a `RoutingTrace.capture()` — those remain the two `server_channel` sites plus simulate. `ROUTING_TRACE_APP_MCP_MODE` therefore stays removed; reintroduce it in the same change that starts emitting `ORIGIN_APP_MCP`, never before (see Configuration below). The identity Stage-2 candidate capture Phase 5 added (below) is implemented correctly but sits on the same unreached surface: `AppMCPRoutingService.route_message` — the only caller of the `identity_stage2` stage — is itself only called from the App MCP request handler, which opens no capture, and the channel routing scope split removed the channel-side delegation that used to reach it from inside one.
 
 ## File Locations
 
