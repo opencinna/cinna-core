@@ -14,13 +14,13 @@ import uuid
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, set_router_trigger_prompt
 from tests.utils.ai_credential import create_random_ai_credential
-from tests.utils.app_agent_route import create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.mfa import find_security_events
 from tests.utils.routing import (
     STUB_TRIGGER_DRAFT,
+    classification,
     draft_routing_recommendation,
     get_routing_trace,
     patched_routing_externals,
@@ -116,13 +116,13 @@ def test_replay_reruns_the_stored_message_and_reports_no_change(
     ), "replay mutated the trace it re-ran"
 
 
-def test_replay_reports_the_change_after_a_route_is_added(
+def test_replay_reports_the_change_after_the_agent_becomes_routable(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
     """
-    The tuning loop's payoff: a message that found nothing, replayed after its
-    sender gains a route, now routes — and the diff names the outcome flip and
-    the candidate that appeared.
+    The tuning loop's payoff: a message that found nothing, replayed after the
+    sender's own agent gains a trigger prompt, now routes — and the diff names
+    the outcome flip and the candidate that appeared.
     """
     channel = _channel(client, superuser_token_headers)
     user, headers, agent = _user_with_agent(client, superuser_token_headers)
@@ -143,8 +143,9 @@ def test_replay_reports_the_change_after_a_route_is_added(
     )["data"][0]
     assert original["outcome"] == "no_match", original
 
-    # The fix an admin would ask the owner to make.
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle maths")
+    # The fix an admin would ask the owner to make — on the agent itself, not
+    # on an App MCP route, which channel routing does not read.
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle maths")
 
     with patched_routing_externals():
         result = replay_routing_trace(client, superuser_token_headers, original["id"])
@@ -157,7 +158,24 @@ def test_replay_reports_the_change_after_a_route_is_added(
     assert diff["selection_changed"] is True
     assert diff["original_selection"] is None
     assert agent["name"] in (diff["replay_selection"] or "")
-    assert agent["name"] in diff["candidates_added"], diff
+    # NOT `candidates_added`: the agent was on the original ballot too, as a
+    # skipped candidate (`no_trigger_prompt`) — which is the whole point of
+    # recording skips rather than dropping them. What changed is its
+    # *eligibility*, which the set-difference fields cannot express, so it is
+    # asserted where it is actually visible: the candidate rows themselves.
+    def _agent_row(detail: dict) -> dict:
+        return next(
+            c
+            for stage in detail["stages"]
+            if stage["stage"] == "pass_1"
+            for c in stage["candidates"]
+            if c["ref_id"] == agent["id"]
+        )
+
+    original_detail = get_routing_trace(client, superuser_token_headers, original["id"])
+    assert _agent_row(original_detail)["eligible"] is False
+    assert _agent_row(original_detail)["skip_reason"] == "no_trigger_prompt"
+    assert _agent_row(result["replay"])["eligible"] is True
     assert result["replay"]["selected_agent_id"] == agent["id"]
 
 
@@ -199,7 +217,9 @@ def test_replay_is_superuser_only_and_audited(
         text="hello",
         sender_email=user["email"],
     )
-    resp, _ = post_channel_message(client, channel, signer, event)
+    resp, _ = post_channel_message(
+        client, channel, signer, event, classify_no_match=True
+    )
     assert resp.status_code == 200
     from tests.utils.routing import list_routing_traces
 
@@ -246,7 +266,7 @@ def test_recommendation_drafts_for_a_candidate_and_changes_nothing(
     """
     channel = _channel(client, superuser_token_headers)
     user, headers, agent = _user_with_agent(client, superuser_token_headers)
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle invoices")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle invoices")
 
     signer = GoogleChatJWTSigner()
     event = build_message_event(
@@ -254,7 +274,12 @@ def test_recommendation_drafts_for_a_candidate_and_changes_nothing(
         text="please compute the eigenvalues",
         sender_email=user["email"],
     )
-    resp, _ = post_channel_message(client, channel, signer, event)
+    # The agent IS a candidate (it has a trigger prompt) and the classifier
+    # runs and rejects it — which is what puts it in the trace as an eligible
+    # candidate that lost, the state a recommendation is drafted from.
+    resp, _ = post_channel_message(
+        client, channel, signer, event, classify_no_match=True
+    )
     assert resp.status_code == 200
     from tests.utils.routing import list_routing_traces
 
@@ -296,7 +321,7 @@ def test_recommendation_refuses_a_candidate_that_is_not_in_the_trace(
     happens to hang off a diagnostics endpoint."""
     channel = _channel(client, superuser_token_headers)
     user, headers, agent = _user_with_agent(client, superuser_token_headers)
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle invoices")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle invoices")
 
     signer = GoogleChatJWTSigner()
     event = build_message_event(
@@ -304,7 +329,9 @@ def test_recommendation_refuses_a_candidate_that_is_not_in_the_trace(
         text="hello",
         sender_email=user["email"],
     )
-    resp, _ = post_channel_message(client, channel, signer, event)
+    resp, _ = post_channel_message(
+        client, channel, signer, event, classify_no_match=True
+    )
     assert resp.status_code == 200
     from tests.utils.routing import list_routing_traces
 
@@ -357,14 +384,16 @@ def test_recommendation_writes_no_security_event(
     route genuinely writes nothing at all."""
     channel = _channel(client, superuser_token_headers)
     user, headers, agent = _user_with_agent(client, superuser_token_headers)
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle invoices")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle invoices")
     signer = GoogleChatJWTSigner()
     event = build_message_event(
         thread_key=f"spaces/AAA/threads/{random_lower_string()}",
         text="hello",
         sender_email=user["email"],
     )
-    resp, _ = post_channel_message(client, channel, signer, event)
+    resp, _ = post_channel_message(
+        client, channel, signer, event, classify_no_match=True
+    )
     assert resp.status_code == 200
     from tests.utils.routing import list_routing_traces
 

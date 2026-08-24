@@ -1,15 +1,48 @@
 """The reachability verdict — why a decision went the way it did, in words.
 
-Plan §9's headline output, and the whole answer to the motivating bug (§2,
-Bug 2): a standalone agent has no ``AppAgentRoute``, is therefore absent from
-``get_effective_routes_for_user``, and the classifier never sees it. That is
-**not** fixed by changing the auto-route rule — standalone agents are
-deliberately owner-managed — it is fixed by saying so, out loud, to the admin
-staring at a ``no_match``:
+Plan §9's headline output: an agent the classifier never saw cannot be
+explained by the candidate table, because the candidate table has no row for
+it. So the verdict says it out loud, to the admin staring at a ``no_match``:
 
     This user has 3 effective routes; Equation Assistant is not among them
     because it is not a bundle install and has no App MCP route — add one from
     its Integrations tab.
+
+**That sentence is an App MCP sentence, and only an App MCP sentence.** It used
+to be emitted for every origin, Google Chat included, which made this module
+the place the surface divergence was baked in: it instructed a channel user to
+configure an *MCP exposure* to fix a *channel* problem
+(``docs/plans/channel_routing_scope_split_plan.md`` §2.4). An App MCP route is
+deliberately required on the App MCP path — a standalone agent never gets an
+auto-route and its owner manages that exposure explicitly — and is deliberately
+**not** required on a channel, which routes over the sender's own agents and
+reads no route, no assignment and no ``channel_app_mcp`` flag at all (§3).
+
+Hence :data:`_CHANNEL_ORIGINS` and the ``channel`` flag threaded through
+everything below. **The split is by origin, never by candidate kind.** That
+distinction is the whole correction and it is worth stating, because gating on
+``kind == KIND_AGENT`` looks equivalent and is not: ``SKIP_ALREADY_INSTALLED``,
+``SKIP_NOT_INSTALLABLE`` and ``SKIP_NO_REVISION`` are recorded by Pass 2's
+auto-install scan as ``KIND_BUNDLE``, Pass 2 runs on channel decisions, and
+``SKIP_ALREADY_INSTALLED``'s remedy used to read *"Check the installed agent's
+App MCP route"* — a live §2.4 defect that a ``kind`` gate would have walked
+straight past. ``kind`` is consulted in exactly one place
+(:data:`_CHANNEL_AGENT_SKIP_EXPLANATIONS`) and only to tell two *facts* apart,
+never to decide which surface the reader is on.
+
+The line the split is drawn along:
+
+- **What to change *now* follows the origin.** Every verdict derived from
+  current configuration, every remedy, and every count noun that names what the
+  candidates *are*, is written for the surface the decision ran on.
+- **What the router *did* stays as recorded.** An explanation clause
+  paraphrases a ``skip_reason`` the recorder wrote during that decision; it
+  describes history, and history does not change with the surface reading it.
+  An **action clause is always forward-looking**, so it must match the surface
+  the reader is on even when the explanation beside it does not — which is why
+  ``SKIP_ROUTE_INACTIVE`` on a channel trace still says the route was off (true,
+  and the reason it was skipped) and no longer says to switch it back on (which
+  would change nothing on a channel today).
 
 **Why the sentence is built here and not in the card** (plan §10, Phase 4).
 Three reasons, and the third is the one that matters:
@@ -33,12 +66,18 @@ diagnosed — the route may well have been fixed since. The database is consulte
 only for an agent the trace never mentions, which is precisely the case the
 trace cannot explain: it has no row for something that was never a candidate.
 
-**What this reads about the expected agent is an allowlist of two fields** —
-its name and its owner's email. Both clear the bar §7 sets for
+**What this reads about the expected agent is an allowlist**, and the split
+added to it deliberately rather than by drift. Two fields are *quoted*: the
+agent's name and its owner's email. Two more are read for their **emptiness
+only** — ``router_trigger_prompt`` and ``example_prompts``, in
+:func:`_has_router_wording` — so what reaches the response is one bit ("set" or
+"not set"), never the wording itself. All four clear the bar §7 sets for
 ``candidates[].trigger_prompt``: owner-authored configuration, not
-sender-derived, already visible to this (superuser-only) audience. Nothing else
-about the agent reaches the response, and a third field would have to clear the
-same bar when it is added rather than inherit these two's answer.
+sender-derived, already visible to this (superuser-only) audience — and the
+trace surface already serves the *full text* of both, so a presence bit adds
+nothing a reader of this page could not already see. Nothing else about the
+agent reaches the response, and a fifth field would have to clear the same bar
+when it is added rather than inherit these four's answer.
 
 **Near-miss ranking reuses ``AppAgentRouteService``'s Jaccard helpers by
 calling them** (plan §3: "Reuse verbatim"). They are private —
@@ -56,7 +95,8 @@ total, because its caller is ``RoutingTraceService.get``, which serves the
 whole trace: a diagnosis that raised would take the trace detail with it, and
 the trace is the more valuable half.
 
-See ``docs/plans/auto_routing_tuning_plan.md`` §2, §9 and §10 Phase 4.
+See ``docs/plans/auto_routing_tuning_plan.md`` §2, §9 and §10 Phase 4, and
+``docs/plans/channel_routing_scope_split_plan.md`` §2.4, §3 and §5 Phase 4.
 """
 from __future__ import annotations
 
@@ -79,16 +119,28 @@ from app.models.routing.routing_decision import (
 )
 from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
 from app.services.routing import routing_trace
+from app.services.routing.channel_candidate_provider import _example_text
 
 logger = logging.getLogger(__name__)
 
 
 # ── Verdict codes ────────────────────────────────────────────────────
 #
-# One code per sentence, and that pairing is load-bearing: a test pins the code
-# *and* the sentence, so a reworded verdict that no longer answers its branch
-# fails rather than passing under a code that still looks right. Plain strings,
-# matching the feature's convention — readers tolerate unknown values.
+# One code per sentence *per origin*, and that pairing is load-bearing: a test
+# pins the code *and* the sentence, so a reworded verdict that no longer answers
+# its branch fails rather than passing under a code that still looks right.
+# Plain strings, matching the feature's convention — readers tolerate unknown
+# values.
+#
+# **A code names a finding, not a wording.** Where a channel and an App MCP
+# decision reach the same finding by the same test — this user had no
+# candidates; this agent is not the sender's; it looks reachable now — they
+# share the code and differ only in the sentence, because a client grouping or
+# colouring by code is answering "what kind of problem is this", which is the
+# same answer on both surfaces. (``frontend/.../routingCopy.ts`` tones every
+# ``expected_agent_*`` code by prefix, so a new one needs no client change.) A
+# code is added only for a finding with no counterpart on the other surface,
+# which today is exactly two — the pair below marked "channel origins only".
 
 #: No expected agent named.
 CODE_ROUTED = "routed"
@@ -108,6 +160,22 @@ CODE_EXPECTED_UNKNOWN = "expected_agent_unknown"
 CODE_EXPECTED_STANDALONE_NO_ROUTE = "expected_agent_standalone_no_route"
 CODE_EXPECTED_BUNDLE_NO_ROUTE = "expected_agent_bundle_no_route"
 CODE_EXPECTED_NO_TRIGGER_PROMPT = "expected_agent_no_trigger_prompt"
+#: Channel origins only, and the counterpart of the trace-side
+#: ``SKIP_NO_TRIGGER_PROMPT`` the channel candidate provider records: the sender
+#: owns the agent, and it carries neither ``router_trigger_prompt`` nor
+#: ``example_prompts``, so it is not a candidate and no route would change that.
+#: Distinct from :data:`CODE_EXPECTED_NO_TRIGGER_PROMPT`, whose finding is about
+#: a bundle install's *auto-route* never having been created.
+CODE_EXPECTED_CHANNEL_NO_TRIGGER_PROMPT = "expected_agent_channel_no_trigger_prompt"
+#: Channel origins only. A channel candidate is defined *entirely* by who owns
+#: it, so a trace whose sender account has since been deleted (``user_id`` is
+#: ``SET NULL``, deliberately — see ``RoutingDecision.user_id``) has nothing
+#: left to check ownership against. Its own code rather than a silent fallthrough
+#: into :data:`CODE_EXPECTED_LOOKS_REACHABLE`, which would have asserted "this
+#: user owns it" about no user at all. The App MCP half needs no counterpart:
+#: every one of its branches asks about a route, and a route with no assignment
+#: is still a fact about the route.
+CODE_EXPECTED_SENDER_GONE = "expected_agent_sender_gone"
 CODE_EXPECTED_FOREIGN_OWNER = "expected_agent_foreign_owner"
 CODE_EXPECTED_ROUTE_INACTIVE = "expected_agent_route_inactive"
 CODE_EXPECTED_ROUTE_NOT_APP_MCP = "expected_agent_route_not_app_mcp"
@@ -116,6 +184,33 @@ CODE_EXPECTED_LOOKS_REACHABLE = "expected_agent_looks_reachable"
 
 #: The diagnosis could not be computed at all.
 CODE_UNAVAILABLE = "unavailable"
+
+
+#: The origins whose decisions route over the **sender's own agents**, where an
+#: App MCP route is not part of the question (plan §3).
+#:
+#: ``ORIGIN_SIMULATE`` is in the set because ``POST /admin/routing/simulate``
+#: and ``.../traces/{id}/replay`` open their capture around
+#: ``ChannelRoutingService.decide`` (``routing_tuning_service.py``) — a simulate
+#: row *is* a channel decision, re-run by an admin. If simulate ever learns to
+#: re-run an App MCP decision it must record which surface it simulated and this
+#: set must read that, rather than go on assuming; a simulate row silently
+#: diagnosed as a channel would send the reader to the wrong control, which is
+#: the defect §2.4 names.
+#:
+#: An origin this set does not know — ``app_mcp``, ``identity``, or one added
+#: later — gets the App MCP wording. Two reasons, and the second is the one that
+#: makes it safe rather than merely conventional: it is the wording every origin
+#: had before this split, so an unknown origin is no worse off than it was; and
+#: the two reserved origins that a future build will actually emit
+#: (``ORIGIN_APP_MCP``, ``ORIGIN_IDENTITY`` — nothing opens a capture with
+#: either today) are precisely the surfaces that *do* require a route.
+_CHANNEL_ORIGINS = frozenset(
+    {
+        routing_trace.ORIGIN_SERVER_CHANNEL,
+        routing_trace.ORIGIN_SIMULATE,
+    }
+)
 
 
 #: Why a near-miss ranking is missing. Named rather than left as an empty list:
@@ -143,9 +238,17 @@ NEAR_MISS_LIMIT = 5
 #
 # Keyed by ``routing_trace``'s constants, never by literals, so renaming one
 # breaks the import rather than silently falling through to the unknown branch.
-# The fallback below is what makes this safe to leave incomplete: an unmapped
-# reason is reported by name with an honest "this build has no explanation for
-# it", which is a worse diagnosis but never a wrong one.
+# The fallback in :func:`_skip_explanation` is what makes these tables safe to
+# leave incomplete: an unmapped reason is reported by name with an honest "this
+# build has no explanation for it", which is a worse diagnosis but never a wrong
+# one.
+#
+# Three tables, consulted narrowest-first — channel+agent, then channel, then
+# this one, which is the App MCP / origin-neutral base. The overrides are
+# deliberately sparse rather than a parallel copy: an explanation restates what
+# the recorder wrote during that decision, and history reads the same on every
+# surface. Only where a *remedy* would point at the wrong control, or where the
+# same ``skip_reason`` names two different missing things, does an entry appear.
 
 _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
     routing_trace.SKIP_ROUTE_INACTIVE: (
@@ -192,6 +295,101 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
         "the route that matched points at an agent id with no agent behind it",
         "Delete the dangling route and recreate it from the agent's "
         "Integrations tab.",
+    ),
+    routing_trace.SKIP_BUNDLE_MISSING: (
+        "it won the auto-install pass and then could not be loaded — the "
+        "bundle was deleted between this decision's catalog scan and the "
+        "lookup that follows it",
+        "Re-run this decision. Nothing is wrong with the routing rules: the "
+        "bundle that matched simply stopped existing mid-decision.",
+    ),
+    routing_trace.SKIP_PASS_1_MATCHED: (
+        "the auto-install pass could have offered it, but Pass 1 matched one "
+        "of this sender's own agents first, so it was never put to the "
+        "classifier",
+        "Nothing to fix — a sender's own agent is meant to win over a bundle "
+        "they have not installed. If the wrong one won, tighten the trigger "
+        "prompt of the agent that claimed the message.",
+    ),
+}
+
+
+#: Channel-origin overrides, **gated on the origin alone**. Every entry here is
+#: a reason a channel decision can actually record, whose base remedy above
+#: sends the reader to an App MCP control that a channel does not read.
+#:
+#: All three are reachable on a channel and none of them is ``KIND_AGENT``-only,
+#: which is why this table is keyed by origin and not by kind:
+#:
+#: - ``SKIP_ALREADY_INSTALLED`` — recorded by Pass 2's auto-install scan as a
+#:   ``KIND_BUNDLE`` candidate (``channel_routing_service._route_catalog``), on
+#:   channel decisions, today. Its base remedy is the §2.4 defect verbatim.
+#: - ``SKIP_AGENT_MISSING`` — recorded by channel Pass 1 when the winning
+#:   candidate's row is gone by the time it is loaded. There is no route in that
+#:   story at all any more: the candidate came from ``WHERE owner_id = sender``.
+#: - ``SKIP_ROUTE_INACTIVE`` — no longer *producible* on a channel (its producer
+#:   is ``AppAgentRouteService``), but channel traces captured before the scope
+#:   split carry it and are still read. The explanation stays: it is what
+#:   happened. The action cannot, because switching that route back on would not
+#:   make the agent a channel candidate now.
+_CHANNEL_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
+    routing_trace.SKIP_ALREADY_INSTALLED: (
+        "this user already has it installed, so the auto-install pass passed "
+        "over it — it should have been reachable in Pass 1 as one of the "
+        "agents they own instead",
+        "Set a router trigger prompt (or example prompts) on the installed "
+        "agent's Configuration tab: an install with neither is not a channel "
+        "candidate, which is exactly this gap.",
+    ),
+    routing_trace.SKIP_AGENT_MISSING: (
+        "the candidate that won names an agent id with no agent behind it — it "
+        "was deleted between this decision's candidate scan and the lookup "
+        "that follows it",
+        "Re-run this decision. If the agent is meant to exist, recreate it and "
+        "set a router trigger prompt (or example prompts) on its Configuration "
+        "tab.",
+    ),
+    routing_trace.SKIP_ROUTE_INACTIVE: (
+        "its App MCP route was switched off when this decision ran, and this "
+        "trace was captured while channel routing still read App MCP routes",
+        "Set a router trigger prompt (or example prompts) on the agent's "
+        "Configuration tab — switching that route back on would not help, "
+        "because channel routing no longer reads routes at all.",
+    ),
+    routing_trace.SKIP_IDENTITY_ROUTE: (
+        "it was reached through an identity contact route, which hands off to "
+        "that person's agents in a second stage and was never selectable from "
+        "a channel",
+        # The base entry's remedy — "route to the contact rather than to their
+        # agent" — is an instruction about a candidate class a channel no
+        # longer has. Its producer was this pass's own ``is_identity`` branch,
+        # deleted by the scope split, so every row carrying it is history and
+        # the only forward-looking answer is the one channel routing actually
+        # reads.
+        "Give this user their own install of the agent and set a router "
+        "trigger prompt (or example prompts) on it — a channel routes over the "
+        "sender's own agents and reads no identity contact at all.",
+    ),
+}
+
+
+#: Channel-origin overrides for ``KIND_AGENT`` candidates only — the one place
+#: ``kind`` is consulted, and not as a stand-in for the surface.
+#:
+#: ``SKIP_NO_TRIGGER_PROMPT`` has two producers a single channel decision can
+#: reach: ``ChannelCandidateProvider`` records it for an **agent** the sender
+#: owns that has neither a trigger prompt nor example prompts, and Pass 2's
+#: auto-install scan records it for a **bundle** whose latest revision carried
+#: no prompt. Same reason string, two different things missing — and a bundle
+#: revision has no ``example_prompts`` of its own to offer, so telling its
+#: reader to go set some would prescribe a field that is not there. The origin
+#: alone cannot pick between them.
+_CHANNEL_AGENT_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
+    routing_trace.SKIP_NO_TRIGGER_PROMPT: (
+        "it has neither a router trigger prompt nor example prompts, so the "
+        "classifier had nothing to match the message against",
+        "Set a router trigger prompt (or example prompts) on the agent's "
+        "Configuration tab.",
     ),
 }
 
@@ -265,12 +463,26 @@ def _diagnose(
         trace.message_text, candidates
     )
 
+    # Resolved once, here, and threaded down rather than re-read: every sentence
+    # in one verdict has to describe the same surface, and a second reader of
+    # ``trace.origin`` further down is how half a verdict ends up written for
+    # the other one.
+    channel = _is_channel_origin(trace.origin)
+
     if expected_agent_id is None:
-        code, problem, action = _general_verdict(trace, eligible, candidates)
+        code, problem, action = _general_verdict(
+            trace, eligible, candidates, channel=channel
+        )
         name = owner_email = None
     else:
         code, problem, action, name, owner_email = _expected_agent_verdict(
-            db, trace, candidates, eligible, expected_agent_id, near_misses
+            db,
+            trace,
+            candidates,
+            eligible,
+            expected_agent_id,
+            near_misses,
+            channel=channel,
         )
 
     return RoutingDiagnosisPublic(
@@ -294,8 +506,16 @@ def _general_verdict(
     trace: RoutingDecisionPublic,
     eligible: list[dict],
     candidates: list[dict],
+    *,
+    channel: bool,
 ) -> tuple[str, str, str]:
-    """The verdict with no expected agent named: (code, problem, action)."""
+    """The verdict with no expected agent named: (code, problem, action).
+
+    ``routed`` and ``error`` read the same on every surface — one names the
+    agent that won, the other names the provider cascade, and neither mentions
+    a route or a trigger prompt. The three negative branches all do, so all
+    three are written twice.
+    """
     if trace.outcome == routing_trace.OUTCOME_ERROR:
         return (
             CODE_ERROR,
@@ -322,6 +542,16 @@ def _general_verdict(
         )
 
     if not candidates:
+        if channel:
+            return (
+                CODE_NO_CANDIDATES,
+                "This user had no routing candidates at all: they own no agent "
+                "the classifier could consider and no auto-install bundle was "
+                "eligible, so no message from them can route anywhere.",
+                "Set a router trigger prompt (or example prompts) on the agent "
+                "you expected, from its Configuration tab, or add its bundle "
+                "to the auto-install list.",
+            )
         return (
             CODE_NO_CANDIDATES,
             "This user had no routing candidates at all: no App MCP route "
@@ -335,7 +565,8 @@ def _general_verdict(
         one = len(candidates) == 1
         return (
             CODE_ALL_CANDIDATES_SKIPPED,
-            f"This user has no eligible routes: "
+            f"This user has no "
+            f"{'eligible candidates' if channel else 'eligible routes'}: "
             f"{_count(len(candidates), 'candidate')} "
             f"{'was' if one else 'were all'} excluded before the classifier "
             f"saw {'it' if one else 'them'} ({_reasons(candidates)}).",
@@ -345,8 +576,8 @@ def _general_verdict(
 
     return (
         CODE_NO_MATCH,
-        f"This user has {_count(len(eligible), 'effective route')} and the "
-        f"classifier matched none of them.",
+        f"This user has {_count(len(eligible), _candidate_noun(channel))} and "
+        f"the classifier matched none of them.",
         "Widen the trigger prompt of the agent that should have won — the "
         "near-miss scores below say which came closest — or use Draft a "
         "recommendation to generate wording for its owner.",
@@ -360,6 +591,8 @@ def _expected_agent_verdict(
     eligible: list[dict],
     expected_agent_id: uuid.UUID,
     near_misses: list[RoutingNearMiss],
+    *,
+    channel: bool,
 ) -> tuple[str, str, str, str | None, str | None]:
     """The verdict about one named agent: (code, problem, action, name, email).
 
@@ -373,7 +606,11 @@ def _expected_agent_verdict(
     owner_email = _owner_email(db, row, agent)
 
     if row is not None:
-        return (*_verdict_from_trace(trace, row, name, near_misses), name, owner_email)
+        return (
+            *_verdict_from_trace(trace, row, name, near_misses, channel=channel),
+            name,
+            owner_email,
+        )
 
     if agent is None:
         return (
@@ -387,10 +624,15 @@ def _expected_agent_verdict(
         )
 
     prefix = (
-        f"This user has {_count(len(eligible), 'effective route')}; "
+        f"This user has {_count(len(eligible), _candidate_noun(channel))}; "
         f"{name} is not among them because"
     )
-    code, problem, action = _verdict_from_configuration(db, trace, agent, prefix)
+    if channel:
+        code, problem, action = _channel_verdict_from_configuration(
+            trace, agent, prefix
+        )
+    else:
+        code, problem, action = _verdict_from_configuration(db, trace, agent, prefix)
     return code, problem, action, name, owner_email
 
 
@@ -399,18 +641,24 @@ def _verdict_from_trace(
     row: dict,
     name: str,
     near_misses: list[RoutingNearMiss],
+    *,
+    channel: bool,
 ) -> tuple[str, str, str]:
-    """The agent WAS in this decision's candidate list. Say what happened to it."""
+    """The agent WAS in this decision's candidate list. Say what happened to it.
+
+    This branch runs **before** any configuration lookup, and on a channel that
+    ordering now decides where most sentences come from: the candidate provider
+    records a wording-less owned agent as a *skipped candidate* rather than
+    dropping it, so "the sender owns it and it has no trigger prompt" arrives
+    here as ``SKIP_NO_TRIGGER_PROMPT`` and never reaches
+    :func:`_channel_verdict_from_configuration`. The override table is the live
+    path for that case; the configuration branch is the one for an agent the
+    decision genuinely never saw.
+    """
     if not row.get("eligible"):
         reason = str(row.get("skip_reason") or "")
-        explanation, action = _SKIP_EXPLANATIONS.get(
-            reason,
-            (
-                f"it was excluded with reason '{reason or 'unspecified'}', "
-                f"which this build has no explanation for",
-                "Read the candidate row below and the router's logs — this "
-                "reason was added after the diagnosis was written.",
-            ),
+        explanation, action = _skip_explanation(
+            reason, kind=str(row.get("kind") or ""), channel=channel
         )
         return (
             CODE_EXPECTED_SKIPPED,
@@ -442,6 +690,80 @@ def _verdict_from_trace(
     )
 
 
+def _channel_verdict_from_configuration(
+    trace: RoutingDecisionPublic,
+    agent: Agent,
+    prefix: str,
+) -> tuple[str, str, str]:
+    """As :func:`_verdict_from_configuration`, for a channel decision.
+
+    Three branches against the two facts a channel candidate is made of — **who
+    owns it** and **whether its owner wrote anything for the classifier to match
+    on** — and no fourth, because there is no fourth thing to check. That is the
+    whole shape of the fix: the App MCP version below asks four questions about
+    routes before it reaches ownership, and every one of those questions is
+    about a switch a channel does not read (plan §2.2, §3).
+
+    Reads ``Agent`` and nothing else, so this function cannot drift back into
+    prescribing a route: there is nothing here to prescribe one *from*.
+
+    **When this is reached at all**, which is narrower than it looks and is the
+    reason the middle branch is not the live path for its own finding. The
+    candidate provider records *every* agent the sender owns — eligible ones as
+    candidates, the rest as ``SKIP_NO_TRIGGER_PROMPT`` skips — so an agent owned
+    at capture time always has a row, and :func:`_verdict_from_trace` answers
+    for it first. What lands here is an agent the decision genuinely never saw:
+    one created or transferred to this sender *since*, or a channel trace
+    captured before the scope split, when the ballot came from App MCP routes.
+    """
+    # Ownership asked positively, so the ``user_id is None`` case cannot fall
+    # through into a sentence that asserts an owner. See CODE_EXPECTED_SENDER_GONE.
+    if trace.user_id is None:
+        return (
+            CODE_EXPECTED_SENDER_GONE,
+            f"{prefix} this decision's sender account no longer exists, and a "
+            f"channel candidate is defined entirely by who owns it — with no "
+            f"sender there is nothing left to check its owner against.",
+            "Run Simulate for the account you actually mean; this trace can no "
+            "longer answer a question about ownership.",
+        )
+
+    if agent.owner_id != trace.user_id:
+        return (
+            CODE_EXPECTED_FOREIGN_OWNER,
+            f"{prefix} it belongs to a different account, and a channel routes "
+            f"only over the sender's own agents.",
+            "Share its bundle with this user and have them install it — a "
+            "channel session runs on the sender's own install, so the install "
+            "they own is the only thing a channel can reach.",
+        )
+
+    if not _has_router_wording(agent):
+        # The §2.4 sentence, inverted. The old verdict sent this reader to the
+        # Integrations tab for an App MCP route, which does nothing for a
+        # channel; the parenthesis is here so nobody who remembers the old
+        # advice goes looking for the route anyway.
+        return (
+            CODE_EXPECTED_CHANNEL_NO_TRIGGER_PROMPT,
+            f"{prefix} it has neither a router trigger prompt nor example "
+            f"prompts, so there is nothing for the classifier to match a "
+            f"message against.",
+            "Set a router trigger prompt (or example prompts) on the agent's "
+            "Configuration tab. (An App MCP route is not part of this: channel "
+            "routing reads no route, no assignment and no App MCP toggle.)",
+        )
+
+    return (
+        CODE_EXPECTED_LOOKS_REACHABLE,
+        f"{prefix} it was not a candidate when this decision ran, even though "
+        f"this user owns it and its router trigger prompt or example prompts "
+        f"are set now.",
+        "Re-run this decision — an agent created, transferred or given wording "
+        "after the trace was captured explains exactly this, and the re-run "
+        "will show it as a candidate.",
+    )
+
+
 def _verdict_from_configuration(
     db: DBSession,
     trace: RoutingDecisionPublic,
@@ -449,6 +771,14 @@ def _verdict_from_configuration(
     prefix: str,
 ) -> tuple[str, str, str]:
     """The agent was never a candidate. Explain from what is configured now.
+
+    **App MCP origins only** — :func:`_channel_verdict_from_configuration` is
+    the channel half. Every branch here names a route, an assignment or the
+    ``channel_app_mcp`` flag, and every one of those is an App MCP concept.
+    Nothing opens an ``app_mcp`` capture yet (``routing_trace.ORIGIN_APP_MCP``
+    is reserved, routing_tuning Phase 6 owns emitting it), so on today's data
+    this half answers only for a seeded row — kept, unchanged, because the
+    surface it describes is unchanged and is the one that will start emitting.
 
     Checked in this order, and the order is the diagnosis:
 
@@ -498,9 +828,17 @@ def _verdict_from_configuration(
             CODE_EXPECTED_LOOKS_REACHABLE,
             f"{prefix} it was not a candidate when this decision ran, even "
             f"though its App MCP route looks correctly configured now.",
-            "Re-run this decision — a route added or switched on after the "
-            "trace was captured explains exactly this, and the re-run will "
-            "show it as a candidate.",
+            # Deliberately no longer "re-run this decision and the re-run will
+            # show it as a candidate". Replay routes through
+            # ``ChannelRoutingService.decide``, which since the scope split
+            # builds its ballot from the sender's own agents and reads no route
+            # at all — so a replay of an App MCP trace would confirm nothing
+            # about the route, and an admin reading an unchanged candidate list
+            # would conclude their fix had not taken.
+            "Confirm it from the route's own page — a route added or switched "
+            "on after the trace was captured explains exactly this. Replay "
+            "will not show it: a replay re-runs the channel pass, which reads "
+            "no App MCP route.",
         )
 
     unassigned = [r for r in routes if r.is_active and r.channel_app_mcp]
@@ -701,6 +1039,84 @@ def _owner_email(db: DBSession, row: dict | None, agent: Agent | None) -> str | 
         return None
     owner = db.get(User, agent.owner_id)
     return owner.email if owner is not None else None
+
+
+def _skip_explanation(reason: str, *, kind: str, channel: bool) -> tuple[str, str]:
+    """The (explanation, action) pair for one recorded ``skip_reason``.
+
+    Narrowest table first: channel+agent, then channel, then the App MCP /
+    origin-neutral base. The fallback is what makes all three safe to leave
+    incomplete — an unmapped reason is reported by name with an honest "this
+    build has no explanation for it", which is a worse diagnosis but never a
+    wrong one.
+    """
+    if channel:
+        if kind == routing_trace.KIND_AGENT:
+            override = _CHANNEL_AGENT_SKIP_EXPLANATIONS.get(reason)
+            if override is not None:
+                return override
+        override = _CHANNEL_SKIP_EXPLANATIONS.get(reason)
+        if override is not None:
+            return override
+    return _SKIP_EXPLANATIONS.get(
+        reason,
+        (
+            f"it was excluded with reason '{reason or 'unspecified'}', "
+            f"which this build has no explanation for",
+            "Read the candidate row below and the router's logs — this "
+            "reason was added after the diagnosis was written.",
+        ),
+    )
+
+
+def _is_channel_origin(origin: str | None) -> bool:
+    """Did this decision route over the sender's own agents?
+
+    See :data:`_CHANNEL_ORIGINS`, which also says where an unknown origin lands
+    and why that is the safe end.
+    """
+    return (origin or "") in _CHANNEL_ORIGINS
+
+
+def _candidate_noun(channel: bool) -> str:
+    """What the eligible candidates *are*, in the reader's own vocabulary.
+
+    "3 effective routes" is an App MCP sentence, and on a channel it is a wrong
+    one twice over: nothing on that ballot is a route, and the phrase sends an
+    admin to a routes list to look for three rows that need not exist. Counted
+    nouns are part of the diagnosis, not decoration.
+
+    "candidate" rather than "agent" on the channel side because a channel ballot
+    is genuinely mixed — Pass 1 contributes the sender's own agents, Pass 2 the
+    auto-install bundles — and it is the noun ``CODE_ROUTED`` already uses, so
+    one diagnosis keeps one vocabulary.
+    """
+    return "eligible candidate" if channel else "effective route"
+
+
+def _has_router_wording(agent: Agent) -> bool:
+    """Anything for the classifier to match on — the channel eligibility test.
+
+    ``_example_text`` is **called**, not restated: it is the same predicate
+    ``ChannelCandidateProvider`` applies when it builds a ballot, including the
+    parts that are not obvious (a non-list column yields nothing; ``[""]`` is
+    not examples). A second copy would drift the first time either side was
+    tuned, and it would drift *silently* — this module would go on saying "it
+    has neither" about an agent the provider was happily admitting, which is
+    precisely the class of wrong-but-confident diagnosis the module docstring
+    exists to forbid. Reaching for a private name is flagged rather than
+    laundered, the same way the Jaccard reach above is; if a third caller
+    appears, promote it.
+
+    The agent-level pair, never a route's copy: ``Agent.example_prompts`` is the
+    SSOT channel routing reads, and borrowing examples from whatever route
+    happened to exist would leave standalone agents — the broken case — looking
+    like they have none.
+    """
+    return bool(
+        (agent.router_trigger_prompt or "").strip()
+        or _example_text(agent.example_prompts)
+    )
 
 
 def _count(n: int, noun: str) -> str:

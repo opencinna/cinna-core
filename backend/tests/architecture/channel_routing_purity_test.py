@@ -54,9 +54,17 @@ with exclusions until it stopped meaning anything. An AST walk over ``Name`` /
 ``Attribute`` / import nodes sees identifiers and not comments, so the
 docstring can say the thing the test enforces without the two fighting.
 
+SEE ALSO
+--------
+``channel_routing_scope_test.py``, a sibling rather than an extension of this
+file. It guards a different property — that channel routing does not import the
+App MCP candidate set — over a module set that includes the candidate provider.
+The "four facts, four tests" pairing above is load-bearing, so a fifth test in
+here about something else would blunt exactly the invariant it holds.
+
 It does deliberately NOT try to be a reachability analysis. ``decide`` calls
-``AppMCPRoutingService`` and ``CatalogService``, which are read-only today but
-are not pinned as such by anything here; a transitive check would have to
+``ChannelCandidateProvider`` and ``CatalogService``, which are read-only today
+but are not pinned as such by anything here; a transitive check would have to
 model the whole service graph. This is the cheap structural half — the
 behavioural half is the API-level no-side-effects suite, which is
 mutation-checked.

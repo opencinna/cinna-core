@@ -16,7 +16,7 @@ files, `tests/api/agents/` is the one example today).
 | `server_channels_security_invariants_test.py` | The three security properties called out by the feature review: cross-user thread gate, lost-race ownership refusal (both the ingest and the park branch), and the malformed-JWT probe family (403, never 500). Also the deliberate `critical_state` plan deviation. Read this file first — everything else is secondary to these invariants staying green. |
 | `server_channels_admin_test.py` | Admin CRUD lifecycle, superuser-only enforcement, secrets never echoed, webhook-token regeneration, auto-install list CRUD + visibility/trigger-prompt badges. |
 | `server_channels_webhook_test.py` | 404 on unknown/disabled token, ignored/added_to_space event handling, the whitelist matrix (patterns, fail-closed, case-insensitivity), auto-register on/off + idempotency, redelivery dedup. |
-| `server_channels_routing_test.py` | Pass 1 (installed agents) match, Pass 2 (auto-install catalog) candidate filtering, no-match reply, binding self-heal (`failed` → re-route), session-deleted recovery. |
+| `server_channels_routing_test.py` | Pass 1 (the sender's own agents) match, candidate scoping (`ChannelCandidateProvider`: foreign agents absent from the ballot, identity contacts absent from the ballot entirely, ineligible owned agents recorded as skips), Pass 2 (auto-install catalog) candidate filtering, no-match reply, binding self-heal (`failed` → re-route), session-deleted recovery. |
 | `server_channels_debug_test.py` | The admin debug feed (pipeline decision visible per event, verification failures captured with no payload detail, superuser-only) and the test-send targeting rework (exactly-one-target validation, the unseen-email explanation, email → observed thread end to end). |
 | `server_channels_pending_outbound_test.py` | `flush_pending_bindings` parking/flush/env-failure paths, `STREAM_COMPLETED` outbound gating + binding lookup. |
 
@@ -43,11 +43,22 @@ patch to stay on the test thread/transaction.
   verified through *observable* effects instead: the webhook's synchronous
   reply text (`REPLY_WORKING`, `REPLY_STILL_SETTING_UP`, `REPLY_THREAD_OWNED`,
   …), session creation/count via `GET /sessions/`, and outbound adapter calls.
-- **Deterministic Pass 1 setup.** Give the sender exactly one personal
-  `app-mcp` route (`tests/utils/app_agent_route.py::create_user_route`) so
-  `AppMCPRoutingService.route_message` takes the `only_one` path — no LLM
-  classification call needed, no classifier mock required for Pass 1.
-- **Pass 2 needs a mocked classifier.** `AgentClassifier.classify` is
+- **Deterministic Pass 1 setup.** Give the sender an agent with its own
+  `router_trigger_prompt` (`tests/utils/agent.py::set_router_trigger_prompt`).
+  Channel Pass 1 builds its candidates from the **agents the sender owns**
+  (`ChannelCandidateProvider`) and reads no `AppAgentRoute` — a personal or
+  admin route grants nothing here.
+- **Whether you must name a classifier answer depends on the *catalog*, not
+  only on the ballot.** Pass 1's `only_one` short-circuit is conditional: one
+  eligible candidate **and** nothing Pass 2 could offer this sender routes
+  without an LLM (`match_method="only_one"`), because there is no alternative
+  to choose between. So the common single-agent setup with an empty
+  auto-install list needs **no** classifier answer — and naming none is the
+  stronger form, since the stub raises if the classifier is reached after all.
+  Name one (`classify_result=tests.utils.routing.classification(agent_id)`)
+  when the sender owns two or more eligible agents, or when the auto-install
+  list holds something they could still be offered.
+- **Pass 2 needs a mocked classifier too.** `AgentClassifier.classify` is
   patched per-test (`app.services.ai_functions.ai_functions_service
   .agent_classifier.AgentClassifier.classify`) to hand back a chosen bundle
   deterministically — there is no LLM in the test environment.
@@ -56,9 +67,10 @@ patch to stay on the test thread/transaction.
   genuine two-in-flight race can't be reproduced directly. The park branch
   (`ChannelInboundService._handle_lost_race`, same-user + `pending_install`)
   is instead driven deterministically: queue two webhook deliveries for the
-  *same* user/thread before draining, and give `AgentClassifier.classify` two different
-  `side_effect` answers (different bundles) so the second delivery's Pass 2
-  isn't excluded by "already installed" when it loses the binding race. See
+  *same* user/thread before draining, with a `side_effect` classifier that
+  picks whichever single candidate is on the ballot — Pass 1's ballot holds
+  agent ids and Pass 2's holds bundle ids, and one fixed answer cannot serve
+  both. See
   the test docstring in `server_channels_security_invariants_test.py` for the
   full walkthrough.
 - **JWT verification uses a real signer, not a mock.** `tests/utils

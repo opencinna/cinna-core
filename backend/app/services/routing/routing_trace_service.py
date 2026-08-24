@@ -181,12 +181,21 @@ class RoutingTraceService:
 
             store_text = bool(settings.ROUTING_TRACE_STORE_MESSAGE_TEXT)
 
-            # Stages are concatenated, not merged by name. Today that cannot
-            # collide — Pass 1 yields ``pass_1``/``identity_stage2`` and Pass 2
-            # only ``pass_2`` — but a future stage emitted by BOTH passes would
-            # produce two entries with the same ``stage`` value, which a UI
-            # keying on the name will not expect. Merge by name here if that
-            # ever becomes possible.
+            # Stages are concatenated, not merged by name, and the premise that
+            # made that safe has narrowed — read this before adding a caller.
+            #
+            # Pass 1 CAN now emit a ``pass_2`` stage: its single-candidate
+            # short-circuit scans the catalog for availability and writes that
+            # scan under ``pass_2``
+            # (``ChannelRoutingService._record_catalog_ballot``). What still
+            # prevents a collision is that the two writers are mutually
+            # exclusive by construction — Pass 1 writes that stage only when it
+            # ROUTED, and ``decide`` runs Pass 2 only when Pass 1 returned
+            # nothing — so ``preceded_by`` never carries a second ``pass_2``.
+            # That is now a fact about ``decide``'s branching rather than about
+            # which names each pass can produce. If a change makes both write in
+            # one decision, merge by name here; a UI keying on the stage name
+            # will not expect two entries with the same value.
             stages: list = []
             prior_latency = 0
             prior_match_method: str | None = None

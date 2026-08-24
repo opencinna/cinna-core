@@ -38,13 +38,13 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models import ChannelThreadBinding
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, set_router_trigger_prompt
 from tests.utils.ai_credential import create_random_ai_credential
-from tests.utils.app_agent_route import create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import make_user_and_headers, publish_bundle_and_make_public
 from tests.utils.mfa import find_security_events
 from tests.utils.routing import (
+    classification,
     get_routing_trace,
     list_routing_traces,
     patched_routing_externals,
@@ -112,17 +112,19 @@ def _outbound_events() -> list:
 
 
 def _routable_user(client: TestClient, superuser_headers: dict[str, str]) -> tuple[dict, dict, dict]:
-    """A user with exactly one personal route, so Pass 1 takes `only_one`.
+    """A user who owns exactly one agent that channel Pass 1 can route to.
 
-    One route, not two: the `only_one` short-circuit means no classifier has to
-    be mocked and the decision is deterministic without an LLM.
+    Routable means the agent's own `router_trigger_prompt` — Pass 1 builds its
+    ballot from the sender's agents and reads no `AppAgentRoute`. The caller
+    names the classifier's answer (`classify_result=`), since there is no
+    single-candidate short-circuit to make the decision without one.
     """
     user, headers = create_random_user_with_headers(client)
     promote_to_developer(client, superuser_headers, user["id"])
     create_random_ai_credential(client, headers, set_default=True)
     agent = create_agent_via_api(client, headers, name=f"Sim-{random_lower_string()[:6]}")
     drain_tasks()
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle anything")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle anything")
     return user, headers, agent
 
 
@@ -304,7 +306,7 @@ def test_simulate_audits_the_acting_admin_and_the_target_without_the_message(
     message body is asserted *absent*, following the admin test-send precedent
     (SecurityEvent rows are broadly readable).
     """
-    user, headers, _ = _routable_user(client, superuser_token_headers)
+    user, headers, agent = _routable_user(client, superuser_token_headers)
     secret = f"stimulate-{random_lower_string()}"
 
     with patched_routing_externals():
@@ -341,7 +343,7 @@ def test_simulate_is_rate_limited_per_admin(
 
     monkeypatch.setattr(admin_routing, "_simulate_rate_limiter", RateLimiter())
 
-    user, _, _ = _routable_user(client, superuser_token_headers)
+    user, _, agent = _routable_user(client, superuser_token_headers)
     with patched_routing_externals():
         for _ in range(2):
             simulate_routing(

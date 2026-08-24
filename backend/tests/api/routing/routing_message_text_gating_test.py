@@ -44,7 +44,11 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import (
+    create_agent_via_api,
+    set_router_trigger_prompt,
+    update_agent,
+)
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import make_user_and_headers, publish_bundle_and_make_public
@@ -435,39 +439,23 @@ def test_llm_attempt_error_is_neither_stored_nor_served_when_text_is_gated(
 # ── The allowlist admits the agent OWNER's own configuration, on purpose ───
 
 
-def _agent_with_examples_route(
-    client, headers, *, trigger_prompt: str, prompt_examples: str, name_prefix: str
+def _agent_with_examples(
+    client, headers, *, trigger_prompt: str, prompt_examples: list[str], name_prefix: str
 ) -> dict:
-    """An agent plus a route assigned to its own owner, carrying both fields.
+    """An owned agent carrying both owner-authored fields.
 
-    Deliberately an *admin-shaped* route (`POST /agents/{id}/app-mcp-routes/`
-    with `activate_for_myself`) rather than the personal route
-    `tests.utils.app_agent_route.create_user_route` builds: only the former's
-    `prompt_examples` reaches the `EffectiveRoute` that
-    `record_effective_routes` reads. `AppAgentRouteService
-    .get_effective_routes_for_user` sets `prompt_examples=` on the assigned-route
-    branch and does NOT on the personal-route branch, so a personal route would
-    make this test assert `prompt_examples is None` and prove nothing at all.
+    Both live on the **agent** for channel routing: `router_trigger_prompt` and
+    `example_prompts`. That is what `ChannelCandidateProvider` reads, and the
+    list is joined with newlines into the one `prompt_examples` string a
+    `Candidate` (and therefore a trace candidate row) carries. No
+    `AppAgentRoute` is involved on this path at all.
     """
     agent = create_agent_via_api(
         client, headers, name=f"{name_prefix}-{random_lower_string()[:6]}"
     )
     drain_tasks()
-    r = client.post(
-        f"{API}/agents/{agent['id']}/app-mcp-routes/",
-        headers=headers,
-        json={
-            "name": f"route-{random_lower_string()[:8]}",
-            "agent_id": agent["id"],
-            "session_mode": "conversation",
-            "trigger_prompt": trigger_prompt,
-            "prompt_examples": prompt_examples,
-            "channel_app_mcp": True,
-            "is_active": True,
-            "activate_for_myself": True,
-        },
-    )
-    assert r.status_code == 200, r.text
+    set_router_trigger_prompt(client, headers, agent["id"], trigger_prompt)
+    update_agent(client, headers, agent["id"], example_prompts=prompt_examples)
     return agent
 
 
@@ -487,10 +475,11 @@ def test_candidate_owner_config_survives_the_gate_while_sender_text_does_not(
     carries all five fields — never by reading `SAFE_CANDIDATE_FIELDS` back,
     which would pass just as happily against a projection that ignores it.
 
-    **Pass 1, with two routes.** One route takes the `only_one` short-circuit
-    and never classifies, so there would be no prompt / raw response for the
-    gate to act on. Two forces `AppMCPRoutingService._ai_classify`, and the
-    provider patch is
+    **Pass 1, over two owned agents.** Two rather than one is load-bearing,
+    not cosmetic: a single eligible agent with an empty auto-install list takes
+    Pass 1's `only_one` short-circuit and never renders a prompt at all, so the
+    very fields this test is about would not exist. A second eligible agent
+    makes the ballot a real one and forces the classifier to run. The provider patch is
     `app.services.routing.agent_classifier.get_provider_manager` —
     the depth the S5 test above established — so the real classifier runs
     and the real `record_prompt` / `record_raw_response` fire. The provider stub
@@ -516,16 +505,17 @@ def test_candidate_owner_config_survives_the_gate_while_sender_text_does_not(
     create_random_ai_credential(client, headers, set_default=True)
 
     trigger_a = f"Handle calendar scheduling requests {random_lower_string()[:6]}"
-    examples_a = "book a meeting\nschedule a call"
+    examples_a = ["book a meeting", "schedule a call"]
     trigger_b = f"Handle expense report questions {random_lower_string()[:6]}"
-    examples_b = "file an expense\nwhere is my refund"
+    examples_b = ["file an expense", "where is my refund"]
 
-    agent_a = _agent_with_examples_route(
+    agent_a = _agent_with_examples(
         client, headers, trigger_prompt=trigger_a, prompt_examples=examples_a, name_prefix="OwnerCfgA"
     )
-    _agent_with_examples_route(
+    _agent_with_examples(
         client, headers, trigger_prompt=trigger_b, prompt_examples=examples_b, name_prefix="OwnerCfgB"
     )
+    examples_a_text = "\n".join(examples_a)
 
     marker = f"SENDER-WORDS-{random_lower_string()}"
 
@@ -593,7 +583,7 @@ def test_candidate_owner_config_survives_the_gate_while_sender_text_does_not(
     assert stage_on["raw_response"], stage_on
     assert marker in stage_on["llm_attempts"][0]["error"], stage_on
     assert _candidate(stage_on, agent_a["id"])["trigger_prompt"] == trigger_a
-    assert _candidate(stage_on, agent_a["id"])["prompt_examples"] == examples_a
+    assert _candidate(stage_on, agent_a["id"])["prompt_examples"] == examples_a_text
 
     # ── 1. Read path: the SAME row, read with the gate OFF. ───────────────
     with patch(_SETTING, False):
@@ -603,11 +593,12 @@ def test_candidate_owner_config_survives_the_gate_while_sender_text_does_not(
     # The owner's own configuration survives — this is the widening under test.
     cand_a_off = _candidate(stage_off, agent_a["id"])
     assert cand_a_off["trigger_prompt"] == trigger_a, cand_a_off
-    assert cand_a_off["prompt_examples"] == examples_a, cand_a_off
+    assert cand_a_off["prompt_examples"] == examples_a_text, cand_a_off
     # ...for every candidate, not just the winner: the near-miss diagnosis is
     # about the agents that LOST.
     assert any(
-        c.get("trigger_prompt") == trigger_b and c.get("prompt_examples") == examples_b
+        c.get("trigger_prompt") == trigger_b
+        and c.get("prompt_examples") == "\n".join(examples_b)
         for c in stage_off["candidates"]
     ), stage_off["candidates"]
 
@@ -631,7 +622,7 @@ def test_candidate_owner_config_survives_the_gate_while_sender_text_does_not(
 
     cand_a_written = _candidate(stage_written_off, agent_a["id"])
     assert cand_a_written["trigger_prompt"] == trigger_a, cand_a_written
-    assert cand_a_written["prompt_examples"] == examples_a, cand_a_written
+    assert cand_a_written["prompt_examples"] == examples_a_text, cand_a_written
     # Read gate wide open, so anything missing here was never written.
     assert stage_written_off.get("prompt") is None, stage_written_off
     assert stage_written_off.get("raw_response") is None, stage_written_off

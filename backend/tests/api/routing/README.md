@@ -26,7 +26,8 @@ home; see `tests/README.md` for the split-domain threshold (~20 files,
 | `routing_trace_disabled_read_gate_test.py` | `ROUTING_TRACE_ENABLED` as a READ gate (S6): `list`/`get` treat it as off — empty page + notice, 404 + a distinguishable notice — while `clear()` and the purge path deliberately ignore it (the erasure paths must keep working when tracing is off). |
 | `routing_simulate_no_side_effects_test.py` | **The Phase 3 safety property.** `POST /admin/routing/simulate` binds no thread, opens no session, installs nothing and sends nothing — each asserted against durable state, never a log, and each **mutation-checked** (see the module docstring; the channel-scoped form of the outbound assertion was found unfalsifiable and replaced). Plus the §12 conditions that make the exposure acceptable: superuser-only, audited naming both admin and target without the body, rate-limited, and a response byte-identical to `GET /traces/{id}`. |
 | `routing_replay_and_recommendation_test.py` | `POST /traces/{id}/replay` (a new row, the original untouched, "nothing changed" said out loud, the outcome flip after a route is added, the 409 when the text gate is off) and `POST /traces/{id}/recommendation` (drafts without writing, scoped to this trace's candidates, no audit row). Also the shared per-admin rate-limit bucket across all three LLM-spending routes. |
-| `routing_reachability_verdict_test.py` | **The Phase 4 headline.** The `diagnosis` on `GET /traces/{id}` — one server-authored sentence per branch, plus `?expected_agent_id=` for "why was THIS agent not a candidate". One test per verdict branch, each pinning the exact sentence (pinning only `code` would let the wording drift into saying something false). Includes the motivating case (plan §2, Bug 2: a standalone agent has no `AppAgentRoute`, so nothing in the trace mentions it and the verdict is answered from configuration), and the Jaccard near-miss ranking, including its going quiet with a notice rather than empty when the message-text gate is closed. Unit-level properties of the same service — totality, the shared-helper reuse, candidate de-duplication — live in `tests/unit/test_routing_reachability.py`. |
+| `routing_reachability_verdict_test.py` | **The Phase 4 headline.** The `diagnosis` on `GET /traces/{id}` — one server-authored sentence per branch, plus `?expected_agent_id=` for "why was THIS agent not a candidate". One test per verdict branch, each pinning the exact sentence (pinning only `code` would let the wording drift into saying something false). **Split by origin:** the channel half is driven through real simulate decisions; the App MCP half is driven from a `seed_routing_trace(origin="app_mcp")` row, because nothing opens an App MCP capture (`ORIGIN_APP_MCP` is reserved) and that is the only producer there is. Also the Jaccard near-miss ranking, including its going quiet with a notice rather than empty when the message-text gate is closed. Branches that need a candidate list on a non-live origin, and skip reasons no surface produces any more, live in `tests/unit/test_routing_reachability.py` alongside that service's unit-level properties. |
+| `routing_only_one_short_circuit_test.py` | Pass 1's **conditional** `only_one` short-circuit: all four branches of the behaviour table (one eligible candidate + empty catalog ⇒ no LLM; one + a bundle still on offer ⇒ classify, so auto-install stays reachable after onboarding; two or more ⇒ classify; zero ⇒ Pass 2), the boundary that counts *eligible* candidates rather than owned agents, `include_catalog=False` ⇒ short-circuit, and the once-only recording of the catalog scan on both paths (Pass 1 short-circuits and Pass 2 never runs; Pass 1 misses and Pass 2 reuses the scan). Plus the totality rule an availability probe has to obey: a scan that *failed* leaves the choice space unknown, and unknown must classify rather than be read as empty. |
 | `routing_persist_session_ownership_test.py` | `RoutingTraceService.persist()` owns its own session: it neither commits nor rolls back the caller's transaction, does not expire the caller's ORM instances, and survives its own failure without damaging the caller. **Deliberately escapes the domain's autouse `create_session` patch** (see the module docstring) — the standard fixture rewrites `app.services.routing.routing_trace_service.create_session` to a `NonClosingSessionProxy` wrapping the test's own session, so under the normal harness `persist()` would receive the caller's session, exactly the defect the fix eliminated. Without the escape these tests would pass against the pre-fix implementation; folding this file back into the standard fixtures would silently destroy the property it exists to prove. |
 
 ## Key fixtures (`conftest.py`)
@@ -101,11 +102,17 @@ domain's own `README.md` for what each stub is for.
   for a reason that had nothing to do with the code.
   `tests/unit/test_routing_classifier_guard.py` pins the mechanism.
 - **Passing no classifier argument now *means something*: this scenario must
-  not classify.** A single effective route takes the `only_one` short-circuit
-  and an empty candidate list short-circuits too, so most scenarios here never
-  reach the classifier — and if one starts to, it fails instead of quietly
-  calling a model. Do not add a stub "just in case": a `classify_no_match=True`
-  on a scenario that never classifies disarms that signal.
+  not classify.** An empty candidate list short-circuits everywhere (and App
+  MCP Stage 1 still takes `only_one` on a single effective route), so a
+  scenario whose sender owns nothing eligible never reaches the classifier —
+  and if one starts to, it fails instead of quietly calling a model. Do not add
+  a stub "just in case": a `classify_no_match=True` on a scenario that never
+  classifies disarms that signal. **Channel Pass 1's `only_one` short-circuit
+  is conditional**, so "does this scenario classify?" has two inputs, not one:
+  a sender owning exactly one eligible agent routes without an LLM *when the
+  auto-install list holds nothing for them*, and classifies when it does. Two
+  or more eligible agents always classify and must name an answer
+  (`tests.utils.routing.classification(agent_id)` builds one).
 - **`patched_routing_externals(classify_no_match=True)` is how a scenario gets
   a classifier that *runs and finds nothing*.** `classify_result=None` is the
   "you have not said" case, so the no-match family needs its own flag; naming
@@ -123,22 +130,26 @@ domain's own `README.md` for what each stub is for.
   identity equivalent has no superuser-free switch at all — the *recipient*
   turns the contact on via `toggle_identity_contact`.
 - **Deterministic Pass 1 / Pass 2 setup** follows the same recipe as
-  `tests/api/server_channels/`: a personal `app-mcp` route gets the
-  `only_one` path with no classifier mock needed; Pass 2 needs
+  `tests/api/server_channels/`: give the sender an agent with its own
+  `router_trigger_prompt` (`tests.utils.agent.set_router_trigger_prompt`) and
+  name the classifier's answer. Channel Pass 1 reads **no `AppAgentRoute` at
+  all** — a route grants nothing here — and Pass 2 needs
   `AgentClassifier.classify` patched per-test to a deterministic result (there
   is no LLM in the test environment).
-- **`candidates[].prompt_examples` only ever populates from an *admin-shaped*
-  route.** `AppAgentRouteService.get_effective_routes_for_user` sets
-  `prompt_examples=` when it builds an `EffectiveRoute` from an assigned
-  `AppAgentRoute`, and does not on the personal `UserAppAgentRoute` branch — so
-  a test built on `create_user_route` sees `prompt_examples: None` on every
-  candidate and would "pass" while proving nothing. Use `POST
-  /agents/{id}/app-mcp-routes/` with `activate_for_myself`, as
-  `routing_message_text_gating_test.py` does.
-- **Two routes, not one, when a test needs Pass 1 to actually classify.** A
-  single effective route takes the `only_one` short-circuit and never reaches
-  the classifier, so `stages[].prompt` / `raw_response` / `llm_attempts` stay
-  empty.
+- **`candidates[].prompt_examples` on a channel trace comes from
+  `Agent.example_prompts`,** joined with newlines by
+  `ChannelCandidateProvider`. Set it with `update_agent(..., example_prompts=[
+  ...])`, as `routing_message_text_gating_test.py` does. (On the App MCP path
+  it still comes from an *admin-shaped* route only: `get_effective_routes_for_
+  user` sets `prompt_examples=` on the assigned-`AppAgentRoute` branch and not
+  on the personal `UserAppAgentRoute` one, so a test built on
+  `create_user_route` sees `prompt_examples: None` and proves nothing.)
+- **`stages[].prompt` / `raw_response` / `llm_attempts` are populated only when
+  Pass 1 actually classified.** A short-circuited decision has none of them by
+  construction — it never rendered a prompt — so a test asserting on them needs
+  a ballot of two or more eligible agents, or an auto-install list with
+  something on it. (App MCP Stage 1 needs two effective routes for the same
+  reason.)
 - **Mocking `AgentClassifier.classify` directly skips the
   `stages[].prompt` / `raw_response` instrumentation.** That boundary sits
   one layer above the code that calls `routing_trace.record_prompt` /

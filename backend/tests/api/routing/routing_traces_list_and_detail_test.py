@@ -14,12 +14,17 @@ is what these tests assert against.
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, set_router_trigger_prompt
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.app_agent_route import create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import make_user_and_headers, publish_bundle, publish_bundle_and_make_public
-from tests.utils.routing import list_routing_traces, get_routing_trace, post_channel_message
+from tests.utils.routing import (
+    classification,
+    get_routing_trace,
+    list_routing_traces,
+    post_channel_message,
+)
 from tests.utils.server_channel import (
     GoogleChatJWTSigner,
     add_auto_install_bundle,
@@ -56,7 +61,8 @@ def test_pass1_match_produces_one_summarized_and_detailed_trace(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
     """
-    1. Sender has exactly one personal route -> Pass 1's `only_one` path.
+    1. Sender owns exactly one eligible agent and the auto-install list is
+       empty -> Pass 1's conditional `only_one` path, with no LLM involved.
     2. Exactly one routing_decision row for the channel, outcome=routed.
     3. The list summary carries the resolved names + candidate counts.
     4. The full detail carries one `pass_1` stage naming the chosen agent as
@@ -69,10 +75,12 @@ def test_pass1_match_produces_one_summarized_and_detailed_trace(
     create_random_ai_credential(client, headers, set_default=True)
     agent = create_agent_via_api(client, headers, name=f"Pass1-{random_lower_string()[:6]}")
     drain_tasks()
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle anything")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle anything")
 
     thread_key = f"spaces/AAA/threads/{random_lower_string()}"
     event = build_message_event(thread_key=thread_key, text="hello there", sender_email=user["email"])
+    # No classifier answer named, which is the strong form: the stub raises if
+    # it is reached, so this also pins that the short-circuit really skipped it.
     resp, _ = post_channel_message(client, channel, signer, event)
     assert resp.status_code == 200
 

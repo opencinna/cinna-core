@@ -13,6 +13,7 @@ Covers:
     account).
   - Redelivery dedup (same external_message_id twice -> ingested once).
 """
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -20,9 +21,8 @@ from sqlmodel import Session
 
 from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, set_router_trigger_prompt
 from tests.utils.ai_credential import create_random_ai_credential
-from tests.utils.app_agent_route import create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.server_channel import (
     GoogleChatJWTSigner,
@@ -33,6 +33,7 @@ from tests.utils.server_channel import (
     post_webhook,
     update_server_channel,
 )
+from tests.utils.routing import classification, enter_classifier_patch
 from tests.utils.session import list_sessions
 from tests.utils.message import list_messages
 from tests.utils.user import create_random_user_with_headers, promote_to_developer, user_authentication_headers
@@ -43,12 +44,19 @@ _SEND_TARGET = "app.services.server_channels.adapters.google_chat.GoogleChatAdap
 _STREAM_TARGET = "app.services.sessions.message_service.agent_env_connector"
 
 
-def _post(client, channel, signer, event, *, stub=None):
+def _post(client, channel, signer, event, *, stub=None, classify_result=None):
+    """One verified delivery. ``classify_result`` is required whenever the
+    sender owns an agent that is eligible for channel routing — Pass 1
+    classifies over the sender's own agents with no short-circuit."""
     token = signer.token(audience=channel["config"]["project_number"])
     stream_stub = stub or StubAgentEnvConnector(response_text="ok")
-    with signer.patched(), patch(_STREAM_TARGET, stream_stub), patch(
-        _SEND_TARGET, AsyncMock(return_value="fake-ext-id")
-    ) as send_mock:
+    with ExitStack() as stack:
+        stack.enter_context(signer.patched())
+        stack.enter_context(patch(_STREAM_TARGET, stream_stub))
+        send_mock = stack.enter_context(
+            patch(_SEND_TARGET, AsyncMock(return_value="fake-ext-id"))
+        )
+        enter_classifier_patch(stack, classify_result=classify_result)
         resp = post_webhook(client, channel["webhook_token"], event, bearer_token=token)
         drain_tasks()
     return resp, send_mock
@@ -285,7 +293,7 @@ def test_redelivery_with_same_external_message_id_is_deduped(
     create_random_ai_credential(client, headers, set_default=True)
     agent = create_agent_via_api(client, headers, name=f"DedupAgent-{random_lower_string()[:6]}")
     drain_tasks()
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle anything")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle anything")
 
     thread_key = f"spaces/AAA/threads/{random_lower_string()}"
     message_name = f"spaces/AAA/messages/{random_lower_string()}"
@@ -307,6 +315,8 @@ def test_redelivery_with_same_external_message_id_is_deduped(
 
     # Second delivery of the SAME event (same external_message_id) — must be
     # acked without a second ingest.
+    # No classifier answer named: the redelivery must be deduped before it
+    # ever reaches routing, and a classifier that runs here fails at the call.
     resp2, _ = _post(client, channel, signer, event)
     assert resp2.status_code == 200
     assert resp2.json() == {}

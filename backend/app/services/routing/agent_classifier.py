@@ -77,6 +77,24 @@ PROMPT_TEMPLATE_PATH = (
 #: ``IdentityAgentBinding`` (2000 chars / 10 non-empty lines). Re-applied at
 #: render time rather than trusted, because a candidate can also be built from a
 #: bundle revision or a stored row written before the validator existed.
+#:
+#: The line limit was enforced here from the start; the character limit was
+#: only ever *documented* by this comment, which held while every path into a
+#: candidate was bounded at write time by one of those route-layer validators.
+#: ``ChannelCandidateProvider`` opened the first unbounded one:
+#: ``Agent.example_prompts`` is a user-editable JSON column with no validator
+#: anywhere, so a single pasted 500KB line would have reached the model
+#: verbatim — ten lines of it is still ten lines.
+#:
+#: Applied to the raw text *before* splitting, which is what the write-time
+#: validators check (``len(value) > 2000`` on the whole field) and which also
+#: bounds the split itself: a megabyte of newlines would otherwise build a
+#: million-element list on the way to taking ten of them.
+#:
+#: Render-time is the **only** home this limit gets. A fourth copy on the
+#: model or route layer could not reach rows already in the database, which is
+#: precisely the case here.
+MAX_EXAMPLE_CHARS = 2000
 MAX_EXAMPLE_LINES = 10
 
 
@@ -129,11 +147,18 @@ def _load_template() -> str:
 
 
 def _example_lines(raw: str | None) -> list[str]:
-    """Non-empty example lines, bounded. Total — a bad value renders nothing."""
+    """Non-empty example lines, bounded. Total — a bad value renders nothing.
+
+    Bounded on **both** axes the comment on the constants promises: the text is
+    clamped to ``MAX_EXAMPLE_CHARS`` before it is split, then to
+    ``MAX_EXAMPLE_LINES`` non-empty lines. Truncation is silent by design — the
+    alternative is dropping a candidate out of a routing decision because its
+    examples were long, which trades a trimmed prompt for a routing failure.
+    """
     if not raw:
         return []
     try:
-        lines = [line.strip() for line in str(raw).splitlines()]
+        lines = [line.strip() for line in str(raw)[:MAX_EXAMPLE_CHARS].splitlines()]
     except Exception:  # noqa: BLE001
         return []
     return [line for line in lines if line][:MAX_EXAMPLE_LINES]

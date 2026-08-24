@@ -57,7 +57,6 @@ _BASE = f"{API}/admin/routing/traces"
 
 _SEND_TARGET = "app.services.server_channels.adapters.google_chat.GoogleChatAdapter.send_message"
 _STREAM_TARGET = "app.services.sessions.message_service.agent_env_connector"
-_ROUTE_MESSAGE_TARGET = "app.services.app_mcp.app_mcp_routing_service.AppMCPRoutingService.route_message"
 _CLASSIFY_TARGET = "app.services.routing.agent_classifier.AgentClassifier.classify"
 _ROUTE_INSTALLED_TARGET = (
     "app.services.server_channels.channel_routing_service."
@@ -83,20 +82,56 @@ _ROUTE_INSTALLED_TARGET = (
 _UNSTUBBED_CLASSIFIER_MESSAGE = (
     "AgentClassifier.classify was reached with no answer named, which would "
     "call a real LLM provider. Either this scenario was not supposed to "
-    "classify at all (a single effective route takes the `only_one` "
-    "short-circuit; an empty candidate list short-circuits too) and the setup "
-    "has drifted — or it does classify and has to say what the answer is: "
+    "classify at all (App MCP Stage 1 takes the `only_one` short-circuit on a "
+    "single effective route, and an empty candidate list short-circuits "
+    "everywhere) and the setup has drifted — or it does classify and has to "
+    "say what the answer is: "
     "`classify_result=<ClassificationResult>` to route, `classify_no_match="
     "True` for a classifier that runs and finds nothing "
     "(`post_channel_message` also takes `classify_side_effect=`). A test that "
     "needs the real render/parse path patches "
     "`app.services.routing.agent_classifier.get_provider_manager` itself and "
-    "passes `classify_via_provider=True` — see tests/api/routing/README.md."
+    "passes `classify_via_provider=True` — see tests/api/routing/README.md. "
+    "NOTE channel Pass 1's `only_one` short-circuit is CONDITIONAL: exactly "
+    "one eligible owned agent AND nothing the auto-install list could offer "
+    "this sender routes without a model. So a sender who owns two or more "
+    "eligible agents always classifies, and one who owns exactly one "
+    "classifies only when a catalog bundle is still available to them."
 )
 
 
-def _refuse_to_classify(*args, **kwargs):
+def refuse_to_classify(*args, **kwargs):
     raise UnstubbedLLMProvider(_UNSTUBBED_CLASSIFIER_MESSAGE)
+
+
+#: Public because a test that builds its own ``patch()`` chain rather than going
+#: through ``enter_classifier_patch`` still needs the loud stub — see
+#: ``server_channels_pending_outbound_test.py``. Leaving it private meant a
+#: second module importing an underscore name.
+
+
+def classification(ref_id: Any, **fields: Any):
+    """A ``ClassificationResult`` naming ``ref_id`` — what ``classify`` answers.
+
+    ``ref_id`` is an agent id for Pass 1 and a bundle id for Pass 2, exactly as
+    ``Candidate.ref_id`` is.
+
+    **When a channel Pass-1 test needs one.** Pass 1 classifies over the agents
+    the sender owns and short-circuits on a single eligible candidate only when
+    Pass 2 has nothing to offer them — so a test needs an answer here when the
+    sender owns two or more eligible agents, or owns one *and* the auto-install
+    list still holds a bundle they could be given. A single-agent sender on a
+    server with an empty auto-install list — the most common setup in this
+    suite — routes with ``match_method="only_one"`` and needs no answer at all;
+    naming none is the stronger form, because the refusal stub then fails the
+    test if the classifier is reached after all.
+
+    Note the ``ref_id`` a channel test passes is the **agent's** id, not a
+    route's. Pass 1 reads no ``AppAgentRoute``.
+    """
+    from app.services.routing.agent_classifier import ClassificationResult
+
+    return ClassificationResult(agent_id=str(ref_id), **fields)
 
 
 def enter_classifier_patch(
@@ -138,7 +173,7 @@ def enter_classifier_patch(
     elif classify_no_match:
         stack.enter_context(patch(_CLASSIFY_TARGET, return_value=None))
     elif not classify_via_provider:
-        stack.enter_context(patch(_CLASSIFY_TARGET, _refuse_to_classify))
+        stack.enter_context(patch(_CLASSIFY_TARGET, refuse_to_classify))
 
 
 # ---------------------------------------------------------------------------
@@ -255,11 +290,13 @@ def post_channel_message(
     """Deliver one verified webhook event and drain the resulting background work.
 
     Passing no classifier argument patches ``classify`` to raise rather than
-    leaving it live — see ``patched_routing_externals`` for why. Most callers
-    here want exactly that: a Pass-1 delivery with a single effective route
-    takes the ``only_one`` short-circuit and never reaches the classifier, so
-    the stub is installed and never invoked. A delivery that *does* classify
-    has to say what the answer is.
+    leaving it live — see ``patched_routing_externals`` for why. Two shapes may
+    legitimately name no answer, and in both the stub is installed and never
+    invoked: a sender who owns nothing eligible (an empty ballot short-circuits
+    everywhere), and a sender who owns exactly one eligible agent on a server
+    whose auto-install list has nothing for them (Pass 1's conditional
+    ``only_one``). Anything else has to say what the answer is
+    (``classification(agent_id)``).
 
     ``classify_via_provider=True`` is the one exception, and it is an
     *explicit* one rather than a hole: the message-text-gating tests patch
@@ -275,12 +312,11 @@ def post_channel_message(
     Shares its classifier stub with ``server_channels_routing_test.py``'s
     ``_post`` (both call ``enter_classifier_patch``) and patches the same
     stream/send targets, plus ``route_installed_side_effect`` — a hook onto
-    ``ChannelRoutingService._route_installed`` itself (not the
-    ``AppMCPRoutingService.route_message`` call it wraps), used only to
-    reach the thread-target-level exception path: any exception raised by
-    ``route_message`` is already caught and swallowed *inside*
-    ``_route_installed`` (see
-    ``server_channels_routing_test.py::test_pass1_ownership_filter_swallows_a_router_exception``),
+    ``ChannelRoutingService._route_installed`` itself (not the candidate build
+    or the classify call it wraps), used only to reach the thread-target-level
+    exception path: an exception from either of those is already caught and
+    swallowed *inside* ``_route_installed`` (see
+    ``server_channels_routing_test.py::test_pass1_swallows_a_classifier_exception``),
     so it never reaches ``_route_installed_in_thread``'s own
     ``except: persist(...); raise``. Forcing ``_route_installed``
     itself to raise is the only way to exercise that outer boundary.
@@ -410,7 +446,7 @@ def patched_routing_externals(
     path.
 
     **Naming an answer is mandatory.** Passing neither argument patches the
-    classifier to raise (``_refuse_to_classify``): it used to leave it
+    classifier to raise (:func:`refuse_to_classify`): it used to leave it
     unpatched, which meant the default behaviour of this helper was to call a
     live model. Sixteen call sites took that default.
 

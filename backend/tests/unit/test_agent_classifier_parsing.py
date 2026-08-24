@@ -22,8 +22,11 @@ import pytest
 
 from app.services.routing import routing_trace
 from app.services.routing.agent_classifier import (
+    MAX_EXAMPLE_CHARS,
+    MAX_EXAMPLE_LINES,
     AgentClassifier,
     Candidate,
+    _example_lines,
     _parse_confidence,
     _parse_reason,
     _parse_runner_up,
@@ -235,3 +238,67 @@ def test_reason_is_not_on_the_message_text_allowlist() -> None:
     # ...while the two neighbours that are genuinely not sender-derived stay.
     assert "confidence" in routing_trace.SAFE_STAGE_FIELDS
     assert "runner_up_id" in routing_trace.SAFE_STAGE_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Example rendering is bounded on BOTH axes
+# ---------------------------------------------------------------------------
+#
+# The line cap was enforced from the start; the character cap was only ever
+# documented by the comment on the constants, and held by accident because
+# every write path into a candidate was bounded by a route-layer validator.
+# `ChannelCandidateProvider` opened the first unbounded one — `Agent
+# .example_prompts` is a user-editable JSON column with no validator anywhere —
+# so a prose promise became a real limit and gets a real test.
+
+
+def test_examples_are_capped_by_characters_not_only_by_lines():
+    """One pasted 500KB line is ten lines' worth of nothing — it is one line.
+
+    The line cap cannot see it, which is the whole point: without the
+    character cap this string reaches the model verbatim on every inbound
+    channel message.
+    """
+    lines = _example_lines("x" * 500_000)
+
+    assert len(lines) == 1
+    assert len(lines[0]) == MAX_EXAMPLE_CHARS
+
+
+def test_the_character_cap_is_applied_before_the_split():
+    """A megabyte of newlines must not build a million-element list first.
+
+    Order is the property, not just the result: clamping after the split would
+    still materialise every line before taking ten of them. Asserted through
+    behaviour — 300k blank lines followed by real content renders NOTHING,
+    because the real content lies beyond the character budget.
+    """
+    raw = "\n" * 300_000 + "book a meeting"
+
+    assert _example_lines(raw) == []
+
+
+def test_the_line_cap_still_applies_within_the_character_budget():
+    """Both caps, not one replacing the other."""
+    raw = "\n".join(f"example {i}" for i in range(50))
+
+    lines = _example_lines(raw)
+
+    assert len(lines) == MAX_EXAMPLE_LINES
+    assert lines[0] == "example 0"
+
+
+def test_a_long_example_block_is_truncated_rather_than_dropped():
+    """Truncation is silent by design.
+
+    The alternative — refusing to render an over-long block — would drop a
+    candidate's examples out of a routing decision entirely, trading a trimmed
+    prompt for a worse routing answer.
+    """
+    raw = "\n".join(["book a meeting"] + ["y" * 3000])
+
+    lines = _example_lines(raw)
+
+    assert lines[0] == "book a meeting"
+    assert len(lines) == 2
+    assert len(lines[1]) < 3000

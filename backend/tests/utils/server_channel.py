@@ -414,43 +414,53 @@ def route_installed(db: Session, user, text: str):
     ``user`` must be a real, persisted ``app.models.User`` row (fetched via
     ``db.get(User, ...)`` after creating the account through the API) —
     ``_route_installed`` reads ``user.id`` for the ownership comparison.
+
+    Returns the **agent only**. ``_route_installed`` also hands back the
+    Pass-2 ``CatalogBallot`` its single-candidate probe computed, which is
+    ``decide``'s plumbing for scanning the catalog at most once per decision
+    and is not what any caller of this helper is asking about. A test that
+    wants the ballot calls the method directly and says so.
     """
     from app.services.server_channels.channel_routing_service import (
         ChannelRoutingService,
     )
 
-    return ChannelRoutingService._route_installed(db, user, text)
+    agent, _ballot = ChannelRoutingService._route_installed(db, user, text)
+    return agent
 
 
-def build_routing_result(
+def build_channel_candidate(
     *,
-    agent_id: uuid.UUID,
-    is_identity: bool = False,
-    agent_name: str = "Mocked Route Result",
-    session_mode: str = "conversation",
-    route_source: str = "user",
-    match_method: str = "only_one",
+    ref_id: uuid.UUID | str,
+    name: str = "Forged Candidate",
+    trigger_prompt: str = "Handle anything",
+    prompt_examples: str | None = None,
 ):
-    """Build a ``RoutingResult`` for mocking ``AppMCPRoutingService.route_message``.
+    """Build a ``Candidate`` for mocking ``ChannelCandidateProvider.build``.
 
-    EXEMPTION — ``RoutingResult`` is a plain dataclass in
-    ``app.services.app_mcp.app_mcp_routing_service`` with no constructor
-    exposed via any API. Hand-building one is the intended, cheap way to
-    pin ``_route_installed``'s ownership-filter branches (identity route /
-    foreign-owned agent / deleted agent / router exception) without paying
-    for a full personal-route setup
-    (``tests.utils.app_agent_route.create_user_route``) per case.
+    EXEMPTION — ``Candidate`` is a plain frozen dataclass in
+    ``app.services.routing.agent_classifier`` with no constructor exposed via
+    any API. Hand-building one is the only way to reach ``_route_installed``'s
+    two remaining post-classification guards, both of which are now
+    **unreachable through the real call graph**: the candidate set is built
+    with ``WHERE owner_id = sender``, so no foreign agent can be on it, and no
+    candidate can be missing from the database it was just selected from. They
+    are kept as defence in depth (the ownership one is the same invariant
+    ``ChannelIngestionService.assert_access`` asserts for ``channel_caller``
+    sessions), which means forging the state is what pins them.
+
+    Replaces ``build_routing_result``, which built an
+    ``AppMCPRoutingService.RoutingResult``. Channel routing no longer calls
+    that service at all — it shares the classifier with App MCP and nothing
+    else — so a helper for mocking it had no channel caller left.
     """
-    from app.services.app_mcp.app_mcp_routing_service import RoutingResult
+    from app.services.routing.agent_classifier import Candidate
 
-    return RoutingResult(
-        agent_id=agent_id,
-        agent_name=agent_name,
-        session_mode=session_mode,
-        route_id=uuid.uuid4(),
-        route_source=route_source,
-        match_method=match_method,
-        is_identity=is_identity,
+    return Candidate(
+        ref_id=str(ref_id),
+        name=name,
+        trigger_prompt=trigger_prompt,
+        prompt_examples=prompt_examples,
     )
 
 
@@ -471,6 +481,6 @@ __all__ = [
     "GoogleChatJWTSigner",
     "flush_pending_bindings",
     "route_installed",
-    "build_routing_result",
+    "build_channel_candidate",
     "CHAT_ISSUER",
 ]

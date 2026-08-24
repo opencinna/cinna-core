@@ -50,6 +50,8 @@ const MATCH_METHOD_LABELS: Record<string, string> = {
 /** Why a candidate never reached the classifier. */
 const SKIP_REASON_LABELS: Record<string, string> = {
   already_installed: "Already installed",
+  bundle_missing: "Bundle missing",
+  pass_1_matched: "Pass 1 matched first",
   not_installable: "Not installable",
   no_trigger_prompt: "No trigger prompt",
   identity_route: "Identity route",

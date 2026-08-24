@@ -32,7 +32,7 @@ from app.services.server_channels.channel_inbound_service import (
     REPLY_TOO_MANY_QUEUED,
 )
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, set_router_trigger_prompt
 from tests.utils.app_agent_route import create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import make_user_and_headers, publish_bundle_and_make_public
@@ -46,6 +46,7 @@ from tests.utils.server_channel import (
     flush_pending_bindings,
     post_webhook,
 )
+from tests.utils.routing import refuse_to_classify
 from tests.utils.session import create_session_via_api, list_sessions
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
 from tests.utils.ai_credential import create_random_ai_credential
@@ -217,7 +218,13 @@ def test_stream_completed_delivers_final_message_through_the_binding(
     create_random_ai_credential(client, headers, set_default=True)
     agent = create_agent_via_api(client, headers, name=f"OutboundGate-{random_lower_string()[:6]}")
     drain_tasks()
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle anything")
+    # Channel Pass 1 routes over the sender's own agents: the agent's own
+    # trigger prompt is what makes it a candidate. One eligible agent and an
+    # empty auto-install list is Pass 1's `only_one` short-circuit, so the
+    # classifier below is stubbed to RAISE — reaching it would mean the
+    # short-circuit stopped firing, and this test would rather say so than
+    # quietly call a model.
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle anything")
 
     thread_key = f"spaces/AAA/threads/{random_lower_string()}"
     reply_text = "Here is the final assistant answer."
@@ -226,7 +233,7 @@ def test_stream_completed_delivers_final_message_through_the_binding(
     stub = StubAgentEnvConnector(response_text=reply_text)
     with signer.patched(), patch(_STREAM_TARGET, stub), patch(
         _SEND_TARGET, AsyncMock(return_value="fake-ext-id")
-    ) as send_mock:
+    ) as send_mock, patch(_CLASSIFY_TARGET, refuse_to_classify):
         resp = post_webhook(client, channel["webhook_token"], event, bearer_token=token)
         drain_tasks()
 

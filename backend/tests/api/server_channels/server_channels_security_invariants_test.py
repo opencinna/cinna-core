@@ -32,8 +32,8 @@ See `tests/api/server_channels/README.md` for the park-branch design notes
 (no true concurrency is available in `drain_tasks()`, so it is driven
 deterministically instead).
 """
-import types
 import uuid
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -41,9 +41,8 @@ from sqlmodel import Session
 
 from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, set_router_trigger_prompt
 from tests.utils.ai_credential import create_random_ai_credential
-from tests.utils.app_agent_route import create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import make_user_and_headers, publish_bundle_and_make_public
 from tests.utils.environment import set_environment_status
@@ -56,6 +55,7 @@ from tests.utils.server_channel import (
     flush_pending_bindings,
     post_webhook,
 )
+from tests.utils.routing import classification, enter_classifier_patch
 from tests.utils.session import get_session, list_sessions
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
 from tests.utils.utils import random_lower_string
@@ -72,10 +72,16 @@ _STREAM_TARGET = "app.services.sessions.message_service.agent_env_connector"
 
 
 def _make_pass1_user(client: TestClient, superuser_headers: dict[str, str]):
-    """A user who owns exactly one agent with one personal app-mcp route.
+    """A user who owns exactly one agent, eligible for channel routing.
 
-    `AppMCPRoutingService.route_message` takes the deterministic `only_one`
-    path for this user — no LLM classification call needed.
+    Eligible means the agent's own `router_trigger_prompt` — channel Pass 1
+    routes over the sender's OWN agents and reads no `AppAgentRoute` at all.
+
+    One eligible agent plus this suite's empty auto-install list is exactly
+    Pass 1's conditional `only_one` case, so deliveries here route with no
+    classifier at all and `_post` names no answer. That is deliberate rather
+    than incidental: the helper's default stub raises, so any of these tests
+    would fail loudly if the short-circuit stopped firing.
     """
     user, headers = create_random_user_with_headers(client)
     promote_to_developer(client, superuser_headers, user["id"])
@@ -86,8 +92,8 @@ def _make_pass1_user(client: TestClient, superuser_headers: dict[str, str]):
     # dict returned by create_agent_via_api (captured before drain_tasks())
     # still has active_environment_id=None.
     agent = client.get(f"{API}/agents/{agent['id']}", headers=headers).json()
-    create_user_route(
-        client, headers, agent["id"], trigger_prompt="Handle anything this user sends"
+    set_router_trigger_prompt(
+        client, headers, agent["id"], "Handle anything this user sends"
     )
     return user, headers, agent
 
@@ -98,16 +104,38 @@ def _channel(client, superuser_headers, **overrides) -> dict:
     return create_server_channel(client, superuser_headers, **defaults)
 
 
-def _post(client, channel, signer, event, *, stream_stub=None):
-    """POST a verified webhook event, draining background tasks."""
+def _post(client, channel, signer, event, *, stream_stub=None, classify_result=None):
+    """POST a verified webhook event, draining background tasks.
+
+    ``classify_result`` names what `AgentClassifier.classify` answers. Omit it
+    only when the delivery must not classify at all — the sender is declined
+    before routing, or owns nothing eligible — in which case a classifier that
+    runs anyway fails loudly at the call.
+    """
     token = signer.token(audience=channel["config"]["project_number"])
     stub = stream_stub or StubAgentEnvConnector(response_text="On it.")
-    with signer.patched(), patch(_STREAM_TARGET, stub), patch(
-        _SEND_TARGET, AsyncMock(return_value="fake-ext-id")
-    ) as send_mock:
+    with ExitStack() as stack:
+        stack.enter_context(signer.patched())
+        stack.enter_context(patch(_STREAM_TARGET, stub))
+        send_mock = stack.enter_context(
+            patch(_SEND_TARGET, AsyncMock(return_value="fake-ext-id"))
+        )
+        enter_classifier_patch(stack, classify_result=classify_result)
         resp = post_webhook(client, channel["webhook_token"], event, bearer_token=token)
         drain_tasks()
     return resp, send_mock
+
+
+def _classify_the_only_candidate(candidates, message, **kwargs):
+    """A classifier that picks whatever is on the ballot — either pass.
+
+    Pass 1's ballot holds agent ids and Pass 2's holds bundle ids, and the
+    lost-race scenarios below drive both in one delivery sequence. A fixed
+    ``return_value`` can only be right for one of them: a Pass-1 answer naming
+    a bundle id is rejected as "not among the candidates", which silently turns
+    the park branch under test into a plain no-match.
+    """
+    return classification(candidates[0].ref_id)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +212,7 @@ def test_cross_user_thread_gate_declines_non_owner_even_on_failed_binding(
     the delete-and-reroute self-heal.
 
       1. User A's agent has no active environment when A's first message
-         arrives → Pass 1 still matches the route, the binding is created,
+         arrives → Pass 1 still matches the agent, the binding is created,
          but ingest raises NoActiveEnvironmentError → binding → `failed`.
       2. User B posts into the same thread → must still get
          REPLY_THREAD_OWNED, not a fresh routing attempt (which would
@@ -206,7 +234,9 @@ def test_cross_user_thread_gate_declines_non_owner_even_on_failed_binding(
     event_a = build_message_event(
         thread_key=thread_key, text="Hello from A", sender_email=user_a["email"]
     )
-    resp_a, send_mock = _post(client, channel, signer, event_a)
+    resp_a, send_mock = _post(
+        client, channel, signer, event_a
+    )
     assert resp_a.status_code == 200
     # The pipeline notified the (now-failed) thread of the setup failure.
     assert any(
@@ -246,8 +276,9 @@ def test_lost_race_ingest_branch_declines_the_loser(
     `_handle_lost_race` must decline the loser rather than ingesting their
     text into the winner's session.
 
-      1. Users A and B each own their own single-route agent (deterministic
-         Pass 1 match, different agents).
+      1. Users A and B each own exactly one eligible agent (deterministic
+         Pass 1 match, different agents — the classifier stub picks whichever
+         single candidate is on the ballot).
       2. Both POST into the SAME new thread_key before draining.
       3. Draining runs A's task first (webhook call order == drain order):
          A's binding is created ACTIVE with A's own agent + session.
@@ -273,7 +304,7 @@ def test_lost_race_ingest_branch_declines_the_loser(
     stub = StubAgentEnvConnector(response_text="On it.")
     with signer.patched(), patch(_STREAM_TARGET, stub), patch(
         _SEND_TARGET, AsyncMock(return_value="fake-ext-id")
-    ) as send_mock:
+    ) as send_mock, patch(_CLASSIFY_TARGET, side_effect=_classify_the_only_candidate):
         resp_a = post_webhook(client, channel["webhook_token"], event_a, bearer_token=token)
         resp_b = post_webhook(client, channel["webhook_token"], event_b, bearer_token=token)
         assert resp_a.status_code == 200 and resp_b.status_code == 200
@@ -315,14 +346,15 @@ def test_lost_race_park_branch_declines_the_loser_but_parks_same_owner(
          consumer has no installs and no routes yet.
       2. Both webhook deliveries (msg1, msg2 — same user, same new thread)
          are queued before draining, so both see "no binding" synchronously.
-      3. Task 1 (msg1) drains first: Pass 1 misses (no routes yet) → Pass 2
-         (mocked classifier) picks the bundle → installs it (which also
-         auto-creates the consumer's personal app-mcp route from the
-         bundle's trigger prompt) → creates the `pending_install` binding →
+      3. Task 1 (msg1) drains first: Pass 1 misses (owns nothing yet) → Pass 2
+         (mocked classifier) picks the bundle → installs it (which restores
+         the bundle's trigger prompt onto the consumer's own agent) →
+         creates the `pending_install` binding →
          parks msg1.
-      4. Task 2 (msg2) drains second: Pass 1 now hits — the auto-route from
-         step 3 makes this the deterministic `only_one` match — so it
-         resolves the SAME agent WITHOUT touching Pass 2 at all. It attempts
+      4. Task 2 (msg2) drains second: Pass 1 now hits — the install of step 3
+         restored the bundle's trigger prompt onto the consumer's OWN agent,
+         making it the only candidate on their ballot — so it resolves the
+         SAME agent WITHOUT touching Pass 2 at all. It attempts
          `_upsert_binding(status=ACTIVE)` for the same thread → unique
          constraint → IntegrityError → re-reads the existing binding → same
          user, `pending_install` → PARK branch: msg2 is appended, not
@@ -350,8 +382,6 @@ def test_lost_race_park_branch_declines_the_loser_but_parks_same_owner(
     signer = GoogleChatJWTSigner()
     add_auto_install_bundle(client, superuser_token_headers, bundle_uuid)
 
-    classify_result = types.SimpleNamespace(agent_id=bundle_uuid, transformed_message=None)
-
     thread_key = f"spaces/AAA/threads/{uuid.uuid4()}"
     token = signer.token(audience=channel["config"]["project_number"])
     event_1 = build_message_event(
@@ -370,7 +400,7 @@ def test_lost_race_park_branch_declines_the_loser_but_parks_same_owner(
     stub = StubAgentEnvConnector(response_text="Sure, on it.")
     with signer.patched(), patch(_STREAM_TARGET, stub), patch(
         _SEND_TARGET, AsyncMock(return_value="fake-ext-id")
-    ) as send_mock, patch(_CLASSIFY_TARGET, return_value=classify_result):
+    ) as send_mock, patch(_CLASSIFY_TARGET, side_effect=_classify_the_only_candidate):
         resp_1 = post_webhook(client, channel["webhook_token"], event_1, bearer_token=token)
         resp_2 = post_webhook(client, channel["webhook_token"], event_2, bearer_token=token)
         assert resp_1.status_code == 200 and resp_2.status_code == 200
@@ -554,14 +584,17 @@ def test_critical_state_does_not_fail_a_pending_binding(
     signer = GoogleChatJWTSigner()
     add_auto_install_bundle(client, superuser_token_headers, bundle_uuid)
 
-    classify_result = types.SimpleNamespace(agent_id=bundle_uuid, transformed_message=None)
+    classify_result = classification(bundle_uuid)
     thread_key = f"spaces/AAA/threads/{uuid.uuid4()}"
     event = build_message_event(
         thread_key=thread_key, text="please help", sender_email=consumer["email"]
     )
     stub = StubAgentEnvConnector(response_text="Sure.")
-    with patch(_CLASSIFY_TARGET, return_value=classify_result):
-        resp, _ = _post(client, channel, signer, event, stream_stub=stub)
+    # Through `_post`, not around it: `enter_classifier_patch` installs an
+    # inner patch that shadows an outer one (deliberately, and loudly).
+    resp, _ = _post(
+        client, channel, signer, event, stream_stub=stub, classify_result=classify_result
+    )
     assert resp.status_code == 200
 
     consumer_agents = client.get(f"{API}/agents/", headers=consumer_headers).json()["data"]

@@ -151,6 +151,25 @@ SKIP_NO_REVISION = "no_revision"
 #: dangling reference, not an inactive route — same distinction as
 #: ``SKIP_NO_REVISION`` vs ``SKIP_NO_TRIGGER_PROMPT`` on the bundle side.
 SKIP_AGENT_MISSING = "agent_missing"
+#: The bundle side of ``SKIP_AGENT_MISSING``: the id that won Pass 2 has no
+#: ``agent_bundle`` row behind it any more. Its own reason rather than
+#: ``SKIP_NO_REVISION``, which means "published nothing" and would send the
+#: reader off to publish a bundle that is simply gone.
+SKIP_BUNDLE_MISSING = "bundle_missing"
+#: Pass 2 held this bundle and could have offered it, but Pass 1 matched one of
+#: the sender's own agents first, so the auto-install pass never classified.
+#:
+#: **Not a filter result** — it is the only ``skip_reason`` recorded for a
+#: candidate that passed every gate. It exists because Pass 1's single-candidate
+#: short-circuit scans the catalog to decide whether it may skip the classifier
+#: (``ChannelRoutingService._catalog_ballot``), and that scan is written to the
+#: trace so an admin can see what the choice space actually held. Recording
+#: those rows as *eligible* would be the lie: they would join the
+#: "N eligible candidates" the verdict counts and the near-miss ranking, and a
+#: reachability diagnosis would tell somebody their bundle "was an eligible
+#: candidate and the classifier did not pick it" about a classifier that was
+#: never given it.
+SKIP_PASS_1_MATCHED = "pass_1_matched"
 #: Identity Stage 2 only: the binding is active and accessible, but has no
 #: ``IdentityBindingAssignment`` for *this* caller, so every Stage-2 path aborts
 #: on it after selecting it. Distinct from "not a candidate": it was on the

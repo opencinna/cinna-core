@@ -51,6 +51,33 @@ def update_agent(
     return r.json()
 
 
+def set_router_trigger_prompt(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+    trigger_prompt: str = "Handle anything",
+) -> dict:
+    """PATCH /agents/{id}/router-trigger-prompt — the owner-only field.
+
+    This is what makes an agent a **channel routing candidate**.
+    ``ChannelCandidateProvider`` builds Pass 1's ballot from the sender's own
+    agents and admits one that has a non-blank ``router_trigger_prompt`` or a
+    non-empty ``example_prompts``; an ``AppAgentRoute`` (personal or admin)
+    grants nothing on the channel path any more — it is an App-MCP exposure and
+    is read only there.
+
+    Setting it here also propagates to the agent's auto-managed route, so a
+    setup that wants both surfaces gets both from this one call.
+    """
+    r = client.patch(
+        f"{settings.API_V1_STR}/agents/{agent_id}/router-trigger-prompt",
+        headers=token_headers,
+        json={"router_trigger_prompt": trigger_prompt},
+    )
+    assert r.status_code == 200, f"Set router trigger prompt failed: {r.text}"
+    return r.json()
+
+
 def sync_agent_prompts(
     client: TestClient,
     token_headers: dict[str, str],

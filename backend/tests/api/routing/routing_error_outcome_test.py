@@ -11,13 +11,14 @@ capture in `except: persist(...); raise` (see
      gets the generic setup-failed reply — the exception "propagates intact"
      through the pipeline's own outer handler rather than 500ing or vanishing.
   2. The symmetric case for Pass 1's own thread target — reached by forcing
-     `_route_installed` itself to raise, since a `route_message` exception is
-     already caught *inside* `_route_installed`
-     (`server_channels_routing_test.py::test_pass1_ownership_filter_swallows_a_router_exception`)
+     `_route_installed` itself to raise, since an exception from the candidate
+     provider or the classifier is already caught *inside* `_route_installed`
+     (`server_channels_routing_test.py::test_pass1_swallows_a_classifier_exception`)
      and never reaches the thread-target boundary.
-  3. W1 (Phase 2 review): Pass 1's OWN router call fails (a real outage,
-     caught inside `_route_installed`, which records the error directly on
-     `pass1_trace` without raising), and Pass 2 then finds a real match. The
+  3. W1 (Phase 2 review): Pass 1's OWN candidate/classify step fails (a real
+     outage, caught inside `_route_installed`, which records the error
+     directly on `pass1_trace` without raising), and Pass 2 then finds a real
+     match. The
      merged row must keep Pass 2's positive verdict — a decision that
      ultimately succeeded should not be mislabeled `error` — but must NOT
      silently drop Pass 1's failure text just because Pass 2 recovered.
@@ -39,7 +40,9 @@ from tests.utils.user import promote_to_developer
 from tests.utils.utils import random_lower_string
 
 API = settings.API_V1_STR
-_ROUTE_MESSAGE_TARGET = "app.services.app_mcp.app_mcp_routing_service.AppMCPRoutingService.route_message"
+_CANDIDATE_PROVIDER_TARGET = (
+    "app.services.routing.channel_candidate_provider.ChannelCandidateProvider.build"
+)
 
 
 # The persisted `error` carries the exception's TYPE, not its message:
@@ -163,7 +166,7 @@ def test_pass1_thread_level_exception_persists_error_outcome_without_500ing(
 def test_pass1_router_outage_error_is_not_dropped_when_pass2_then_finds_a_match(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """W1 (Phase 2 review): Pass 1's router call fails and is recorded on
+    """W1 (Phase 2 review): Pass 1's candidate build fails and is recorded on
     `pass1_trace` (caught *inside* `_route_installed`, which returns `None`
     rather than raising); Pass 2 then genuinely matches a catalog bundle.
 
@@ -188,7 +191,7 @@ def test_pass1_router_outage_error_is_not_dropped_when_pass2_then_finds_a_match(
     event = build_message_event(thread_key=thread_key, text="please help", sender_email=consumer["email"])
     from unittest.mock import patch
 
-    with patch(_ROUTE_MESSAGE_TARGET, side_effect=_Pass1RouterOutage("pass1-router-outage-marker")):
+    with patch(_CANDIDATE_PROVIDER_TARGET, side_effect=_Pass1RouterOutage("pass1-router-outage-marker")):
         resp, _ = post_channel_message(
             client, channel, signer, event, classify_result=classify_result
         )

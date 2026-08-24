@@ -16,15 +16,15 @@ alias is user-authentication only and this adapter authenticates as an app, so
 an unseen address has no reachable destination — the test asserts the error
 says so instead of surfacing a bare provider 404.
 """
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, set_router_trigger_prompt
 from tests.utils.ai_credential import create_random_ai_credential
-from tests.utils.app_agent_route import create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.server_channel import (
     GoogleChatJWTSigner,
@@ -37,6 +37,7 @@ from tests.utils.server_channel import (
     send_test_outbound,
 )
 from tests.utils.mfa import find_security_events
+from tests.utils.routing import classification, enter_classifier_patch
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
 from tests.utils.utils import random_lower_string
 
@@ -48,12 +49,22 @@ _SEND_TARGET = (
 _STREAM_TARGET = "app.services.sessions.message_service.agent_env_connector"
 
 
-def _post(client, channel, signer, event):
-    """Deliver one verified webhook event and run the background work."""
+def _post(client, channel, signer, event, *, classify_result=None):
+    """Deliver one verified webhook event and run the background work.
+
+    ``classify_result`` is required whenever the sender owns an eligible agent:
+    channel Pass 1 classifies over the sender's own agents and has no
+    single-candidate short-circuit, so an un-named answer would reach a real
+    provider (the global guard in ``tests/conftest.py`` stops it loudly).
+    """
     token = signer.token(audience=channel["config"]["project_number"])
-    with signer.patched(), patch(
-        _STREAM_TARGET, StubAgentEnvConnector(response_text="ok")
-    ), patch(_SEND_TARGET, AsyncMock(return_value="fake-ext-id")) as send_mock:
+    with ExitStack() as stack:
+        stack.enter_context(signer.patched())
+        stack.enter_context(patch(_STREAM_TARGET, StubAgentEnvConnector(response_text="ok")))
+        send_mock = stack.enter_context(
+            patch(_SEND_TARGET, AsyncMock(return_value="fake-ext-id"))
+        )
+        enter_classifier_patch(stack, classify_result=classify_result)
         resp = post_webhook(client, channel["webhook_token"], event, bearer_token=token)
         drain_tasks()
     return resp, send_mock
@@ -248,14 +259,14 @@ def test_a_sender_who_messaged_becomes_reachable_by_email(
     space id. The resolved destination must be the thread that person is
     actually in — the whole complaint was not knowing where a test landed.
 
-    Pass 1 is made deterministic with a single personal app-mcp route, so
-    routing takes the ``only_one`` path and needs no LLM.
+    Pass 1 is made deterministic by giving the sender exactly one eligible
+    agent and naming the classifier's answer — there is no LLM here.
     """
     signer = GoogleChatJWTSigner()
     thread_key = "spaces/AAA/threads/known"
 
-    # The sender needs a platform account with exactly one routable agent, so
-    # Pass 1 takes the `only_one` path (no LLM in the test environment).
+    # The sender needs a platform account owning exactly one routable agent —
+    # routable means the agent's OWN router_trigger_prompt, not a route.
     user, headers = create_random_user_with_headers(client)
     promote_to_developer(client, superuser_token_headers, user["id"])
     create_random_ai_credential(client, headers, set_default=True)
@@ -263,7 +274,7 @@ def test_a_sender_who_messaged_becomes_reachable_by_email(
         client, headers, name=f"Debug-{random_lower_string()[:6]}"
     )
     drain_tasks()
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle anything")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle anything")
     sender_email = user["email"]
 
     channel = create_server_channel(client, superuser_token_headers, email_whitelist="*")
@@ -327,7 +338,7 @@ def test_recent_senders_merges_a_bound_thread_with_a_buffer_only_one(
         client, headers, name=f"Debug-{random_lower_string()[:6]}"
     )
     drain_tasks()
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle anything")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle anything")
     _post(
         client,
         channel,
