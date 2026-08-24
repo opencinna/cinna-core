@@ -25,6 +25,7 @@ Driven through `POST /admin/routing/simulate`, which runs the real router over
 the target's real state (see `routing_reachability_verdict_test.py`'s module
 docstring for why the branches here use simulate rather than a webhook).
 """
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -41,6 +42,39 @@ from tests.utils.user import create_random_user_with_headers, promote_to_develop
 from tests.utils.utils import random_lower_string
 
 API = settings.API_V1_STR
+
+
+# ── Both tests below are currently unreachable ────────────────────────────────
+#
+# They drive `POST /admin/routing/simulate`, which is `ChannelRoutingService.
+# decide` and nothing else. Since the channel routing scope split (e11d4020)
+# Pass 1 builds its ballot from `ChannelCandidateProvider.build(db, sender_id)`
+# — the sender's OWN agents — instead of delegating into
+# `AppMCPRoutingService.route_message`. The sender in both scenarios owns zero
+# agents, so Pass 1 returns an empty candidate list and Stage 2 is never
+# entered.
+#
+# Nothing was deleted. The identity Stage-2 instrumentation in
+# `app/services/identity/identity_routing_service.py` is intact and untouched;
+# it simply has no capture to write into. `RoutingTrace.capture(` has exactly
+# two call sites in the whole backend, both in `channel_routing_service.py`,
+# and `app_mcp_request_handler` opens none — dead instrumentation, not deleted
+# instrumentation.
+#
+# The post-split design is asserted from the other side and is green:
+# `tests/api/server_channels/server_channels_routing_test.py:348` pins the
+# literal opposite (`assert "identity_stage2" not in stage_names`).
+#
+# So these are marked, not rewritten or removed: Phase 1 of the plan below
+# makes identity a routing-layer candidate provider, at which point the
+# scenarios should hold again as written. `strict=False` is deliberate — when
+# that lands, an XPASS must report, not fail the suite.
+_UNREACHABLE = (
+    "identity Stage-2 capture is currently unreachable — the channel path no "
+    "longer delegates into App MCP (e11d4020); superseded by "
+    "IdentityCandidateProvider in "
+    "docs/plans/channels_identity_unification/phase_1_identity_routing_layer.md"
+)
 
 
 def _user(client: TestClient, superuser_headers: dict[str, str]) -> tuple[dict, dict]:
@@ -70,6 +104,7 @@ def _stage(trace: dict, name: str) -> dict | None:
     return next((s for s in trace["stages"] if s["stage"] == name), None)
 
 
+@pytest.mark.xfail(reason=_UNREACHABLE, strict=False)
 def test_identity_stage2_records_its_candidate_ballot(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
@@ -126,6 +161,7 @@ def test_identity_stage2_records_its_candidate_ballot(
     assert calendar["source"] == "identity"
 
 
+@pytest.mark.xfail(reason=_UNREACHABLE, strict=False)
 def test_identity_stage2_pattern_hit_reports_its_match_method(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:

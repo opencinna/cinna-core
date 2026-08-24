@@ -275,20 +275,27 @@ def test_list_filters_by_channel_and_user(
 def test_an_inactive_route_is_recorded_as_a_skip_rather_than_dropped_silently(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """`SKIP_ROUTE_INACTIVE` was defined, exported, and never emitted — so a
-    candidate dropped for an inactive route vanished without a trace, which is
-    exactly what the plan's "single highest-value rule" forbids: a trace listing
-    only the finalists cannot diagnose "the expected agent was never a candidate
-    at all".
+    """A candidate excluded from Pass 1 is recorded WITH A REASON, not dropped.
 
-    `get_effective_routes_for_user` used to exclude inactive routes with a SQL
-    predicate, before anything could observe them. The predicate now runs in
-    Python, at the point the skip is recorded — same query count, no re-fetch on
-    the routing hot path.
+    This is the plan's "single highest-value rule" (§3.5): a trace listing only
+    the finalists cannot diagnose "the expected agent was never a candidate at
+    all", so every agent the ballot-builder walks past has to leave a row
+    saying why it was passed over.
+
+    The surface that produces that row is now the **candidate provider**, not a
+    route. Since the channel routing scope split, Pass 1's ballot comes from
+    `ChannelCandidateProvider.build(db, sender_id)` — straight from
+    `Agent.owner_id == sender`, reading no `AppAgentRoute` at all. The agent
+    below has neither a `router_trigger_prompt` nor `example_prompts`, so it
+    fails the provider's admission test and is recorded as `no_trigger_prompt`.
+    `SKIP_ROUTE_INACTIVE` — which this test asserted before the split — is
+    producible only by `AppAgentRouteService` on the App MCP surface now; see
+    the note on `_CHANNEL_SKIP_EXPLANATIONS` in
+    `app/services/routing/routing_reachability_service.py`.
 
     Both halves matter, and the first is the one a regression would break
-    quietly: an inactive route must STILL not route (it is now merely visible,
-    not eligible), and it must now appear in the trace saying why.
+    quietly: an agent with nothing to route on must STILL not route, and it
+    must appear in the trace saying why rather than silently vanishing.
     """
     channel = _channel(client, superuser_token_headers)
     signer = GoogleChatJWTSigner()
@@ -297,6 +304,13 @@ def test_an_inactive_route_is_recorded_as_a_skip_rather_than_dropped_silently(
     create_random_ai_credential(client, headers, set_default=True)
     agent = create_agent_via_api(client, headers, name=f"Inactive-{random_lower_string()[:6]}")
     drain_tasks()
+    # INERT — and deliberately kept, as the negative half of the property.
+    # Since the scope split, a personal `AppAgentRoute` grants nothing on the
+    # channel path whether it is active or not: this call does not cause the
+    # skip asserted below, and making it `is_active=True` would not prevent it.
+    # It stays because it pins that direction too — the route carries a trigger
+    # prompt and the agent is skipped anyway, because Pass 1 reads the agent's
+    # own `router_trigger_prompt` and never this row.
     create_user_route(
         client, headers, agent["id"], trigger_prompt="Handle anything", is_active=False
     )
@@ -322,5 +336,5 @@ def test_an_inactive_route_is_recorded_as_a_skip_rather_than_dropped_silently(
     ]
     assert skipped, pass1["candidates"]
     assert skipped[0]["eligible"] is False, skipped
-    assert skipped[0]["skip_reason"] == "route_inactive", skipped
+    assert skipped[0]["skip_reason"] == "no_trigger_prompt", skipped
     assert skipped[0]["name"] == agent["name"], skipped
