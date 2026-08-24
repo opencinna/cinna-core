@@ -15,14 +15,18 @@
 
 ### Backend -- Services
 
-- `backend/app/services/identity/identity_service.py` -- `IdentityService` (binding CRUD, assignment management, contact listing, per-person toggle)
-- `backend/app/services/identity/identity_routing_service.py` -- `IdentityRoutingService` (Stage 2 routing: pattern match + AI classification within an identity); `IdentityRoutingResult` includes `transformed_message` field; `_ai_classify()` returns `(binding, transformed_message)` tuple
+- `backend/app/services/identity/identity_service.py` -- `IdentityService` (binding CRUD, assignment management, contact listing, per-person toggle, and `verify_identity_access()` -- the shared six-condition re-verification behind both the access grant and the session validity check)
+- `backend/app/services/identity/identity_routing_service.py` -- `IdentityRoutingService` (Stage 2 routing: AI classification within an identity); takes ids and text, opens its own read session; `IdentityRoutingResult` includes `transformed_message` field; `_ai_classify()` returns `(binding, transformed_message)` tuple
 
 ### Backend -- Routing Integration
 
-- `backend/app/services/app_mcp/app_agent_route_service.py` -- `EffectiveRoute` dataclass extended with identity fields; `get_effective_routes_for_user()` includes identity contacts as routes with `source = "identity"`
-- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `RoutingResult` extended with identity fields; `AppMCPRoutingService.route_message()` invokes `_route_identity()` when Stage 1 selects an identity route; `AppMCPRoutingService._route_identity()` delegates to Stage 2
-- `backend/app/services/app_mcp/app_mcp_request_handler.py` -- `AppMCPRequestHandler._resolve_session()` handles identity session creation and resumption; `_create_identity_session()` sets owner as session user; `_check_identity_session_validity()` validates binding and assignment on resumption
+- `backend/app/services/routing/identity_candidate_provider.py` -- `IdentityCandidateProvider.build(db, caller_user_id)` -- Stage 1's identity candidates, one per owner, with the `identity:{owner_id}` `ref_id` namespace (`identity_ref_id()` / `parse_identity_ref()`)
+- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `RoutingResult` extended with identity fields; `AppMCPRoutingService.route_message()` composes the route and identity providers and invokes `_route_identity()` when an identity candidate wins; `IdentityPick` is Stage 1's answer shape for a person
+- `backend/app/services/sessions/channel_ingestion_service.py` -- `create_identity_session()` builds the session in the owner's space from an `IdentityGrant`; `assert_access()`'s `channel_caller` arm honours a re-verified grant as the one alternative to the three-way owner invariant
+- `backend/app/models/sessions/session_sender.py` -- `IdentityGrant` (owner/binding/assignment ids) and `ChannelAccessPolicy.identity_grant`
+- `backend/app/services/app_mcp/app_mcp_request_handler.py` -- `AppMCPRequestHandler._resolve_session()` handles identity session creation and resumption; `_create_identity_session()` delegates to `ChannelIngestionService.create_identity_session()`; `_check_identity_session_validity()` re-verifies on resumption
+
+**Where identity used to live.** `AppAgentRouteService.get_effective_routes_for_user()` had a third arm appending one `EffectiveRoute` per identity owner with `source = "identity"` and a placeholder `agent_id`. That made "the people this caller can address" a fact only the App MCP route service could answer and only the App MCP surface could consume — and, because every identity route carried the same placeholder id, two owners on one ballot collided. The arm is gone; `EffectiveRoute`'s identity fields remain as vestigial optionals until the `AppAgentRoute` family is deleted.
 
 ### Frontend
 
@@ -193,6 +197,21 @@ The `PATCH` endpoint accepts `{ "is_enabled": bool }` and updates all binding as
   - Filters: `binding.is_active=True`, `assignment.is_active=True`, `assignment.is_enabled=True`, `assignment.target_user_id=target_user_id`
   - Used by Stage 2 routing to filter accessible agents
 
+**Access re-verification:**
+
+- `_live_binding(db, binding_id)` / `_live_assignment(db, assignment_id)` -- conditions 1 and 2, one implementation each, shared by both checks below so a liveness rule can never be tightened on one path and forgotten on the other
+- `verify_identity_access(db, *, owner_id, binding_id, assignment_id, caller_user_id, agent_id) -> str | None`
+  - Re-verifies an identity **authorization claim** — the ids behind `ChannelAccessPolicy.identity_grant`, handed in by the routing layer
+  - Six conditions, all of them, every time:
+    1. the `IdentityAgentBinding` exists and is `is_active`
+    2. the `IdentityBindingAssignment` exists, `is_active`, `is_enabled`
+    3. `assignment.binding_id == binding.id`
+    4. `assignment.target_user_id == caller_user_id`
+    5. `binding.agent_id == agent_id`
+    6. `binding.owner_id == agent.owner_id == owner_id`
+  - Conditions 3–6 are the ones a "still active?" check alone misses: they stop three individually-live rows belonging to three different authorizations from being assembled into a fourth that never existed
+  - Returns `None` on success, else `IdentityService.IDENTITY_REVOKED_MESSAGE` — one message for every failure, deliberately: the caller is somebody else's guest, and naming *which* fact failed would describe the owner's configuration to them. The specific reason is logged
+
 **Assignment management:**
 
 - `assign_users(db_session, binding_id, owner_id, user_ids: list[UUID], auto_enable: bool) -> list[IdentityBindingAssignmentPublic]`
@@ -217,22 +236,25 @@ The `PATCH` endpoint accepts `{ "is_enabled": bool }` and updates all binding as
 
 Stage 2 routing — selects an agent from the owner's bindings accessible to the caller.
 
-- `route_within_identity(db_session, owner_id, caller_user_id, message) -> IdentityRoutingResult | None`
-  1. Calls `IdentityService.get_active_bindings_for_user()` to get accessible bindings
+- `route_within_identity(owner_id, caller_user_id, message) -> IdentityRoutingResult | None`
+  1. Opens its **own** short-lived read session (see below), then calls `IdentityService.get_active_bindings_for_user()` to get accessible bindings
   2. If none → returns `None`
-  3. If one → uses directly (`match_method = "only_one"`)
-  4. Tries `_try_pattern_match()` — fnmatch against each binding's `message_patterns`
-  5. Falls back to `_ai_classify()` — builds a `Candidate` per binding (via the shared `_binding_candidates()` builder) and calls `AgentClassifier.classify()` (`backend/app/services/routing/agent_classifier.py`) directly, not `route_to_agent()` — routing_tuning's Phase 5 collapsed this and two other near-copies onto one classifier
-  6. Returns `IdentityRoutingResult(agent_id, agent_name, session_mode, binding_id, binding_assignment_id, match_method)`
+  3. If one → uses directly (`match_method = "only_one"`). The single-binding shortcut stays a Stage-2 property; it is not flattened into Stage 1, which chose a *person* and cannot know how many agents that person exposes to this caller without re-deriving access per candidate
+  4. Otherwise `_ai_classify()` — builds a `Candidate` per binding (via the shared `_binding_candidates()` builder) and calls `AgentClassifier.classify()` (`backend/app/services/routing/agent_classifier.py`) directly, not `route_to_agent()` — routing_tuning's Phase 5 collapsed this and two other near-copies onto one classifier
+  5. Returns `IdentityRoutingResult(agent_id, agent_name, session_mode, binding_id, binding_assignment_id, match_method)`
+
+**No caller session crosses the boundary.** The signature takes ids and text, and the service opens and closes its own read-only session. That is deliberate: Stage 2 is called from routing contexts that must not hand their transaction to a decision (`ChannelRoutingService.decide` is held to exactly these properties by `tests/architecture/channel_routing_purity_test.py`). The module performs no `add` / `commit` / `delete`, and returns plain data — never an ORM instance, whose session would be closed by the time the caller read an attribute off it.
+
+**Glob pre-matching is gone.** `_try_pattern_match()` and Stage 2's reads of `IdentityAgentBinding.message_patterns` were removed: a second routing mechanism with silently higher priority than the classifier, which no trace explains well, is worse than one classifier call. `match_method` can therefore no longer be `"pattern"` at Stage 2. The **column and its API surface remain** (create/update/read still persist it) until the `message_patterns` removal migration.
 
 `IdentityRoutingResult` dataclass:
 ```python
 agent_id: uuid.UUID
-agent_name: str
-session_mode: str
+agent_name: str        # value, copied out inside the service's own session
+session_mode: str      # value, ditto
 binding_id: uuid.UUID
 binding_assignment_id: uuid.UUID
-match_method: str  # "only_one" | "pattern" | "ai"
+match_method: str  # "only_one" | "ai"
 ```
 
 ## Integration with App MCP Routing
@@ -290,15 +312,29 @@ identity_stmt = (
 If found, calls `_check_identity_session_validity()` before allowing resumption.
 
 **Session creation (identity):**
-Calls `_create_identity_session()` which:
-1. Creates session with `user_id = identity_owner_id` (NOT the caller)
-2. Sets `integration_type = "identity_mcp"`
-3. Sets `identity_caller_id`, `identity_binding_id`, `identity_binding_assignment_id`
-4. Stores `identity_caller_name`, `identity_owner_name`, `identity_match_method` in `session_metadata`
+Calls `_create_identity_session()`, which keeps only what is App-MCP-specific — the sender shape (`SessionSender.from_app_mcp(caller, identity_caller_user_id=caller)`), `integration_type = "identity_mcp"`, and the display metadata the MCP response reads back — and delegates the session itself to `ChannelIngestionService.create_identity_session()`, which:
+1. Calls `assert_access` with `ChannelAccessPolicy(identity_grant=IdentityGrant(owner_id, binding_id, assignment_id), ...)`
+2. Creates the session with `user_id = identity_owner_id` (NOT the caller)
+3. Stamps `identity_caller_id` (from `sender.platform_user_id`), `identity_binding_id`, `identity_binding_assignment_id` — all three already in `_STAMPABLE_COLUMNS`
+4. Merges the caller's `session_metadata_extra` (`identity_caller_name`, `identity_owner_name`, `identity_match_method`, …)
+
+It is shared rather than inline so that a surface other than App MCP can create the same kind of session; `sender` and `integration_type` are parameters because those are the only things that genuinely differ per surface.
+
+### The access grant
+
+Ownership is inverted for an identity session — `session.user_id` is the identity **owner** while `identity_caller_id` records who is talking — and `ChannelIngestionService.assert_access`'s `channel_caller` arm asserts a three-way invariant (`agent.owner_id == policy.expected_owner_id == sender.platform_user_id`) that this inversion cannot satisfy. `ChannelAccessPolicy.identity_grant` is the one deliberate alternative:
+
+- **Ids only.** `IdentityGrant` is a claim from the routing layer, not a conclusion
+- **`assert_access` re-reads all of them** through `IdentityService.verify_identity_access` before honouring it. The routing decision and the session creation are separated by a worker-thread hop and possibly an auto-install wait; the owner may have revoked in between
+- `assert_access` therefore takes a `db: DBSession` — the honest signature for a check that reads, and the same snapshot the session will be created in
+- With no grant present the invariant is exactly as strict as before
+- The `mcp_caller` arm carries the grant but does not consult it. App MCP's own re-verification is the per-message resume check, which is **liveness only** (conditions 1 and 2) — not the grant arm's four linkage conditions. That asymmetry is inherited, not introduced: App MCP never derived the linkage facts at create time either, because the routing decision that produced the ids ran in the same transaction moments before. So on today's only caller of `create_identity_session` the grant is carried and stamped but not re-read; it becomes a live check the moment a `channel_caller` sender uses that method
 
 **Binding validity check** (`_check_identity_session_validity()`):
-- Looks up `session.identity_binding_id` → checks `binding.is_active`
-- Looks up `session.identity_binding_assignment_id` → checks `assignment.is_active` and `assignment.is_enabled`
+- Delegates to `IdentityService.check_session_validity()`, which runs the shared `_live_binding` / `_live_assignment` predicates — **conditions 1 and 2 only**, unchanged behaviour
+- Deliberately not the full six. Conditions 3–6 ask "do these ids actually belong together", which is a question about a claim someone handed in; a session's ids were written together in one statement by `create_identity_session` *after* the grant was verified, and none of the fields they link is editable afterwards. Re-deriving them here would turn a revocation check into an integrity check, and would only ever reject rows written past the API
+- What *can* change after creation is exactly what is re-read: the owner deactivating the binding or the assignment, and the caller opting out
+- A session carrying neither identity column is not identity-routed and passes untouched
 - Returns error string `"This identity connection is no longer active."` on any failure, `None` if valid
 
 **Response payload:**

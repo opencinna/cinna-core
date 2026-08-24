@@ -496,7 +496,10 @@ class A2ARequestHandler:
         try:
             with self.get_db_session() as resolve_db:
                 ChannelIngestionService.assert_access(
-                    agent=self.agent, sender=sender, policy=access_policy,
+                    db=resolve_db,
+                    agent=self.agent,
+                    sender=sender,
+                    policy=access_policy,
                 )
                 session_obj, is_new_session = ChannelIngestionService.resolve_or_create_session(
                     db=resolve_db,

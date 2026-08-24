@@ -12,8 +12,9 @@ The win is **one canonical entry point for the production send paths** (A2A and 
 |------|-----------|
 | **`SessionSender`** | Immutable value type that names the sender uniformly across channels — `kind`, `external_id`, `display_name`, `platform_user_id`. Built via per-channel constructors (`from_a2a`, `from_app_mcp`, `from_webui`, `from_guest_share`, `from_task_execution`, `from_system_trigger`). |
 | **Sender kind** | `Literal["platform_user", "a2a_caller", "mcp_caller", "webui_user", "task_executor", "system_trigger", "anonymous"]`. Not an Enum — flat string literals so new kinds can be added without machinery. |
-| **`ChannelAccessPolicy`** | Per-call policy (`expected_owner_id`, `allow_system_trigger_fastpath`, `require_owner_match`, `require_access_token_scope`, `require_caller_in_route`) supplied by each entry point. The service interprets it; new access primitives never live here. |
-| **`ChannelIngestionService`** | Stateless three-method service: `assert_access`, `resolve_or_create_session`, `ingest_inbound_message`. The ≥2-callers rule applies to every method. |
+| **`ChannelAccessPolicy`** | Per-call policy (`expected_owner_id`, `allow_system_trigger_fastpath`, `require_owner_match`, `require_access_token_scope`, `require_caller_in_route`, `identity_grant`) supplied by each entry point. The service interprets it; new access primitives never live here. |
+| **`IdentityGrant`** | Ids only — `owner_id`, `binding_id`, `assignment_id`. A **claim from the routing layer** that this caller may hold a session inside that owner's workspace, not a conclusion: `assert_access` re-reads and re-verifies all three against the database. |
+| **`ChannelIngestionService`** | Stateless service: `assert_access`, `resolve_or_create_session`, `ingest_inbound_message`, `create_identity_session`. The ≥2-callers rule applies to every method (`create_identity_session` has one caller today and gains its second when a channel can route to an identity). |
 | **`IngestionResult`** | Return shape from `ingest_inbound_message` — `session`, `message_id`, `is_new_session`, `streaming_initiated`, `action`, `message`. Mirrors the dict shape of `SessionService.send_session_message` so per-channel migration is a near-textual swap. |
 | **`integration_type`** | Plain `str` ("a2a", "app_mcp", "identity_mcp", "task", "schedule", …) stamped on `Session` at create time. Drives reader-side `get_session_sender(session)` mapping. |
 
@@ -50,6 +51,14 @@ The win is **one canonical entry point for the production send paths** (A2A and 
 ### Scheduler / human task execution
 - **`system_trigger`** kind (scheduler, handover): `policy.allow_system_trigger_fastpath=True` plus the structural invariant `expected_owner_id == agent.owner_id == sender.platform_user_id` is *asserted*, not skipped. If invariant is violated the call raises — cron fires that mis-stamp the owner can't sneak past.
 - **`task_executor`** kind (human-initiated tasks): the executing user is passed through as `sender.platform_user_id`, and `assert_access` runs a real owner-match check. This split makes the trust model visible in code rather than hidden inside `send_session_message`'s `user_id` check.
+
+### Sessions inside somebody else's workspace
+
+Nearly every gate here reduces to "the sender owns the agent". Identity is the one case where that is deliberately false: the session runs in the identity **owner's** space, on their agent and their credentials, while `identity_caller_id` records who is talking. `ChannelAccessPolicy.identity_grant` is how that exception is expressed, and it is deliberately narrow:
+
+- The grant carries **ids only**, and `assert_access` re-reads every one of them (binding live, assignment live and enabled, and four linkage checks tying binding, assignment, caller, agent and owner together).
+- **Re-verify, do not trust.** The routing decision and the session creation are separated by a worker-thread hop and possibly an auto-install wait; the owner may have revoked in between. A grant honoured on the strength of the routing layer's word is a stale answer with a stranger's workspace behind it.
+- With no grant present, the `channel_caller` three-way owner invariant is exactly as strict as it has always been — an external caller can only ever reach their own installs.
 
 ## Business Rules
 

@@ -396,16 +396,174 @@ class IdentityService:
         db_session.commit()
         return True
 
+    #: What a caller is told when any identity check fails. One message for
+    #: every condition, deliberately: the reasons differ (revoked, disabled,
+    #: opted out, mismatched ids) but the caller is somebody else's guest, and
+    #: naming *which* fact failed would tell them about the owner's
+    #: configuration. The specific reason goes to the log.
+    IDENTITY_REVOKED_MESSAGE = "This identity connection is no longer active."
+
+    @staticmethod
+    def _deny(reason: str, **context: Any) -> str:
+        """Log the real reason, return the caller-safe one."""
+        logger.warning(
+            "[Identity] Access denied: %s (%s)",
+            reason,
+            " ".join(f"{k}={v}" for k, v in context.items()),
+        )
+        return IdentityService.IDENTITY_REVOKED_MESSAGE
+
+    @staticmethod
+    def _live_binding(
+        db: DBSession, binding_id: uuid.UUID
+    ) -> tuple[IdentityAgentBinding | None, str | None]:
+        """Condition 1 — the binding exists and the owner has it switched on.
+
+        Returns ``(binding, None)`` or ``(None, message)``. One implementation,
+        shared by the session-resume check and the access-grant check, so a
+        liveness rule can never be tightened on one path and forgotten on the
+        other — which for an authorization check is how one side quietly stops
+        enforcing what the other still does.
+        """
+        binding = db.get(IdentityAgentBinding, binding_id)
+        if binding is None or not binding.is_active:
+            return None, IdentityService._deny(
+                "binding is missing or inactive", binding=binding_id,
+            )
+        return binding, None
+
+    @staticmethod
+    def _live_assignment(
+        db: DBSession, assignment_id: uuid.UUID
+    ) -> tuple[IdentityBindingAssignment | None, str | None]:
+        """Condition 2 — the assignment exists, the owner has it on, the caller opted in.
+
+        Sibling of :meth:`_live_binding`; see there for why these are shared.
+        """
+        assignment = db.get(IdentityBindingAssignment, assignment_id)
+        if assignment is None or not assignment.is_active or not assignment.is_enabled:
+            return None, IdentityService._deny(
+                "assignment is missing, inactive, or not enabled",
+                assignment=assignment_id,
+            )
+        return assignment, None
+
+    @staticmethod
+    def verify_identity_access(
+        db: DBSession,
+        *,
+        owner_id: uuid.UUID | None,
+        binding_id: uuid.UUID | None,
+        assignment_id: uuid.UUID | None,
+        caller_user_id: uuid.UUID | None,
+        agent_id: uuid.UUID | None,
+    ) -> str | None:
+        """Re-verify an identity **authorization claim** against the database.
+
+        This is what stands behind ``ChannelAccessPolicy.identity_grant``: a
+        set of ids handed in by the routing layer, asserting that this caller
+        may hold a session on this agent inside that owner's workspace. It is a
+        claim, not a conclusion — the routing decision and the session creation
+        are separated by a worker-thread hop and possibly an auto-install wait,
+        and the owner may have revoked in between.
+
+        **Six conditions, all of them, every time.** A grant that passes because
+        only five were checked is the failure mode that matters here:
+
+        1. the ``IdentityAgentBinding`` exists and is ``is_active``
+        2. the ``IdentityBindingAssignment`` exists, ``is_active``, ``is_enabled``
+        3. ``assignment.binding_id == binding.id``
+        4. ``assignment.target_user_id == caller_user_id``
+        5. ``binding.agent_id == agent_id``
+        6. ``binding.owner_id == agent.owner_id == owner_id``
+
+        1–2 come from :meth:`_live_binding` / :meth:`_live_assignment`, shared
+        with the resume check.
+        3–6 are specific to a claim: they are what stops three individually-live
+        rows belonging to three different authorizations from being assembled
+        into a fourth one that never existed. A resume check does not need them
+        (see :meth:`check_session_validity`); a grant cannot do without them.
+
+        Returns ``None`` when every condition holds, else a caller-safe message.
+        """
+        if binding_id is None or assignment_id is None:
+            return IdentityService._deny(
+                "grant is missing a binding or assignment id",
+                binding=binding_id, assignment=assignment_id,
+            )
+
+        binding, denial = IdentityService._live_binding(db, binding_id)
+        if denial:
+            return denial
+        assignment, denial = IdentityService._live_assignment(db, assignment_id)
+        if denial:
+            return denial
+
+        # 3. The assignment belongs to *this* binding.
+        if assignment.binding_id != binding.id:
+            return IdentityService._deny(
+                "assignment belongs to a different binding",
+                assignment=assignment_id, binding=binding_id,
+            )
+
+        # 4. The assignment was issued to *this* caller.
+        if caller_user_id is None or assignment.target_user_id != caller_user_id:
+            return IdentityService._deny(
+                "assignment was issued to a different user",
+                assignment=assignment_id, caller=caller_user_id,
+            )
+
+        # 5. The binding exposes *this* agent.
+        if agent_id is None or binding.agent_id != agent_id:
+            return IdentityService._deny(
+                "binding exposes a different agent",
+                binding=binding_id, agent=agent_id,
+            )
+
+        # 6. The binding's owner is the agent's owner and the claimed owner.
+        agent = db.get(Agent, binding.agent_id)
+        if agent is None:
+            return IdentityService._deny(
+                "binding points at an agent that no longer exists",
+                binding=binding_id,
+            )
+        if owner_id is None or not (binding.owner_id == agent.owner_id == owner_id):
+            return IdentityService._deny(
+                "binding owner, agent owner and claimed owner disagree",
+                binding_owner=binding.owner_id,
+                agent_owner=agent.owner_id,
+                claimed_owner=owner_id,
+            )
+
+        return None
+
     @staticmethod
     def check_session_validity(
         db: DBSession,
         session: Any,
     ) -> str | None:
-        """Verify the identity binding and assignment for a session are still active.
+        """Verify an existing identity session is still authorized.
 
         This is the canonical implementation shared by the App MCP and External A2A
         handlers.  Both ``A2ARequestHandler._check_identity_session_validity`` and
         ``AppMCPRequestHandler._check_identity_session_validity`` delegate here.
+
+        **Liveness only — conditions 1 and 2 — and that is the right scope.**
+        The linkage conditions 3–6 that :meth:`verify_identity_access` adds
+        answer "do these ids actually belong together", which is a question
+        about a claim someone handed in. A session's ids were not handed in:
+        they were written together, in one statement, by
+        ``ChannelIngestionService.create_identity_session`` *after* the grant
+        was verified, and none of the fields they link (``binding.agent_id``,
+        ``binding.owner_id``, ``assignment.binding_id``,
+        ``assignment.target_user_id``) is editable afterwards. So 3–6 are
+        invariants of how the row was made rather than facts to re-derive, and
+        re-deriving them here would only reject rows written past the API — at
+        the cost of turning a revocation check into an integrity check.
+
+        What *can* change after creation is exactly what this does re-read: the
+        owner can deactivate the binding or the assignment, and the caller can
+        opt out. That is the whole point of the per-message check.
 
         Args:
             db: Active database session.
@@ -414,22 +572,26 @@ class IdentityService:
 
         Returns:
             ``None`` when the session is still valid.
-            An error message string when the binding or assignment has been disabled.
+            An error message string when the identity authorization no longer holds.
         """
+        # A session carrying neither id is not identity-routed.
+        if not session.identity_binding_id and not session.identity_binding_assignment_id:
+            return None
+
+        # Historically each id was checked independently, so a session with one
+        # of the two set was validated on that one alone. Preserved: the pair is
+        # always written together today, but a row from before that was true
+        # must not start failing on the half it never had.
         if session.identity_binding_id:
-            binding = db.get(IdentityAgentBinding, session.identity_binding_id)
-            if not binding or not binding.is_active:
-                return "This identity connection is no longer active."
+            _, denial = IdentityService._live_binding(db, session.identity_binding_id)
+            if denial:
+                return denial
 
         if session.identity_binding_assignment_id:
-            assignment = db.get(
-                IdentityBindingAssignment, session.identity_binding_assignment_id
+            _, denial = IdentityService._live_assignment(
+                db, session.identity_binding_assignment_id
             )
-            if (
-                not assignment
-                or not assignment.is_active
-                or not assignment.is_enabled
-            ):
-                return "This identity connection is no longer active."
+            if denial:
+                return denial
 
         return None

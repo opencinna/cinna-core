@@ -1,11 +1,45 @@
-"""
-Identity Routing Service — Stage 2 routing for the Identity MCP Server.
+"""Identity Stage 2 — which of *this person's* agents should take the message.
 
-After Stage 1 routing identifies an identity contact (a person), Stage 2
-selects the appropriate agent from that person's identity portfolio,
-filtered to only those accessible to the specific caller.
+Stage 1 resolves a person (``IdentityCandidateProvider`` puts them on the
+ballot); Stage 2 resolves an agent from that person's portfolio, filtered to
+what the specific caller may reach. Two stages is also the recursion cap: an
+identity's agents are agents, never further identities, and that is the
+intended guard.
+
+**This module is written to the four structural facts in
+``channel_routing_service.py``'s module docstring**, because the channels &
+identity unification calls this from inside ``ChannelRoutingService.decide``,
+which ``tests/architecture/channel_routing_purity_test.py`` holds to them:
+
+1. **No caller session crosses the boundary.** ``route_within_identity`` takes
+   ids and text. It cannot add to, commit, or roll back a transaction the
+   caller is holding, and a caller therefore cannot be surprised by what a
+   routing decision did to its unit of work.
+2. **The session it opens is read-only in practice.** One short-lived session,
+   ``SELECT``s only, closed on the way out. No ``add`` / ``commit`` /
+   ``delete`` anywhere in this module.
+3. **It returns plain data.** ``IdentityRoutingResult`` carries ids and two
+   strings read off rows *inside* that session — never an ORM instance, whose
+   session is closed by the time the caller sees it and whose next attribute
+   read would be a lazy reload against a dead connection.
+4. The trace it writes is the ambient ``RoutingTrace`` recorder, which is a
+   no-op when nobody opened a capture.
+
+**These four are held by review here, not by a test.** That purity test parses
+one module path, ``channel_routing_service.py``; it does not walk this one. So
+this list is a claim, and its own file's warning applies — a claim about
+coverage is the one thing a reader cannot spot as false. Two ways to close it,
+whichever comes first: parameterize ``_ROUTING_MODULE`` over both modules (this
+docstring's fact list is already in the shape that test's regex parses), or let
+the change that calls Stage 2 from inside ``decide`` do it, since that is the
+point at which a violation here becomes a violation there.
+
+**Glob pre-matching is gone.** ``IdentityAgentBinding.message_patterns`` is no
+longer read here (settled decision §2.9 of the channels/identity unification
+master plan): a second routing mechanism with silently higher priority than the
+classifier, which no trace explains well, is worse than one classifier call.
+The column survives until a later phase drops it in a migration.
 """
-import fnmatch
 import logging
 import uuid
 from dataclasses import dataclass
@@ -13,8 +47,8 @@ from dataclasses import dataclass
 from sqlmodel import Session as DBSession
 
 from app.models import Agent
-from app.services.identity.identity_service import IdentityService
 from app.models.identity.identity_models import IdentityAgentBinding, IdentityBindingAssignment
+from app.services.identity.identity_service import IdentityService
 from app.services.routing import routing_trace
 from app.services.routing.agent_classifier import AgentClassifier, Candidate
 
@@ -23,14 +57,21 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class IdentityRoutingResult:
-    """Result of Stage 2 identity routing."""
+    """What Stage 2 decided — ids and plain strings, no rows.
+
+    ``agent_name`` and ``session_mode`` are values, not references: both are
+    read off the binding and agent inside the service's own session and copied
+    out. They are on the result because the two consumers need them to build a
+    session (``session_mode``) and to label the reply, and re-reading them
+    would mean a second query for facts this stage already had in hand.
+    """
 
     agent_id: uuid.UUID
     agent_name: str
     session_mode: str
     binding_id: uuid.UUID
     binding_assignment_id: uuid.UUID
-    match_method: str  # "only_one" | "pattern" | "ai"
+    match_method: str  # "only_one" | "ai"
     # Message transformation (only set when AI routing stripped a routing prefix)
     transformed_message: str | None = None
 
@@ -38,12 +79,12 @@ class IdentityRoutingResult:
 class IdentityRoutingService:
     """Stage 2 routing: selects an agent from the identity owner's portfolio.
 
-    Only considers agents that are accessible to the specific caller (target_user_id).
+    Only considers agents that are accessible to the specific caller
+    (``target_user_id``).
     """
 
     @staticmethod
     def route_within_identity(
-        db_session: DBSession,
         owner_id: uuid.UUID,
         caller_user_id: uuid.UUID,
         message: str,
@@ -51,23 +92,58 @@ class IdentityRoutingService:
         """Select the best agent from owner's identity, filtered by caller's access.
 
         Algorithm:
-        1. Get active bindings accessible to caller_user_id
-        2. If none → return None
-        3. If one → use directly (no AI needed)
-        4. Try pattern matching
-        5. Fall back to AI classification via route_to_agent()
+        1. Get active bindings accessible to ``caller_user_id``
+        2. If none → return ``None``
+        3. If one → use directly (no classifier call)
+        4. Otherwise classify
 
-        Returns IdentityRoutingResult or None if no agent available.
+        The **single-binding shortcut** in step 3 stays a Stage-2 property and
+        is not flattened into Stage 1 (master plan §2.15): Stage 1 chose a
+        *person*, and whether that person happens to have exactly one reachable
+        agent is not a fact Stage 1's ballot can hold without re-deriving the
+        caller's access for every candidate on it.
+
+        Opens its own database session — see fact 1 in the module docstring.
+
+        **Cost, stated because it is not free.** On the App MCP path the caller
+        still holds its own session across this call, so an identity request
+        occupies two pooled connections instead of one while Stage 2 runs. That
+        is the same shape ``ChannelRoutingService`` has, with one difference
+        worth knowing: there ``decide`` runs *before* any caller transaction,
+        whereas here it runs inside one. Holding a connection while waiting for
+        a second is the classic pool-exhaustion deadlock, and identity routing
+        is not a hot path today — but if it becomes one, this is the line to
+        revisit, not the pool size.
         """
-        # Debug, not info: Stage 2 runs before the channel pipeline's Pass 1
-        # ownership filter gets a chance to reject an identity route, so this
-        # line can carry EXTERNAL, non-platform users' message text. Same
-        # reasoning as the [Stage1]/[AIRouter] downgrades.
+        # Debug, not info: Stage 2 can carry EXTERNAL, non-platform users'
+        # message text. Same reasoning as the [Stage1]/[AIRouter] downgrades.
         logger.debug(
             "[Stage2] Identity routing: owner=%s caller=%s | message=%r",
             owner_id, caller_user_id, message[:120],
         )
 
+        # Function-local so the name resolves through the (patchable)
+        # ``app.core.db`` module at call time rather than becoming a module
+        # attribute — the convention `ChannelRoutingService` follows, and the
+        # one `tests/architecture/patch_target_drift_test.py` documents.
+        from app.core.db import create_session
+
+        with create_session() as db_session:
+            return IdentityRoutingService._select(
+                db_session=db_session,
+                owner_id=owner_id,
+                caller_user_id=caller_user_id,
+                message=message,
+            )
+
+    @staticmethod
+    def _select(
+        db_session: DBSession,
+        owner_id: uuid.UUID,
+        caller_user_id: uuid.UUID,
+        message: str,
+    ) -> IdentityRoutingResult | None:
+        """The decision itself, on an already-open read session."""
         bindings = IdentityService.get_active_bindings_for_user(
             db_session=db_session,
             owner_id=owner_id,
@@ -82,31 +158,25 @@ class IdentityRoutingService:
             )
             return None
 
-        logger.info("[Stage2] %d accessible binding(s) for caller:", len(bindings))
-        for i, b in enumerate(bindings):
-            agent = db_session.get(Agent, b.agent_id)
-            logger.info(
-                "[Stage2]   binding[%d] agent=%s (%s) trigger=%r patterns=%r active=%s mode=%s",
-                i, agent.name if agent else "?", b.agent_id,
-                (b.trigger_prompt or "")[:80],
-                (b.message_patterns or "")[:60] or None,
-                b.is_active, b.session_mode,
-            )
-
-        # Enrich bindings with their assignment IDs for the caller
-        # We need the assignment ID (to store on session) for each binding
+        # Enrich bindings with their assignment IDs for the caller. The
+        # assignment id is stamped on the session, so a binding without one
+        # cannot produce a usable result and every branch below aborts on it.
         binding_assignments = IdentityRoutingService._get_binding_assignments(
             db_session, bindings, caller_user_id
         )
 
-        # Record the ballot before anything narrows it. Phase 1 left this stage
-        # capturing a prompt and a raw response with **zero candidates**,
-        # because the binding list is built here rather than by a shared
-        # builder — a documented deferral that reads, on the tuning card, as a
-        # broken recorder. It is closed here now that ``_binding_candidates``
-        # is the one builder both the capture and the classifier use.
+        # Record the ballot before anything narrows it. ``_binding_candidates``
+        # is the one builder both this capture and the classifier use, so the
+        # tuning card can never show a ballot the classifier did not receive.
         candidates = IdentityRoutingService._binding_candidates(db_session, bindings)
         IdentityRoutingService._record_candidates(candidates, binding_assignments, bindings)
+
+        logger.debug(
+            "[Stage2] %d accessible binding(s), %d with an assignment for caller=%s",
+            len(bindings),
+            len(binding_assignments),
+            caller_user_id,
+        )
 
         # Single binding — use directly
         if len(bindings) == 1:
@@ -131,30 +201,6 @@ class IdentityRoutingService:
                 match_method="only_one",
             )
 
-        # Try pattern matching
-        matched = IdentityRoutingService._try_pattern_match(message, bindings)
-        if matched:
-            agent = db_session.get(Agent, matched.agent_id)
-            agent_name = agent.name if agent else ""
-            assignment_id = binding_assignments.get(matched.id)
-            if not assignment_id:
-                logger.info("[Stage2] Pattern matched binding but no assignment — aborting")
-                return None
-            logger.info(
-                "[Stage2] Pattern match hit: %s (%s)",
-                agent_name, matched.agent_id,
-            )
-            return IdentityRoutingResult(
-                agent_id=matched.agent_id,
-                agent_name=agent_name,
-                session_mode=matched.session_mode,
-                binding_id=matched.id,
-                binding_assignment_id=assignment_id,
-                match_method="pattern",
-            )
-
-        # Fall back to AI classification
-        logger.info("[Stage2] No pattern match — falling back to AI classification")
         ai_result = IdentityRoutingService._ai_classify(message, bindings, db_session)
         if ai_result:
             ai_matched, ai_transformed_message = ai_result
@@ -244,12 +290,12 @@ class IdentityRoutingService:
         """Put the Stage-2 ballot on the active trace, skips included.
 
         A binding with no assignment for this caller is recorded as an excluded
-        candidate rather than dropped: every one of the three paths below aborts
-        on a missing assignment, and "the agent you expected has no assignment
-        for this caller" is precisely the diagnosis the tuning card exists to
-        give. Wrapped whole because it builds its arguments from ORM objects —
-        the recorder guards the *recording*, never the caller's expressions
-        (plan §11a, Rule 2).
+        candidate rather than dropped: every one of the paths below aborts on a
+        missing assignment, and "the agent you expected has no assignment for
+        this caller" is precisely the diagnosis the tuning card exists to give.
+        Wrapped whole because it builds its arguments from ORM objects — the
+        recorder guards the *recording*, never the caller's expressions
+        (auto-routing plan §11a, Rule 2).
         """
         try:
             for candidate, binding in zip(candidates, bindings):
@@ -274,39 +320,6 @@ class IdentityRoutingService:
                     )
         except Exception:  # noqa: BLE001
             logger.debug("[Stage2] Candidate capture failed", exc_info=True)
-
-    @staticmethod
-    def _try_pattern_match(
-        message: str,
-        bindings: list[IdentityAgentBinding],
-    ) -> IdentityAgentBinding | None:
-        """Try fnmatch-based pattern matching against binding message_patterns."""
-        message_lower = message.lower()
-        for binding in bindings:
-            if not binding.message_patterns:
-                continue
-            patterns = [
-                p.strip()
-                for p in binding.message_patterns.splitlines()
-                if p.strip()
-            ]
-            for pattern in patterns:
-                if fnmatch.fnmatch(message_lower, pattern.lower()):
-                    # Without this the stage reported ``match_method=None`` on a
-                    # pattern hit — a lying field, not a missing one: the trace
-                    # said "nothing matched this way" about a match that had
-                    # just happened. Its App MCP twin has always recorded it.
-                    routing_trace.record_match(
-                        method=routing_trace.MATCH_PATTERN,
-                        matched_pattern=pattern,
-                    )
-                    logger.debug(
-                        "[IdentityRouting] Pattern match: binding=%s pattern=%r",
-                        binding.id,
-                        pattern,
-                    )
-                    return binding
-        return None
 
     @staticmethod
     def _ai_classify(
@@ -336,6 +349,11 @@ class IdentityRoutingService:
             logger.warning("[IdentityRouting] AI router returned invalid UUID: %r", routing_result.agent_id)
             return None
 
+        # No ``record_match`` here, deliberately: this stage has never recorded
+        # one on the AI branch, and adding it would change what the trace's
+        # decision-level ``match_method`` reports (it reads "how the *last*
+        # stage matched", and Stage 2 overwrites Stage 1's value). That field's
+        # shape is settled — do not restructure it from here.
         for binding in bindings:
             if binding.agent_id == agent_id:
                 return binding, routing_result.transformed_message

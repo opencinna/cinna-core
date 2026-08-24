@@ -235,6 +235,7 @@ from .sessions.session import (
 )
 from .sessions.session_sender import (
     ChannelAccessPolicy,
+    IdentityGrant,
     IngestionResult,
     SessionSender,
     SessionSenderKind,
@@ -1016,6 +1017,7 @@ __all__ = [
     "SessionSender",
     "SessionSenderKind",
     "ChannelAccessPolicy",
+    "IdentityGrant",
     "IngestionResult",
     "get_session_sender",
     # Activities

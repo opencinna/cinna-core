@@ -28,10 +28,20 @@ def register_app_mcp_prompts(server) -> None:
     async def list_available_agents() -> list:
         """List available agents as MCP prompts for the authenticated user.
 
-        Returns prompts representing each active route's trigger description.
+        Returns prompts representing each addressable target's trigger
+        description. The set mirrors what App MCP Stage 1 would put on the
+        ballot — the user's effective routes **and** the identity owners they
+        can address — because a discovery list that omits half the routable
+        targets teaches the client the wrong vocabulary. The two are composed
+        here for the same reason ``AppMCPRoutingService.route_message``
+        composes them: identity stopped being an arm inside the route service
+        in phase 1 of the channels/identity unification.
         """
         from app.core.db import create_session
         from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
+        from app.services.routing.identity_candidate_provider import (
+            IdentityCandidateProvider,
+        )
 
         auth_user_id_str = mcp_authenticated_user_id_var.get(None)
         if not auth_user_id_str:
@@ -49,30 +59,34 @@ def register_app_mcp_prompts(server) -> None:
                     user_id=user_id,
                     channel="app_mcp",
                 )
+                identity_candidates = IdentityCandidateProvider.build(db, user_id)
         except Exception as e:
             logger.error("[AppMCP] Failed to load prompts for user %s: %s", user_id, e)
             return []
 
         from mcp.types import TextContent, PromptMessage
-        prompts = []
-        for route in effective_routes:
-            prompts.append(
+
+        def _entry(trigger_prompt: str, prompt_examples: str | None) -> list:
+            messages = [
                 PromptMessage(
                     role="user",
-                    content=TextContent(
-                        type="text",
-                        text=route.trigger_prompt,
-                    ),
+                    content=TextContent(type="text", text=trigger_prompt),
                 )
-            )
-            if route.prompt_examples:
-                for raw_line in route.prompt_examples.splitlines():
-                    line = raw_line.strip()
-                    if line:
-                        prompts.append(
-                            PromptMessage(
-                                role="user",
-                                content=TextContent(type="text", text=line),
-                            )
+            ]
+            for raw_line in (prompt_examples or "").splitlines():
+                line = raw_line.strip()
+                if line:
+                    messages.append(
+                        PromptMessage(
+                            role="user",
+                            content=TextContent(type="text", text=line),
                         )
+                    )
+            return messages
+
+        prompts = []
+        for route in effective_routes:
+            prompts.extend(_entry(route.trigger_prompt, route.prompt_examples))
+        for candidate in identity_candidates:
+            prompts.extend(_entry(candidate.trigger_prompt, candidate.prompt_examples))
         return prompts

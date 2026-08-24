@@ -336,8 +336,9 @@ class ExternalAgentCatalogService:
     ) -> list[ExternalTargetPublic]:
         """Return agents shared with the user via active AppAgentRoute assignments.
 
-        Excludes identity-source routes (those are handled by the identity
-        section) and any route whose underlying agent is already present in
+        Excludes identity-source routes (which this function's source can no
+        longer produce — see the filter below) and any route whose underlying
+        agent is already present in
         ``seen_agent_ids`` — this de-duplicates against the personal section
         and collapses multiple routes pointing at the same agent into a single
         entry.
@@ -352,7 +353,10 @@ class ExternalAgentCatalogService:
             user_id=user.id,
             channel="app_mcp",
         )
-        # Keep only direct agent routes; identity routes are in the identity section
+        # Vacuous since identity moved to its own candidate provider — this
+        # function's source can no longer be "identity". Kept as the standing
+        # statement of the contract: identity belongs to the identity section
+        # below (``_list_identity_contacts``), never to the route section.
         routes = [r for r in routes if r.source != "identity"]
         # Sort by agent name ascending
         routes.sort(key=lambda r: r.agent_name.lower())
@@ -515,6 +519,15 @@ class ExternalAgentCatalogService:
         use them as-is in the identity's A2A endpoint.
 
         Capped at _MAX_EXAMPLE_PROMPTS total entries.
+
+        **A near-twin of ``IdentityCandidateProvider._contact_examples``, and
+        deliberately not merged with it.** That one builds classifier input:
+        it carries the owner's email inside the prefix (because the model is
+        disambiguating people), is uncapped here and clamped at render time,
+        and returns the newline ``str`` a ``Candidate`` holds. This one builds
+        a native client's discovery list: no email, hard-capped, ``list[str]``.
+        Collapsing them would silently change one of the two surfaces — which
+        is the thing to weigh if a future change is tempted to.
         """
         bindings = IdentityService.get_active_bindings_for_user(
             db_session=db,

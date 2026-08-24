@@ -459,6 +459,17 @@ class AppAgentRouteService:
     ) -> list[EffectiveRoute]:
         """Get all active routes for a user (assigned + personal), filtered by channel.
 
+        **Routes only.** Identity contacts used to be appended here as a third
+        arm, which made "the people this user can address" a fact only the App
+        MCP route service could answer and only the App MCP surface could
+        consume. They now come from
+        ``app.services.routing.identity_candidate_provider``, and
+        ``AppMCPRoutingService.route_message`` composes the two
+        (channels/identity unification, phase 1 §2.3). Consumers that filtered
+        ``source != "identity"`` out of this list — the external A2A catalog and
+        access policy — are unaffected by construction; consumers that wanted
+        the identity rows (``app.mcp.app_prompts``) now call the provider.
+
         Returns unified EffectiveRoute objects. Only includes routes where:
         - Assigned route: is_active=True AND assignment is_enabled=True AND channel enabled
         - Personal route (UserAppAgentRoute): is_active=True AND channel enabled
@@ -479,15 +490,11 @@ class AppAgentRouteService:
         being switched off is the exception.
 
         Excluded routes never reach ``results`` — they are recorded as
-        ``SKIP_ROUTE_INACTIVE`` candidates and discarded.
-
-        The identity contact set below is deliberately **not** converted the same
-        way: its ``is_active`` predicates sit on the *join* side of a
-        one-to-many collapsed by ``DISTINCT`` (one EffectiveRoute per owner, not
-        per binding), so dropping them would not yield "the same owners plus the
-        inactive ones" — it would yield owners with at least one inactive
-        binding, indistinguishable from owners whose bindings are all inactive,
-        without restructuring the select. Left alone rather than guessed at.
+        ``SKIP_ROUTE_INACTIVE`` candidates and discarded, after ``results``, so
+        this function's own contribution to the trace lists its eligible set
+        first and then what it dropped and why. That ordering is a property of
+        *this batch*, not of the composed Stage 1 ballot: identity candidates
+        are recorded by their own provider, after both of these batches.
         """
         results: list[EffectiveRoute] = []
         # Recorded as skipped candidates after ``results``, so the trace lists
@@ -562,86 +569,6 @@ class AppAgentRouteService:
                 source="user",
             )
             (results if user_route.is_active else inactive).append(effective)
-
-        # Identity contacts — distinct owners who have active+enabled assignments for this user
-        # One EffectiveRoute per person (not per binding). Stage 2 handles agent selection.
-        from app.models.identity.identity_models import (
-            IdentityAgentBinding,
-            IdentityBindingAssignment,
-        )
-
-        # Debug: count raw identity assignments for this user (before filters)
-        raw_assignments_stmt = select(IdentityBindingAssignment).where(
-            IdentityBindingAssignment.target_user_id == user_id,
-        )
-        raw_assignments = db_session.exec(raw_assignments_stmt).all()
-        logger.debug(
-            "[EffectiveRoutes]   Identity assignments (raw, all states): %d",
-            len(raw_assignments),
-        )
-        for ra in raw_assignments:
-            binding = db_session.get(IdentityAgentBinding, ra.binding_id)
-            logger.debug(
-                "[EffectiveRoutes]     - assignment=%s binding=%s "
-                "assign.is_active=%s assign.is_enabled=%s "
-                "binding.is_active=%s binding.owner=%s",
-                ra.id, ra.binding_id,
-                ra.is_active, ra.is_enabled,
-                binding.is_active if binding else "MISSING",
-                binding.owner_id if binding else "MISSING",
-            )
-
-        identity_stmt = (
-            select(User)
-            .join(
-                IdentityAgentBinding,
-                IdentityAgentBinding.owner_id == User.id,
-            )
-            .join(
-                IdentityBindingAssignment,
-                IdentityBindingAssignment.binding_id == IdentityAgentBinding.id,
-            )
-            .where(
-                IdentityBindingAssignment.target_user_id == user_id,
-                IdentityBindingAssignment.is_active == True,  # noqa: E712
-                IdentityBindingAssignment.is_enabled == True,  # noqa: E712
-                IdentityAgentBinding.is_active == True,  # noqa: E712
-            )
-            .distinct()
-        )
-
-        identity_owners = db_session.exec(identity_stmt).all()
-        logger.debug("[EffectiveRoutes]   Identity contacts (filtered): %d", len(identity_owners))
-        for owner in identity_owners:
-            logger.debug(
-                "[EffectiveRoutes]     - owner=%s (%s)",
-                owner.full_name or owner.email, owner.id,
-            )
-            identity_examples = AppAgentRouteService._build_identity_prompt_examples(
-                db_session=db_session,
-                owner_id=owner.id,
-                owner_name=owner.full_name or "",
-                owner_email=owner.email or "",
-                target_user_id=user_id,
-            )
-            results.append(
-                EffectiveRoute(
-                    route_id=uuid.UUID(int=0),  # placeholder — identity uses owner_id
-                    agent_id=uuid.UUID(int=0),  # placeholder — resolved in Stage 2
-                    agent_name=owner.full_name or owner.email or "",
-                    session_mode="conversation",  # Stage 2 overrides with binding's session_mode
-                    trigger_prompt=(
-                        f"Contact {owner.full_name or owner.email} ({owner.email}). "
-                        f"Routes to their available agents."
-                    ),
-                    message_patterns=None,
-                    source="identity",
-                    identity_owner_id=owner.id,
-                    identity_owner_name=owner.full_name or "",
-                    identity_owner_email=owner.email or "",
-                    prompt_examples=identity_examples,
-                )
-            )
 
         logger.debug(
             "[EffectiveRoutes] Total effective routes: %d (%d inactive)",
@@ -917,46 +844,6 @@ class AppAgentRouteService:
         db_session.commit()
         db_session.refresh(assignment)
         return _assignment_to_public(db_session, assignment)
-
-    @staticmethod
-    def _build_identity_prompt_examples(
-        db_session: DBSession,
-        owner_id: uuid.UUID,
-        owner_name: str,
-        owner_email: str,
-        target_user_id: uuid.UUID,
-    ) -> str | None:
-        """Build prefixed prompt examples for an identity route.
-
-        Aggregates prompt_examples from all active bindings accessible to the caller,
-        prefixing each with the identity owner's name.
-        """
-        from app.models.identity.identity_models import (
-            IdentityAgentBinding,
-            IdentityBindingAssignment,
-        )
-        stmt = (
-            select(IdentityAgentBinding)
-            .join(
-                IdentityBindingAssignment,
-                IdentityBindingAssignment.binding_id == IdentityAgentBinding.id,
-            )
-            .where(
-                IdentityAgentBinding.owner_id == owner_id,
-                IdentityBindingAssignment.target_user_id == target_user_id,
-                IdentityBindingAssignment.is_active == True,  # noqa: E712
-                IdentityBindingAssignment.is_enabled == True,  # noqa: E712
-                IdentityAgentBinding.is_active == True,  # noqa: E712
-            )
-        )
-        lines: list[str] = []
-        for binding in db_session.exec(stmt).all():
-            if binding.prompt_examples:
-                for raw_line in binding.prompt_examples.splitlines():
-                    line = raw_line.strip()
-                    if line:
-                        lines.append(f"ask {owner_name} ({owner_email}) to {line}")
-        return "\n".join(lines) if lines else None
 
 
 # ---------------------------------------------------------------------------

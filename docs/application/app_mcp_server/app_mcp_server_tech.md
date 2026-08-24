@@ -20,8 +20,9 @@
 
 ### Backend -- Services
 
-- `backend/app/services/app_mcp/app_agent_route_service.py` -- `AppAgentRouteService` (agent-scoped and admin CRUD, assignments, effective routes), `UserAppAgentRouteService` (personal/legacy CRUD, toggle, shared route listing), `get_effective_routes_for_user()`
-- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `AppMCPRoutingService` with `route_message()`, `_try_pattern_match()`, `_ai_classify()`; `RoutingResult` includes `transformed_message` field; `_route_identity()` passes Stage 1 transformation to Stage 2 and applies cascade logic
+- `backend/app/services/app_mcp/app_agent_route_service.py` -- `AppAgentRouteService` (agent-scoped and admin CRUD, assignments, effective routes), `UserAppAgentRouteService` (personal/legacy CRUD, toggle, shared route listing), `get_effective_routes_for_user()` -- **routes only**; identity contacts are no longer an arm of this function
+- `backend/app/services/routing/identity_candidate_provider.py` -- `IdentityCandidateProvider.build(db, caller_user_id)` -- the identity half of Stage 1's ballot, one `Candidate` per identity owner; `identity_ref_id()` / `parse_identity_ref()` own the `identity:{owner_id}` `ref_id` namespace
+- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `AppMCPRoutingService` with `route_message()` (composes the route and identity candidate providers), `_try_pattern_match()`, `_ai_classify()`; `IdentityPick` is Stage 1's answer when a person wins; `RoutingResult` includes `transformed_message` field; `_route_identity()` passes Stage 1 transformation to Stage 2 and applies cascade logic
 - `backend/app/services/app_mcp/app_mcp_request_handler.py` -- `AppMCPRequestHandler` with `handle_send_message()`, `_resolve_session()`, session lock management; uses `routing_result.transformed_message` as `effective_message` for message creation and title generation; stores `app_mcp_original_message` in session metadata when transformation occurs
 - `backend/app/services/app_mcp/app_mcp_oauth_service.py` -- `AppMCPOAuthService` for app-level OAuth token lifecycle
 
@@ -29,7 +30,7 @@
 
 - `backend/app/mcp/app_server.py` -- `create_app_mcp_server()` singleton factory
 - `backend/app/mcp/app_tools.py` -- `send_message` tool registration on the App MCP FastMCP instance
-- `backend/app/mcp/app_prompts.py` -- dynamic per-user MCP prompt listing
+- `backend/app/mcp/app_prompts.py` -- dynamic per-user MCP prompt listing; composes effective routes **and** identity candidates so the discovery list matches Stage 1's ballot
 - `backend/app/mcp/app_token_verifier.py` -- `AppMCPTokenVerifier` for validating app-level OAuth tokens
 - `backend/app/mcp/server.py` -- `MCPServerRegistry` extended with `"app"` path handling and `get_or_create_app_server()`
 
@@ -254,7 +255,7 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 - `delete_route_for_agent(db_session, agent_id, route_id, current_user)` -- delete with ownership check; raises ValueError on permission violation
 - `assign_users(db_session, route_id, user_ids, auto_enable=False)` -- bulk assign users, skip duplicates; `auto_enable` controls `is_enabled` for new assignments
 - `remove_assignment(db_session, route_id, user_id)` -- remove single assignment
-- `get_effective_routes_for_user(db_session, user_id, channel)` -- returns unified `EffectiveRoute` list combining assigned routes (active + enabled) and personal routes (active), filtered by channel
+- `get_effective_routes_for_user(db_session, user_id, channel)` -- returns unified `EffectiveRoute` list combining assigned routes (active + enabled) and personal routes (active), filtered by channel. **Routes only.** The identity arm moved to `IdentityCandidateProvider` (see below), so `EffectiveRoute.source` is now always `"admin"` or `"user"` here; the `source != "identity"` filters in the external A2A catalog and access policy are retained as documentation of that contract and are no-ops
 - `toggle_admin_assignment(db_session, assignment_id, user_id, is_enabled)` -- allow a user to toggle their own route assignment on/off
 - `find_route_conflicts_for_agent(db_session, agent_id, user_id, threshold=None)` -- compares the agent's auto-managed route trigger prompt against all other effective routes for `user_id` using Jaccard token-overlap; excludes identity routes and routes targeting the same agent; returns `RouteConflictResponse` sorted by descending similarity; returns empty when no auto-managed route exists for the agent
 - `sync_router_trigger_prompt_from_agent(db_session, agent)` -- called after `PATCH /agents/{id}/router-trigger-prompt` and the generic `PUT /agents/{id}` save; propagates the new value onto the agent's auto-managed route (`is_auto_managed=True`) so the router sees it immediately without waiting for an apply-update. When no auto-managed route exists, delegates to `_create_auto_route_for_agent` instead of no-oping
@@ -268,12 +269,22 @@ shared_routes: list[SharedRoutePublic]           # AppAgentRoute records assigne
 - `delete_route(db_session, route_id, user_id)` -- delete personal route (ownership check)
 - `get_shared_routes(db_session, user_id)` -- returns `list[SharedRoutePublic]` with JOINed agent owner info and route creator ("shared by") info for all routes assigned to the user
 
+### `IdentityCandidateProvider` (`backend/app/services/routing/identity_candidate_provider.py`)
+
+The identity half of Stage 1's ballot, extracted out of `get_effective_routes_for_user` so any surface can offer identity without inheriting the App MCP enablement toggles that come attached to a route. Sibling of `ChannelCandidateProvider`; providers **compose** rather than one borrowing another's set.
+
+- `build(db, caller_user_id) -> list[Candidate]` -- one `Candidate` per identity **owner** (not per binding). Eligible when the caller has at least one `IdentityBindingAssignment` with `is_active AND is_enabled` whose `IdentityAgentBinding.is_active`. One join, partitioned in Python — the previous arm ran a per-owner aggregation query plus a raw-assignment debug loop
+- `name` = owner's `full_name or email`; `trigger_prompt` = `"Contact {name} ({email}). Routes to their available agents."`; `prompt_examples` = every reachable binding's examples re-voiced as `"ask {name} ({email}) to {line}"` — the pre-refactor text, unchanged, because a changed prompt is a changed routing outcome
+- `ref_id` = `identity:{owner_id}` via `identity_ref_id()`, read back by `parse_identity_ref()`. `Candidate.ref_id` is a plain `str` and every other provider puts an agent UUID in it, so an un-namespaced owner id would be looked up as an agent. (The old arm gave every identity route the same placeholder `agent_id` `UUID(int=0)`, so two identity owners on one ballot collided and the second was unreachable — namespacing removes that as a side effect)
+- **Skips are recorded**, never dropped: an owner who named this caller but whose bindings/assignments are all switched off is a `SKIP_IDENTITY_UNAVAILABLE` candidate. Deliberately **not** `SKIP_IDENTITY_ROUTE`, which means the unrelated "a channel decision rejected an identity route it was offered". An owner who never named this caller produces no row at all
+- `AgentClassifier.classify` accepts a `ref_id` that is on the ballot even when it is not UUID-shaped; the shape check remains for anything else
+
 ### `AppMCPRoutingService`
 
-- `route_message(db, user_id, message, channel)` -- main entry: gets effective routes, tries pattern match, falls back to AI, returns `RoutingResult` (with optional `transformed_message`) or None
-- `_try_pattern_match(message, routes)` -- fnmatch-based glob matching against `message_patterns`
-- `_ai_classify(message, routes)` -- builds a `Candidate` (`ref_id`, `name`, `trigger_prompt`, `prompt_examples`) per effective route and calls `AgentClassifier.classify(candidates, message)` directly (`backend/app/services/routing/agent_classifier.py`, not `AIFunctionsService.route_to_agent()` — routing_tuning's Phase 5 collapsed this and two other near-copies onto one classifier); returns `(EffectiveRoute, transformed_message)` tuple or None
-- `_route_identity(db, selected_route, caller_user_id, message, stage1_method, transformed_message)` -- Stage 2 delegation; passes Stage 1's transformed message to identity router; applies cascade logic (Stage 2 wins > Stage 1 fallback > None)
+- `route_message(db, user_id, message, channel)` -- main entry: composes `get_effective_routes_for_user` (routes) with `IdentityCandidateProvider.build` (people), tries pattern match over the routes, falls back to AI over the whole ballot, returns `RoutingResult` (with optional `transformed_message`) or None. The `only_one` short-circuit counts both providers' candidates together
+- `_try_pattern_match(message, routes)` -- fnmatch-based glob matching against `message_patterns`. Routes only; identity candidates carry no patterns, exactly as the identity *route* never did
+- `_ai_classify(message, routes, identity_candidates)` -- builds a `Candidate` (`ref_id`, `name`, `trigger_prompt`, `prompt_examples`) per effective route, appends the identity candidates the provider already built, and calls `AgentClassifier.classify(candidates, message)` directly (`backend/app/services/routing/agent_classifier.py`, not `AIFunctionsService.route_to_agent()` — routing_tuning's Phase 5 collapsed this and two other near-copies onto one classifier); returns `(EffectiveRoute | IdentityPick, transformed_message)` tuple or None. The identity ref is resolved **before** the UUID parse, which would otherwise reject it
+- `_route_identity(db, selected_route, caller_user_id, message, stage1_method, transformed_message)` -- Stage 2 delegation, where `selected_route` is an `IdentityPick`; passes Stage 1's transformed message to identity router; applies cascade logic (Stage 2 wins > Stage 1 fallback > None). `db` is **not** forwarded — Stage 2 opens its own short-lived read session
 
 ### `AppMCPRequestHandler`
 
@@ -281,7 +292,7 @@ Session resolution flows through `ChannelIngestionService.assert_access` + `reso
 
 - `handle_send_message(user_id, message, context_id, mcp_ctx)` -- main tool handler: resolves session, creates message with effective (transformed) content, streams response, returns JSON
 - `_try_resume_session(...)` -- single helper that resumes an existing session by `context_id` with strict `(integration_type, caller-column)` match (channel-edge resume verification; not delegated to `ChannelIngestionService._verify_resume_sender`)
-- New-session creation supplies `caller_id` (app_mcp) or `identity_caller_id` + identity-binding columns (identity_mcp) via `extra_session_kwargs`; the service stamps them post-create via its whitelisted `_STAMPABLE_COLUMNS`
+- New-session creation supplies `caller_id` (app_mcp) via `extra_session_kwargs`; the service stamps it post-create via its whitelisted `_STAMPABLE_COLUMNS`. Identity sessions go through `ChannelIngestionService.create_identity_session` instead, which stamps `identity_caller_id` + the two identity-binding columns from an `IdentityGrant` — shared so a channel can create the same kind of session
 - Effective message: `routing_result.transformed_message or original_message`; used for `MessageService.create_message()` and title generation
 - Session lock management: per-session `asyncio.Lock` with 500-entry cap and best-effort eviction
 

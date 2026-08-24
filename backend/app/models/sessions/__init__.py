@@ -1,6 +1,7 @@
 """Public surface of the sessions models package."""
 from .session_sender import (
     ChannelAccessPolicy,
+    IdentityGrant,
     IngestionResult,
     SessionSender,
     SessionSenderKind,
@@ -9,6 +10,7 @@ from .session_sender import (
 
 __all__ = [
     "ChannelAccessPolicy",
+    "IdentityGrant",
     "IngestionResult",
     "SessionSender",
     "SessionSenderKind",

@@ -29,7 +29,8 @@ Caller (User A): "Ask User B to prepare the annual report"
        |
        v
 Stage 1: App MCP Server Router
-  - Effective routes include agent routes AND identity contacts
+  - The ballot is composed: the caller's effective agent routes PLUS one
+    candidate per identity owner they can address (IdentityCandidateProvider)
   - AI classifies message -> selects "User B" (identity route)
   - Transforms message: "prepare the annual report" (strips "Ask User B to")
        |
@@ -96,7 +97,7 @@ Stage 2 only considers agents where the caller has an active, enabled binding as
 ### Identity Configuration
 
 - Users have one identity; it is workspace-independent (agents from any workspace can be added)
-- Each agent binding has its own trigger prompt and optional glob message patterns for Stage 2 routing
+- Each agent binding has its own trigger prompt for Stage 2 routing. `message_patterns` is still stored and editable but **Stage 2 no longer reads it** — see *Stage 2 Routing Priority* below
 - The same agent cannot be bound twice to the same identity (unique constraint: `owner_id, agent_id`)
 - Agents must be owned by the identity owner — you can only expose your own agents
 - Identity does not generate routes for the owner themselves (self-exclusion at the assignment level)
@@ -119,9 +120,10 @@ Stage 2 only considers agents where the caller has an active, enabled binding as
 ### Stage 2 Routing Priority
 
 1. **Single binding shortcut** — if the caller has access to only one binding, use it directly (no classification needed)
-2. **Pattern matching** — try each binding's `message_patterns` against the message using fnmatch (case-insensitive, newline-separated patterns); first match wins
-3. **AI classification** — call LLM with the message and each binding's trigger prompt; LLM picks the best agent or returns "NONE"
-4. **No match** — error returned to caller
+2. **AI classification** — call LLM with the message and each binding's trigger prompt and prompt examples; LLM picks the best agent or returns "NONE"
+3. **No match** — error returned to caller
+
+**Glob pattern matching was removed from Stage 2.** It was a second routing mechanism with silently higher priority than the classifier, and no trace explained it well: a decision that a pattern took would look, in the trace, much like one the classifier took. The classifier is cheap and its reasoning is recorded. `IdentityAgentBinding.message_patterns` still exists as a column and is still editable in the UI, but nothing reads it during routing; it is removed outright in a later phase of the channels/identity unification.
 
 ### Session Ownership and Access
 
@@ -149,7 +151,7 @@ See **[Prompt Examples](../app_mcp_server/prompt_examples.md)** for full details
 
 ## Integration Points
 
-- **[App MCP Server](../app_mcp_server/app_mcp_server.md)** — identity contacts appear as entries in `get_effective_routes_for_user()` alongside direct agent routes; `AppMCPRoutingService.route_message()` invokes Stage 2 routing when a selected route has `source = "identity"`
+- **[App MCP Server](../app_mcp_server/app_mcp_server.md)** — `AppMCPRoutingService.route_message()` composes two candidate providers for Stage 1: the caller's effective agent routes, and `IdentityCandidateProvider` (one candidate per identity owner, with an `identity:{owner_id}` ref so a person can never be mistaken for an agent). When an identity candidate wins, Stage 2 routing runs
 - **[Agent Sessions](../agent_sessions/agent_sessions.md)** — identity sessions use the same `Session` model with `integration_type = "identity_mcp"` and three additional columns: `identity_caller_id`, `identity_binding_id`, `identity_binding_assignment_id`
 - **[MCP Integration](../mcp_integration/agent_mcp_architecture.md)** — uses the same shared OAuth AS and App MCP token infrastructure; no separate OAuth flow
 - **[Agent Management](../agent_management/agent_management.md)** — MCP Connectors card is extended with a third integration type option for identity registration

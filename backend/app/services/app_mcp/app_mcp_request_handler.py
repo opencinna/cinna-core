@@ -17,6 +17,7 @@ from app.core.db import create_session
 from app.models import (
     Agent,
     ChannelAccessPolicy,
+    IdentityGrant,
     Session,
     SessionSender,
 )
@@ -227,6 +228,7 @@ class AppMCPRequestHandler:
         sender = SessionSender.from_app_mcp(caller_user_id=user_id)
         try:
             ChannelIngestionService.assert_access(
+                db=db,
                 agent=agent,
                 sender=sender,
                 policy=ChannelAccessPolicy(
@@ -318,7 +320,15 @@ class AppMCPRequestHandler:
         agent: Agent,
         caller_user_id: uuid.UUID,
     ) -> tuple[Session | None, Agent | str | None, bool]:
-        """Create a session in the identity owner's space for identity routing."""
+        """Create a session in the identity owner's space for identity routing.
+
+        The session itself is built by
+        ``ChannelIngestionService.create_identity_session`` — shared so a
+        channel can create the same kind of session in Phase 3. This method
+        keeps only what is App-MCP-specific: the sender shape, the
+        ``identity_mcp`` integration type, and the display metadata the MCP
+        response reads back.
+        """
         from app.models import User
 
         owner_id = routing_result.identity_owner_id
@@ -330,43 +340,30 @@ class AppMCPRequestHandler:
             identity_caller_user_id=caller_user_id,
         )
         try:
-            ChannelIngestionService.assert_access(
-                agent=agent,
-                sender=sender,
-                policy=ChannelAccessPolicy(
-                    expected_owner_id=agent.owner_id,
-                    require_caller_in_route=True,
-                ),
-            )
-            session, _ = ChannelIngestionService.resolve_or_create_session(
+            session = ChannelIngestionService.create_identity_session(
                 db=db,
                 agent=agent,
                 sender=sender,
-                thread_key=None,
+                grant=IdentityGrant(
+                    owner_id=owner_id,
+                    binding_id=routing_result.identity_binding_id,
+                    assignment_id=routing_result.identity_binding_assignment_id,
+                ),
                 integration_type="identity_mcp",
-                extra_session_kwargs={
-                    "mode": routing_result.session_mode,
-                    # Owner of the session is the identity owner, not the
-                    # agent owner (consumed by ``_select_session_owner_id``).
-                    "identity_owner_id": owner_id,
-                    # Post-create stamping of identity-specific columns.
-                    "identity_caller_id": caller_user_id,
-                    "identity_binding_id": routing_result.identity_binding_id,
-                    "identity_binding_assignment_id": routing_result.identity_binding_assignment_id,
-                    "session_metadata_extra": {
-                        "identity_caller_name": caller.full_name if caller else str(caller_user_id),
-                        "identity_owner_name": owner.full_name if owner else str(owner_id),
-                        "identity_match_method": routing_result.identity_stage2_match_method or "",
-                        "app_mcp_route_type": "identity",
-                        "app_mcp_match_method": routing_result.match_method,
-                    },
+                mode=routing_result.session_mode,
+                session_metadata_extra={
+                    "identity_caller_name": caller.full_name if caller else str(caller_user_id),
+                    "identity_owner_name": owner.full_name if owner else str(owner_id),
+                    "identity_match_method": routing_result.identity_stage2_match_method or "",
+                    "app_mcp_route_type": "identity",
+                    "app_mcp_match_method": routing_result.match_method,
                 },
             )
         except PermissionError as e:
             # Service-side access denial. ValueError (session not found) is
             # only raised for resume paths — unreachable here because
             # thread_key=None. RuntimeError (no active env) is pre-checked
-            # by the caller (_resolve_session :213) before this method is
+            # by the caller (_resolve_session) before this method is
             # invoked. Both can propagate as unexpected exceptions if they
             # ever fire.
             logger.warning("[AppMCP] Permission denied creating identity session: %s", e)

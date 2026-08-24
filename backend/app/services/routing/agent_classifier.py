@@ -366,11 +366,27 @@ class AgentClassifier:
                 )
                 return None
 
-            # Validate it looks like a UUID (basic check)
-            if not (
-                isinstance(agent_id, str)
-                and len(agent_id) == 36
-                and agent_id.count("-") == 4
+            known_ids = {c.ref_id for c in candidates}
+
+            # Validate it looks like a UUID (basic check) — **unless the model
+            # echoed back a ref that is literally on the ballot.**
+            #
+            # ``Candidate.ref_id`` is a plain ``str``, and not every provider
+            # puts a UUID in it: ``IdentityCandidateProvider`` namespaces its
+            # refs (``identity:{owner_id}``) precisely so a person cannot be
+            # mistaken for an agent. A shape check alone would reject those,
+            # turning "the model picked the person it was offered" into
+            # "malformed reply". The allowlist arm is strictly wider than the
+            # shape check — a reply that passed before still passes — and it is
+            # the stronger of the two tests anyway: being on the ballot says
+            # more than looking like a UUID does.
+            #
+            # ``isinstance`` is checked first and separately: a model can reply
+            # with a list or an object here, and an unhashable value would make
+            # the ``in`` test raise rather than reject.
+            if not isinstance(agent_id, str) or (
+                agent_id not in known_ids
+                and not (len(agent_id) == 36 and agent_id.count("-") == 4)
             ):
                 logger.warning("[AIRouter] Unexpected agent_id format: %r", agent_id)
                 routing_trace.record_parse_outcome(
@@ -378,7 +394,6 @@ class AgentClassifier:
                 )
                 return None
 
-            known_ids = {c.ref_id for c in candidates}
             result = ClassificationResult(
                 agent_id=agent_id,
                 transformed_message=_parse_transformed_message(

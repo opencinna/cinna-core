@@ -19,6 +19,7 @@ from sqlmodel import Session as DBSession
 from app.models import (
     Agent,
     ChannelAccessPolicy,
+    IdentityGrant,
     IngestionResult,
     Session,
     SessionCreate,
@@ -29,6 +30,15 @@ from app.services.sessions.session_service import SessionService
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[ChannelIngestion]"
+
+#: Sender kinds ``create_identity_session`` will build a session for. An
+#: allowlist rather than a comment, because the failure mode of the wrong kind
+#: is a *committed* session owned by the wrong user — see that method's
+#: docstring. Grows in **Phase 3** of
+#: ``docs/plans/channels_identity_unification/`` — the same change that teaches
+#: ``ChannelIngestionService._select_session_owner_id`` how a
+#: ``channel_caller`` sender owns an identity session, never ahead of it.
+_IDENTITY_SESSION_SENDER_KINDS: frozenset[str] = frozenset({"mcp_caller"})
 
 
 class NoActiveEnvironmentError(RuntimeError):
@@ -74,7 +84,7 @@ class ChannelIngestionService:
         """
         # Step 1: access gating.
         ChannelIngestionService.assert_access(
-            agent=agent, sender=sender, policy=access_policy
+            db=db, agent=agent, sender=sender, policy=access_policy
         )
 
         # Step 2: resolve or create the session.
@@ -216,13 +226,131 @@ class ChannelIngestionService:
         return session, True
 
     @staticmethod
+    def create_identity_session(
+        *,
+        db: DBSession,
+        agent: Agent,
+        sender: SessionSender,
+        grant: IdentityGrant,
+        integration_type: str,
+        mode: str = "conversation",
+        session_metadata_extra: dict[str, Any] | None = None,
+    ) -> Session:
+        """Create a session in the identity **owner's** space for a foreign caller.
+
+        The one place identity sessions are built. It used to live inline in
+        ``AppMCPRequestHandler._create_identity_session``, which made "a caller
+        may hold a session inside somebody else's workspace" an App-MCP-only
+        capability; any surface that wanted it would have had to rebuild the
+        ownership and stamping rules, and a surface that rebuilt them slightly
+        differently is the failure this consolidates away.
+
+        Ownership is the non-obvious part and does not change here:
+        ``session.user_id`` is the **identity owner** (the agent runs in their
+        space, on their credentials) while ``identity_caller_id`` records who
+        is talking. That inversion is why the grant exists and why
+        ``assert_access`` re-reads it.
+
+        ``sender`` is a parameter rather than built here because it is the one
+        thing that genuinely differs per surface: App MCP passes
+        ``SessionSender.from_app_mcp(caller, identity_caller_user_id=caller)``,
+        and a channel passes ``SessionSender.from_channel(...)``.
+        ``integration_type`` is likewise the caller's to choose — App MCP
+        identity sessions stay ``"identity_mcp"``.
+
+        **Where the grant is actually verified.** ``assert_access`` consults
+        ``policy.identity_grant`` on its ``channel_caller`` arm only. The one
+        sender kind that reaches here today is ``mcp_caller``, whose arm does
+        **not** consult it — App MCP re-verifies identity per message on resume
+        instead, which is what it has always done, and this refactor does not
+        add a second gate on the create path. So on today's only live caller
+        the grant is carried and stamped but not re-read; it becomes a live
+        check the moment a ``channel_caller`` sender uses this method.
+
+        Raises ``PermissionError`` when the sender kind is unsupported or a
+        consulted grant does not re-verify, and ``NoActiveEnvironmentError``
+        when the agent has no live environment.
+
+        **Only ``mcp_caller`` is supported, and the check is up front.**
+        ``_select_session_owner_id`` consumes ``identity_owner_id`` on the
+        ``mcp_caller`` arm only; its ``channel_caller`` arm deliberately honors
+        no owner override — "a channel session owned by anyone but the sender
+        would let one external caller reach another user's installs". A channel
+        sender reaching the body would therefore create and **commit** a
+        session owned by the external caller and only then trip
+        ``_stamp_new_session``'s unknown-key ``ValueError``: a wrong session
+        that already exists, plus an unhandled error. Rejecting the kind before
+        any write turns that tripwire into a guard. Widening the
+        ``channel_caller`` owner arm is a security decision that belongs in
+        **Phase 3** of ``docs/plans/channels_identity_unification/``, the change
+        which turns identity candidates on for channels — not here. Lifting
+        ``_IDENTITY_SESSION_SENDER_KINDS`` must happen in that *same* change,
+        the one that teaches ``_select_session_owner_id`` how a
+        ``channel_caller`` sender owns an identity session. Either half alone is
+        the bug: the allowlist without the owner arm rejects a legitimate
+        sender, the owner arm without the allowlist is unreachable, and lifting
+        the allowlist first re-opens the committed-wrong-owner path this guard
+        closes.
+        """
+        if sender.kind not in _IDENTITY_SESSION_SENDER_KINDS:
+            raise PermissionError(
+                f"identity session not supported for sender kind {sender.kind!r} "
+                f"(supported: {sorted(_IDENTITY_SESSION_SENDER_KINDS)})"
+            )
+
+        caller_id = sender.platform_user_id
+        if caller_id is None:
+            raise PermissionError(
+                "identity session requires a sender with a platform_user_id"
+            )
+
+        ChannelIngestionService.assert_access(
+            db=db,
+            agent=agent,
+            sender=sender,
+            policy=ChannelAccessPolicy(
+                expected_owner_id=agent.owner_id,
+                require_caller_in_route=True,
+                identity_grant=grant,
+            ),
+        )
+        session, _ = ChannelIngestionService.resolve_or_create_session(
+            db=db,
+            agent=agent,
+            sender=sender,
+            thread_key=None,
+            integration_type=integration_type,
+            extra_session_kwargs={
+                "mode": mode,
+                # Owner of the session is the identity owner, not the agent
+                # owner (consumed by ``_select_session_owner_id``).
+                "identity_owner_id": grant.owner_id,
+                # Post-create stamping of identity-specific columns; all three
+                # are already in ``_STAMPABLE_COLUMNS``.
+                "identity_caller_id": caller_id,
+                "identity_binding_id": grant.binding_id,
+                "identity_binding_assignment_id": grant.assignment_id,
+                "session_metadata_extra": session_metadata_extra or {},
+            },
+        )
+        return session
+
+    @staticmethod
     def assert_access(
         *,
+        db: DBSession,
         agent: Agent,
         sender: SessionSender,
         policy: ChannelAccessPolicy,
     ) -> None:
-        """Per-kind access check (plan §4.3). Raises on denial."""
+        """Per-kind access check (plan §4.3). Raises on denial.
+
+        ``db`` is required rather than opened here. The ``channel_caller`` arm
+        re-reads the identity rows behind ``policy.identity_grant``, and an
+        access check that quietly opened its own connection would be deciding
+        on a different snapshot from the one the caller is about to create the
+        session in — the honest signature is the one that says it reads.
+        """
         kind = sender.kind
 
         if kind == "webui_user":
@@ -271,19 +399,53 @@ class ChannelIngestionService:
             # agents, or a fresh auto-install for the caller — so a legitimate
             # channel agent is always owned by the sender. Asserting it here
             # (rather than trusting the routing layer) means a router that can
-            # return someone else's agent — e.g. App MCP identity routes — can
-            # never hand an external caller a session inside another user's
-            # workspace.
-            if not (
+            # return someone else's agent can never hand an external caller a
+            # session inside another user's workspace *by accident*.
+            if (
                 agent.owner_id
                 == policy.expected_owner_id
                 == sender.platform_user_id
             ):
+                return
+
+            # The one deliberate exception: an identity grant. Reaching another
+            # person's agent is the whole point of identity, so the invariant
+            # above cannot be the only door — but the grant does not *weaken*
+            # it, because every fact behind the grant is re-read here. The
+            # routing decision that produced it and this call are separated by
+            # a worker-thread hop and possibly an auto-install wait; the owner
+            # may have revoked in between.
+            #
+            # ``policy.expected_owner_id`` is not compared separately on this
+            # arm, and does not need to be: condition 6 below pins
+            # ``binding.owner_id == agent.owner_id == grant.owner_id``, and the
+            # arm above already established ``expected_owner_id`` is not None.
+            # A seventh check tying the two together would be free — it is left
+            # out only because the six are the agreed contract, and an
+            # authorization check whose condition list drifts from its spec is
+            # worse than one that is merely minimal.
+            grant = policy.identity_grant
+            if grant is None:
                 raise PermissionError(
                     "channel_caller invariant violated: "
                     f"agent.owner_id={agent.owner_id}, "
                     f"expected_owner_id={policy.expected_owner_id}, "
                     f"sender.platform_user_id={sender.platform_user_id}"
+                )
+
+            from app.services.identity.identity_service import IdentityService
+
+            denial = IdentityService.verify_identity_access(
+                db,
+                owner_id=grant.owner_id,
+                binding_id=grant.binding_id,
+                assignment_id=grant.assignment_id,
+                caller_user_id=sender.platform_user_id,
+                agent_id=agent.id,
+            )
+            if denial:
+                raise PermissionError(
+                    f"channel_caller identity grant rejected: {denial}"
                 )
             return
 
@@ -295,6 +457,16 @@ class ChannelIngestionService:
 
         if kind == "mcp_caller":
             # Routing has already gated this caller against the agent (§7.4).
+            # An `identity_grant` on the policy is carried but not consulted
+            # here. App MCP re-verifies identity per message on resume, in
+            # `_check_identity_session_validity` — which checks *liveness*
+            # (binding active, assignment active and enabled), not the grant
+            # arm's four linkage conditions. Those linkage facts are not
+            # re-derived on this path because App MCP never derived them here
+            # either: the routing decision that produced the ids ran in this
+            # same transaction moments ago. Keeping this arm as it was is what
+            # makes the extraction a refactor; tightening it is a behaviour
+            # change and needs its own reasoning.
             if policy.require_caller_in_route and sender.platform_user_id is None:
                 raise PermissionError(
                     "mcp_caller missing platform_user_id "

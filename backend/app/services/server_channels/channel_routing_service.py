@@ -734,9 +734,19 @@ class ChannelRoutingService:
         try:
             agent_uuid = uuid.UUID(result.agent_id)
         except ValueError:
-            # ``classify`` shape-checks the id, and the membership test above
-            # already proved it is one of ours — so this is unreachable too,
-            # and cheaper to keep than to reason about again later.
+            # Unreachable for *this* ballot: the membership test above proved
+            # the id is one of ours, and every candidate this module builds
+            # carries an agent or bundle UUID.
+            #
+            # Note what stopped being true. ``classify`` used to shape-check
+            # every id it returned, so membership and UUID-ness were two
+            # independent guarantees; it now accepts any id that is literally
+            # on the ballot, because ``IdentityCandidateProvider`` namespaces
+            # its refs (``identity:{owner_id}``) and a shape check alone would
+            # reject them. Membership therefore no longer implies UUID shape —
+            # only this module's own candidate sources do. Keep the guard: it
+            # is what makes a future non-UUID ref on this ballot a recorded
+            # no-match instead of a raised ``ValueError``.
             routing_trace.record_parse_outcome(
                 reason="classifier returned a value that is not a UUID"
             )

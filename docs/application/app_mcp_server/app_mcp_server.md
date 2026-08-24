@@ -117,10 +117,14 @@ This design lets the publisher update the trigger prompt in a new revision and h
 
 ### Message Routing Priority
 
-1. **Single route shortcut** -- if user has only one effective route, use it directly (no classification needed)
-2. **Pattern matching** -- try each route's `message_patterns` against the message using fnmatch (case-insensitive); first match wins
-3. **AI classification** -- call LLM with the message and all available routes; each candidate is passed as `{id, name, trigger_prompt, prompt_examples}`; `agent_name` is included so the classifier can disambiguate near-duplicate trigger prompts (e.g. "Calendar Planner" vs "Vacation Planner"); LLM picks the best agent or returns "NONE"
+The Stage 1 ballot is **composed** from two candidate providers: the user's effective routes (above) and the identity owners they can address (one candidate per person, from `IdentityCandidateProvider` — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md)). Neither borrows the other's set; a surface that wants only routes simply does not ask for identities.
+
+1. **Single candidate shortcut** -- if the ballot holds exactly one entry, route or person, use it directly (no classification needed)
+2. **Pattern matching** -- try each *route's* `message_patterns` against the message using fnmatch (case-insensitive); first match wins. Identity candidates carry no patterns
+3. **AI classification** -- call LLM with the message and the whole ballot; each candidate is passed as `{id, name, trigger_prompt, prompt_examples}`; `agent_name` is included so the classifier can disambiguate near-duplicate trigger prompts (e.g. "Calendar Planner" vs "Vacation Planner"); LLM picks the best candidate or returns "NONE"
 4. **No match** -- return error asking user to be more specific
+
+When the winner is an identity candidate, Stage 2 picks the agent from that person's portfolio.
 
 ### Message Transformation
 

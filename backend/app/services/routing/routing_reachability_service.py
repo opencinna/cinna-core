@@ -268,6 +268,16 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
         "Route to the contact rather than to their agent, or give this user "
         "their own install of it.",
     ),
+    routing_trace.SKIP_IDENTITY_UNAVAILABLE: (
+        "this person shared an agent with the sender, but none of what they "
+        "shared is switched on right now, so they were not on the ballot at all",
+        "Three switches can each cause this, and they live on two different "
+        "people's screens. The owner's binding is inactive, or the owner "
+        "disabled it for this specific caller — both on the owner's Settings > "
+        "Channels > Identity Server card. Or the caller has not enabled the "
+        "contact, which is the Identity Contacts section of the MCP Server "
+        "card on the CALLER'S Settings > Channels. Check them in that order.",
+    ),
     routing_trace.SKIP_NO_TRIGGER_PROMPT: (
         "it has no router trigger prompt, so the classifier had nothing to "
         "match the message against",
@@ -332,6 +342,12 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
 #:   split carry it and are still read. The explanation stays: it is what
 #:   happened. The action cannot, because switching that route back on would not
 #:   make the agent a channel candidate now.
+#: **No ``SKIP_IDENTITY_UNAVAILABLE`` entry, and that is correct today:** only
+#: App MCP Stage 1 records it, so a channel decision cannot carry it. The moment
+#: identity candidates enter a channel ballot, one belongs here — the base entry
+#: is written in App MCP's voice and would send a channel user to an MCP card.
+#: Adding the reason to a surface and adding its override for that surface is
+#: one change, per this file's convention.
 _CHANNEL_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
     routing_trace.SKIP_ALREADY_INSTALLED: (
         "this user already has it installed, so the auto-install pass passed "

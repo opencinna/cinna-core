@@ -151,7 +151,13 @@ class ExternalAccessPolicy:
         user: User,
         route_id: uuid.UUID,
     ) -> EffectiveRoute:
-        """Return the EffectiveRoute for ``route_id`` or raise TargetNotAccessibleError."""
+        """Return the EffectiveRoute for ``route_id`` or raise TargetNotAccessibleError.
+
+        The ``source != "identity"`` guard below is vacuous since identity moved
+        to its own candidate provider — ``get_effective_routes_for_user`` returns
+        routes only. Kept as the standing statement of the contract: an identity
+        is reached through ``require_identity_access``, never by route id.
+        """
         routes = AppAgentRouteService.get_effective_routes_for_user(
             db_session=db,
             user_id=user.id,

@@ -175,6 +175,17 @@ SKIP_PASS_1_MATCHED = "pass_1_matched"
 #: on it after selecting it. Distinct from "not a candidate": it was on the
 #: ballot and could even win, and the request would still end nowhere.
 SKIP_NO_ASSIGNMENT = "no_assignment"
+#: Stage 1 only: an identity **owner** who named this caller on at least one
+#: binding, but none of those bindings is currently reachable — the binding is
+#: switched off, the owner disabled it for this caller, or the caller has not
+#: enabled the contact. The person is therefore not on the ballot.
+#:
+#: Deliberately **not** ``SKIP_IDENTITY_ROUTE``, which is an older reason with
+#: an unrelated meaning: *a channel decision rejected an identity route it was
+#: offered*. That one describes a candidate that existed and lost; this one
+#: describes a person who never became a candidate. Reusing it would make the
+#: two indistinguishable in exactly the diagnosis they are read for.
+SKIP_IDENTITY_UNAVAILABLE = "identity_unavailable"
 
 KIND_AGENT = "agent"
 KIND_BUNDLE = "bundle"

@@ -405,8 +405,10 @@ class ExternalA2ARequestHandler:
         ExternalAccessPolicy.require_identity_access(db, user, owner_id)
         first_message = self._extract_message_text(message_data)
 
+        # ``db`` is deliberately not passed: Stage 2 takes ids and text and
+        # opens its own short-lived read session, so a routing decision can
+        # never touch the transaction this handler is holding.
         routing_result = IdentityRoutingService.route_within_identity(
-            db_session=db,
             owner_id=owner_id,
             caller_user_id=user.id,
             message=first_message,
