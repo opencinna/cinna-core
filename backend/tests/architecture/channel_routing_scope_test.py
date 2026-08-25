@@ -2,9 +2,11 @@
 
 WHY THIS EXISTS
 ---------------
-``docs/plans/channel_routing_scope_split_plan.md`` §3: each routing surface owns
-its **candidate provider**. A Server Channel routes over the agents the sender
-*owns*, built by ``ChannelCandidateProvider``. Since
+The channel routing scope split settled the rule this test guards: each routing
+surface owns its **candidate provider** — see
+``docs/application/server_channels/server_channels.md``. A Server Channel
+routes over the agents the sender *owns*, built by
+``ChannelCandidateProvider``. Since
 ``docs/plans/channels_identity_unification/phase_5_app_mcp_channel.md``, App MCP
 is itself a channel and composes the *same* ``ChannelCandidateProvider`` (plus
 ``IdentityCandidateProvider`` when ``allow_identity_routing`` allows it) —
@@ -204,8 +206,9 @@ def test_channel_routing_never_imports_the_app_mcp_candidate_set() -> None:
 #
 # WHY THIS SECTION EXISTS
 # -----------------------
-# The test above guards exactly ONE pair, the one the scope-split plan
-# produced: channel routing must not import App MCP's composition layer. By the
+# The test above guards exactly ONE pair, the one the channel routing scope
+# split produced (docs/application/server_channels/server_channels.md):
+# channel routing must not import App MCP's composition layer. By the
 # end of the channels & identity unification there are five more pairs of the
 # same shape, because the refactor's whole direction was to make surfaces
 # *compose* shared providers instead of borrowing each other's answers — and

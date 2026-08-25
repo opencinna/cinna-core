@@ -1,7 +1,5 @@
 # Identity MCP Server
 
-> **Naming note — the directory name is behind the concept, deliberately.** This doc still lives under `identity_mcp_server/`, but identity is no longer an App-MCP-only mechanism: since Phase 3 of the channels & identity unification refactor it is a **routing-layer** concept, and Server Channels is its second consumer. Renaming the directory to `identity_routing/` was considered for that phase and **deferred to Phase 7**, which owns the consistency sweep. The reasoning is worth recording rather than leaving as an omission: a rename means updating every inbound link, including the env-template knowledge mirror an agent reads at runtime, and Phase 5 deletes the `AppAgentRoute` family — which forces another pass over these same files anyway. Doing that pass twice is worse than doing it once, at the end.
-
 ## Purpose
 
 An **identity** is a person-shaped routing candidate: instead of exposing individual agents directly, a user exposes *themselves* as a routable contact point that other users can address by name. Picking that person is one routing decision; picking which of their agents answers is a second one.

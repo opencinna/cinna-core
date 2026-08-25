@@ -67,7 +67,10 @@ database query to diagnose. Scope makes that failure mode cheap to reach: with
 ``agent_scope="none"`` **every** agent the sender owns is out, and the trace
 has to be able to say so rather than come back empty (master plan §3.5).
 
-See ``docs/plans/channel_routing_scope_split_plan.md`` §2–§3.
+See ``docs/application/server_channels/server_channels.md`` for why a channel
+routes over the agents the sender owns, and
+``docs/application/server_channels/server_channels_tech.md`` for this
+provider's contract.
 """
 from __future__ import annotations
 

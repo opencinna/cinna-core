@@ -13,7 +13,8 @@ not a bundle install and has no App MCP route — add one from its Integrations
 tab"*. It was emitted for every origin, Google Chat included, which made this
 module the place the surface divergence was baked in — it instructed a channel
 user to configure an *MCP exposure* to fix a *channel* problem
-(``docs/plans/channel_routing_scope_split_plan.md`` §2.4). The scope split
+(``docs/application/routing_tuning/routing_tuning.md`` — *the verdict is split
+by origin for wording, never for findings*). The scope split
 answered that by giving the channel origins their own half. The
 ``AppAgentRoute`` deletion then removed the other half's subject entirely: App
 MCP builds its ballot from the same two candidate providers a channel does, so
@@ -118,7 +119,9 @@ whole trace: a diagnosis that raised would take the trace detail with it, and
 the trace is the more valuable half.
 
 See ``docs/plans/auto_routing_tuning_plan.md`` §2, §9 and §10 Phase 4, and
-``docs/plans/channel_routing_scope_split_plan.md`` §2.4, §3 and §5 Phase 4.
+``docs/application/routing_tuning/routing_tuning.md`` /
+``docs/application/routing_tuning/routing_tuning_tech.md`` for the verdict's
+origin split and the remedy profiles it feeds.
 """
 from __future__ import annotations
 

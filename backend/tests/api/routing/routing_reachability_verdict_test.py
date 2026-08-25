@@ -14,8 +14,9 @@ exact text of the branch it exercises. That makes them deliberately brittle to
 rewording, which is the intended trade: reword the verdict, update the test, and
 the update is where somebody re-reads whether the new sentence is still true.
 
-**The verdicts are split by origin** (`docs/plans/channel_routing_scope_split_plan.md`
-§5, Phase 4), so this file is split the same way and the two halves are produced
+**The verdicts are split by origin** (`docs/application/routing_tuning/routing_tuning.md`
+— *the verdict is split by origin for wording, never for findings*), so this
+file is split the same way and the two halves are produced
 differently — which is itself the thing worth understanding before editing here:
 
 *Channel origins* (`server_channel`, and the `simulate`/`replay` of a channel

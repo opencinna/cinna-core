@@ -1,6 +1,6 @@
 # Auto Routing Tuning — Technical Reference
 
-Implementation reference for [Auto Routing Tuning](routing_tuning.md). Parent/sibling features: [Server Channels](../server_channels/server_channels_tech.md) (the producer of `server_channel` and `email` traces), [App MCP Server](../app_mcp_server/app_mcp_server_tech.md), [Identity MCP Server](../identity_mcp_server/identity_mcp_server_tech.md).
+Implementation reference for [Auto Routing Tuning](routing_tuning.md). Parent/sibling features: [Server Channels](../server_channels/server_channels_tech.md) (the producer of `server_channel` and `email` traces), [App MCP Server](../app_mcp_server/app_mcp_server_tech.md), [Identity MCP Server](../identity_routing/identity_routing_tech.md).
 
 **Phases 1–5 are implemented and tested.** Phase 5 added `AgentClassifier` (one renderer and one parser for all four routing consumers), rendered `prompt_examples` into the classifier prompt, and added the model's `confidence` / `reason` / `runner_up` plus identity Stage-2 candidate capture.
 

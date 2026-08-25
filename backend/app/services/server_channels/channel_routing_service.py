@@ -927,7 +927,8 @@ class ChannelRoutingService:
         LLM spent the decision on an identity route, the filter rejected it
         afterwards, and nothing re-classified over the survivors.
         ``ChannelCandidateProvider`` builds the right set instead — see its
-        module docstring, and ``docs/plans/channel_routing_scope_split_plan.md``.
+        module docstring, and
+        ``docs/application/server_channels/server_channels.md``.
 
         **Identities are a second provider, composed — not the old branch
         restored.** ``IdentityCandidateProvider.build`` appends one candidate
