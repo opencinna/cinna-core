@@ -211,7 +211,7 @@ Handles both direct MCP connector management and agent-to-agent MCP connector ma
 - **Direct MCP Connector** — dedicated endpoint for this agent, external clients connect directly
 - **Agent to Agent MCP Connector** (developer-tier only, `isDeveloper` gate) — exposes this agent over MCP so other platform agents can connect via "Connect MCP Provider"
 
-"App MCP Server Integration" and "Identity MCP Server Integration" are gone from this dialog. App MCP exposure is automatic (trigger prompt / example prompts on the Configuration tab); identity binding creation moved to Settings → Channels → Identity Server card (see [Identity MCP Server — tech](../identity_routing/identity_routing_tech.md)).
+"App MCP Server Integration" and "Identity MCP Server Integration" are gone from this dialog. App MCP exposure is automatic (trigger prompt / example prompts on the Configuration tab); identity binding creation moved to Settings → Channels → Identity Server card (see [Identity Routing — tech](../identity_routing/identity_routing_tech.md)).
 
 ### McpConnectorsCardSimple (`McpConnectorsCardSimple.tsx`)
 

@@ -1,4 +1,4 @@
-# Identity MCP Server -- Technical Details
+# Identity Routing -- Technical Details
 
 ## File Locations
 
@@ -67,7 +67,7 @@
 - Indexes: `binding_id`, `target_user_id`
 - Application-level constraint: `binding.owner_id != target_user_id` (self-exclusion)
 
-### `session` table -- Identity MCP extensions
+### `session` table -- Identity Routing extensions
 
 Three nullable columns added to the existing `session` table:
 

@@ -87,11 +87,11 @@ There is no App MCP-specific creation dialog any more — the agent's Integratio
 4. Saves — examples are stored on the binding.
 5. Callers with active assignments see the prefixed examples in their MCP client.
 
-This entry point moved here from the agent's Integrations tab ("Identity MCP Server Integration" is gone from that dialog) as part of the same phase that removed App MCP's route-based creation flow — see [Identity MCP Server](../identity_routing/identity_routing.md).
+This entry point moved here from the agent's Integrations tab ("Identity MCP Server Integration" is gone from that dialog) as part of the same phase that removed App MCP's route-based creation flow — see [Identity Routing](../identity_routing/identity_routing.md).
 
 ## Integration Points
 
 - **[App MCP Server](app_mcp_server.md)** — `Agent.example_prompts` is read by `ChannelCandidateProvider`, the same provider [Server Channels](../server_channels/server_channels.md) uses; emitted in `prompts/list` via `app_prompts.py`
-- **[Identity MCP Server](../identity_routing/identity_routing.md)** — `IdentityAgentBinding.prompt_examples` is aggregated and prefixed by `IdentityCandidateProvider` when building Stage 1 candidates for a caller
+- **[Identity Routing](../identity_routing/identity_routing.md)** — `IdentityAgentBinding.prompt_examples` is aggregated and prefixed by `IdentityCandidateProvider` when building Stage 1 candidates for a caller
 - **[MCP Integration](../mcp_integration/agent_mcp_architecture.md)** — examples appear as MCP prompts in the standard `prompts/list` protocol response
 - **[Auto Routing Tuning](../routing_tuning/routing_tuning.md)** — since that feature's Phase 5, `prompt_examples` is no longer purely an MCP-prompt-suggestion aid: the shared `AgentClassifier` renders each candidate's examples into the routing prompt sent to the LLM, so this field now directly influences which agent an ambiguous message is routed to. The routing-tuning card's near-miss ranking scores `prompt_examples` alongside `trigger_prompt` for the same reason

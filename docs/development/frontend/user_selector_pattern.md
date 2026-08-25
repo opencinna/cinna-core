@@ -55,5 +55,5 @@ When a picker shows *existing* assignments (edit dialogs), the assignment record
 ## Integration Points
 
 - [Credential Sharing](../../agents/agent_credentials/credential_sharing.md)
-- [Identity MCP Server](../../application/identity_routing/identity_routing.md)
+- [Identity Routing](../../application/identity_routing/identity_routing.md)
 - [Agent Bundles](../../agents/agent_bundles/agent_bundles.md)
