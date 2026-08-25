@@ -24,7 +24,12 @@ interface Meta {
   tone: BadgeTone
 }
 
-/** Terminal verdict of a routing pass. `no_match` is the interesting one. */
+/**
+ * Terminal verdict of a routing pass. `no_match` is the interesting one.
+ *
+ * Vocabulary owner: the `OUTCOME_*` constants in
+ * `backend/app/services/routing/routing_trace.py`.
+ */
 const OUTCOME_META: Record<string, Meta> = {
   routed: { label: "Routed", tone: "default" },
   no_match: { label: "No match", tone: "outline" },
@@ -32,7 +37,12 @@ const OUTCOME_META: Record<string, Meta> = {
   parked_install: { label: "Parked install", tone: "secondary" },
 }
 
-/** Which entry point captured the trace. */
+/**
+ * Which entry point captured the trace.
+ *
+ * Vocabulary owner: the `ORIGIN_*` constants in
+ * `backend/app/services/routing/routing_trace.py`.
+ */
 const ORIGIN_META: Record<string, Meta> = {
   server_channel: { label: "Channel", tone: "secondary" },
   app_mcp: { label: "App MCP", tone: "secondary" },
@@ -41,14 +51,36 @@ const ORIGIN_META: Record<string, Meta> = {
   simulate: { label: "Simulate", tone: "outline" },
 }
 
-/** How the winner was picked, when there was one. */
+/**
+ * How the winner was picked, when there was one.
+ *
+ * Vocabulary owner: the `MATCH_*` constants in
+ * `backend/app/services/routing/routing_trace.py`. Adding one there without
+ * adding it here costs an admin the label, not the row — see rule 2 above.
+ * `pattern` has no producer left (`message_patterns` was dropped) and stays
+ * for the stored rows that still carry it.
+ */
 const MATCH_METHOD_LABELS: Record<string, string> = {
   pattern: "pattern match",
   ai: "AI classifier",
   only_one: "only candidate",
+  pinned: "pinned by sender",
 }
 
-/** Why a candidate never reached the classifier. */
+/**
+ * Why a candidate never reached the classifier — or reached it and could not
+ * have been used.
+ *
+ * Vocabulary owner: the `SKIP_*` constants in
+ * `backend/app/services/routing/routing_trace.py`.
+ *
+ * Several entries here have no producer any more (`identity_route`,
+ * `route_inactive`, and the route-shaped `agent_missing` case) because the
+ * `AppAgentRoute` mechanism they described is gone. They stay for the same
+ * reason the backend keeps the constants: `routing_decision` is a
+ * retention-window table, and a row captured before the refactor still carries
+ * them.
+ */
 const SKIP_REASON_LABELS: Record<string, string> = {
   already_installed: "Already installed",
   bundle_missing: "Bundle missing",
@@ -60,6 +92,9 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   route_inactive: "Route inactive",
   no_revision: "No published revision",
   agent_missing: "Agent missing",
+  no_assignment: "No access for this caller",
+  identity_unavailable: "Identity not reachable",
+  not_in_channel_scope: "Not enabled for this channel",
 }
 
 /**
@@ -70,6 +105,10 @@ const SKIP_REASON_LABELS: Record<string, string> = {
  * withheld whenever the message-text gate is closed — this map is what the view
  * renders in that case, so it must stand on its own rather than annotate a
  * sentence that may not be there.
+ *
+ * Vocabulary owner: the `NOT_RUN_*` constants in
+ * `backend/app/services/routing/routing_trace.py` (`NOT_RUN_CODES` is the
+ * closed set).
  */
 const NOT_RUN_LABELS: Record<string, string> = {
   pinned: "Sender pinned an agent",
@@ -78,12 +117,28 @@ const NOT_RUN_LABELS: Record<string, string> = {
   simulate_toggle: "Catalog pass not requested",
 }
 
-/** Where a candidate came from. */
+/**
+ * Where a candidate came from.
+ *
+ * Vocabulary owner: `SOURCE_OWNED` in
+ * `backend/app/services/routing/channel_candidate_provider.py`,
+ * `SOURCE_IDENTITY` in `identity_candidate_provider.py`, and the literal
+ * `"catalog"` written by `channel_routing_service.py`'s Pass 2. (The
+ * `CandidateTrace.source` comment in `routing_trace.py` still lists the old
+ * route-era values and is not the authority here.)
+ *
+ * `admin` and `user` have no producer any more — they named where an
+ * `AppAgentRoute` came from, and that table is gone. **Do not delete them.**
+ * `routing_decision` is a retention-window table: rows captured before the
+ * refactor still carry those values, and a renderer that meets an unknown
+ * source shows a decision it cannot name.
+ */
 const SOURCE_LABELS: Record<string, string> = {
-  admin: "Admin",
-  user: "User",
+  owned: "Owned",
   identity: "Identity",
   catalog: "Catalog",
+  admin: "Admin",
+  user: "User",
 }
 
 export function outcomeMeta(outcome: string): Meta {

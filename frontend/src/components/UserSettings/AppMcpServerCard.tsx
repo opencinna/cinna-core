@@ -1,5 +1,5 @@
 /**
- * AppAgentRoutesCard — Settings → Channels, the "MCP Server" card.
+ * AppMcpServerCard — Settings → Channels, the "MCP Server" card.
  *
  * WHAT IS LEFT OF IT, AND WHY IT IS STILL HERE
  * --------------------------------------------
@@ -40,7 +40,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 
-export function AppAgentRoutesCard() {
+export function AppMcpServerCard() {
   const [copied, setCopied] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
 

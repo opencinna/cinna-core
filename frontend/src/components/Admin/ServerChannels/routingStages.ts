@@ -160,12 +160,24 @@ export function parseStages(raw: unknown): RoutingStage[] {
 /**
  * Stage labels. A stage name this build has not met renders as itself — the
  * stage vocabulary grows on the backend the same way `origin` does.
+ *
+ * Vocabulary owner: the `STAGE_*` constants in
+ * `backend/app/services/routing/routing_trace.py`. There are exactly three,
+ * and App MCP is **not** one of them: it records its own first pass as
+ * `pass_1`, deliberately, so one stage vocabulary covers every origin.
+ *
+ * An `app_mcp` entry sat here from the file's first commit and was removed as
+ * dead — unlike the unproduced values in `routingCopy.ts`, which are kept for
+ * the retention window, no producer ever wrote this one. Verified across every
+ * revision of `routing_trace.py` (no `STAGE_*` constant has ever had the value)
+ * and of every trace producer under `backend/app/services` (no stage argument
+ * has ever been `"app_mcp"`); the string only ever appears there as a
+ * `Session.integration_type` / channel name.
  */
 const STAGE_LABELS: Record<string, string> = {
   pass_1: "Pass 1 — agents this sender already has",
   pass_2: "Pass 2 — auto-install catalog",
   identity_stage2: "Identity — stage 2",
-  app_mcp: "App MCP",
 }
 
 export function stageLabel(stage: string | null | undefined): string {

@@ -3,8 +3,8 @@ import { useEffect } from "react"
 import { AgenticTeamSettings } from "@/components/AgenticTeams/AgenticTeamSettings"
 import { HashTabs, type TabConfig } from "@/components/Common/HashTabs"
 import { AICredentialsSettings } from "@/components/UserSettings/AICredentials"
-import { AppAgentRoutesCard } from "@/components/UserSettings/AppAgentRoutesCard"
 import { AppDataTab } from "@/components/UserSettings/AppData/AppDataTab"
+import { AppMcpServerCard } from "@/components/UserSettings/AppMcpServerCard"
 import { DashboardSettings } from "@/components/UserSettings/DashboardSettings"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import { DesktopSessionsCard } from "@/components/UserSettings/DesktopSessionsCard"
@@ -117,7 +117,7 @@ function UserSettings() {
               unreachable if this card were the only thing on the tab. */}
           <UserChannelsCard />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <AppAgentRoutesCard />
+            <AppMcpServerCard />
             <IdentityServerCard />
           </div>
         </div>
