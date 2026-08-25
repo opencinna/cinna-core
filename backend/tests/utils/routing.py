@@ -18,11 +18,20 @@ surface, by design:
    decision. That is deliberate (forging a trace's timestamp has no
    legitimate use), which also means it is the *only* way to test
    ``purge``'s ``created_at < cutoff`` boundary. It is also still the only
-   way to produce an ``app_mcp`` / ``identity`` row — nothing opens a capture
-   with those origins (plan Phase 5). ``simulate`` is no longer in that list:
-   ``POST /admin/routing/simulate`` and ``.../replay`` emit it for real, so a
-   test wanting a simulate-origin row should drive the route rather than seed
-   one. Builds a real ``RoutingTrace``
+   way to produce an ``identity`` row — nothing opens a capture with that
+   origin, and by ruling nothing will: identity is a *stage* inside another
+   surface's decision. Neither ``simulate`` nor ``app_mcp`` is in that list
+   any more: ``POST /admin/routing/simulate`` and ``.../replay`` emit the
+   first for real, and ``AppMCPRoutingService.route_message`` emits the
+   second (phase 6 of ``docs/plans/channels_identity_unification/``), so a
+   test wanting a row on either should drive the surface rather than seed
+   one — ``tests/api/app_mcp/app_mcp_routing_trace_test.py`` does. Seeding an
+   ``app_mcp`` row is still legitimate where the *shape* of the row is the
+   fixture rather than the thing under test, but note it now passes through
+   ``ROUTING_TRACE_APP_MCP_MODE``: at the default ``metadata`` the seeded row
+   comes back without its ``message_text``, and at ``off`` it is not written
+   at all. Pin the mode around the seed if the test cares.
+   Builds a real ``RoutingTrace``
    through the recorder (so ``message_sha256`` etc. are computed the same
    way production computes them), then backdates ``created_at`` before
    handing it to ``RoutingTraceService.persist``.

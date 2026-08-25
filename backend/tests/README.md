@@ -150,7 +150,7 @@ tests/
     ai_credentials/        # conftest.py: env stubs for credential propagation tests
     app_auth/
     app_data/
-    app_mcp/
+    app_mcp/               # README.md: service-layer entry convention, singleton channel, LLM guard
     app_sync/
     auth/                  # test_login.py, test_users.py — login, signup, password mgmt
     cli/

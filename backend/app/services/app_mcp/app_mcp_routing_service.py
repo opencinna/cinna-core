@@ -57,6 +57,7 @@ from dataclasses import dataclass
 
 from sqlmodel import Session as DBSession
 
+from app.core.config import ROUTING_TRACE_APP_MCP_OFF, settings
 from app.services.routing import routing_trace
 from app.services.routing.agent_classifier import Candidate
 from app.services.routing.channel_candidate_provider import (
@@ -68,8 +69,13 @@ from app.services.routing.identity_candidate_provider import (
     IdentityCandidateProvider,
     parse_identity_ref,
 )
+from app.services.routing.routing_trace import RoutingTrace
+from app.services.routing.routing_trace_service import RoutingTraceService
 from app.services.server_channels.adapters.app_mcp import AppMCPChannelAdapter
-from app.services.server_channels.channel_policy_service import ChannelPolicyService
+from app.services.server_channels.channel_policy_service import (
+    ChannelPolicyService,
+    ResolvedChannelPolicy,
+)
 from app.services.server_channels.server_channel_service import ServerChannelService
 
 logger = logging.getLogger(__name__)
@@ -145,6 +151,14 @@ class AppMCPRoutingService:
 
         Returns RoutingResult or None if routing fails.
 
+        Steps 2–4 are :meth:`_decide`; this method resolves the channel and
+        policy, then wraps that call in the ``origin="app_mcp"`` routing
+        capture and persists it. How much of the resulting row is written is
+        governed by ``ROUTING_TRACE_APP_MCP_MODE`` — ``off`` opens no capture
+        here at all, ``metadata`` (the default) writes the row without the
+        sender's words, ``full`` writes it like any other origin. The setting's
+        comment in ``config.py`` lists the fields each value stores and omits.
+
         ``policy.is_available`` is **not** re-checked here. It is the token
         verifier's gate (``app_token_verifier.is_app_mcp_available``, cached and
         fail-closed), and a second copy of an availability rule is exactly what
@@ -164,6 +178,103 @@ class AppMCPRoutingService:
         )
         policy = ChannelPolicyService.resolve(db_session, channel, user_id)
 
+        # ``off`` short-circuits HERE: no capture is opened at all, which is
+        # what "suppresses the capture" literally means. It costs nothing —
+        # every recorder call inside :meth:`_decide` (``record_match``,
+        # ``record_parse_outcome``, ``stage_scope``) is already a no-op with no
+        # capture open — and, more to the point, it attempts nothing, so
+        # nothing can half-succeed. ``persist`` swallows its own failures and
+        # returns ``None``, so "suppressed" and "attempted and quietly failed"
+        # would be indistinguishable from outside if the mode were honoured
+        # only at the write. It is honoured at both ends deliberately: this is
+        # the cheap path, and ``RoutingTraceService.persist``'s refusal is the
+        # invariant a second App MCP producer cannot bypass.
+        if settings.ROUTING_TRACE_APP_MCP_MODE == ROUTING_TRACE_APP_MCP_OFF:
+            return AppMCPRoutingService._decide(
+                db_session, user_id, message, policy=policy
+            )
+
+        # The capture opens after the policy resolve and **before** the first
+        # candidate provider runs, so every candidate and every skip those
+        # providers record lands inside the span. ``channel_id`` is populated
+        # on every App MCP trace: App MCP is a singleton ``ServerChannel``, so
+        # "which channel was this" has a real answer here — unlike a hand-typed
+        # simulate, which carries NULL by design.
+        #
+        # ``actor_user_id`` and ``thread_key`` are NULL and stay NULL: there is
+        # no admin standing behind an App MCP call (that field is simulate's)
+        # and this surface has no thread key — the MCP ``context_id`` is a
+        # session id, resolved by the handler after routing has already
+        # finished, so it is not this decision's to record.
+        trace: RoutingTrace | None = None
+        try:
+            with RoutingTrace.capture(
+                origin=routing_trace.ORIGIN_APP_MCP,
+                user_id=user_id,
+                channel_id=channel.id,
+                actor_user_id=None,
+                thread_key=None,
+                message=message,
+                stage=routing_trace.STAGE_PASS_1,
+            ) as trace:
+                result = AppMCPRoutingService._decide(
+                    db_session, user_id, message, policy=policy
+                )
+                if result is not None:
+                    trace.record_outcome(
+                        routing_trace.OUTCOME_ROUTED,
+                        selected_agent_id=result.agent_id,
+                    )
+        except Exception:
+            # ``capture`` stamps ``outcome="error"`` and re-raises unchanged, so
+            # this trace never reaches the persist below. Written here, inside
+            # the failing path, exactly as both channel passes do
+            # (``ChannelRoutingService._route_installed_in_thread`` and
+            # ``_route_catalog_in_thread``) — otherwise ``outcome="error"``
+            # becomes the one verdict no App MCP code path can produce, and
+            # ``?origin=app_mcp&outcome=error``, the filter that exists for
+            # precisely this, stays empty while App MCP is failing.
+            #
+            # Deliberately no ``db_session.rollback()`` first, for the reason
+            # set out at length at the channel sites: ``persist`` opens its own
+            # session and cannot observe this one, and a ``rollback()`` that
+            # raises inside an ``except`` replaces the original exception and
+            # loses the error row — the diagnostic breaking the thing it
+            # observes.
+            RoutingTraceService.persist(trace)
+            raise
+        # Happy path, persisted after the block exits so ``latency_ms`` and the
+        # settled outcome are on the trace. Persisted **inline** rather than
+        # handed back: ``_decide`` is fully synchronous with no ``await``, so
+        # the ContextVar is set and reset inside one frame and cannot leak
+        # across a suspension, and ``route_message``'s ``RoutingResult | None``
+        # signature stays what its caller expects. Unlike channel routing there
+        # is no second pass to merge with, so there is nobody else who could
+        # know better when to write.
+        RoutingTraceService.persist(trace)
+        return result
+
+    @staticmethod
+    def _decide(
+        db_session: DBSession,
+        user_id: uuid.UUID,
+        message: str,
+        *,
+        policy: ResolvedChannelPolicy,
+    ) -> RoutingResult | None:
+        """The decision itself — ballot, classify, Stage 2 handoff.
+
+        Split out of :meth:`route_message` so the routing trace's capture span
+        can wrap the whole of it, including its several early returns, without
+        a hundred-line ``with`` block. Every ``return None`` below is a
+        ``no_match`` the recorder settles on its own (``capture`` finishes an
+        unsettled trace as ``no_match``), so the caller records only the
+        positive verdict.
+
+        Takes the already-resolved ``policy`` rather than resolving its own:
+        the channel row and the policy are the caller's, because the capture
+        needs ``channel.id`` before this runs.
+        """
         # Owned agents first, identities after — mirroring
         # ``ChannelRoutingService._route_installed`` exactly. See the module
         # docstring on why the order is copied rather than re-decided.

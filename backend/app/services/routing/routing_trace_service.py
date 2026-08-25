@@ -69,7 +69,12 @@ from typing import Any
 from sqlalchemy import delete, func
 from sqlmodel import Session as DBSession, select
 
-from app.core.config import ROUTING_TRACE_RETENTION_FOREVER, settings
+from app.core.config import (
+    ROUTING_TRACE_APP_MCP_FULL,
+    ROUTING_TRACE_APP_MCP_OFF,
+    ROUTING_TRACE_RETENTION_FOREVER,
+    settings,
+)
 from app.core.db import create_session
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
@@ -129,6 +134,13 @@ class RoutingTraceService:
         Call this *after* the ``RoutingTrace.capture`` block has exited, so
         ``latency_ms`` and the settled ``outcome`` are on the trace.
 
+        **Two write gates, not one.** ``ROUTING_TRACE_ENABLED`` and
+        ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` apply to every origin;
+        ``ROUTING_TRACE_APP_MCP_MODE`` applies to ``origin="app_mcp"`` and
+        nothing else, and can only ever store *less* than the other two would.
+        Both are applied here, at the write, so what is withheld is withheld
+        from the database and not merely from the API.
+
         The row keeps the trace's own id, so the ``trace_id`` the live channel
         debug feed already shows is the id to fetch here.
 
@@ -180,6 +192,27 @@ class RoutingTraceService:
                 return None
 
             store_text = bool(settings.ROUTING_TRACE_STORE_MESSAGE_TEXT)
+
+            # ``ROUTING_TRACE_APP_MCP_MODE``, applied to this one origin. The
+            # producer already skips the capture entirely when the mode is
+            # ``off`` (``AppMCPRoutingService.route_message``), so in practice
+            # no trace reaches this branch — and it is here anyway, for the
+            # same reason the outcome promotion below duplicates
+            # ``_settle_locked``'s rule: the producer-side skip is the cheap
+            # path, this is the invariant. A *second* App MCP producer added
+            # later inherits the refusal instead of having to remember it.
+            #
+            # ``metadata`` sets the same ``store_text`` local the global flag
+            # sets rather than introducing a rule of its own, so the two
+            # settings AND by construction: this can only ever turn text
+            # storage off, never back on. See the setting's comment in
+            # ``config.py`` for the field-by-field list.
+            if trace.origin == routing_trace.ORIGIN_APP_MCP:
+                mode = settings.ROUTING_TRACE_APP_MCP_MODE
+                if mode == ROUTING_TRACE_APP_MCP_OFF:
+                    return None
+                if mode != ROUTING_TRACE_APP_MCP_FULL:
+                    store_text = False
 
             # Stages are concatenated, not merged by name, and the premise that
             # made that safe has narrowed — read this before adding a caller.

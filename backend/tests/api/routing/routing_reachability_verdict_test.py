@@ -29,15 +29,21 @@ three fewer moving parts, no channel to set up. Where a branch needs
 configuration that changed *after* the decision, the change is made between the
 simulate and the read, which is the real-world shape of those branches too.
 
-*App MCP origins* cannot be produced that way, and saying why is the point:
-**nothing opens an `origin="app_mcp"` capture.** `ORIGIN_APP_MCP` is reserved
-vocabulary (`routing_trace.py`) and routing_tuning Phase 6 owns emitting it, so
-the only producer is `seed_routing_trace`, the documented Rule-1 exemption in
-`tests/utils/routing.py`. Those tests therefore assert the *configuration*
-branches only — the half whose answer comes from the database rather than from
-the trace — and their candidate counts are all zero, because a seeded row has no
-candidate list. The App MCP wording is unchanged by the scope split; these tests
-exist to prove it stayed unchanged, not to re-derive it.
+*App MCP origins* are **seeded**, not simulated, and saying why is the point.
+`AppMCPRoutingService.route_message` does open an `origin="app_mcp"` capture
+now (phase 6 of `docs/plans/channels_identity_unification/` — this file used to
+say nothing did, and that stopped being true), but simulate still cannot
+produce one: `POST /admin/routing/simulate` runs the *channel* router. Reaching
+a real App MCP decision from here would mean calling the MCP handler and
+standing up a ballot, for branches whose answer comes from the database rather
+than from the trace. So these use `seed_routing_trace`, the documented Rule-1
+exemption in `tests/utils/routing.py`, and their candidate counts are all zero
+because a seeded row has no candidate list. That the App MCP *capture* now
+writes real rows — with a populated `channel_id`, under
+`ROUTING_TRACE_APP_MCP_MODE` — is proved in
+`tests/api/app_mcp/app_mcp_routing_trace_test.py`, not here. The App MCP
+wording is unchanged by the scope split; these tests exist to prove it stayed
+unchanged, not to re-derive it.
 
 Branches that need a candidate list on a non-live origin, and skip reasons no
 surface can produce any more (`identity_route`, `foreign_owner`, `agent_missing`
@@ -47,11 +53,12 @@ directly. Everything drivable is driven.
 """
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.core.config import settings
+from app.core.config import ROUTING_TRACE_APP_MCP_FULL, settings
 from app.models import ChannelUserSetting
 from tests.utils.agent import (
     create_agent_via_api,
@@ -85,6 +92,9 @@ from tests.utils.user import create_random_user_with_headers, promote_to_develop
 from tests.utils.utils import random_lower_string
 
 API = settings.API_V1_STR
+#: Pinned by `_seed_app_mcp_trace` so the seeded instrument does not inherit
+#: the deployed default of the per-origin App MCP write mode.
+_APP_MCP_MODE_SETTING = "app.core.config.settings.ROUTING_TRACE_APP_MCP_MODE"
 
 
 # ---------------------------------------------------------------------------
@@ -144,23 +154,32 @@ def _simulate_no_match(
 
 
 def _seed_app_mcp_trace(user_id: str) -> dict:
-    """A stored `origin="app_mcp"` decision, which nothing else can produce.
+    """A stored `origin="app_mcp"` decision with a controlled shape.
 
-    See the module docstring: the App MCP capture is unbuilt (routing_tuning
-    Phase 6), so the reserved origin has no live producer and this documented
-    Rule-1 exemption is the only way to exercise the App MCP verdict half at
-    all. The row carries no candidates, which is why every App MCP sentence
-    below counts "0 eligible candidates" — the same noun a channel decision
-    uses; the per-origin count noun ("N effective routes") was deleted with
-    the AppAgentRoute family in phase 5.
+    App MCP *does* open a capture now (phase 6), but driving one here would
+    buy nothing and cost determinism: these tests are about the verdict's
+    **configuration** branches, whose answer comes from the database rather
+    than from the trace, and a real App MCP decision would drag an MCP handler
+    call and a candidate ballot in with it. The row carries no candidates,
+    which is why every App MCP sentence below counts "0 eligible candidates" —
+    the same noun a channel decision uses; the per-origin count noun ("N
+    effective routes") was deleted with the AppAgentRoute family in phase 5.
+
+    `ROUTING_TRACE_APP_MCP_MODE` is pinned to `"full"` across the seed so the
+    instrument stays deterministic whatever the deployed default is. Without
+    it this helper would inherit the metadata default and start writing rows
+    with no `message_text` — the flag reaching an instrument it was never
+    aimed at. Nothing below reads `message_text`; the patch is here so that
+    stays a fact about the helper rather than a coincidence.
     """
-    trace_id = seed_routing_trace(
-        created_at=datetime.now(UTC),
-        origin="app_mcp",
-        user_id=user_id,
-        outcome="no_match",
-        message="please do the thing",
-    )
+    with patch(_APP_MCP_MODE_SETTING, ROUTING_TRACE_APP_MCP_FULL):
+        trace_id = seed_routing_trace(
+            created_at=datetime.now(UTC),
+            origin="app_mcp",
+            user_id=user_id,
+            outcome="no_match",
+            message="please do the thing",
+        )
     assert trace_id is not None, "seeded trace was not persisted"
     return {"id": str(trace_id)}
 

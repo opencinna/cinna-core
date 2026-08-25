@@ -32,6 +32,22 @@ def parse_cors(v: Any) -> list[str] | str:
 #: ``RoutingTraceService.purge`` so both ends agree on the sentinel.
 ROUTING_TRACE_RETENTION_FOREVER = -1
 
+#: The three values of ``ROUTING_TRACE_APP_MCP_MODE``. Shared constants rather
+#: than literals because three modules branch on them — the producer
+#: (``AppMCPRoutingService.route_message``), the write gate
+#: (``RoutingTraceService.persist``) and the startup validator below — and a
+#: typo in any one of them would degrade to "not off, not full", i.e. silently
+#: to ``metadata``, which is the shape of failure this setting was removed over
+#: the first time. See the setting for what each value stores and omits.
+ROUTING_TRACE_APP_MCP_OFF = "off"
+ROUTING_TRACE_APP_MCP_METADATA = "metadata"
+ROUTING_TRACE_APP_MCP_FULL = "full"
+ROUTING_TRACE_APP_MCP_MODES = (
+    ROUTING_TRACE_APP_MCP_OFF,
+    ROUTING_TRACE_APP_MCP_METADATA,
+    ROUTING_TRACE_APP_MCP_FULL,
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -561,20 +577,62 @@ class Settings(BaseSettings):
     # ``SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS`` deliberately: the two surfaces
     # show the same text to the same audience and should truncate alike.
     ROUTING_TRACE_TEXT_MAX_CHARS: int = 2_000
-    # NOTE — ``ROUTING_TRACE_APP_MCP_MODE`` (``off`` | ``metadata`` | ``full``)
-    # used to sit here and has been **removed**. ``RoutingTrace.capture()`` is
-    # opened at exactly two sites, both ``origin="server_channel"``, so the
-    # setting was unreachable at every value including ``off`` — an operator who
-    # set it would have believed they had disabled a capture that was never
-    # running. That is the rule above in a different guise: a control must not
-    # appear to do more than it does.
+    # How much of an App MCP routing decision is written to ``routing_decision``.
+    # Applies to ``origin="app_mcp"`` rows and to nothing else — every other
+    # origin is governed by ``ROUTING_TRACE_ENABLED`` and
+    # ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` alone.
     #
-    # The policy it encoded still stands and applies the moment the origin
-    # exists: App MCP routes *every* message, not just thread openings, so its
-    # write volume is unbounded in a way the channel path's is not (that one
-    # sits behind the webhook rate limit), and it must default to metadata-only.
-    # Reintroduce this setting **in the same change that adds
-    # ``origin="app_mcp"`` capture**, not before (plan §4).
+    # Read this table rather than the code. Naming the fields here is the whole
+    # point of the comment: this setting was **removed once** because a reader
+    # could not tell from it what a value did (it was unreachable at every
+    # value, including ``off``, so an operator who set it believed they had
+    # disabled a capture that was never running). Shipping it again with a
+    # description that has to be decoded by tracing ``persist`` would repeat
+    # that defect in a new shape.
+    #
+    #   ``off``       No row at all. ``AppMCPRoutingService.route_message``
+    #                 opens no capture, and ``RoutingTraceService.persist``
+    #                 refuses any ``app_mcp`` trace that reaches it anyway.
+    #                 ``GET /admin/routing/traces?origin=app_mcp`` stays empty.
+    #                 Absence, not a swallowed failure: nothing is attempted,
+    #                 so nothing can half-succeed.
+    #
+    #   ``metadata``  (default) The row is written **without the sender's
+    #                 words**. Omitted: ``message_text``, and every ``stages``
+    #                 field outside ``routing_trace.SAFE_STAGE_FIELDS`` — i.e.
+    #                 ``stages[].prompt``, ``stages[].raw_response``,
+    #                 ``stages[].reason``, ``stages[].llm_attempts[].error``,
+    #                 and any ``candidates[]`` field outside
+    #                 ``SAFE_CANDIDATE_FIELDS``. Stored: ``message_sha256``
+    #                 (so the row stays replayable and "withheld" stays
+    #                 distinguishable from "no message"), ``origin``,
+    #                 ``outcome``, ``match_method``, ``channel_id``,
+    #                 ``user_id``, ``selected_*``, ``confidence``,
+    #                 ``latency_ms``, the row-level ``error``, and
+    #                 ``stages[].stage`` / ``.match_method`` /
+    #                 ``.matched_pattern`` / ``.confidence`` / ``.runner_up_id``
+    #                 / ``.not_run_code`` / ``.candidates`` / ``.llm_attempts``.
+    #                 Exactly the set ``ROUTING_TRACE_STORE_MESSAGE_TEXT=False``
+    #                 omits, applied to this one origin — one rule, not two.
+    #
+    #   ``full``      No per-origin narrowing. ``app_mcp`` rows are written
+    #                 exactly like a channel's, and
+    #                 ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` alone decides whether
+    #                 the text is stored.
+    #
+    # The two settings **AND**; ``metadata`` narrows and never widens, so
+    # ``full`` cannot re-open a text gate that ``ROUTING_TRACE_STORE_MESSAGE_TEXT``
+    # has closed.
+    #
+    # Why the default is the narrow one: App MCP routes *every* message, not
+    # just thread openings, and it does not sit behind the webhook rate limit
+    # that bounds the channel path — so it is the only origin whose write
+    # volume is unbounded, and ``message_text`` / ``prompt`` / ``raw_response``
+    # are the dominant per-row cost. (For the record, the removal note this
+    # replaces claimed the two capture sites in ``channel_routing_service.py``
+    # were "both ``origin=server_channel``". They were not, even then: simulate
+    # and replay reuse those same two sites with ``origin="simulate"``.)
+    ROUTING_TRACE_APP_MCP_MODE: str = ROUTING_TRACE_APP_MCP_METADATA
 
     # Per-admin cap on the routing-tuning calls that spend real LLM budget:
     # POST /admin/routing/simulate, .../traces/{id}/replay and
@@ -611,6 +669,33 @@ class Settings(BaseSettings):
             f"'store nothing', set ROUTING_TRACE_STORE_MESSAGE_TEXT=False to "
             f"keep traces without the message text, or "
             f"ROUTING_TRACE_ENABLED=False to stop writing traces entirely."
+        )
+
+    @model_validator(mode="after")
+    def _validate_routing_trace_app_mcp_mode(self) -> Self:
+        """Reject an unknown ``ROUTING_TRACE_APP_MCP_MODE`` at startup.
+
+        Rejecting rather than falling back, for the same reason the retention
+        validator above rejects: an unrecognised value would degrade to the
+        ``metadata`` branch (it is neither ``off`` nor ``full``), so an operator
+        who typed ``none`` or ``disabled`` meaning "stop recording App MCP
+        decisions" would get rows they believe do not exist. That is precisely
+        the failure this setting was withdrawn over the first time — a control
+        that appears to do more, or less, than it does — and it is cheaper to
+        fail a boot than to discover it from a table.
+        """
+        mode = self.ROUTING_TRACE_APP_MCP_MODE
+        if mode in ROUTING_TRACE_APP_MCP_MODES:
+            return self
+        raise ValueError(
+            f"ROUTING_TRACE_APP_MCP_MODE must be one of "
+            f"{', '.join(ROUTING_TRACE_APP_MCP_MODES)} (got {mode!r}). "
+            f"{ROUTING_TRACE_APP_MCP_OFF!r} writes no app_mcp routing traces at "
+            f"all, {ROUTING_TRACE_APP_MCP_METADATA!r} writes them without the "
+            f"sender's message text or any model prompt/response, and "
+            f"{ROUTING_TRACE_APP_MCP_FULL!r} writes them like any other origin. "
+            f"To stop writing traces for every origin, set "
+            f"ROUTING_TRACE_ENABLED=False instead."
         )
 
     # ── Two-Factor Authentication (MFA) ────────────────────────────────

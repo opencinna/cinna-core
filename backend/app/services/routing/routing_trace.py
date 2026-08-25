@@ -98,16 +98,28 @@ SUMMARY_MAX_CHARS = 400
 # must tolerate unknown values.
 
 ORIGIN_SERVER_CHANNEL = "server_channel"
-#: RESERVED — Phase 5 vocabulary, **not reachable today**. Nothing opens a
-#: capture with either of these, so no trace has ever carried one. They are
-#: declared here so the origin vocabulary is written down in one place, not
-#: because anything emits them. The setting that used to branch on
-#: ``ORIGIN_APP_MCP`` (``ROUTING_TRACE_APP_MCP_MODE``) has been removed for
-#: exactly that reason — an operator setting it to ``off`` would have believed
-#: they disabled a capture that was never running. Reintroduce that setting in
-#: the same change that starts emitting ``ORIGIN_APP_MCP``, never before
-#: (plan §4).
+#: LIVE as of phase 6 of the channels & identity unification, and the only
+#: origin with a per-origin write setting: ``ROUTING_TRACE_APP_MCP_MODE``
+#: (``off`` | ``metadata`` | ``full``, defaulting to ``metadata``). App MCP
+#: routes *every* message rather than just thread openings and sits behind no
+#: webhook rate limit, so it is the one origin whose write volume is unbounded.
+#: ``AppMCPRoutingService.route_message`` opens the capture; that setting is
+#: read in ``routing_trace_service`` and in the producer, never here — this
+#: module imports nothing from ``app.*`` (see the module docstring), which is
+#: also why the mode is applied to the trace rather than by it.
+#:
+#: The setting was **removed once**, when this constant was still reserved and
+#: unreachable, on the ground that an operator setting it to ``off`` would have
+#: believed they disabled a capture that was never running. It came back in the
+#: same change that started emitting this origin, which was the condition its
+#: removal note attached.
 ORIGIN_APP_MCP = "app_mcp"
+#: RESERVED — declared so the origin vocabulary is written down in one place,
+#: not because anything emits it. Nothing opens a capture with this and no
+#: trace has ever carried one: identity is a *stage*
+#: (``STAGE_IDENTITY_STAGE2``) reached inside a ``server_channel`` or
+#: ``app_mcp`` decision, never a decision of its own (settled decisions §2.10,
+#: §2.15).
 ORIGIN_IDENTITY = "identity"
 #: LIVE as of Phase 3, and the first origin other than ``server_channel`` that
 #: anything actually writes. ``POST /admin/routing/simulate`` and

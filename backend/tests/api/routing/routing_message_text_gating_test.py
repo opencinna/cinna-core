@@ -1,10 +1,14 @@
 """`ROUTING_TRACE_STORE_MESSAGE_TEXT` both ways, through the real channel path.
 
-Per the developer's Phase 2 notes: `origin` is always `server_channel` today
-(no call site opens a capture for `app_mcp` / `identity` / `simulate`), but
-`ROUTING_TRACE_STORE_MESSAGE_TEXT` IS testable both ways through the channel
-path — no need to reach for the `app_mcp` per-origin mode to prove the text
-gate.
+Every row this file produces is `origin="server_channel"`, and that is a
+statement about this file rather than about the table: `simulate` and `app_mcp`
+both have live producers now (`POST /admin/routing/simulate`;
+`AppMCPRoutingService.route_message`, phase 6). The point stands unchanged —
+`ROUTING_TRACE_STORE_MESSAGE_TEXT` is testable both ways through the channel
+path, so proving the text gate needs no per-origin mode. That the same gate
+holds on the App MCP origin, and that `ROUTING_TRACE_APP_MCP_MODE` narrows it
+rather than re-opening it, is proved where that producer lives:
+`tests/api/app_mcp/app_mcp_routing_trace_test.py`.
 
 The property that matters most (plan §7): with the flag off, `message_text`
 must be absent, but `message_sha256` must still be present — that residue is

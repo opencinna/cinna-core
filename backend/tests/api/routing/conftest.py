@@ -1,8 +1,11 @@
 """Auto Routing Tuning test fixtures.
 
 Most scenarios here drive real webhook deliveries through
-``ChannelInboundService`` (the only wired producer of routing traces today —
-see the domain README), so this mirrors ``tests/api/server_channels/conftest.py``
+``ChannelInboundService`` (this domain's producer of routing traces — no longer
+the only one anywhere: ``POST /admin/routing/simulate`` writes ``simulate``
+rows and ``AppMCPRoutingService.route_message`` writes ``app_mcp`` ones, the
+latter covered from ``tests/api/app_mcp/``; see the domain README), so this
+mirrors ``tests/api/server_channels/conftest.py``
 exactly: session-proxy, environment-adapter, background-task, and
 external-service stubs so the inbound pipeline runs against the test
 transaction instead of the real engine, plus ``patch_anyio_to_thread`` so the
