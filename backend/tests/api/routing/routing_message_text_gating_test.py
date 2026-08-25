@@ -58,6 +58,7 @@ from tests.utils.server_channel import (
     add_auto_install_bundle,
     build_message_event,
     create_server_channel,
+    update_server_channel,
 )
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
 from tests.utils.utils import random_lower_string
@@ -628,3 +629,129 @@ def test_candidate_owner_config_survives_the_gate_while_sender_text_does_not(
     assert stage_written_off.get("raw_response") is None, stage_written_off
     assert stage_written_off["llm_attempts"][0].get("error") in (None, ""), stage_written_off
     assert marker not in json.dumps(detail_written_off), detail_written_off
+
+
+# ── The allowlist admits a server-CHOSEN code where it refuses the sentence ──
+
+
+def _publish_public_bundle(client, publisher_headers, *, trigger_prompt: str) -> str:
+    """A public, listed bundle with a router trigger prompt — the Pass-2 shape."""
+    agent = create_agent_via_api(
+        client, publisher_headers, name=f"NotRunCode-{random_lower_string()[:6]}"
+    )
+    drain_tasks()
+    set_router_trigger_prompt(client, publisher_headers, agent["id"], trigger_prompt)
+    publish_bundle_and_make_public(client, publisher_headers, agent["id"])
+    detail = client.get(f"{API}/agents/{agent['id']}", headers=publisher_headers).json()
+    return detail["bundle_uuid"]
+
+
+def test_pass_2_not_run_code_survives_the_gate_that_withholds_its_sentence(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """`stages[].not_run_code` is on `SAFE_STAGE_FIELDS`; `stages[].reason` is
+    not — and that split is the entire design.
+
+    `_record_pass_2_not_run` writes *why* the auto-install pass was barred as a
+    pair: a human sentence in `reason`, and one of the closed `NOT_RUN_*`
+    constants in `not_run_code`. The sentence is server-authored, but `reason`
+    is the field the classifier's own prose lands in, so it stays off the
+    allowlist and stays gated. The code cannot carry anything a sender wrote —
+    it is picked by a branch over `ResolvedChannelPolicy` — so it is served
+    either way.
+
+    Without it, a `pass_2` stage read with the gate closed was
+    indistinguishable from a Pass 2 that ran over an empty catalog: both say
+    "no bundle was offered and none could be", and only the note said *which
+    switch to go and look at*. This test is that fact being served.
+
+    A bundle really is on the auto-install list, so the catalog genuinely had
+    something to offer and `allow_auto_install=False` is genuinely the only
+    reason it was not. The sender is a fresh auto-registered account owning
+    nothing, so Pass 1's ballot is empty and Pass 2 is the only pass that could
+    have produced anything.
+
+    Both flag directions, because they prove different things:
+
+      1. **Read path** — captured with the gate ON (the sentence is stored),
+         read with it OFF. The code must still be served and the sentence must
+         not: `_project_safe_stages` is doing the withholding.
+      2. **Write path** — captured with the gate OFF, read back with it ON, so
+         the read projection cannot be what is hiding the sentence. The code
+         must have been *stored*; the sentence must not.
+    """
+    channel = _channel(client, superuser_token_headers)
+    update_server_channel(
+        client, superuser_token_headers, channel["id"], allow_auto_install=False
+    )
+
+    publisher, publisher_headers = make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, publisher["id"])
+    bundle_uuid = _publish_public_bundle(
+        client, publisher_headers, trigger_prompt="Handle auto-install-off requests"
+    )
+    add_auto_install_bundle(client, superuser_token_headers, bundle_uuid)
+
+    def _post(store_text: bool) -> str:
+        before = {
+            r["id"]
+            for r in list_routing_traces(
+                client, superuser_token_headers, channel_id=channel["id"]
+            )["data"]
+        }
+        signer = GoogleChatJWTSigner()
+        event = build_message_event(
+            thread_key=f"spaces/AAA/threads/{random_lower_string()}",
+            text=f"please help {random_lower_string()}",
+            sender_email=f"{random_lower_string()}@example.com",
+        )
+        with patch(_SETTING, store_text):
+            resp, _ = post_channel_message(client, channel, signer, event)
+            assert resp.status_code == 200
+        page = list_routing_traces(
+            client, superuser_token_headers, channel_id=channel["id"]
+        )
+        new_ids = [r["id"] for r in page["data"] if r["id"] not in before]
+        assert len(new_ids) == 1, page["data"]
+        return new_ids[0]
+
+    def _pass2(detail: dict) -> dict:
+        stage = next((s for s in detail["stages"] if s["stage"] == "pass_2"), None)
+        assert stage is not None, (
+            "policy barred Pass 2 but the trace carries no pass_2 stage"
+        )
+        return stage
+
+    # ── 0. Baseline: with the gate ON both halves are stored AND served. ───
+    on_id = _post(store_text=True)
+    with patch(_SETTING, True):
+        detail_on = get_routing_trace(client, superuser_token_headers, on_id)
+    stage_on = _pass2(detail_on)
+    assert stage_on["not_run_code"] == "auto_install_off", stage_on
+    assert (
+        "installing a bundle for this sender is switched off for this channel"
+        in (stage_on["reason"] or "")
+    ), stage_on
+
+    # ── 1. Read path: the SAME row, read with the gate OFF. ───────────────
+    with patch(_SETTING, False):
+        detail_off = get_routing_trace(client, superuser_token_headers, on_id)
+    stage_off = _pass2(detail_off)
+    assert stage_off["not_run_code"] == "auto_install_off", stage_off
+    # `.get`, not `[...]`: a withheld field is absent under an allowlist, not
+    # present-and-blanked.
+    assert stage_off.get("reason") is None, stage_off
+    assert detail_off["message_text"] is None, detail_off
+
+    # ── 2. Write path: captured with the gate OFF, read back with it ON, so
+    #      the read projection cannot be what hides the sentence. ──────────
+    written_off_id = _post(store_text=False)
+    with patch(_SETTING, True):
+        detail_written_off = get_routing_trace(
+            client, superuser_token_headers, written_off_id
+        )
+    stage_written_off = _pass2(detail_written_off)
+    # Read gate wide open, so anything present here was genuinely stored...
+    assert stage_written_off["not_run_code"] == "auto_install_off", stage_written_off
+    # ...and anything missing was never written.
+    assert stage_written_off.get("reason") is None, stage_written_off

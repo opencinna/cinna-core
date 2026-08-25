@@ -17,6 +17,7 @@ import {
   formatConfidence,
   formatLatency,
   matchMethodLabel,
+  notRunLabel,
   skipReasonLabel,
   sourceLabel,
 } from "./routingCopy"
@@ -292,6 +293,7 @@ function StageBlock({
   /** The message-text gate withheld the sender's words from this payload. */
   textGated: boolean
 }) {
+  const notRun = notRunLabel(stage.not_run_code)
   return (
     <div className="space-y-2 rounded-lg border p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -312,6 +314,13 @@ function StageBlock({
           </span>
         )}
       </div>
+
+      {/* Rendered independently of `reason`, and that is the whole point of
+          the field: the sentence is withheld whenever the message-text gate is
+          closed, while this code is on the backend's stage allowlist and
+          survives it. Nesting it inside the `reason` block would hide it in
+          exactly the case it was added for. */}
+      {notRun && <p className="text-xs font-medium">{notRun}</p>}
 
       {stage.reason && (
         <p className="text-xs break-words text-muted-foreground">

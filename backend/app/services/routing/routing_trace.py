@@ -228,6 +228,34 @@ SKIP_IDENTITY_UNAVAILABLE = "identity_unavailable"
 #: Settings > Channels.
 SKIP_NOT_IN_CHANNEL_SCOPE = "not_in_channel_scope"
 
+#: Why Pass 2 (auto-install from the catalog) did not run, as a closed
+#: server-chosen vocabulary rather than a sentence.
+#:
+#: The sentence already exists — ``ChannelRoutingService`` writes one of three
+#: ``PASS_2_*_NOTE`` constants into :attr:`StageTrace.reason` — and it is
+#: withheld with the message-text gate off, along with every other free-text
+#: stage field. That is the allowlist working as designed, and it costs the one
+#: fact a reader of that trace came for: *which switch to go and look at*. These
+#: codes carry that fact, and only that fact, on a field that can be served with
+#: the gate closed (see :data:`SAFE_STAGE_FIELDS`).
+#:
+#: **Assigned in the same narrowest-first if/elif chain that picks the note**
+#: (:meth:`ChannelRoutingService._record_pass_2_not_run`), never computed
+#: independently: that ordering *is* the diagnosis — a restricted scope
+#: invalidates the auto-install remedy too — so a code derived from a second,
+#: separate pass over the policy could name a control the note does not.
+NOT_RUN_PINNED = "pinned"
+NOT_RUN_CHANNEL_SCOPE = "channel_scope"
+NOT_RUN_AUTO_INSTALL_OFF = "auto_install_off"
+#: Reserved, and **not written by** ``_record_pass_2_not_run``: the admin
+#: unticked ``include_catalog`` on a simulate, and the call to that recorder is
+#: deliberately gated on the flag, so no note is written in that case at all —
+#: reporting the policy underneath the admin's own toggle answers a question
+#: nobody asked. Declared because it is the one cause a read-time
+#: re-resolution could never recover: ``include_catalog`` is a per-run flag
+#: persisted nowhere.
+NOT_RUN_SIMULATE_TOGGLE = "simulate_toggle"
+
 KIND_AGENT = "agent"
 KIND_BUNDLE = "bundle"
 
@@ -279,6 +307,10 @@ class StageTrace:
     confidence: float | None = None
     reason: str | None = None
     runner_up_id: str | None = None
+    #: One of the ``NOT_RUN_*`` constants when this stage records a pass that
+    #: was barred before it ran. The machine-readable half of ``reason``, and
+    #: the half that survives the message-text gate.
+    not_run_code: str | None = None
 
 
 # --- The message-text allowlist ---------------------------------------------
@@ -385,12 +417,33 @@ SAFE_LLM_ATTEMPT_FIELDS: tuple[str, ...] = (
 #: cost is accepted, because the alternative is enumerating which reasons are
 #: ours and which are the model's, which is the per-field inventory this list
 #: replaced after it failed three times.
+#:
+#: ``not_run_code`` is on this list because it is **enum-shaped by
+#: construction**: its values are the module constants above —
+#: :data:`NOT_RUN_PINNED` / :data:`NOT_RUN_CHANNEL_SCOPE` /
+#: :data:`NOT_RUN_AUTO_INSTALL_OFF` / :data:`NOT_RUN_SIMULATE_TOGGLE` — chosen
+#: by a branch over ``ResolvedChannelPolicy``, and no sender-derived string can
+#: reach it. The human sentence stays in ``reason``, and stays gated.
+#:
+#: **``reason``, above, is the counter-example, and it is why this is a
+#: per-field judgement and never a licence.** It was on this list. It was safe
+#: on the terms it was admitted under — it held our own parse literals. It had
+#: to be withdrawn the moment its content began arriving from the model,
+#: because a field's safety is a property of *where its content comes from*,
+#: not of what it is called or of who added it.
+#:
+#: So the test to apply to the next candidate is not "does it look like
+#: ``not_run_code``" but "can user input reach it, now or after the next change
+#: to its producer". **A candidate rendered from user input must be refused,
+#: and refused here, in this comment**, rather than discovered on a read
+#: surface.
 SAFE_STAGE_FIELDS: dict[str, tuple[str, ...] | None] = {
     "stage": None,
     "match_method": None,
     "matched_pattern": None,
     "confidence": None,
     "runner_up_id": None,
+    "not_run_code": None,
     "candidates": SAFE_CANDIDATE_FIELDS,
     "llm_attempts": SAFE_LLM_ATTEMPT_FIELDS,
 }
@@ -1106,9 +1159,18 @@ def record_parse_outcome(
     reason: str | None = None,
     confidence: float | None = None,
     runner_up_id: str | None = None,
+    not_run_code: str | None = None,
     stage: str | None = None,
 ) -> None:
-    """What the parse made of the raw response."""
+    """What the parse made of the raw response.
+
+    ``not_run_code`` is the machine-readable companion to ``reason`` — one of
+    the ``NOT_RUN_*`` constants — and is **not clamped**: it is a closed
+    server-chosen vocabulary, not text. It rides here rather than on a recorder
+    of its own because the only caller that sets it is already writing the
+    matching ``reason`` in the same statement, and splitting them across two
+    calls is how the code and the sentence drift apart.
+    """
     trace = RoutingTrace.current()
     if trace is None:
         return
@@ -1122,6 +1184,7 @@ def record_parse_outcome(
         reason=clamped_reason,
         confidence=confidence,
         runner_up_id=runner_up_id,
+        not_run_code=not_run_code,
     )
 
 
@@ -1251,6 +1314,7 @@ __all__ = [
     "SAFE_CANDIDATE_FIELDS",
     "SAFE_LLM_ATTEMPT_FIELDS",
     "SAFE_STAGE_FIELDS",
+    "SUMMARY_MAX_CHARS",
     "TRACE_TEXT_MAX_CHARS",
     "ORIGIN_APP_MCP",
     "ORIGIN_IDENTITY",
@@ -1267,14 +1331,22 @@ __all__ = [
     "MATCH_ONLY_ONE",
     "MATCH_PATTERN",
     "MATCH_PINNED",
+    "NOT_RUN_AUTO_INSTALL_OFF",
+    "NOT_RUN_CHANNEL_SCOPE",
+    "NOT_RUN_PINNED",
+    "NOT_RUN_SIMULATE_TOGGLE",
     "SKIP_AGENT_MISSING",
     "SKIP_ALREADY_INSTALLED",
+    "SKIP_BUNDLE_MISSING",
     "SKIP_FOREIGN_OWNER",
     "SKIP_IDENTITY_ROUTE",
+    "SKIP_IDENTITY_UNAVAILABLE",
     "SKIP_NOT_INSTALLABLE",
+    "SKIP_NO_ASSIGNMENT",
     "SKIP_NO_REVISION",
     "SKIP_NOT_IN_CHANNEL_SCOPE",
     "SKIP_NO_TRIGGER_PROMPT",
+    "SKIP_PASS_1_MATCHED",
     "SKIP_ROUTE_INACTIVE",
     "KIND_AGENT",
     "KIND_BUNDLE",
@@ -1284,6 +1356,7 @@ __all__ = [
     "describe_exception",
     "mark_candidate_skipped",
     "record_candidate",
+    "record_confidence",
     "record_error",
     "record_llm_attempt",
     "record_match",

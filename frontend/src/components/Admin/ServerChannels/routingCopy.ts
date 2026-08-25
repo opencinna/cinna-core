@@ -61,6 +61,22 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   agent_missing: "Agent missing",
 }
 
+/**
+ * Why a pass was barred before it ran (`stages[].not_run_code`).
+ *
+ * Each label names the control to go and look at, because that is the fact the
+ * code carries. The matching sentence lives in `stages[].reason` and is
+ * withheld whenever the message-text gate is closed — this map is what the view
+ * renders in that case, so it must stand on its own rather than annotate a
+ * sentence that may not be there.
+ */
+const NOT_RUN_LABELS: Record<string, string> = {
+  pinned: "Sender pinned an agent",
+  channel_scope: "Channel limited to chosen agents",
+  auto_install_off: "Auto-install off for this channel",
+  simulate_toggle: "Catalog pass not requested",
+}
+
 /** Where a candidate came from. */
 const SOURCE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -85,6 +101,11 @@ export function matchMethodLabel(method: string | null | undefined): string {
 export function skipReasonLabel(reason: string | null | undefined): string {
   if (!reason) return "Skipped"
   return SKIP_REASON_LABELS[reason] ?? reason
+}
+
+export function notRunLabel(code: string | null | undefined): string | null {
+  if (!code) return null
+  return NOT_RUN_LABELS[code] ?? code
 }
 
 export function sourceLabel(source: string | null | undefined): string {

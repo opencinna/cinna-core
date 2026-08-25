@@ -62,6 +62,12 @@ export interface RoutingStage {
   confidence?: number | null
   reason?: string | null
   runner_up_id?: string | null
+  /** Why a pass was barred before it ran, as a closed server-chosen code.
+   *  Unlike `reason` — the sentence saying the same thing — this is on the
+   *  backend's stage allowlist, so it is served even while the message-text
+   *  gate is closed. Render it independently of `reason`, never nested inside
+   *  it: the gate-off case is the one it exists for. */
+  not_run_code?: string | null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -141,6 +147,7 @@ function parseStage(raw: unknown): RoutingStage | null {
     confidence: asNumber(raw.confidence) ?? null,
     reason: asString(raw.reason) ?? null,
     runner_up_id: asString(raw.runner_up_id) ?? null,
+    not_run_code: asString(raw.not_run_code) ?? null,
   }
 }
 

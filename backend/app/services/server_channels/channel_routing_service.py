@@ -1867,27 +1867,37 @@ class ChannelRoutingService:
         were never offered anything, and the answer is not visible anywhere
         else on the row. The stage is the finding, not a heading over one.
 
-        The honest cost, stated rather than discovered later: with
-        ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` off the note is withheld (see
-        :data:`PASS_2_NOT_ALLOWED_NOTE`), and this stage then becomes
-        indistinguishable from a Pass 2 that ran over an empty catalog. Both
-        mean "no bundle was offered and none could be", so what is lost with
-        the gate closed is which switch to go and look at, not whether
-        something went wrong.
+        **Each note is written alongside a code**, and the pair is the whole
+        arrangement. With ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` off the note is
+        still withheld — ``reason`` is not on ``routing_trace``'s allowlist and
+        should not be, since it is the field the classifier's own prose lands
+        in — but ``not_run_code`` is, so the fact the note carries survives the
+        gate while the sentence does not. That fact is precisely *which switch
+        to go and look at*: without it this stage read, gate closed,
+        indistinguishable from a Pass 2 that ran over an empty catalog.
+
+        The code is assigned **inside this same if/elif chain**, never
+        recomputed from ``policy`` afterwards. The narrowest-first ordering
+        above is the diagnosis, and a second independent pass over the same
+        three terms is how a code ends up naming a different control from the
+        sentence beside it.
         """
         trace = routing_trace.current()
         if trace is not None and trace.error:
             return
         if policy.pinned_agent_id is not None:
             note = PASS_2_PINNED_NOTE
+            code = routing_trace.NOT_RUN_PINNED
         elif policy.agent_scope != CHANNEL_AGENT_SCOPE_ALL:
             note = PASS_2_SCOPE_RESTRICTED_NOTE
+            code = routing_trace.NOT_RUN_CHANNEL_SCOPE
         elif not policy.allow_auto_install:
             note = PASS_2_NOT_ALLOWED_NOTE
+            code = routing_trace.NOT_RUN_AUTO_INSTALL_OFF
         else:
             return
         with routing_trace.stage_scope(routing_trace.STAGE_PASS_2):
-            routing_trace.record_parse_outcome(reason=note)
+            routing_trace.record_parse_outcome(reason=note, not_run_code=code)
 
     @staticmethod
     def _record_catalog_rows(
