@@ -1247,6 +1247,7 @@ class ChannelInboundService:
                         text=text,
                         external_message_id=external_message_id,
                         external_user_id=external_user_id,
+                        policy=policy,
                     )
                 except Exception as exc:
                     # The park is what ``parked_install`` asserts, so a failed
@@ -1451,8 +1452,14 @@ class ChannelInboundService:
         text: str,
         external_message_id: str | None,
         external_user_id: str | None,
+        policy: ResolvedChannelPolicy,
     ) -> None:
-        """Install the matched bundle and park the message until the env is up."""
+        """Install the matched bundle and park the message until the env is up.
+
+        ``policy`` is carried only to hand on to :meth:`_handle_lost_race`,
+        which needs the sender's reading for *this* message and has no safe
+        default to fall back on.
+        """
         from app.services.bundles.install_service import InstallService
 
         agent = await InstallService.install_bundle(db, user, bundle)
@@ -1492,6 +1499,7 @@ class ChannelInboundService:
                 text=text,
                 external_message_id=external_message_id,
                 external_user_id=external_user_id,
+                policy=policy,
             )
             return
 

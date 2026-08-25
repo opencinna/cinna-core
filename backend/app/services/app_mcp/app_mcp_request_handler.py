@@ -310,7 +310,8 @@ class AppMCPRequestHandler:
             fall through to routing).
           - (session, agent, False) on a successful resume.
           - (None, error_message, False) when an identity session was found
-            but its binding/assignment is no longer active.
+            but its binding/assignment is no longer active, or the caller has
+            switched identity routing off since the session was created.
         """
         existing = SessionService.get_session(db, existing_session_id)
         if existing is None:
@@ -330,6 +331,21 @@ class AppMCPRequestHandler:
             validity_error = AppMCPRequestHandler._check_identity_session_validity(db, existing)
             if validity_error:
                 return None, validity_error, False
+            # Consent, re-read per message — the caller's own
+            # ``allow_identity_routing`` switch, which
+            # ``_check_identity_session_validity`` deliberately does not cover
+            # (it re-reads the binding and the assignment, the *owner's* and
+            # the *per-person* controls, not the caller's per-channel one).
+            # Without this, turning the switch off in Settings → Channels
+            # stopped new identity routing but left every already-open identity
+            # session answering — while the channel path, which re-reads the
+            # same flag on every message of a bound identity thread, closed
+            # its own. Revocation must close both.
+            consent_error = AppMCPRequestHandler._check_identity_routing_consent(
+                db, user_id
+            )
+            if consent_error:
+                return None, consent_error, False
         else:
             return None
 
@@ -413,3 +429,47 @@ class AppMCPRequestHandler:
         """
         from app.services.identity.identity_service import IdentityService
         return IdentityService.check_session_validity(db, session)
+
+    @staticmethod
+    def _check_identity_routing_consent(
+        db: DBSession,
+        user_id: uuid.UUID,
+    ) -> str | None:
+        """Verify the caller still consents to identity routing on App MCP.
+
+        ``allow_identity_routing`` is the **sender's own** consent that a
+        message of theirs may open a session inside somebody else's workspace,
+        where that person can read it. It gates the identity half of the ballot
+        at routing time (``AppMCPRoutingService._decide``); this is the other
+        half of the same rule, applied on resume, so revoking consent ends the
+        conversations it already authorized instead of only preventing new
+        ones.
+
+        Resolved through ``ChannelPolicyService`` like every other channel
+        question rather than read off the settings row, because the inherit
+        rules live in exactly one place. Returns ``None`` when consent stands,
+        else the same caller-safe message a revoked binding or assignment
+        returns — a refusal that named the cause would tell the caller which of
+        the several switches closed.
+        """
+        from app.services.identity.identity_service import IdentityService
+        from app.services.server_channels.adapters.app_mcp import AppMCPChannelAdapter
+        from app.services.server_channels.channel_policy_service import (
+            ChannelPolicyService,
+        )
+        from app.services.server_channels.server_channel_service import (
+            ServerChannelService,
+        )
+
+        channel = ServerChannelService.get_or_create_singleton(
+            db, AppMCPChannelAdapter.channel_type
+        )
+        policy = ChannelPolicyService.resolve(db, channel, user_id)
+        if policy.allow_identity_routing:
+            return None
+        logger.warning(
+            "[AppMCP] Identity resume denied: caller %s has identity routing "
+            "switched off on the App MCP channel",
+            user_id,
+        )
+        return IdentityService.IDENTITY_REVOKED_MESSAGE

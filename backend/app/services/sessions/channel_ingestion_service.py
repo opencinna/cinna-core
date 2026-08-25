@@ -677,7 +677,14 @@ class ChannelIngestionService:
             # conditions, including ``binding.owner_id == agent.owner_id ==
             # grant.owner_id`` — is still what makes it live rather than merely
             # well-shaped.
-            identity_owner_id = extra_session_kwargs.pop("identity_owner_id", None)
+            # Annotated because ``extra_session_kwargs`` is ``dict[str, Any]``,
+            # and the pinning below is this arm's whole point: without a
+            # declared type the popped value is ``Any`` and the identity of the
+            # three ids is checked against something the type system has
+            # stopped looking at. The ``mcp_caller`` arm reuses this binding.
+            identity_owner_id: UUID | None = extra_session_kwargs.pop(
+                "identity_owner_id", None
+            )
             if identity_owner_id is None:
                 return sender.platform_user_id
             grant = policy.identity_grant if policy is not None else None
@@ -709,9 +716,40 @@ class ChannelIngestionService:
             return agent.owner_id
 
         if kind == "mcp_caller":
-            # identity_mcp: session is owned by the identity owner, not the caller.
+            # identity_mcp: session is owned by the identity owner, not the
+            # caller. Held to exactly the same structural standard as the
+            # ``channel_caller`` arm above, and for the reason spelled out
+            # there: this method is reached through the public
+            # ``resolve_or_create_session``, so "``assert_access`` must have
+            # run first" is a property of today's single caller
+            # (``create_identity_session``), not of the arm. Requiring the
+            # grant object means the override cannot be taken without the
+            # thing that authorizes it.
+            #
+            # Behaviour is unchanged for that caller: it builds one
+            # ``ChannelAccessPolicy`` carrying the same ``grant`` it passes as
+            # ``identity_owner_id=grant.owner_id``, and ``assert_access`` has
+            # already re-read ``binding.owner_id == agent.owner_id ==
+            # grant.owner_id``. The three ids are pinned to each other here,
+            # not merely present.
             identity_owner_id = extra_session_kwargs.pop("identity_owner_id", None)
-            return identity_owner_id or agent.owner_id
+            if identity_owner_id is None:
+                return agent.owner_id
+            grant = policy.identity_grant if policy is not None else None
+            if grant is None:
+                raise ChannelDecline(
+                    "mcp_caller identity_owner_id requires an identity "
+                    "grant on the access policy: "
+                    f"identity_owner_id={identity_owner_id}"
+                )
+            if not (grant.owner_id == agent.owner_id == identity_owner_id):
+                raise ChannelDecline(
+                    "mcp_caller identity owner mismatch: "
+                    f"identity_owner_id={identity_owner_id}, "
+                    f"agent.owner_id={agent.owner_id}, "
+                    f"grant.owner_id={grant.owner_id}"
+                )
+            return identity_owner_id
 
         if kind == "platform_user":
             return sender.platform_user_id or agent.owner_id

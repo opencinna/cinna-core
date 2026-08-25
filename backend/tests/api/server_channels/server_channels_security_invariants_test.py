@@ -438,6 +438,140 @@ def test_lost_race_park_branch_declines_the_loser_but_parks_same_owner(
     assert any("thing two" in c for c in contents)
 
 
+def test_lost_race_install_branch_declines_the_loser_from_another_user(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """Two DIFFERENT users race a brand-new thread, and BOTH reach Pass 2.
+
+    The third lost-race entry point, and the one that had no coverage:
+    `_install_and_park`'s own `if not created:` edge. The two tests above both
+    reach `_handle_lost_race` from Pass 1; this one reaches it from Pass 2,
+    *after* an auto-install has already happened. The path exists because
+    `_upsert_binding` is called a second time inside `_install_and_park`, on a
+    thread another sender may have bound while this sender's bundle was
+    installing.
+
+    Regression guard, not a new behaviour. Phase 3 of the channels & identity
+    unification threaded `policy` — the sender's own per-message reading,
+    keyword-only with no default — through every `_handle_lost_race` call site
+    but this one. The park path therefore raised
+    `TypeError: _handle_lost_race() missing 1 required keyword-only argument`,
+    which `_route_new_thread`'s outer handler swallowed into the generic
+    `REPLY_SETUP_FAILED`: B was told setup had failed (it had not), and the
+    deliberate one-person-per-thread re-check that this branch exists to
+    perform never ran at all. Both halves are asserted below — the decline is
+    delivered, and the setup-failed text is absent.
+
+    Driven deterministically, the same way as the sibling park test
+    (`drain_tasks()` runs background tasks strictly sequentially; see
+    `tests/api/server_channels/README.md`):
+
+      1. One public bundle sits on the server auto-install list. Consumers A
+         and B own nothing at all, so Pass 1 finds zero candidates for either
+         and both fall straight through to Pass 2.
+      2. Both deliveries are queued into the SAME new thread before draining,
+         so both see "no binding" synchronously.
+      3. A's task drains first: Pass 2 picks the bundle, installs it, creates
+         the `pending_install` binding, parks A's message.
+      4. B's task drains second: Pass 2 picks the same bundle and installs
+         B's own copy — then `_upsert_binding` loses the race on the thread,
+         `created=False`, and `_handle_lost_race` must find `binding.user_id
+         != B` and decline.
+      5. The flush proves A's binding survived intact: A's parked message is
+         still delivered, on A's own install.
+    """
+    publisher, publisher_headers = make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, publisher["id"])
+    agent = create_agent_via_api(
+        client, publisher_headers, name=f"InstallRace-{random_lower_string()[:6]}"
+    )
+    drain_tasks()
+    set_router_trigger_prompt(
+        client, publisher_headers, agent["id"], "Handle install-race test requests"
+    )
+    publish_bundle_and_make_public(client, publisher_headers, agent["id"])
+    fresh = client.get(f"{API}/agents/{agent['id']}", headers=publisher_headers).json()
+    bundle_uuid = fresh["bundle_uuid"]
+
+    channel = _channel(client, superuser_token_headers)
+    signer = GoogleChatJWTSigner()
+    add_auto_install_bundle(client, superuser_token_headers, bundle_uuid)
+
+    # Neither consumer owns anything, so neither has a Pass 1 ballot at all —
+    # which is what keeps BOTH of them on the Pass 2 path and makes the loser
+    # arrive at `_install_and_park` rather than at Pass 1's race handler.
+    consumer_a, headers_a = make_user_and_headers(client)
+    consumer_b, headers_b = make_user_and_headers(client)
+
+    thread_key = f"spaces/AAA/threads/{uuid.uuid4()}"
+    token = signer.token(audience=channel["config"]["project_number"])
+    event_a = build_message_event(
+        thread_key=thread_key,
+        text="A opens the thread",
+        sender_email=consumer_a["email"],
+        message_name=f"spaces/AAA/messages/{uuid.uuid4()}",
+    )
+    event_b = build_message_event(
+        thread_key=thread_key,
+        text="B piles into the same thread",
+        sender_email=consumer_b["email"],
+        message_name=f"spaces/AAA/messages/{uuid.uuid4()}",
+    )
+
+    stub = StubAgentEnvConnector(response_text="On it.")
+    with signer.patched(), patch(_STREAM_TARGET, stub), patch(
+        _SEND_TARGET, AsyncMock(return_value="fake-ext-id")
+    ) as send_mock, patch(_CLASSIFY_TARGET, side_effect=_classify_the_only_candidate):
+        resp_a = post_webhook(client, channel["webhook_token"], event_a, bearer_token=token)
+        resp_b = post_webhook(client, channel["webhook_token"], event_b, bearer_token=token)
+        assert resp_a.status_code == 200 and resp_b.status_code == 200
+        drain_tasks()
+
+    texts = [call.args[-1] or "" for call in send_mock.await_args_list]
+
+    # The headline: the loser was told the thread is someone else's. Before the
+    # fix this line never ran — `_handle_lost_race` raised on the missing
+    # keyword argument before reaching its own ownership check.
+    assert any("belongs to someone else" in t for t in texts), texts
+
+    # And was NOT told setup failed. This is the exact shape the swallowed
+    # `TypeError` produced, so it is the assertion that pins the regression
+    # rather than merely covering the branch.
+    assert not any("setting up your assistant failed" in t for t in texts), texts
+
+    # B reached nobody's session — not their own, and above all not A's.
+    assert list_sessions(client, headers_b) == []
+
+    # A's binding is untouched: their install is there and their message is
+    # still parked on it, delivered once the environment comes up.
+    installed_a = [
+        a
+        for a in client.get(f"{API}/agents/", headers=headers_a).json()["data"]
+        if a["bundle_uuid"] == bundle_uuid
+    ]
+    assert len(installed_a) == 1, installed_a
+    agent_a = installed_a[0]
+
+    set_environment_status(db, agent_a["active_environment_id"], "running")
+    db.commit()
+    with patch(_STREAM_TARGET, stub):
+        advanced = flush_pending_bindings(db)
+        drain_tasks()
+    assert advanced >= 1
+
+    sessions_a = [
+        s for s in list_sessions(client, headers_a) if s["agent_id"] == agent_a["id"]
+    ]
+    assert len(sessions_a) == 1
+    contents = [
+        m["content"]
+        for m in list_messages(client, headers_a, sessions_a[0]["id"])
+        if m["role"] == "user"
+    ]
+    assert any("A opens the thread" in c for c in contents), contents
+    assert not any("B piles into" in c for c in contents), contents
+
+
 # ---------------------------------------------------------------------------
 # 3. Malformed-JWT probe family — must be 403, never 500
 # ---------------------------------------------------------------------------

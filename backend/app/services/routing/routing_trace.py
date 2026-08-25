@@ -324,7 +324,16 @@ class CandidateTrace:
     ref_id: str
     name: str
     owner_email: str | None = None
-    source: str = ""  # "admin" | "user" | "identity" | "catalog"
+    # Live producers write exactly three values: "owned"
+    # (``channel_candidate_provider.SOURCE_OWNED``), "identity"
+    # (``identity_candidate_provider.SOURCE_IDENTITY``) and "catalog"
+    # (``ChannelRoutingService._record_catalog_rows``). "admin" and "user"
+    # were the pre-unification route-based values; nothing writes them any
+    # more, but rows captured before the refactor still carry them for as long
+    # as ``ROUTING_TRACE_RETENTION_DAYS`` keeps them — which is why the admin
+    # UI still renders labels for both. Do not treat this as a closed set of
+    # three when reading.
+    source: str = ""  # "owned" | "identity" | "catalog" (+ legacy "admin" | "user")
     trigger_prompt: str = ""  # clamped
     prompt_examples: str | None = None
     eligible: bool = True

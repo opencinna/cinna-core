@@ -275,74 +275,105 @@ class AppMCPRoutingService:
         the channel row and the policy are the caller's, because the capture
         needs ``channel.id`` before this runs.
         """
-        # Owned agents first, identities after — mirroring
-        # ``ChannelRoutingService._route_installed`` exactly. See the module
-        # docstring on why the order is copied rather than re-decided.
-        candidates = ChannelCandidateProvider.build(db_session, user_id, policy=policy)
-        owned_count = len(candidates)
-        if policy.allow_identity_routing:
-            candidates += IdentityCandidateProvider.build(db_session, user_id)
-        # With the switch off the provider is simply not called, so identity
-        # owners this caller *could* have reached leave no trace rows at all,
-        # not even skips. That is the same deliberate inversion of master plan
-        # §3.5 the channel path makes, for the same reason: recording them
-        # would publish the existence of other people's identities into a trace
-        # the caller can trigger at will. Do not "fix" it by building the
-        # candidates and filtering them after.
-
-        if not candidates:
-            logger.debug("No routing candidates for user %s", user_id)
-            return None
-
-        # Debug, not info: this line carries the caller's message text and
-        # every candidate's trigger prompt. The routing trace is where that
-        # detail belongs.
-        logger.debug(
-            "[Stage1] Routing message for user=%s | message=%r | "
-            "%d candidates (%d owned, %d identity)",
-            user_id, message[:120], len(candidates),
-            owned_count, len(candidates) - owned_count,
-        )
-
         stage1_transformed_message: str | None = None
         selected: Candidate | IdentityPick
 
-        # If only one candidate in total, use it directly (no need to classify)
-        if len(candidates) == 1:
-            only = candidates[0]
-            # Positional, not by value: ``Candidate`` is an unfrozen dataclass
-            # whose ``__eq__`` compares fields, so membership testing could
-            # match the wrong provider's candidate. The identity half is
-            # everything appended after the owned block.
-            if owned_count == 0:
-                only_identity = AppMCPRoutingService._identity_pick(only)
-                if only_identity is None:
-                    logger.warning(
-                        "[Stage1] Sole candidate has a malformed identity ref — "
-                        "refusing to route (user=%s)", user_id,
-                    )
-                    return None
-                selected = only_identity
-            else:
-                selected = only
-            stage1_method = "only_one"
-            routing_trace.record_match(method=routing_trace.MATCH_ONLY_ONE)
-            logger.info(
-                "[Stage1] Single candidate — using directly: %s",
-                selected.name if isinstance(selected, Candidate) else selected.agent_name,
+        # One try block around candidate building *and* classification —
+        # mirroring ``ChannelRoutingService._route_installed``'s, for the reason
+        # stated there: a database hiccup and a provider-cascade outage are the
+        # same thing to this pass. Both mean "no agent chosen", and the caller
+        # is entitled to the same graceful "could not determine which agent"
+        # reply either way rather than an unhandled exception surfacing through
+        # the MCP tool call. (``AgentClassifier.classify`` has its own catch-all
+        # and returns ``None``; this is the belt for everything around it.)
+        #
+        # ``record_error`` settles the trace as ``outcome="error"``, so
+        # ``?origin=app_mcp&outcome=error`` — the filter that exists for exactly
+        # this — keeps finding App MCP outages even though nothing propagates
+        # out of here any more. The outer ``except`` in :meth:`route_message`
+        # stays: it still covers the capture machinery itself.
+        try:
+            # Owned agents first, identities after — mirroring
+            # ``ChannelRoutingService._route_installed`` exactly. See the module
+            # docstring on why the order is copied rather than re-decided.
+            candidates = ChannelCandidateProvider.build(
+                db_session, user_id, policy=policy
             )
-        else:
-            ai_result = AppMCPRoutingService._ai_classify(candidates, message)
-            if ai_result is None:
-                logger.info("[Stage1] AI classification returned no match (user=%s)", user_id)
+            owned_count = len(candidates)
+            if policy.allow_identity_routing:
+                candidates += IdentityCandidateProvider.build(db_session, user_id)
+            # With the switch off the provider is simply not called, so identity
+            # owners this caller *could* have reached leave no trace rows at
+            # all, not even skips. That is the same deliberate inversion of
+            # master plan §3.5 the channel path makes, for the same reason:
+            # recording them would publish the existence of other people's
+            # identities into a trace the caller can trigger at will. Do not
+            # "fix" it by building the candidates and filtering them after.
+
+            if not candidates:
+                logger.debug("No routing candidates for user %s", user_id)
                 return None
-            selected, stage1_transformed_message = ai_result
-            stage1_method = "ai"
+
+            # Debug, not info: this line carries the caller's message text and
+            # every candidate's trigger prompt. The routing trace is where that
+            # detail belongs.
             logger.debug(
-                "[Stage1] AI selected: %s | transformed_message=%r",
-                selected.name if isinstance(selected, Candidate) else selected.agent_name,
-                stage1_transformed_message[:120] if stage1_transformed_message else None,
+                "[Stage1] Routing message for user=%s | message=%r | "
+                "%d candidates (%d owned, %d identity)",
+                user_id, message[:120], len(candidates),
+                owned_count, len(candidates) - owned_count,
             )
+
+            # If only one candidate in total, use it directly (no classify)
+            if len(candidates) == 1:
+                only = candidates[0]
+                # Positional, not by value: ``Candidate`` is an unfrozen
+                # dataclass whose ``__eq__`` compares fields, so membership
+                # testing could match the wrong provider's candidate. The
+                # identity half is everything appended after the owned block.
+                if owned_count == 0:
+                    only_identity = AppMCPRoutingService._identity_pick(only)
+                    if only_identity is None:
+                        logger.warning(
+                            "[Stage1] Sole candidate has a malformed identity "
+                            "ref — refusing to route (user=%s)", user_id,
+                        )
+                        # Recorded, not merely logged — the channel twin
+                        # (``ChannelRoutingService._route_only_candidate``)
+                        # carries a reason here for the reason it states: a bare
+                        # ``no_match`` under ``match_method=only_one`` would be
+                        # the one outcome shape with nothing at all explaining
+                        # it. Unreachable by construction either way.
+                        routing_trace.record_parse_outcome(
+                            reason="the sole candidate's id is not a "
+                            "well-formed identity ref"
+                        )
+                        return None
+                    selected = only_identity
+                else:
+                    selected = only
+                stage1_method = "only_one"
+                routing_trace.record_match(method=routing_trace.MATCH_ONLY_ONE)
+                logger.info(
+                    "[Stage1] Single candidate — using directly: %s",
+                    selected.name if isinstance(selected, Candidate) else selected.agent_name,
+                )
+            else:
+                ai_result = AppMCPRoutingService._ai_classify(candidates, message)
+                if ai_result is None:
+                    logger.info("[Stage1] AI classification returned no match (user=%s)", user_id)
+                    return None
+                selected, stage1_transformed_message = ai_result
+                stage1_method = "ai"
+                logger.debug(
+                    "[Stage1] AI selected: %s | transformed_message=%r",
+                    selected.name if isinstance(selected, Candidate) else selected.agent_name,
+                    stage1_transformed_message[:120] if stage1_transformed_message else None,
+                )
+        except Exception as exc:  # noqa: BLE001 — a router outage is a no-match
+            logger.exception("[Stage1] Routing failed for user %s", user_id)
+            routing_trace.record_error(exc)
+            return None
 
         is_identity = isinstance(selected, IdentityPick)
         selected_name = selected.agent_name if is_identity else selected.name
@@ -395,6 +426,20 @@ class AppMCPRoutingService:
             # ``str(agent.id)`` — and handled rather than asserted because the
             # alternative is handing a non-UUID on to ``db.get(Agent, ...)``.
             logger.warning("[Stage1] Owned candidate has a non-UUID ref: %r", selected.ref_id)
+            # Recorded, not merely logged. This one guard stands where the
+            # channel path has two, because App MCP's owned branch is shared by
+            # both selection routes — so the wording is picked from whichever
+            # twin actually applies: ``_route_only_candidate``'s when the sole
+            # candidate was taken directly, ``_route_installed``'s when the
+            # classifier chose. Either way a bare ``no_match`` with nothing
+            # explaining it is what this avoids.
+            routing_trace.record_parse_outcome(
+                reason=(
+                    "the sole candidate's id is not a UUID"
+                    if stage1_method == "only_one"
+                    else "classifier returned a value that is not a UUID"
+                )
+            )
             return None
 
         return RoutingResult(

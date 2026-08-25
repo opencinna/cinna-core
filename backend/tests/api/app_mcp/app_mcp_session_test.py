@@ -865,7 +865,9 @@ def test_app_mcp_identity_mcp_context_id_reuses_existing_session(
     from app.services.app_mcp.app_mcp_routing_service import RoutingResult
     from tests.utils.identity import create_identity_binding, assign_users_to_binding
     from tests.utils.message import list_messages
+    from tests.utils.server_channel import find_server_channel_by_type
     from tests.utils.user import create_random_user_with_headers
+    from tests.utils.user_channel import update_my_channel
 
     # ── Phase 1: Create agent (owned by superuser) ────────────────────────
     agent = _setup_agent(client, superuser_token_headers, name="Identity Resume Agent")
@@ -876,8 +878,21 @@ def test_app_mcp_identity_mcp_context_id_reuses_existing_session(
     owner_id = uuid.UUID(r.json()["id"])
 
     # ── Phase 2: Create caller + identity binding ─────────────────────────
-    caller_user, _ = create_random_user_with_headers(client)
+    caller_user, caller_headers = create_random_user_with_headers(client)
     caller_id = uuid.UUID(caller_user["id"])
+
+    # Setup only — no assertion below changes. `route_message` is patched out
+    # further down, so the forged identity result stands in for a decision the
+    # routing layer would only ever have made with this caller's own
+    # `allow_identity_routing` switch on. The resume path re-reads that switch
+    # per message (parity with the channel path, which has always done so), so
+    # the premise now has to be true rather than merely implied by the patch.
+    app_mcp_channel = find_server_channel_by_type(
+        client, superuser_token_headers, "app_mcp"
+    )
+    update_my_channel(
+        client, caller_headers, app_mcp_channel["id"], allow_identity_routing=True
+    )
 
     binding = create_identity_binding(
         client,
@@ -1099,6 +1114,151 @@ def test_app_mcp_identity_binding_deactivated_mid_session_returns_error(
     assert result2.get("context_id") == "", (
         f"context_id should be empty string on validity error, got: {result2.get('context_id')!r}"
     )
+
+
+def test_app_mcp_caller_withdrawing_consent_closes_the_identity_session(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """Switching `allow_identity_routing` off closes an OPEN identity session.
+
+    The sibling above covers the *owner's* half of revocation (the binding goes
+    inactive). This is the *caller's* own half, and it used to have no effect
+    at all on a conversation already in progress:
+    `_check_identity_session_validity` re-reads the binding and the assignment,
+    neither of which the caller's per-channel consent switch touches, so
+    `_try_resume_session` happily resumed a session the caller had just
+    withdrawn permission for. Turning the switch off stopped new identity
+    routing and left every open identity session answering.
+
+    The channel path has always re-read the flag per message on a bound
+    identity thread (`ChannelInboundService._ingest`, raising `ChannelDecline`
+    — see `tests/api/server_channels/server_channels_identity_revocation_test.py`
+    for the same story on Google Chat). Revocation must close both surfaces,
+    so this asserts App MCP's half.
+
+    Two properties, and the second is what makes this more than a smoke test:
+
+      1. The next call is refused rather than answered.
+      2. It is refused with the **same** message a revoked binding gets, and
+         it does not quietly fall through to routing and open a *fresh*
+         identity session instead — `route_message` is patched to keep
+         returning the identity result, so a fall-through would show up as a
+         second `identity_mcp` session and a new `context_id`, not as an error.
+    """
+    from app.core.config import settings
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+    from app.services.app_mcp.app_mcp_routing_service import RoutingResult
+    from app.services.identity.identity_service import IdentityService
+    from tests.utils.identity import create_identity_binding
+    from tests.utils.server_channel import find_server_channel_by_type
+    from tests.utils.user import create_random_user_with_headers
+    from tests.utils.user_channel import update_my_channel
+
+    agent = _setup_agent(client, superuser_token_headers, name="Consent Test Agent")
+    agent_id = uuid.UUID(agent["id"])
+
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = uuid.UUID(r.json()["id"])
+
+    caller_user, caller_headers = create_random_user_with_headers(client)
+    caller_id = uuid.UUID(caller_user["id"])
+
+    # The caller consents. It never inherits and has no channel-level default,
+    # so this route is the only way it can ever become true.
+    app_mcp_channel = find_server_channel_by_type(
+        client, superuser_token_headers, "app_mcp"
+    )
+    update_my_channel(
+        client, caller_headers, app_mcp_channel["id"], allow_identity_routing=True
+    )
+
+    binding = create_identity_binding(
+        client,
+        superuser_token_headers,
+        agent_id=agent["id"],
+        trigger_prompt="Route to this agent for consent test.",
+        assigned_user_ids=[caller_user["id"]],
+        auto_enable=True,
+    )
+    binding_id = uuid.UUID(binding["id"])
+    assignments = binding.get("assignments", [])
+    assert len(assignments) == 1, f"Expected 1 assignment, got {assignments}"
+    assignment_id = uuid.UUID(assignments[0]["id"])
+
+    fixed_identity_result = RoutingResult(
+        agent_id=agent_id,
+        agent_name=agent["name"],
+        session_mode="conversation",
+        source="identity",
+        match_method="only_one",
+        is_identity=True,
+        identity_owner_id=owner_id,
+        identity_owner_name="Identity Owner",
+        identity_binding_id=binding_id,
+        identity_binding_assignment_id=assignment_id,
+    )
+
+    async def _run(context_id):
+        return await AppMCPRequestHandler.handle_send_message(
+            user_id=caller_id,
+            message="Test message",
+            context_id=context_id,
+            mcp_ctx=None,
+        )
+
+    # ── The conversation opens while consent stands ──────────────────────
+    stub = StubAgentEnvConnector(response_text="Identity reply")
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=fixed_identity_result,
+    ):
+        with patch("app.services.sessions.message_service.agent_env_connector", stub):
+            raw1 = asyncio.run(_run(context_id=None))
+    drain_tasks()
+
+    result1 = json.loads(raw1)
+    assert "error" not in result1, f"First call should succeed: {result1.get('error')}"
+    ctx_id = result1["context_id"]
+    assert ctx_id, "First call must return a context_id"
+
+    # ── The caller withdraws it, mid-conversation ────────────────────────
+    update_my_channel(
+        client, caller_headers, app_mcp_channel["id"], allow_identity_routing=False
+    )
+
+    stub2 = StubAgentEnvConnector(response_text="Should not reach agent")
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=fixed_identity_result,
+    ):
+        with patch("app.services.sessions.message_service.agent_env_connector", stub2):
+            raw2 = asyncio.run(_run(context_id=ctx_id))
+    drain_tasks()
+
+    result2 = json.loads(raw2)
+    # 1: refused.
+    assert "error" in result2, (
+        f"Expected the resume to be refused after consent withdrawal, got: {result2}"
+    )
+    # 2a: refused with the same words a revoked binding gets — the caller must
+    #     not be able to tell which of the switches closed.
+    assert result2["error"] == IdentityService.IDENTITY_REVOKED_MESSAGE, result2
+    assert result2.get("context_id") == "", result2
+
+    # 2b: and NOT quietly re-routed into a brand-new identity session.
+    identity_sessions = [
+        s
+        for s in list_sessions(client, superuser_token_headers)
+        if s.get("integration_type") == "identity_mcp"
+    ]
+    assert len(identity_sessions) == 1, (
+        f"consent withdrawal must refuse, not open a second identity session: "
+        f"{identity_sessions}"
+    )
+    assert identity_sessions[0]["id"] == ctx_id
 
 
 def test_app_mcp_reaches_a_standalone_agent_with_only_a_trigger_prompt(
