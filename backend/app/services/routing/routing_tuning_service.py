@@ -242,13 +242,27 @@ class RoutingTuningService:
           docstring is the argument for why it is not spelled as a default.
         - **A channel that resolves.** The real policy, for this target user —
           the identical call the webhook makes.
-        - **A channel id with no row behind it.** A pure race, and a narrow
-          one: ``RoutingDecision.channel_id`` is ``ON DELETE CASCADE``, so a
-          deleted channel takes its traces with it and ``replay_source`` would
-          have 404'd on the row first. Degraded to the no-channel policy and
-          logged, rather than raised: the run is a diagnostic, the sender's
-          account and agents are still real, and refusing outright would turn a
-          millisecond-wide race into an error an admin cannot act on.
+        - **A channel id with no row behind it.** Reachable from **replay**,
+          and there only as a race, and a narrow one: a replay's channel id
+          comes off the stored trace row, ``RoutingDecision.channel_id`` is
+          ``ON DELETE CASCADE``, so a deleted channel takes its traces with it
+          and ``replay_source`` would have 404'd on the row first. Degraded to
+          the no-channel policy and logged, rather than raised: the run is a
+          diagnostic, the sender's account and agents are still real, and
+          refusing outright would turn a millisecond-wide race into an error an
+          admin cannot act on.
+
+          A **hand-typed simulate** id does not arrive here at all — the route
+          404s on a ``channel_id`` that does not resolve, before anything is
+          spent. That check is not a duplicate of this degrade: neither half of
+          the paragraph above holds for an id nobody stored, and degrading one
+          would mean classifying at real cost and then failing the trace INSERT
+          on the foreign key.
+
+          Note what the degrade does **not** buy, either here or there: it
+          keeps the decision sane when the channel disappears mid-run, but the
+          trace INSERT still names the vanished channel and still fails its
+          foreign key. That window is left unclosed.
         """
         if channel_id is None:
             return ResolvedChannelPolicy.for_no_channel()

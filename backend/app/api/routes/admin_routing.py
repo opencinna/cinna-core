@@ -43,6 +43,7 @@ from app.models import (
     RoutingReplayResult,
     RoutingSimulateRequest,
     SecurityEventCreate,
+    ServerChannel,
     User,
 )
 from app.models.events import security_event as security_event_constants
@@ -337,14 +338,31 @@ async def simulate_routing(
     reimplemented to match.
 
     **Naming a ``channel_id`` decides under that channel's real policy** rather
-    than under ``ResolvedChannelPolicy.for_no_channel()``, which is the only way
-    a simulate can reproduce a ballot containing an identity candidate — the
-    no-channel policy holds ``allow_identity_routing`` False deliberately. It
-    therefore widens what a run can name, from the target's own agents to the
-    people who opted in to being routed to on that channel. That reach is the
-    same reach a stored trace for that channel already has, and it stays inside
-    the four conditions above; the audit row records the channel so a run can
-    be told apart from one made without it.
+    than under ``ResolvedChannelPolicy.for_no_channel()``. That cuts both ways,
+    and both ways matter to whoever reads the result.
+
+    *It widens.* The no-channel policy holds ``allow_identity_routing`` False
+    deliberately, so naming a channel is the only way a simulate can reproduce
+    a ballot containing an identity candidate — a person who opted in to being
+    routed to on that channel. Such a row carries that person's display name
+    (their full name, falling back to their email), their ``owner_email``, a
+    server-composed trigger prompt reading "Contact {name} ({email}). Routes to
+    their available agents.", and — as ``prompt_examples`` — one line per
+    example on each identity binding the target can reach, re-voiced as "ask
+    {name} ({email}) to …". Those example lines are the third party's own
+    binding wording, shown to an admin who is neither party.
+
+    *It also narrows*, which is the half a reader will not expect. The resolved
+    policy brings that channel's ``agent_scope`` and ``pinned_agent_id`` to
+    bear and can switch ``allow_auto_install`` off, so a channel-named run can
+    return **fewer** candidates than the same message run with no channel — down
+    to a single pinned agent, or to none — and can bar Pass 2 entirely. A
+    no-match under a channel is therefore not evidence of a no-match without
+    one.
+
+    Either way the reach is the reach a stored trace for that channel already
+    has, and it stays inside the four conditions above; the audit row records
+    the channel so a run can be told apart from one made without it.
     """
     _require_tracing_enabled("simulate")
     message = (data.message or "").strip()
@@ -362,6 +380,17 @@ async def simulate_routing(
     target = session.get(User, data.as_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="User not found")
+    # Beside the target-user 404, and after the limiter, for the same reason it
+    # is: this is the second existence oracle on the route, and both belong
+    # behind the same bucket. 404 rather than a degrade because a channel id
+    # that resolves to nothing *now* is a bad request, and answering it with a
+    # classification would bill the admin for an LLM call whose trace then
+    # cannot be stored — see the comment on ``channel_id`` below.
+    if (
+        data.channel_id is not None
+        and session.get(ServerChannel, data.channel_id) is None
+    ):
+        raise HTTPException(status_code=404, detail="Channel not found")
 
     # Read before the audit's commit expires the instance — the same Rule 2
     # hoist the routing pipeline makes, for the same reason: an argument
@@ -406,12 +435,21 @@ async def simulate_routing(
             actor_user_id=current_user.id,
             message=message,
             include_catalog=data.include_catalog,
-            # Passed through unvalidated on purpose. ``_policy_for`` already
-            # owns the "named a channel that no longer exists" case and
-            # degrades it to the no-channel policy with a log line; a second
-            # existence check here would either duplicate that rule or
-            # disagree with it, and a 404 would turn a diagnostic into an
-            # error an admin cannot act on.
+            # Already checked to exist above, and that check is not
+            # redundant with ``_policy_for``'s degrade. ``_policy_for`` was
+            # written for replay, whose channel id comes off a stored trace
+            # row; for a hand-typed simulate id the degrade is not enough,
+            # because the run would classify (real LLM spend) and only then
+            # fail the trace INSERT on ``RoutingDecision.channel_id``'s
+            # foreign key — which ``persist`` swallows into ``None``, leaving
+            # the admin a paid-for 500 pointing at the server log.
+            #
+            # What remains, stated rather than implied: the check closes the
+            # hand-typed case, NOT the race. A channel deleted between that
+            # check and the INSERT still fails the foreign key and still 500s
+            # here. ``_policy_for``'s degrade keeps the *decision* sane across
+            # that window but cannot save the trace, and the trace is what this
+            # route returns. Narrow, unfixed, and known — see ``_policy_for``.
             channel_id=data.channel_id,
         )
     except RoutingSimulationError as exc:

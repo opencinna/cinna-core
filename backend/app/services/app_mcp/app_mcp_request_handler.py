@@ -361,8 +361,6 @@ class AppMCPRequestHandler:
         ``identity_mcp`` integration type, and the display metadata the MCP
         response reads back.
         """
-        from app.models import User
-
         owner_id = routing_result.identity_owner_id
         owner = db.get(User, owner_id)
         caller = db.get(User, caller_user_id)
