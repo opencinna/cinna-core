@@ -475,12 +475,11 @@ def test_app_mcp_session_owned_by_agent_owner_not_caller(
 
     # ── Phase 2: Create a second user (the MCP caller) and grant them
     # identity access to the owner's agent. Signed up with an explicit
-    # full_name — a random-signup user has none, and
-    # AppMCPRequestHandler._create_identity_session stamps
-    # session_metadata["identity_caller_name"] from caller.full_name with no
-    # email fallback (unlike the channel and external-A2A identity paths,
-    # which both fall back to email), so a nameless caller would make this
-    # assertion depend on that gap rather than on the property under test.
+    # full_name so Phase 7 below pins the name itself. The nameless case —
+    # where session_metadata["identity_caller_name"] falls back to the email,
+    # as the channel and external-A2A identity paths have always done — is
+    # covered by
+    # ``test_app_mcp_identity_caller_name_falls_back_to_email_when_unnamed``.
     caller_email = random_email()
     caller_password = random_lower_string()
     caller_full_name = f"Caller {random_lower_string()[:8]}"
@@ -583,6 +582,124 @@ def test_app_mcp_session_owned_by_agent_owner_not_caller(
     # ── Phase 7: session_metadata carries identity_caller_name for the owner
     metadata = owner_session.get("session_metadata") or {}
     assert metadata.get("identity_caller_name") == caller_full_name, metadata
+
+
+def test_app_mcp_identity_caller_name_falls_back_to_email_when_unnamed(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """A caller with no ``full_name`` is labelled by their email, not by nothing.
+
+    ``full_name`` is optional and routinely empty — a signup that does not send
+    one, or an OAuth provider that supplies none — so it cannot be the last word
+    in a field that is read back as a **person**. The owner's session list
+    renders a "Via Identity — {caller}" badge from
+    ``session_metadata["identity_caller_name"]``, and a blank there leaves them
+    a conversation they never started, containing a stranger's message,
+    identified by nothing.
+
+    Both sibling identity paths already fall through to the email
+    (``external_a2a_request_handler``: ``full_name or email or str(id)``;
+    ``channel_inbound_service``: ``(full_name or "").strip() or email``). App
+    MCP was the only one of the three that read ``full_name`` alone. This is
+    that gap, closed, and it is asserted **through the same surface the owner
+    reads** rather than against the helper.
+
+    ``identity_owner_name`` is checked on the same row: it had the identical
+    defect on the adjacent line, and the property that matters for both is that
+    a user who exists is never identified by a raw uuid.
+    """
+    from app.core.config import settings
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+    from app.services.app_mcp.app_mcp_routing_service import RoutingResult
+    from tests.utils.identity import create_identity_binding
+    from tests.utils.user import user_authentication_headers
+    from tests.utils.utils import random_email, random_lower_string
+
+    agent = _setup_agent(client, superuser_token_headers, name="Unnamed Caller Agent")
+    agent_id = uuid.UUID(agent["id"])
+
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = uuid.UUID(r.json()["id"])
+
+    # Signed up with NO full_name — the whole point of this test.
+    caller_email = random_email()
+    caller_password = random_lower_string()
+    r = client.post(
+        f"{settings.API_V1_STR}/users/signup",
+        json={"email": caller_email, "password": caller_password},
+    )
+    assert r.status_code == 200, r.text
+    caller_user = r.json()
+    assert not (caller_user.get("full_name") or "").strip(), caller_user
+    caller_headers = user_authentication_headers(
+        client=client, email=caller_email, password=caller_password
+    )
+    caller_id = uuid.UUID(caller_user["id"])
+
+    binding = create_identity_binding(
+        client,
+        superuser_token_headers,
+        agent_id=agent["id"],
+        trigger_prompt="Route to this agent for the unnamed-caller test.",
+        assigned_user_ids=[caller_user["id"]],
+        auto_enable=True,
+    )
+    assignments = binding.get("assignments", [])
+    assert len(assignments) == 1, f"Expected 1 assignment, got {assignments}"
+
+    fixed_identity_result = RoutingResult(
+        agent_id=agent_id,
+        agent_name=agent["name"],
+        session_mode="conversation",
+        source="identity",
+        match_method="only_one",
+        is_identity=True,
+        identity_owner_id=owner_id,
+        identity_owner_name="Identity Owner",
+        identity_binding_id=uuid.UUID(binding["id"]),
+        identity_binding_assignment_id=uuid.UUID(assignments[0]["id"]),
+    )
+
+    stub = StubAgentEnvConnector(response_text="Response from owner's agent")
+
+    async def _run():
+        return await AppMCPRequestHandler.handle_send_message(
+            user_id=caller_id,
+            message="Hello from an unnamed caller",
+            context_id=None,
+            mcp_ctx=None,
+        )
+
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=fixed_identity_result,
+    ):
+        with patch("app.services.sessions.message_service.agent_env_connector", stub):
+            raw = asyncio.run(_run())
+    drain_tasks()
+    result = json.loads(raw)
+    assert "error" not in result, f"Unexpected error: {result.get('error')}"
+    context_id = result["context_id"]
+    assert context_id
+
+    owner_sessions = _find_identity_mcp_sessions(client, superuser_token_headers)
+    owner_session = next(s for s in owner_sessions if s["id"] == context_id)
+    metadata = owner_session.get("session_metadata") or {}
+
+    # The fix: the email, not None and not the raw id.
+    assert metadata.get("identity_caller_name") == caller_email, metadata
+    # The adjacent line, which had the same defect: an existing user is never
+    # identified by a bare uuid.
+    owner_name = metadata.get("identity_owner_name")
+    assert owner_name, metadata
+    assert owner_name != str(owner_id), metadata
+
+    # The caller's headers are live — the grant is real, not a stub artefact.
+    r = client.get(f"{settings.API_V1_STR}/external/sessions", headers=caller_headers)
+    assert r.status_code == 200, r.text
+    assert any(s["id"] == context_id for s in r.json()), r.json()
 
 
 def test_app_mcp_context_id_caller_isolation(

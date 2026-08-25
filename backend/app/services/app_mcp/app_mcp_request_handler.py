@@ -31,6 +31,34 @@ from app.utils import create_task_with_error_logging
 logger = logging.getLogger(__name__)
 
 
+def _display_name(user, fallback: uuid.UUID) -> str:
+    """Full name, else email, else the raw id — the shape both siblings use.
+
+    The identity metadata this feeds is read back as a **person**: the session
+    opens in the identity owner's space, and the session view renders a "Via
+    Identity — {caller}" badge from it. A blank there is not a cosmetic gap; it
+    leaves the owner a conversation they never started, containing a stranger's
+    message, identified by nothing.
+
+    ``full_name`` is optional and routinely empty (OAuth signup fills it only
+    when the provider supplies one), so it cannot be the last word. Both
+    siblings already fall through to the email —
+    ``external_a2a_request_handler`` as ``full_name or email or str(id)``,
+    ``channel_inbound_service`` as ``(full_name or "").strip() or email`` — and
+    this path was the only one of the three that read ``full_name`` alone and
+    so could yield ``None`` for a user who exists.
+
+    Both halves of each sibling are kept: the **strip** (a name of spaces is a
+    blank name, and only the channel sibling caught that) and the **id
+    fallback** (only the A2A sibling has one, and here it is load-bearing —
+    these users come from ``db.get``, so unlike either sibling's the row can
+    genuinely be ``None``).
+    """
+    if user is None:
+        return str(fallback)
+    return (user.full_name or "").strip() or user.email or str(fallback)
+
+
 class AppMCPRequestHandler:
     """Handles App MCP send_message tool calls."""
 
@@ -355,8 +383,8 @@ class AppMCPRequestHandler:
                 integration_type="identity_mcp",
                 mode=routing_result.session_mode,
                 session_metadata_extra={
-                    "identity_caller_name": caller.full_name if caller else str(caller_user_id),
-                    "identity_owner_name": owner.full_name if owner else str(owner_id),
+                    "identity_caller_name": _display_name(caller, caller_user_id),
+                    "identity_owner_name": _display_name(owner, owner_id),
                     "identity_match_method": routing_result.identity_stage2_match_method or "",
                     "app_mcp_source": routing_result.source,
                     "app_mcp_match_method": routing_result.match_method,
