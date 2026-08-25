@@ -6521,7 +6521,7 @@ export type AdminRoutingClearRoutingTracesResponse = (Message);
 
 export type AdminRoutingGetRoutingTraceData = {
     /**
-     * Narrow the reachability verdict to one agent: 'why was THIS one not a candidate'. Optional — without it the verdict describes the decision as a whole.
+     * Narrow the reachability verdict to one candidate: 'why was THIS one not a candidate'. A candidate ref, not only an agent id — an agent's bare UUID, or 'identity:{owner_id}' to ask why a *person* was not reachable. Optional — without it the verdict describes the decision as a whole.
      */
     expectedAgentId?: (string | null);
     traceId: string;

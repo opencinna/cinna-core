@@ -21413,8 +21413,7 @@ export const RoutingDiagnosisPublicSchema = {
         expected_agent_id: {
             anyOf: [
                 {
-                    type: 'string',
-                    format: 'uuid'
+                    type: 'string'
                 },
                 {
                     type: 'null'

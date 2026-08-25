@@ -899,7 +899,7 @@ export class AdminRoutingService {
      * detail so the reader can tell the two apart.
      * @param data The data for the request.
      * @param data.traceId
-     * @param data.expectedAgentId Narrow the reachability verdict to one agent: 'why was THIS one not a candidate'. Optional — without it the verdict describes the decision as a whole.
+     * @param data.expectedAgentId Narrow the reachability verdict to one candidate: 'why was THIS one not a candidate'. A candidate ref, not only an agent id — an agent's bare UUID, or 'identity:{owner_id}' to ask why a *person* was not reachable. Optional — without it the verdict describes the decision as a whole.
      * @returns RoutingDecisionPublic Successful Response
      * @throws ApiError
      */
@@ -954,14 +954,31 @@ export class AdminRoutingService {
      * reimplemented to match.
      *
      * **Naming a ``channel_id`` decides under that channel's real policy** rather
-     * than under ``ResolvedChannelPolicy.for_no_channel()``, which is the only way
-     * a simulate can reproduce a ballot containing an identity candidate — the
-     * no-channel policy holds ``allow_identity_routing`` False deliberately. It
-     * therefore widens what a run can name, from the target's own agents to the
-     * people who opted in to being routed to on that channel. That reach is the
-     * same reach a stored trace for that channel already has, and it stays inside
-     * the four conditions above; the audit row records the channel so a run can
-     * be told apart from one made without it.
+     * than under ``ResolvedChannelPolicy.for_no_channel()``. That cuts both ways,
+     * and both ways matter to whoever reads the result.
+     *
+     * *It widens.* The no-channel policy holds ``allow_identity_routing`` False
+     * deliberately, so naming a channel is the only way a simulate can reproduce
+     * a ballot containing an identity candidate — a person who opted in to being
+     * routed to on that channel. Such a row carries that person's display name
+     * (their full name, falling back to their email), their ``owner_email``, a
+     * server-composed trigger prompt reading "Contact {name} ({email}). Routes to
+     * their available agents.", and — as ``prompt_examples`` — one line per
+     * example on each identity binding the target can reach, re-voiced as "ask
+     * {name} ({email}) to …". Those example lines are the third party's own
+     * binding wording, shown to an admin who is neither party.
+     *
+     * *It also narrows*, which is the half a reader will not expect. The resolved
+     * policy brings that channel's ``agent_scope`` and ``pinned_agent_id`` to
+     * bear and can switch ``allow_auto_install`` off, so a channel-named run can
+     * return **fewer** candidates than the same message run with no channel — down
+     * to a single pinned agent, or to none — and can bar Pass 2 entirely. A
+     * no-match under a channel is therefore not evidence of a no-match without
+     * one.
+     *
+     * Either way the reach is the reach a stored trace for that channel already
+     * has, and it stays inside the four conditions above; the audit row records
+     * the channel so a run can be told apart from one made without it.
      * @param data The data for the request.
      * @param data.requestBody
      * @returns RoutingDecisionPublic Successful Response
