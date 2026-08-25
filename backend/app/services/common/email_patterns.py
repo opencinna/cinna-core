@@ -1,9 +1,15 @@
 """Shared email-pattern matching for sender allowlists.
 
-Two features gate inbound senders on an admin-authored pattern list: the
-email integration's ``auto_approve_email_pattern`` and the server channels'
-``email_whitelist``. They must agree on what ``*@example.com,
-devops.*@support.com`` means, so the semantics live here once.
+Written when two features gated inbound senders on an admin-authored pattern
+list — the per-agent email integration's ``auto_approve_email_pattern`` and
+the server channels' ``email_whitelist``. The email integration is deleted
+(``auto_approve_email_pattern`` survives only in alembic history), so today
+there is exactly one consumer: ``ServerChannel.email_whitelist``, matched by
+``ChannelInboundService``. The module stays separate because the semantics
+below are a **fail-closed security contract** worth stating in one place
+rather than inlining into the inbound pipeline — and because the next
+transport that needs a sender allowlist must get the identical answer for
+``*@example.com, devops.*@support.com``.
 
 Semantics:
 - Comma-separated list of ``fnmatch`` globs (``*``, ``?``, ``[seq]``).

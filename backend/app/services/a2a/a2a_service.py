@@ -194,11 +194,15 @@ class A2AService:
                 ``run_commands`` capability and the ``run_commands[]`` array.
             tool_name: Stable, deconflicted slug used as the tool name. Computed
                 by the caller across the user's full reachable set.
-            display_name: Human-readable name. Defaults to ``agent.name``. The
-                route-card builder passes the route's name here.
+            display_name: Human-readable name. Defaults to ``agent.name``.
+                No production caller overrides it today — the route card that
+                used to pass a route's name is deleted (channels & identity
+                unification, phase 5); the parameter stays as the descriptor's
+                own contract, covered by ``tests/unit/test_cinna_mcp_descriptor``.
             description: Override for the tool description. Defaults to a
-                generated description folding in ``router_trigger_prompt``. The
-                route-card builder passes the route's trigger prompt here.
+                generated description folding in ``router_trigger_prompt``.
+                Same story as ``display_name``: the route card that passed a
+                route's trigger prompt here no longer exists.
 
         Returns:
             A JSON-serializable descriptor dict.
@@ -298,8 +302,6 @@ class A2AService:
         url_override: str | None = None,
         *,
         mcp_tool_name: str | None = None,
-        mcp_display_name: str | None = None,
-        mcp_description: str | None = None,
     ) -> AgentCard:
         """
         Build a full (extended) A2A AgentCard from internal Agent model.
@@ -317,10 +319,6 @@ class A2AService:
                 When omitted, a slug is derived from the agent name (callers that
                 see the user's full reachable set — e.g. the external catalog —
                 pass a pre-deconflicted slug).
-            mcp_display_name: Display name override for the cinna.mcp descriptor.
-                The route card passes the route's name.
-            mcp_description: Description override for the cinna.mcp descriptor.
-                The route card passes the route's trigger prompt.
 
         Returns:
             Full AgentCard compliant with A2A protocol
@@ -368,8 +366,6 @@ class A2AService:
                 agent,
                 environment,
                 tool_name=tool_name,
-                display_name=mcp_display_name,
-                description=mcp_description,
             ),
             required=False,
         ))
@@ -420,8 +416,6 @@ class A2AService:
         protocol: Literal["v1.0", "v0.3"] = "v0.3",
         *,
         mcp_tool_name: str | None = None,
-        mcp_display_name: str | None = None,
-        mcp_description: str | None = None,
     ) -> dict:
         """
         Get full (extended) AgentCard as a dictionary for JSON serialization.
@@ -436,8 +430,6 @@ class A2AService:
                 need to overwrite ``supportedInterfaces`` for a custom URL
                 namespace (e.g. ExternalA2AService) do so after this call.
             mcp_tool_name: Stable, deconflicted slug for the cinna.mcp descriptor.
-            mcp_display_name: Display name override for the cinna.mcp descriptor.
-            mcp_description: Description override for the cinna.mcp descriptor.
 
         Returns:
             Dictionary representation of full AgentCard
@@ -448,8 +440,6 @@ class A2AService:
             base_url,
             url_override=url_override,
             mcp_tool_name=mcp_tool_name,
-            mcp_display_name=mcp_display_name,
-            mcp_description=mcp_description,
         )
         card_dict = card.model_dump(by_alias=True, exclude_none=True)
         return A2AService.apply_protocol(card_dict, protocol)

@@ -17,7 +17,8 @@ identity decision writes into the trace, which needs the trace to belong to a
 real channel **and** to have been produced by the real inbound path; simulate
 satisfies only the first. The second of the pair also asserted
 `match_method == "pattern"`, a mechanism deleted by settled decision §2.9 —
-`IdentityAgentBinding.message_patterns` is no longer read by anything. Both
+`IdentityAgentBinding.message_patterns` is gone as a column too (dropped by
+migration `867cacb5a827`), so nothing can even feed it any more. Both
 facts they were reaching for are re-asserted below, at equal or greater
 strength, on the surface that can actually produce them.
 
@@ -382,22 +383,30 @@ def test_identity_stage2_match_method_is_only_one_on_the_single_binding_shortcut
     assert trace["selected_agent_id"] == only["id"], trace
 
 
-def test_a_binding_glob_no_longer_wins_and_never_reports_a_pattern_match(
+def test_a_lexical_hit_on_a_trigger_prompt_never_beats_the_classifier(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
     """Settled decision §2.9, executed rather than assumed.
 
-    `IdentityAgentBinding.message_patterns` still exists as a column (a later
-    phase drops it) and the create route still accepts it, so "nobody reads it
-    any more" is exactly the kind of claim that rots silently. Here a binding
-    carries a glob that the message hits verbatim, and the classifier is told
-    to pick the **other** agent. The other agent must win, and no stage may
-    report `match_method="pattern"` or a `matched_pattern`.
+    `IdentityAgentBinding.message_patterns` is gone outright: the create route
+    has no such field (an extra key is silently dropped by the request model),
+    and migration `867cacb5a827` dropped the column. So the glob branch cannot
+    be *fed* any more, and a test that tried would be asserting nothing while
+    still passing — which is exactly what this test used to do.
+
+    What remains provable, and is what the deletion was for, is the property
+    itself: Stage 2 has exactly **one** decision-maker. Here one binding's
+    trigger prompt is a verbatim lexical hit on the message ("sign this
+    document"), the shape the glob used to encode, and the classifier is told
+    to pick the **other** agent. The classifier's verdict must win, and no
+    stage may report `match_method="pattern"` or a `matched_pattern` — the two
+    fields that stay in the read vocabulary for stored history but must never
+    gain a new producer.
 
     This replaces the deleted `..._pattern_hit_reports_its_match_method` test.
     That one asserted the pattern branch recorded its match honestly; the
-    branch is gone, so the equivalent-or-stronger statement is that the glob
-    has no effect at all and leaves no trace of having had one.
+    branch is gone, so the equivalent-or-stronger statement is that nothing
+    short-circuits the classifier and no decision claims a pattern took it.
     """
     channel = _channel(client, superuser_token_headers)
     signer = GoogleChatJWTSigner()
@@ -405,15 +414,14 @@ def test_a_binding_glob_no_longer_wins_and_never_reports_a_pattern_match(
     owner, owner_headers = _agent_owner(client, superuser_token_headers)
     sender, sender_headers = create_random_user_with_headers(client)
 
-    patterned = _agent(client, owner_headers, "IdentityPatterned")
+    lexical = _agent(client, owner_headers, "IdentityLexical")
     other = _agent(client, owner_headers, "IdentityOther")
     share_identity_agent(
         client, owner_headers, sender_headers,
-        agent_id=patterned["id"],
+        agent_id=lexical["id"],
         target_user_id=sender["id"],
         owner_id=owner["id"],
-        trigger_prompt="Handle signature requests",
-        message_patterns="sign this document *",
+        trigger_prompt="Handle sign this document requests",
     )
     share_identity_agent(
         client, owner_headers, sender_headers,
@@ -436,7 +444,7 @@ def test_a_binding_glob_no_longer_wins_and_never_reports_a_pattern_match(
         classify_result=classification(other["id"]),
     )
 
-    # The glob matched the message and lost anyway.
+    # The lexically-matching binding lost to the classifier's verdict.
     assert trace["selected_agent_id"] == other["id"], trace
     assert trace["outcome"] == "routed", trace
     for stage in trace["stages"]:
@@ -449,7 +457,7 @@ def test_a_binding_glob_no_longer_wins_and_never_reports_a_pattern_match(
     assert len(owner_sessions) == 1, owner_sessions
     assert [
         s for s in list_sessions(client, owner_headers)
-        if s["agent_id"] == patterned["id"]
+        if s["agent_id"] == lexical["id"]
     ] == []
 
 

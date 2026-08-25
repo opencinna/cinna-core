@@ -19,7 +19,6 @@ def create_identity_binding(
     token_headers: dict[str, str],
     agent_id: str,
     trigger_prompt: str = "Route to this agent when asked about support.",
-    message_patterns: str | None = None,
     prompt_examples: str | None = None,
     session_mode: str = "conversation",
     assigned_user_ids: list[str] | None = None,
@@ -33,8 +32,6 @@ def create_identity_binding(
         "assigned_user_ids": assigned_user_ids or [],
         "auto_enable": auto_enable,
     }
-    if message_patterns is not None:
-        payload["message_patterns"] = message_patterns
     if prompt_examples is not None:
         payload["prompt_examples"] = prompt_examples
 
@@ -173,7 +170,6 @@ def share_identity_agent(
     owner_id: str,
     trigger_prompt: str = "Answer questions about time off and HR policy.",
     prompt_examples: str | None = None,
-    message_patterns: str | None = None,
     enable: bool = True,
 ) -> dict:
     """Create a binding assigned to one person and (by default) let them enable it.
@@ -196,7 +192,6 @@ def share_identity_agent(
         agent_id,
         trigger_prompt=trigger_prompt,
         prompt_examples=prompt_examples,
-        message_patterns=message_patterns,
         assigned_user_ids=[target_user_id],
     )
     if enable:

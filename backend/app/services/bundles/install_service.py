@@ -23,10 +23,6 @@ Key flows:
   volume); deletes the Agent row.
 
 - ``check_for_updates`` / ``set_update_mode``: small read/write helpers.
-
-- ``install_bundle_for_email``: thin wrapper used by the email routing
-  service. Auto-promotes the publisher install into a bundle on first
-  email-driven install (mirrors today's ``create_auto_share`` semantics).
 """
 import asyncio
 import copy
@@ -203,51 +199,6 @@ class InstallService:
             bundle=bundle,
             revision=revision,
             request=request,
-        )
-
-    @staticmethod
-    async def install_bundle_for_email(
-        session: Session,
-        publisher_agent_id: uuid.UUID,
-        recipient_user_id: uuid.UUID,
-    ) -> Agent:
-        """Auto-install for an email sender.
-
-        If the publisher hasn't published yet, lazily create an empty bundle
-        + first revision so installs can attach. This preserves today's
-        email-integration behaviour where the first sender effectively
-        forks a clone of the unpublished agent.
-        """
-        from app.services.bundles.bundle_service import BundleService
-        from app.services.bundles.publish_service import PublishService
-
-        publisher = session.get(Agent, publisher_agent_id)
-        if not publisher:
-            raise InstallError("Publisher agent not found")
-        recipient = session.get(User, recipient_user_id)
-        if not recipient:
-            raise InstallError("Recipient user not found")
-
-        bundle = BundleService.get_bundle_by_id(session, publisher.bundle_id)
-        if bundle is None or bundle.latest_revision_id is None:
-            # Promote the publisher install into a bundle by publishing
-            # an initial revision. This is the email-driven equivalent of
-            # the publish-from-UI flow.
-            await PublishService.publish(
-                session=session,
-                install=publisher,
-                publisher_user_id=publisher.owner_id,
-                release_notes="Initial revision (auto-published via email integration)",
-            )
-            session.refresh(publisher)
-            bundle = BundleService.get_bundle_by_id(session, publisher.bundle_id)
-            if bundle is None or bundle.latest_revision_id is None:
-                raise InstallError("Auto-publish for email integration failed")
-
-        return await InstallService.install_bundle(
-            session=session,
-            user=recipient,
-            bundle=bundle,
         )
 
     @staticmethod

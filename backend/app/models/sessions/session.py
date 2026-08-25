@@ -48,10 +48,21 @@ class Session(SQLModel, table=True):
     # Agent-declared session outcome (set via update_session_state tool)
     result_state: str | None = None  # "completed" | "needs_input" | "error"
     result_summary: str | None = None  # Agent's summary/question/error description
-    # Email integration fields
+    # `email_thread_id` / `sender_email` are retention-only, left over from the
+    # deleted per-agent email integration: nothing writes either column any
+    # more (the email *channel* keeps its thread state on
+    # ChannelThreadBinding.thread_key instead), but historical rows still carry
+    # values that `_build_session_context` forwards to the agent env.
     email_thread_id: str | None = None  # Email Message-ID for threading
-    integration_type: str | None = None  # "email" | "a2a" | null
-    sender_email: str | None = None  # Original sender email (owner mode only)
+    # How this session was opened. Written today as one of "channel_<type>"
+    # (server channels — "channel_email", "channel_google_chat", ...), "a2a",
+    # "app_mcp", "identity_mcp", "mcp", "task", "webhook", "schedule",
+    # "external", or NULL for web-UI sessions. Historical rows may also carry
+    # "email" from the deleted per-agent email integration — readers must still
+    # tolerate it (see `_build_session_context`), but no producer emits it any
+    # more.
+    integration_type: str | None = None
+    sender_email: str | None = None  # Original sender address
     streaming_started_at: datetime | None = None
     # MCP integration fields
     mcp_connector_id: uuid.UUID | None = Field(
