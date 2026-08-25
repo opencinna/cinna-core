@@ -435,7 +435,7 @@ class RoutingTraceService:
         db: DBSession,
         decision_id: uuid.UUID,
         *,
-        expected_agent_id: uuid.UUID | None = None,
+        expected_agent_id: str | None = None,
     ) -> RoutingDecisionPublic | None:
         """One decision with its full stage trace, or ``None``.
 
@@ -444,11 +444,14 @@ class RoutingTraceService:
         carrying :meth:`disabled_notice` as the detail so the reader is told
         which of the two it was.
 
-        ``expected_agent_id`` narrows the attached ``diagnosis`` to one agent —
-        "why was *this* one not a candidate", the question the tuning card is
-        actually opened to answer. Optional, and the un-narrowed verdict is
-        still a real answer ("N effective routes, none matched"), so the default
-        stays free of it.
+        ``expected_agent_id`` narrows the attached ``diagnosis`` to one
+        candidate — "why was *this* one not a candidate", the question the
+        tuning card is actually opened to answer. It is a candidate **ref**
+        rather than an agent id, which is why it is ``str``: an identity
+        candidate is written ``identity:{owner_id}``, so the same parameter
+        asks the question about a person. Optional, and the un-narrowed verdict
+        is still a real answer ("N effective routes, none matched"), so the
+        default stays free of it.
 
         **The diagnosis is attached here rather than in the route**, for the
         same reason ``RoutingTuningService.simulate`` returns this function's

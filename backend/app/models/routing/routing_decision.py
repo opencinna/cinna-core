@@ -341,8 +341,12 @@ class RoutingDiagnosisPublic(SQLModel):
     #: single highest-value field on the whole trace (plan §4) rolled up.
     skipped_by_reason: dict[str, int] = Field(default_factory=dict)
     #: Echoed back so a client can tell a general verdict from one about a
-    #: specific agent without tracking its own request.
-    expected_agent_id: uuid.UUID | None = None
+    #: specific candidate without tracking its own request. A candidate **ref**
+    #: rather than an agent id — an agent's bare UUID, or the namespaced
+    #: ``identity:{owner_id}`` an identity candidate carries — which is why it
+    #: is ``str``. A no-op for the generated client either way: a UUID already
+    #: serialised as a string.
+    expected_agent_id: str | None = None
     expected_agent_name: str | None = None
     expected_agent_owner_email: str | None = None
     #: Ranked best-first. Empty when there is nothing to rank *or* when the

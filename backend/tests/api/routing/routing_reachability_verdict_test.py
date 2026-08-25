@@ -72,6 +72,7 @@ from tests.utils.bundle import (
     make_user_and_headers,
     publish_bundle_and_make_public,
 )
+from tests.utils.identity import share_identity_agent
 from tests.utils.routing import (
     classification,
     get_routing_trace,
@@ -89,6 +90,7 @@ from tests.utils.server_channel import (
     update_server_channel,
 )
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
+from tests.utils.user_channel import update_my_channel
 from tests.utils.utils import random_lower_string
 
 API = settings.API_V1_STR
@@ -751,6 +753,159 @@ def test_verdict_for_an_agent_id_that_does_not_exist(
         f"a routing candidate. Check the id against the agent's own page — a "
         f"deleted agent and a mistyped id look the same from here."
     )
+
+
+# ---------------------------------------------------------------------------
+# The expected candidate is a person, not an agent
+# ---------------------------------------------------------------------------
+
+
+def test_verdict_for_an_identity_owner_who_shared_nothing_reachable(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """`?expected_agent_id=identity:{owner_id}` — "why was this PERSON not
+    reachable", which the surface could not phrase until phase 6 widened the
+    parameter from `uuid.UUID` to `str`.
+
+    `SKIP_IDENTITY_UNAVAILABLE` has been a live channel row since phase 3 — an
+    identity owner named this sender on a binding, the sender never switched
+    the contact on, so nothing they shared was reachable and they never made
+    the ballot. What was *not* reachable until now is the sentence explaining
+    it: `_verdict_from_trace` renders a skip explanation only on this branch,
+    and no UUID can name a candidate whose ref is `identity:{owner_id}`. This
+    is the first test to reach that copy, which is why
+    `routing_reachability_service`'s two `SKIP_IDENTITY_UNAVAILABLE` entries
+    now name it.
+
+    Driven through a **real webhook delivery** rather than simulate, for the
+    reason `tests/api/server_channels/server_channels_identity_trace_test.py`
+    gives at length: identity needs a channel policy with
+    `allow_identity_routing` on, and the row asserted here has exactly one live
+    producer, which is the inbound path.
+
+    The last assertion is the one that says *which* of the two entries was
+    served. The base table's remedy sends the reader to "the Identity Contacts
+    section of the MCP Server card"; the channel override sends them to the
+    owner's Identity Server card instead, because a channel reads no MCP
+    control at all. Both entries carry the same finding, so pinning only the
+    finding would pass on either.
+    """
+    channel = create_server_channel(
+        client, superuser_token_headers, auto_register_users=False,
+        email_whitelist="*",
+    )
+    signer = GoogleChatJWTSigner()
+
+    owner, owner_headers = _user(client, superuser_token_headers)
+    hr_agent = _agent(client, owner_headers, "HRUnreachable")
+    sender, sender_headers = create_random_user_with_headers(client)
+    share_identity_agent(
+        client,
+        owner_headers,
+        sender_headers,
+        agent_id=hr_agent["id"],
+        target_user_id=sender["id"],
+        owner_id=owner["id"],
+        trigger_prompt="Answer time-off questions",
+        # Never switched on by the sender, so the assignment stays
+        # `is_enabled=False` — the state recorded as this skip.
+        enable=False,
+    )
+    update_my_channel(
+        client, sender_headers, channel["id"], allow_identity_routing=True
+    )
+
+    # No classifier answer is named: the only candidate was skipped, so the
+    # ballot is empty and the decision short-circuits before the classifier.
+    event = build_message_event(
+        thread_key=f"spaces/AAA/threads/{random_lower_string()}",
+        text="hey, ask HR what is my time-off status?",
+        sender_email=sender["email"],
+    )
+    resp, _ = post_channel_message(client, channel, signer, event)
+    assert resp.status_code == 200
+
+    page = list_routing_traces(
+        client, superuser_token_headers, channel_id=channel["id"]
+    )
+    assert page["count"] == 1, page
+    trace = page["data"][0]
+
+    diagnosis = _diagnosis(
+        client,
+        superuser_token_headers,
+        trace,
+        expected_agent_id=f"identity:{owner['id']}",
+    )
+
+    assert diagnosis["code"] == "expected_agent_skipped", diagnosis
+    # Echoed back verbatim: the ref the caller asked about, not a UUID it was
+    # coerced into.
+    assert diagnosis["expected_agent_id"] == f"identity:{owner['id']}", diagnosis
+    # The candidate row's own label and owner — the person, since no `Agent`
+    # row was ever looked up for this ref.
+    assert diagnosis["expected_agent_name"] == owner["email"], diagnosis
+    assert diagnosis["expected_agent_owner_email"] == owner["email"], diagnosis
+    assert diagnosis["verdict"] == (
+        f"{owner['email']} was considered for this decision and then "
+        f"excluded: this person had named the sender on an identity binding, "
+        f"so they were recorded on this decision, but nothing they shared was "
+        f"reachable when the message arrived — they were on the trace and "
+        f"never on the ballot. The switch that fixes this is the identity "
+        f"owner's, not the sender's, in two of the three cases: on the "
+        f"owner's Settings > Channels > Identity Server card, either the "
+        f"binding itself is inactive or this sender's assignment to it is. "
+        f"The third is the sender's own contact toggle for that person, in "
+        f"their Settings > Channels. Check the owner's two first — a sender "
+        f"cannot enable a contact nobody has shared with them. What this is "
+        f"NOT is the sender's channel-level identity-routing switch: with "
+        f"that off, no identity appears on a channel trace at all, so this "
+        f"row is evidence it was already on."
+    ), diagnosis
+    assert diagnosis["action"] in diagnosis["verdict"], diagnosis
+    # The channel override, not the App-MCP-voiced base entry.
+    assert "MCP Server card" not in diagnosis["verdict"], diagnosis
+
+
+def test_verdict_for_an_identity_ref_nobody_on_this_decision_matches(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """A well-formed `identity:` ref that names no candidate — the guard.
+
+    This is the branch that would have failed *silently*. `expected_agent_id`
+    reaches `db.get(Agent, ...)`, and with the parameter widened to `str` an
+    unguarded lookup raises on `identity:{uuid}`, gets swallowed by
+    `RoutingReachabilityService.diagnose`'s total guard, and comes back as
+    `unavailable` — "this decision's diagnosis could not be computed", which on
+    the tuning card reads as though the question had never been asked. So the
+    parse is explicit (`_agent_uuid`) and this test pins the answer rather than
+    the absence of a crash: the ref names nobody, and the verdict says so in
+    ref-shaped words instead of claiming "no agent identity:… exists on this
+    server", which would be false about a ref that never named an agent.
+
+    Same code as the bare-UUID miss on purpose — the finding is identical, and
+    a new wire value would oblige every client to render it to say nothing new.
+    """
+    user, _ = _user(client, superuser_token_headers)
+    trace = _simulate_no_match(
+        client, superuser_token_headers, user["id"], "please do the thing"
+    )
+    stranger = f"identity:{uuid.uuid4()}"
+
+    diagnosis = _diagnosis(
+        client, superuser_token_headers, trace, expected_agent_id=stranger
+    )
+
+    assert diagnosis["code"] == "expected_agent_unknown", diagnosis
+    assert diagnosis["verdict"] == (
+        f"No candidate {stranger} appears on this decision, so there is "
+        f"nothing recorded here to explain about it. Check the ref against "
+        f"the candidate table below — an identity candidate is named "
+        f"identity: followed by the owner's user id, and a person nobody "
+        f"recorded has no row on this trace at all."
+    ), diagnosis
+    assert diagnosis["expected_agent_id"] == stranger, diagnosis
+    assert diagnosis["expected_agent_name"] is None, diagnosis
 
 
 def test_verdict_for_an_agent_created_after_the_decision_with_no_wording(

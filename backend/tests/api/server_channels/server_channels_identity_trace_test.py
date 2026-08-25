@@ -483,13 +483,16 @@ def test_verdict_when_an_identity_owner_shared_nothing_the_sender_can_reach(
          and a test that pinned only `code` would keep passing while the
          sentence drifted into saying something false.
 
-    One thing deliberately NOT asserted here, because it cannot be reached:
-    the channel-voiced *skip explanation* for this reason
-    (`_CHANNEL_SKIP_EXPLANATIONS[SKIP_IDENTITY_UNAVAILABLE]`) is only rendered
-    on the `?expected_agent_id=` branch, and that query parameter is typed
-    `uuid.UUID` while an identity candidate's `ref_id` is the namespaced
-    `identity:{owner_id}`. No UUID can name this row, so the override is
-    unreachable through the API as it stands.
+    One thing deliberately not asserted here, and no longer for want of a way
+    to: the channel-voiced *skip explanation* for this reason
+    (`_CHANNEL_SKIP_EXPLANATIONS[SKIP_IDENTITY_UNAVAILABLE]`) renders on the
+    `?expected_agent_id=` branch, which phase 6 widened from `uuid.UUID` to
+    `str` so it can name the namespaced `identity:{owner_id}` ref. It is
+    reachable, and it is pinned — in
+    `tests/api/routing/routing_reachability_verdict_test.py`'s
+    `test_verdict_for_an_identity_owner_who_shared_nothing_reachable`, beside
+    the other verdict sentences rather than duplicated here. What this test
+    owns is the row; that one owns the sentence about it.
     """
     channel = _channel(client, superuser_token_headers)
     signer = GoogleChatJWTSigner()

@@ -135,12 +135,14 @@ def get_routing_trace(
     session: SessionDep,
     current_user: SuperUser,
     trace_id: uuid.UUID,
-    expected_agent_id: uuid.UUID | None = Query(
+    expected_agent_id: str | None = Query(
         default=None,
         description=(
-            "Narrow the reachability verdict to one agent: 'why was THIS one "
-            "not a candidate'. Optional — without it the verdict describes the "
-            "decision as a whole."
+            "Narrow the reachability verdict to one candidate: 'why was THIS "
+            "one not a candidate'. A candidate ref, not only an agent id — an "
+            "agent's bare UUID, or 'identity:{owner_id}' to ask why a *person* "
+            "was not reachable. Optional — without it the verdict describes "
+            "the decision as a whole."
         ),
     ),
 ) -> Any:

@@ -374,46 +374,45 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
         "Route to the contact rather than to their agent, or give this user "
         "their own install of it.",
     ),
-    # ── Unservable copy, deliberately kept ───────────────────────────
-    # Two facts about two different layers, and conflating them is what
-    # makes this entry look like working code when it is not.
+    # ── Servable since phase 6 ───────────────────────────────────────
+    # Two facts about two different layers, each made true in a different
+    # phase, and conflating them is what used to make this entry look
+    # like working code when only half of it was.
     #
-    # The skip **row** is genuinely produced. Whenever an identity owner
-    # has named this caller on a binding whose binding or assignment is
-    # switched off, ``IdentityCandidateProvider.build`` records
+    # The skip **row** is genuinely produced, and has been since phase 3.
+    # Whenever an identity owner has named this caller on a binding whose
+    # binding or assignment is switched off,
+    # ``IdentityCandidateProvider.build`` records
     # ``SKIP_IDENTITY_UNAVAILABLE``; a test in
     # ``tests/api/server_channels/server_channels_identity_trace_test.py``
     # drives one over the webhook and asserts it.
     #
-    # The **explanation below is never served**. It renders only through
-    # :func:`_verdict_from_trace`, which is reached only when
-    # :func:`_find_candidate` matches, and that match compares
-    # ``str(expected_agent_id)`` against ``candidate["ref_id"]``.
-    # ``expected_agent_id`` is annotated ``uuid.UUID`` on both
+    # The **explanation is served too, since phase 6**. It renders through
+    # :func:`_verdict_from_trace`, reached when :func:`_find_candidate`
+    # matches ``expected_agent_id`` against ``candidate["ref_id"]``. That
+    # parameter used to be annotated ``uuid.UUID`` on both
     # :meth:`RoutingReachabilityService.diagnose` and the route behind it
     # (``admin_routing.get_routing_trace``), while an identity candidate
-    # always writes the namespaced ``identity:{owner_id}``. The type
-    # annotation is the specific obstacle: a UUID cannot name an identity
-    # candidate, so neither this entry nor its channel override below can
-    # be reached, whatever the trace contains.
+    # always writes the namespaced ``identity:{owner_id}`` — and the
+    # annotation was the whole obstacle, because a UUID cannot name a
+    # person. Phase 6 of the channels & identity unification widened it to
+    # ``str``, so the surface can finally ask "why was this *person* not
+    # reachable".
     #
-    # Known and deferred, not an oversight. The real fix is to widen
-    # ``expected_agent_id`` to ``str`` — which would also let an admin ask
-    # "why was this *person* not reachable", a question the surface cannot
-    # currently phrase — and Phase 6 of the channels & identity
-    # unification owns it, because it is one gap with two faces: ``POST
-    # /admin/routing/simulate`` carries no ``channel_id`` and so can never
-    # name a channel either. The diagnostic surface is UUID- and
-    # agent-shaped while identity candidates are person-shaped. One
-    # diagnostic-layer change and one client regeneration, rather than two.
-    #
-    # The consequence, stated plainly because this file treats an
-    # unverifiable claim about coverage as a defect: **no test covers this
-    # copy.** A test written today would have to forge a candidate row
-    # carrying a bare-UUID identity ref, which no producer emits — it
-    # would assert the instrument rather than the system, and would keep
-    # passing after the real path broke. Deliberately not written; the
-    # wording gets its first test when Phase 6 makes it reachable.
+    # Coverage, stated exactly because this file treats an unverifiable
+    # claim about it as a defect. The **channel override below** is pinned
+    # by ``tests/api/routing/routing_reachability_verdict_test.py``'s
+    # ``test_verdict_for_an_identity_owner_who_shared_nothing_reachable``,
+    # which drives a real webhook decision and reads it back with
+    # ``?expected_agent_id=identity:{owner_id}`` — a real ref, not the
+    # forged bare-UUID one that earlier comment refused, and still refuses.
+    # **This base entry — the App MCP voice of the same reason — is
+    # reachable now but has no test of its own.** Reaching it needs an
+    # ``origin="app_mcp"`` trace carrying a candidate list, and a seeded
+    # row carries none, so it belongs beside the other candidate-list
+    # branches in ``tests/unit/test_routing_reachability.py`` rather than
+    # on the API surface. Not written yet; said here rather than left to
+    # be assumed.
     routing_trace.SKIP_IDENTITY_UNAVAILABLE: (
         "this person shared an agent with the sender, but none of what they "
         "shared is switched on right now, so they were not on the ballot at all",
@@ -511,14 +510,14 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
 #: entry below landed in the same change, per this file's convention: adding the
 #: reason to a surface and adding its override for that surface are one change.
 #:
-#: What that entry does **not** do is reach a reader, and this comment should
-#: not be read as claiming it does. The reason is now recorded on this surface;
-#: the wording below is still unservable, because the only branch that renders
-#: a skip explanation is keyed by a ``uuid.UUID`` ``expected_agent_id`` and an
-#: identity candidate's ``ref_id`` is ``identity:{owner_id}``. So "the fourth"
-#: means *a channel decision can now carry the reason*, not *a channel user can
-#: now read this sentence*. The entry's own comment and the base table's give
-#: the mechanism, the Phase 6 deferral, and why no test covers the copy.
+#: What that entry did **not** do until phase 6 was reach a reader, and this
+#: comment used to say so. It does now: the only branch that renders a skip
+#: explanation is keyed by ``expected_agent_id``, and phase 6 of the channels &
+#: identity unification widened that from ``uuid.UUID`` to ``str``, so
+#: ``identity:{owner_id}`` names the candidate the sentence is about. So "the
+#: fourth" now means both halves — a channel decision carries the reason, and a
+#: channel user can read this sentence. The entry's own comment names the test
+#: that pins it.
 _CHANNEL_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
     routing_trace.SKIP_ALREADY_INSTALLED: (
         "this user already has it installed, so the auto-install pass passed "
@@ -557,18 +556,20 @@ _CHANNEL_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
         "trigger prompt (or example prompts) on it — a channel routes over the "
         "sender's own agents and reads no identity contact at all.",
     ),
-    # ── Unservable copy, for the same reason as the base entry ───────
-    # Repeated here rather than cross-referenced, because it is the half
-    # of the story that reads as done: what Phase 3 made live is the skip
-    # **row** on a channel, not this **sentence**. The sentence renders
-    # only on the ``?expected_agent_id=`` branch, which is typed
-    # ``uuid.UUID`` and therefore can never name an ``identity:{owner_id}``
-    # candidate. Producible and explainable are facts about different
-    # layers, and only the first one is true today. Deferred to Phase 6
-    # together with simulate's missing ``channel_id``; untested for the
-    # same reason, since the only test that could reach it would forge a
-    # bare-UUID identity ref and assert the instrument. See the base
-    # table's entry for the full argument.
+    # ── Served since phase 6, and pinned by a real decision ──────────
+    # Spelled out here rather than cross-referenced, because this is the
+    # half of the story that used to read as done and was not: phase 3
+    # made the skip **row** live on a channel, and phase 6 made this
+    # **sentence** reachable, by widening the ``?expected_agent_id=``
+    # branch from ``uuid.UUID`` to ``str`` so it can name an
+    # ``identity:{owner_id}`` candidate. Producible and explainable are
+    # facts about different layers; both are true now.
+    #
+    # Pinned by ``tests/api/routing/routing_reachability_verdict_test.py``'s
+    # ``test_verdict_for_an_identity_owner_who_shared_nothing_reachable``,
+    # which drives a real webhook decision that records this reason and
+    # reads the trace back with the identity ref — not the forged
+    # bare-UUID one the base table's comment refused, and still refuses.
     routing_trace.SKIP_IDENTITY_UNAVAILABLE: (
         # The base entry says the same thing and then sends the reader to "the "
         # Identity Contacts section of the MCP Server card", which is an App MCP
@@ -619,7 +620,7 @@ class RoutingReachabilityService:
         db: DBSession,
         trace: RoutingDecisionPublic,
         *,
-        expected_agent_id: uuid.UUID | None = None,
+        expected_agent_id: str | uuid.UUID | None = None,
     ) -> RoutingDiagnosisPublic:
         """The verdict for ``trace``, optionally about one expected agent.
 
@@ -632,9 +633,18 @@ class RoutingReachabilityService:
         it can never quote a field the message-text gate withheld, and the
         near-miss ranking goes quiet on its own when the text is gated instead
         of needing a second rule that remembers to.
+
+        ``expected_agent_id`` is a **candidate ref**, not an agent id: an
+        identity candidate is named ``identity:{owner_id}``, which is how an
+        admin asks "why was this *person* not reachable". The ``uuid.UUID`` arm
+        of the union is kept because every in-process caller already holds a
+        real ``Agent.id``, and normalising once here rather than at each call
+        site is what keeps the two shapes from having to be thought about again
+        further down.
         """
+        ref = None if expected_agent_id is None else str(expected_agent_id)
         try:
-            return _diagnose(db, trace, expected_agent_id=expected_agent_id)
+            return _diagnose(db, trace, expected_agent_id=ref)
         except Exception:  # noqa: BLE001 — a diagnostic must not break the read
             logger.warning("Routing reachability diagnosis failed", exc_info=True)
             # Composed from problem + action like every other branch, and not
@@ -654,7 +664,7 @@ class RoutingReachabilityService:
                 code=CODE_UNAVAILABLE,
                 verdict=f"{problem} {action}",
                 action=action,
-                expected_agent_id=expected_agent_id,
+                expected_agent_id=ref,
             )
 
 
@@ -665,7 +675,7 @@ def _diagnose(
     db: DBSession,
     trace: RoutingDecisionPublic,
     *,
-    expected_agent_id: uuid.UUID | None,
+    expected_agent_id: str | None,
 ) -> RoutingDiagnosisPublic:
     candidates = _candidates(trace.stages)
     eligible = [c for c in candidates if c.get("eligible")]
@@ -940,7 +950,7 @@ def _expected_agent_verdict(
     trace: RoutingDecisionPublic,
     candidates: list[dict],
     eligible: list[dict],
-    expected_agent_id: uuid.UUID,
+    expected_agent_id: str,
     near_misses: list[RoutingNearMiss],
     *,
     channel: bool,
@@ -950,9 +960,14 @@ def _expected_agent_verdict(
     The trace is consulted first and the database only for an agent the trace
     never mentions — see the module docstring on why that order and not the
     reverse.
+
+    ``expected_agent_id`` is a candidate ref, so the ``Agent`` lookup below is
+    guarded rather than unconditional — :func:`_agent_uuid` says why that guard
+    is load-bearing and not defensive.
     """
     row = _find_candidate(candidates, expected_agent_id)
-    agent = db.get(Agent, expected_agent_id)
+    as_agent_id = _agent_uuid(expected_agent_id)
+    agent = None if as_agent_id is None else db.get(Agent, as_agent_id)
     name = _agent_label(row, agent, expected_agent_id)
     owner_email = _owner_email(db, row, agent)
 
@@ -964,6 +979,24 @@ def _expected_agent_verdict(
         )
 
     if agent is None:
+        if as_agent_id is None:
+            # A namespaced ref — ``identity:{owner_id}`` is the only one any
+            # producer writes — that matched no candidate row. The same code,
+            # deliberately: the finding is identical ("what you named was never
+            # on this decision"), and a new wire value would have to be
+            # rendered by every client in order to say nothing new. Only the
+            # noun moves, because "No agent identity:… exists on this server"
+            # is false about a ref that never named an agent to begin with.
+            return (
+                CODE_EXPECTED_UNKNOWN,
+                f"No candidate {expected_agent_id} appears on this decision, "
+                f"so there is nothing recorded here to explain about it.",
+                "Check the ref against the candidate table below — an identity "
+                "candidate is named identity: followed by the owner's user id, "
+                "and a person nobody recorded has no row on this trace at all.",
+                None,
+                None,
+            )
         return (
             CODE_EXPECTED_UNKNOWN,
             f"No agent {expected_agent_id} exists on this server, so it could "
@@ -1240,14 +1273,36 @@ def _candidates(stages: Any) -> list[dict]:
     return list(found.values())
 
 
-def _find_candidate(candidates: list[dict], ref_id: uuid.UUID) -> dict | None:
+def _agent_uuid(ref_id: str) -> uuid.UUID | None:
+    """The bare-agent-id reading of a candidate ref, or ``None``.
+
+    ``expected_agent_id`` is a **ref**, and an identity candidate's ref is
+    ``identity:{owner_id}``. Handing that to ``db.get(Agent, ...)`` raises,
+    :meth:`RoutingReachabilityService.diagnose`'s total guard swallows it, and
+    the whole verdict comes back as ``CODE_UNAVAILABLE`` — which on screen
+    reads as if nothing had been asked rather than as if something had broken.
+    So the parse happens here, before the lookup, and a ref that does not name
+    an agent never reaches the ``Agent`` table.
+
+    The total guard is not the answer to this. It is the answer to a diagnosis
+    failing *unexpectedly*; a ref shape this surface documents and invites is
+    not unexpected, and letting it fall through there would turn the widening
+    this parameter got into a silent no-op.
+    """
+    try:
+        return uuid.UUID(ref_id)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _find_candidate(candidates: list[dict], ref_id: str) -> dict | None:
     wanted = str(ref_id)
     return next(
         (c for c in candidates if str(c.get("ref_id") or "") == wanted), None
     )
 
 
-def _agent_label(row: dict | None, agent: Agent | None, ref_id: uuid.UUID) -> str:
+def _agent_label(row: dict | None, agent: Agent | None, ref_id: str) -> str:
     """A display name for the expected agent, from whichever source has one.
 
     **The agent row first, the trace second.** The reverse order was tried and
