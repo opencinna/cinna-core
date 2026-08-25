@@ -48,7 +48,7 @@ The **App MCP Server** row itself lives among the other channels on the same Set
 
 ### User: Address a Colleague from an MCP Client
 
-Composing the identity candidate provider means an MCP client can reach another person's agents the same way a Google Chat message can — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md). This requires the caller to have turned `allow_identity_routing` on for the App MCP channel in Settings → Channels; **it is off by default and does not inherit an admin default** (see [Business Rules](#business-rules) below for why every existing user is affected).
+Composing the identity candidate provider means an MCP client can reach another person's agents the same way a Google Chat message can — see [Identity MCP Server](../identity_routing/identity_routing.md). This requires the caller to have turned `allow_identity_routing` on for the App MCP channel in Settings → Channels; **it is off by default and does not inherit an admin default** (see [Business Rules](#business-rules) below for why every existing user is affected).
 
 ### Superuser: Configure App MCP as a Channel
 
@@ -61,13 +61,13 @@ App MCP now has an admin-facing side it never had before, on the **Channels** ta
 The Stage 1 ballot is composed from exactly the same two providers [Server Channels](../server_channels/server_channels.md) uses, in the same order:
 
 1. `ChannelCandidateProvider.build(db, user_id, policy=policy)` — every agent the caller owns, narrowed to the resolved agent scope (`"all"` / `"list"` / `"none"`), eligible when it has a non-blank `router_trigger_prompt` or non-empty `example_prompts`. An agent excluded by scope or wording is recorded as a skipped candidate, never silently dropped.
-2. `IdentityCandidateProvider.build(db, user_id)` — one candidate per identity owner the caller may currently address, appended **only when `policy.allow_identity_routing` is on**. With the switch off the provider is not called at all, so no identity trace row exists either — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md).
+2. `IdentityCandidateProvider.build(db, user_id, policy=policy)` — one candidate per identity owner the caller may currently address. **`policy` is required and keyword-only**, and the consent gate lives *inside* `build`: with `policy.allow_identity_routing` off it returns `[]` immediately, before any query and without writing a trace row of any kind. The provider is therefore always called; what changes is what it returns. (Until Phase 7 of the channels & identity unification the gate was an `if` copied out at each of the three call sites — do not re-add one. The observable outcome is unchanged: no identity candidate, and no identity trace row.) See [Identity MCP Server](../identity_routing/identity_routing.md).
 
 Neither surface borrows the other's candidate set or enablement toggles; they compose the same building blocks independently. A standalone (non-bundle) agent needs nothing special any more — the old motivating bug ("a standalone agent has no `AppAgentRoute` by construction and is invisible to routing") no longer exists, because there is no route in the story at all.
 
 ### ⚠️ Identity Routing Is Opt-In and Does Not Inherit
 
-**`allow_identity_routing` defaults to `false` and never inherits from a channel default** (master plan §3, principle 4 — anything that can route into another person's workspace is opt-in, per person, by the receiving message's *sender*). This is a **deliberate behaviour change**, not an oversight, and its effect is immediate on every existing deployment: **every App MCP user who could previously reach an identity contact loses that reach until they turn the switch on themselves**, from **Settings → Channels → App MCP Server → Identity routing**. There is no admin override that can restore it on their behalf.
+**`allow_identity_routing` defaults to `false` and never inherits from a channel default.** It is the **sender's own** consent that a message of theirs may open a session inside somebody else's workspace, where that person can read it — not the receiver's control over who reaches them (that is the identity owner's bindings and per-person assignments). An admin default must therefore not be able to switch it on for someone who never agreed, which is why it is `NOT NULL DEFAULT false` with no channel-level default to inherit; see `ChannelUserSetting`'s module docstring for the full semantics. **Scope of the switch:** it governs identity routing on **channels and App MCP** only. **External A2A identity access is authorized by a separate mechanism** — `ExternalAccessPolicy.require_identity_access` plus the identity owner's binding assignments — and is **not** closed by this switch. This is a **deliberate behaviour change**, not an oversight, and its effect is immediate on every existing deployment: **every App MCP user who could previously reach an identity contact loses that reach until they turn the switch on themselves**, from **Settings → Channels → App MCP Server → Identity routing**. There is no admin override that can restore it on their behalf.
 
 ### Availability Is Checked at Token Use, Not at Issue
 
@@ -116,7 +116,7 @@ When the AI router classifies a message, it also **strips routing prefixes** and
 2. **AI classification** — the shared `AgentClassifier.classify` (the same classifier every routing consumer uses since [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5) is called with the message and the whole ballot; each candidate is passed as `{id, name, trigger_prompt, prompt_examples}`.
 3. **No match** — an error asking the caller to be more specific.
 
-When the winner is an identity candidate, Stage 2 (`IdentityRoutingService.route_within_identity`) picks the agent from that person's portfolio and returns the binding + assignment ids that become the `IdentityGrant` re-verified at ingest — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md).
+When the winner is an identity candidate, Stage 2 (`IdentityRoutingService.route_within_identity`) picks the agent from that person's portfolio and returns the binding + assignment ids that become the `IdentityGrant` re-verified at ingest — see [Identity MCP Server](../identity_routing/identity_routing.md).
 
 Glob/pattern pre-matching is gone entirely (`message_patterns` is dropped everywhere, settled decision §2.9 of the master plan): it was a second, silently-higher-priority routing mechanism no trace explained well.
 
@@ -147,7 +147,7 @@ This means:
 
 ### Access Control on the Underlying Session
 
-`ChannelIngestionService.assert_access`'s `mcp_caller` arm used to trust "the App MCP routing layer verified the caller has a route to this agent." With no route left to have verified that, the arm now requires that **the agent be owned by the caller, or an identity grant authorizes it** — reusing the same `IdentityService.verify_identity_access` six-condition check every other surface's identity arm uses, rather than inventing a second one. See [Identity MCP Server — Business Rules](../identity_mcp_server/identity_mcp_server.md#per-message-re-verification-channel-path).
+`ChannelIngestionService.assert_access`'s `mcp_caller` arm used to trust "the App MCP routing layer verified the caller has a route to this agent." With no route left to have verified that, the arm now requires that **the agent be owned by the caller, or an identity grant authorizes it** — reusing the same `IdentityService.verify_identity_access` six-condition check every other surface's identity arm uses, rather than inventing a second one. See [Identity MCP Server — Business Rules](../identity_routing/identity_routing.md#per-message-re-verification-channel-path).
 
 ### OAuth / Authentication
 
@@ -175,7 +175,8 @@ App MCP Server (/mcp/app/mcp)
     |
     +-- 2. AppMCPRoutingService.route_message:
     |      - ChannelCandidateProvider (owned agents, agent-scope narrowed)
-    |      - + IdentityCandidateProvider, only if allow_identity_routing
+    |      - + IdentityCandidateProvider (returns [] unless the caller's own
+    |        allow_identity_routing is on — gate is inside build)
     |      - single-candidate shortcut, else AgentClassifier.classify
     |      - a person wins -> Stage 2 (IdentityRoutingService) picks the agent
     |
@@ -205,7 +206,7 @@ Admin UI:        Admin > Server Configuration > Channels > App MCP Server row
 ## Integration Points
 
 - **[Server Channels](../server_channels/server_channels.md)** — App MCP is one `ServerChannel` row (`channel_type="app_mcp"`, the platform's `authenticated` transport). It shares the admin kill switch, `visibility` + grants, per-user agent scope, and `allow_identity_routing` model with every other channel, resolved by the same `ChannelPolicyService`
-- **[Identity MCP Server](../identity_mcp_server/identity_mcp_server.md)** — `IdentityCandidateProvider` supplies the people this caller can address; Stage 2 picks the agent when a person wins
+- **[Identity MCP Server](../identity_routing/identity_routing.md)** — `IdentityCandidateProvider` supplies the people this caller can address; Stage 2 picks the agent when a person wins
 - **[Auto Routing Tuning](../routing_tuning/routing_tuning.md)** — **since Phase 6 of the channels & identity unification, App MCP writes routing traces of its own.** `AppMCPRoutingService.route_message` opens the capture with `origin="app_mcp"` and the singleton channel's `channel_id`, so every candidate, skip reason and identity Stage-2 handoff on this surface is durably recorded and diagnosable from `/admin/routing-tuning` — the recorder calls in that service existed long before and were no-ops for want of an open capture. How much of each row is written is governed by `ROUTING_TRACE_APP_MCP_MODE` (`off` | `metadata` | `full`), **defaulting to `metadata`** because App MCP routes *every* message rather than only thread openings and sits behind no webhook rate limit: it is the one origin whose write volume is unbounded. App MCP still emits **no** [Channel Debug Monitor](../server_channels/channel_debug_monitor.md) events — its reply is the synchronous MCP response, so there is no outbound delivery to hook
 - **[MCP Integration](../mcp_integration/agent_mcp_architecture.md)** — reuses the shared OAuth AS, MCPServerRegistry, and session infrastructure
 - **[Agent Sessions](../agent_sessions/agent_sessions.md)** — App MCP sessions use the same Session model with `integration_type = "app_mcp"` and `agent_id` for direct agent resolution

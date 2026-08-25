@@ -97,7 +97,7 @@ The service has no state, no instance fields, no notion of "which adapter." Outb
 ## Integration Points
 
 - **[Agent Sessions](agent_sessions.md)** — session creation, message dispatch, and streaming all flow through `SessionService` primitives that this service composes.
-- **[A2A Protocol](../a2a_integration/a2a_protocol/a2a_protocol.md)** — both the core A2A surface and the External A2A surface (with three target types: `agent`, `app_mcp_route`, `identity`) use `ingest_inbound_message`.
+- **[A2A Protocol](../a2a_integration/a2a_protocol/a2a_protocol.md)** — both the core A2A surface and the External A2A surface (with two target types: `agent` and `identity` — `ExternalAgentMessageRequest.target_type` is `Literal["agent", "identity"]`, and anything else raises `InvalidExternalParamsError`) use `ingest_inbound_message`.
 - **[App MCP Server](../app_mcp_server/app_mcp_server.md)** — the plain App MCP and identity-routed App MCP handlers both consume `assert_access` and `resolve_or_create_session`.
 - **[Input Tasks](../input_tasks/input_tasks.md)** — human-initiated task execution uses the `task_executor` kind with real owner-match enforcement.
 - **[Agent Schedulers](../../agents/agent_schedulers/agent_schedulers.md)** — cron-fired and handover-fired paths use the `system_trigger` kind, with the structural invariant asserted (not bypassed).
