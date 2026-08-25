@@ -27,7 +27,7 @@ from app.models.app_mcp.app_agent_route import (
     UserAppAgentRoutePublic,
     SharedRoutePublic,
 )
-from app.services.routing import routing_trace
+from app.services.routing import routing_trace, text_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -712,36 +712,10 @@ class AppAgentRouteService:
     # near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
     # Planner") as a non-blocking toast on the install completion page.
     #
-    # Stopwords aren't worth pruning — Jaccard already discounts common
-    # tokens that appear in both sides. Threshold tuned conservatively
-    # (≥ 0.45) so unrelated agents don't trigger noise.
-
-    SIMILARITY_THRESHOLD: float = 0.45
-
-    @staticmethod
-    def _tokens_for_similarity(text: str | None) -> set[str]:
-        """Tokenise ``text`` for Jaccard comparison.
-
-        Lowercases, splits on non-alphanumerics, drops tokens shorter than
-        3 chars (filters single letters / digits / very common short
-        words). Returns a set of tokens.
-        """
-        if not text:
-            return set()
-        import re
-
-        tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
-        return {t for t in tokens if len(t) >= 3}
-
-    @staticmethod
-    def _jaccard_similarity(a: set[str], b: set[str]) -> float:
-        if not a or not b:
-            return 0.0
-        intersection = a & b
-        union = a | b
-        if not union:
-            return 0.0
-        return len(intersection) / len(union)
+    # The scoring itself lives in ``app/services/routing/text_similarity.py``
+    # — reachability near-miss ranking asks the same question and the two
+    # answers have to agree. See that module's docstring for the threshold
+    # and the no-stopwords rationale.
 
     @staticmethod
     def find_route_conflicts_for_agent(
@@ -768,7 +742,7 @@ class AppAgentRouteService:
         """
         cutoff = (
             threshold if threshold is not None
-            else AppAgentRouteService.SIMILARITY_THRESHOLD
+            else text_similarity.SIMILARITY_THRESHOLD
         )
 
         # Locate the agent's auto-managed route. If none exists (install
@@ -787,7 +761,7 @@ class AppAgentRouteService:
         if own_route is None or not own_route.trigger_prompt:
             return RouteConflictResponse(matches=[])
 
-        own_tokens = AppAgentRouteService._tokens_for_similarity(
+        own_tokens = text_similarity.tokens_for_similarity(
             own_route.trigger_prompt
         )
         if not own_tokens:
@@ -810,10 +784,10 @@ class AppAgentRouteService:
             # baseline, not a conflict).
             if r.agent_id == agent_id:
                 continue
-            other_tokens = AppAgentRouteService._tokens_for_similarity(
+            other_tokens = text_similarity.tokens_for_similarity(
                 r.trigger_prompt
             )
-            score = AppAgentRouteService._jaccard_similarity(own_tokens, other_tokens)
+            score = text_similarity.jaccard_similarity(own_tokens, other_tokens)
             if score >= cutoff:
                 matches.append(
                     RouteConflictMatch(

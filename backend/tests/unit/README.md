@@ -8,9 +8,14 @@ Postgres connection, and adds the env-template tree (`app/env-templates/app_core
 ## What belongs here
 
 - Pure logic with no I/O: event transformers, parsers, decision tables, similarity / scoring
-  functions, URL and filesystem-path helpers.
+  functions, URL and filesystem-path helpers. Public ones too, when the module is pure — e.g.
+  `app.services.routing.text_similarity`, covered by `test_text_similarity.py`.
 - Private `_helper` functions extracted from services (e.g. `_parse_prompt_line`,
-  `_assemble_session_prompt`, `_tokens_for_similarity`).
+  `_assemble_session_prompt`). Being private is what makes a unit test the *only* place these
+  can be covered; it is not what qualifies them. When a private helper acquires a second
+  caller outside its owning service, promote it to a public module of its own rather than
+  reaching across the boundary for an underscored name — `text_similarity` is that move having
+  already happened, which is why it is an example on the bullet above and not this one.
 - Egress-guard predicates (`validate_external_endpoint_url`, `is_host_blocked`) and other
   defensive checks.
 - MagicMock-driven defensive-branch tests for code paths that have no clean API surface.

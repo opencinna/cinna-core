@@ -13,10 +13,10 @@ Four properties, each one there because its failure mode is silent:
    detail down with it — §11a Rule 2's shape, on a read path: the debugging aid
    breaking the thing it observes.
 2. **The Jaccard helpers are *called*, not copied.** Plan §3 says reuse
-   `AppAgentRouteService._jaccard_similarity` / `._tokens_for_similarity`
-   verbatim. A copy would pass every behavioural test in this file and then
-   drift the first time either side was tuned, so the test asserts the call
-   itself rather than the numbers it produces.
+   `app.services.routing.text_similarity`'s `jaccard_similarity` /
+   `tokens_for_similarity` verbatim. A copy would pass every behavioural test in
+   this file and then drift the first time either side was tuned, so the test
+   asserts the call itself rather than the numbers it produces.
 3. **A candidate seen in two stages is one candidate.** "This user has N
    effective routes" is the verdict's headline number; counted twice it is a
    wrong number stated with confidence.
@@ -51,17 +51,20 @@ from unittest.mock import MagicMock, patch
 
 from app.models import Agent
 from app.models.routing.routing_decision import RoutingDecisionPublic
-from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
 from app.services.routing import routing_trace
 from app.services.routing.routing_reachability_service import (
     NEAR_MISS_LIMIT,
     RoutingReachabilityService,
 )
+from app.services.routing.text_similarity import tokens_for_similarity
 
-_JACCARD = (
-    "app.services.app_mcp.app_agent_route_service."
-    "AppAgentRouteService._jaccard_similarity"
-)
+# Patched at its *definition site* on purpose. `routing_reachability_service`
+# reaches these through the module (`text_similarity.jaccard_similarity(...)`)
+# rather than binding the name locally, so this target is only reachable if the
+# shared implementation really is the one running. A local copy — or a
+# `from ... import jaccard_similarity` rebind — would leave this patch unused
+# and the assertions below red.
+_JACCARD = "app.services.routing.text_similarity.jaccard_similarity"
 
 
 def _candidate(
@@ -161,10 +164,11 @@ def test_diagnose_reports_its_own_failure_instead_of_raising() -> None:
 
 
 def test_near_miss_ranking_calls_the_shared_jaccard_helper() -> None:
-    """Patching `AppAgentRouteService._jaccard_similarity` must change the
-    ranking. If this module ever grows its own copy of the overlap formula the
-    patch stops reaching it and this goes red — which is the entire point,
-    because a copy is otherwise invisible until the two disagree.
+    """Patching `text_similarity.jaccard_similarity` must change the ranking.
+
+    If this module ever grows its own copy of the overlap formula the patch
+    stops reaching it and this goes red — which is the entire point, because a
+    copy is otherwise invisible until the two disagree.
     """
     trace = _trace(
         [
@@ -283,12 +287,12 @@ def test_near_miss_ranking_is_ordered_and_capped() -> None:
 def test_the_shared_tokenizer_is_the_one_being_used() -> None:
     """The tokenizer, not only the overlap function.
 
-    Asserted by agreeing with `AppAgentRouteService` on a case the naive
-    alternative gets wrong: its tokenizer drops tokens shorter than three
-    characters, so "my ok" and "ok my" have *no* tokens at all and a plain
-    word-set overlap would say 1.0 where this says 0.0.
+    Asserted by agreeing with `text_similarity` on a case the naive alternative
+    gets wrong: its tokenizer drops tokens shorter than three characters, so
+    "my ok" and "ok my" have *no* tokens at all and a plain word-set overlap
+    would say 1.0 where this says 0.0.
     """
-    assert AppAgentRouteService._tokens_for_similarity("my ok") == set()
+    assert tokens_for_similarity("my ok") == set()
 
     trace = _trace(
         [

@@ -90,14 +90,15 @@ nothing a reader of this page could not already see. Nothing else about the
 agent reaches the response, and a fifth field would have to clear the same bar
 when it is added rather than inherit these four's answer.
 
-**Near-miss ranking reuses ``AppAgentRouteService``'s Jaccard helpers by
-calling them** (plan §3: "Reuse verbatim"). They are private —
-``_tokens_for_similarity`` / ``_jaccard_similarity`` — and reaching across a
-service boundary for an underscore-prefixed static method is not something to
-do casually. It is still strictly better than the alternative here: a second
-copy of the tokenizer would make "closest: X 0.31" and install-time conflict
-detection disagree about what a token is, silently, the first time either was
-tuned. Flagged rather than laundered; if a third caller appears, promote them.
+**Near-miss ranking reuses the shared Jaccard helpers by calling them**
+(plan §3: "Reuse verbatim"). They live in
+``app/services/routing/text_similarity.py`` —
+``tokens_for_similarity`` / ``jaccard_similarity`` — alongside this module
+rather than on the service that first happened to need them. A second copy of
+the tokenizer would make "closest: X 0.31" and install-time conflict detection
+disagree about what a token is, silently, the first time either was tuned; the
+module is imported and its functions called through it, so a test can patch the
+definition site and prove no copy crept in.
 
 **Never break the thing it observes** (§11a Rule 2). This module runs on the
 read path only — no capture is open, no routing decision is in flight — so a
@@ -128,8 +129,7 @@ from app.models.routing.routing_decision import (
     RoutingDiagnosisPublic,
     RoutingNearMiss,
 )
-from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
-from app.services.routing import routing_trace
+from app.services.routing import routing_trace, text_similarity
 from app.services.routing.channel_candidate_provider import example_prompt_text
 from app.services.server_channels.channel_policy_service import ChannelPolicyService
 
@@ -1285,10 +1285,11 @@ def _rank_near_misses(
 ) -> tuple[list[RoutingNearMiss], str | None]:
     """Rank candidates by token overlap with the message. See module docstring.
 
-    ``AppAgentRouteService._tokens_for_similarity`` and ``._jaccard_similarity``
-    are **called**, not copied: install-time conflict detection and this ranking
+    ``text_similarity.tokens_for_similarity`` and ``.jaccard_similarity`` are
+    **called**, not copied: install-time conflict detection and this ranking
     have to agree on what a token is, and two copies of a tokenizer agree only
-    until one of them is tuned.
+    until one of them is tuned. They are reached through the module rather than
+    bound by name here so that patching the definition site reaches this call.
 
     Ranked on ``trigger_prompt`` **and** ``prompt_examples`` together, because
     together is what the classifier now receives. Phase 5 fixed Bug 1 — examples
@@ -1307,7 +1308,7 @@ def _rank_near_misses(
     if not text:
         return [], NEAR_MISS_NO_TEXT_NOTICE
 
-    message_tokens = AppAgentRouteService._tokens_for_similarity(text)
+    message_tokens = text_similarity.tokens_for_similarity(text)
     ranked: list[RoutingNearMiss] = []
     for candidate in candidates:
         prompt = str(candidate.get("trigger_prompt") or "")
@@ -1316,8 +1317,8 @@ def _rank_near_misses(
         if not (prompt or examples) or not ref_id:
             continue
         scored_text = "\n".join(part for part in (prompt, examples) if part)
-        similarity = AppAgentRouteService._jaccard_similarity(
-            message_tokens, AppAgentRouteService._tokens_for_similarity(scored_text)
+        similarity = text_similarity.jaccard_similarity(
+            message_tokens, text_similarity.tokens_for_similarity(scored_text)
         )
         ranked.append(
             RoutingNearMiss(

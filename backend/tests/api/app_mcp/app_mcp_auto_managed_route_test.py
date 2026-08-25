@@ -428,7 +428,9 @@ def test_conflict_detection_returns_empty_for_dissimilar_route(
 # ---------------------------------------------------------------------------
 # Conflict detection — threshold boundary
 # ---------------------------------------------------------------------------
-# Unit tests for the Jaccard similarity helpers (_tokens_for_similarity /
-# _jaccard_similarity, the boundary arithmetic) live in
-# tests/unit/test_app_agent_route_similarity.py. The endpoint-level conflict
-# match/empty behavior is covered by the other tests in this file.
+# Unit tests for the Jaccard similarity helpers (tokens_for_similarity /
+# jaccard_similarity, the boundary arithmetic) live in
+# tests/unit/test_text_similarity.py. The helpers themselves live in
+# app/services/routing/text_similarity.py -- shared with reachability near-miss
+# ranking, which is why they are not on AppAgentRouteService. The endpoint-level
+# conflict match/empty behavior is covered by the other tests in this file.
