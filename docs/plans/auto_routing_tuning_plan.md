@@ -211,7 +211,7 @@ actually bites (the expected agent was never a candidate at all).
 | `ROUTING_TRACE_STORE_MESSAGE_TEXT` | `True` | see §7 |
 | `ROUTING_TRACE_RETENTION_DAYS` | `14` | purge window. **Must be `>= 1`.** `-1` is the *only* spelling of "keep forever" (the escape hatch for a debugging session that must outlive the window). `0` and all other negatives are **rejected at settings validation**, naming `-1` in the error. Rationale: §7's case for storing message text is that it changes the *duration* of exposure, not the exposure class — a value that reads as "no retention" but means "unbounded retention" inverts exactly that property, and fails toward keeping *more* external users' text. Documentation does not reach the operator who sets `0` meaning "don't keep this". |
 | `ROUTING_TRACE_TEXT_MAX_CHARS` | `2_000` | match `SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS` |
-| ~~`ROUTING_TRACE_APP_MCP_MODE`~~ | *(removed — verified absent from `config.py` and `_should_store_text`; only historical comments remain)* | **Removed until the origin exists.** Applied in the Phase 2 fix pass. `capture()` is opened only at the two `origin=server_channel` sites, so this setting was unreachable: an operator setting it to `off` would believe they had disabled capture that was never running — a false assurance, §11a Rule 1 in a different guise. App MCP / identity / simulate capture is deferred; reintroduce this setting **in the same change that adds the origin**, not before. The rationale it encoded still stands and still applies then: App MCP routes *every* message, not just thread openings, so it must default to metadata-only. |
+| `ROUTING_TRACE_APP_MCP_MODE` | `"metadata"` (one of `off` \| `metadata` \| `full`; an unknown value raises at startup) | **Removed, then reintroduced — and the condition attached to the removal is what brought it back.** It was withdrawn in the Phase 2 fix pass because `capture()` opened only at the two `origin=server_channel` sites, so the setting was unreachable at every value: an operator setting it to `off` would believe they had disabled a capture that was never running — a false assurance, §11a Rule 1 in a different guise. The removal note said to reintroduce it **in the same change that adds the origin**, not before. **Phase 6 of the channels & identity unification is that change**: `AppMCPRoutingService.route_message` now opens a capture with `origin="app_mcp"`, and the setting landed in the same commit, wired at the producer (`off` opens no capture), at the write gate (`persist` refuses an `app_mcp` row at `off`, forces text off at `metadata`) and at a startup validator. The rationale it encoded still stands and is still the default: App MCP routes *every* message, not just thread openings, and sits behind no webhook rate limit, so it must default to metadata-only. |
 | `ROUTING_SIMULATE_RATE_LIMIT_PER_MIN` | `10` | per admin |
 
 ---
@@ -574,6 +574,12 @@ its removal merely queued. Two independent agents misread it as a completed chan
 the same evidence standard we accepted for `RETENTION_DAYS = 0`. **A decision recorded in a plan is
 not a change made in the tree, and when the two can be confused the plan must say which it is.**
 Rule 1 governs the source of truth as much as the code it describes.
+
+*(Fifth instance, same row, opposite direction — recorded because the pair is the lesson.* The row
+stayed struck-through and past-tense long after the setting was reintroduced by Phase 6 of the
+channels & identity unification, so the plan then understated the tree exactly as it had once
+overstated it. **A plan status marker is not tree state in either direction**; the check is a grep,
+and it costs seconds.)
 
 **A guard whose correctness depends on the test harness is not a guard.** `logging` interpolates
 lazily and *swallows its own formatting errors* in production; pytest's `LogCaptureHandler` overrides
