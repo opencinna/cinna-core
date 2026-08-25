@@ -58,6 +58,7 @@ from app.services.server_channels.channel_policy_service import (
     ChannelPolicyService,
     ChannelPolicyView,
 )
+from app.services.server_channels.server_channel_service import ServerChannelService
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,14 @@ class UserChannelService:
         trade against a query count bounded by the number of channels a server
         has.
         """
+        # Singleton channels (App MCP) have no admin create step, so
+        # nothing else would have brought their row into existence for a
+        # user who has never touched the transport. Materialized through
+        # the one accessor that answers "give me that channel", so this
+        # listing and the App MCP token verifier can never disagree about
+        # whether it exists.
+        ServerChannelService.ensure_singleton_channels(session)
+
         channels = session.exec(
             select(ServerChannel)
             .where(ServerChannel.enabled == True)  # noqa: E712

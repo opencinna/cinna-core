@@ -438,6 +438,28 @@ class Settings(BaseSettings):
     SERVER_CHANNEL_DEBUG_BUFFER_SIZE: int = 50
     SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS: int = 2_000
 
+    # App MCP is a channel too, but an ``authenticated`` one: its policy is
+    # consulted in ``app.mcp.app_token_verifier`` on *every* verified token,
+    # which is once per HTTP request to /mcp/app/mcp — every tools/call,
+    # tools/list, prompts/list and SSE reconnect. Two DB reads per request is
+    # not affordable, so the resolved availability is cached per user id, in
+    # process memory, for this many seconds.
+    #
+    # The TTL is the admin's revocation delay and nothing else: disabling the
+    # channel, withdrawing a grant, or a user switching it off takes effect
+    # within this window (per backend process — the cache is process-local).
+    # Keep it short. The kill switch is the reason the channel exists, and an
+    # admin who flips it expects it to bite, not to be advisory for a minute.
+    # A value <= 0 disables the cache entirely and is what tests set in order
+    # to observe a revocation without sleeping; it is a legitimate, if costly,
+    # production setting too.
+    APP_MCP_AVAILABILITY_CACHE_TTL_SECONDS: int = 45
+    # Bound on the cache's size, so a deployment with many App MCP users (or a
+    # burst of expired entries) cannot grow it without limit. Reaching it drops
+    # expired entries first and clears the rest only if that was not enough —
+    # a cleared cache costs one extra lookup per user, never a wrong answer.
+    APP_MCP_AVAILABILITY_CACHE_MAX_ENTRIES: int = 10_000
+
     # ── Routing traces (auto-routing tuning) ────────────────────────────
     # Durable, superuser-only record of each routing decision — candidates
     # (including rejected ones), rendered prompt, provider attempts, verdict.

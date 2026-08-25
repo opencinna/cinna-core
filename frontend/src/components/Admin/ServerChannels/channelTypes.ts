@@ -20,9 +20,15 @@
  * one of those has a different true answer per transport, so each is a field
  * here rather than a sentence inlined in a component.
  */
-import { type LucideIcon, Mail, MessagesSquare, Plug } from "lucide-react"
+import {
+  type LucideIcon,
+  Mail,
+  MessagesSquare,
+  Plug,
+  Plug2,
+} from "lucide-react"
 
-import type { MailServerType } from "@/client"
+import type { ChannelTypePublic, MailServerType } from "@/client"
 import {
   EMAIL_SENDER_SPOOFABLE_WARNING,
   EMAIL_SILENT_DECLINE_NOTE,
@@ -71,8 +77,17 @@ export interface ChannelTypeMeta {
   /** One line on the picker card — what connecting this actually gets you. */
   tagline: string
   namePlaceholder: string
-  /** Empty ⇒ the form renders a raw JSON editor for `config` instead. */
-  configFields: ChannelConfigField[]
+  /**
+   * `[]` ⇒ the form renders a raw JSON editor for `config` instead — the
+   * fallback for a backend type nobody has written an entry for yet.
+   *
+   * `null` ⇒ this transport takes **no** config at all, and no config control
+   * is rendered. Distinct from `[]` on purpose: offering a JSON editor over an
+   * object that must stay empty invites an admin to put something in it, and
+   * the adapter would then refuse the save with a message about a key they
+   * were shown a box for.
+   */
+  configFields: ChannelConfigField[] | null
   /**
    * `null` ⇒ this transport stores no channel secret and the field is not
    * rendered at all.
@@ -95,7 +110,21 @@ export interface ChannelTypeMeta {
   /** Extra paragraph in the setup panel, for behaviour the backend's own
    *  `get_setup_instructions` steps can't carry. */
   setupNote?: string
-  outboundTest: {
+  /**
+   * Copy for the "send a test message" control.
+   *
+   * Absent ⇒ this transport has **no outbound path at all**, so there is no
+   * control to write copy for: the setup panel renders no test section and
+   * the list renders no missing-credential badge. That is the case for an
+   * `authenticated` transport, whose reply is the response to the caller's
+   * own request.
+   *
+   * Absent is not the same as "has an outbound path with nothing configured
+   * yet" — email declares `needs_outbound_credentials=false` and still needs
+   * this, because its credential lives on the SMTP server row and can be
+   * missing.
+   */
+  outboundTest?: {
     /** Label for the "type a raw destination instead" option. */
     customTargetLabel: string
     customTargetPlaceholder: string
@@ -205,6 +234,33 @@ const EMAIL: ChannelTypeMeta = {
   },
 }
 
+const APP_MCP: ChannelTypeMeta = {
+  icon: Plug2,
+  iconClass: "text-violet-500",
+  tagline: "Your own MCP client talks to your agents, signed in as you.",
+  namePlaceholder: "App MCP Server",
+  // Not `[]`. This transport takes no configuration whatsoever — its endpoint
+  // is fixed and its callers authenticate with a platform token — so the raw
+  // JSON fallback would be an editor over an object the adapter rejects any
+  // content in.
+  configFields: null,
+  // `needs_outbound_credentials=False` on the adapter, and unlike email there
+  // is no credential anywhere else either: the answer rides the caller's own
+  // synchronous MCP response.
+  secrets: null,
+  // No `senderTrustWarning`. This is the one transport whose sender identity
+  // is proven by the platform itself, which is a stronger tier than either of
+  // the other two — there is nothing to warn about.
+  setupNote:
+    "This channel is always present and cannot be deleted. Switching it off " +
+    "closes the App MCP server for everyone; the change takes effect within " +
+    "the revocation delay shown in the setup panel.",
+  // No `outboundTest`. There is no outbound path to test: the answer rides
+  // the caller's own synchronous MCP response, so the setup panel renders no
+  // test control for this transport at all. Copy for a control that cannot
+  // exist would only ever be read by whoever revives it by accident.
+}
+
 /** Used for a backend type with no entry above. Deliberately generic. */
 const FALLBACK: ChannelTypeMeta = {
   icon: Plug,
@@ -231,8 +287,89 @@ const FALLBACK: ChannelTypeMeta = {
 const CHANNEL_TYPE_META: Record<string, ChannelTypeMeta> = {
   google_chat: GOOGLE_CHAT,
   email: EMAIL,
+  app_mcp: APP_MCP,
 }
 
 export function getChannelTypeMeta(channelType: string): ChannelTypeMeta {
   return CHANNEL_TYPE_META[channelType] ?? FALLBACK
+}
+
+/**
+ * The transport facts the admin surface branches on, as declared by the
+ * backend adapter and projected onto `ChannelTypePublic`.
+ *
+ * Kept as its own type — rather than passing `ChannelTypePublic | undefined`
+ * around — because callers need an answer for a channel whose type the
+ * `/channel-types` fetch has not returned (still loading, or an adapter that
+ * left the registry), and that answer has to be one deliberate fallback rather
+ * than one per component.
+ */
+export interface ChannelTransportShape {
+  inboundMode: string
+  needsWebhookToken: boolean
+  needsOutboundCredentials: boolean
+  isSingleton: boolean
+}
+
+/**
+ * What an unknown type is assumed to be: a freely-instantiable push webhook
+ * with its own credential — the shape every channel had before the transport
+ * split, and the shape whose controls it is safe to render.
+ *
+ * Conservative in the direction that matters. Guessing "webhook" shows an
+ * admin a whitelist and a secrets box on a channel that may not need them,
+ * which is confusing; guessing "authenticated" would *hide* the whitelist on a
+ * Google Chat channel whose adapter had temporarily failed to load, and a
+ * hidden fail-closed whitelist is a security control the admin cannot see.
+ */
+export const DEFAULT_TRANSPORT_SHAPE: ChannelTransportShape = {
+  inboundMode: "webhook",
+  needsWebhookToken: true,
+  needsOutboundCredentials: true,
+  isSingleton: false,
+}
+
+/** Read the declared shape off a `/channel-types` entry, or fall back. */
+export function getTransportShape(
+  type: ChannelTypePublic | undefined,
+): ChannelTransportShape {
+  if (!type) return DEFAULT_TRANSPORT_SHAPE
+  return {
+    inboundMode: type.inbound_mode,
+    needsWebhookToken: type.needs_webhook_token,
+    needsOutboundCredentials: type.needs_outbound_credentials,
+    isSingleton: type.is_singleton,
+  }
+}
+
+/** Index `/channel-types` by `channel_type`, for per-row lookups in a list. */
+export function transportShapesByType(
+  types: ChannelTypePublic[] | undefined,
+): Record<string, ChannelTransportShape> {
+  const map: Record<string, ChannelTransportShape> = {}
+  for (const type of types ?? []) {
+    map[type.channel_type] = getTransportShape(type)
+  }
+  return map
+}
+
+/**
+ * Whether this transport turns an *outside* identity into a platform user.
+ *
+ * The single question behind three controls — the sender whitelist, the
+ * auto-registration switch, and the "no allowed senders" badge — all of which
+ * are enforced in the inbound pipeline's post-verification step. An
+ * `authenticated` transport never enters that step: its caller is already a
+ * platform user, so there is nobody to whitelist and nobody to register.
+ *
+ * Hiding those controls for such a transport is correctness, not tidiness. The
+ * whitelist is fail-closed, so an empty one on an App MCP channel would render
+ * as "this channel denies everyone" while denying nobody — the most misleading
+ * thing the Channels tab could say.
+ *
+ * Derived here, in one place, so no component grows its own copy and none of
+ * them is tempted to write `channel_type === "app_mcp"` instead.
+ */
+export function resolvesExternalSenders(shape: ChannelTransportShape): boolean {
+  return shape.inboundMode !== "authenticated"
 }

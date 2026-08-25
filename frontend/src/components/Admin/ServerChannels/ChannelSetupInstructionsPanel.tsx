@@ -38,7 +38,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import useCustomToast from "@/hooks/useCustomToast"
 import { getErrorMessage } from "@/utils"
-import { getChannelTypeMeta } from "./channelTypes"
+import { type ChannelTransportShape, getChannelTypeMeta } from "./channelTypes"
 
 /** Sentinel for the "type a raw id instead" option. A non-email string so it
  *  can never collide with a real sender address in the same Select. */
@@ -48,6 +48,11 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   channel: ServerChannelPublic
+  /** The declared transport shape, from `/channel-types`. What this panel says
+   *  about how a channel is reached, and whether it offers to send through it,
+   *  branches on this rather than on a stored value that merely correlates
+   *  with it — see `isWebhook` and the test-outbound section. */
+  transport: ChannelTransportShape
 }
 
 /** Read-only value with a copy button. The webhook URL is long and must be
@@ -106,6 +111,7 @@ export function ChannelSetupInstructionsPanel({
   open,
   onOpenChange,
   channel,
+  transport,
 }: Props) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -118,6 +124,21 @@ export function ChannelSetupInstructionsPanel({
   const [testResult, setTestResult] =
     useState<ChannelTestOutboundResult | null>(null)
 
+  // How this transport is *reached*, as the adapter declares it. Three modes,
+  // not two: reading `webhook_token != null` as "push vs polled" put every
+  // authenticated transport into the polled arm and told the admin their App
+  // MCP channel is being polled for new messages, which is not a thing that
+  // happens.
+  const isWebhook = transport.inboundMode === "webhook"
+  const isAuthenticated = transport.inboundMode === "authenticated"
+
+  // Every transport-specific sentence in this panel comes from here rather
+  // than being written for Google Chat and left to be wrong everywhere else.
+  const meta = getChannelTypeMeta(channel.channel_type)
+  // Absent ⇒ no outbound path at all, so no test control. Hoisted so the JSX
+  // narrows on a const rather than on a property access.
+  const outboundTest = meta.outboundTest
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["serverChannelSetup", channel.id],
     queryFn: () =>
@@ -129,6 +150,11 @@ export function ChannelSetupInstructionsPanel({
   // destination the platform has observed — the provider's email alias needs
   // user authentication and this app authenticates as an app — so the picker
   // lists exactly the addresses that can actually work.
+  //
+  // Not fetched at all for a transport with no outbound path: the only
+  // consumer is the test control below, which such a transport does not
+  // render, and an unread list would be a permanent "nobody has messaged this
+  // channel" waiting for someone to render it by accident.
   const {
     data: senders = [],
     isLoading: sendersLoading,
@@ -137,7 +163,7 @@ export function ChannelSetupInstructionsPanel({
     queryKey: ["serverChannelRecentSenders", channel.id],
     queryFn: () =>
       ServerChannelsService.listRecentSenders({ channelId: channel.id }),
-    enabled: open,
+    enabled: open && outboundTest !== undefined,
   })
 
   const testMutation = useMutation({
@@ -187,16 +213,11 @@ export function ChannelSetupInstructionsPanel({
       showErrorToast(getErrorMessage(err, "Failed to regenerate token")),
   })
 
-  // Not every transport is reached by a webhook — a polled one (email) has no
-  // URL and no token. `webhook_token` is the stored fact and is NULL exactly
-  // when `webhook_url` is, so it decides both the copy above and whether the
-  // regenerate control exists at all. Offering regenerate on a tokenless
-  // channel would just earn a 422 from the backend, which refuses it.
-  const hasWebhook = channel.webhook_token != null
-
-  // Every transport-specific sentence in this panel comes from here rather
-  // than being written for Google Chat and left to be wrong everywhere else.
-  const meta = getChannelTypeMeta(channel.channel_type)
+  // The regenerate control is the one thing here that must key off the stored
+  // fact rather than the declared mode: there is nothing to replace on a
+  // channel that holds no token, and asking anyway earns a 422 from the
+  // backend, which refuses it.
+  const canRegenerateWebhook = channel.webhook_token != null
 
   return (
     <>
@@ -205,9 +226,11 @@ export function ChannelSetupInstructionsPanel({
           <DialogHeader>
             <DialogTitle>Set up {channel.name}</DialogTitle>
             <DialogDescription>
-              {hasWebhook
+              {isWebhook
                 ? "Paste the webhook URL into the channel's app configuration, then send the bot a message to test it."
-                : "This channel isn't reached by a webhook — it polls for new messages, so there is nothing to paste anywhere."}
+                : isAuthenticated
+                  ? "Nothing to paste anywhere: clients reach this channel by signing in as a platform user, and their own credentials are the configuration."
+                  : "This channel isn't reached by a webhook — it polls for new messages, so there is nothing to paste anywhere."}
             </DialogDescription>
           </DialogHeader>
 
@@ -227,6 +250,12 @@ export function ChannelSetupInstructionsPanel({
                   there is no URL instead. */}
               {data.webhook_url ? (
                 <CopyableValue label="Webhook URL" value={data.webhook_url} />
+              ) : isAuthenticated ? (
+                <p className="text-xs text-muted-foreground">
+                  This transport has no webhook — its clients connect to a fixed
+                  endpoint and authenticate as themselves, so there is no URL to
+                  configure here.
+                </p>
               ) : (
                 <p className="text-xs text-muted-foreground">
                   This transport has no webhook — the platform polls it for new
@@ -261,119 +290,130 @@ export function ChannelSetupInstructionsPanel({
                 </p>
               )}
 
-              <div className="space-y-2 rounded-lg border p-3">
-                <div className="space-y-0.5">
-                  <p className="text-sm font-medium">Test outbound</p>
-                  <p className="text-xs text-muted-foreground">
-                    Sends a message through this channel to prove its outbound
-                    path works. Pick someone who has messaged the app — the test
-                    lands in the conversation they already have with it.
-                  </p>
-                </div>
-
-                {/* A result names the address it was sent to, so it must not
-                    outlive the target — it would read as a verdict about the
-                    newly picked one. */}
-                <Select
-                  value={target}
-                  onValueChange={(value) => {
-                    setTarget(value)
-                    setTestResult(null)
-                  }}
-                >
-                  <SelectTrigger className="text-xs">
-                    <SelectValue placeholder="Choose who to message…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {senders.map((sender) => (
-                      <SelectItem key={sender.email} value={sender.email}>
-                        {sender.display_name
-                          ? `${sender.display_name} <${sender.email}>`
-                          : sender.email}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value={CUSTOM_TARGET}>
-                      {meta.outboundTest.customTargetLabel}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {/* A failed fetch must never look like "nobody has messaged
-                    this channel" — the admin would go re-check the chat app's
-                    configuration when only this one admin GET failed. */}
-                {target !== CUSTOM_TARGET &&
-                  (sendersError ? (
-                    <p className="text-xs text-destructive">
-                      Couldn't load recent senders. You can still send to a raw
-                      destination with "{meta.outboundTest.customTargetLabel}".
-                    </p>
-                  ) : sendersLoading ? (
+              {/* Suppressed entirely for a transport with no outbound path.
+                  `has_outbound_credentials` is true for such a channel — it
+                  is not missing a credential, it has nowhere to use one — so
+                  gating on that flag would leave this control enabled and a
+                  click on it would render a red `ChannelSendError` under a
+                  button that should not have existed. */}
+              {outboundTest && (
+                <div className="space-y-2 rounded-lg border p-3">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-medium">Test outbound</p>
                     <p className="text-xs text-muted-foreground">
-                      Loading recent senders…
+                      Sends a message through this channel to prove its outbound
+                      path works. Pick someone who has messaged the app — the
+                      test lands in the conversation they already have with it.
                     </p>
-                  ) : senders.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">
-                      Nobody has messaged this channel yet. An email can only be
-                      resolved once the app has seen a message from that person,
-                      so until then use "{meta.outboundTest.customTargetLabel}".
-                    </p>
-                  ) : null)}
+                  </div>
 
-                <div className="flex items-center gap-2">
-                  {target === CUSTOM_TARGET && (
-                    <Input
-                      value={threadKey}
-                      onChange={(e) => {
-                        setThreadKey(e.target.value)
-                        setTestResult(null)
-                      }}
-                      placeholder={meta.outboundTest.customTargetPlaceholder}
-                      className="font-mono text-xs"
-                    />
-                  )}
-                  <LoadingButton
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    loading={testMutation.isPending}
-                    disabled={
-                      !channel.has_outbound_credentials ||
-                      (target === CUSTOM_TARGET
-                        ? !threadKey.trim()
-                        : !target.trim())
-                    }
-                    onClick={() =>
-                      testMutation.mutate(
-                        target === CUSTOM_TARGET
-                          ? { thread_key: threadKey.trim() }
-                          : { email: target },
-                      )
-                    }
+                  {/* A result names the address it was sent to, so it must
+                      not outlive the target — it would read as a verdict
+                      about the newly picked one. */}
+                  <Select
+                    value={target}
+                    onValueChange={(value) => {
+                      setTarget(value)
+                      setTestResult(null)
+                    }}
                   >
-                    <Send className="mr-2 h-3.5 w-3.5" />
-                    Send test
-                  </LoadingButton>
-                </div>
-                {!channel.has_outbound_credentials && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400">
-                    {meta.outboundTest.missingCredentialsHint}
-                  </p>
-                )}
-                {/* The whole point of this control is the reason for failure,
-                    so the error is rendered in place rather than only toasted. */}
-                {testResult &&
-                  (testResult.success ? (
-                    <p className="text-xs text-green-600 dark:text-green-400">
-                      Message delivered.
-                    </p>
-                  ) : (
-                    <p className="text-xs text-destructive break-all">
-                      {testResult.error || "Delivery failed."}
-                    </p>
-                  ))}
-              </div>
+                    <SelectTrigger className="text-xs">
+                      <SelectValue placeholder="Choose who to message…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {senders.map((sender) => (
+                        <SelectItem key={sender.email} value={sender.email}>
+                          {sender.display_name
+                            ? `${sender.display_name} <${sender.email}>`
+                            : sender.email}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={CUSTOM_TARGET}>
+                        {outboundTest.customTargetLabel}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
 
-              {hasWebhook && (
+                  {/* A failed fetch must never look like "nobody has
+                      messaged this channel" — the admin would go re-check the
+                      chat app's configuration when only this one admin GET
+                      failed. */}
+                  {target !== CUSTOM_TARGET &&
+                    (sendersError ? (
+                      <p className="text-xs text-destructive">
+                        Couldn't load recent senders. You can still send to a
+                        raw destination with "{outboundTest.customTargetLabel}".
+                      </p>
+                    ) : sendersLoading ? (
+                      <p className="text-xs text-muted-foreground">
+                        Loading recent senders…
+                      </p>
+                    ) : senders.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Nobody has messaged this channel yet. An email can only
+                        be resolved once the app has seen a message from that
+                        person, so until then use "
+                        {outboundTest.customTargetLabel}".
+                      </p>
+                    ) : null)}
+
+                  <div className="flex items-center gap-2">
+                    {target === CUSTOM_TARGET && (
+                      <Input
+                        value={threadKey}
+                        onChange={(e) => {
+                          setThreadKey(e.target.value)
+                          setTestResult(null)
+                        }}
+                        placeholder={outboundTest.customTargetPlaceholder}
+                        className="font-mono text-xs"
+                      />
+                    )}
+                    <LoadingButton
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      loading={testMutation.isPending}
+                      disabled={
+                        !channel.has_outbound_credentials ||
+                        (target === CUSTOM_TARGET
+                          ? !threadKey.trim()
+                          : !target.trim())
+                      }
+                      onClick={() =>
+                        testMutation.mutate(
+                          target === CUSTOM_TARGET
+                            ? { thread_key: threadKey.trim() }
+                            : { email: target },
+                        )
+                      }
+                    >
+                      <Send className="mr-2 h-3.5 w-3.5" />
+                      Send test
+                    </LoadingButton>
+                  </div>
+                  {!channel.has_outbound_credentials && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      {outboundTest.missingCredentialsHint}
+                    </p>
+                  )}
+                  {/* The whole point of this control is the reason for
+                      failure, so the error is rendered in place rather than
+                      only toasted. */}
+                  {testResult &&
+                    (testResult.success ? (
+                      <p className="text-xs text-green-600 dark:text-green-400">
+                        Message delivered.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-destructive break-all">
+                        {testResult.error || "Delivery failed."}
+                      </p>
+                    ))}
+                </div>
+              )}
+
+              {canRegenerateWebhook && (
                 <div className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 p-3">
                   <div className="min-w-0 space-y-0.5">
                     <p className="text-sm font-medium">

@@ -228,10 +228,41 @@ class ServerChannelPublic(ServerChannelBase):
 
 
 class ChannelTypePublic(SQLModel):
-    """One registered adapter, for the admin type picker."""
+    """One registered adapter, for the admin type picker *and its form*.
+
+    Carries the transport shape as well as the label, because the admin form
+    has to decide which controls exist at all — a transport with no webhook,
+    no channel secret and no external senders must not be offered a secrets
+    box, a sender whitelist or an auto-registration switch. Every one of those
+    would be a value nothing reads, and the whitelist is worse than useless:
+    it is fail-closed, so an empty one renders as "this channel denies
+    everyone" on a channel where it denies nobody.
+
+    Declared facts, projected — never re-derived. The frontend must branch on
+    these fields and never on ``channel_type``, for the same reason nothing in
+    the backend does: a type check is a rule that has to be found and edited
+    again for the next transport, and the one that gets missed is the one that
+    silently shows the wrong form.
+
+    All four are required (no defaults), like the derived fields on
+    ``ServerChannelPublic``: a projection that forgets one fails loudly rather
+    than reporting a plausible-looking ``False``.
+    """
 
     channel_type: str
     display_name: str
+    #: ``"webhook"`` | ``"polled"`` | ``"authenticated"`` — see
+    #: ``ChannelInboundMode``. An ``authenticated`` transport resolves no
+    #: external sender, so it has nothing to whitelist and nobody to register.
+    inbound_mode: str
+    #: Whether channels of this type are reachable at a webhook URL.
+    needs_webhook_token: bool
+    #: Whether this type's outbound credential lives in ``encrypted_secrets``
+    #: (and therefore whether the write-only secrets field means anything).
+    needs_outbound_credentials: bool
+    #: Whether at most one channel of this type may exist. The picker offers
+    #: no second one, and the list offers no delete for it.
+    is_singleton: bool
 
 
 class ChannelTestOutboundRequest(SQLModel):

@@ -51,7 +51,10 @@ from app.services.server_channels.adapters.base import (
     ChannelVerificationError,
     UnknownChannelTypeError,
 )
-from app.services.server_channels.adapters.registry import CHANNEL_ADAPTERS
+from app.services.server_channels.adapters.registry import (
+    CHANNEL_ADAPTERS,
+    get_transport,
+)
 from app.services.server_channels.channel_debug_buffer import (
     CAPTURING_SINCE,
     DEBUG_TEST_SEND,
@@ -64,6 +67,7 @@ from app.services.server_channels.channel_inbound_service import (
 from app.services.server_channels.server_channel_service import (
     ChannelNotFoundError,
     DuplicateChannelNameError,
+    DuplicateSingletonChannelError,
     InvalidChannelPolicyError,
     ServerChannelService,
     UnsupportedChannelOperationError,
@@ -165,14 +169,25 @@ async def channel_inbound(
 
 @router.get("/admin/server-channels/channel-types", response_model=list[ChannelTypePublic])
 def list_channel_types(current_user: SuperUser) -> Any:
-    """Registered adapters, for the admin type picker."""
+    """Registered adapters, with the transport shape the admin form needs.
+
+    The shape is projected from each adapter's declared capabilities rather
+    than inferred anywhere downstream: the form decides whether a secrets box,
+    a sender whitelist or an auto-registration switch exists at all, and those
+    decisions belong to the transport. See ``ChannelTypePublic``.
+    """
     return [
         ChannelTypePublic(
-            channel_type=adapter.channel_type,
-            display_name=adapter.display_name or adapter.channel_type,
+            channel_type=transport.channel_type,
+            display_name=transport.adapter.display_name or transport.channel_type,
+            inbound_mode=transport.inbound_mode,
+            needs_webhook_token=transport.needs_webhook_token,
+            needs_outbound_credentials=transport.needs_outbound_credentials,
+            is_singleton=transport.is_singleton,
         )
-        for adapter in sorted(
-            CHANNEL_ADAPTERS.values(), key=lambda a: a.display_name or a.channel_type
+        for transport in sorted(
+            (get_transport(t) for t in CHANNEL_ADAPTERS),
+            key=lambda t: t.adapter.display_name or t.channel_type,
         )
     ]
 
@@ -272,7 +287,12 @@ async def create_channel(
         raise HTTPException(status_code=400, detail=str(exc))
     except (ChannelConfigError, InvalidChannelPolicyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    except DuplicateChannelNameError as exc:
+    # 409, not 422. The payload is well-formed and every value in it is legal;
+    # what it conflicts with is the current state of the collection — the same
+    # thing a duplicate name conflicts with, and the same remedy shape ("that
+    # one already exists"). A 422 would tell the admin their input is malformed
+    # and send them looking for the bad field.
+    except (DuplicateChannelNameError, DuplicateSingletonChannelError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
     await _audit(
@@ -308,7 +328,10 @@ async def update_channel(
         UnsupportedChannelOperationError,
     ) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    except DuplicateChannelNameError as exc:
+    # Same 409 reasoning as create: a ``channel_type`` patch that would move
+    # this row onto an occupied singleton type is a collection conflict, not a
+    # malformed payload.
+    except (DuplicateChannelNameError, DuplicateSingletonChannelError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
     await _audit(
@@ -340,14 +363,25 @@ async def delete_channel(
     current_user: SuperUser,
     channel_id: uuid.UUID,
 ) -> Response:
-    """Delete a channel. Thread bindings cascade away with it."""
+    """Delete a channel. Thread bindings cascade away with it.
+
+    A singleton channel refuses — it would be re-materialized with default
+    settings on the next read, so deleting it silently *resets* a kill switch
+    the admin may have deliberately thrown. 422: the request names a real
+    channel and is well-formed, but the operation does not exist for it, which
+    is what every other ``UnsupportedChannelOperationError`` on this router
+    already means.
+    """
     channel = _get_channel_or_404(session, channel_id)
     details = {
         "server_channel_id": str(channel.id),
         "channel_type": channel.channel_type,
         "name": channel.name,
     }
-    ServerChannelService.delete_channel(session, channel)
+    try:
+        ServerChannelService.delete_channel(session, channel)
+    except UnsupportedChannelOperationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     await _audit(
         session,
         current_user,

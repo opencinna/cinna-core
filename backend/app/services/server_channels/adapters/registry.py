@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.services.server_channels.adapters.app_mcp import AppMCPChannelAdapter
 from app.services.server_channels.adapters.base import (
+    AuthenticatedChannelTransport,
     ChannelAdapter,
     ChannelInboundMode,
     PolledChannelTransport,
@@ -28,6 +30,7 @@ from app.services.server_channels.adapters.google_chat import GoogleChatAdapter
 CHANNEL_ADAPTERS: dict[str, ChannelAdapter] = {
     GoogleChatAdapter.channel_type: GoogleChatAdapter(),
     EmailChannelAdapter.channel_type: EmailChannelAdapter(),
+    AppMCPChannelAdapter.channel_type: AppMCPChannelAdapter(),
 }
 
 
@@ -37,10 +40,11 @@ class RegisteredTransport:
 
     ``ChannelCapabilities`` stays the single source of truth; this is the read
     of it that ``ServerChannelService`` and the pollers share. Flattened rather
-    than carrying the capabilities object because these three are the questions
+    than carrying the capabilities object because these four are the questions
     that decide whether a channel gets a webhook token, where its outbound
-    credential lives, and which driver feeds it — and having one place answer
-    them is what stops each caller growing its own default.
+    credential lives, which driver feeds it, and how many of it may exist — and
+    having one place answer them is what stops each caller growing its own
+    default.
     """
 
     channel_type: str
@@ -51,6 +55,8 @@ class RegisteredTransport:
     needs_webhook_token: bool
     #: Whether the outbound credential lives in ``encrypted_secrets``.
     needs_outbound_credentials: bool
+    #: Whether at most one channel row of this type may exist.
+    is_singleton: bool
 
 
 def get_adapter(channel_type: str) -> ChannelAdapter:
@@ -84,6 +90,7 @@ def get_transport(channel_type: str) -> RegisteredTransport:
         inbound_mode=capabilities.inbound_mode,
         needs_webhook_token=capabilities.needs_webhook_token,
         needs_outbound_credentials=capabilities.needs_outbound_credentials,
+        is_singleton=capabilities.is_singleton,
     )
 
 
@@ -108,6 +115,21 @@ def channel_types_with_inbound_mode(mode: ChannelInboundMode) -> list[str]:
     )
 
 
+def singleton_channel_types() -> list[str]:
+    """Registered channel types that may only ever have one row.
+
+    The enumeration seam for "materialize the rows this build owns" — the
+    counterpart to :func:`channel_types_with_inbound_mode` for a driver finding
+    its own channels. Returns an empty list when this build declares no
+    singleton, which is a real answer rather than a missing one.
+    """
+    return sorted(
+        channel_type
+        for channel_type, adapter in CHANNEL_ADAPTERS.items()
+        if adapter.capabilities.is_singleton
+    )
+
+
 def _assert_declared_modes_agree() -> None:
     """Fail at import if an adapter's base class and its declaration disagree.
 
@@ -128,6 +150,12 @@ def _assert_declared_modes_agree() -> None:
       that genuinely accepts traffic, while the admin is told it has none and
       the poller crashes with ``AttributeError`` reaching for ``poll()``.
 
+    Both non-webhook modes are checked the same way and for the same reason.
+    An ``authenticated`` transport has no ``poll()`` for the second failure to
+    crash on, which makes it *quieter*, not safer: without the subclass it
+    keeps a live, working ``verify_inbound`` while its whole premise is that no
+    unauthenticated request can reach it.
+
     The token rule rides along for the same reason: a transport that declares
     a non-``webhook`` mode and ``needs_webhook_token=True`` has asked for a
     token on a door it says it does not have. So does the outbound-credential
@@ -142,15 +170,20 @@ def _assert_declared_modes_agree() -> None:
     for channel_type, adapter in CHANNEL_ADAPTERS.items():
         capabilities = adapter.capabilities
         mode = capabilities.inbound_mode
-        if isinstance(adapter, PolledChannelTransport) != (mode == "polled"):
-            raise RuntimeError(
-                f"Channel adapter {channel_type!r} declares "
-                f"inbound_mode={mode!r} but "
-                f"{'subclasses' if mode != 'polled' else 'does not subclass'} "
-                "PolledChannelTransport. The two must agree: the declaration "
-                "is what the registry and the poller dispatch on, and the base "
-                "class is what supplies (or refuses) the matching methods."
-            )
+        for base, declared_mode in (
+            (PolledChannelTransport, "polled"),
+            (AuthenticatedChannelTransport, "authenticated"),
+        ):
+            if isinstance(adapter, base) != (mode == declared_mode):
+                raise RuntimeError(
+                    f"Channel adapter {channel_type!r} declares "
+                    f"inbound_mode={mode!r} but "
+                    f"{'subclasses' if mode != declared_mode else 'does not subclass'} "
+                    f"{base.__name__}. The two must agree: the declaration is "
+                    "what the registry, the channel service and the drivers "
+                    "dispatch on, and the base class is what supplies (or "
+                    "refuses) the matching methods."
+                )
         if not capabilities.needs_outbound_credentials and (
             type(adapter).has_outbound_credentials
             is ChannelAdapter.has_outbound_credentials
@@ -184,4 +217,5 @@ __all__ = [
     "get_transport",
     "available_channel_types",
     "channel_types_with_inbound_mode",
+    "singleton_channel_types",
 ]

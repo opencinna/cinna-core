@@ -12213,7 +12213,12 @@ export class ServerChannelsService {
     
     /**
      * List Channel Types
-     * Registered adapters, for the admin type picker.
+     * Registered adapters, with the transport shape the admin form needs.
+     *
+     * The shape is projected from each adapter's declared capabilities rather
+     * than inferred anywhere downstream: the form decides whether a secrets box,
+     * a sender whitelist or an auto-registration switch exists at all, and those
+     * decisions belong to the transport. See ``ChannelTypePublic``.
      * @returns ChannelTypePublic Successful Response
      * @throws ApiError
      */
@@ -12345,6 +12350,13 @@ export class ServerChannelsService {
     /**
      * Delete Channel
      * Delete a channel. Thread bindings cascade away with it.
+     *
+     * A singleton channel refuses — it would be re-materialized with default
+     * settings on the next read, so deleting it silently *resets* a kill switch
+     * the admin may have deliberately thrown. 422: the request names a real
+     * channel and is well-formed, but the operation does not exist for it, which
+     * is what every other ``UnsupportedChannelOperationError`` on this router
+     * already means.
      * @param data The data for the request.
      * @param data.channelId
      * @returns void Successful Response

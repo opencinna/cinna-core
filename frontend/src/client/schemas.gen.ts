@@ -11399,12 +11399,46 @@ export const ChannelTypePublicSchema = {
         display_name: {
             type: 'string',
             title: 'Display Name'
+        },
+        inbound_mode: {
+            type: 'string',
+            title: 'Inbound Mode'
+        },
+        needs_webhook_token: {
+            type: 'boolean',
+            title: 'Needs Webhook Token'
+        },
+        needs_outbound_credentials: {
+            type: 'boolean',
+            title: 'Needs Outbound Credentials'
+        },
+        is_singleton: {
+            type: 'boolean',
+            title: 'Is Singleton'
         }
     },
     type: 'object',
-    required: ['channel_type', 'display_name'],
+    required: ['channel_type', 'display_name', 'inbound_mode', 'needs_webhook_token', 'needs_outbound_credentials', 'is_singleton'],
     title: 'ChannelTypePublic',
-    description: 'One registered adapter, for the admin type picker.'
+    description: `One registered adapter, for the admin type picker *and its form*.
+
+Carries the transport shape as well as the label, because the admin form
+has to decide which controls exist at all — a transport with no webhook,
+no channel secret and no external senders must not be offered a secrets
+box, a sender whitelist or an auto-registration switch. Every one of those
+would be a value nothing reads, and the whitelist is worse than useless:
+it is fail-closed, so an empty one renders as "this channel denies
+everyone" on a channel where it denies nobody.
+
+Declared facts, projected — never re-derived. The frontend must branch on
+these fields and never on \`\`channel_type\`\`, for the same reason nothing in
+the backend does: a type check is a rule that has to be found and edited
+again for the next transport, and the one that gets missed is the one that
+silently shows the wrong form.
+
+All four are required (no defaults), like the derived fields on
+\`\`ServerChannelPublic\`\`: a projection that forgets one fails loudly rather
+than reporting a plausible-looking \`\`False\`\`.`
 } as const;
 
 export const CheckAccessResponseSchema = {

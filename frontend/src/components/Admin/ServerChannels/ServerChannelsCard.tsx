@@ -44,7 +44,12 @@ import { getErrorMessage } from "@/utils"
 import { ChannelDebugDialog } from "./ChannelDebugDialog"
 import { ChannelSetupInstructionsPanel } from "./ChannelSetupInstructionsPanel"
 import { parseWhitelist, WHITELIST_EMPTY_WARNING } from "./channelCopy"
-import { getChannelTypeMeta } from "./channelTypes"
+import {
+  DEFAULT_TRANSPORT_SHAPE,
+  getChannelTypeMeta,
+  resolvesExternalSenders,
+  transportShapesByType,
+} from "./channelTypes"
 import { ServerChannelDialog } from "./ServerChannelDialog"
 
 export function ServerChannelsCard() {
@@ -65,6 +70,17 @@ export function ServerChannelsCard() {
     queryKey: ["serverChannels"],
     queryFn: () => ServerChannelsService.listChannels(),
   })
+
+  // The declared transport shape per type. Shared query key with the dialog,
+  // so opening "Add channel" costs nothing extra. A channel whose type is
+  // missing here (still loading, or an adapter that left the registry) falls
+  // back to the webhook shape — see `DEFAULT_TRANSPORT_SHAPE` for why that is
+  // the safe direction to guess.
+  const { data: channelTypes } = useQuery({
+    queryKey: ["serverChannelTypes"],
+    queryFn: () => ServerChannelsService.listChannelTypes(),
+  })
+  const shapes = transportShapesByType(channelTypes)
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
@@ -162,13 +178,24 @@ export function ServerChannelsCard() {
                 // `enabled` is optional in the generated type; derive once so
                 // the dot, the row styling and the switch cannot disagree.
                 const isEnabled = channel.enabled ?? true
-                const hasNoAllowedSenders = parseWhitelist(
-                  channel.email_whitelist ?? "",
-                ).isEmpty
+                const shape =
+                  shapes[channel.channel_type] ?? DEFAULT_TRANSPORT_SHAPE
+                // Only meaningful for a transport that resolves an outside
+                // sender. On an `authenticated` one the whitelist is never
+                // consulted, so an empty one denies nobody — and the badge
+                // would be a permanent false alarm right next to a Google Chat
+                // row where it means the channel really is closed.
+                const hasNoAllowedSenders =
+                  resolvesExternalSenders(shape) &&
+                  parseWhitelist(channel.email_whitelist ?? "").isEmpty
                 // "No credential" means something different per transport —
                 // a service account key for Google Chat, an SMTP server for
                 // email — so the badge's explanation comes from the registry.
+                // Absent ⇒ this transport has no outbound path at all, and a
+                // badge with nothing to say in its tooltip is worse than none.
                 const meta = getChannelTypeMeta(channel.channel_type)
+                const missingCredentialsHint =
+                  meta.outboundTest?.missingCredentialsHint
                 return (
                   <div
                     key={channel.id}
@@ -210,24 +237,25 @@ export function ServerChannelsCard() {
                           </Tooltip>
                         </TooltipProvider>
                       )}
-                      {!channel.has_outbound_credentials && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge
-                                variant="outline"
-                                className="shrink-0 gap-1 border-amber-500/50 text-xs text-amber-600 dark:text-amber-400"
-                              >
-                                <KeyRound className="h-3 w-3" />
-                                No credential
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent className="max-w-xs text-xs">
-                              {meta.outboundTest.missingCredentialsHint}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
+                      {!channel.has_outbound_credentials &&
+                        missingCredentialsHint && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="outline"
+                                  className="shrink-0 gap-1 border-amber-500/50 text-xs text-amber-600 dark:text-amber-400"
+                                >
+                                  <KeyRound className="h-3 w-3" />
+                                  No credential
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs text-xs">
+                                {missingCredentialsHint}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
                     </div>
 
                     <div className="ml-2 flex shrink-0 items-center gap-1">
@@ -309,15 +337,23 @@ export function ServerChannelsCard() {
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-destructive hover:text-destructive"
-                        onClick={() => setDeleting(channel)}
-                        aria-label="Delete channel"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                      {/* A singleton channel has no delete: the backend
+                          refuses it, because the row would be re-materialized
+                          with default settings on the next read — turning
+                          "delete" into a silent reset of a kill switch the
+                          admin may have deliberately thrown. The switch to its
+                          left is the operation they want. */}
+                      {!shape.isSingleton && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          onClick={() => setDeleting(channel)}
+                          aria-label="Delete channel"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 )
@@ -331,6 +367,7 @@ export function ServerChannelsCard() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         channel={editing}
+        existingChannelTypes={channels.map((c) => c.channel_type)}
         onCreated={(created) => setSetupChannel(created)}
       />
 
@@ -342,6 +379,14 @@ export function ServerChannelsCard() {
             // Re-read from the list so the panel follows a token regeneration
             // instead of showing the value captured when it was opened.
             channels.find((c) => c.id === setupChannel.id) ?? setupChannel
+          }
+          // The same declared shape the rows above branch on. The panel needs
+          // it because "how is this channel reached" and "can it send" are
+          // transport facts, and the stored columns it used to read
+          // (`webhook_token`, `has_outbound_credentials`) answer neither for
+          // an authenticated transport.
+          transport={
+            shapes[setupChannel.channel_type] ?? DEFAULT_TRANSPORT_SHAPE
           }
         />
       )}

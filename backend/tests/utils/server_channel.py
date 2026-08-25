@@ -106,6 +106,34 @@ def get_setup_instructions(
     return r.json()
 
 
+def find_server_channel_by_type(
+    client: TestClient, token_headers: dict[str, str], channel_type: str
+) -> dict:
+    """The single admin channel of ``channel_type``, or fail loudly.
+
+    For singleton transports (App MCP), which no test creates — the row is
+    materialized by the listing itself. Asserts there is exactly one, because
+    "the first of several" would quietly pass the very test that is supposed
+    to prove there can only be one.
+    """
+    matches = [
+        c
+        for c in list_server_channels(client, token_headers)
+        if c["channel_type"] == channel_type
+    ]
+    assert len(matches) == 1, f"expected exactly one {channel_type} channel: {matches}"
+    return matches[0]
+
+
+def list_channel_types(
+    client: TestClient, token_headers: dict[str, str]
+) -> list[dict]:
+    """GET /admin/server-channels/channel-types — the adapter registry."""
+    r = client.get(f"{_ADMIN_BASE}/channel-types", headers=token_headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 def update_server_channel(
     client: TestClient,
     token_headers: dict[str, str],
@@ -614,6 +642,8 @@ def deliver_via_binding(db: Session, channel, binding, text: str) -> bool:
 __all__ = [
     "create_server_channel",
     "list_server_channels",
+    "find_server_channel_by_type",
+    "list_channel_types",
     "get_setup_instructions",
     "update_server_channel",
     "delete_server_channel",

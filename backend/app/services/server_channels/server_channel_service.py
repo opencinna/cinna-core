@@ -24,6 +24,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
 
@@ -55,6 +56,7 @@ from app.services.server_channels.adapters.registry import (
     RegisteredTransport,
     get_adapter,
     get_transport,
+    singleton_channel_types,
 )
 from app.services.server_channels.channel_debug_buffer import ChannelDebugBuffer
 
@@ -104,6 +106,17 @@ class InvalidChannelPolicyError(ChannelError):
     back as a legitimate setting."""
 
 
+class DuplicateSingletonChannelError(ChannelError):
+    """A second channel of a type that may only ever have one row.
+
+    Distinct from ``DuplicateChannelNameError`` even though both become a 409:
+    that one is about a label an admin can change, this one is about a
+    transport that is not an instance of anything. The messages differ because
+    the remedies do — one is "pick another name", the other is "edit the row
+    you already have".
+    """
+
+
 class UnsupportedChannelOperationError(ChannelError):
     """The requested operation does not exist for this channel's transport.
 
@@ -124,6 +137,14 @@ class ServerChannelService:
 
     @staticmethod
     def list_channels(session: Session) -> list[ServerChannel]:
+        """Every configured channel, singleton rows materialized first.
+
+        The materialization is here rather than in the route because it is
+        what makes the list *complete*: a singleton channel has no create
+        button, so if the admin list did not mint it there would be no surface
+        anywhere from which to disable the transport it governs.
+        """
+        ServerChannelService.ensure_singleton_channels(session)
         return list(
             session.exec(select(ServerChannel).order_by(ServerChannel.created_at)).all()
         )
@@ -134,6 +155,121 @@ class ServerChannelService:
         if channel is None:
             raise ChannelNotFoundError(f"Channel {channel_id} not found")
         return channel
+
+    @staticmethod
+    def get_or_create_singleton(session: Session, channel_type: str) -> ServerChannel:
+        """The one row of a singleton channel type, materialized on first ask.
+
+        **This is the only function that answers "give me the App MCP
+        channel".** Every caller — the admin list, the user-facing list, and
+        the App MCP token verifier on its hot path — goes through here, and
+        that is load-bearing rather than tidy.
+
+        The verifier must **fail closed on a lookup error**, and "the row has
+        not been materialized yet" is not an error. If the row were seeded at
+        boot instead (``initial_data.py``), then every deployment whose seed
+        had not run would deny every App MCP user — a kill switch stuck in the
+        "off" position, on a surface that worked yesterday. Having exactly one
+        function answer the question makes it impossible for the verifier's
+        "not available" and the admin UI's "not configured" to drift apart:
+        there is nothing to drift between.
+
+        Shape borrowed from ``ServerConfigService.get_or_create``: deterministic
+        read (oldest first, so concurrent first-hits converge on the same row),
+        insert, and an ``IntegrityError`` guard that rolls back and re-reads.
+
+        **Precondition: the caller must have nothing uncommitted on
+        ``session``.** The insert below commits, and it commits the whole
+        transaction — anything the request had staged rides along, and the
+        ``IntegrityError`` path rolls the whole thing back. Every caller today
+        is a read path (the admin list, the user-facing list, the token
+        verifier's own short-lived session) with nothing pending, which is the
+        only reason this is safe. A future caller that wants this row *and*
+        has staged work must materialize the row first, or hand this function
+        a session of its own.
+
+        **The race guard works because ``ServerChannel`` carries
+        ``UniqueConstraint("name")``.** Two workers reaching this at once both
+        compute the same ``_singleton_name`` — it is derived from the
+        transport's display name, not from anything per-request — so the loser
+        collides on the *name* and re-reads the winner's row. That is the
+        constraint actually doing the work; if the name were ever made
+        non-unique, this would silently degrade into two rows of the same
+        singleton type, each a policy over one door with nothing to say which
+        wins. A uniqueness rule on ``channel_type`` would give the same guard a
+        second and more direct reason to fire; it would not retire this one,
+        because for two racing materializations the name collides first.
+
+        Defaults come from the model — ``enabled=True``, ``visibility="public"``,
+        ``default_enabled_for_users=True``, ``default_agent_scope="all"`` — and
+        are deliberately *not* restated here. A restated default is a second
+        copy that silently stops matching, and these particular values are what
+        keep an existing deployment working exactly as it did before App MCP
+        had a row at all.
+
+        Raises ``UnknownChannelTypeError`` for a type with no adapter, and
+        ``ValueError`` for a registered type that is not a singleton — the
+        caller has asked a question with no single answer, and returning an
+        arbitrary one of several rows is the wrong way to say so.
+        """
+        transport = get_transport(channel_type)  # raises UnknownChannelTypeError
+        if not transport.is_singleton:
+            raise ValueError(
+                f"Channel type {channel_type!r} is not a singleton transport; "
+                "there is no single row to return."
+            )
+
+        existing = ServerChannelService._find_singleton(session, channel_type)
+        if existing is not None:
+            return existing
+
+        channel = ServerChannel(
+            channel_type=channel_type,
+            name=ServerChannelService._singleton_name(session, transport),
+        )
+        # Every other write path defers token minting to this rule; so does
+        # this one, even though a singleton transport is a webhook in no
+        # deployment we ship. The rule is the transport's, not the caller's.
+        ServerChannelService._ensure_webhook_token(channel, transport)
+        session.add(channel)
+        try:
+            session.commit()
+        except IntegrityError:
+            # Lost the race, or collided on the name. Either way the winning
+            # row is the answer; a second attempt at inserting is not.
+            session.rollback()
+            winner = ServerChannelService._find_singleton(session, channel_type)
+            if winner is not None:
+                return winner
+            raise
+        session.refresh(channel)
+        logger.info(
+            "Materialized singleton server channel %s (type=%s)",
+            channel.id,
+            channel_type,
+        )
+        return channel
+
+    @staticmethod
+    def ensure_singleton_channels(session: Session) -> None:
+        """Materialize every singleton type this build declares.
+
+        The enumerating counterpart to :meth:`get_or_create_singleton`, for the
+        two surfaces that list channels rather than ask for one: the admin
+        Channels tab and Settings → Channels. Without it a singleton would be
+        invisible on both until somebody happened to use the transport, which
+        is precisely backwards — the admin needs the row in order to switch the
+        transport *off*.
+
+        A write on a read path, and a deliberate one. It is the same trade
+        ``ServerConfigService.get_or_create`` makes, and it is unrelated to the
+        rule that forbids materializing ``channel_user_setting`` rows on a read
+        (master plan §3.3): that rule protects a per-person row whose existence
+        asserts a choice its owner made. This row asserts nothing about anyone;
+        it is an admin object whose values are the defaults either way.
+        """
+        for channel_type in singleton_channel_types():
+            ServerChannelService.get_or_create_singleton(session, channel_type)
 
     @staticmethod
     def get_by_webhook_token(
@@ -335,6 +471,22 @@ class ServerChannelService:
     ) -> ServerChannel:
         """Create a channel. Validates type + config before persisting."""
         transport = get_transport(data.channel_type)  # raises UnknownChannelTypeError
+
+        # Before any type-specific validation, because this refusal is about
+        # the type itself: telling an admin their config is wrong for a channel
+        # that can never be created sends them to fix the wrong thing.
+        #
+        # Service-layer only in this commit. The partial unique index that
+        # makes it structural lands with the phase's migration; until then this
+        # is the enforcement, and it is why the check is at *both* write paths
+        # rather than only the obvious one.
+        if ServerChannelService._singleton_taken(session, data.channel_type):
+            raise DuplicateSingletonChannelError(
+                f"A {transport.adapter.display_name or data.channel_type} "
+                "channel already exists, and only one may. Edit the existing "
+                "one instead."
+            )
+
         config = data.config or {}
         transport.adapter.validate_config(config)
         # Shape first, then references. Splitting the two is what lets the
@@ -441,6 +593,20 @@ class ServerChannelService:
                 "no token to regenerate."
             )
 
+        # The second door onto a singleton type, and the easier one to forget:
+        # a ``channel_type`` patch can move an *existing* channel onto it,
+        # producing the second row ``create_channel`` refuses. Excluding this
+        # row's own id is what keeps re-sending an unchanged type from
+        # conflicting with itself. Refused here, with the other pre-mutation
+        # guards, so nothing is half-applied on the session instance.
+        if "channel_type" in patch and ServerChannelService._singleton_taken(
+            session, channel_type, exclude_id=channel.id
+        ):
+            raise DuplicateSingletonChannelError(
+                f"A {channel_type!r} channel already exists, and only one may. "
+                "Edit the existing one instead."
+            )
+
         if "config" in patch:
             config = patch.pop("config") or {}
             if transport is None:
@@ -527,7 +693,22 @@ class ServerChannelService:
 
     @staticmethod
     def delete_channel(session: Session, channel: ServerChannel) -> None:
-        """Delete a channel. Bindings cascade at the DB level."""
+        """Delete a channel. Bindings cascade at the DB level.
+
+        A singleton channel cannot be deleted, and the reason is the lazy
+        materialization above rather than any sentiment about the row. Nothing
+        created it deliberately and nothing can re-create it deliberately: the
+        next list or token verification would mint a fresh one **with the
+        default values**, so "delete" would read as "remove this" and act as
+        "silently reset the kill switch to on". Disabling is the operation the
+        admin wants, and it is one switch away on the same row.
+        """
+        if ServerChannelService._is_singleton_type(channel.channel_type):
+            raise UnsupportedChannelOperationError(
+                f"The {channel.channel_type!r} channel cannot be deleted — it "
+                "is a fixed part of this server and would be recreated with "
+                "default settings. Switch it off instead."
+            )
         ServerChannelService._invalidate_adapter_caches(channel)
         # The debug buffer is keyed by channel id and has no cascade of its
         # own, so without this its entries — including captured message text —
@@ -767,6 +948,87 @@ class ServerChannelService:
                 "default_agent_scope must be one of "
                 f"{', '.join(CHANNEL_AGENT_SCOPES)}"
             )
+
+    @staticmethod
+    def _find_singleton(
+        session: Session, channel_type: str
+    ) -> ServerChannel | None:
+        """The existing row of ``channel_type``, oldest first.
+
+        Ordered rather than arbitrary so that every caller converges on the
+        same row if a race ever produced two — the service refuses a second
+        one and the partial unique index will make it impossible, but a
+        deterministic read costs nothing and is what stops "which one is the
+        real App MCP channel?" from having two answers on two requests.
+        """
+        return session.exec(
+            select(ServerChannel)
+            .where(ServerChannel.channel_type == channel_type)
+            .order_by(ServerChannel.created_at, ServerChannel.id)
+        ).first()
+
+    @staticmethod
+    def _singleton_name(session: Session, transport: RegisteredTransport) -> str:
+        """A free name for a singleton row being materialized.
+
+        The transport's display name, which is what an admin would have typed.
+        Names are unique, though, and nothing stops an admin having already
+        called their Google Chat channel "App MCP Server" — so a taken name is
+        disambiguated rather than allowed to raise.
+
+        The random third attempt is not paranoia about the second: it is the
+        difference between an ugly name and a **deadlock**. A materialization
+        that fails on a cosmetic collision fails everywhere at once — the admin
+        list cannot render (so nobody can rename the offending channel) and the
+        App MCP verifier, which fails closed on a lookup error, denies every
+        user. A name is not worth that, and the admin can rename the row.
+        """
+        base = transport.adapter.display_name or transport.channel_type
+        for candidate in (base, f"{base} ({transport.channel_type})"):
+            if not ServerChannelService._name_taken(session, candidate):
+                return candidate
+        return f"{base} ({secrets_module.token_hex(4)})"
+
+    @staticmethod
+    def _is_singleton_type(channel_type: str) -> bool:
+        """Whether this build declares ``channel_type`` a singleton transport.
+
+        Lenient on an unregistered type: nothing declares it anything, so there
+        is no rule to enforce, and the callers that care about an unknown type
+        reject it on their own terms. Same leniency ``update_channel`` applies
+        to a *stored* type whose adapter left the registry — a rule that cannot
+        be read must not strand the admin on the row it applies to.
+        """
+        try:
+            return get_transport(channel_type).is_singleton
+        except ChannelError:
+            return False
+
+    @staticmethod
+    def _singleton_taken(
+        session: Session,
+        channel_type: str,
+        exclude_id: uuid.UUID | None = None,
+    ) -> bool:
+        """Whether a channel of a singleton type already exists.
+
+        Same shape as :meth:`_name_taken`, including ``exclude_id``, and for
+        the same reason: the update path must be able to ask "does anyone
+        *else* hold this?" so that re-sending a row's own type is not a
+        conflict with itself.
+
+        Returns False for a type that is not a singleton, so callers can ask
+        unconditionally instead of each remembering to check the declaration
+        first.
+        """
+        if not ServerChannelService._is_singleton_type(channel_type):
+            return False
+        stmt = select(ServerChannel.id).where(
+            ServerChannel.channel_type == channel_type
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(ServerChannel.id != exclude_id)
+        return session.exec(stmt).first() is not None
 
     @staticmethod
     def _name_taken(

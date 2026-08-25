@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ChannelTypePicker } from "./ChannelTypePicker"
-import { getChannelTypeMeta } from "./channelTypes"
+import { getChannelTypeMeta, getTransportShape } from "./channelTypes"
 import { ServerChannelForm } from "./ServerChannelForm"
 
 interface Props {
@@ -24,6 +24,12 @@ interface Props {
   onOpenChange: (open: boolean) => void
   /** null = create. */
   channel: ServerChannelPublic | null
+  /**
+   * The channel types that already have a row. Only singleton types are read
+   * from it — the picker greys those out instead of offering an "Add" that can
+   * only ever come back 409.
+   */
+  existingChannelTypes?: string[]
   onCreated?: (channel: ServerChannelPublic) => void
 }
 
@@ -38,6 +44,7 @@ export function ServerChannelDialog({
   open,
   onOpenChange,
   channel,
+  existingChannelTypes,
   onCreated,
 }: Props) {
   const isEdit = channel !== null
@@ -57,16 +64,18 @@ export function ServerChannelDialog({
     setSelectedType(channel?.channel_type ?? null)
   }, [open, channel])
 
-  // Resolved from the registry, falling back to the slug: an edit renders
-  // before (or without) the types fetch, and a channel whose adapter was
-  // unregistered has no entry at all — neither may leave the header blank.
-  const selected: ChannelTypePublic | null = selectedType
-    ? (types.find((t) => t.channel_type === selectedType) ?? {
-        channel_type: selectedType,
-        display_name: selectedType,
-      })
-    : null
-  const meta = selected ? getChannelTypeMeta(selected.channel_type) : null
+  // May be undefined: an edit renders before (or without) the types fetch, and
+  // a channel whose adapter left the registry has no entry at all. Kept
+  // separate from the display name and the transport shape below so neither
+  // has to be faked into a `ChannelTypePublic` that would claim a transport
+  // shape nobody declared.
+  const selectedEntry: ChannelTypePublic | undefined = selectedType
+    ? types.find((t) => t.channel_type === selectedType)
+    : undefined
+  // Falls back to the slug rather than leaving the header blank.
+  const selectedName = selectedEntry?.display_name ?? selectedType ?? ""
+  const transport = getTransportShape(selectedEntry)
+  const meta = selectedType ? getChannelTypeMeta(selectedType) : null
   const Icon = meta?.icon
 
   return (
@@ -75,15 +84,16 @@ export function ServerChannelDialog({
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit channel" : "Add channel"}</DialogTitle>
           <DialogDescription>
-            {selected
+            {selectedType
               ? "Let people outside the platform reach your agents from a chat app."
               : "Pick the chat app you want to connect."}
           </DialogDescription>
         </DialogHeader>
 
-        {selected === null || meta === null ? (
+        {selectedType === null || meta === null ? (
           <ChannelTypePicker
             types={types}
+            existingChannelTypes={existingChannelTypes}
             isLoading={isLoading}
             isError={isError}
             error={error}
@@ -97,9 +107,7 @@ export function ServerChannelDialog({
               {Icon && (
                 <Icon className={`h-4 w-4 shrink-0 ${meta.iconClass}`} />
               )}
-              <span className="text-sm font-medium">
-                {selected.display_name}
-              </span>
+              <span className="text-sm font-medium">{selectedName}</span>
               {isEdit ? (
                 <span className="ml-auto text-xs text-muted-foreground">
                   Type can't be changed after creation
@@ -121,9 +129,10 @@ export function ServerChannelDialog({
             <ServerChannelForm
               // Rebuilds the form when the type changes — its fields, schema
               // and defaults are all type-derived.
-              key={`${channel?.id ?? "new"}:${selected.channel_type}`}
-              channelType={selected.channel_type}
-              displayName={selected.display_name}
+              key={`${channel?.id ?? "new"}:${selectedType}`}
+              channelType={selectedType}
+              displayName={selectedName}
+              transport={transport}
               channel={channel}
               onCancel={() => onOpenChange(false)}
               onSaved={(created) => {

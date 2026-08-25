@@ -25,7 +25,10 @@ Two rules the pipeline depends on:
 Both rules survive the transport split; what changes is *which method* holds
 rule 1 for a given transport. A push transport authenticates in
 ``verify_inbound``; a pull transport authenticates inside ``poll``, which
-restates the same promise for messages nobody pushed. The mode is a **declared
+restates the same promise for messages nobody pushed; an **authenticated**
+transport holds it nowhere in this file at all, because its caller was already
+an authenticated platform user before the platform heard from them (App MCP
+presents a bearer token this platform minted). The mode is a **declared
 capability** (``ChannelCapabilities.inbound_mode``), never inferred from which
 ABC an adapter happens to subclass — the declaration is what the registry, the
 channel service and the pollers dispatch on.
@@ -159,10 +162,10 @@ class ChannelCapabilities:
 
     # --- Transport shape -------------------------------------------------
     #
-    # The three defaults below describe a push webhook with its own outbound
-    # credential — i.e. exactly what every adapter was before the transport
-    # split — so an adapter that says nothing keeps its previous behaviour
-    # byte for byte.
+    # The defaults below describe a freely-instantiable push webhook with its
+    # own outbound credential — i.e. exactly what every adapter was before the
+    # transport split — so an adapter that says nothing keeps its previous
+    # behaviour byte for byte.
 
     #: Where this transport's authentication chokepoint lives. See
     #: ``ChannelInboundMode``.
@@ -179,6 +182,20 @@ class ChannelCapabilities:
     #: config), which is why ``has_outbound_credentials`` on the admin
     #: projection is *derived* rather than read straight off that column.
     needs_outbound_credentials: bool = True
+    #: Whether at most **one** ``ServerChannel`` row of this type may exist.
+    #:
+    #: True for a transport that is not an instance of anything: App MCP is a
+    #: single endpoint this deployment either offers or does not, so a second
+    #: row would be two policies over one door with nothing to say which wins.
+    #: False — the default, and the shape every transport had before this
+    #: existed — for a transport an admin can legitimately run several of
+    #: (two Google Chat apps, three polled mailboxes).
+    #:
+    #: Declared here rather than spelled ``channel_type == "app_mcp"`` in the
+    #: service, for the same reason every other transport fact is: the rule
+    #: belongs to the transport, and a hardcoded type check is a rule that has
+    #: to be found and edited again for the next such transport.
+    is_singleton: bool = False
 
 
 class ChannelAdapter(ABC):
@@ -437,9 +454,93 @@ class PolledChannelTransport(ChannelAdapter):
         """
 
 
+class AuthenticatedChannelTransport(ChannelAdapter):
+    """A transport with **no inbound driver at all**.
+
+    The third shape, and the odd one out: there is nothing to push to and
+    nothing to pull from, because the caller is already an authenticated
+    platform user by the time the platform hears from them. App MCP is the
+    first — a user's MCP client presents a bearer token minted by this
+    platform's own OAuth flow, and the door it comes through has been
+    authenticating that token since long before channels existed.
+
+    So what does a ``ServerChannel`` row buy such a surface? Everything above
+    the transport: an admin kill switch, visibility plus a grant allowlist,
+    per-user enablement and agent scope. Rule 1 of the module docstring —
+    "``verify_inbound`` is the single authentication chokepoint" — is not
+    weakened here so much as satisfied *elsewhere and earlier*: the identity
+    is proven by the platform's own token verification, which is a stronger
+    tier than either a signed webhook or a ``From:`` header, and this class
+    exists to make sure nobody can accidentally route traffic around that
+    proof by pointing a webhook at the row.
+
+    Subclasses **must** declare ``inbound_mode="authenticated"`` in
+    ``capabilities``. As with :class:`PolledChannelTransport`, subclassing is
+    how a transport inherits the refusals below; it is never a substitute for
+    the declaration, because nothing dispatches on the class. The registry
+    checks both directions and refuses to import on a disagreement.
+    """
+
+    async def verify_inbound(
+        self, request: Request, channel: ServerChannel, body: bytes
+    ) -> ChannelInboundMessage:
+        """Refuse: this transport has no webhook, so there is nothing to verify.
+
+        Verbatim the reasoning of :meth:`PolledChannelTransport.verify_inbound`,
+        and deliberately the same exception. Reaching here means a request
+        arrived at ``/channels/{token}/inbound`` for a channel whose callers are
+        supposed to arrive already authenticated — the route cannot prove
+        anything about it, and acking or parsing the body would put an
+        unverified payload into a pipeline whose ordering rests on step 2 having
+        really run.
+
+        ``ChannelTransportMisuseError`` is a ``ChannelVerificationError``, so
+        the caller gets the standard detail-free 403 and the attempt is audited
+        like any other verification failure. In practice this is unreachable:
+        the webhook route resolves a channel *by token*, and a transport
+        declaring ``needs_webhook_token=False`` never has one. It is written
+        anyway, because "unreachable because of a rule in another module" is
+        exactly the guarantee that quietly stops holding.
+        """
+        raise ChannelTransportMisuseError(
+            f"Channel type {self.channel_type!r} is an authenticated transport "
+            "and has no webhook; its callers arrive already authenticated by "
+            "the platform."
+        )
+
+    async def send_message(
+        self, channel: ServerChannel, thread_key: str, text: str
+    ) -> str | None:
+        """Refuse: this transport has no outbound path to deliver into.
+
+        The answer to an authenticated caller rides the synchronous response
+        of the request they made — there is no thread to post into later and
+        no credential with which to do it.
+
+        ``ChannelSendError`` rather than ``ChannelTransportMisuseError``,
+        because the two callers are outbound ones and already handle it: the
+        admin test-send route renders a ``ChannelError`` as an admin-readable
+        ``success=false``, and ``ChannelOutboundService`` treats any exception
+        from a send as a failed best-effort delivery. Reusing the *verification*
+        error here would put an authentication-shaped exception on a path that
+        never authenticated anything.
+
+        Also unreachable in practice, and worth stating where the next reader
+        will look: ``ChannelOutboundService`` only resolves sessions whose
+        ``integration_type`` starts with ``channel_``, and this transport's
+        sessions are stamped by their own surface (App MCP writes ``app_mcp``),
+        so no stream event ever reaches a send on this adapter.
+        """
+        raise ChannelSendError(
+            f"Channel type {self.channel_type!r} has no outbound transport; "
+            "replies are returned in the caller's own synchronous response."
+        )
+
+
 __all__ = [
     "ChannelAdapter",
     "PolledChannelTransport",
+    "AuthenticatedChannelTransport",
     "ChannelCapabilities",
     "ChannelInboundMessage",
     "ChannelEventKind",

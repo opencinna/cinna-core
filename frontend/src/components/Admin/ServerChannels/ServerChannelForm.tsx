@@ -55,13 +55,25 @@ import {
   WHITELIST_HELP,
   WHITELIST_WILDCARD_WARNING,
 } from "./channelCopy"
-import { getChannelTypeMeta } from "./channelTypes"
+import {
+  type ChannelConfigField,
+  type ChannelTransportShape,
+  getChannelTypeMeta,
+  resolvesExternalSenders,
+} from "./channelTypes"
 import { MailServerSelect } from "./MailServerSelect"
 
 interface Props {
   /** Fixed for the lifetime of this form: picked in step 1, immutable on edit. */
   channelType: string
   displayName: string
+  /**
+   * The transport's declared shape, from `/channel-types`. It decides which
+   * *sections* exist — not which fields a section has, which is still the
+   * registry entry's job. Passed in rather than fetched here so the dialog's
+   * single `/channel-types` query answers both steps.
+   */
+  transport: ChannelTransportShape
   /** null = create. */
   channel: ServerChannelPublic | null
   onCancel: () => void
@@ -174,6 +186,12 @@ function SegmentedField({
   )
 }
 
+/** Shared empty list for a transport that takes no config.
+ *
+ *  Module-level so the identity is stable: it is a `useMemo` dependency, and a
+ *  fresh `[]` per render rebuilds the whole zod schema on every keystroke. */
+const EMPTY_CONFIG_FIELDS: ChannelConfigField[] = []
+
 /** Said when the channel write landed and only the grant write did not. */
 const GRANTS_FAILED =
   "The channel was saved, but its granted-user list was not. Reopen the channel and add them again."
@@ -204,6 +222,7 @@ function isJsonObject(value: string): boolean {
 export function ServerChannelForm({
   channelType,
   displayName,
+  transport,
   channel,
   onCancel,
   onSaved,
@@ -212,14 +231,40 @@ export function ServerChannelForm({
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const isEdit = channel !== null
   const meta = getChannelTypeMeta(channelType)
-  const isRawConfig = meta.configFields.length === 0
+  // `null` config fields mean "this transport takes no config"; `[]` means
+  // "no typed entry, fall back to raw JSON". Collapsed to one array here so
+  // the schema and defaults below have nothing to branch on.
+  const configFields = meta.configFields ?? EMPTY_CONFIG_FIELDS
+  const hasConfigSection = meta.configFields !== null
+  const isRawConfig = hasConfigSection && configFields.length === 0
   // Hoisted so the JSX below narrows on a const rather than on a property
   // access, which TypeScript re-widens inside every callback.
-  const secretsMeta = meta.secrets
+  //
+  // Gated on the *declared* capability rather than trusted from the registry
+  // entry: the two agree for every type shipped today, but an adapter
+  // registered on the backend with `needs_outbound_credentials=false` and no
+  // entry here falls through to `FALLBACK`, which has a `secrets` block. That
+  // would render a credentials box for a transport that declared it stores
+  // none — and the write silently succeeds, encrypting a value into a column
+  // nothing ever reads.
+  //
+  // `configFields` is the one branch below still driven by the registry entry
+  // alone, because there is no capability to drive it from: a config *shape*
+  // is a list of fields, not a boolean, and only the frontend registry knows
+  // it. The asymmetry is safe in the direction it fails — an unknown type
+  // falls back to the raw JSON editor, and whatever is typed there is put to
+  // the adapter's own `validate_config`, which answers a wrong key with a 422.
+  // The secrets box has no such backstop, which is why it gets the gate.
+  const secretsMeta = transport.needsOutboundCredentials ? meta.secrets : null
+  // One question, three controls — see `resolvesExternalSenders`. A transport
+  // whose callers are already platform users has nobody to whitelist and
+  // nobody to register, and its fail-closed empty whitelist would read as
+  // "denies everyone" while denying no one.
+  const hasSenderControls = resolvesExternalSenders(transport)
 
   const schema = useMemo(() => {
     const configShape: Record<string, z.ZodString> = {}
-    for (const field of meta.configFields) {
+    for (const field of configFields) {
       let value = z.string().trim().min(1, `${field.label} is required`)
       if (field.pattern) {
         value = value.regex(field.pattern.regex, field.pattern.message)
@@ -254,7 +299,7 @@ export function ServerChannelForm({
           message: 'Must be a JSON object, e.g. { "key": "value" }',
         },
       )
-  }, [meta, isRawConfig])
+  }, [configFields, isRawConfig])
 
   const storedConfig = (channel?.config ?? {}) as Record<string, unknown>
   const storedVisibility = channel?.visibility
@@ -267,10 +312,7 @@ export function ServerChannelForm({
       // an admin running two of the same type just renames it.
       name: channel?.name ?? displayName,
       config: Object.fromEntries(
-        meta.configFields.map((f) => [
-          f.key,
-          String(storedConfig[f.key] ?? ""),
-        ]),
+        configFields.map((f) => [f.key, String(storedConfig[f.key] ?? "")]),
       ),
       configJson:
         isRawConfig && Object.keys(storedConfig).length > 0
@@ -438,11 +480,16 @@ export function ServerChannelForm({
         ? JSON.parse(values.configJson)
         : {}
       : Object.fromEntries(
-          meta.configFields.map((f) => [f.key, values.config[f.key].trim()]),
+          configFields.map((f) => [f.key, values.config[f.key].trim()]),
         )
-    const whitelist = values.email_whitelist.trim()
-    // Structurally empty for a transport with no secrets field, rather than
-    // empty because nothing rendered the input.
+    // Structurally empty for a transport whose sender controls were never
+    // rendered, rather than empty because the admin left the box blank. The
+    // distinction matters on an *edit*: sending back the untouched form value
+    // would be fine, but sending a value for a control the form does not have
+    // is how a hidden field silently acquires meaning.
+    const whitelist = hasSenderControls ? values.email_whitelist.trim() : ""
+    const autoRegister = hasSenderControls ? values.auto_register_users : false
+    // Same reasoning for the write-only secret.
     const secrets = secretsMeta ? values.secrets.trim() : ""
 
     if (isEdit) {
@@ -451,7 +498,7 @@ export function ServerChannelForm({
       const body: ServerChannelUpdate = {
         name: values.name,
         enabled: values.enabled,
-        auto_register_users: values.auto_register_users,
+        auto_register_users: autoRegister,
         config,
         email_whitelist: whitelist || null,
         visibility: values.visibility,
@@ -468,7 +515,7 @@ export function ServerChannelForm({
       channel_type: channelType,
       name: values.name,
       enabled: values.enabled,
-      auto_register_users: values.auto_register_users,
+      auto_register_users: autoRegister,
       config,
       email_whitelist: whitelist || null,
       secrets: secrets || null,
@@ -501,7 +548,11 @@ export function ServerChannelForm({
           )}
         />
 
-        {isRawConfig ? (
+        {/* Absent entirely for a transport that takes no configuration.
+            `isRawConfig` (an empty typed entry) still renders the JSON escape
+            hatch — that is a type nobody has written a form for yet, not a
+            type with nothing to configure. See `ChannelTypeMeta.configFields`. */}
+        {!hasConfigSection ? null : isRawConfig ? (
           <FormField
             control={form.control}
             name="configJson"
@@ -526,7 +577,7 @@ export function ServerChannelForm({
             )}
           />
         ) : (
-          meta.configFields.map((cfgField) => (
+          configFields.map((cfgField) => (
             <FormField
               key={cfgField.key}
               control={form.control}
@@ -593,76 +644,88 @@ export function ServerChannelForm({
           />
         )}
 
-        {/* Immediately above the whitelist and the auto-register switch,
+        {/* The whole sender block — trust warning, whitelist, fail-closed
+            callouts, auto-registration — exists to turn an *outside* identity
+            into a platform user. A transport whose callers arrive already
+            authenticated has none of that to do, and its fail-closed empty
+            whitelist would read as "denies everyone" while denying nobody.
+            Driven off the declared transport shape, never off `channel_type`. */}
+        {hasSenderControls && (
+          <>
+            {/* Immediately above the whitelist and the auto-register switch,
             because those two controls are where an unverified sender identity
             actually costs something. */}
-        {meta.senderTrustWarning && (
-          /* Amber, not destructive: this is a permanent property of the
+            {meta.senderTrustWarning && (
+              /* Amber, not destructive: this is a permanent property of the
              transport, not something this admin has misconfigured, and the red
              variant below is reserved for the whitelist state they *can* get
              wrong. Red on every email channel forever would teach them to skip
              both. */
-          <Alert className="border-amber-500/50 text-amber-600 dark:text-amber-400">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Sender identity is not verified</AlertTitle>
-            <AlertDescription>{meta.senderTrustWarning}</AlertDescription>
-          </Alert>
-        )}
+              <Alert className="border-amber-500/50 text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Sender identity is not verified</AlertTitle>
+                <AlertDescription>{meta.senderTrustWarning}</AlertDescription>
+              </Alert>
+            )}
 
-        <FormField
-          control={form.control}
-          name="email_whitelist"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Allowed senders</FormLabel>
-              <FormControl>
-                <Textarea
-                  rows={2}
-                  spellCheck={false}
-                  className="font-mono text-xs"
-                  placeholder="*@example.com, devops.*@support.com"
-                  {...field}
-                />
-              </FormControl>
-              <FormDescription>{WHITELIST_HELP}</FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+            <FormField
+              control={form.control}
+              name="email_whitelist"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Allowed senders</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={2}
+                      spellCheck={false}
+                      className="font-mono text-xs"
+                      placeholder="*@example.com, devops.*@support.com"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>{WHITELIST_HELP}</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-        {/* Fail-closed semantics, stated rather than implied. An admin who
+            {/* Fail-closed semantics, stated rather than implied. An admin who
             reads "empty = open" into a blank box has made a security
             mistake; both non-obvious states get an explicit callout. */}
-        {whitelist.isEmpty ? (
-          <Alert>
-            <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>{WHITELIST_EMPTY_WARNING}</AlertDescription>
-          </Alert>
-        ) : whitelist.hasWildcard ? (
-          <Alert variant="destructive">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>{WHITELIST_WILDCARD_WARNING}</AlertDescription>
-          </Alert>
-        ) : null}
+            {whitelist.isEmpty ? (
+              <Alert>
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{WHITELIST_EMPTY_WARNING}</AlertDescription>
+              </Alert>
+            ) : whitelist.hasWildcard ? (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  {WHITELIST_WILDCARD_WARNING}
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
-        <FormField
-          control={form.control}
-          name="auto_register_users"
-          render={({ field }) => (
-            <FormItem className="flex items-start justify-between gap-4 rounded-lg border p-3">
-              <div className="space-y-0.5">
-                <FormLabel>Auto-register senders</FormLabel>
-                <FormDescription>{AUTO_REGISTER_HELP}</FormDescription>
-              </div>
-              <FormControl>
-                <Switch
-                  checked={field.value}
-                  onCheckedChange={field.onChange}
-                />
-              </FormControl>
-            </FormItem>
-          )}
-        />
+            <FormField
+              control={form.control}
+              name="auto_register_users"
+              render={({ field }) => (
+                <FormItem className="flex items-start justify-between gap-4 rounded-lg border p-3">
+                  <div className="space-y-0.5">
+                    <FormLabel>Auto-register senders</FormLabel>
+                    <FormDescription>{AUTO_REGISTER_HELP}</FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+          </>
+        )}
 
         {/* ---------------------------------------------------------------
             Availability policy. Everything in this block is a *default* for

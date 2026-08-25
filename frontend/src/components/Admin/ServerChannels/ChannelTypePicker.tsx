@@ -7,6 +7,12 @@ import { getChannelTypeMeta } from "./channelTypes"
 
 interface Props {
   types: ChannelTypePublic[]
+  /**
+   * Channel types that already have a row. Consulted only for types declaring
+   * `is_singleton` — everything else may legitimately be added again (two
+   * Google Chat apps, three polled mailboxes).
+   */
+  existingChannelTypes?: string[]
   isLoading: boolean
   isError: boolean
   error: unknown
@@ -23,11 +29,13 @@ interface Props {
  */
 export function ChannelTypePicker({
   types,
+  existingChannelTypes,
   isLoading,
   isError,
   error,
   onSelect,
 }: Props) {
+  const existing = new Set(existingChannelTypes ?? [])
   if (isLoading) {
     return (
       <div className="space-y-2">
@@ -60,12 +68,18 @@ export function ChannelTypePicker({
       {types.map((type) => {
         const meta = getChannelTypeMeta(type.channel_type)
         const Icon = meta.icon
+        // A singleton type that already has its row can never be added again —
+        // the backend answers 409. Shown disabled rather than hidden: an admin
+        // looking for App MCP needs to find out that it exists and is edited
+        // from the list, not that it is missing from this server.
+        const taken = type.is_singleton && existing.has(type.channel_type)
         return (
           <button
             key={type.channel_type}
             type="button"
+            disabled={taken}
             onClick={() => onSelect(type)}
-            className="group flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:border-primary/50 hover:bg-muted/50"
+            className="group flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:border-primary/50 hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-60"
           >
             <span className="shrink-0 rounded-md border bg-muted/50 p-2">
               <Icon className={`h-4 w-4 ${meta.iconClass}`} />
@@ -75,10 +89,14 @@ export function ChannelTypePicker({
                 {type.display_name}
               </span>
               <span className="block text-xs text-muted-foreground">
-                {meta.tagline}
+                {taken
+                  ? "Already configured — edit it from the channel list."
+                  : meta.tagline}
               </span>
             </span>
-            <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+            {!taken && (
+              <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+            )}
           </button>
         )
       })}
