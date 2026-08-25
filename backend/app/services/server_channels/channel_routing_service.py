@@ -409,11 +409,15 @@ class ChannelRoutingService:
         this have matched something they already have?" without the catalog
         answering for it.
 
-        ``origin`` / ``actor_user_id`` travel onto the trace unchanged. The real
-        path leaves both at their defaults; simulate and replay pass
-        ``ORIGIN_SIMULATE`` and the acting admin, which is what makes a
-        simulated decision distinguishable from a real one in the admin list
-        rather than something a reader has to infer.
+        ``origin`` / ``actor_user_id`` travel onto the trace unchanged. Simulate
+        and replay pass ``ORIGIN_SIMULATE`` and the acting admin, which is what
+        makes a simulated decision distinguishable from a real one in the admin
+        list rather than something a reader has to infer. The real path passes
+        an origin resolved from the transport that accepted the message
+        (``_trace_origin`` in ``channel_inbound_service``), so it is
+        ``server_channel`` for Google Chat and ``email`` for email since phase
+        6 of the channels & identity unification. The default below is what an
+        unnamed caller gets, not what the real path relies on.
 
         **Deviation from the pre-split behaviour, deliberate and narrow.**
         ``_route_new_thread`` used to gate Pass 2 on re-resolving the Pass-1

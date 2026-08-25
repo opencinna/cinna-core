@@ -274,6 +274,20 @@ CODE_UNAVAILABLE = "unavailable"
 #: diagnosed as a channel would send the reader to the wrong control, which is
 #: the defect §2.4 names.
 #:
+#: ``ORIGIN_EMAIL`` is in the set for the plainest reason of all: an email
+#: channel *is* a ``ServerChannel``. It resolves a ``ResolvedChannelPolicy``,
+#: runs Pass 2, and has every switch the channel sentences name — agent scope,
+#: auto-install, the pin. It reached routing through the same
+#: ``ChannelInboundService`` before phase 6 too and was diagnosed as a channel
+#: because it *was* labelled ``server_channel``; the label changed in phase 6
+#: and the diagnosis must not. Leaving it out is not a wording nicety: the
+#: channel arm of ``_general_verdict`` is what calls
+#: :func:`_channel_pass_2_block` and returns ``CODE_NO_CANDIDATES_CHANNEL_SCOPE``
+#: / ``CODE_NO_CANDIDATES_AUTO_INSTALL_OFF`` at all. An email trace outside this
+#: set loses those two codes outright, and is never told that the channel's own
+#: settings were what stopped Pass 2 — while being offered remedies for
+#: machinery it does have.
+#:
 #: An origin this set does not know — ``app_mcp``, ``identity``, or one added
 #: later — gets the App MCP wording, which is now the *narrower* of the two: it
 #: promises no Pass 2 and no channel policy, so an unknown origin is described
@@ -282,6 +296,7 @@ _CHANNEL_ORIGINS = frozenset(
     {
         routing_trace.ORIGIN_SERVER_CHANNEL,
         routing_trace.ORIGIN_SIMULATE,
+        routing_trace.ORIGIN_EMAIL,
     }
 )
 

@@ -121,6 +121,23 @@ ORIGIN_APP_MCP = "app_mcp"
 #: ``app_mcp`` decision, never a decision of its own (settled decisions §2.10,
 #: §2.15).
 ORIGIN_IDENTITY = "identity"
+#: LIVE as of phase 6 of the channels & identity unification. Email is a
+#: ``ServerChannel`` like any other — it resolves a ``ResolvedChannelPolicy``,
+#: runs Pass 1 and Pass 2, and reaches routing through
+#: ``ChannelInboundService.process_inbound`` — so it is a transport label, not
+#: a different kind of decision. That is also why the reachability verdict puts
+#: it in the *channel* remedy profile: every switch a channel verdict names is
+#: one an email channel really has.
+#:
+#: **This changed an existing surface's value.** Email decisions carried
+#: ``server_channel`` until phase 6, because the polled path took ``decide``'s
+#: default. Rows written before that still carry it, and nothing rewrites them
+#: — so "every email trace" and "every ``origin="email"`` trace" are different
+#: sets, and anything counting email traffic across that boundary has to say
+#: which it means. ``google_chat`` deliberately keeps ``server_channel``:
+#: renaming it would move a value the admin filter, the docs and three tests
+#: already agree on, for no gain.
+ORIGIN_EMAIL = "email"
 #: LIVE as of Phase 3, and the first origin other than ``server_channel`` that
 #: anything actually writes. ``POST /admin/routing/simulate`` and
 #: ``.../traces/{id}/replay`` open their captures with this, and those rows are
@@ -134,7 +151,11 @@ ORIGIN_IDENTITY = "identity"
 #: which is the intended behaviour and not an oversight. What a simulate row is
 #: *not* is evidence that a message was ever sent: it is an admin's what-if.
 #: Anything that counts traffic, or reads the table as a record of what senders
-#: did, has to filter ``origin="server_channel"`` explicitly.
+#: did, has to filter the real-traffic origins explicitly — which since phase 6
+#: means ``server_channel`` **and** ``email``, not ``server_channel`` alone. A
+#: filter written when there was one real origin now silently undercounts, which
+#: is the cost of relabelling a live surface and is stated here rather than
+#: discovered.
 ORIGIN_SIMULATE = "simulate"
 
 STAGE_PASS_1 = "pass_1"
@@ -1345,6 +1366,7 @@ __all__ = [
     "SUMMARY_MAX_CHARS",
     "TRACE_TEXT_MAX_CHARS",
     "ORIGIN_APP_MCP",
+    "ORIGIN_EMAIL",
     "ORIGIN_IDENTITY",
     "ORIGIN_SERVER_CHANNEL",
     "ORIGIN_SIMULATE",

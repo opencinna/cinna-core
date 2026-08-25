@@ -180,6 +180,46 @@ def _debug_channel_key(channel: ServerChannel) -> str | None:
         return None
 
 
+#: Which routing-trace ``origin`` each transport's decisions carry, keyed on
+#: ``ChannelAdapter.channel_type``.
+#:
+#: One mapping rather than a literal at the ``decide()`` call, so a fourth
+#: transport cannot arrive without somebody deciding what its traces are
+#: called — which is the question that went unasked when email started routing
+#: and silently inherited ``decide``'s default.
+#:
+#: ``google_chat`` keeps ``server_channel`` deliberately. It is the value every
+#: trace that path has ever written carries, and the one the admin origin
+#: filter, the feature docs and the trace tests already agree on; renaming it
+#: would move all of that for no gain. ``email`` gets its own as of phase 6 of
+#: the channels & identity unification — see ``routing_trace.ORIGIN_EMAIL`` for
+#: what that changes about rows written before it.
+#:
+#: ``app_mcp`` is absent on purpose. It is a ``ServerChannel`` and it has an
+#: origin of its own, but it does not route through this service:
+#: ``AppMCPRoutingService.route_message`` opens its own capture. An entry here
+#: would describe a path that does not exist.
+_TRACE_ORIGIN_BY_CHANNEL_TYPE: dict[str, str] = {
+    "google_chat": routing_trace.ORIGIN_SERVER_CHANNEL,
+    "email": routing_trace.ORIGIN_EMAIL,
+}
+
+
+def _trace_origin(channel_type: str) -> str:
+    """The routing-trace ``origin`` for one transport.
+
+    An unmapped transport falls back to ``server_channel`` rather than raising.
+    An origin is a label on a diagnostic: a transport that reaches routing
+    without an entry above should still leave a readable trace rather than
+    failing a delivery over one. The fallback is what makes the map safe to be
+    incomplete; the comment above it is what keeps leaving it incomplete a
+    decision rather than an oversight.
+    """
+    return _TRACE_ORIGIN_BY_CHANNEL_TYPE.get(
+        channel_type, routing_trace.ORIGIN_SERVER_CHANNEL
+    )
+
+
 def _log_detail(exc: BaseException) -> str:
     """``exc``'s full text for the application **log**. Total by construction.
 
@@ -697,6 +737,12 @@ class ChannelInboundService:
                 # Bare platform id — `SessionSender.from_channel` adds the
                 # `channel_type:` prefix, so namespacing here would double it.
                 external_user_id=inbound.external_user_id,
+                # Resolved from the adapter HERE, where one is in hand, rather
+                # than from the channel row the background task reloads: same
+                # answer, and it keeps the origin a fact about the transport
+                # that accepted the message rather than about a row that could
+                # have been edited in between.
+                origin=_trace_origin(adapter.channel_type),
             ),
             "channel_route_new_thread",
         )
@@ -889,6 +935,7 @@ class ChannelInboundService:
         text: str,
         external_message_id: str | None,
         external_user_id: str | None,
+        origin: str,
     ) -> None:
         """``decide()`` → bind → ingest.
 
@@ -908,6 +955,11 @@ class ChannelInboundService:
         here. It is a frozen dataclass of scalars, so it crosses into this
         background task the way ids and text do, and this method's
         freshly-opened session is never asked to re-derive an inherit rule.
+
+        ``origin`` travels onto the trace unchanged, carried in for the same
+        reason ``policy`` is: it is a plain string resolved from the adapter
+        that accepted the message, and re-deriving it from the reloaded channel
+        row would make it a fact about the row's current state instead.
         """
         from app.core.db import create_session
 
@@ -962,6 +1014,7 @@ class ChannelInboundService:
                     policy=policy,
                     channel_id=channel_id,
                     thread_key=thread_key,
+                    origin=origin,
                 )
                 pass1_trace = decision.pass1_trace
                 pass2_trace = decision.pass2_trace

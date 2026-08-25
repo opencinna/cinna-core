@@ -53,6 +53,10 @@ Covers (phase 4 plan §6):
       `EmailPollingService.format_email_as_message` in the message text
       instead, and these tests assert exactly that shape rather than the
       pre-refactor one.
+  13. The routing trace an email decision leaves: `origin="email"`, on the
+      channel it arrived through — and the reachability verdict that reads it
+      still speaks in channel terms, because an email channel has every
+      control those sentences name.
 """
 import uuid
 from unittest.mock import patch
@@ -78,6 +82,7 @@ from tests.utils.email_channel import (
 )
 from tests.utils.mail_server import create_imap_server, create_smtp_server
 from tests.utils.message import list_messages
+from tests.utils.routing import get_routing_trace, list_routing_traces
 from tests.utils.server_channel import (
     binding_thread_key,
     create_server_channel,
@@ -793,3 +798,122 @@ def test_email_thread_continuity_session_context(
     user_msgs = [m for m in list_messages(client, headers, session_id) if m["role"] == "user"]
     assert len(user_msgs) == 2
     assert any("second turn" in (m["content"] or "") for m in user_msgs)
+
+
+# ---------------------------------------------------------------------------
+# 13. The routing trace an email decision leaves
+# ---------------------------------------------------------------------------
+
+
+def test_an_email_decision_writes_a_trace_with_its_own_origin(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """`origin="email"`, and a `channel_id` naming the channel it arrived on.
+
+    Email has written routing traces since channel routing did — it reaches
+    `ChannelRoutingService.decide` through the same
+    `ChannelInboundService.process_inbound` a webhook does. What it did not
+    have until phase 6 of the channels & identity unification was an origin of
+    its own: the polled path took `decide`'s default, so every email decision
+    was labelled `server_channel` and was indistinguishable in the admin list
+    from a Google Chat one. This pins the label, which is the whole of the
+    change — the row, its `channel_id` and its outcome were already there.
+
+    `google_chat` deliberately keeps `server_channel`, so this assertion and
+    the ones in `tests/api/routing/routing_traces_list_and_detail_test.py` are
+    about two different transports and must both hold.
+    """
+    imap_id, smtp_id = _mail_servers(client, superuser_token_headers)
+    mailbox = "support@corp.example"
+    channel = create_email_channel(
+        client,
+        superuser_token_headers,
+        incoming_server_id=imap_id,
+        outgoing_server_id=smtp_id,
+        incoming_mailbox=mailbox,
+        email_whitelist="*",
+    )
+    user, _, agent = _known_sender_with_agent(client, superuser_token_headers)
+
+    raw = build_raw_email(
+        message_id=f"<{random_lower_string()}@sender.example>",
+        sender=user["email"],
+        to=mailbox,
+        subject="Need a hand",
+        body="please help me with this",
+    )
+    processed, _ = _poll_with_stubs(db, [raw])
+    assert processed == 1
+
+    page = list_routing_traces(
+        client, superuser_token_headers, channel_id=channel["id"]
+    )
+    assert page["count"] == 1, page
+    trace = page["data"][0]
+    assert trace["origin"] == "email", trace
+    assert trace["channel_id"] == channel["id"], trace
+    # The decision itself is unchanged by the relabelling: one eligible agent
+    # takes Pass 1's `only_one` short-circuit, exactly as before.
+    assert trace["outcome"] == "routed", trace
+    assert trace["selected_agent_id"] == agent["id"], trace
+
+
+def test_an_email_verdict_still_speaks_in_channel_terms(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """The half of the relabelling that is easy to ship broken.
+
+    `RoutingReachabilityService` picks its remedy wording from the trace's
+    origin, so giving email an origin of its own moves it out of the channel
+    arm unless the origin set is told about it. That arm is not just wording:
+    it is the branch that consults the sender's channel policy and can return
+    `no_candidates_channel_scope` / `no_candidates_auto_install_off` at all. An
+    email trace outside it would be diagnosed as an App MCP decision — offered
+    no auto-install remedy, and never told when the channel's own settings were
+    what blocked Pass 2.
+
+    Pinned on the sentence rather than the code, because the code is
+    `no_candidates` on both arms; the auto-install clause is the half that only
+    the channel arm says.
+    """
+    imap_id, smtp_id = _mail_servers(client, superuser_token_headers)
+    mailbox = "support@corp.example"
+    channel = create_email_channel(
+        client,
+        superuser_token_headers,
+        incoming_server_id=imap_id,
+        outgoing_server_id=smtp_id,
+        incoming_mailbox=mailbox,
+        email_whitelist="*",
+    )
+    # A known sender who owns no agent at all: the ballot is empty, so no
+    # classifier is reached and the verdict is the `no_candidates` one.
+    user, headers = create_random_user_with_headers(client)
+    promote_to_developer(client, superuser_token_headers, user["id"])
+    create_random_ai_credential(client, headers, set_default=True)
+
+    raw = build_raw_email(
+        message_id=f"<{random_lower_string()}@sender.example>",
+        sender=user["email"],
+        to=mailbox,
+        subject="Anyone there",
+        body="please do the thing",
+    )
+    processed, _ = _poll_with_stubs(db, [raw])
+    assert processed == 1
+
+    page = list_routing_traces(
+        client, superuser_token_headers, channel_id=channel["id"]
+    )
+    assert page["count"] == 1, page
+    trace = get_routing_trace(client, superuser_token_headers, page["data"][0]["id"])
+    diagnosis = trace["diagnosis"]
+    assert diagnosis is not None, trace
+    assert diagnosis["code"] == "no_candidates", diagnosis
+    assert diagnosis["verdict"] == (
+        "This user had no routing candidates at all: they own no agent the "
+        "classifier could consider and no auto-install bundle was eligible, "
+        "so no message from them can route anywhere. Set a router trigger "
+        "prompt (or example prompts) on the agent you expected, from its "
+        "Configuration tab, or add its bundle to the auto-install list."
+    ), diagnosis

@@ -36,6 +36,7 @@ const OUTCOME_META: Record<string, Meta> = {
 const ORIGIN_META: Record<string, Meta> = {
   server_channel: { label: "Channel", tone: "secondary" },
   app_mcp: { label: "App MCP", tone: "secondary" },
+  email: { label: "Email", tone: "secondary" },
   identity: { label: "Identity", tone: "secondary" },
   simulate: { label: "Simulate", tone: "outline" },
 }
@@ -148,6 +149,7 @@ export const OUTCOME_FILTER_OPTIONS = [
 export const ORIGIN_FILTER_OPTIONS = [
   "server_channel",
   "app_mcp",
+  "email",
   "identity",
   "simulate",
 ] as const

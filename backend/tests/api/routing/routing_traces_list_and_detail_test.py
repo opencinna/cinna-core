@@ -1,7 +1,9 @@
 """List + get-by-id, and the single-row-per-message property (fact #1).
 
-Channel routing is the only wired producer of routing traces today (see the
-domain README): `origin` is always `server_channel` through this path. A
+Everything below is driven through the **Google Chat webhook**, which is why
+`origin` is always `server_channel` here. That is a fact about this path, not
+about the table: App MCP and email write their own origins, and simulate has
+written one since phase 3 (see the domain README for the live set). A
 webhook delivery runs Pass 1 (installed agents) then, only if Pass 1 misses,
 Pass 2 (auto-install catalog) — and however many passes actually ran, one
 inbound message now writes exactly ONE `routing_decision` row. Pass 1's
