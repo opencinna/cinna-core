@@ -57,13 +57,32 @@ much of an App MCP row survives is ``ROUTING_TRACE_APP_MCP_MODE``'s business,
 not this module's; at ``off`` no capture is opened and these calls no-op again,
 exactly as they did before phase 6.
 
+**The consent gate lives here, not at the call sites.** Identity routing is
+opt-in per person (master plan §3.4) and the switch is
+``ResolvedChannelPolicy.allow_identity_routing`` — the *sender's* own consent
+that a message of theirs may open a session in somebody else's workspace, where
+that person can read it. Until Phase 7 that gate was an ``if`` written out at
+each of the three surfaces that compose this provider (channel routing, App MCP
+routing, App MCP ``prompts/list`` discovery). Three copies of one consent check,
+over one shared provider, whose failure mode is routing a stranger's message
+into a stranger's workspace: the fourth consumer inherits the gate only if
+whoever writes it reads one of the other three first. It is enforced in
+:meth:`IdentityCandidateProvider.build` instead, so forgetting it is not a thing
+a call site can do — and ``tests/architecture/channel_routing_scope_test.py``
+holds the other half, that every call site under ``app/`` actually hands its
+resolved policy in rather than falling back on the permissive default this
+module keeps for direct, channel-less unit use.
+
 **One thing is deliberately NOT recorded**, and it is the feature's single
 inversion of master plan §3.5: when the sender has not switched identity
-routing on for the channel, ``ChannelRoutingService`` does not call this
-provider at all, so the identity owners they *could* have reached leave no rows
-— not even skips. Recording them would publish the existence of other people's
-identities into a trace an external sender can trigger at will. The reasoning
-is at the call site, which is where somebody would otherwise "fix" it.
+routing on, the gate above returns an empty list *before the query runs and
+before any recorder is touched*, so the identity owners they *could* have
+reached leave no rows — not even skips. Recording them would publish the
+existence of other people's identities into a trace an external sender can
+trigger at will. Nothing about that changed when the gate moved in from the
+call sites: "no call, no rows" became "no query, no rows", which is the same
+absence reached one frame earlier. Do not "fix" it by building the candidates
+and filtering them after.
 
 **Ordering is fixed here, and it was not before.** The arm this replaces ran
 its owner query and its per-owner example query with no ``ORDER BY`` at all, so
@@ -104,6 +123,7 @@ from app.models.identity.identity_models import (
 )
 from app.services.routing import routing_trace
 from app.services.routing.agent_classifier import Candidate
+from app.services.server_channels.channel_policy_service import ResolvedChannelPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -180,8 +200,34 @@ class IdentityCandidateProvider:
     """Builds the identity half of a ballot: one candidate per person."""
 
     @staticmethod
-    def build(db: DBSession, caller_user_id: uuid.UUID) -> list[Candidate]:
+    def build(
+        db: DBSession,
+        caller_user_id: uuid.UUID,
+        *,
+        policy: ResolvedChannelPolicy | None = None,
+    ) -> list[Candidate]:
         """Every identity owner ``caller_user_id`` can currently address.
+
+        **The consent gate is applied here**, before anything else happens.
+        ``policy.allow_identity_routing`` is the sender's own opt-in to having
+        a message of theirs routed into somebody else's workspace; with it off
+        this returns ``[]`` immediately — no query, and, deliberately, no trace
+        rows of any kind (see the module docstring's §3.5 inversion).
+
+        ``policy`` is keyword-only, and ``None`` means "no channel governs this
+        call". It is **not** the shape ``ChannelCandidateProvider.build`` uses,
+        which requires its policy and argues in its own docstring that a
+        permissive default is a restriction that silently stops applying. The
+        difference is deliberate and is the narrower of two evils: this
+        provider's unit tests, and the App MCP domain's documented convention
+        of entering at ``build()`` directly, ask the channel-less question
+        ("who has named this caller on a binding at all"), and that question is
+        real. The hole a permissive default would otherwise leave — a new
+        production consumer that simply omits ``policy=`` — is closed by
+        ``tests/architecture/channel_routing_scope_test.py``, which walks every
+        call to this method under ``app/`` and fails the one that does not pass
+        a policy in. Promote this parameter to required the day that
+        channel-less question stops being asked.
 
         One query, not one per owner: the join below returns every
         ``(owner, binding, assignment)`` triple naming this caller — switched
@@ -206,6 +252,17 @@ class IdentityCandidateProvider:
         example lines *within* one owner, which the channel provider has no
         equivalent of.
         """
+        if policy is not None and not policy.allow_identity_routing:
+            # Consent is off. Return before the query and before any recorder
+            # call: the identity owners this caller *could* have reached must
+            # leave no trace rows at all, not even skips, because a trace an
+            # external sender can trigger at will would otherwise enumerate
+            # other people's identities one row per person. This is the single
+            # deliberate inversion of master plan §3.5 and it is structural —
+            # there is nothing here to filter, so nothing can leak by being
+            # built first and dropped after.
+            return []
+
         rows = db.exec(
             select(User, IdentityAgentBinding, IdentityBindingAssignment)
             .join(

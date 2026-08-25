@@ -300,15 +300,22 @@ class AppMCPRoutingService:
                 db_session, user_id, policy=policy
             )
             owned_count = len(candidates)
-            if policy.allow_identity_routing:
-                candidates += IdentityCandidateProvider.build(db_session, user_id)
-            # With the switch off the provider is simply not called, so identity
-            # owners this caller *could* have reached leave no trace rows at
-            # all, not even skips. That is the same deliberate inversion of
-            # master plan §3.5 the channel path makes, for the same reason:
-            # recording them would publish the existence of other people's
-            # identities into a trace the caller can trigger at will. Do not
-            # "fix" it by building the candidates and filtering them after.
+            # No `if policy.allow_identity_routing` here, and that is the
+            # point: since phase 7 of the channels & identity unification the
+            # consent gate is enforced inside the provider, so this surface and
+            # the channel one cannot drift on what the switch means, and a
+            # fourth consumer gets the gate without having to know it exists.
+            # With the switch off `build` returns an empty list before it
+            # queries anything, so identity owners this caller *could* have
+            # reached leave no trace rows at all, not even skips — the same
+            # deliberate inversion of master plan §3.5 the channel path makes,
+            # for the same reason: recording them would publish the existence
+            # of other people's identities into a trace the caller can trigger
+            # at will. The full reasoning is in `identity_candidate_provider`'s
+            # module docstring.
+            candidates += IdentityCandidateProvider.build(
+                db_session, user_id, policy=policy
+            )
 
             if not candidates:
                 logger.debug("No routing candidates for user %s", user_id)

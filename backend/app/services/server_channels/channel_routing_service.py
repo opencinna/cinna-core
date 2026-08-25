@@ -1071,29 +1071,35 @@ class ChannelRoutingService:
                 )
 
             candidates = ChannelCandidateProvider.build(db, user.id, policy=policy)
-            if policy.allow_identity_routing:
-                # Owned agents first, identities after. That ordering is for
-                # the trace and the prompt to read top-down — the common case
-                # (my own agents) before the exceptional one (another person's)
-                # — and nothing turns on it: both providers sort internally,
-                # and the classifier is given a set, not a priority list.
-                candidates += IdentityCandidateProvider.build(db, user.id)
-            # DELIBERATE INVERSION of master plan §3.5 ("a candidate excluded
-            # without a skip_reason cannot diagnose the failure that actually
-            # bites"), and the only one in the feature. With the toggle off the
-            # provider is simply not called, so identity owners this sender
-            # *could* have reached leave no trace rows at all — not even skips.
+            # Owned agents first, identities after. That ordering is for the
+            # trace and the prompt to read top-down — the common case (my own
+            # agents) before the exceptional one (another person's) — and
+            # nothing turns on it: both providers sort internally, and the
+            # classifier is given a set, not a priority list.
             #
-            # It reads like an oversight, so: recording them would publish the
-            # existence of other people's identities into a trace an external
-            # sender can trigger at will, one row per person who has ever named
-            # them on a binding. The §3.5 rule buys a diagnosis; here it would
-            # sell an enumeration. The diagnosis is not lost, only moved — the
-            # sender's own Settings > Channels page says whether the switch is
-            # on, and that is the one control that changes this outcome.
+            # `policy.allow_identity_routing` is the sender's consent to being
+            # routed into somebody else's workspace, and it is enforced INSIDE
+            # the provider (phase 7 of the channels & identity unification):
+            # with it off, `build` returns an empty list before it queries
+            # anything, so this line adds nothing and the two surfaces that
+            # compose the same provider cannot drift on what the switch means.
+            # There is deliberately no `if` here to forget.
             #
-            # Structurally this falls out for free (no call, no rows). Do not
-            # "fix" it by building the candidates and filtering them after.
+            # That empty return is also the DELIBERATE INVERSION of master plan
+            # §3.5 ("a candidate excluded without a skip_reason cannot diagnose
+            # the failure that actually bites") — the only one in the feature.
+            # Identity owners this sender *could* have reached leave no trace
+            # rows at all, not even skips, because a trace an external sender
+            # can trigger at will would otherwise enumerate other people's
+            # identities, one row per person who has ever named them on a
+            # binding. The §3.5 rule buys a diagnosis; here it would sell an
+            # enumeration. The diagnosis is not lost, only moved — the sender's
+            # own Settings > Channels page says whether the switch is on, and
+            # that is the one control that changes this outcome. The reasoning
+            # in full, and the "do not fix it by filtering after" warning, are
+            # in `identity_candidate_provider`'s module docstring, which is now
+            # where somebody would go to "fix" it.
+            candidates += IdentityCandidateProvider.build(db, user.id, policy=policy)
             if not candidates:
                 # Zero eligible candidates: no probe, straight to Pass 2, which
                 # is the onboarding path this state exists for. Unchanged.

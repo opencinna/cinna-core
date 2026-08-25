@@ -33,10 +33,19 @@ def register_app_mcp_prompts(server) -> None:
         ballot — the agents this user owns **and** the identity owners they can
         address — because a discovery list that omits half the routable targets
         teaches the client the wrong vocabulary. The two providers are composed
-        here in the same order, behind the same
-        ``policy.allow_identity_routing`` gate, for exactly that reason: a
-        prompt list built from a different question than the router asks is a
-        vocabulary the router will refuse.
+        here in the same order, and handed the same resolved
+        ``ResolvedChannelPolicy``, for exactly that reason: a prompt list built
+        from a different question than the router asks is a vocabulary the
+        router will refuse.
+
+        The ``allow_identity_routing`` consent gate is **not** written out
+        here. Since phase 7 of the channels & identity unification it lives
+        inside ``IdentityCandidateProvider.build``, which returns nothing when
+        the caller has not opted in — so discovery and routing cannot disagree
+        about the switch by one of them being edited and the other not, which
+        is precisely how a discovery list starts answering a different
+        question. Passing ``policy`` is what asks it; there is no ``if`` here
+        to drop.
 
         Examples come from ``Agent.example_prompts`` (via
         ``ChannelCandidateProvider``) and ``IdentityAgentBinding.prompt_examples``
@@ -74,8 +83,9 @@ def register_app_mcp_prompts(server) -> None:
                 )
                 policy = ChannelPolicyService.resolve(db, channel, user_id)
                 candidates = ChannelCandidateProvider.build(db, user_id, policy=policy)
-                if policy.allow_identity_routing:
-                    candidates += IdentityCandidateProvider.build(db, user_id)
+                candidates += IdentityCandidateProvider.build(
+                    db, user_id, policy=policy
+                )
         except Exception as e:
             logger.error("[AppMCP] Failed to load prompts for user %s: %s", user_id, e)
             return []
