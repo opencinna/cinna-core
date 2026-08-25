@@ -952,6 +952,16 @@ export class AdminRoutingService {
      * message-text gate, the ``SAFE_STAGE_FIELDS`` allowlist and the name
      * resolution apply here because they are the same code, not because they were
      * reimplemented to match.
+     *
+     * **Naming a ``channel_id`` decides under that channel's real policy** rather
+     * than under ``ResolvedChannelPolicy.for_no_channel()``, which is the only way
+     * a simulate can reproduce a ballot containing an identity candidate — the
+     * no-channel policy holds ``allow_identity_routing`` False deliberately. It
+     * therefore widens what a run can name, from the target's own agents to the
+     * people who opted in to being routed to on that channel. That reach is the
+     * same reach a stored trace for that channel already has, and it stays inside
+     * the four conditions above; the audit row records the channel so a run can
+     * be told apart from one made without it.
      * @param data The data for the request.
      * @param data.requestBody
      * @returns RoutingDecisionPublic Successful Response

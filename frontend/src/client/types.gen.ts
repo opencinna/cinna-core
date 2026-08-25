@@ -5108,6 +5108,7 @@ export type RoutingReplayResult = {
 export type RoutingSimulateRequest = {
     message: string;
     as_user_id: string;
+    channel_id?: (string | null);
     include_catalog?: boolean;
 };
 

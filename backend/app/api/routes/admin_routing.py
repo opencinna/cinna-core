@@ -335,6 +335,16 @@ async def simulate_routing(
     message-text gate, the ``SAFE_STAGE_FIELDS`` allowlist and the name
     resolution apply here because they are the same code, not because they were
     reimplemented to match.
+
+    **Naming a ``channel_id`` decides under that channel's real policy** rather
+    than under ``ResolvedChannelPolicy.for_no_channel()``, which is the only way
+    a simulate can reproduce a ballot containing an identity candidate — the
+    no-channel policy holds ``allow_identity_routing`` False deliberately. It
+    therefore widens what a run can name, from the target's own agents to the
+    people who opted in to being routed to on that channel. That reach is the
+    same reach a stored trace for that channel already has, and it stays inside
+    the four conditions above; the audit row records the channel so a run can
+    be told apart from one made without it.
     """
     _require_tracing_enabled("simulate")
     message = (data.message or "").strip()
@@ -375,6 +385,13 @@ async def simulate_routing(
             "target_user_id": str(target_id),
             "target_user_email": target_email,
             "include_catalog": data.include_catalog,
+            # Recorded because it changes what was decided, not merely how it
+            # was displayed: a named channel resolves that channel's real
+            # policy for the target, so the same message can produce a
+            # different ballot — identity candidates included — depending on
+            # this one value. An audit row that omitted it would timestamp a
+            # run it could not describe.
+            "channel_id": str(data.channel_id) if data.channel_id else None,
             # Deliberately NOT the message body: SecurityEvent rows are broadly
             # readable, and the message lives on the routing_decision row behind
             # the superuser-only trace API and its text gate. The length is
@@ -389,6 +406,13 @@ async def simulate_routing(
             actor_user_id=current_user.id,
             message=message,
             include_catalog=data.include_catalog,
+            # Passed through unvalidated on purpose. ``_policy_for`` already
+            # owns the "named a channel that no longer exists" case and
+            # degrades it to the no-channel policy with a log line; a second
+            # existence check here would either duplicate that rule or
+            # disagree with it, and a 404 would turn a diagnostic into an
+            # error an admin cannot act on.
+            channel_id=data.channel_id,
         )
     except RoutingSimulationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

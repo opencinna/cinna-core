@@ -21827,6 +21827,18 @@ export const RoutingSimulateRequestSchema = {
             format: 'uuid',
             title: 'As User Id'
         },
+        channel_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Id'
+        },
         include_catalog: {
             type: 'boolean',
             title: 'Include Catalog',

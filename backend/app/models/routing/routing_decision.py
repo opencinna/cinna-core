@@ -410,6 +410,23 @@ class RoutingSimulateRequest(SQLModel):
     #: Whose routing state to decide against — the sender being diagnosed, not
     #: the admin. This is the parameter that makes the route sensitive.
     as_user_id: uuid.UUID
+    #: Which channel to decide *under*, or ``None`` for a run that names no
+    #: channel at all.
+    #:
+    #: Naming one resolves that channel's **real** policy for ``as_user_id``
+    #: (``RoutingTuningService._policy_for``) — the identical call the webhook
+    #: makes — instead of ``ResolvedChannelPolicy.for_no_channel()``. That is
+    #: not a nicety: ``for_no_channel`` is permissive in every respect except
+    #: ``allow_identity_routing``, which it holds ``False`` on purpose, because
+    #: the absence of a channel is nobody's consent to be routed into. So a
+    #: simulate that names no channel can never put an identity candidate on
+    #: the ballot, and naming a channel is the only way to reproduce a
+    #: decision in which one appeared.
+    #:
+    #: Optional, and a run without it still answers the question it always
+    #: answered — which is why it is not required and why replay, which always
+    #: has the original's channel, carries it through rather than asking.
+    channel_id: uuid.UUID | None = None
     #: Include the Pass-2 auto-install catalog. Off answers the narrower
     #: question "would this have matched something they already have?", which
     #: is usually the one being asked when an install went somewhere odd.
