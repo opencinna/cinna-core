@@ -265,7 +265,7 @@ def test_identity_streaming_creates_identity_mcp_session(
     assert meta.get("identity_match_method") == "only_one", (
         f"Expected identity_match_method='only_one', got {meta}"
     )
-    assert meta.get("app_mcp_route_type") == "identity"
+    assert meta.get("app_mcp_source") == "identity"
 
     # Verify the session is NOT in the caller's own session list (it's owned
     # by the identity owner).
@@ -820,8 +820,8 @@ def test_identity_mcp_session_identity_fields_stamped_correctly(
     assert meta.get("identity_match_method") == "only_one", (
         f"Expected identity_match_method='only_one' in session_metadata, got {meta}"
     )
-    assert meta.get("app_mcp_route_type") == "identity", (
-        f"Expected app_mcp_route_type='identity' in session_metadata, got {meta}"
+    assert meta.get("app_mcp_source") == "identity", (
+        f"Expected app_mcp_source='identity' in session_metadata, got {meta}"
     )
 
     # ── Phase 3: Resume succeeds, same task_id ────────────────────────────────

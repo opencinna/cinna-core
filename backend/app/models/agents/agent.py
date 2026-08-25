@@ -24,11 +24,12 @@ class AgentBase(SQLModel):
     entrypoint_prompt: str | None = Field(default=None)
     refiner_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     # Short, capability-verb-focused natural-language description of what to
-    # ask the agent to do. Used by the App MCP router for AI classification
-    # of incoming external messages. Edited by the agent owner on the
-    # Prompts tab; snapshotted onto each bundle revision at publish time
-    # and propagated back into auto-managed AppAgentRoute rows on install
-    # / apply-update.
+    # ask the agent to do. With ``example_prompts``, the sole routing source
+    # of truth: every surface — App MCP, Server Channels, identity Stage 2 —
+    # classifies over these two fields on the agent row itself. Edited by the
+    # agent owner on the Prompts tab and snapshotted onto each bundle revision
+    # at publish time; nothing is propagated anywhere on install, because
+    # there is nowhere left to propagate it to.
     router_trigger_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     # Command executed inside the agent container before every live/forced
     # status refresh (REST force_refresh, A2A agent/status force, /agent-status).

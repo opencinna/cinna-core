@@ -134,6 +134,13 @@ OUTCOME_NO_MATCH = "no_match"
 OUTCOME_ERROR = "error"
 OUTCOME_PARKED_INSTALL = "parked_install"
 
+#: No producer since ``message_patterns`` was dropped everywhere (channels &
+#: identity unification, settled decision §2.9). Kept because stored
+#: ``routing_decision`` rows still carry it and a rendering that met an unknown
+#: ``match_method`` would show a decision it could not name — the same
+#: treatment ``SKIP_IDENTITY_ROUTE`` gets, and for the same reason: the
+#: vocabulary is a read contract over history, not a list of what is emitted
+#: today.
 MATCH_PATTERN = "pattern"
 MATCH_AI = "ai"
 MATCH_ONLY_ONE = "only_one"
@@ -953,40 +960,6 @@ def stage_scope(stage: str) -> Iterator[None]:
             trace.begin_stage(previous)
 
 
-def record_effective_routes(
-    routes: Any, *, skip_reason: str | None = None, stage: str | None = None
-) -> None:
-    """Candidate set from ``AppAgentRouteService.get_effective_routes_for_user``.
-
-    ``skip_reason`` records the batch as *excluded* instead — the shape a filter
-    site needs when it drops routes for a reason (an inactive route) that would
-    otherwise vanish silently. Attribute reads still happen inside this guard,
-    so the caller never has to build an expression that could raise.
-    """
-    trace = RoutingTrace.current()
-    if trace is None:
-        return
-    try:
-        candidates = [
-            CandidateTrace(
-                kind=KIND_AGENT,
-                ref_id=str(getattr(route, "agent_id", "") or ""),
-                name=str(getattr(route, "agent_name", "") or ""),
-                owner_email=getattr(route, "identity_owner_email", None),
-                source=str(getattr(route, "source", "") or ""),
-                trigger_prompt=clamp(getattr(route, "trigger_prompt", None)) or "",
-                prompt_examples=clamp(getattr(route, "prompt_examples", None)),
-                eligible=skip_reason is None,
-                skip_reason=skip_reason,
-            )
-            for route in (routes or [])
-        ]
-    except Exception:  # noqa: BLE001
-        logger.debug("Routing trace route capture failed", exc_info=True)
-        return
-    trace.add_candidates(candidates, stage=stage)
-
-
 def record_candidate(
     *,
     kind: str,
@@ -1311,7 +1284,6 @@ __all__ = [
     "describe_exception",
     "mark_candidate_skipped",
     "record_candidate",
-    "record_effective_routes",
     "record_error",
     "record_llm_attempt",
     "record_match",

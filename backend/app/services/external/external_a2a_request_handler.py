@@ -9,7 +9,7 @@ Responsibilities:
      body parsing, method dispatch, v1.0 adapter transform, and domain
      exception → JSON-RPC error-envelope mapping.
   4. Skip the a2a_config.enabled gate (the external surface is owner-only
-     for agent targets, and caller-scoped for route / identity targets).
+     for agent targets, and caller-scoped for identity targets).
 """
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ class ExternalA2ARequestHandler:
         Args:
             db: Active database session.
             user: Authenticated caller.
-            target_type: "agent", "app_mcp_route", or "identity".
+            target_type: "agent" or "identity".
             target_id: UUID of the target.
             request_body: Parsed JSON-RPC request dict.
             protocol: "v1.0" or "v0.3" (already resolved by the route layer).
@@ -272,12 +272,6 @@ class ExternalA2ARequestHandler:
                 client_kind=client_kind,
                 external_client_id=external_client_id,
             )
-        if target_type == "app_mcp_route":
-            return self._resolve_route_context(
-                db, user, target_id,
-                client_kind=client_kind,
-                external_client_id=external_client_id,
-            )
         if target_type == "identity":
             return self._resolve_identity_context(
                 db, user, target_id, params,
@@ -303,40 +297,6 @@ class ExternalA2ARequestHandler:
             environment=environment,
             integration_type="external",
             session_owner_id=user.id,
-            client_kind=client_kind,
-            external_client_id=external_client_id,
-        )
-
-    def _resolve_route_context(
-        self,
-        db: DBSession,
-        user: User,
-        route_id: UUID,
-        client_kind: str | None = None,
-        external_client_id: str | None = None,
-    ) -> TargetContext:
-        """Resolve TargetContext for target_type="app_mcp_route" via ExternalAccessPolicy."""
-        route, effective = ExternalAccessPolicy.resolve_route(db, user, route_id)
-
-        agent = db.get(Agent, route.agent_id)
-        if agent is None:
-            raise TargetNotAccessibleError("Route agent not found")
-
-        if not agent.active_environment_id:
-            raise NoActiveEnvironmentError()
-        environment = db.get(AgentEnvironment, agent.active_environment_id)
-        if not environment:
-            raise NoActiveEnvironmentError()
-
-        return TargetContext(
-            agent=agent,
-            environment=environment,
-            integration_type="app_mcp",
-            session_owner_id=agent.owner_id,
-            caller_id=user.id,
-            match_method="external_direct",
-            route_id=route.id,
-            route_source=effective.source,
             client_kind=client_kind,
             external_client_id=external_client_id,
         )

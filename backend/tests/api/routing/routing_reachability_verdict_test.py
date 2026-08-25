@@ -59,7 +59,6 @@ from tests.utils.agent import (
     update_agent,
 )
 from tests.utils.ai_credential import create_random_ai_credential
-from tests.utils.app_agent_route import create_admin_route, create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import (
     install_bundle,
@@ -151,7 +150,9 @@ def _seed_app_mcp_trace(user_id: str) -> dict:
     Phase 6), so the reserved origin has no live producer and this documented
     Rule-1 exemption is the only way to exercise the App MCP verdict half at
     all. The row carries no candidates, which is why every App MCP sentence
-    below counts zero effective routes.
+    below counts "0 eligible candidates" — the same noun a channel decision
+    uses; the per-origin count noun ("N effective routes") was deleted with
+    the AppAgentRoute family in phase 5.
     """
     trace_id = seed_routing_trace(
         created_at=datetime.now(UTC),
@@ -739,9 +740,15 @@ def test_verdict_for_an_agent_created_after_the_decision_with_no_wording(
 
     Created *after* the simulate, so the trace has no row for it — an agent
     owned at capture time would have been recorded as a `no_trigger_prompt`
-    skip and answered from the trace instead. Distinct code from the App MCP
-    `expected_agent_no_trigger_prompt`, whose finding is about an install's
-    auto-route never having been created.
+    skip and answered from the trace instead. Since phase 5 of
+    `docs/plans/channels_identity_unification/`, this is no longer a
+    channel-only code: `_verdict_from_configuration` collapsed the channel and
+    App MCP configuration branches into one function ("who owns it, and
+    whether its owner wrote anything for the classifier to match on" is the
+    same question on both surfaces now that the `AppAgentRoute` family is
+    gone), so `expected_agent_channel_no_trigger_prompt` — the name is
+    historical — fires with the same wording for an App MCP decision too; see
+    `test_app_mcp_verdict_for_an_owned_agent_with_no_router_wording`.
     """
     user, headers = _user(client, superuser_token_headers)
 
@@ -759,8 +766,8 @@ def test_verdict_for_an_agent_created_after_the_decision_with_no_wording(
         f"them because it has neither a router trigger prompt nor example "
         f"prompts, so there is nothing for the classifier to match a message "
         f"against. Set a router trigger prompt (or example prompts) on the "
-        f"agent's Configuration tab. (An App MCP route is not part of this: "
-        f"channel routing reads no route, no assignment and no App MCP toggle.)"
+        f"agent's Configuration tab. That pair is the whole of it — there is "
+        f"no route, assignment or per-agent toggle to configure anywhere."
     )
 
 
@@ -769,8 +776,13 @@ def test_verdict_for_a_foreign_agent_on_a_channel_decision(
 ) -> None:
     """Never a candidate, and the reason is ownership rather than a switch.
 
-    The channel remedy says nothing about assigning an App MCP route — on this
-    surface that would change nothing, however correct it is on the other one.
+    The remedy says nothing about assigning an App MCP route — that
+    mechanism is deleted — and, since phase 5's collapse of
+    `_verdict_from_configuration` into one function for both origins, the
+    finding and remedy are now identical in shape to App MCP's own foreign-
+    owner verdict; see
+    `test_app_mcp_verdict_for_a_foreign_agent_with_no_grant`. Only the one
+    `{surface}` clause differs.
     """
     owner, owner_headers = _user(client, superuser_token_headers)
     sender, _ = _user(client, superuser_token_headers)
@@ -787,11 +799,13 @@ def test_verdict_for_a_foreign_agent_on_a_channel_decision(
     assert diagnosis["code"] == "expected_agent_foreign_owner"
     assert diagnosis["verdict"] == (
         f"This user has 0 eligible candidates; {agent['name']} is not among "
-        f"them because it belongs to a different account, and a channel routes "
-        f"only over the sender's own agents. Share its bundle with this user "
-        f"and have them install it — a channel session runs on the sender's "
-        f"own install, so the install they own is the only thing a channel can "
-        f"reach."
+        f"them because it belongs to a different account, and a channel "
+        f"routes over the caller's own agents. Share its bundle with this "
+        f"user and have them install it — the session runs on the caller's "
+        f"own install, so the install they own is the only thing this "
+        f"surface can reach. (Reaching somebody else's agent is what "
+        f"identity contacts are for, and that is a different question from "
+        f"this one.)"
     )
     assert diagnosis["expected_agent_owner_email"] == owner["email"]
 
@@ -856,139 +870,91 @@ def test_example_prompts_alone_count_as_router_wording(
 
 
 # ---------------------------------------------------------------------------
-# App MCP verdicts — unchanged wording, on a seeded `app_mcp` trace
+# App MCP verdicts, on a seeded `app_mcp` trace
 #
 # See the module docstring: nothing opens an App MCP capture, so these are the
 # configuration branches only, on rows with no candidate list.
+#
+# Phase 5 of docs/plans/channels_identity_unification/ deleted the six
+# route-based verdict codes this section used to test one-by-one
+# (CODE_EXPECTED_STANDALONE_NO_ROUTE, _BUNDLE_NO_ROUTE, _NO_TRIGGER_PROMPT,
+# _ROUTE_INACTIVE, _ROUTE_NOT_APP_MCP, _ROUTE_UNASSIGNED) along with the
+# AppAgentRoute family whose configuration they described. What is left is
+# `_verdict_from_configuration`'s new, origin-neutral shape: App MCP asks the
+# same two questions a channel does — who owns the agent, and did its owner
+# write anything for the classifier to match on — so this section shrank to
+# the App MCP half of the three surviving shared branches, each cross-
+# referenced against its channel-origin twin above.
 # ---------------------------------------------------------------------------
 
 
 def test_app_mcp_verdict_when_the_user_has_no_candidates_at_all(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """The App MCP half of `no_candidates` — the wording every origin used to
-    get, kept verbatim for the surface it is actually true of."""
+    """App MCP's `no_candidates` sentence, now the same shape a channel's
+    non-scoped `no_candidates` gets — no route or Integrations-tab wording,
+    because App MCP builds its ballot from `ChannelCandidateProvider` exactly
+    as a channel does and has no Pass 2 catalog of its own to name either."""
     user, _ = _user(client, superuser_token_headers)
     trace = _seed_app_mcp_trace(user["id"])
 
     diagnosis = _diagnosis(client, superuser_token_headers, trace)
     assert diagnosis["code"] == "no_candidates"
     assert diagnosis["verdict"] == (
-        "This user had no routing candidates at all: no App MCP route reaches "
-        "them and no auto-install bundle was eligible, so no message from them "
-        "can route anywhere. Give the agent you expected an App MCP route from "
-        "its Integrations tab, or add its bundle to the auto-install list."
+        "This user had no routing candidates at all: they own no agent the "
+        "classifier could consider, so no message from them can route "
+        "anywhere. Give this user an agent with a router trigger prompt (or "
+        "example prompts) on its Configuration tab."
     )
 
 
-def test_app_mcp_verdict_for_a_standalone_agent_with_no_app_mcp_route(
+def test_app_mcp_verdict_for_an_owned_agent_with_no_router_wording(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """`_create_auto_route_for_agent` returns `None` when `bundle_uuid IS NULL`,
-    so a standalone agent never gets an automatic route and is absent from
-    `get_effective_routes_for_user`.
+    """The App MCP half of `expected_agent_channel_no_trigger_prompt` — the
+    "channel" in the code name is historical (settled decision, plan §2.3):
+    the same code and the same wording now fire on an App MCP decision, since
+    `_verdict_from_configuration` collapsed both origins' no-wording finding
+    into one branch. See
+    `test_verdict_for_an_agent_created_after_the_decision_with_no_wording`
+    for the channel-origin twin — the two differ only in how the trace was
+    produced (simulate vs. `_seed_app_mcp_trace`), not in wording.
 
-    Still true, still deliberate, and still the right thing to say — on the App
-    MCP surface. It is what channel routing no longer says.
+    Replaces the old `..._for_a_bundle_install_whose_revision_has_no_trigger_
+    prompt`: a bundle install's auto-created route is deleted machinery, and
+    an owned agent needs nothing route-shaped to reach this branch any more —
+    just no trigger prompt and no example prompts, exactly like the channel
+    case.
     """
     user, headers = _user(client, superuser_token_headers)
-    orphan = _agent(client, headers, "Standalone")
+    orphan = _agent(client, headers, "NoWording")
     trace = _seed_app_mcp_trace(user["id"])
 
     diagnosis = _diagnosis(
         client, superuser_token_headers, trace, expected_agent_id=orphan["id"]
     )
-    assert diagnosis["code"] == "expected_agent_standalone_no_route"
+    assert diagnosis["code"] == "expected_agent_channel_no_trigger_prompt"
     assert diagnosis["verdict"] == (
-        f"This user has 0 effective routes; {orphan['name']} is not among them "
-        f"because it is not a bundle install and has no App MCP route. Add one "
-        f"from its Integrations tab. (Setting its router trigger prompt alone "
-        f"will not do it: a standalone agent never gets an automatic route — "
-        f"that is deliberate, its owner manages App MCP exposure explicitly.)"
+        f"This user has 0 eligible candidates; {orphan['name']} is not among "
+        f"them because it has neither a router trigger prompt nor example "
+        f"prompts, so there is nothing for the classifier to match a message "
+        f"against. Set a router trigger prompt (or example prompts) on the "
+        f"agent's Configuration tab. That pair is the whole of it — there is "
+        f"no route, assignment or per-agent toggle to configure anywhere."
     )
 
 
-def test_app_mcp_verdict_for_a_bundle_install_whose_revision_has_no_trigger_prompt(
+def test_app_mcp_verdict_for_a_foreign_agent_with_no_grant(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """No prompt means no auto-route was ever created for the install."""
-    publisher, publisher_headers = make_user_and_headers(client)
-    promote_to_developer(client, superuser_token_headers, publisher["id"])
-    source = _agent(client, publisher_headers, "NoPrompt")
-    publish_bundle_and_make_public(client, publisher_headers, source["id"])
-    bundle_id = client.get(
-        f"{API}/agents/{source['id']}", headers=publisher_headers
-    ).json()["bundle_id"]
-
-    consumer, consumer_headers = _user(client, superuser_token_headers)
-    installed = install_bundle(client, consumer_headers, bundle_id)
-    trace = _seed_app_mcp_trace(consumer["id"])
-
-    diagnosis = _diagnosis(
-        client, superuser_token_headers, trace, expected_agent_id=installed["id"]
-    )
-    assert diagnosis["code"] == "expected_agent_no_trigger_prompt"
-    assert diagnosis["verdict"] == (
-        f"This user has 0 effective routes; {installed['name']} is not among "
-        f"them because it has no router trigger prompt, so no route was ever "
-        f"created for its install and the classifier would have had nothing to "
-        f"match on anyway. Set a router trigger prompt on the agent's "
-        f"Configuration tab — for a bundle install that creates the App MCP "
-        f"route automatically."
-    )
-
-
-def test_app_mcp_verdict_for_a_bundle_install_whose_route_was_deleted(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """Trigger prompt set, route gone — a different repair from the no-prompt one."""
-    publisher, publisher_headers = make_user_and_headers(client)
-    promote_to_developer(client, superuser_token_headers, publisher["id"])
-    source = _agent(client, publisher_headers, "HasPrompt")
-    set_router_trigger_prompt(
-        client, publisher_headers, source["id"], "Handle bundle routing questions"
-    )
-    publish_bundle_and_make_public(client, publisher_headers, source["id"])
-    bundle_id = client.get(
-        f"{API}/agents/{source['id']}", headers=publisher_headers
-    ).json()["bundle_id"]
-
-    consumer, consumer_headers = _user(client, superuser_token_headers)
-    installed = install_bundle(client, consumer_headers, bundle_id)
-
-    routes = client.get(
-        f"{API}/agents/{installed['id']}/app-mcp-routes/", headers=consumer_headers
-    )
-    assert routes.status_code == 200, routes.text
-    assert routes.json(), "precondition: the install auto-created a route"
-    for route in routes.json():
-        d = client.delete(
-            f"{API}/agents/{installed['id']}/app-mcp-routes/{route['id']}",
-            headers=consumer_headers,
-        )
-        assert d.status_code == 200, d.text
-
-    trace = _seed_app_mcp_trace(consumer["id"])
-    diagnosis = _diagnosis(
-        client, superuser_token_headers, trace, expected_agent_id=installed["id"]
-    )
-
-    assert diagnosis["code"] == "expected_agent_bundle_no_route"
-    assert diagnosis["verdict"] == (
-        f"This user has 0 effective routes; {installed['name']} is not among "
-        f"them because it has no App MCP route, even though its router trigger "
-        f"prompt is set. Add a route from its Integrations tab. An install "
-        f"whose revision carried no trigger prompt at the time gets no "
-        f"automatic route, and re-saving the prompt is what normally backfills "
-        f"it."
-    )
-
-
-def test_app_mcp_verdict_for_a_foreign_agent_with_no_route_at_all(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """On App MCP, ownership is not the last word — a route can assign somebody
-    else's agent to this user, so the remedy names that as an option."""
+    """The App MCP half of `expected_agent_foreign_owner` — since the route
+    family that used to let App MCP reach somebody else's agent is deleted,
+    this finding and remedy are now identical in shape to the channel-origin
+    twin (`test_verdict_for_a_foreign_agent_on_a_channel_decision`); only the
+    `{surface}` clause names "App MCP" instead of "a channel". Reaching a
+    foreign owner's agent is an identity-contact question now, on both
+    surfaces, and the remedy says so.
+    """
     owner, owner_headers = _user(client, superuser_token_headers)
     sender, _ = _user(client, superuser_token_headers)
     agent = _agent(client, owner_headers, "SomebodyElses")
@@ -999,118 +965,45 @@ def test_app_mcp_verdict_for_a_foreign_agent_with_no_route_at_all(
     )
     assert diagnosis["code"] == "expected_agent_foreign_owner"
     assert diagnosis["verdict"] == (
-        f"This user has 0 effective routes; {agent['name']} is not among them "
-        f"because it belongs to a different account and has no route assigning "
-        f"it to this user — a channel session runs on the sender's own "
-        f"install. Share its bundle with this user and have them install it, "
-        f"or assign them to an App MCP route on it."
+        f"This user has 0 eligible candidates; {agent['name']} is not among "
+        f"them because it belongs to a different account, and App MCP routes "
+        f"over the caller's own agents. Share its bundle with this user and "
+        f"have them install it — the session runs on the caller's own "
+        f"install, so the install they own is the only thing this surface "
+        f"can reach. (Reaching somebody else's agent is what identity "
+        f"contacts are for, and that is a different question from this "
+        f"one.)"
     )
     assert diagnosis["expected_agent_owner_email"] == owner["email"]
 
 
-def test_app_mcp_verdict_when_the_route_exists_but_is_not_assigned_to_this_user(
+def test_app_mcp_verdict_when_the_agent_was_given_a_trigger_prompt_after_the_decision(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """An admin route with nobody assigned is invisible to every sender."""
-    user, headers = _user(client, superuser_token_headers)
-    agent = _agent(client, headers, "Unassigned")
-    create_admin_route(
-        client,
-        superuser_token_headers,
-        agent["id"],
-        trigger_prompt="Handle anything at all",
-        assigned_user_ids=[],
-    )
-    trace = _seed_app_mcp_trace(user["id"])
-
-    diagnosis = _diagnosis(
-        client, superuser_token_headers, trace, expected_agent_id=agent["id"]
-    )
-    assert diagnosis["code"] == "expected_agent_route_unassigned"
-    assert diagnosis["verdict"] == (
-        f"This user has 0 effective routes; {agent['name']} is not among them "
-        f"because its App MCP route is not assigned to this user, or the "
-        f"assignment is switched off. Assign this user to the route from the "
-        f"route's Users list, and check the per-user toggle is on."
-    )
-
-
-def test_app_mcp_verdict_when_the_route_is_not_enabled_for_the_app_mcp_channel(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """An active route that is off the App MCP channel."""
-    user, headers = _user(client, superuser_token_headers)
-    agent = _agent(client, headers, "WrongChannel")
-    create_user_route(
-        client,
-        headers,
-        agent["id"],
-        trigger_prompt="Handle it",
-        channel_app_mcp=False,
-    )
-    trace = _seed_app_mcp_trace(user["id"])
-
-    diagnosis = _diagnosis(
-        client, superuser_token_headers, trace, expected_agent_id=agent["id"]
-    )
-    assert diagnosis["code"] == "expected_agent_route_not_app_mcp"
-    assert diagnosis["verdict"] == (
-        f"This user has 0 effective routes; {agent['name']} is not among them "
-        f"because its route is not enabled for the App MCP channel, which is "
-        f"the channel this decision routed over. Turn on App MCP for that "
-        f"route from the agent's Integrations tab."
-    )
-
-
-def test_app_mcp_verdict_when_the_route_is_switched_off(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """The configuration branch for an inactive route."""
-    user, headers = _user(client, superuser_token_headers)
-    agent = _agent(client, headers, "LaterOff")
-    create_user_route(
-        client, headers, agent["id"], trigger_prompt="Handle it", is_active=False
-    )
-    trace = _seed_app_mcp_trace(user["id"])
-
-    diagnosis = _diagnosis(
-        client, superuser_token_headers, trace, expected_agent_id=agent["id"]
-    )
-    assert diagnosis["code"] == "expected_agent_route_inactive"
-    assert diagnosis["verdict"] == (
-        f"This user has 0 effective routes; {agent['name']} is not among them "
-        f"because its App MCP route exists but is switched off. Switch the "
-        f"route back on from the agent's Integrations tab."
-    )
-
-
-def test_app_mcp_verdict_when_the_route_was_added_after_the_decision(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """"It looks fine now" — and the remedy no longer promises a replay proves it.
-
-    Replay re-runs `ChannelRoutingService.decide`, which since the scope split
-    builds its ballot from the sender's own agents and reads no route at all. So
-    a replay of an App MCP trace confirms nothing about the route, and the old
-    wording ("the re-run will show it as a candidate") would have had an admin
-    conclude their fix had not taken.
+    """The App MCP half of `expected_agent_looks_reachable` — fully origin-
+    neutral wording now (`_verdict_from_configuration`'s last branch never
+    mentions `{surface}` at all), so this is byte-identical to the channel
+    twin (`test_verdict_when_the_agent_was_given_a_trigger_prompt_after_the_
+    decision`) apart from how the trace was produced. Replaces the old
+    route-added-after-the-decision test: setting a trigger prompt is now the
+    only way to move an agent into this branch on either surface.
     """
     user, headers = _user(client, superuser_token_headers)
     agent = _agent(client, headers, "FixedSince")
     trace = _seed_app_mcp_trace(user["id"])
-    create_user_route(client, headers, agent["id"], trigger_prompt="Handle it")
+    set_router_trigger_prompt(client, headers, agent["id"], "Handle it")
 
     diagnosis = _diagnosis(
         client, superuser_token_headers, trace, expected_agent_id=agent["id"]
     )
     assert diagnosis["code"] == "expected_agent_looks_reachable"
     assert diagnosis["verdict"] == (
-        f"This user has 0 effective routes; {agent['name']} is not among them "
-        f"because it was not a candidate when this decision ran, even though "
-        f"its App MCP route looks correctly configured now. Confirm it from "
-        f"the route's own page — a route added or switched on after the trace "
-        f"was captured explains exactly this. Replay will not show it: a "
-        f"replay re-runs the channel pass, which reads no App MCP route."
+        f"This user has 0 eligible candidates; {agent['name']} is not among "
+        f"them because it was not a candidate when this decision ran, even "
+        f"though this user owns it and its router trigger prompt or example "
+        f"prompts are set now. Re-run this decision — an agent created, "
+        f"transferred or given wording after the trace was captured explains "
+        f"exactly this, and the re-run will show it as a candidate."
     )
 
 

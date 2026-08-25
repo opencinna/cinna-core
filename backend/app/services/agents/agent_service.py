@@ -587,35 +587,6 @@ class AgentService:
                 except Exception as e:
                     logger.warning(f"Failed to sync prompts to environment after agent update: {e}")
 
-        # Propagate ``router_trigger_prompt`` changes to the install's
-        # auto-managed App MCP route. The focused
-        # ``PATCH /agents/{id}/router-trigger-prompt`` endpoint already
-        # does this; mirror the behaviour here so the generic
-        # ``PUT /agents/{id}`` path stays consistent — otherwise a
-        # publisher edit via the standard Edit form silently fails to
-        # reach the router until the next apply-update.
-        if "router_trigger_prompt" in update_dict:
-            try:
-                from app.services.app_mcp.app_agent_route_service import (
-                    AppAgentRouteService,
-                )
-
-                AppAgentRouteService.sync_router_trigger_prompt_from_agent(
-                    db_session=session, agent=agent,
-                )
-            except Exception as exc:  # noqa: BLE001 — defensive
-                # Same reasoning as the PATCH endpoint: a failed statement
-                # aborts the transaction, so without a rollback the caller's
-                # response serialization blows up with
-                # ``InFailedSqlTransaction``. The agent write is already
-                # committed above, so nothing is lost.
-                session.rollback()
-                logger.warning(
-                    "Failed to sync router_trigger_prompt to auto-managed route "
-                    "for agent %s after PUT: %s",
-                    agent.id, exc,
-                )
-
         return agent
 
     @staticmethod

@@ -10,7 +10,7 @@ Identity is a **routing-layer** concept, not a property of any one surface. `Ide
 
 | Surface | Ballot composition | Gate | Resulting session |
 |---------|-------------------|------|-------------------|
-| [App MCP Server](../app_mcp_server/app_mcp_server.md) | the caller's effective agent routes **+** identity candidates | the per-person contact toggle only | `integration_type = "identity_mcp"` |
+| [App MCP Server](../app_mcp_server/app_mcp_server.md) | the caller's own eligible agents (`ChannelCandidateProvider`) **+** identity candidates | the per-person contact toggle only | `integration_type = "identity_mcp"` |
 | [Server Channels](../server_channels/server_channels.md) | the sender's own agents **+** identity candidates | the sender's per-channel `allow_identity_routing` opt-in (default off, never inherited) **and** the per-person contact toggle | `integration_type = "channel_<type>"` — an identity-routed channel session is still a channel session |
 
 Whichever surface asked, a message that resolves to a person then runs **two-stage routing**: Stage 1 resolves the message to a person (identity owner), and Stage 2 selects the appropriate agent from that person's portfolio, filtered to only those accessible to the specific caller.
@@ -44,8 +44,8 @@ Caller (User A): "Ask User B to prepare the annual report"
        |
        v
 Stage 1: App MCP Server Router
-  - The ballot is composed: the caller's effective agent routes PLUS one
-    candidate per identity owner they can address (IdentityCandidateProvider)
+  - The ballot is composed: the agents the caller owns (ChannelCandidateProvider)
+    PLUS one candidate per identity owner they can address (IdentityCandidateProvider)
   - AI classifies message -> selects "User B" (identity route)
   - Transforms message: "prepare the annual report" (strips "Ask User B to")
        |
@@ -104,15 +104,17 @@ Stage 2 only considers agents where the caller has an active, enabled binding as
 
 ## User Stories / Flows
 
-### Identity Owner: Expose an Agent via Identity (from Integrations Tab)
+### Identity Owner: Expose an Agent via Identity (from Settings)
 
-1. Agent owner opens their agent's Integrations tab
-2. Clicks "New" in the MCP Connectors card
-3. Selects "Identity MCP Server Integration" (the third option)
+**As of Phase 5 of the channels & identity unification, this is the only creation path.** The agent's Integrations tab MCP Connectors "New" dialog no longer offers an "Identity MCP Server Integration" option — it now offers exactly two choices, Direct MCP Connector and (developer-only) Agent to Agent MCP Connector. See [App MCP Server](../app_mcp_server/app_mcp_server.md) and [Agent Management](../agent_management/agent_management.md#mcp-connectors).
+
+1. Agent owner opens **Settings → Channels → Identity Server** card
+2. Clicks **"Add Agent"** in the card header
+3. Picks one of their own agents via the agent selector dialog
 4. Writes a trigger prompt describing when to route to this agent (e.g., "Handle annual report requests and financial analysis tasks")
 5. Selects session mode (conversation or building)
 6. Searches and selects users to share this agent with via the "Share with Users" picker
-7. Clicks "Add to Identity" — creates the binding and assignments
+7. Saves — creates the binding and assignments
 8. Selected users now see the identity owner in their "Identity Contacts" section
 
 ### Identity Owner: Manage Identity from Settings
@@ -124,13 +126,12 @@ Stage 2 only considers agents where the caller has an active, enabled binding as
 5. Can edit trigger prompt, message patterns, and session mode via the edit dialog
 6. Can toggle individual agents active/inactive with a switch
 7. Can remove agents from identity (cascades all assignments)
-8. Can add new agents via the "Add Agent" button, which opens an inline form
+8. Can add new agents via the "Add Agent" button, which opens the "Add Agent to Identity" dialog (agent picker, trigger prompt, session mode, user share picker)
 
 ### Caller: Enable and Use an Identity Contact
 
-1. Opens Settings > Channels tab > "MCP Server" card
-2. Sees the "Identity Contacts" section (after the "MCP Shared Agents" section)
-3. Each row shows an identity owner's name, email, and an enable/disable toggle
+1. Opens Settings > Channels tab and finds the identity contacts list on `UserChannelsCard` (as of Phase 5 the sole surface for this list — it used to be duplicated, without the consent copy, on the now-stripped `AppAgentRoutesCard` / "MCP Server" card)
+2. Each row shows an identity owner's name, email, and an enable/disable toggle
 4. Enables the desired contact
 5. In their MCP client, types a message addressing that person: "Ask User B to prepare the annual report"
 6. Stage 1 routes to User B's identity; Stage 2 selects the best matching agent
@@ -158,7 +159,7 @@ Stage 2 only considers agents where the caller has an active, enabled binding as
 ### Identity Configuration
 
 - Users have one identity; it is workspace-independent (agents from any workspace can be added)
-- Each agent binding has its own trigger prompt for Stage 2 routing. `message_patterns` is still stored and editable but **Stage 2 no longer reads it** — see *Stage 2 Routing Priority* below
+- Each agent binding has its own trigger prompt for Stage 2 routing. `message_patterns` no longer exists on the binding at all — dropped in Phase 5's migration, alongside the `AppAgentRoute` deletion — see *Stage 2 Routing Priority* below
 - The same agent cannot be bound twice to the same identity (unique constraint: `owner_id, agent_id`)
 - Agents must be owned by the identity owner — you can only expose your own agents
 - Identity does not generate routes for the owner themselves (self-exclusion at the assignment level)
@@ -206,7 +207,7 @@ This is the single easiest thing to get backwards, and the direction matters bec
 
 `match_method` on a Stage-2 decision is therefore one of exactly two values, `"only_one"` or `"ai"`.
 
-**Glob pattern matching was removed from Stage 2.** It was a second routing mechanism with silently higher priority than the classifier, and no trace explained it well: a decision that a pattern took would look, in the trace, much like one the classifier took. The classifier is cheap and its reasoning is recorded. `IdentityAgentBinding.message_patterns` still exists as a column and is still editable in the UI, but nothing reads it during routing; it is removed outright in a later phase of the channels/identity unification.
+**Glob pattern matching was removed from Stage 2 in Phase 1, and the column itself is gone as of Phase 5.** It was a second routing mechanism with silently higher priority than the classifier, and no trace explained it well: a decision that a pattern took would look, in the trace, much like one the classifier took. The classifier is cheap and its reasoning is recorded. `IdentityAgentBinding.message_patterns` was dropped outright in Phase 5's migration, alongside the `AppAgentRoute` deletion.
 
 ### Session Ownership and Access
 
@@ -252,12 +253,12 @@ See **[Prompt Examples](../app_mcp_server/prompt_examples.md)** for full details
 
 ## Integration Points
 
-- **[App MCP Server](../app_mcp_server/app_mcp_server.md)** — `AppMCPRoutingService.route_message()` composes two candidate providers for Stage 1: the caller's effective agent routes, and `IdentityCandidateProvider` (one candidate per identity owner, with an `identity:{owner_id}` ref so a person can never be mistaken for an agent). When an identity candidate wins, Stage 2 routing runs
+- **[App MCP Server](../app_mcp_server/app_mcp_server.md)** — `AppMCPRoutingService.route_message()` composes two candidate providers for Stage 1: `ChannelCandidateProvider` (the caller's own eligible agents), and `IdentityCandidateProvider` (one candidate per identity owner, with an `identity:{owner_id}` ref so a person can never be mistaken for an agent). When an identity candidate wins, Stage 2 routing runs
 - **[Server Channels](../server_channels/server_channels.md)** — the second consumer, since Phase 3 of the channels & identity unification. `ChannelRoutingService._route_installed` appends `IdentityCandidateProvider.build(...)` to the sender's own-agent candidates **only when `policy.allow_identity_routing` is on**, and `ChannelRoutingService.decide` calls Stage 2 itself when a person wins. What crosses back is an `IdentityGrant`, re-verified in full at ingest. The sender opts in per channel from Settings → Channels; the per-person contact toggle is the *same* `IdentityBindingAssignment.is_enabled` switch App MCP uses, reused rather than duplicated per channel
 - **[Auto Routing Tuning](../routing_tuning/routing_tuning.md)** — since Phase 3 the channel Pass-1 capture is open around this feature's Stage-1 candidates *and* around Stage 2 (recorded under the `identity_stage2` stage), so identity routing finally writes durable trace rows. An identity owner with nothing currently reachable is recorded as a `SKIP_IDENTITY_UNAVAILABLE` skip; an owner the sender could have reached with the channel switch **off** is deliberately not recorded at all (see Business Rules below)
 - **[Agent Sessions](../agent_sessions/agent_sessions.md)** — identity sessions use the same `Session` model with three additional columns: `identity_caller_id`, `identity_binding_id`, `identity_binding_assignment_id`. `integration_type` is `"identity_mcp"` on the App MCP path; on the channel path it stays `"channel_<type>"`, which is load-bearing — `ChannelOutboundService._resolve_channel_session` gates reply delivery on that prefix, so a session stamped `identity_mcp` there would route correctly, run correctly, and never deliver a word
 - **[MCP Integration](../mcp_integration/agent_mcp_architecture.md)** — uses the same shared OAuth AS and App MCP token infrastructure; no separate OAuth flow
-- **[Agent Management](../agent_management/agent_management.md)** — MCP Connectors card is extended with a third integration type option for identity registration
+- **[Agent Management](../agent_management/agent_management.md)** — as of Phase 5, identity registration no longer lives on the agent's Integrations tab MCP Connectors card at all (that dialog dropped both its "App MCP Server Integration" and "Identity MCP Server Integration" options, leaving only Direct MCP Connector and, for developers, Agent to Agent MCP Connector). Identity binding creation is Settings → Channels → Identity Server card only
 
 ## Access Control
 
@@ -280,7 +281,7 @@ See **[Prompt Examples](../app_mcp_server/prompt_examples.md)** for full details
 | Stage 2 AI cannot determine agent | Error: "Could not determine which of {owner_name}'s agents to use. Please be more specific." |
 | Binding disabled mid-conversation | Next message returns: "This identity connection is no longer active." |
 | Assignment disabled or removed mid-conversation | Same: "This identity connection is no longer active." |
-| Agent deleted (binding cascade) | Binding and all assignments are deleted; caller's effective routes no longer include this person if no other bindings remain |
+| Agent deleted (binding cascade) | Binding and all assignments are deleted; the caller's identity candidates no longer include this person if no other bindings remain |
 | Self-assignment attempt | Silently skipped (self-exclusion) |
 | Non-superuser sets `auto_enable = True` | 403: "Only administrators can auto-enable identities for users" |
 | Duplicate binding (`owner_id, agent_id`) | 409: "Agent already added to identity" |

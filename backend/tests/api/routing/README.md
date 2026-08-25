@@ -57,8 +57,11 @@ domain's own `README.md` for what each stub is for.
   `.../traces/{id}/replay` write the second, and those rows are the only ones
   carrying `actor_user_id` (the admin who ran it) and, for a hand-typed
   simulate, a NULL `channel_id`. `app_mcp` / `identity` are still unreachable
-  (plan Phase 5), so `seed_routing_trace` remains the only way to exercise the
-  `origin` filter against *those*. Nothing may assume a single origin: a
+  — `ORIGIN_APP_MCP` is reserved vocabulary and `routing_tuning` Phase 6 owns
+  emitting it; phase 5 of `docs/plans/channels_identity_unification/` made
+  App MCP itself a channel but did not wire a capture — so `seed_routing_trace`
+  remains the only way to exercise the `origin` filter against *those*.
+  Nothing may assume a single origin: a
   channel-scoped trace clear does not remove a channel-less simulate row, and a
   test counting "traces this delivery produced" must filter by origin or it
   will pick up an earlier simulate.
@@ -124,27 +127,29 @@ domain's own `README.md` for what each stub is for.
   bullet below on stage instrumentation). The flag removes the helper's stub
   only — the global guard stays underneath, so forgetting the provider patch
   still fails loudly rather than dialling out.
-- **An assignment made for anyone other than the route's creator lands
-  `is_enabled=False`.** `create_admin_route(assigned_user_ids=[...])` alone
-  therefore produces a route nobody can reach; pass `auto_enable_for_users=True`
-  (superuser-only) or the scenario silently becomes a different one. The
-  identity equivalent has no superuser-free switch at all — the *recipient*
-  turns the contact on via `toggle_identity_contact`.
+- **Assignment-gated reachability is now an identity-only concern.**
+  `AppAgentRoute` / `AppAgentRouteAssignment` (and `create_admin_route` /
+  `create_user_route`, the test helpers that drove them) are deleted — phase 5
+  of `docs/plans/channels_identity_unification/`. The identity equivalent
+  survives: `create_identity_binding(assigned_user_ids=[...])` alone produces a
+  binding nobody can reach until the *recipient* turns the contact on via
+  `toggle_identity_contact` (`auto_enable=True` on the binding, superuser-only,
+  skips that step).
 - **Deterministic Pass 1 / Pass 2 setup** follows the same recipe as
   `tests/api/server_channels/`: give the sender an agent with its own
   `router_trigger_prompt` (`tests.utils.agent.set_router_trigger_prompt`) and
-  name the classifier's answer. Channel Pass 1 reads **no `AppAgentRoute` at
-  all** — a route grants nothing here — and Pass 2 needs
-  `AgentClassifier.classify` patched per-test to a deterministic result (there
-  is no LLM in the test environment).
+  name the classifier's answer. Channel Pass 1 reads **no `AppAgentRoute`**
+  (the family no longer exists) — and Pass 2 needs `AgentClassifier.classify`
+  patched per-test to a deterministic result (there is no LLM in the test
+  environment).
 - **`candidates[].prompt_examples` on a channel trace comes from
   `Agent.example_prompts`,** joined with newlines by
   `ChannelCandidateProvider`. Set it with `update_agent(..., example_prompts=[
-  ...])`, as `routing_message_text_gating_test.py` does. (On the App MCP path
-  it still comes from an *admin-shaped* route only: `get_effective_routes_for_
-  user` sets `prompt_examples=` on the assigned-`AppAgentRoute` branch and not
-  on the personal `UserAppAgentRoute` one, so a test built on
-  `create_user_route` sees `prompt_examples: None` and proves nothing.)
+  ...])`, as `routing_message_text_gating_test.py` does. App MCP reads the
+  same field through the same provider now — phase 5 made App MCP compose
+  `ChannelCandidateProvider` (+ `IdentityCandidateProvider`) exactly as a
+  channel does, so there is no separate admin-route-shaped `prompt_examples`
+  source left to distinguish.
 - **`stages[].prompt` / `raw_response` / `llm_attempts` are populated only when
   Pass 1 actually classified.** A short-circuited decision has none of them by
   construction — it never rendered a prompt — so a test asserting on them needs

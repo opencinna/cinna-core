@@ -6,8 +6,8 @@ Server Channels. The only things legitimately shared across surfaces are
 and never another surface's enablement toggles.
 
 **Why this module exists.** Channel Pass 1 used to call
-``AppMCPRoutingService.route_message``, whose candidates come from
-``AppAgentRouteService.get_effective_routes_for_user``. That function answers
+``AppMCPRoutingService.route_message``, whose candidates came from the deleted
+``AppAgentRouteService.get_effective_routes_for_user``. That function answered
 *"what can this user address through the App MCP server"* — admin-created
 ``AppAgentRoute`` rows assigned to them, their ``UserAppAgentRoute`` rows, and
 identity contacts — which is a different question from *"which agents does this

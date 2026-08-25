@@ -241,10 +241,12 @@ export function UserChannelsCard() {
   const agentsTruncated = (agentsData?.count ?? 0) > agents.length
 
   // The people who have shared their identity with this user. Fetched on the
-  // same "only once a row is open" terms as the agent list, and under the query
-  // key `AppAgentRoutesCard` already uses — this is the same list, viewed from
-  // a second surface, and two keys for it would let one card show a person the
-  // other has just switched off.
+  // same "only once a row is open" terms as the agent list. This card is now
+  // the sole surface for these toggles: `AppAgentRoutesCard` rendered a second
+  // copy of them over a raw `fetch` until App MCP became a channel row here.
+  // If a second surface is ever added, it must share this query key — two keys
+  // for one list would let one card show a person the other has just switched
+  // off.
   const {
     data: identityContacts,
     isError: isContactsError,

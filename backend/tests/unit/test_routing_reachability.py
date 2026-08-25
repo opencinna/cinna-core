@@ -24,14 +24,8 @@ Four properties, each one there because its failure mode is silent:
    through a real decision at all — which is why the last section is here rather
    than in the API file next to the rest of the sentences.
 
-   Three shapes are undrivable, for three different reasons, and the last one is
-   the interesting case:
+   Two shapes are undrivable, for two different reasons:
 
-   - An `origin="app_mcp"` decision **with a candidate list**. Nothing opens an
-     App MCP capture (`ORIGIN_APP_MCP` is reserved vocabulary; routing_tuning
-     Phase 6 owns emitting it), and the seeded-row exemption the API file uses
-     carries no candidates. So the App MCP *count noun* — plan §9's "3 effective
-     routes" headline — has nowhere else to be asserted.
    - Skip reasons **no surface produces any more**: `identity_route` (deleted
      from the channel path by the scope split) and `foreign_owner` (kept as a
      defence-in-depth postcondition that is unreachable by construction, since
@@ -42,6 +36,18 @@ Four properties, each one there because its failure mode is silent:
      `agent_missing` needs the winning agent deleted between the candidate scan
      and the lookup — plus `route_inactive`, whose producer moved off the
      channel path entirely but whose historical rows did not.
+
+   A third shape used to live here: an `origin="app_mcp"` decision **with a
+   candidate list**, needed because plan §9's "3 effective routes" headline was
+   App MCP's own count noun and nothing opens an App MCP capture to drive it
+   through the API file. Phase 5 of `docs/plans/channels_identity_unification/`
+   deleted the `AppAgentRoute` family that noun described — App MCP now builds
+   its ballot from the same two candidate providers a channel does, so there is
+   no route left for any verdict to count, and both origins say "N eligible
+   candidates". The noun is gone, not merely hard to drive, so there is nothing
+   left here to assert; `test_the_counted_noun_follows_the_origin` and
+   `test_an_unknown_origin_gets_the_app_mcp_wording`, which pinned the old
+   per-origin wording, were deleted with it.
 """
 from __future__ import annotations
 
@@ -557,68 +563,17 @@ def test_the_foreign_owner_skip_still_explains_itself() -> None:
     )
 
 
-def test_the_counted_noun_follows_the_origin() -> None:
-    """Plan §9's headline number, in each surface's own vocabulary.
-
-    "3 effective routes" on a channel is wrong twice over: nothing on that
-    ballot is a route, and the phrase sends an admin to a routes list to look
-    for three rows that need not exist. The App MCP half is the sentence §9
-    actually specifies, and this is the only place it can be asserted with a
-    candidate list behind it — nothing opens an App MCP capture.
-    """
-    stage = {
-        "stage": routing_trace.STAGE_PASS_1,
-        "candidates": [_candidate(f"r{i}", f"Agent{i}") for i in range(3)],
-    }
-
-    channel = RoutingReachabilityService.diagnose(
-        _DB(), _trace([stage], origin=routing_trace.ORIGIN_SERVER_CHANNEL)
-    )
-    app_mcp = RoutingReachabilityService.diagnose(
-        _DB(), _trace([stage], origin=routing_trace.ORIGIN_APP_MCP)
-    )
-
-    assert channel.code == app_mcp.code == "no_match"
-    assert channel.verdict.startswith(
-        "This user has 3 eligible candidates and the classifier matched none of "
-        "them."
-    )
-    assert app_mcp.verdict.startswith(
-        "This user has 3 effective routes and the classifier matched none of "
-        "them."
-    )
-
-
-def test_an_unknown_origin_gets_the_app_mcp_wording() -> None:
-    """The default has to land somewhere, and it lands on the wording every
-    origin had before the split.
-
-    Safe in both directions: an unknown origin is no worse off than it was, and
-    the two reserved origins a future build will actually emit (`app_mcp`,
-    `identity`) are precisely the surfaces that do require a route. A channel
-    silently diagnosed as App MCP is the §2.4 defect; App MCP diagnosed as a
-    channel would be its mirror image, and only the known channel origins are
-    ever treated as one.
-    """
-    stage = {
-        "stage": routing_trace.STAGE_PASS_1,
-        "candidates": [_candidate("r1", "Agent1")],
-    }
-    diagnosis = RoutingReachabilityService.diagnose(
-        _DB(), _trace([stage], origin="something_added_later")
-    )
-
-    assert diagnosis.verdict.startswith("This user has 1 effective route")
-
-
 def test_a_channel_verdict_never_claims_an_owner_when_the_sender_is_gone() -> None:
     """`RoutingDecision.user_id` is `SET NULL`, deliberately — a trace still
     explains a routing rule after the account is gone.
 
-    A channel candidate is defined *entirely* by ownership, so with no sender
-    there is nothing to check the agent's owner against. The branch that
-    otherwise catches this one says "this user owns it", which about no user at
-    all is exactly the confidently-wrong diagnosis this module exists to avoid.
+    A routing candidate is defined *entirely* by ownership on every surface
+    now — App MCP builds its ballot from the same `ChannelCandidateProvider`
+    a channel does, since the `AppAgentRoute` family that used to make App MCP
+    a different case is deleted — so with no sender there is nothing to check
+    the agent's owner against. The branch that otherwise catches this one says
+    "this user owns it", which about no user at all is exactly the
+    confidently-wrong diagnosis this module exists to avoid.
     """
     agent = Agent(
         name="Orphaned Trace Agent",
@@ -639,7 +594,7 @@ def test_a_channel_verdict_never_claims_an_owner_when_the_sender_is_gone() -> No
     assert diagnosis.verdict == (
         "This user has 0 eligible candidates; Orphaned Trace Agent is not "
         "among them because this decision's sender account no longer exists, "
-        "and a channel candidate is defined entirely by who owns it — with no "
+        "and a routing candidate is defined entirely by who owns it — with no "
         "sender there is nothing left to check its owner against. Run Simulate "
         "for the account you actually mean; this trace can no longer answer a "
         "question about ownership."

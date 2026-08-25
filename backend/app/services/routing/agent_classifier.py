@@ -73,14 +73,18 @@ PROMPT_TEMPLATE_PATH = (
     Path(__file__).resolve().parents[2] / "agents" / "prompts" / "app_agent_router_prompt.md"
 )
 
-#: Mirrors the ``prompt_examples`` validation on ``AppAgentRoute`` /
-#: ``IdentityAgentBinding`` (2000 chars / 10 non-empty lines). Re-applied at
-#: render time rather than trusted, because a candidate can also be built from a
-#: bundle revision or a stored row written before the validator existed.
+#: Mirrors the ``prompt_examples`` validation enforced at write time in
+#: ``api/routes/identity.py`` for ``IdentityAgentBinding`` (2000 chars / 10
+#: non-empty lines) — the one surviving write-time validator on a routing
+#: candidate's text. Re-applied at render time rather than trusted, because a
+#: candidate can also be built from a bundle revision or a stored row written
+#: before the validator existed.
 #:
 #: The line limit was enforced here from the start; the character limit was
 #: only ever *documented* by this comment, which held while every path into a
-#: candidate was bounded at write time by one of those route-layer validators.
+#: candidate was bounded at write time by one of the route-layer validators
+#: that existed then (the App MCP route family, now deleted, plus the
+#: surviving ``IdentityAgentBinding`` one above).
 #: ``ChannelCandidateProvider`` opened the first unbounded one:
 #: ``Agent.example_prompts`` is a user-editable JSON column with no validator
 #: anywhere, so a single pasted 500KB line would have reached the model

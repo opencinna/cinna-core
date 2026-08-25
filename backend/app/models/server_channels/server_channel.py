@@ -31,7 +31,7 @@ import uuid
 from datetime import UTC, datetime
 
 from pydantic import model_validator
-from sqlalchemy import JSON, Text, UniqueConstraint
+from sqlalchemy import JSON, Index, Text, UniqueConstraint, text
 from sqlmodel import Column, Field, SQLModel
 
 
@@ -116,6 +116,30 @@ class ServerChannel(ServerChannelBase, table=True):
     __table_args__ = (
         UniqueConstraint("name", name="uq_server_channel_name"),
         UniqueConstraint("webhook_token", name="uq_server_channel_webhook_token"),
+        # Partial unique index: at most one row per *singleton* channel type.
+        #
+        # Declared here purely so the model metadata and the database agree.
+        # Alembic compares indexes on this table, so an index that exists in
+        # Postgres but not in the metadata is proposed for deletion by the next
+        # ``--autogenerate`` — the singleton guard would be swept away in an
+        # unrelated migration (see bccf5d92996f, which did exactly that to
+        # ``ix_cli_setup_token_owner_agent``). Name and predicate must stay
+        # byte-identical to migration 867cacb5a827.
+        #
+        # The predicate is a SQL literal, so the singleton list is hardcoded and
+        # cannot be derived from ``registry.singleton_channel_types()`` at
+        # runtime. Adding a future singleton transport requires a NEW migration
+        # that rebuilds this index with the extra type in the IN-list.
+        #
+        # This does not replace ``uq_server_channel_name``: that constraint is
+        # the collision ``ServerChannelService.get_or_create_singleton`` is
+        # written against on the two-worker materialization race.
+        Index(
+            "uq_server_channel_singleton_type",
+            "channel_type",
+            unique=True,
+            postgresql_where=text("channel_type IN ('app_mcp')"),
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

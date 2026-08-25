@@ -283,11 +283,11 @@ class RoutingNearMiss(SQLModel):
 
     A *hint*, explicitly not a rule: the classifier is an LLM and there is no
     similarity cut-off anywhere in routing. This is the same Jaccard overlap
-    ``AppAgentRouteService`` already uses for install-time route-conflict
-    detection, borrowed to answer the question an admin actually asks about a
-    ``no_match`` — "how close did it come?". Saying "0.31, below the threshold"
-    would be a claim the router does not implement; the wording says "closest",
-    not "just missed".
+    ``app/services/routing/text_similarity.py`` already uses for install-time
+    route-conflict detection, borrowed to answer the question an admin
+    actually asks about a ``no_match`` — "how close did it come?". Saying
+    "0.31, below the threshold" would be a claim the router does not
+    implement; the wording says "closest", not "just missed".
     """
 
     ref_id: str

@@ -999,3 +999,77 @@ def test_ai_credential_share_recreated_on_reinstall_after_manual_deletion(
         "via _link_publisher_ai_credential — install_bundle should be "
         "self-healing for the publisher AI share row."
     )
+
+
+# ── Scenario N: missing router_trigger_prompt is NOT degraded ────────────────
+
+
+def test_missing_router_trigger_prompt_does_not_degrade_the_install(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """N. The single most important regression guard in phase 5 of
+    docs/plans/channels_identity_unification/.
+
+    Before the AppAgentRoute deletion, ``InstallService`` marked an install
+    ``last_update_status="degraded"`` when the published revision carried no
+    ``router_trigger_prompt`` — that was the signal "the auto-managed App MCP
+    route could not be created". With the whole route family gone there is
+    nothing left to fail to create, so a revision published with no trigger
+    prompt must install cleanly: no route, no attempted route, no degrade.
+
+    Paired with the credential-driven degrade path (Scenario D above) so this
+    is not a vacuous "nothing ever degrades" test: the missing-trigger-prompt
+    case must read as healthy while a real degrade reason — revoked
+    credential sharing — still reads as degraded on the very next install.
+    """
+    # ── Phase 1: publish with NO router_trigger_prompt, no credentials ───────
+    publisher_agent = create_agent_via_api(
+        client, superuser_token_headers, name="InstCred-N-NoPrompt-Publisher"
+    )
+    drain_tasks()
+    assert publisher_agent["router_trigger_prompt"] in (None, ""), (
+        f"Precondition: agent must start with no trigger prompt, got "
+        f"{publisher_agent['router_trigger_prompt']!r}"
+    )
+    fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
+    _make_public(client, superuser_token_headers, fresh_pub["bundle_uuid"])
+
+    installer, installer_headers = _make_user_and_headers(client)
+    install = _install(client, installer_headers, fresh_pub["bundle_id"])
+
+    fresh_install = _get_install(client, installer_headers, install["id"])
+    assert fresh_install["last_update_status"] != "degraded", (
+        f"A missing router_trigger_prompt must not degrade the install — "
+        f"there is no route left to fail to create. Got "
+        f"{fresh_install['last_update_status']!r}"
+    )
+
+    # ── Phase 2: a REAL degrade reason still degrades ─────────────────────────
+    # Same recipe as Scenario D: a shareable credential whose sharing is
+    # revoked between publish and install. If this stopped degrading too,
+    # Phase 1 above would prove nothing — it would just mean degradation
+    # broke entirely, not that this specific case was fixed correctly.
+    other_publisher_agent = create_agent_via_api(
+        client, superuser_token_headers, name="InstCred-N-Degrades-Publisher"
+    )
+    drain_tasks()
+    shared_cred = _create_credential(
+        client, superuser_token_headers, name="ic-n-shared", allow_sharing=True
+    )
+    _link_credential_to_agent(
+        client, superuser_token_headers, other_publisher_agent["id"], shared_cred["id"]
+    )
+    other_fresh_pub = _publish(client, superuser_token_headers, other_publisher_agent["id"])
+    _make_public(client, superuser_token_headers, other_fresh_pub["bundle_uuid"])
+    set_credential_sharing(
+        client, superuser_token_headers, shared_cred["id"], allow_sharing=False
+    )
+
+    other_install = _install(client, installer_headers, other_fresh_pub["bundle_id"])
+    other_fresh_install = _get_install(client, installer_headers, other_install["id"])
+    assert other_fresh_install["last_update_status"] == "degraded", (
+        f"A real degrade reason (revoked credential sharing) must still "
+        f"degrade the install. Got {other_fresh_install['last_update_status']!r}"
+    )

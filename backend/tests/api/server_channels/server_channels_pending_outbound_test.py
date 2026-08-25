@@ -35,7 +35,6 @@ from app.services.server_channels.channel_inbound_service import (
 )
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.agent import create_agent_via_api, set_router_trigger_prompt
-from tests.utils.app_agent_route import create_user_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import make_user_and_headers, publish_bundle_and_make_public
 from tests.utils.environment import set_environment_status

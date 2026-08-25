@@ -2,169 +2,132 @@
 
 ## Purpose
 
-A universal, application-level MCP endpoint that any authenticated platform user can connect to. Unlike per-agent MCP connectors (which expose a single agent), the App MCP Server acts as a **router**: it receives a message, determines which agent should handle it, creates a session with that agent, and streams the response back -- all transparently to the MCP client.
+A universal, application-level MCP endpoint that any authenticated platform user can connect to. Unlike per-agent MCP connectors (which expose a single agent), the App MCP Server acts as a **router**: it receives a message, determines which agent should handle it, creates a session with that agent, and streams the response back — all transparently to the MCP client.
 
-Users connect once with a single URL and interact with multiple agents through natural language, without needing to configure separate MCP connectors for each agent.
+Users connect once with a single URL and interact with multiple agents through natural language, without needing to configure anything per agent.
+
+**As of Phase 5 of the channels & identity unification refactor, App MCP is a [Server Channel](../server_channels/server_channels.md)** — a singleton `ServerChannel` row (`channel_type="app_mcp"`) resolved by the same `ChannelPolicyService` every other channel uses. The entire `AppAgentRoute` family (admin routes, per-user assignments, personal routes, `is_auto_managed`, backfill-on-demand, `message_patterns`, the install-time conflict toast) is **deleted**. There is nothing left to create or assign: **App MCP routes over every agent the caller owns that has a router trigger prompt or example prompts, plus the identities they have enabled** — the identical candidate set [Server Channels](../server_channels/server_channels.md) routes over for the same person.
 
 ## Core Concepts
 
 | Term | Definition |
 |------|-----------|
-| **App Agent Route** | A binding between an agent and one or more users, with routing rules that determine when to use that agent |
-| **Shared Route** | Route created by any user for their own agent (or by a superuser for any agent) and assigned to specific users; users can enable/disable their assignment |
-| **Personal Route** | Legacy route type created via Settings (soft-deprecated; replaced by agent-scoped routes) |
-| **Route Assignment** | Link between a route and a specific user, with a per-user enable/disable toggle |
-| **Trigger Prompt** | Natural language description of when to route messages to this agent (fed to the AI router) |
-| **Message Pattern** | Glob-style pattern (fnmatch) for auto-matching messages to agents (e.g., `sign this document *`) |
-| **Effective Route** | Unified representation of a route (shared or personal) that is active for a given user and channel |
-| **Routing Result** | Output of the routing engine: which agent was selected and how (pattern, AI, or single-route) |
-| **Channel** | Delivery mechanism for the App MCP Server (currently `app_mcp`; extensible to `google-chat`, `slack`, etc.) |
-| **auto_enable_for_users** | Flag on a route that, when set by a superuser, automatically enables assignments for newly assigned users |
-| **activate_for_myself** | Flag on route creation that auto-adds the creator as an assigned user with `is_enabled=True`; defaults ON in the UI |
-| **Prompt Examples** | Optional newline-separated short prompts on a route, exposed as individual MCP prompts via `prompts/list` to give MCP clients ready-to-use task suggestions |
+| **App MCP Channel** | The singleton `ServerChannel` row (`channel_type="app_mcp"`) that carries App MCP's admin kill switch, `visibility` + grant allowlist, per-user agent scope, and `allow_identity_routing`. Created lazily on first use by `ServerChannelService.get_or_create_singleton`; at most one may ever exist. See [Server Channels — App MCP as a channel](../server_channels/server_channels.md#app-mcp-as-a-channel) |
+| **Authenticated transport** | The `ChannelCapabilities.inbound_mode` App MCP declares: `needs_webhook_token=False`, `needs_outbound_credentials=False`. There is no external sender to whitelist and no request to verify — the caller already holds a platform bearer token bound to one `user_id` |
+| **Router Trigger Prompt** | `Agent.router_trigger_prompt` — the short natural-language sentence an owner writes describing when their agent should be picked. The sole trigger-side routing input, alongside example prompts |
+| **Example Prompts** | `Agent.example_prompts` — a list of ready-to-send task suggestions on the agent itself, edited from the Configuration tab. Both fed to the classifier and surfaced as MCP prompts |
+| **Candidate Providers** | The two composable building blocks every routing surface shares: `ChannelCandidateProvider` (the caller's own agents, narrowed to the resolved agent scope) and `IdentityCandidateProvider` (the people the caller can address, one candidate per identity owner). App MCP composes them in that order — owned agents first, identities after — exactly as [Server Channels](../server_channels/server_channels.md) does |
+| **Routing Result** | Output of the routing engine: which agent (or which identity, handed to Stage 2) was selected and how (`only_one` or `ai`) |
+| **Revocation delay** | The App MCP availability cache TTL (`settings.APP_MCP_AVAILABILITY_CACHE_TTL_SECONDS`, default **45 seconds**). An admin disabling the channel, withdrawing a grant, or the caller's own toggle takes up to this long to actually refuse the next MCP call — see [Availability is checked at token use, not at issue](#availability-is-checked-at-token-use-not-at-issue) |
 
 ## User Stories / Flows
 
-### Bundle Install: Auto-Route Creation
+### Any Agent Owner: Become Reachable Over App MCP
 
-When a user installs a bundle whose latest revision has a non-empty `router_trigger_prompt`, `InstallService` automatically creates an `AppAgentRoute` and a self-assignment for the installer:
+There is no dialog to fill in and nothing to create. An agent becomes an App MCP candidate the moment it has a router trigger prompt or at least one example prompt:
 
-- Route `name` = the install's agent name
-- Route `trigger_prompt` = `revision.router_trigger_prompt`
-- `session_mode = "conversation"`, `channel_app_mcp = True`, `is_active = True`
-- `activate_for_myself = True` — the installer is auto-assigned with `is_enabled = True`
-- `is_auto_managed = True` — signals that apply-update is permitted to refresh `trigger_prompt` and `name` from future revisions
+1. Owner opens their agent's **Configuration** tab.
+2. Sets a **Router Trigger Prompt** — one sentence describing when the agent should be picked (e.g. "Handles annual report generation and financial summaries") — and/or adds **Example Prompts**.
+3. As soon as it is saved, the agent is reachable from every MCP client connected to the caller's own App MCP session, subject to the caller's own agent scope on the channel (see [Server Channels — Agent scope](../server_channels/server_channels.md#agent-scope)).
 
-If the revision has no `router_trigger_prompt`, the route creation is skipped and the install is marked `last_update_status = "degraded"`. The installer can set or regenerate the trigger prompt from the Configuration tab's Agent Prompts card — saving it creates the missing route on the spot (see **Backfill-on-Demand** below), so the agent becomes reachable without waiting for the next apply-update.
+The agent's Integrations tab **MCP Connectors card** no longer offers an "App MCP Server Integration" option — the "New" dialog now has exactly two choices, **Direct MCP Connector** and (for developers) **Agent to Agent MCP Connector**. See [Agent Management](../agent_management/agent_management.md#mcp-connectors).
 
-### Backfill-on-Demand: Setting the Trigger Prompt Later
-
-`AppAgentRouteService.sync_router_trigger_prompt_from_agent` runs whenever `router_trigger_prompt` is saved (the focused `PATCH /agents/{id}/router-trigger-prompt` and the generic `PUT /agents/{id}`). It updates the install's auto-managed route — and when there is no such route yet, it **creates** one with exactly the install-time shape above. Without this, a degraded install stayed unreachable until an apply-update happened to run, while the MCP Connectors card promised the route would "appear here automatically".
-
-Creation is deliberately narrow. Nothing is created when:
-
-- the trigger prompt is empty — there is nothing to route on;
-- the agent is **not a bundle install** (`bundle_uuid IS NULL`) — owners of standalone agents manage App MCP exposure explicitly from the Integrations tab, the same reason the Phase 8 backfill script skips them;
-- the owner already has a **manual** route (`is_auto_managed=False`) on the agent — their override wins, mirroring `InstallService._refresh_or_create_auto_route_on_update`.
-
-The route is attributed to the **agent owner**, not the caller, so a superuser editing someone else's install creates the route and the enabled self-assignment for the owner.
-
-After install, a non-blocking conflict toast appears on the install page if the new route's trigger prompt closely overlaps (by lowercased token / Jaccard similarity) with an existing effective route the installer already has.
-
-### Any Agent Owner: Add Agent to App MCP Server
-
-1. User opens their agent's Integrations tab
-2. Finds the "MCP Connectors" card and clicks "New"
-3. Dialog shows two options: "Direct MCP Connector" and "App MCP Server Integration"
-4. User selects "App MCP Server Integration"
-5. Name defaults to the agent's name; fills in trigger prompt, session mode, and optionally message patterns
-6. "Activate for Myself" switch is ON by default — the creator is automatically added as an assigned user with the route enabled
-7. Optionally assigns other users via "Share with Users" (the creator is excluded from this list since they have the dedicated switch)
-8. If superuser: can toggle "Make Active for Users" ON so assigned users get the route pre-enabled
-9. If regular user: "Make Active for Users" toggle is disabled; assigned users must manually enable it
-10. Clicks Save — route appears in the MCP Connectors card under "App MCP Server" section
+For the `agent-user` role, `McpConnectorsCardSimple` on the Integrations tab is now purely explanatory: it mirrors the agent's trigger prompt read-only and states that the agent is reachable — there is no per-agent enable/disable switch any more, because there is nothing to switch. Reachability is governed entirely by the App MCP channel row (Settings → Channels) and the trigger prompt (Configuration tab).
 
 ### User: Connect via App MCP
 
-1. User opens Settings > Channels tab > "MCP Server" card
-2. Copies the MCP Server URL displayed in the card header (or clicks the `?` help button for step-by-step instructions via the Getting Started modal)
-3. Pastes URL into MCP client (Claude Desktop, Cursor, etc.) as a new MCP connector
-4. Clicks "Authorize" or "Connect" (label varies by client) to complete the OAuth flow
-5. User types a message in MCP client chat
-6. MCP client calls the `send_message` tool
-7. App MCP Server routes message to the right agent > session created > response streamed
-8. Subsequent messages in the same chat reuse the session (via `context_id`)
+1. User opens **Settings → Channels** and finds the **MCP Server** card.
+2. Copies the MCP Server URL displayed in the card header (or clicks the `?` help button for step-by-step instructions via the Getting Started modal).
+3. Pastes the URL into an MCP client (Claude Desktop, Cursor, etc.) as a new MCP connector.
+4. Completes the OAuth flow.
+5. User types a message; the MCP client calls the `send_message` tool.
+6. App MCP routes the message to the right agent (or identity), creates or reuses a session, and streams the response back.
+7. Subsequent messages in the same chat reuse the session (via `context_id`).
 
-### User: Enable/Disable Shared Routes
+The **App MCP Server** row itself lives among the other channels on the same Settings → Channels page: the caller's own on/off toggle, agent scope, and `allow_identity_routing` switch are set there, exactly as for Google Chat or Email. See [Server Channels — Availability and per-user settings](../server_channels/server_channels.md#availability-and-per-user-settings).
 
-1. User opens Settings > Channels tab > "MCP Server" card
-2. Sees the "MCP Shared Agents" section listing routes shared with them
-3. Each row shows: agent name, owner name, "shared by" info (if different from owner), and an enable/disable switch
-4. Toggles the switch to enable or disable their assignment
-5. If the route creator has globally disabled the route, the switch is greyed out with a "Disabled by admin" label
+### User: Address a Colleague from an MCP Client
 
-### Superuser: Manage Routes Across All Agents
+Composing the identity candidate provider means an MCP client can reach another person's agents the same way a Google Chat message can — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md). This requires the caller to have turned `allow_identity_routing` on for the App MCP channel in Settings → Channels; **it is off by default and does not inherit an admin default** (see [Business Rules](#business-rules) below for why every existing user is affected).
 
-Superusers retain full management capabilities via the preserved admin API endpoints at `/api/v1/admin/app-agent-routes/`. They can list all routes across all agents, create routes for any agent, and set `auto_enable_for_users=True` so that assigned users get the route immediately active.
+### Superuser: Configure App MCP as a Channel
+
+App MCP now has an admin-facing side it never had before, on the **Channels** tab of `/admin/server-configuration`, alongside every other channel: a kill switch (`enabled`), `visibility` (`public` or `restricted` + a grant allowlist), and a default agent scope. The admin form renders no webhook, secret, or whitelist field for this row — the app-MCP adapter declares an `authenticated` transport with nothing of the sort, and the form drives off that declaration rather than a `channel_type` check. See [Server Channels — App MCP as a channel](../server_channels/server_channels.md#app-mcp-as-a-channel).
 
 ## Business Rules
 
-### Route Ownership and Creation
+### Composed Routing, Not Route Lookup
 
-- **Any user** can create App MCP routes for agents they own
-- **Superusers** can create routes for any agent regardless of ownership
-- **Bundle installs** auto-create a route via `InstallService._auto_create_app_mcp_route` — the route has `is_auto_managed=True` and is owned by the installer. When install-time creation was skipped for want of a trigger prompt, `AppAgentRouteService._create_auto_route_for_agent` mints the same route the moment the owner saves one
-- Non-superusers cannot set `auto_enable_for_users=True` — this is superuser-only
-- Non-superusers can assign other users to their routes, but assignments are created with `is_enabled=False` (users must manually enable)
-- Superusers assigning users to routes with `auto_enable_for_users=True` create assignments with `is_enabled=True`
-- When `activate_for_myself=True` (default in UI), the route creator is auto-added as an assigned user with `is_enabled=True`
-- The creator is excluded from the "Share with Users" picker in the UI to avoid confusion (they use the dedicated "Activate for Myself" switch instead)
+The Stage 1 ballot is composed from exactly the same two providers [Server Channels](../server_channels/server_channels.md) uses, in the same order:
 
-### `is_auto_managed` Flag
+1. `ChannelCandidateProvider.build(db, user_id, policy=policy)` — every agent the caller owns, narrowed to the resolved agent scope (`"all"` / `"list"` / `"none"`), eligible when it has a non-blank `router_trigger_prompt` or non-empty `example_prompts`. An agent excluded by scope or wording is recorded as a skipped candidate, never silently dropped.
+2. `IdentityCandidateProvider.build(db, user_id)` — one candidate per identity owner the caller may currently address, appended **only when `policy.allow_identity_routing` is on**. With the switch off the provider is not called at all, so no identity trace row exists either — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md).
 
-The `is_auto_managed` boolean column on `AppAgentRoute` marks routes that were created by `InstallService` (including the backfill-on-demand path in `AppAgentRouteService`, and the Phase 8 backfill script `backend/app/scripts/backfill_router_trigger_prompts.py`). The backfill targets **foreign bundle installs only** (`is_publisher_install=False AND bundle_uuid IS NOT NULL`); owned non-bundle agents are intentionally skipped because the owner manages App MCP exposure manually via the Integrations tab. Its semantics:
+Neither surface borrows the other's candidate set or enablement toggles; they compose the same building blocks independently. A standalone (non-bundle) agent needs nothing special any more — the old motivating bug ("a standalone agent has no `AppAgentRoute` by construction and is invisible to routing") no longer exists, because there is no route in the story at all.
 
-- **`True`** — the route was bundle-created. `apply_update` is permitted to refresh `trigger_prompt` and `name` from the new revision's `router_trigger_prompt`. The flag is not settable from the public `POST /api/v1/agents/{agent_id}/app-mcp-routes/` body; `InstallService` sets it via the internal `auto_managed=True` kwarg on `AppAgentRouteService.create_route`
-- **`False`** — default for routes created via the UI. Any user edit via `PUT /api/v1/agents/{agent_id}/app-mcp-routes/{route_id}` also flips an auto-managed route to `False`, after which `apply_update` will never overwrite it again
+### ⚠️ Identity Routing Is Opt-In and Does Not Inherit
 
-This design lets the publisher update the trigger prompt in a new revision and have all installers' routes refresh automatically — unless an installer has intentionally customized their route.
+**`allow_identity_routing` defaults to `false` and never inherits from a channel default** (master plan §3, principle 4 — anything that can route into another person's workspace is opt-in, per person, by the receiving message's *sender*). This is a **deliberate behaviour change**, not an oversight, and its effect is immediate on every existing deployment: **every App MCP user who could previously reach an identity contact loses that reach until they turn the switch on themselves**, from **Settings → Channels → App MCP Server → Identity routing**. There is no admin override that can restore it on their behalf.
 
-### Route Resolution
+### Availability Is Checked at Token Use, Not at Issue
 
-- **Shared routes** (AppAgentRoute via assignment) are active for a user only when: route `is_active=true` AND assignment `is_enabled=true`
-- **Personal routes** (legacy UserAppAgentRoute) are active when: route `is_active=true`
-- Multiple routes per agent are supported — no unique constraint by owner
+`app_mcp_token` rows are unaffected by any of this — a minted token is not revoked. Instead, `AppMCPTokenVerifier` checks, on every request, whether the App MCP channel is currently available to the token's owner: `ServerChannel.enabled` AND access (public, or a granted `restricted` channel) AND the caller's own per-channel toggle, all resolved through `ChannelPolicyService.resolve(...).is_available` — the identical conjunction every other channel is gated on.
 
-### Message Routing Priority
+That resolution is expensive to run on every MCP call (`tools/call`, `tools/list`, `prompts/list`, every SSE reconnect), so it is cached **per user id, in process memory, for `settings.APP_MCP_AVAILABILITY_CACHE_TTL_SECONDS` (default 45 seconds)**. Concretely:
 
-The Stage 1 ballot is **composed** from two candidate providers: the user's effective routes (above) and the identity owners they can address (one candidate per person, from `IdentityCandidateProvider` — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md)). Neither borrows the other's set; a surface that wants only routes simply does not ask for identities.
+- **An admin disabling the channel, withdrawing a grant, or the caller's own toggle takes up to 45 seconds to actually refuse the next call** — the documented revocation delay.
+- The cache **fails closed**: a lookup that raises an exception denies the caller and is never cached in either direction — a transient database blip costs one denial, not a TTL-long one, and it can never be mistaken for "available" because of an outage.
+- A `TTL <= 0` bypasses the cache entirely — useful for a test or an operator who wants the switch to bite immediately, at the cost of the extra database read on every call.
 
-1. **Single candidate shortcut** -- if the ballot holds exactly one entry, route or person, use it directly (no classification needed)
-2. **Pattern matching** -- try each *route's* `message_patterns` against the message using fnmatch (case-insensitive); first match wins. Identity candidates carry no patterns
-3. **AI classification** -- call LLM with the message and the whole ballot; each candidate is passed as `{id, name, trigger_prompt, prompt_examples}`; `agent_name` is included so the classifier can disambiguate near-duplicate trigger prompts (e.g. "Calendar Planner" vs "Vacation Planner"); LLM picks the best candidate or returns "NONE"
-4. **No match** -- return error asking user to be more specific
-
-When the winner is an identity candidate, Stage 2 picks the agent from that person's portfolio. App MCP is **not** the only consumer of that provider: since Phase 3 of the channels & identity unification, [Server Channels](../server_channels/server_channels.md) composes the same identity candidates into its own Pass-1 ballot (gated on the sender's per-channel `allow_identity_routing` opt-in). Providers compose; neither surface borrows the other's candidate set or enablement toggles.
+An invalid token and a channel switched off for a valid one return the identical, undistinguishable refusal — telling them apart would be an oracle for a server's channel configuration.
 
 ### Message Transformation
 
-When the AI router classifies a message, it also **strips routing prefixes** and extracts the core task. This ensures agents receive clean, actionable messages instead of delegation phrasing.
+When the AI router classifies a message, it also **strips routing prefixes** and extracts the core task, so agents receive clean, actionable messages instead of delegation phrasing.
 
-**How it works:**
-- The AI router returns both a selected agent ID and a transformed message
-- Routing prefixes like "ask cinna to...", "tell john to...", "forward to X..." are stripped automatically
-- If the message has no routing prefix (it's already a direct task), no transformation occurs
-- Pattern-match and single-route-shortcut paths deliver the original message unchanged (no AI involved)
+- The AI router returns both a selected candidate and a transformed message.
+- Routing prefixes like "ask cinna to...", "tell john to...", "forward to X..." are stripped automatically.
+- If the message has no routing prefix (it's already a direct task), no transformation occurs.
+- The single-candidate shortcut delivers the original message unchanged (no AI involved).
 
 **Examples:**
 - "ask cinna to generate employee report" → agent receives "generate employee report"
 - "tell john to fix the bug" → agent receives "fix the bug"
 - "generate report" → agent receives "generate report" (no prefix, no change)
 
-**Two-level transformation (with Identity MCP):**
+**Two-level transformation (through Identity):**
 - "ask cinna to ask john to generate report" → Stage 1 strips one layer → "ask john to generate report" → Stage 2 strips another → agent receives "generate report"
-- Each routing stage transforms the output of the previous stage
 
 **Cascade logic:**
-- If both stages transform, the final (Stage 2) transformation is used
-- If only Stage 1 transforms, its output is used
-- If neither transforms, the original message is used
+- If both stages transform, the final (Stage 2) transformation is used.
+- If only Stage 1 transforms, its output is used.
+- If neither transforms, the original message is used.
 
 **Safety guards:**
-- Empty or whitespace-only transformations are discarded (original used)
-- Transformations identical to the original are discarded
-- Transformations exceeding 2x the original message length are discarded (prevents hallucinated expansions)
+- Empty or whitespace-only transformations are discarded (original used).
+- Transformations identical to the original are discarded.
+- Transformations exceeding 2x the original message length are discarded (prevents hallucinated expansions).
 
-**Auditability:** When a transformation occurs, the original message is stored in `session_metadata["app_mcp_original_message"]` for traceability
+**Auditability:** when a transformation occurs, the original message is stored in `session_metadata["app_mcp_original_message"]` for traceability.
+
+### Routing Priority
+
+1. **Single-candidate shortcut** — if the whole ballot (owned agents + identities, when enabled) holds exactly one entry, use it directly; no classification call is made.
+2. **AI classification** — the shared `AgentClassifier.classify` (the same classifier every routing consumer uses since [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5) is called with the message and the whole ballot; each candidate is passed as `{id, name, trigger_prompt, prompt_examples}`.
+3. **No match** — an error asking the caller to be more specific.
+
+When the winner is an identity candidate, Stage 2 (`IdentityRoutingService.route_within_identity`) picks the agent from that person's portfolio and returns the binding + assignment ids that become the `IdentityGrant` re-verified at ingest — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md).
+
+Glob/pattern pre-matching is gone entirely (`message_patterns` is dropped everywhere, settled decision §2.9 of the master plan): it was a second, silently-higher-priority routing mechanism no trace explained well.
 
 ### Session Management
 
-- First message creates a new session with `integration_type = "app_mcp"`
-- Response includes `context_id` (the session UUID)
-- Subsequent messages with the same `context_id` reuse the existing session (no re-routing)
-- `context_id` is validated: session must have `integration_type = "app_mcp"` and `caller_id` matching the authenticated user
-- Invalid or missing `context_id` triggers a new routing + session creation
-- Sessions are independent of route configuration once created -- deleting a route does not affect active sessions
+- First message creates a new session with `integration_type = "app_mcp"` (or `"identity_mcp"` when the winner was an identity).
+- Response includes `context_id` (the session UUID).
+- Subsequent messages with the same `context_id` reuse the existing session (no re-routing).
+- `context_id` is validated: session must have `integration_type = "app_mcp"` and `caller_id` matching the authenticated user.
+- Invalid or missing `context_id` triggers a new routing + session creation.
+- Sessions are independent of any per-agent configuration once created.
 
 ### Session Ownership
 
@@ -176,28 +139,23 @@ App MCP sessions are owned by the **agent owner**, not the MCP caller:
 | `caller_id` | caller's user ID | The MCP client user who initiated the session — tracked for audit and display |
 
 This means:
-- The **agent owner** sees all App MCP sessions in their Sessions list
-- The **caller** does not see the session in their own platform UI (they interact through their MCP client only)
-- Session page shows a "MCP" badge and a caller email badge (e.g., `user-b@example.com`) so the owner knows who initiated the session
-- `caller_id` is set to `NULL` on `ON DELETE SET NULL` if the caller's account is deleted; the session remains visible to the owner
-- The caller can still resume their session using the `context_id` returned from the first message
+- The **agent owner** sees all App MCP sessions in their Sessions list.
+- The **caller** does not see the session in their own platform UI (they interact through their MCP client only).
+- Session page shows a "MCP" badge and a caller email badge so the owner knows who initiated the session.
+- `caller_id` is set to `NULL` on `ON DELETE SET NULL` if the caller's account is deleted; the session remains visible to the owner.
+- The caller can still resume their session using the `context_id` returned from the first message.
+
+### Access Control on the Underlying Session
+
+`ChannelIngestionService.assert_access`'s `mcp_caller` arm used to trust "the App MCP routing layer verified the caller has a route to this agent." With no route left to have verified that, the arm now requires that **the agent be owned by the caller, or an identity grant authorizes it** — reusing the same `IdentityService.verify_identity_access` six-condition check every other surface's identity arm uses, rather than inventing a second one. See [Identity MCP Server — Business Rules](../identity_mcp_server/identity_mcp_server.md#per-message-re-verification-channel-path).
 
 ### OAuth / Authentication
 
-- Reuses the existing shared OAuth AS at `/mcp/oauth/...`
-- MCP clients register via the same DCR endpoint with `resource` pointing to `/app/mcp`
-- Consent page shows "Application MCP Server" instead of a specific agent name
-- Any authenticated platform user can approve (no email ACL needed -- the user IS the ACL)
-- Tokens are app-scoped (stored in `app_mcp_token`), not connector-scoped
-
-### Access Control
-
-- **Agent-scoped endpoints** (`/agents/{agent_id}/app-mcp-routes`): accessible to agent owner and superusers
-- **Admin endpoints** (`/admin/app-agent-routes`): superuser-only, provides cross-agent visibility
-- **User endpoints** (`/users/me/app-agent-routes`): regular auth, returns user's shared and personal routes
-- **Conflict check endpoint** (`GET /api/v1/agents/{agent_id}/app-mcp-routes/conflicts`): same ownership gate as other agent-scoped routes — agent owner or superuser
-- Session listing enforced: `GET /sessions/` returns sessions where `user_id = current_user.id` (owner sees all their App MCP sessions)
-- Cross-caller session isolation: `context_id` resumption verifies `caller_id = authenticated_user.id` for `app_mcp` sessions — one caller cannot resume another caller's session
+- Reuses the existing shared OAuth AS at `/mcp/oauth/...`.
+- MCP clients register via the same DCR endpoint with `resource` pointing to `/app/mcp`.
+- Consent page shows "Application MCP Server" instead of a specific agent name.
+- Any authenticated platform user can approve (no email ACL needed — the user IS the ACL), subject to the App MCP channel's own `visibility` when restricted.
+- Tokens are app-scoped (stored in `app_mcp_token`), not connector-scoped, and are never revoked by a channel change — see [Availability Is Checked at Token Use, Not at Issue](#availability-is-checked-at-token-use-not-at-issue).
 
 ## Architecture Overview
 
@@ -208,23 +166,29 @@ MCP Client (Claude Desktop, Cursor, etc.)
     v
 App MCP Server (/mcp/app/mcp)
     |
-    +-- Authenticate user (AppMCPTokenVerifier)
+    +-- AppMCPTokenVerifier: is the token valid, AND is the App MCP channel
+    |   available to this user right now (ChannelPolicyService, 45s cache,
+    |   fail-closed)?
     +-- Receive send_message(message, context_id)
     |
     +-- 1. If context_id exists -> reuse existing session
     |
-    +-- 2. Pattern matching: try message_patterns on user's active routes
-    |      -> If match found -> select that agent
+    +-- 2. AppMCPRoutingService.route_message:
+    |      - ChannelCandidateProvider (owned agents, agent-scope narrowed)
+    |      - + IdentityCandidateProvider, only if allow_identity_routing
+    |      - single-candidate shortcut, else AgentClassifier.classify
+    |      - a person wins -> Stage 2 (IdentityRoutingService) picks the agent
     |
-    +-- 3. AI router: call LLM with message + user's available agents
-    |      -> LLM picks the best agent + extracts core task (strips routing prefixes)
-    |
-    +-- 4. Create session with selected agent, send transformed message, stream response
+    +-- 3. Create session with selected agent, send transformed message,
+    |      stream response
     |
     +-- Return { response, context_id, agent_name }
 
-Agent Owner UI:  Agent > Integrations tab > MCP Connectors card > New > App MCP Server Integration
-User Settings:   Settings > Channels tab > "MCP Server" card (read view + toggle shared routes)
+Agent Owner UI:  Agent > Configuration tab > Router Trigger Prompt / Example Prompts
+User Settings:   Settings > Channels > "App MCP Server" row (on/off, scope,
+                 identity routing) + "MCP Server" card (URL + connect help)
+Admin UI:        Admin > Server Configuration > Channels > App MCP Server row
+                 (kill switch, visibility + grants, default agent scope)
 ```
 
 ### Integration with Per-Agent MCP
@@ -235,60 +199,41 @@ User Settings:   Settings > Channels tab > "MCP Server" card (read view + toggle
 | Resource Server URL | `/mcp/{connector_id}/mcp` | `/mcp/app/mcp` |
 | Token Verifier | `MCPTokenVerifier(connector_id)` | `AppMCPTokenVerifier()` |
 | MCPServer instance | One per connector (lazy) | Single instance |
-| Session routing | `context_id` > fixed agent | `context_id` > routed agent |
+| Session routing | `context_id` → fixed agent | `context_id` → routed agent |
 | Registry | `MCPServerRegistry` dispatches by connector UUID | Special `"app"` path handled before UUID validation |
 
 ## Integration Points
 
-- **[MCP Integration](../mcp_integration/agent_mcp_architecture.md)** -- reuses the shared OAuth AS, MCPServerRegistry, and session infrastructure
-- **[Agent Sessions](../agent_sessions/agent_sessions.md)** -- App MCP sessions use the same Session model with `integration_type = "app_mcp"` and `agent_id` for direct agent resolution
-- **[AI Functions](../../development/backend/ai_functions_development.md)** -- the AI router classifies via `AgentClassifier.classify()` (`backend/app/services/routing/agent_classifier.py`), the classifier shared by every routing consumer since [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5; `AIFunctionsService.route_to_agent()` is a thin adapter kept for callers outside routing. The underlying provider cascade still defaults to `gemini-2.5-flash-lite`.
-- **[Agent Management](../agent_management/agent_management.md)** -- routes reference agents by ID; any user can create routes for their own agents, superusers for any agent
+- **[Server Channels](../server_channels/server_channels.md)** — App MCP is one `ServerChannel` row (`channel_type="app_mcp"`, the platform's `authenticated` transport). It shares the admin kill switch, `visibility` + grants, per-user agent scope, and `allow_identity_routing` model with every other channel, resolved by the same `ChannelPolicyService`
+- **[Identity MCP Server](../identity_mcp_server/identity_mcp_server.md)** — `IdentityCandidateProvider` supplies the people this caller can address; Stage 2 picks the agent when a person wins
+- **[MCP Integration](../mcp_integration/agent_mcp_architecture.md)** — reuses the shared OAuth AS, MCPServerRegistry, and session infrastructure
+- **[Agent Sessions](../agent_sessions/agent_sessions.md)** — App MCP sessions use the same Session model with `integration_type = "app_mcp"` and `agent_id` for direct agent resolution
+- **[AI Functions](../../development/backend/ai_functions_development.md)** — the AI router classifies via `AgentClassifier.classify()` (`backend/app/services/routing/agent_classifier.py`), the classifier shared by every routing consumer since [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5. The underlying provider cascade still defaults to `gemini-2.5-flash-lite`
+- **[Agent Management](../agent_management/agent_management.md)** — reachability is driven entirely by `Agent.router_trigger_prompt` and `Agent.example_prompts`, both edited from the Configuration tab; there is no App MCP-specific creation flow left on the Integrations tab
+- **[External Agent Access](../external_agent_access/external_agent_access.md)** — native clients (Cinna Desktop) discover the same personal-agents + identity-contacts sections through `GET /external/agents`; the old "MCP shared routes" middle section is gone there too
 
 ## Error Handling
 
 | Scenario | Behavior |
 |----------|----------|
-| No routes configured for user | Error: "No agents are configured for your account. Contact your admin." |
+| No candidates for user (no owned agent has wording, and no identity enabled) | Error: "No agents are configured for your account. Contact your admin." |
 | AI router can't determine agent | Error: "Could not determine which agent to use. Please be more specific." |
+| App MCP channel disabled, or caller not granted/enabled for it | Token refused with the same generic 401 an invalid token gets, within the 45s cache TTL |
 | Agent environment not active | Environment auto-activates; pending until ready |
 | Agent deleted after session created | Error: "The agent for this conversation is no longer available" |
 | Cross-caller `context_id` (caller B using caller A's context_id) | `caller_id` mismatch; session not found; falls through to new routing |
 | Concurrent messages on same session | Error: "Another message is being processed. Please wait." |
-| Non-superuser sets `auto_enable_for_users=True` | 400: "Only administrators can auto-enable routes for users" |
-| Non-superuser creates route for agent they don't own | 403: "You can only create routes for your own agents" |
-| Non-superuser edits or deletes another user's route | 403: "Access denied" |
 
 ## MCP Prompts
 
-The App MCP Server exposes the user's active route trigger prompts as MCP prompts via `prompts/list`. This allows external AI clients (like Claude Desktop) to discover available agents without guessing. Each prompt includes the route name and trigger description.
-
-### Prompt Examples
-
-App Agent Routes support an optional `prompt_examples` field: a newline-separated list of short, actionable example prompts. When set, each non-empty line is emitted as an individual MCP prompt alongside the existing trigger-prompt-based prompt.
-
-- Examples are returned **as-is** — they already skip the "ask cinna to..." routing prefix, so MCP clients can send them directly
-- Routes without `prompt_examples` behave exactly as before (only the trigger-prompt-based prompt is emitted)
-- Validation: max 2000 characters total, max 10 non-empty lines per route
-
-Owners set prompt examples in the App MCP Server Integration form (Integrations tab → "Prompt Examples" textarea, one example per line).
-
-```
-Route prompt_examples:
-  "generate employee report"
-  "summarize last quarter sales"
-
-MCP client prompts/list sees:
-  "generate employee report"
-  "summarize last quarter sales"
-```
+The App MCP Server exposes the caller's routable targets as MCP prompts via `prompts/list`, mirroring exactly what Stage 1's ballot would contain: the caller's own eligible agents, plus (when `allow_identity_routing` is on) the identity owners they can address. See [Prompt Examples](prompt_examples.md) for the full field-level behavior.
 
 ## Deprecation Notes
 
-### Personal Routes (UserAppAgentRoute)
+### The `AppAgentRoute` Family — Deleted
 
-The `user_app_agent_route` table and personal route creation in Settings are **soft-deprecated**. Existing personal routes continue to work and appear in the Settings card under a "Personal Routes" section with a deprecation hint. New routes should be created via the agent's Integrations tab (agent-scoped endpoints). The personal route creation UI has been removed from `AppAgentRoutesCard`.
+`AppAgentRoute`, `AppAgentRouteAssignment`, and `UserAppAgentRoute` (and everything built on them — admin-managed routes, per-user route assignments, the legacy personal routes, `is_auto_managed`, backfill-on-demand, the install-time conflict toast, install-time auto-route creation) are deleted outright, with no data migration (settled decision §2.8 of the master plan: "Admin makes their agent addressable by user B" is now served by identity or by an admin-published bundle, not by a route). Existing sessions created through the old route path continue to work by their `context_id`; there is nothing left in the platform that creates, assigns, or displays a route.
 
-### Admin Application Agents Page
+### The Admin "Application Agents" Page — Already Removed
 
-The dedicated admin "Application Agents" page (`/admin/application-agents`) and its sidebar menu item have been removed. Superusers manage routes from each agent's Integrations tab, with superuser-only admin endpoints still available via the API for administrative scripting.
+The dedicated admin "Application Agents" page and its sidebar menu item were removed before this phase and remain removed; there is no route-specific admin surface at all any more — App MCP's admin controls now live on the **Channels** tab of `/admin/server-configuration`, alongside every other channel.

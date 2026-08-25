@@ -3,9 +3,20 @@
 Covers:
   - Pass 1 (the sender's own agents) match, on a standalone agent with no
     `AppAgentRoute` at all — the shape that used to be invisible to routing.
-  - Pass 1 candidate scoping (`ChannelCandidateProvider`): a foreign agent is
-    absent from the ballot rather than filtered off it afterwards, and an
-    owned agent with nothing to classify on is a recorded skip.
+    (`AppAgentRoute` is deleted entirely as of phase 5 of
+    `docs/plans/channels_identity_unification/`, so every agent is now this
+    shape; the phrase is kept because it names the historical failure mode
+    this test guards, not a distinction that still exists.)
+  - Pass 1 candidate scoping (`ChannelCandidateProvider`): an identity contact
+    is absent from the ballot entirely, and an owned agent with nothing to
+    classify on is a recorded skip. Two tests that proved a *route* leaking
+    into or gating the ballot — a foreign agent reachable only through an
+    admin-route assignment, and a route's `channel_app_mcp`/`is_active`
+    toggles — are deleted with the mechanism they guarded: there is no route
+    left that could leak or gate. `channel_routing_scope_test.py` (an
+    architecture test) now holds the corresponding guarantee structurally —
+    neither `channel_routing_service.py` nor `channel_candidate_provider.py`
+    may import the App MCP routing surface at all.
   - Pass 1's two remaining post-classification guards, both unreachable
     through the real call graph and pinned by forging a candidate: the
     ownership postcondition that keeps an external Google Chat sender out of
@@ -35,11 +46,6 @@ from tests.utils.agent import (
     set_router_trigger_prompt,
     update_agent,
 )
-from tests.utils.app_agent_route import (
-    create_admin_route,
-    create_user_route,
-    list_user_routes,
-)
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import make_user_and_headers, publish_bundle, publish_bundle_and_make_public
@@ -55,6 +61,7 @@ from tests.utils.server_channel import (
     build_channel_candidate,
     build_message_event,
     create_server_channel,
+    find_server_channel_by_type,
     post_webhook,
     route_installed,
     update_server_channel,
@@ -67,6 +74,7 @@ from tests.utils.routing import (
 )
 from tests.utils.session import list_sessions
 from tests.utils.message import list_messages
+from tests.utils.user_channel import update_my_channel
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
 from tests.utils.utils import random_lower_string
 
@@ -204,72 +212,6 @@ def _pass1_candidates(client, superuser_headers, channel) -> list[dict]:
     ]
 
 
-def test_pass1_candidates_are_only_agents_the_sender_owns(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """An admin route assigned to the sender, pointing at ANOTHER user's agent,
-    is **absent from the ballot** — not skipped after the classifier saw it.
-
-    The setup is the incident's own shape, and it is what makes this a test
-    rather than a tautology: the foreign agent is reachable by the sender
-    through an active, enabled, `channel_app_mcp` admin route, so
-    `get_effective_routes_for_user` DOES return it and the old implementation
-    put it in front of the classifier. It also has a trigger prompt, so
-    eligibility is not what excludes it. Ownership is — applied when the
-    candidate set is built, not to the classifier's answer.
-
-    Naming no classifier answer is the second half of the assertion: once the
-    ballot is scoped to the sender's own agents it is empty, so nothing should
-    classify, and a classifier that runs anyway fails at the call.
-    """
-    channel = _channel(client, superuser_token_headers)
-    signer = GoogleChatJWTSigner()
-    sender, _sender_headers = create_random_user_with_headers(client)
-
-    other_owner, other_headers = create_random_user_with_headers(client)
-    promote_to_developer(client, superuser_token_headers, other_owner["id"])
-    create_random_ai_credential(client, other_headers, set_default=True)
-    foreign_agent = create_agent_via_api(
-        client, other_headers, name=f"Foreign-{random_lower_string()[:6]}"
-    )
-    drain_tasks()
-    set_router_trigger_prompt(client, other_headers, foreign_agent["id"], "Handle anything")
-
-    # Reachable BY THE SENDER over App MCP: assigned and auto-enabled (an
-    # assignment made for anyone but the route's creator otherwise lands
-    # `is_enabled=False`, which would make this a different scenario).
-    create_admin_route(
-        client,
-        superuser_token_headers,
-        foreign_agent["id"],
-        trigger_prompt="Handle anything",
-        assigned_user_ids=[sender["id"]],
-        auto_enable_for_users=True,
-    )
-    # Precondition, asserted rather than assumed: the sender really can reach
-    # this foreign agent over App MCP. Without it this test would pass against
-    # ANY implementation — including the one it exists to pin — because the
-    # sender owns nothing and the ballot is empty either way.
-    shared = list_user_routes(client, _sender_headers)["shared_routes"]
-    reachable = [r for r in shared if r["agent_name"] == foreign_agent["name"]]
-    assert len(reachable) == 1, shared
-    assert reachable[0]["is_active"] is True and reachable[0]["is_enabled"] is True
-
-    event = build_message_event(
-        thread_key=f"spaces/AAA/threads/{random_lower_string()}",
-        text="hello",
-        sender_email=sender["email"],
-    )
-    resp, send_mock = _post(client, channel, signer, event)
-    assert resp.status_code == 200
-    assert any(
-        "couldn't find an assistant" in c.args[-1] for c in send_mock.await_args_list
-    )
-
-    candidates = _pass1_candidates(client, superuser_token_headers, channel)
-    assert [c for c in candidates if c["ref_id"] == foreign_agent["id"]] == [], candidates
-
-
 def test_pass1_candidates_never_include_an_identity_contact(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
@@ -366,46 +308,6 @@ def test_pass1_candidates_never_include_an_identity_contact(
     assert [c for c in all_candidates if c["ref_id"] == identity_agent["id"]] == [], all_candidates
     assert [c for c in all_candidates if c["name"] == identity_agent["name"]] == [], all_candidates
     assert all(c["source"] != "identity" for c in all_candidates), all_candidates
-
-
-def test_pass1_ignores_the_app_mcp_enablement_toggles(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """Root cause §2.2: an MCP exposure switch must not gate a channel.
-
-    The sender's own agent carries every App-MCP "off" switch at once — the
-    route is inactive AND not exposed on the `app_mcp` channel — and still
-    routes from the sender's own chat app. What a user exposes over MCP is not
-    a statement about what they can reach from Google Chat, and inheriting
-    those toggles made an owner's own agent silently unreachable.
-    """
-    channel = _channel(client, superuser_token_headers)
-    signer = GoogleChatJWTSigner()
-    user, headers = create_random_user_with_headers(client)
-    promote_to_developer(client, superuser_token_headers, user["id"])
-    create_random_ai_credential(client, headers, set_default=True)
-    agent = create_agent_via_api(client, headers, name=f"MCPOff-{random_lower_string()[:6]}")
-    drain_tasks()
-    set_router_trigger_prompt(client, headers, agent["id"], "Handle anything")
-    create_user_route(
-        client,
-        headers,
-        agent["id"],
-        trigger_prompt="Handle anything",
-        channel_app_mcp=False,
-        is_active=False,
-    )
-
-    event = build_message_event(
-        thread_key=f"spaces/AAA/threads/{random_lower_string()}",
-        text="hello",
-        sender_email=user["email"],
-    )
-    resp, _ = _post(client, channel, signer, event)
-    assert resp.status_code == 200
-
-    sessions = [s for s in list_sessions(client, headers) if s["agent_id"] == agent["id"]]
-    assert len(sessions) == 1
 
 
 def test_pass1_admits_an_agent_whose_only_config_is_example_prompts(
@@ -940,3 +842,204 @@ def test_only_one_short_circuits_when_the_scope_bars_pass_2(
     page = list_routing_traces(client, superuser_token_headers, channel_id=channel["id"])
     detail = get_routing_trace(client, superuser_token_headers, page["data"][0]["id"])
     assert detail["match_method"] == "only_one", detail
+
+
+# ---------------------------------------------------------------------------
+# App MCP / Server Channel candidate parity — the property this refactor is for
+# ---------------------------------------------------------------------------
+
+
+def _parity_setup(client, superuser_headers) -> tuple[dict, dict, str]:
+    """A sender who owns two eligible agents, plus a third party who has
+    shared one more with them over identity (assigned + enabled).
+
+    Two owned agents rather than one: a single eligible candidate takes the
+    `only_one` short-circuit on both surfaces and the classifier — the seam
+    this capture patches — is never called at all.
+
+    Returns (sender, sender_headers, identity_owner_id).
+    """
+    sender, sender_headers = create_random_user_with_headers(client)
+    promote_to_developer(client, superuser_headers, sender["id"])
+    create_random_ai_credential(client, sender_headers, set_default=True)
+
+    agent1 = create_agent_via_api(
+        client, sender_headers, name=f"Parity1-{random_lower_string()[:6]}"
+    )
+    agent2 = create_agent_via_api(
+        client, sender_headers, name=f"Parity2-{random_lower_string()[:6]}"
+    )
+    drain_tasks()
+    set_router_trigger_prompt(client, sender_headers, agent1["id"], "Handle the first kind of work")
+    set_router_trigger_prompt(client, sender_headers, agent2["id"], "Handle the second kind of work")
+
+    identity_owner, identity_owner_headers = create_random_user_with_headers(client)
+    promote_to_developer(client, superuser_headers, identity_owner["id"])
+    create_random_ai_credential(client, identity_owner_headers, set_default=True)
+    identity_agent = create_agent_via_api(
+        client, identity_owner_headers, name=f"ParityIdentity-{random_lower_string()[:6]}"
+    )
+    drain_tasks()
+    create_identity_binding(
+        client,
+        identity_owner_headers,
+        identity_agent["id"],
+        trigger_prompt="Handle identity-routed work",
+        assigned_user_ids=[sender["id"]],
+    )
+    toggle_identity_contact(client, sender_headers, identity_owner["id"], True)
+
+    return sender, sender_headers, identity_owner["id"]
+
+
+def _capture_app_mcp_candidates(client, superuser_headers, sender_id: str) -> list:
+    """Drive one real App MCP `handle_send_message` call and return the exact
+    candidate list `AgentClassifier.classify` was called with.
+
+    No HTTP route exists for App MCP (it is an MCP tool-call surface) — same
+    direct-call convention `tests/api/app_mcp/app_mcp_session_test.py`
+    establishes. `AppMCPRoutingService.route_message` itself is NOT mocked:
+    the whole point is to observe the real ballot it composes.
+    """
+    import asyncio
+    import json
+
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+
+    captured: list = []
+
+    def _capture(candidates, message, **kwargs):
+        captured.append(list(candidates))
+        return None
+
+    async def _run():
+        return await AppMCPRequestHandler.handle_send_message(
+            user_id=uuid.UUID(sender_id),
+            message="hello",
+            context_id=None,
+            mcp_ctx=None,
+        )
+
+    with patch(_CLASSIFY_TARGET, side_effect=_capture):
+        with patch(_STREAM_TARGET, StubAgentEnvConnector(response_text="ok")):
+            raw = asyncio.run(_run())
+    drain_tasks()
+
+    assert len(captured) == 1, (
+        f"Expected exactly one AgentClassifier.classify call from App MCP "
+        f"routing, got {len(captured)}. Response was {raw!r}"
+    )
+    return captured[0]
+
+
+def _capture_channel_candidates(
+    client, superuser_headers, channel: dict, signer, sender_email: str
+) -> list:
+    """Drive one real Google Chat webhook delivery and return the exact
+    candidate list `AgentClassifier.classify` was called with (Pass 1's
+    ballot — Pass 2 never reaches classify here because the auto-install
+    list is empty, so there is nothing for it to classify over)."""
+    captured: list = []
+
+    def _capture(candidates, message, **kwargs):
+        captured.append(list(candidates))
+        return None
+
+    event = build_message_event(
+        thread_key=f"spaces/AAA/threads/{random_lower_string()}",
+        text="hello",
+        sender_email=sender_email,
+    )
+    resp, _ = _post(client, channel, signer, event, classify_side_effect=_capture)
+    assert resp.status_code == 200
+
+    assert len(captured) == 1, (
+        f"Expected exactly one AgentClassifier.classify call from channel "
+        f"routing, got {len(captured)}"
+    )
+    return captured[0]
+
+
+def test_app_mcp_and_channel_candidate_lists_match_with_identity_routing_on(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """**The property the whole refactor exists to create.** With
+    `allow_identity_routing=True` on both surfaces for the same user, App MCP
+    and a Google Chat channel hand `AgentClassifier.classify` the exact same
+    candidate list — same three `Candidate` objects, same order: the two
+    owned agents first, the identity contact after
+    (`AppMCPRoutingService`'s own module docstring: "mirroring
+    ChannelRoutingService._route_installed exactly").
+
+    Asserted by dataclass equality on the real ``Candidate`` objects each
+    surface actually handed its classifier — not by re-deriving what the
+    ballot "should" contain, which would just restate the implementation
+    under a different name.
+    """
+    sender, sender_headers, identity_owner_id = _parity_setup(client, superuser_token_headers)
+
+    channel = _channel(client, superuser_token_headers)
+    signer = GoogleChatJWTSigner()
+    app_mcp_channel = find_server_channel_by_type(client, superuser_token_headers, "app_mcp")
+
+    update_my_channel(client, sender_headers, channel["id"], allow_identity_routing=True)
+    update_my_channel(
+        client, sender_headers, app_mcp_channel["id"], allow_identity_routing=True
+    )
+
+    channel_candidates = _capture_channel_candidates(
+        client, superuser_token_headers, channel, signer, sender["email"]
+    )
+    app_mcp_candidates = _capture_app_mcp_candidates(
+        client, superuser_token_headers, sender["id"]
+    )
+
+    assert len(channel_candidates) == 3, channel_candidates
+    assert channel_candidates == app_mcp_candidates, (
+        f"App MCP and channel candidate lists must be identical, including "
+        f"order. channel={channel_candidates!r} app_mcp={app_mcp_candidates!r}"
+    )
+
+    # Ordering is part of the property: owned agents first, identity after.
+    from app.services.routing.identity_candidate_provider import parse_identity_ref
+
+    assert parse_identity_ref(channel_candidates[0].ref_id) is None
+    assert parse_identity_ref(channel_candidates[1].ref_id) is None
+    assert parse_identity_ref(channel_candidates[2].ref_id) == uuid.UUID(identity_owner_id)
+
+
+def test_app_mcp_and_channel_candidate_lists_match_with_identity_routing_off(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The companion to the ON test above, and required for the same reason
+    that test is: the ON-only version would pass even if the gate were
+    ignored entirely (both surfaces would just always include identity).
+    `allow_identity_routing` defaults False on both surfaces and never
+    inherits, so with nothing switched on, App MCP and the channel produce
+    the same *two-candidate* list — the identity contact is absent from
+    both, not merely deprioritised.
+    """
+    sender, sender_headers, _identity_owner_id = _parity_setup(client, superuser_token_headers)
+
+    channel = _channel(client, superuser_token_headers)
+    signer = GoogleChatJWTSigner()
+    # Deliberately no update_my_channel call — the default is what is tested.
+
+    channel_candidates = _capture_channel_candidates(
+        client, superuser_token_headers, channel, signer, sender["email"]
+    )
+    app_mcp_candidates = _capture_app_mcp_candidates(
+        client, superuser_token_headers, sender["id"]
+    )
+
+    assert len(channel_candidates) == 2, channel_candidates
+    assert channel_candidates == app_mcp_candidates, (
+        f"App MCP and channel candidate lists must still match with "
+        f"identity off. channel={channel_candidates!r} app_mcp={app_mcp_candidates!r}"
+    )
+
+    from app.services.routing.identity_candidate_provider import parse_identity_ref
+
+    assert all(parse_identity_ref(c.ref_id) is None for c in channel_candidates), (
+        "No identity candidate should appear on either surface by default"
+    )

@@ -1962,62 +1962,6 @@ export type AllowedToolsUpdate = {
     tools: Array<(string)>;
 };
 
-export type AppAgentRouteAssignmentPublic = {
-    id: string;
-    route_id: string;
-    user_id: string;
-    user_email?: (string | null);
-    user_full_name?: (string | null);
-    is_enabled: boolean;
-    created_at: string;
-};
-
-export type AppAgentRouteCreate = {
-    name: string;
-    agent_id: string;
-    session_mode?: string;
-    trigger_prompt: string;
-    message_patterns?: (string | null);
-    prompt_examples?: (string | null);
-    channel_app_mcp?: boolean;
-    is_active?: boolean;
-    auto_enable_for_users?: boolean;
-    activate_for_myself?: boolean;
-    assigned_user_ids?: Array<(string)>;
-};
-
-export type AppAgentRoutePublic = {
-    id: string;
-    name: string;
-    agent_id: string;
-    agent_name?: string;
-    session_mode: string;
-    trigger_prompt: string;
-    message_patterns: (string | null);
-    prompt_examples?: (string | null);
-    channel_app_mcp: boolean;
-    is_active: boolean;
-    auto_enable_for_users?: boolean;
-    is_auto_managed?: boolean;
-    agent_owner_name?: string;
-    agent_owner_email?: string;
-    created_by: string;
-    created_at: string;
-    updated_at: string;
-    assignments?: Array<AppAgentRouteAssignmentPublic>;
-};
-
-export type AppAgentRouteUpdate = {
-    name?: (string | null);
-    session_mode?: (string | null);
-    trigger_prompt?: (string | null);
-    message_patterns?: (string | null);
-    prompt_examples?: (string | null);
-    channel_app_mcp?: (boolean | null);
-    is_active?: (boolean | null);
-    auto_enable_for_users?: (boolean | null);
-};
-
 /**
  * Response schema for ``GET /users/me/app-data``.
  */
@@ -2307,8 +2251,8 @@ export type BundlePermissionUser = {
  * and offer an in-client update. Populated only for consumer installs
  * (``target_type="agent"`` with a ``bundle_uuid`` and
  * ``is_publisher_install=False``); ``None`` for the publisher's own
- * working copy, shared routes, and identity contacts (none of which the
- * caller updates).
+ * working copy and identity contacts (neither of which the caller
+ * updates).
  *
  * Computed read-only — building this never mutates ``Agent.pending_update``
  * (the discovery endpoint is write-free). ``update_available`` is derived
@@ -3246,8 +3190,8 @@ export type ExecuteTaskResponse = {
 /**
  * Response schema for GET /api/v1/external/agents.
  *
- * Targets are ordered: personal agents first, then MCP shared agents,
- * then identity contacts — each section sorted by name ascending.
+ * Targets are ordered: personal agents first, then identity contacts —
+ * each section sorted by name ascending.
  */
 export type ExternalAgentListResponse = {
     targets?: Array<ExternalTargetPublic>;
@@ -3287,13 +3231,12 @@ export type ExternalSessionPublic = {
 /**
  * A single addressable target returned by the external agent discovery endpoint.
  *
- * Covers three source types:
- * - "agent"         — personal agent owned by (or cloned to) the user
- * - "app_mcp_route" — agent shared with the user via an AppAgentRoute assignment
- * - "identity"      — another user who has exposed agents via the Identity MCP server
+ * Covers two source types:
+ * - "agent"    — personal agent owned by (or cloned to) the user
+ * - "identity" — another user who has exposed agents via the Identity MCP server
  */
 export type ExternalTargetPublic = {
-    target_type: 'agent' | 'app_mcp_route' | 'identity';
+    target_type: 'agent' | 'identity';
     target_id: string;
     name: string;
     description?: (string | null);
@@ -3312,7 +3255,7 @@ export type ExternalTargetPublic = {
     bundle_version?: (BundleVersionInfo | null);
 };
 
-export type target_type = 'agent' | 'app_mcp_route' | 'identity';
+export type target_type = 'agent' | 'identity';
 
 /**
  * Response schema for file upload
@@ -3556,7 +3499,6 @@ export type HTTPValidationError = {
 export type IdentityAgentBindingCreate = {
     agent_id: string;
     trigger_prompt: string;
-    message_patterns?: (string | null);
     prompt_examples?: (string | null);
     session_mode?: string;
     assigned_user_ids?: Array<(string)>;
@@ -3568,7 +3510,6 @@ export type IdentityAgentBindingPublic = {
     agent_id: string;
     agent_name?: string;
     trigger_prompt: string;
-    message_patterns: (string | null);
     prompt_examples?: (string | null);
     session_mode: string;
     is_active: boolean;
@@ -3579,7 +3520,6 @@ export type IdentityAgentBindingPublic = {
 
 export type IdentityAgentBindingUpdate = {
     trigger_prompt?: (string | null);
-    message_patterns?: (string | null);
     prompt_examples?: (string | null);
     session_mode?: (string | null);
     is_active?: (boolean | null);
@@ -4955,34 +4895,6 @@ export type RevokeRequest = {
 };
 
 /**
- * A single conflicting effective route the installer already has.
- *
- * Surfaced as a non-blocking toast on the install completion page when an
- * agent's auto-created route looks similar (by lowercased token overlap)
- * to another route already active for the installer. Helps the user
- * spot near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
- * Planner") that could confuse the App MCP router.
- */
-export type RouteConflictMatch = {
-    route_id: string;
-    agent_id: string;
-    agent_name: string;
-    trigger_prompt: string;
-    similarity: number;
-};
-
-/**
- * Response payload for the install-time conflict check.
- *
- * ``matches`` is sorted by descending similarity. Empty when no
- * effective route crosses the similarity threshold (or when the agent
- * has no auto-managed route to compare against).
- */
-export type RouteConflictResponse = {
-    matches?: Array<RouteConflictMatch>;
-};
-
-/**
  * Owner-only update payload for ``Agent.router_trigger_prompt``.
  */
 export type RouterTriggerPromptUpdate = {
@@ -5108,11 +5020,11 @@ export type RoutingDiagnosisPublic = {
  *
  * A *hint*, explicitly not a rule: the classifier is an LLM and there is no
  * similarity cut-off anywhere in routing. This is the same Jaccard overlap
- * ``AppAgentRouteService`` already uses for install-time route-conflict
- * detection, borrowed to answer the question an admin actually asks about a
- * ``no_match`` — "how close did it come?". Saying "0.31, below the threshold"
- * would be a claim the router does not implement; the wording says "closest",
- * not "just missed".
+ * ``app/services/routing/text_similarity.py`` already uses for install-time
+ * route-conflict detection, borrowed to answer the question an admin
+ * actually asks about a ``no_match`` — "how close did it come?". Saying
+ * "0.31, below the threshold" would be a claim the router does not
+ * implement; the wording says "closest", not "just missed".
  */
 export type RoutingNearMiss = {
     ref_id: string;
@@ -5578,25 +5490,6 @@ export type SharedCredentialsPublic = {
 };
 
 /**
- * Route shared with a user (via assignment), as seen by the assignee.
- */
-export type SharedRoutePublic = {
-    route_id: string;
-    name: string;
-    agent_name: string;
-    agent_owner_name?: string;
-    agent_owner_email?: string;
-    shared_by_name?: string;
-    session_mode: string;
-    trigger_prompt: string;
-    message_patterns?: (string | null);
-    prompt_examples?: (string | null);
-    is_active: boolean;
-    assignment_id: string;
-    is_enabled: boolean;
-};
-
-/**
  * User who has access to this credential via share
  */
 export type SharedUserPublic = {
@@ -5934,45 +5827,6 @@ export type UsageIntentResponse = {
     status: string;
     message: string;
     environment_id: string;
-};
-
-export type UserAppAgentRouteCreate = {
-    agent_id: string;
-    session_mode?: string;
-    trigger_prompt: string;
-    message_patterns?: (string | null);
-    channel_app_mcp?: boolean;
-    is_active?: boolean;
-};
-
-export type UserAppAgentRoutePublic = {
-    id: string;
-    user_id: string;
-    agent_id: string;
-    agent_name?: string;
-    session_mode: string;
-    trigger_prompt: string;
-    message_patterns: (string | null);
-    channel_app_mcp: boolean;
-    is_active: boolean;
-    created_at: string;
-    updated_at: string;
-};
-
-/**
- * Combined response for user's personal + shared routes.
- */
-export type UserAppAgentRoutesResponse = {
-    personal_routes: Array<UserAppAgentRoutePublic>;
-    shared_routes: Array<SharedRoutePublic>;
-};
-
-export type UserAppAgentRouteUpdate = {
-    session_mode?: (string | null);
-    trigger_prompt?: (string | null);
-    message_patterns?: (string | null);
-    channel_app_mcp?: (boolean | null);
-    is_active?: (boolean | null);
 };
 
 /**
@@ -6792,56 +6646,6 @@ export type AgentApiPublicConsumerSpecData = {
 
 export type AgentApiPublicConsumerSpecResponse = (unknown);
 
-export type AgentAppMcpRoutesListAgentAppMcpRoutesData = {
-    agentId: string;
-};
-
-export type AgentAppMcpRoutesListAgentAppMcpRoutesResponse = (Array<AppAgentRoutePublic>);
-
-export type AgentAppMcpRoutesCreateAgentAppMcpRouteData = {
-    agentId: string;
-    requestBody: AppAgentRouteCreate;
-};
-
-export type AgentAppMcpRoutesCreateAgentAppMcpRouteResponse = (AppAgentRoutePublic);
-
-export type AgentAppMcpRoutesUpdateAgentAppMcpRouteData = {
-    agentId: string;
-    requestBody: AppAgentRouteUpdate;
-    routeId: string;
-};
-
-export type AgentAppMcpRoutesUpdateAgentAppMcpRouteResponse = (AppAgentRoutePublic);
-
-export type AgentAppMcpRoutesDeleteAgentAppMcpRouteData = {
-    agentId: string;
-    routeId: string;
-};
-
-export type AgentAppMcpRoutesDeleteAgentAppMcpRouteResponse = (Message);
-
-export type AgentAppMcpRoutesCheckRouteConflictsData = {
-    agentId: string;
-};
-
-export type AgentAppMcpRoutesCheckRouteConflictsResponse = (RouteConflictResponse);
-
-export type AgentAppMcpRoutesAssignUsersToAgentRouteData = {
-    agentId: string;
-    requestBody: Array<(string)>;
-    routeId: string;
-};
-
-export type AgentAppMcpRoutesAssignUsersToAgentRouteResponse = (Array<AppAgentRouteAssignmentPublic>);
-
-export type AgentAppMcpRoutesRemoveUserAssignmentFromAgentRouteData = {
-    agentId: string;
-    routeId: string;
-    userId: string;
-};
-
-export type AgentAppMcpRoutesRemoveUserAssignmentFromAgentRouteResponse = (Message);
-
 export type AgentGitCheckoutAgentData = {
     requestBody: AgentCheckoutRequest;
 };
@@ -7489,47 +7293,6 @@ export type AiCredentialsGetAffectedEnvironmentsData = {
 };
 
 export type AiCredentialsGetAffectedEnvironmentsResponse = (AffectedEnvironmentsPublic);
-
-export type AppAgentRoutesListAppAgentRoutesResponse = (Array<AppAgentRoutePublic>);
-
-export type AppAgentRoutesCreateAppAgentRouteData = {
-    requestBody: AppAgentRouteCreate;
-};
-
-export type AppAgentRoutesCreateAppAgentRouteResponse = (AppAgentRoutePublic);
-
-export type AppAgentRoutesGetAppAgentRouteData = {
-    routeId: string;
-};
-
-export type AppAgentRoutesGetAppAgentRouteResponse = (AppAgentRoutePublic);
-
-export type AppAgentRoutesUpdateAppAgentRouteData = {
-    requestBody: AppAgentRouteUpdate;
-    routeId: string;
-};
-
-export type AppAgentRoutesUpdateAppAgentRouteResponse = (AppAgentRoutePublic);
-
-export type AppAgentRoutesDeleteAppAgentRouteData = {
-    routeId: string;
-};
-
-export type AppAgentRoutesDeleteAppAgentRouteResponse = (Message);
-
-export type AppAgentRoutesAssignUsersToRouteData = {
-    requestBody: Array<(string)>;
-    routeId: string;
-};
-
-export type AppAgentRoutesAssignUsersToRouteResponse = (Array<AppAgentRouteAssignmentPublic>);
-
-export type AppAgentRoutesRemoveUserAssignmentData = {
-    routeId: string;
-    userId: string;
-};
-
-export type AppAgentRoutesRemoveUserAssignmentResponse = (Message);
 
 export type AppAuthListAppClientsResponse = (Array<DesktopOAuthClientPublic>);
 
@@ -8564,7 +8327,7 @@ export type EventsTestEventResponse = (unknown);
 
 export type ExternalListExternalAgentsData = {
     /**
-     * Optional workspace filter. When provided, limits the personal agents section to agents in this workspace. MCP shared agents and identity contacts are not filtered.
+     * Optional workspace filter. When provided, limits the personal agents section to agents in this workspace. Identity contacts are not filtered.
      */
     workspaceId?: (string | null);
 };
@@ -8639,36 +8402,6 @@ export type ExternalA2aGetExternalAgentCardWellKnownData = {
 };
 
 export type ExternalA2aGetExternalAgentCardWellKnownResponse = (unknown);
-
-export type ExternalA2aGetExternalRouteCardData = {
-    /**
-     * Protocol version: 'v1.0' (default) or 'v0.3'
-     */
-    protocol?: (string | null);
-    routeId: string;
-};
-
-export type ExternalA2aGetExternalRouteCardResponse = (unknown);
-
-export type ExternalA2aHandleExternalRouteJsonrpcData = {
-    /**
-     * Protocol version: 'v1.0' (default) or 'v0.3'
-     */
-    protocol?: (string | null);
-    routeId: string;
-};
-
-export type ExternalA2aHandleExternalRouteJsonrpcResponse = (unknown);
-
-export type ExternalA2aGetExternalRouteCardWellKnownData = {
-    /**
-     * Protocol version: 'v1.0' (default) or 'v0.3'
-     */
-    protocol?: (string | null);
-    routeId: string;
-};
-
-export type ExternalA2aGetExternalRouteCardWellKnownResponse = (unknown);
 
 export type ExternalA2aGetExternalIdentityCardData = {
     ownerId: string;
@@ -10000,34 +9733,6 @@ export type TaskTriggersRegenerateTokenData = {
 };
 
 export type TaskTriggersRegenerateTokenResponse = (TaskTriggerPublicWithToken);
-
-export type UserAppAgentRoutesListUserAppAgentRoutesResponse = (UserAppAgentRoutesResponse);
-
-export type UserAppAgentRoutesCreateUserAppAgentRouteData = {
-    requestBody: UserAppAgentRouteCreate;
-};
-
-export type UserAppAgentRoutesCreateUserAppAgentRouteResponse = (UserAppAgentRoutePublic);
-
-export type UserAppAgentRoutesUpdateUserAppAgentRouteData = {
-    requestBody: UserAppAgentRouteUpdate;
-    routeId: string;
-};
-
-export type UserAppAgentRoutesUpdateUserAppAgentRouteResponse = (UserAppAgentRoutePublic);
-
-export type UserAppAgentRoutesDeleteUserAppAgentRouteData = {
-    routeId: string;
-};
-
-export type UserAppAgentRoutesDeleteUserAppAgentRouteResponse = (Message);
-
-export type UserAppAgentRoutesToggleAdminAssignmentData = {
-    assignmentId: string;
-    isEnabled: boolean;
-};
-
-export type UserAppAgentRoutesToggleAdminAssignmentResponse = (AppAgentRouteAssignmentPublic);
 
 export type UserChannelsListMyChannelsResponse = (Array<UserChannelPublic>);
 

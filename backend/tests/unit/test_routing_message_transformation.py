@@ -10,6 +10,18 @@ Tests cover:
 6. Sanity guards: empty, equals-original, exceeds-2x-length
 
 All tests use mocks — no DB, no Docker, no LLM calls.
+
+Updated for phase 5 of docs/plans/channels_identity_unification/: the
+AppAgentRoute family is deleted, so ``AppMCPRoutingService._ai_classify``
+takes ``(candidates: list[Candidate], message)`` — the shared
+``agent_classifier.Candidate`` shape every routing surface now uses — rather
+than ``(message, routes)`` against ``AppAgentRoute`` mocks, and
+``_route_identity`` takes a ``selected_identity: IdentityPick`` (from
+``IdentityCandidateProvider``) rather than ``db_session`` +
+``selected_route``. ``RoutingResult`` lost ``route_id``/``route_source``
+in favor of ``source`` ("owned" | "identity"). The transformation cascade
+logic itself (Stage 2's stripped message wins, falling back to Stage 1's) is
+unchanged — only the shapes carrying it through are.
 """
 
 import json
@@ -176,8 +188,7 @@ class TestRoutingResultDataclass:
             agent_id=uuid.uuid4(),
             agent_name="Test",
             session_mode="conversation",
-            route_id=uuid.uuid4(),
-            route_source="user",
+            source="owned",
             match_method="ai",
         )
         assert r.transformed_message is None
@@ -188,8 +199,7 @@ class TestRoutingResultDataclass:
             agent_id=uuid.uuid4(),
             agent_name="Test",
             session_mode="conversation",
-            route_id=uuid.uuid4(),
-            route_source="user",
+            source="owned",
             match_method="ai",
             transformed_message="stripped task",
         )
@@ -232,12 +242,18 @@ class TestIdentityRoutingResultDataclass:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestAppMCPRoutingServiceAiClassify:
-    def _make_route(self, agent_id: uuid.UUID, name: str = "Agent") -> MagicMock:
-        route = MagicMock()
-        route.agent_id = agent_id
-        route.agent_name = name
-        route.trigger_prompt = "some trigger"
-        return route
+    """``_ai_classify`` now takes ``(candidates, message)`` — a plain list of
+    the shared ``agent_classifier.Candidate`` — not ``(message, routes)``
+    against ``AppAgentRoute`` mocks. The route family is deleted (phase 5 of
+    docs/plans/channels_identity_unification/); every routing surface,
+    including App MCP, composes ``ChannelCandidateProvider`` /
+    ``IdentityCandidateProvider`` candidates and hands them to the one
+    shared ``AgentClassifier``.
+    """
+
+    def _make_candidate(self, agent_id: uuid.UUID, name: str = "Agent"):
+        from app.services.routing.agent_classifier import Candidate
+        return Candidate(ref_id=str(agent_id), name=name, trigger_prompt="some trigger")
 
     def test_returns_tuple_with_transformed_message(self):
         # Import the service module first so its lazy imports are resolved
@@ -249,18 +265,18 @@ class TestAppMCPRoutingServiceAiClassify:
         )
 
         agent_id = uuid.uuid4()
-        route = self._make_route(agent_id)
+        candidate = self._make_candidate(agent_id)
         routing_result = RouteToAgentResult(
             agent_id=str(agent_id),
             transformed_message="core task",
         )
 
         with patch.object(AgentClassifier, "classify", return_value=routing_result):
-            result = AppMCPRoutingService._ai_classify("ask cinna to core task", [route])
+            result = AppMCPRoutingService._ai_classify([candidate], "ask cinna to core task")
 
         assert result is not None
-        matched_route, transformed = result
-        assert matched_route is route
+        matched, transformed = result
+        assert matched is candidate
         assert transformed == "core task"
 
     def test_returns_none_transformed_when_ai_returns_no_message(self):
@@ -272,18 +288,18 @@ class TestAppMCPRoutingServiceAiClassify:
         )
 
         agent_id = uuid.uuid4()
-        route = self._make_route(agent_id)
+        candidate = self._make_candidate(agent_id)
         routing_result = RouteToAgentResult(
             agent_id=str(agent_id),
             transformed_message=None,
         )
 
         with patch.object(AgentClassifier, "classify", return_value=routing_result):
-            result = AppMCPRoutingService._ai_classify("direct task", [route])
+            result = AppMCPRoutingService._ai_classify([candidate], "direct task")
 
         assert result is not None
-        matched_route, transformed = result
-        assert matched_route is route
+        matched, transformed = result
+        assert matched is candidate
         assert transformed is None
 
     def test_returns_none_when_ai_returns_no_match(self):
@@ -291,14 +307,14 @@ class TestAppMCPRoutingServiceAiClassify:
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
         from app.services.routing.agent_classifier import AgentClassifier
 
-        route = self._make_route(uuid.uuid4())
+        candidate = self._make_candidate(uuid.uuid4())
 
         with patch.object(AgentClassifier, "classify", return_value=None):
-            result = AppMCPRoutingService._ai_classify("unrelated message", [route])
+            result = AppMCPRoutingService._ai_classify([candidate], "unrelated message")
 
         assert result is None
 
-    def test_returns_none_when_agent_id_not_in_routes(self):
+    def test_returns_none_when_agent_id_not_in_candidates(self):
         import app.services.app_mcp.app_mcp_routing_service  # noqa: F401
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
         from app.services.routing.agent_classifier import (
@@ -306,12 +322,12 @@ class TestAppMCPRoutingServiceAiClassify:
             ClassificationResult as RouteToAgentResult,
         )
 
-        route = self._make_route(uuid.uuid4())
-        # AI returns a different agent_id not in routes
+        candidate = self._make_candidate(uuid.uuid4())
+        # AI returns a different agent_id not in the ballot
         routing_result = RouteToAgentResult(agent_id=str(uuid.uuid4()))
 
         with patch.object(AgentClassifier, "classify", return_value=routing_result):
-            result = AppMCPRoutingService._ai_classify("message", [route])
+            result = AppMCPRoutingService._ai_classify([candidate], "message")
 
         assert result is None
 
@@ -395,13 +411,21 @@ class TestIdentityRoutingServiceAiClassify:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestRouteIdentityCascadeLogic:
-    def _make_selected_route(self, owner_id: uuid.UUID) -> MagicMock:
-        route = MagicMock()
-        route.identity_owner_id = owner_id
-        route.identity_owner_name = "John"
-        route.agent_name = "John"
-        route.route_id = uuid.uuid4()
-        return route
+    """``_route_identity`` no longer takes ``db_session``/``selected_route``
+    (an ``AppAgentRoute`` shape) — Stage 2 opens its own short-lived session
+    (see the method's own docstring), and the winner it receives is an
+    ``IdentityPick`` built from an ``IdentityCandidateProvider`` candidate,
+    not a route row. The cascade logic under test (Stage 2's transformed
+    message wins, falling back to Stage 1's) is unchanged.
+    """
+
+    def _make_identity_pick(self, owner_id: uuid.UUID):
+        from app.services.app_mcp.app_mcp_routing_service import IdentityPick
+        return IdentityPick(
+            identity_owner_id=owner_id,
+            identity_owner_name="John",
+            agent_name="John",
+        )
 
     def _make_stage2_result(self, transformed: str | None = None) -> MagicMock:
         from app.services.identity.identity_routing_service import IdentityRoutingResult
@@ -428,13 +452,12 @@ class TestRouteIdentityCascadeLogic:
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
 
         owner_id = uuid.uuid4()
-        selected_route = self._make_selected_route(owner_id)
+        selected_identity = self._make_identity_pick(owner_id)
         stage2_result = self._make_stage2_result("final task")
 
         with self._patch_stage2(stage2_result):
             result = AppMCPRoutingService._route_identity(
-                db_session=MagicMock(),
-                selected_route=selected_route,
+                selected_identity=selected_identity,
                 caller_user_id=uuid.uuid4(),
                 message="ask cinna to ask john to final task",
                 stage1_method="ai",
@@ -448,13 +471,12 @@ class TestRouteIdentityCascadeLogic:
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
 
         owner_id = uuid.uuid4()
-        selected_route = self._make_selected_route(owner_id)
+        selected_identity = self._make_identity_pick(owner_id)
         stage2_result = self._make_stage2_result(None)  # Stage 2 didn't transform
 
         with self._patch_stage2(stage2_result):
             result = AppMCPRoutingService._route_identity(
-                db_session=MagicMock(),
-                selected_route=selected_route,
+                selected_identity=selected_identity,
                 caller_user_id=uuid.uuid4(),
                 message="ask cinna to ask john to do thing",
                 stage1_method="ai",
@@ -468,13 +490,12 @@ class TestRouteIdentityCascadeLogic:
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
 
         owner_id = uuid.uuid4()
-        selected_route = self._make_selected_route(owner_id)
+        selected_identity = self._make_identity_pick(owner_id)
         stage2_result = self._make_stage2_result(None)
 
         with self._patch_stage2(stage2_result):
             result = AppMCPRoutingService._route_identity(
-                db_session=MagicMock(),
-                selected_route=selected_route,
+                selected_identity=selected_identity,
                 caller_user_id=uuid.uuid4(),
                 message="direct task",
                 stage1_method="ai",
@@ -489,14 +510,13 @@ class TestRouteIdentityCascadeLogic:
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
 
         owner_id = uuid.uuid4()
-        selected_route = self._make_selected_route(owner_id)
+        selected_identity = self._make_identity_pick(owner_id)
         stage2_result = self._make_stage2_result("final task")
         stage1_transformed = "ask john to final task"
 
         with self._patch_stage2(stage2_result) as mock_stage2:
             AppMCPRoutingService._route_identity(
-                db_session=MagicMock(),
-                selected_route=selected_route,
+                selected_identity=selected_identity,
                 caller_user_id=uuid.uuid4(),
                 message="ask cinna to ask john to final task",
                 stage1_method="ai",
@@ -512,14 +532,13 @@ class TestRouteIdentityCascadeLogic:
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
 
         owner_id = uuid.uuid4()
-        selected_route = self._make_selected_route(owner_id)
+        selected_identity = self._make_identity_pick(owner_id)
         stage2_result = self._make_stage2_result(None)
         original_message = "direct task for john"
 
         with self._patch_stage2(stage2_result) as mock_stage2:
             AppMCPRoutingService._route_identity(
-                db_session=MagicMock(),
-                selected_route=selected_route,
+                selected_identity=selected_identity,
                 caller_user_id=uuid.uuid4(),
                 message=original_message,
                 stage1_method="only_one",
@@ -533,12 +552,11 @@ class TestRouteIdentityCascadeLogic:
         from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
 
         owner_id = uuid.uuid4()
-        selected_route = self._make_selected_route(owner_id)
+        selected_identity = self._make_identity_pick(owner_id)
 
         with self._patch_stage2(None):
             result = AppMCPRoutingService._route_identity(
-                db_session=MagicMock(),
-                selected_route=selected_route,
+                selected_identity=selected_identity,
                 caller_user_id=uuid.uuid4(),
                 message="message",
                 stage1_method="ai",

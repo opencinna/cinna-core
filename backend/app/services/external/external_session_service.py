@@ -159,22 +159,16 @@ class ExternalSessionService:
     def _derive_target(
         session: ChatSession,
     ) -> tuple[str | None, uuid.UUID | None]:
-        """Derive (target_type, target_id) from integration_type and session_metadata."""
+        """Derive (target_type, target_id) from the session's integration_type."""
         itype = session.integration_type
-        metadata = session.session_metadata or {}
 
-        if itype == "external":
+        if itype in ("external", "app_mcp"):
+            # App MCP routes over the caller's own agents, so its addressable
+            # target is the agent itself — the same card the owner-scoped
+            # "external" arm points at. There is no separate route target any
+            # more: the ``AppAgentRoute`` family (and the ``app_mcp_route_id``
+            # metadata key this used to read) went with the route target kind.
             return "agent", session.agent_id
-
-        if itype == "app_mcp":
-            raw = metadata.get("app_mcp_route_id")
-            target_id: uuid.UUID | None = None
-            if raw:
-                try:
-                    target_id = uuid.UUID(str(raw))
-                except (ValueError, AttributeError):
-                    target_id = None
-            return "app_mcp_route", target_id
 
         if itype == "identity_mcp":
             return "identity", session.user_id

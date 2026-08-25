@@ -53,8 +53,20 @@ def reset_channel_debug_buffer():
 
 @pytest.fixture(autouse=True)
 def patch_create_session(db):
-    """Patch create_session at every server_channels + agent import site."""
-    with patched_create_sessions(db, CREATE_SESSION_TARGETS_AGENT):
+    """Patch create_session at every server_channels + agent import site.
+
+    ``app.services.app_mcp.app_mcp_request_handler.create_session`` is
+    included because a test in this domain (the App-MCP/channel candidate
+    parity pair) calls ``AppMCPRequestHandler.handle_send_message`` directly
+    to compare the two surfaces' candidate ballots — there is no HTTP route
+    for App MCP, it is an MCP tool-call surface, same pattern as
+    ``tests/api/app_mcp/conftest.py``'s own extension of this list. Without
+    it, that handler's ``with create_session() as db:`` would open a real
+    session outside the test transaction.
+    """
+    with patched_create_sessions(db, CREATE_SESSION_TARGETS_AGENT + [
+        "app.services.app_mcp.app_mcp_request_handler.create_session",
+    ]):
         yield
 
 
@@ -74,8 +86,16 @@ def background_tasks():
     ``ChannelInboundService._schedule`` resolves at call time via
     ``from app.utils import create_task_with_error_logging``, so patching the
     module attribute here is picked up transparently.
+
+    ``app.services.app_mcp.app_mcp_request_handler.create_task_with_error_
+    logging`` is its own separate target (not covered by the ``app.utils``
+    one above — ``from X import Y`` binds a local reference at the import
+    site): the handler schedules a session-title background task on every
+    new App MCP session, reached directly by the candidate-parity test.
     """
-    with patched_background_tasks(BACKGROUND_TASK_TARGETS_FULL):
+    with patched_background_tasks(BACKGROUND_TASK_TARGETS_FULL + [
+        "app.services.app_mcp.app_mcp_request_handler.create_task_with_error_logging",
+    ]):
         yield
 
 

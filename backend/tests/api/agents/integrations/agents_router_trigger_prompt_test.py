@@ -1,19 +1,27 @@
 """
-Router trigger prompt propagation tests (M1 regression + generator endpoint).
+Router trigger prompt field tests (PATCH endpoint + generator endpoint).
 
 Covers:
   1. PATCH /agents/{id}/router-trigger-prompt updates the agent's field and
-     propagates to the auto-managed AppAgentRoute.
+     the response echoes it back through to_public_with_clone_info.
 
-  2. PUT /agents/{id} (generic update) propagates router_trigger_prompt to
-     the auto-managed route.
-
-  3. POST /agents/{id}/generate-router-trigger-prompt returns a non-empty
+  2. POST /agents/{id}/generate-router-trigger-prompt returns a non-empty
      trigger_prompt string when the agent has a description (LLM mocked).
 
-  4. POST /agents/{id}/generate-router-trigger-prompt returns a 200 with
+  3. POST /agents/{id}/generate-router-trigger-prompt returns a 200 with
      success=False (and an error field) when the agent has no description —
      the endpoint never 500s.
+
+Phase 5 of docs/plans/channels_identity_unification/ deleted the
+AppAgentRoute family this file used to test propagation into: PATCH
+(and the generic PUT) used to sync router_trigger_prompt onto an
+auto-managed route (the "M1 regression" this file's tests were originally
+named for), and a PATCH on a bundle install with no auto-route used to
+backfill one on demand. Saving a trigger prompt now just saves it — there
+is nothing to propagate to and nothing to backfill — so those tests are
+deleted with the mechanism, and what remains is the field itself: the
+PATCH endpoint stays (it is still how the owner edits
+router_trigger_prompt) and must stay covered.
 """
 from unittest.mock import patch
 
@@ -25,7 +33,6 @@ from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.user import (
     create_random_user,
-    promote_to_developer,
     user_authentication_headers,
 )
 from tests.utils.utils import random_lower_string
@@ -56,10 +63,6 @@ def _publish_and_install(
     description: str | None = None,
 ) -> tuple[str, str]:
     """Publish a bundle and install it.
-
-    ``trigger_prompt=None`` publishes a revision without a router trigger
-    prompt, which is what makes ``InstallService`` skip the auto-route and
-    mark the install degraded.
 
     Returns (bundle_id, install_id).
     """
@@ -104,155 +107,8 @@ def _publish_and_install(
     return fresh["bundle_id"], install["id"]
 
 
-def _list_agent_routes(
-    client: TestClient, headers: dict, agent_id: str
-) -> list[dict]:
-    r = client.get(
-        f"{API}/agents/{agent_id}/app-mcp-routes/",
-        headers=headers,
-    )
-    assert r.status_code == 200, f"List routes failed: {r.text}"
-    return r.json()
-
-
 # ---------------------------------------------------------------------------
-# Test 1: PATCH /router-trigger-prompt propagates to auto-managed route
-# ---------------------------------------------------------------------------
-
-
-def test_patch_router_trigger_prompt_propagates_to_auto_managed_route(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-) -> None:
-    """
-    PATCH /agents/{id}/router-trigger-prompt updates Agent.router_trigger_prompt
-    and syncs the new value to the matching auto-managed AppAgentRoute.
-
-      1. Publish + install bundle with trigger prompt → auto route created.
-      2. PATCH the install's trigger prompt with a new value.
-      3. Agent row reflects new value.
-      4. Auto-managed route's trigger_prompt also updated.
-    """
-    _, installer_headers = _make_user_and_headers(client)
-    create_random_ai_credential(client, installer_headers, set_default=True)
-
-    original_trigger = "Help plan travel itineraries and book flights"
-    _, install_id = _publish_and_install(
-        client,
-        superuser_token_headers,
-        installer_headers,
-        trigger_prompt=original_trigger,
-    )
-
-    # Verify the auto-managed route has the original trigger
-    routes = _list_agent_routes(client, installer_headers, install_id)
-    assert len(routes) == 1
-    assert routes[0]["is_auto_managed"] is True
-    route_id = routes[0]["id"]
-    assert routes[0]["trigger_prompt"] == original_trigger
-
-    # ── PATCH with new value ───────────────────────────────────────────────
-    new_trigger = "Plan travel itineraries, hotel bookings, and flight reservations"
-    r = client.patch(
-        f"{API}/agents/{install_id}/router-trigger-prompt",
-        headers=installer_headers,
-        json={"router_trigger_prompt": new_trigger},
-    )
-    assert r.status_code == 200, f"PATCH failed: {r.text}"
-    # PATCH response carries the updated AgentPublic — verify the
-    # router_trigger_prompt round-trips through to_public_with_clone_info.
-    patch_body = r.json()
-    assert patch_body["router_trigger_prompt"] == new_trigger
-
-    # ── Route updated ──────────────────────────────────────────────────────
-    routes_after = _list_agent_routes(client, installer_headers, install_id)
-    matching = [rt for rt in routes_after if rt["id"] == route_id]
-    assert len(matching) == 1
-    assert matching[0]["trigger_prompt"] == new_trigger, (
-        f"Auto-managed route trigger_prompt must be updated via PATCH endpoint. "
-        f"Got {matching[0]['trigger_prompt']!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 2: PUT /agents/{id} propagates router_trigger_prompt (M1 regression)
-# ---------------------------------------------------------------------------
-
-
-def test_generic_put_propagates_router_trigger_prompt_to_route(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-) -> None:
-    """
-    Updating router_trigger_prompt via the generic PUT /agents/{id} endpoint
-    updates Agent.router_trigger_prompt and propagates it to the
-    auto-managed AppAgentRoute.
-
-    M1 regression: AgentService.update_agent must call
-    AppAgentRouteService.sync_router_trigger_prompt_from_agent when
-    router_trigger_prompt appears in the update dict.
-
-      1. Promote a developer + install a bundle for them → auto-managed
-         route created (foreign install path).
-      2. Use ``PUT /agents/{id}`` to update ``router_trigger_prompt`` on
-         the install (PUT requires the developer role).
-      3. Response carries the new ``router_trigger_prompt`` (round-trips
-         through ``to_public_with_clone_info``).
-      4. Auto-managed route's ``trigger_prompt`` is synced to the same
-         value via ``AgentService.update_agent`` → ``AppAgentRouteService
-         .sync_router_trigger_prompt_from_agent``.
-    """
-    installer = create_random_user(client)
-    installer_headers = user_authentication_headers(
-        client=client, email=installer["email"], password=installer["_password"]
-    )
-    create_random_ai_credential(client, installer_headers, set_default=True)
-    # PUT /agents/{id} is gated on require_developer; promote so we can
-    # exercise the actual production update path.
-    promote_to_developer(client, superuser_token_headers, installer["id"])
-
-    original_trigger = "Generate monthly financial reports"
-    _, install_id = _publish_and_install(
-        client,
-        superuser_token_headers,
-        installer_headers,
-        trigger_prompt=original_trigger,
-    )
-
-    # Verify route starts with the original trigger
-    routes = _list_agent_routes(client, installer_headers, install_id)
-    assert len(routes) == 1
-    assert routes[0]["trigger_prompt"] == original_trigger
-    assert routes[0]["is_auto_managed"] is True
-    route_id = routes[0]["id"]
-
-    # ── Generic PUT updates agent + propagates to auto-managed route ─────
-    new_trigger = "Compile and deliver monthly financial reports with trend analysis"
-    r = client.put(
-        f"{API}/agents/{install_id}",
-        headers=installer_headers,
-        json={"router_trigger_prompt": new_trigger},
-    )
-    assert r.status_code == 200, f"PUT failed: {r.text}"
-    put_body = r.json()
-    assert put_body["router_trigger_prompt"] == new_trigger, (
-        f"PUT response must echo updated router_trigger_prompt. "
-        f"Got {put_body.get('router_trigger_prompt')!r}"
-    )
-
-    # ── Auto-managed route also updated (the M1 regression check) ────────
-    routes_after = _list_agent_routes(client, installer_headers, install_id)
-    matching = [rt for rt in routes_after if rt["id"] == route_id]
-    assert len(matching) == 1
-    assert matching[0]["trigger_prompt"] == new_trigger, (
-        f"M1 regression: generic PUT must sync auto-managed route "
-        f"trigger_prompt. Got {matching[0]['trigger_prompt']!r}"
-    )
-    assert matching[0]["is_auto_managed"] is True
-
-
-# ---------------------------------------------------------------------------
-# Test 2b: Generic PUT /agents/{id} propagates router_trigger_prompt (M1)
+# Test 1: PATCH /router-trigger-prompt returns the updated field
 # ---------------------------------------------------------------------------
 
 
@@ -261,10 +117,12 @@ def test_patch_router_trigger_prompt_returns_updated_field_in_response(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    PATCH /agents/{id}/router-trigger-prompt returns an AgentPublic whose
-    ``router_trigger_prompt`` reflects the new value. Complements Test 1
-    (which asserts the route side-effect) by directly checking the field
-    surfaces through ``AgentService.to_public_with_clone_info``.
+    PATCH /agents/{id}/router-trigger-prompt updates
+    ``Agent.router_trigger_prompt`` and returns an ``AgentPublic`` whose
+    field reflects the new value — directly checking it surfaces through
+    ``AgentService.to_public_with_clone_info``. There is nothing left to
+    propagate to (no auto-managed route), so the field update is the whole
+    of the contract now.
     """
     _, installer_headers = _make_user_and_headers(client)
     create_random_ai_credential(client, installer_headers, set_default=True)
@@ -276,11 +134,6 @@ def test_patch_router_trigger_prompt_returns_updated_field_in_response(
         installer_headers,
         trigger_prompt=original_trigger,
     )
-
-    routes = _list_agent_routes(client, installer_headers, install_id)
-    assert len(routes) == 1
-    assert routes[0]["is_auto_managed"] is True
-    route_id = routes[0]["id"]
 
     new_trigger = "Generate and distribute weekly status reports automatically"
     r = client.patch(
@@ -295,15 +148,13 @@ def test_patch_router_trigger_prompt_returns_updated_field_in_response(
         f"Got {body.get('router_trigger_prompt')!r}"
     )
 
-    # Side-effect check — keeps this test self-contained.
-    routes_after = _list_agent_routes(client, installer_headers, install_id)
-    matching = [rt for rt in routes_after if rt["id"] == route_id]
-    assert len(matching) == 1
-    assert matching[0]["trigger_prompt"] == new_trigger
+    # Verify it persisted, not just echoed in the response.
+    fresh = client.get(f"{API}/agents/{install_id}", headers=installer_headers).json()
+    assert fresh["router_trigger_prompt"] == new_trigger
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Generator endpoint returns non-empty prompt (LLM mocked)
+# Test 2: Generator endpoint returns non-empty prompt (LLM mocked)
 # ---------------------------------------------------------------------------
 
 
@@ -352,7 +203,7 @@ def test_generate_router_trigger_prompt_returns_non_empty_string(
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Generator returns 200 + success=False when no description
+# Test 3: Generator returns 200 + success=False when no description
 # ---------------------------------------------------------------------------
 
 
@@ -391,109 +242,3 @@ def test_generate_router_trigger_prompt_no_description_returns_error(
     )
     assert "error" in body
     assert body["error"]  # non-empty error message
-
-
-# ---------------------------------------------------------------------------
-# Test 5: PATCH backfills the missing route on a degraded install
-# ---------------------------------------------------------------------------
-
-
-def test_patch_creates_missing_auto_route_on_degraded_install(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-) -> None:
-    """
-    A bundle published without a router trigger prompt installs with no
-    auto-managed route (``last_update_status="degraded"``). Setting the
-    prompt afterwards from the Configuration tab must create the route —
-    otherwise the MCP Connectors card sits on its "the route will appear
-    here automatically" empty state forever.
-
-      1. Publish + install a bundle with NO trigger prompt → no route.
-      2. PATCH the install's trigger prompt.
-      3. An auto-managed, active route now exists with that prompt,
-         enabled for the installer.
-      4. A second PATCH updates it in place rather than adding a duplicate.
-    """
-    _, installer_headers = _make_user_and_headers(client)
-    create_random_ai_credential(client, installer_headers, set_default=True)
-
-    _, install_id = _publish_and_install(
-        client,
-        superuser_token_headers,
-        installer_headers,
-        trigger_prompt=None,
-    )
-
-    assert _list_agent_routes(client, installer_headers, install_id) == [], (
-        "Install of a revision without a trigger prompt must start with no route"
-    )
-
-    # ── Owner sets the trigger prompt after the fact ───────────────────────
-    trigger = "Look up live BTC and crypto exchange rates"
-    r = client.patch(
-        f"{API}/agents/{install_id}/router-trigger-prompt",
-        headers=installer_headers,
-        json={"router_trigger_prompt": trigger},
-    )
-    assert r.status_code == 200, f"PATCH failed: {r.text}"
-
-    routes = _list_agent_routes(client, installer_headers, install_id)
-    assert len(routes) == 1, f"Expected the route to be created, got {routes!r}"
-    route = routes[0]
-    assert route["trigger_prompt"] == trigger
-    assert route["is_auto_managed"] is True
-    assert route["is_active"] is True
-    assert route["channel_app_mcp"] is True
-    # The installer owns the agent, so they get the enabled self-assignment
-    # the simplified MCP Connectors card toggles.
-    enabled = [a for a in route["assignments"] if a["is_enabled"]]
-    assert len(enabled) == 1, f"Installer must be assigned + enabled: {route!r}"
-
-    # ── Second PATCH updates in place ──────────────────────────────────────
-    updated = "Look up live BTC, ETH, and fiat exchange rates"
-    r = client.patch(
-        f"{API}/agents/{install_id}/router-trigger-prompt",
-        headers=installer_headers,
-        json={"router_trigger_prompt": updated},
-    )
-    assert r.status_code == 200, r.text
-
-    routes_after = _list_agent_routes(client, installer_headers, install_id)
-    assert len(routes_after) == 1, f"PATCH must not duplicate: {routes_after!r}"
-    assert routes_after[0]["id"] == route["id"]
-    assert routes_after[0]["trigger_prompt"] == updated
-
-
-# ---------------------------------------------------------------------------
-# Test 6: standalone (non-bundle) agents never get an auto route
-# ---------------------------------------------------------------------------
-
-
-def test_patch_does_not_create_route_for_standalone_agent(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-) -> None:
-    """
-    The backfill-on-demand path is scoped to bundle installs. An owner of a
-    standalone agent manages App MCP exposure explicitly from the
-    Integrations tab, so setting a trigger prompt must not silently mint a
-    route for them (same rationale as the Phase 8 backfill script skipping
-    owned non-bundle agents).
-    """
-    agent = create_agent_via_api(
-        client, superuser_token_headers, name="Standalone Trigger Agent"
-    )
-    drain_tasks()
-
-    r = client.patch(
-        f"{API}/agents/{agent['id']}/router-trigger-prompt",
-        headers=superuser_token_headers,
-        json={"router_trigger_prompt": "Handle standalone requests"},
-    )
-    assert r.status_code == 200, r.text
-
-    routes = _list_agent_routes(client, superuser_token_headers, agent["id"])
-    assert routes == [], (
-        f"Standalone agent must not get an auto-managed route, got {routes!r}"
-    )

@@ -1,8 +1,8 @@
 """
 ExternalAccessPolicy — centralised access-check layer for the External A2A surface.
 
-All three target types (agent, app_mcp_route, identity) funnel through the methods
-here so access rules live in exactly one place.
+Both target types (agent, identity) funnel through the methods here so access
+rules live in exactly one place.
 
 Raises domain exceptions from ``app.services.external.errors`` instead of plain
 ``ValueError`` — the route and request-handler layers catch those and translate to
@@ -17,13 +17,8 @@ from typing import Optional
 from sqlmodel import Session as DBSession
 
 from app.models import Agent, User
-from app.models.app_mcp.app_agent_route import AppAgentRoute
 from app.models.environments.environment import AgentEnvironment
 from app.models.identity.identity_models import IdentityAgentBinding
-from app.services.app_mcp.app_agent_route_service import (
-    AppAgentRouteService,
-    EffectiveRoute,
-)
 from app.services.external.errors import (
     NoActiveEnvironmentError,
     TargetNotAccessibleError,
@@ -79,34 +74,6 @@ class ExternalAccessPolicy:
         return agent, environment
 
     @staticmethod
-    def resolve_route(
-        db: DBSession,
-        user: User,
-        route_id: uuid.UUID,
-    ) -> tuple[AppAgentRoute, EffectiveRoute]:
-        """Resolve and verify route effectiveness for the caller.
-
-        Re-verifies every request so mid-conversation revocations are detected.
-
-        Args:
-            db: Active database session.
-            user: Authenticated caller.
-            route_id: UUID of the AppAgentRoute.
-
-        Returns:
-            ``(route, effective_route)`` where ``effective_route`` is the
-            caller-visible representation (contains ``source``, ``trigger_prompt``, etc.).
-
-        Raises:
-            TargetNotAccessibleError: Route not effective for this caller or not found.
-        """
-        effective = ExternalAccessPolicy._find_effective_route(db, user, route_id)
-        route = db.get(AppAgentRoute, route_id)
-        if route is None:
-            raise TargetNotAccessibleError("Route not found or access denied")
-        return route, effective
-
-    @staticmethod
     def require_identity_access(
         db: DBSession,
         user: User,
@@ -144,29 +111,6 @@ class ExternalAccessPolicy:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _find_effective_route(
-        db: DBSession,
-        user: User,
-        route_id: uuid.UUID,
-    ) -> EffectiveRoute:
-        """Return the EffectiveRoute for ``route_id`` or raise TargetNotAccessibleError.
-
-        The ``source != "identity"`` guard below is vacuous since identity moved
-        to its own candidate provider — ``get_effective_routes_for_user`` returns
-        routes only. Kept as the standing statement of the contract: an identity
-        is reached through ``require_identity_access``, never by route id.
-        """
-        routes = AppAgentRouteService.get_effective_routes_for_user(
-            db_session=db,
-            user_id=user.id,
-            channel="app_mcp",
-        )
-        for r in routes:
-            if r.route_id == route_id and r.source != "identity":
-                return r
-        raise TargetNotAccessibleError("Route not found or access denied")
 
     @staticmethod
     def _require_active_environment(

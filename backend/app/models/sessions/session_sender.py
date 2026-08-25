@@ -351,17 +351,13 @@ class ChannelAccessPolicy:
     # existing `AccessTokenService.can_access_session`).
     require_access_token_scope: A2ATokenPayload | None = None
 
-    # When True, the App MCP routing layer must have verified the caller
-    # has a route to the resolved agent. The service does not re-check
-    # routing — it delegates to existing `AppMCPRoutingService` logic.
-    require_caller_in_route: bool = False
-
     # An identity binding the routing layer selected, permitting a session on
     # an agent the sender does not own. The *only* thing that can satisfy the
-    # `channel_caller` three-way owner invariant other than owning the agent —
-    # and it does not weaken it, because `assert_access` re-verifies all six
-    # facts behind the grant against the database before honoring it. `None`
-    # (the default) leaves the invariant exactly as strict as it has been.
+    # `channel_caller` three-way owner invariant, or the `mcp_caller` ownership
+    # check, other than owning the agent — and it does not weaken either,
+    # because `assert_access` re-verifies all six facts behind the grant
+    # against the database before honoring it. `None` (the default) leaves both
+    # arms exactly as strict as they have been.
     identity_grant: IdentityGrant | None = None
 
 

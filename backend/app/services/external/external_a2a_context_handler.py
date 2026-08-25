@@ -51,8 +51,6 @@ class TargetContext:
     caller_id: Optional[UUID] = None  # for app_mcp: the calling user's ID
     identity_caller_id: Optional[UUID] = None  # for identity_mcp
     match_method: Optional[str] = None  # for app_mcp: "external_direct"
-    route_id: Optional[UUID] = None  # for app_mcp: the AppAgentRoute.id
-    route_source: Optional[str] = None  # for app_mcp: "admin" or "user"
     # Identity-specific fields (only set when integration_type == "identity_mcp")
     identity_binding_id: Optional[UUID] = None
     identity_binding_assignment_id: Optional[UUID] = None
@@ -181,10 +179,6 @@ class ExternalA2AContextHandler(A2ARequestHandler):
             if context.integration_type == "app_mcp":
                 session.caller_id = context.caller_id
                 meta = dict(session.session_metadata or {})
-                if context.route_id is not None:
-                    meta["app_mcp_route_id"] = str(context.route_id)
-                if context.route_source is not None:
-                    meta["app_mcp_route_type"] = context.route_source
                 if context.match_method is not None:
                     meta["app_mcp_match_method"] = context.match_method
                 meta.setdefault("app_mcp_agent_name", context.agent.name)
@@ -212,7 +206,7 @@ class ExternalA2AContextHandler(A2ARequestHandler):
                     )
                 if context.match_method is not None:
                     meta["app_mcp_match_method"] = context.match_method
-                meta.setdefault("app_mcp_route_type", "identity")
+                meta.setdefault("app_mcp_source", "identity")
                 if context.client_kind is not None:
                     meta["client_kind"] = context.client_kind
                     if context.external_client_id is not None:

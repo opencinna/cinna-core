@@ -21,18 +21,17 @@
 ### Backend -- Routing Integration
 
 - `backend/app/services/routing/identity_candidate_provider.py` -- `IdentityCandidateProvider.build(db, caller_user_id)` -- Stage 1's identity candidates, one per owner, with the `identity:{owner_id}` `ref_id` namespace (`identity_ref_id()` / `parse_identity_ref()`)
-- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `RoutingResult` extended with identity fields; `AppMCPRoutingService.route_message()` composes the route and identity providers and invokes `_route_identity()` when an identity candidate wins; `IdentityPick` is Stage 1's answer shape for a person
+- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `RoutingResult` extended with identity fields; `AppMCPRoutingService.route_message()` composes `ChannelCandidateProvider` (owned agents) with `IdentityCandidateProvider` (people) and invokes `_route_identity()` when an identity candidate wins; `IdentityPick` is Stage 1's answer shape for a person
 - `backend/app/services/sessions/channel_ingestion_service.py` -- `create_identity_session()` builds the session in the owner's space from an `IdentityGrant`; `assert_access()`'s `channel_caller` arm honours a re-verified grant as the one alternative to the three-way owner invariant
 - `backend/app/models/sessions/session_sender.py` -- `IdentityGrant` (owner/binding/assignment ids) and `ChannelAccessPolicy.identity_grant`
 - `backend/app/services/app_mcp/app_mcp_request_handler.py` -- `AppMCPRequestHandler._resolve_session()` handles identity session creation and resumption; `_create_identity_session()` delegates to `ChannelIngestionService.create_identity_session()`; `_check_identity_session_validity()` re-verifies on resumption
 
-**Where identity used to live.** `AppAgentRouteService.get_effective_routes_for_user()` had a third arm appending one `EffectiveRoute` per identity owner with `source = "identity"` and a placeholder `agent_id`. That made "the people this caller can address" a fact only the App MCP route service could answer and only the App MCP surface could consume — and, because every identity route carried the same placeholder id, two owners on one ballot collided. The arm is gone; `EffectiveRoute`'s identity fields remain as vestigial optionals until the `AppAgentRoute` family is deleted.
+**Where identity used to live.** `AppAgentRouteService.get_effective_routes_for_user()` used to have a third arm appending one `EffectiveRoute` per identity owner with `source = "identity"` and a placeholder `agent_id`. That made "the people this caller can address" a fact only the App MCP route service could answer and only the App MCP surface could consume — and, because every identity route carried the same placeholder id, two owners on one ballot collided. **As of Phase 5 of the channels & identity unification, `AppAgentRouteService` and `EffectiveRoute` no longer exist at all** — the entire `AppAgentRoute` family was deleted. `IdentityCandidateProvider` was already the sole source of identity candidates before that; the deletion removed only the vestigial, unused `EffectiveRoute` identity fields this section used to describe.
 
 ### Frontend
 
-- `frontend/src/components/UserSettings/IdentityServerCard.tsx` -- Settings > Channels tab card for identity owner management (list bindings, add/edit/delete, manage user assignments)
-- `frontend/src/components/Agents/McpConnectorsCard.tsx` -- Extended with third integration type option: "Identity MCP Server Integration"
-- `frontend/src/components/UserSettings/AppAgentRoutesCard.tsx` -- Extended with "Identity Contacts" section showing received identity contacts with per-person enable/disable toggle
+- `frontend/src/components/UserSettings/IdentityServerCard.tsx` -- Settings > Channels tab card for identity owner management (list bindings, add/edit/delete, manage user assignments). **As of Phase 5, this is the sole creation entry point**: an "Add Agent" button in the card header opens an "Add Agent to Identity" dialog (agent picker via `AgentSelectorDialog`, trigger prompt, session mode, `UserAllowlistPicker`). `McpConnectorsCard.tsx` no longer offers an "Identity MCP Server Integration" option at all
+- `frontend/src/components/UserSettings/UserChannelsCard.tsx` -- renders the identity-contacts list (received identity contacts with per-person enable/disable toggle); the sole surface for it since `AppAgentRoutesCard` was stripped down to just the MCP Server URL
 
 ## Database Schema
 
@@ -44,7 +43,6 @@
 | `owner_id` | UUID | FK > user.id, CASCADE, indexed | Identity owner; also acts as the identity's primary key for callers |
 | `agent_id` | UUID | FK > agent.id, CASCADE, indexed | Agent exposed through this binding |
 | `trigger_prompt` | Text | NOT NULL | Describes when Stage 2 should select this agent |
-| `message_patterns` | Text | nullable | **Dead column.** Newline-separated fnmatch patterns; Stage 2 stopped reading it in Phase 1 of the channels & identity unification (glob pre-matching deleted). Still stored and editable in the UI; dropped by a later phase |
 | `session_mode` | str(20) | default: "conversation" | Session mode for routing to this agent |
 | `is_active` | bool | default: true | Owner toggle — disable agent for all callers at once |
 | `created_at` | datetime | default: now | |
@@ -83,7 +81,7 @@ Identity sessions additionally store non-queryable display data in `session_meta
 - `identity_caller_name` — caller's full name (for session header label)
 - `identity_owner_name` — identity owner's full name (returned as `agent_name` in MCP response)
 - `identity_match_method` — Stage 2 match method: `"only_one"` or `"ai"`. `"pattern"` is no longer producible — glob pre-matching was deleted in Phase 1 of the channels & identity unification
-- `app_mcp_route_type` — fixed value `"identity"`
+- `app_mcp_source` — the candidate provider that supplied the winner, `"owned"` or `"identity"` (`routing_result.source`); fixed at `"identity"` for an identity session. Replaces the old `app_mcp_route_type`, which named a route kind that no longer exists
 - `app_mcp_match_method` — Stage 1 match method
 
 `integration_type` is `"identity_mcp"` for identity sessions **created on the App MCP path** (distinct from `"app_mcp"`). It is **not** the marker of "an identity session" in general: since Phase 3 of the channels & identity unification an identity-routed *channel* session keeps `integration_type = "channel_<type>"`, because `ChannelOutboundService._resolve_channel_session` gates reply delivery on that prefix — stamping such a session `identity_mcp` would route correctly, run correctly, and never deliver a reply. The reliable cross-surface markers are the three identity columns (`identity_caller_id` / `identity_binding_id` / `identity_binding_assignment_id`). The channel path also stamps `identity_caller_name` into `session_metadata` (same key, so one UI branch serves both) but deliberately not `identity_owner_name`, since there the owner is the session's own user.
@@ -94,7 +92,6 @@ Identity sessions additionally store non-queryable display data in `session_meta
 ```
 agent_id: UUID
 trigger_prompt: str
-message_patterns: str | None = None
 session_mode: str = "conversation"
 assigned_user_ids: list[UUID] = []   # users assigned on creation
 auto_enable: bool = False            # superuser-only
@@ -103,7 +100,6 @@ auto_enable: bool = False            # superuser-only
 ### `IdentityAgentBindingUpdate`
 ```
 trigger_prompt: str | None = None
-message_patterns: str | None = None
 session_mode: str | None = None
 is_active: bool | None = None
 ```
@@ -114,7 +110,6 @@ id: UUID
 agent_id: UUID
 agent_name: str          # resolved from Agent.name
 trigger_prompt: str
-message_patterns: str | None
 session_mode: str
 is_active: bool
 created_at: datetime
@@ -245,7 +240,7 @@ Stage 2 routing — selects an agent from the owner's bindings accessible to the
 
 **No caller session crosses the boundary.** The signature takes ids and text, and the service opens and closes its own read-only session. That is deliberate: Stage 2 is called from routing contexts that must not hand their transaction to a decision (`ChannelRoutingService.decide` is held to exactly these properties by `tests/architecture/channel_routing_purity_test.py`). The module performs no `add` / `commit` / `delete`, and returns plain data — never an ORM instance, whose session would be closed by the time the caller read an attribute off it.
 
-**Glob pre-matching is gone.** `_try_pattern_match()` and Stage 2's reads of `IdentityAgentBinding.message_patterns` were removed: a second routing mechanism with silently higher priority than the classifier, which no trace explains well, is worse than one classifier call. `match_method` can therefore no longer be `"pattern"` at Stage 2. The **column and its API surface remain** (create/update/read still persist it) until the `message_patterns` removal migration.
+**Glob pre-matching is gone, and so is the column.** `_try_pattern_match()` and Stage 2's reads of `IdentityAgentBinding.message_patterns` were removed in Phase 1 of the channels & identity unification (glob pre-matching deleted); `message_patterns` itself was then dropped from `identity_agent_binding` in Phase 5's migration (`867cacb5a827_remove_app_agent_routes_and_enforce_.py`), alongside the `AppAgentRoute` deletion. `match_method` can therefore no longer be `"pattern"` at Stage 2 — only `"only_one"` or `"ai"`.
 
 `IdentityRoutingResult` dataclass:
 ```python
@@ -273,27 +268,12 @@ The channel path differs in two further respects worth pinning here:
 
 ## Integration with App MCP Routing
 
-### `EffectiveRoute` (extended)
+**As of Phase 5 of the channels & identity unification, `EffectiveRoute` and `AppAgentRouteService` no longer exist.** Identity candidates are built exclusively by `IdentityCandidateProvider` (see [Backend — Routing Integration](#backend--routing-integration) above), the same builder [Server Channels](../server_channels/server_channels_tech.md) uses.
 
-`EffectiveRoute` in `app_agent_route_service.py` has three identity-specific optional fields:
-
-```python
-source: str  # "admin" | "user" | "identity"
-identity_owner_id: uuid.UUID | None = None
-identity_owner_name: str | None = None
-identity_owner_email: str | None = None
-```
-
-Identity contacts are added to the effective routes list by `get_effective_routes_for_user()`. Each distinct identity owner becomes one `EffectiveRoute` with:
-- `source = "identity"`
-- `agent_id` = placeholder UUID (resolved in Stage 2)
-- `agent_name` = owner's full name
-- `trigger_prompt` = auto-generated: "Contact {full_name} ({email}). Routes to their available agents."
-- `message_patterns = None` (identity routes never use Stage 1 pattern matching)
-
-### `RoutingResult` (extended)
+### `RoutingResult` (identity fields)
 
 ```python
+source: str  # "owned" | "identity" — replaces the old "admin"/"user"/"identity" route_source
 is_identity: bool = False
 identity_owner_id: uuid.UUID | None = None
 identity_owner_name: str | None = None
@@ -302,11 +282,11 @@ identity_binding_id: uuid.UUID | None = None
 identity_binding_assignment_id: uuid.UUID | None = None
 ```
 
-### `AppMCPRoutingService.route_message()` (extended)
+### `AppMCPRoutingService.route_message()` (identity handling)
 
-After Stage 1 selects a route, if `selected.source == "identity"`:
+Composes `ChannelCandidateProvider` (owned agents) with `IdentityCandidateProvider` (people, only when `policy.allow_identity_routing`) into one ballot. When the single-candidate shortcut or `AgentClassifier.classify` selects an identity `Candidate` (identified by its namespaced `identity:{owner_id}` `ref_id`, resolved via `_identity_pick`):
 - Calls `_route_identity()` which delegates to `IdentityRoutingService.route_within_identity()`
-- Returns a `RoutingResult` with `is_identity=True` and all identity fields populated
+- Returns a `RoutingResult` with `is_identity=True`, `source="identity"`, and all identity fields populated
 - `agent_name` in the result is the identity owner's name, not the internal agent name
 
 ### `AppMCPRequestHandler._resolve_session()` (extended)
@@ -365,34 +345,33 @@ For identity sessions, `agent_name` in the JSON response is the identity owner's
 
 ### `IdentityServerCard.tsx` (Settings > Channels tab)
 
-Owner-only card. Loads from `["identity-bindings"]` query key via `GET /api/v1/identity/bindings/`.
+Owner-only card. Loads from `["identity-bindings"]` query key via `GET /api/v1/identity/bindings/`. **As of Phase 5, this is the sole creation entry point for identity bindings** — the "Identity MCP Server Integration" option that used to live on the agent's Integrations tab MCP Connectors dialog is gone.
 
 **State:**
 - `expandedBindings: Set<string>` — which binding rows show user assignments
-- Add form state (agent selector, trigger prompt, message patterns, session mode) plus assigned users as a `UserAllowlistSelectedItem[]`
-- Edit dialog state (mirrors add form fields for the selected binding)
+- `addDialogOpen` — controls the "Add Agent to Identity" dialog, with agent picker (`AgentSelectorDialog`), trigger prompt, session mode, and assigned users as a `UserAllowlistSelectedItem[]`. No `message_patterns` field — the column was dropped from `identity_agent_binding` in this phase's migration
+- Edit dialog state (mirrors add-dialog fields for the selected binding)
 
 **Queries:**
 - `["identity-bindings"]` — binding list with assignments
-- `["agents-for-identity"]` — owner's agents (lazy, only when add form is open); filters out already-bound agents
+- `["allAgents"]` — owner's agents, fetched lazily (`enabled: addDialogOpen`) and handed to `AgentSelectorDialog` rather than let it fetch on its own; filters out already-bound agents
 - User selection uses the shared `UserAllowlistPicker` → `["user-search", q]` via `GET /users/search` (works for non-admin owners); no full user-list fetch. See [User Selector Pattern](../../development/frontend/user_selector_pattern.md)
 
 **Mutations:** `createBindingMutation`, `updateBindingMutation`, `deleteBindingMutation`, `toggleBindingMutation`, `assignUsersMutation`, `removeAssignmentMutation` — all invalidate `["identity-bindings"]`.
 
 **UI:**
+- Card header: "Identity Server" title + an **"Add Agent"** button (`handleAddOpen`) opening the "Add Agent to Identity" dialog
 - Each binding row: session mode icon (Wrench for building, MessageCircle for conversation), agent name, trigger prompt (truncated), active/inactive badge
 - Row controls: expand chevron, active toggle switch, edit button, delete (AlertDialog)
 - Expanded section: user assignment pills with remove buttons (rendered by the shared `UserAllowlistPicker`); pill labels come from the assignment's `target_user_name`/`target_user_email`
 
-### `AppAgentRoutesCard.tsx` (Settings > Channels, "Identity Contacts" section)
+### `UserChannelsCard.tsx` (Settings > Channels, identity contacts list)
 
-Extended with a new section after "MCP Shared Agents". Loads contacts from `["identity-contacts"]` query key via `GET /api/v1/users/me/identity-contacts/`.
-
-Each row shows: owner name, owner email, per-person enable/disable toggle. Toggle calls `PATCH /api/v1/users/me/identity-contacts/{owner_id}` with `{ is_enabled: bool }`.
+Renders the received-identity-contacts list — owner name, owner email, per-person enable/disable toggle — loaded from `["identity-contacts"]` via `GET /api/v1/users/me/identity-contacts/`. Toggle calls `PATCH /api/v1/users/me/identity-contacts/{owner_id}` with `{ is_enabled: bool }`. As of Phase 5 this is the **sole** surface for the list — it used to be duplicated on the now-stripped `AppAgentRoutesCard`, over a raw `fetch` and without the consent copy explaining which way the switch points.
 
 ### `McpConnectorsCard.tsx` (Agent > Integrations tab)
 
-Extended with a third option in the type selector step of the creation dialog: "Identity MCP Server Integration". Selecting this shows a form that creates an identity binding for the current agent, with trigger prompt, session mode, and the shared `UserAllowlistPicker` — equivalent to the add form in `IdentityServerCard.tsx`.
+No longer offers an identity option. The "New" dialog's type-select step is now exactly two choices — Direct MCP Connector, and (developer-only) Agent to Agent MCP Connector — see [App MCP Server — tech](../app_mcp_server/app_mcp_server_tech.md#frontend-components).
 
 ### Session Header Label
 
@@ -404,5 +383,5 @@ For sessions with `integration_type = "identity_mcp"`, the session header shows 
 |-----------|----------|-------|
 | `["identity-bindings"]` | `GET /api/v1/identity/bindings/` | Identity owner |
 | `["identity-contacts"]` | `GET /api/v1/users/me/identity-contacts/` | Target user (caller) |
-| `["agents-for-identity"]` | `GET /api/v1/agents/?limit=200` | Identity owner (lazy) |
+| `["allAgents"]` | `GET /api/v1/agents/?limit=200` | Identity owner (lazy, `enabled: addDialogOpen`) |
 | `["user-search", q]` | `GET /api/v1/users/search` (via shared `UserAllowlistPicker`) | Any authenticated user |

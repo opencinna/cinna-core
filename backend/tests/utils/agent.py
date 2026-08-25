@@ -59,15 +59,13 @@ def set_router_trigger_prompt(
 ) -> dict:
     """PATCH /agents/{id}/router-trigger-prompt — the owner-only field.
 
-    This is what makes an agent a **channel routing candidate**.
-    ``ChannelCandidateProvider`` builds Pass 1's ballot from the sender's own
+    This is what makes an agent a **routing candidate on every surface**.
+    ``ChannelCandidateProvider`` builds the ballot from the sender's own
     agents and admits one that has a non-blank ``router_trigger_prompt`` or a
-    non-empty ``example_prompts``; an ``AppAgentRoute`` (personal or admin)
-    grants nothing on the channel path any more — it is an App-MCP exposure and
-    is read only there.
-
-    Setting it here also propagates to the agent's auto-managed route, so a
-    setup that wants both surfaces gets both from this one call.
+    non-empty ``example_prompts``. Since phase 5 of
+    ``docs/plans/channels_identity_unification/``, App MCP composes the same
+    provider, so setting it here is what makes the agent reachable over App
+    MCP too — with no route, no assignment and no toggle to also set.
     """
     r = client.patch(
         f"{settings.API_V1_STR}/agents/{agent_id}/router-trigger-prompt",

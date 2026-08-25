@@ -2,8 +2,12 @@
 Architecture allowlist test — ``ChannelInboundService.process_inbound`` callers.
 
 Closes a commitment from Phase 4 of
-``docs/plans/channels_identity_unification/``: this must land before Phase 5,
-which adds the next caller into this same seam.
+``docs/plans/channels_identity_unification/``: this must land before Phase 5.
+Phase 5 turned out not to add a caller here — App MCP composes
+``ChannelCandidateProvider`` / ``IdentityCandidateProvider`` directly rather
+than routing through ``ChannelInboundService.process_inbound`` — so the
+allowlist below is unchanged; the guard against a *future* caller is what
+this test still exists to hold.
 
 WHY THIS EXISTS
 ---------------
@@ -43,10 +47,10 @@ THE TWO LEGITIMATE CALLERS (verified against the source, not assumed)
     there is no separate verify step here because polling *is* the transport's
     authentication step.
 
-A future caller (Phase 5 adds the next one) must either authenticate its
-``ChannelInboundMessage`` before calling ``process_inbound`` — and be added
-here with a comment saying how — or go through ``handle_inbound`` /
-``poll_enabled_channels`` instead of calling ``process_inbound`` directly.
+A future caller must either authenticate its ``ChannelInboundMessage`` before
+calling ``process_inbound`` — and be added here with a comment saying how —
+or go through ``handle_inbound`` / ``poll_enabled_channels`` instead of
+calling ``process_inbound`` directly.
 
 HOW IT WORKS
 ------------
@@ -163,7 +167,7 @@ def test_process_inbound_callers_match_the_allowlist() -> None:
     """Every module calling ``ChannelInboundService.process_inbound(`` must be
     in ``ALLOWED_CALLER_MODULES``, each with its own authentication justification.
 
-    This is the drift guard: a new caller (e.g. Phase 5's) that reaches
+    This is the drift guard: a new caller that reaches
     ``process_inbound`` without first authenticating the message must fail
     this test until it is either routed through ``handle_inbound`` /
     ``poll_enabled_channels`` instead, or explicitly added here with a comment

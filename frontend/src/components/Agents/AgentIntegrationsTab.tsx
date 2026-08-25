@@ -45,7 +45,9 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <McpConnectorsCardSimple agentId={agent.id} />
+          <McpConnectorsCardSimple
+            routerTriggerPrompt={agent.router_trigger_prompt}
+          />
         </div>
       </div>
     )

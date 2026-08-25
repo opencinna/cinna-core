@@ -48,7 +48,8 @@ channel Pass-1 capture is now open around it.
 longer read here (settled decision §2.9 of the channels/identity unification
 master plan): a second routing mechanism with silently higher priority than the
 classifier, which no trace explains well, is worse than one classifier call.
-The column survives until a later phase drops it in a migration.
+The field is gone from the model and its DTOs; the column is dropped by the
+phase's own migration.
 """
 import logging
 import uuid

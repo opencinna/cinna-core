@@ -15,6 +15,17 @@ than an intention. The candidate objects are checked too, because a field
 missing from the ballot can never reach the prompt; but the prompt assertion is
 the one that would have failed.
 
+Phase 5 of ``docs/plans/channels_identity_unification/`` deleted
+``AppMCPRoutingService._ai_classify`` along with the rest of the
+``AppAgentRoute`` family — App MCP no longer has a renderer of its own.
+``AgentClassifier.classify`` / ``agent_classifier.render_prompt`` are now the
+one renderer every routing surface (Channel Pass 1/2, App MCP Stage 1, Identity
+Stage 2) shares, so the App-MCP-labelled tests below are rewritten against that
+shared entry point, building plain ``Candidate`` objects instead of the deleted
+``EffectiveRoute``. The property they guard — a candidate's name and
+``prompt_examples`` reach the model — is unchanged; only the door it is tested
+through moved, because there is only one door left.
+
 No DB, no Docker, no LLM calls — the provider is mocked at classifier depth.
 """
 import uuid
@@ -52,23 +63,17 @@ def _candidate_block(prompt: str) -> str:
     return tail.split("## User Message", 1)[0]
 
 
-def _route(**overrides):
-    from app.services.app_mcp.app_agent_route_service import EffectiveRoute
+def _candidate(**overrides):
+    from app.services.routing.agent_classifier import Candidate
 
     base = dict(
-        route_id=uuid.uuid4(),
-        agent_id=uuid.uuid4(),
-        agent_name="Calendar Planner",
-        session_mode="conversation",
+        ref_id=str(uuid.uuid4()),
+        name="Calendar Planner",
         trigger_prompt="Schedule meetings and manage calendar events",
-        message_patterns=None,
         prompt_examples=None,
-        source="user",
-        identity_owner_id=None,
-        identity_owner_name=None,
     )
     base.update(overrides)
-    return EffectiveRoute(**base)
+    return Candidate(**base)
 
 
 # ---------------------------------------------------------------------------
@@ -82,17 +87,17 @@ def test_agent_name_reaches_the_rendered_prompt() -> None:
     It is what lets the model separate "Calendar Planner" from "Vacation
     Planner" when their trigger words overlap.
     """
-    from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
+    from app.services.routing.agent_classifier import AgentClassifier
 
-    route = _route(agent_name="Calendar Planner")
+    candidate = _candidate(name="Calendar Planner")
     _, prompt = _capture_prompt(
-        lambda: AppMCPRoutingService._ai_classify(
-            "Can you schedule a meeting for tomorrow?", [route]
+        lambda: AgentClassifier.classify(
+            [candidate], "Can you schedule a meeting for tomorrow?"
         )
     )
 
     assert "Calendar Planner" in prompt
-    assert str(route.agent_id) in prompt
+    assert candidate.ref_id in prompt
     assert "Schedule meetings and manage calendar events" in prompt
 
 
@@ -109,12 +114,12 @@ def test_prompt_examples_reach_the_rendered_prompt() -> None:
     renderer and was discarded there, so the owner's examples changed nothing
     at all.
     """
-    from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
+    from app.services.routing.agent_classifier import AgentClassifier
 
-    route = _route(prompt_examples="book a meeting\nschedule event")
+    candidate = _candidate(prompt_examples="book a meeting\nschedule event")
     _, prompt = _capture_prompt(
-        lambda: AppMCPRoutingService._ai_classify(
-            "Can you schedule a meeting for tomorrow?", [route]
+        lambda: AgentClassifier.classify(
+            [candidate], "Can you schedule a meeting for tomorrow?"
         )
     )
 
@@ -156,11 +161,11 @@ def test_identity_bindings_send_their_prompt_examples_too() -> None:
 
 def test_absent_prompt_examples_render_no_examples_block() -> None:
     """No examples must not render an empty, model-confusing heading."""
-    from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
+    from app.services.routing.agent_classifier import AgentClassifier
 
-    route = _route(prompt_examples=None)
+    candidate = _candidate(prompt_examples=None)
     _, prompt = _capture_prompt(
-        lambda: AppMCPRoutingService._ai_classify("process this invoice", [route])
+        lambda: AgentClassifier.classify([candidate], "process this invoice")
     )
 
     candidate_block = _candidate_block(prompt)
@@ -169,11 +174,11 @@ def test_absent_prompt_examples_render_no_examples_block() -> None:
 
 def test_blank_prompt_examples_render_no_examples_block() -> None:
     """Whitespace-only examples are "no examples", not one blank bullet."""
-    from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
+    from app.services.routing.agent_classifier import AgentClassifier
 
-    route = _route(prompt_examples="   \n\n  \n")
+    candidate = _candidate(prompt_examples="   \n\n  \n")
     _, prompt = _capture_prompt(
-        lambda: AppMCPRoutingService._ai_classify("process this invoice", [route])
+        lambda: AgentClassifier.classify([candidate], "process this invoice")
     )
 
     candidate_block = _candidate_block(prompt)

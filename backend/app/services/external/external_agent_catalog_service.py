@@ -1,10 +1,9 @@
 """
 ExternalAgentCatalogService — Discovery layer for the External Agent Access API.
 
-Builds the unified target list (GET /api/v1/external/agents) from three sources:
+Builds the unified target list (GET /api/v1/external/agents) from two sources:
   1. Personal agents owned by the user
-  2. MCP Shared Agents (AppAgentRoute assignments)
-  3. Identity Contacts (IdentityAgentBinding-based)
+  2. Identity Contacts (IdentityAgentBinding-based)
 
 No database writes are performed — this is a read-only service.
 """
@@ -28,10 +27,6 @@ from app.models.external.external_agents import (
 )
 from app.models.users.user import User
 from app.services.a2a.a2a_service import A2AService
-from app.services.app_mcp.app_agent_route_service import (
-    AppAgentRouteService,
-    EffectiveRoute,
-)
 from app.services.identity.identity_service import IdentityService
 
 logger = logging.getLogger(__name__)
@@ -41,18 +36,14 @@ logger = logging.getLogger(__name__)
 class _DescriptorContext:
     """Everything needed to build a cinna.mcp descriptor for one target.
 
-    Collected during the per-section passes (which already resolve the
-    underlying Agent) and consumed by the deconfliction post-pass in
-    ``list_targets``, where the full set of names is visible.
+    Collected by the section pass that already resolves the underlying Agent
+    and consumed by the deconfliction post-pass in ``list_targets``, where the
+    full set of names is visible. Only the personal-agent section records one —
+    identity contacts are person-level and carry no single-tool descriptor.
     """
 
     agent: Agent
     environment: AgentEnvironment | None
-    # Name to slugify (agent name for personal targets, route name for routes).
-    slug_source: str
-    # Display name / description overrides for the descriptor (route identity).
-    display_name: str | None = None
-    description: str | None = None
 
 # Maximum number of prompt examples to include per identity contact
 # (aggregated across all their bindings)
@@ -87,8 +78,7 @@ class ExternalAgentCatalogService:
 
         Sections are assembled sequentially and concatenated:
           1. Personal agents (sorted by name)
-          2. MCP Shared Agents (sorted by agent_name)
-          3. Identity Contacts (sorted by owner_name)
+          2. Identity Contacts (sorted by owner_name)
 
         Args:
             db: Active database session.
@@ -97,11 +87,11 @@ class ExternalAgentCatalogService:
                 used to build absolute ``agent_card_url`` values. Trailing slash must
                 be stripped by the caller.
             workspace_id: Optional workspace filter. When provided, the personal
-                agents section is limited to agents in this workspace. MCP shared
-                agents and identity contacts are not filtered.
+                agents section is limited to agents in this workspace. Identity
+                contacts are not filtered.
 
         Returns:
-            ExternalAgentListResponse containing all three sections.
+            ExternalAgentListResponse containing both sections.
         """
         # Descriptor contexts keyed by target_id — populated by the section
         # helpers, consumed by the slug deconfliction post-pass below.
@@ -111,20 +101,11 @@ class ExternalAgentCatalogService:
             db, user, request_base_url, workspace_id=workspace_id,
             descriptor_contexts=descriptor_contexts,
         )
-        # Track agents already surfaced so the same underlying agent is never
-        # returned twice (e.g. an agent exposed both as personal and via an
-        # AppAgentRoute shared to the same user, or two routes pointing at the
-        # same agent).
-        seen_agent_ids: set[uuid.UUID] = {t.target_id for t in personal}
-        shared = ExternalAgentCatalogService._list_mcp_shared_agents(
-            db, user, request_base_url, seen_agent_ids=seen_agent_ids,
-            descriptor_contexts=descriptor_contexts,
-        )
         identity = ExternalAgentCatalogService._list_identity_contacts(
             db, user, request_base_url
         )
 
-        targets = personal + shared + identity
+        targets = personal + identity
 
         # Compute deconflicted slugs across the full reachable set and attach the
         # cinna.mcp descriptor to each target that has a context (identity
@@ -154,7 +135,7 @@ class ExternalAgentCatalogService:
             ctx = contexts.get(target.target_id)
             if ctx is None:
                 continue
-            base = A2AService.slugify_tool_name(ctx.slug_source)
+            base = A2AService.slugify_tool_name(ctx.agent.name)
             base_slugs[target.target_id] = base
             slug_counts[base] = slug_counts.get(base, 0) + 1
 
@@ -172,8 +153,6 @@ class ExternalAgentCatalogService:
                 ctx.agent,
                 ctx.environment,
                 tool_name=tool_name,
-                display_name=ctx.display_name,
-                description=ctx.description,
             )
 
     # ------------------------------------------------------------------
@@ -243,7 +222,6 @@ class ExternalAgentCatalogService:
                     environment=ExternalAgentCatalogService._resolve_environment(
                         db, agent
                     ),
-                    slug_source=agent.name,
                 )
         return results
 
@@ -324,134 +302,6 @@ class ExternalAgentCatalogService:
             "workspace_id": (
                 str(agent.user_workspace_id) if agent.user_workspace_id else None
             ),
-        }
-
-    @staticmethod
-    def _list_mcp_shared_agents(
-        db: DBSession,
-        user: User,
-        base_url: str,
-        seen_agent_ids: set[uuid.UUID] | None = None,
-        descriptor_contexts: dict[uuid.UUID, _DescriptorContext] | None = None,
-    ) -> list[ExternalTargetPublic]:
-        """Return agents shared with the user via active AppAgentRoute assignments.
-
-        Excludes identity-source routes (which this function's source can no
-        longer produce — see the filter below) and any route whose underlying
-        agent is already present in
-        ``seen_agent_ids`` — this de-duplicates against the personal section
-        and collapses multiple routes pointing at the same agent into a single
-        entry.
-
-        When ``descriptor_contexts`` is provided, a ``_DescriptorContext`` keyed
-        by the route id is recorded for each surfaced route so ``list_targets``
-        can build the cinna.mcp descriptor with the route's identity (route name
-        + trigger prompt).
-        """
-        routes = AppAgentRouteService.get_effective_routes_for_user(
-            db_session=db,
-            user_id=user.id,
-            channel="app_mcp",
-        )
-        # Vacuous since identity moved to its own candidate provider — this
-        # function's source can no longer be "identity". Kept as the standing
-        # statement of the contract: identity belongs to the identity section
-        # below (``_list_identity_contacts``), never to the route section.
-        routes = [r for r in routes if r.source != "identity"]
-        # Sort by agent name ascending
-        routes.sort(key=lambda r: r.agent_name.lower())
-
-        if seen_agent_ids is None:
-            seen_agent_ids = set()
-
-        results: list[ExternalTargetPublic] = []
-        for route in routes:
-            # Skip if we've already surfaced this agent (personal section or
-            # an earlier route in this loop).
-            if route.agent_id in seen_agent_ids:
-                continue
-            seen_agent_ids.add(route.agent_id)
-
-            # Resolve agent to get entrypoint_prompt
-            agent = db.get(Agent, route.agent_id)
-
-            entrypoint_prompt = (
-                agent.entrypoint_prompt
-                if agent and agent.entrypoint_prompt
-                else None
-            )
-
-            # Resolve agent owner details
-            agent_owner_id: uuid.UUID | None = None
-            agent_owner_name: str | None = None
-            agent_owner_email: str | None = None
-            if agent:
-                owner = db.get(User, agent.owner_id)
-                if owner:
-                    agent_owner_id = owner.id
-                    agent_owner_name = owner.full_name or ""
-                    agent_owner_email = owner.email or ""
-
-            results.append(
-                ExternalTargetPublic(
-                    target_type="app_mcp_route",
-                    target_id=route.route_id,
-                    name=route.agent_name,
-                    description=route.trigger_prompt,
-                    entrypoint_prompt=entrypoint_prompt,
-                    example_prompts=_parse_prompt_examples(route.prompt_examples),
-                    session_mode=(
-                        route.session_mode
-                        if route.session_mode in ("conversation", "building")
-                        else None
-                    ),
-                    ui_color_preset=None,
-                    agent_card_url=(
-                        f"{base_url}/api/v1/external/a2a/route/{route.route_id}/"
-                    ),
-                    metadata=ExternalAgentCatalogService._route_metadata(
-                        route,
-                        agent_owner_id=agent_owner_id,
-                        agent_owner_name=agent_owner_name,
-                        agent_owner_email=agent_owner_email,
-                    ),
-                )
-            )
-            if descriptor_contexts is not None and agent is not None:
-                # Slug + identity come from the route the caller sees, not the
-                # raw underlying agent. Use the route's own display name
-                # (AppAgentRoute.name) so the descriptor matches the card path
-                # (external_a2a_service passes route.name); fall back to the
-                # agent name for routes without their own name (personal /
-                # identity sources).
-                route_display_name = route.name or route.agent_name
-                descriptor_contexts[route.route_id] = _DescriptorContext(
-                    agent=agent,
-                    environment=ExternalAgentCatalogService._resolve_environment(
-                        db, agent
-                    ),
-                    slug_source=route_display_name,
-                    display_name=route_display_name,
-                    description=route.trigger_prompt,
-                )
-        return results
-
-    @staticmethod
-    def _route_metadata(
-        route: EffectiveRoute,
-        *,
-        agent_owner_id: uuid.UUID | None,
-        agent_owner_name: str | None,
-        agent_owner_email: str | None,
-    ) -> dict[str, Any]:
-        return {
-            "route_id": str(route.route_id),
-            "agent_id": str(route.agent_id),
-            "agent_name": route.agent_name,
-            "agent_owner_id": str(agent_owner_id) if agent_owner_id else None,
-            "agent_owner_name": agent_owner_name,
-            "agent_owner_email": agent_owner_email,
-            "trigger_prompt": route.trigger_prompt,
         }
 
     @staticmethod

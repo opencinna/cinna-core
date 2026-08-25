@@ -8,9 +8,6 @@ Covers:
      envelope; the is_active filter excludes deactivated users.
   3. limit clamping (1–25) and LIKE-wildcard escaping (`%` / `_`).
   4. Authentication guard — unauthenticated requests are rejected.
-  5. AppAgentRouteAssignmentPublic carries user_email and user_full_name —
-     verified by creating a route + assignment and asserting the returned
-     assignment payload includes the assigned user's display info.
 """
 
 import uuid
@@ -26,7 +23,6 @@ from tests.utils.user import (
 from tests.utils.utils import random_lower_string
 
 _SEARCH = f"{settings.API_V1_STR}/users/search"
-_ADMIN_ROUTES = f"{settings.API_V1_STR}/admin/app-agent-routes"
 
 # This file creates users + routes/assignments but no agents; opt out of the
 # heavy agent/env stubs in tests/api/users/conftest.py.
@@ -291,140 +287,3 @@ def test_user_search_limit_clamping_and_wildcard_escaping(
         )
 
 
-# ---------------------------------------------------------------------------
-# Scenario 4: AppAgentRouteAssignment carries user display info
-# ---------------------------------------------------------------------------
-
-
-def test_route_assignment_carries_user_display_info(
-    client: TestClient,
-    db,
-    superuser_token_headers: dict[str, str],
-    tmp_path_factory,
-) -> None:
-    """
-    AppAgentRouteAssignmentPublic includes user_email and user_full_name.
-
-      1. Create two target users with known full_name values.
-      2. Bootstrap the same infrastructure patches the app_mcp conftest
-         uses (environment adapter, credentials, session proxy, background
-         task collector, external service mocks, storage dirs) so agent
-         creation succeeds without a running Docker environment.
-      3. Create an agent and an admin route.
-      4. Assign both users to the route.
-      5. GET the route by ID → each assignment carries user_email and
-         user_full_name matching the assigned user's actual values.
-      6. Multiple assignments are batch-resolved correctly (no N+1 leak).
-    """
-    from tests.utils.agent import create_agent_via_api
-    from tests.utils.background_tasks import drain_tasks
-    from tests.utils.fixtures import (
-        create_default_ai_credential,
-        patched_background_tasks,
-        patched_create_sessions,
-        patched_external_services,
-        patched_storage_dirs,
-        setup_environment_adapter,
-        teardown_environment_adapter,
-        CREATE_SESSION_TARGETS_AGENT,
-        BACKGROUND_TASK_TARGETS_FULL,
-    )
-
-    # ── Phase 1: Create users with known display info ──────────────────────
-    known_name_a = f"Alice {random_lower_string()[:8]}"
-    password_a = random_lower_string()
-    email_a = f"alice{random_lower_string()[:8]}@example.com"
-    r = client.post(
-        f"{settings.API_V1_STR}/users/signup",
-        json={"email": email_a, "password": password_a, "full_name": known_name_a},
-    )
-    assert r.status_code == 200, r.text
-    user_a = r.json()
-
-    known_name_b = f"Bob {random_lower_string()[:8]}"
-    password_b = random_lower_string()
-    email_b = f"bob{random_lower_string()[:8]}@example.com"
-    r = client.post(
-        f"{settings.API_V1_STR}/users/signup",
-        json={"email": email_b, "password": password_b, "full_name": known_name_b},
-    )
-    assert r.status_code == 200, r.text
-    user_b = r.json()
-
-    # ── Phase 2: Apply infrastructure patches identical to app_mcp conftest ─
-    # create_agent_via_api triggers environment creation which needs:
-    #   - a default AI credential (credential validation in agent service)
-    #   - an environment adapter stub (replaces Docker lifecycle calls)
-    #   - create_session patched to use the test transaction
-    #   - background task collector (so env-start tasks don't escape)
-    #   - external service mocks (SocketIO, OAuth refresh, AI functions)
-    #   - storage dirs redirected to tmp (no host filesystem writes)
-    create_default_ai_credential(client, superuser_token_headers)
-    lm = setup_environment_adapter(tmp_path_factory)
-    try:
-        with (
-            patched_create_sessions(db, CREATE_SESSION_TARGETS_AGENT),
-            patched_background_tasks(BACKGROUND_TASK_TARGETS_FULL),
-            patched_external_services(mock_ai_functions=True, mock_a2a_skills=True),
-            patched_storage_dirs(tmp_path_factory),
-        ):
-            # ── Phase 3: Create agent and admin route ──────────────────────
-            agent = create_agent_via_api(
-                client, superuser_token_headers, name="DisplayInfo Agent"
-            )
-            drain_tasks()
-
-            route_name = f"disp-{random_lower_string()[:8]}"
-            r = client.post(
-                f"{_ADMIN_ROUTES}/",
-                headers=superuser_token_headers,
-                json={
-                    "name": route_name,
-                    "agent_id": agent["id"],
-                    "trigger_prompt": "Handle all display-info tests",
-                },
-            )
-            assert r.status_code == 200, r.text
-            route_id = r.json()["id"]
-
-            # ── Phase 4: Assign both users ─────────────────────────────────
-            r = client.post(
-                f"{_ADMIN_ROUTES}/{route_id}/assignments",
-                headers=superuser_token_headers,
-                json=[user_a["id"], user_b["id"]],
-            )
-            assert r.status_code == 200, r.text
-
-            # ── Phase 5: GET route → verify assignment display info ────────
-            r = client.get(
-                f"{_ADMIN_ROUTES}/{route_id}", headers=superuser_token_headers
-            )
-            assert r.status_code == 200, r.text
-            route_body = r.json()
-
-            assignments = route_body["assignments"]
-            assert len(assignments) == 2
-
-            # Build a lookup by user_id for easy assertion.
-            by_user: dict[str, dict] = {a["user_id"]: a for a in assignments}
-
-            # ── Phase 6: user_email / user_full_name match actual users ────
-            assert user_a["id"] in by_user, "Assignment for user_a missing"
-            a_asgn = by_user[user_a["id"]]
-            assert a_asgn["user_email"] == email_a, (
-                f"Expected user_email={email_a!r}, got {a_asgn['user_email']!r}"
-            )
-            assert a_asgn["user_full_name"] == known_name_a, (
-                f"Expected user_full_name={known_name_a!r}, got {a_asgn['user_full_name']!r}"
-            )
-
-            assert user_b["id"] in by_user, "Assignment for user_b missing"
-            b_asgn = by_user[user_b["id"]]
-            assert b_asgn["user_email"] == email_b, (
-                f"Expected user_email={email_b!r}, got {b_asgn['user_email']!r}"
-            )
-            assert b_asgn["user_full_name"] == known_name_b, (
-                f"Expected user_full_name={known_name_b!r}, got {b_asgn['user_full_name']!r}"
-            )
-    finally:
-        teardown_environment_adapter()

@@ -9039,340 +9039,6 @@ export const AllowedToolsUpdateSchema = {
     description: 'Schema for updating allowed tools list'
 } as const;
 
-export const AppAgentRouteAssignmentPublicSchema = {
-    properties: {
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        route_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Route Id'
-        },
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
-        user_email: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'User Email'
-        },
-        user_full_name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'User Full Name'
-        },
-        is_enabled: {
-            type: 'boolean',
-            title: 'Is Enabled'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        }
-    },
-    type: 'object',
-    required: ['id', 'route_id', 'user_id', 'is_enabled', 'created_at'],
-    title: 'AppAgentRouteAssignmentPublic'
-} as const;
-
-export const AppAgentRouteCreateSchema = {
-    properties: {
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode',
-            default: 'conversation'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        prompt_examples: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Prompt Examples'
-        },
-        channel_app_mcp: {
-            type: 'boolean',
-            title: 'Channel App Mcp',
-            default: true
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active',
-            default: true
-        },
-        auto_enable_for_users: {
-            type: 'boolean',
-            title: 'Auto Enable For Users',
-            default: false
-        },
-        activate_for_myself: {
-            type: 'boolean',
-            title: 'Activate For Myself',
-            default: false
-        },
-        assigned_user_ids: {
-            items: {
-                type: 'string',
-                format: 'uuid'
-            },
-            type: 'array',
-            title: 'Assigned User Ids',
-            default: []
-        }
-    },
-    type: 'object',
-    required: ['name', 'agent_id', 'trigger_prompt'],
-    title: 'AppAgentRouteCreate'
-} as const;
-
-export const AppAgentRoutePublicSchema = {
-    properties: {
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        agent_name: {
-            type: 'string',
-            title: 'Agent Name',
-            default: ''
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        prompt_examples: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Prompt Examples'
-        },
-        channel_app_mcp: {
-            type: 'boolean',
-            title: 'Channel App Mcp'
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active'
-        },
-        auto_enable_for_users: {
-            type: 'boolean',
-            title: 'Auto Enable For Users',
-            default: false
-        },
-        is_auto_managed: {
-            type: 'boolean',
-            title: 'Is Auto Managed',
-            default: false
-        },
-        agent_owner_name: {
-            type: 'string',
-            title: 'Agent Owner Name',
-            default: ''
-        },
-        agent_owner_email: {
-            type: 'string',
-            title: 'Agent Owner Email',
-            default: ''
-        },
-        created_by: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Created By'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        },
-        assignments: {
-            items: {
-                '$ref': '#/components/schemas/AppAgentRouteAssignmentPublic'
-            },
-            type: 'array',
-            title: 'Assignments',
-            default: []
-        }
-    },
-    type: 'object',
-    required: ['id', 'name', 'agent_id', 'session_mode', 'trigger_prompt', 'message_patterns', 'channel_app_mcp', 'is_active', 'created_by', 'created_at', 'updated_at'],
-    title: 'AppAgentRoutePublic'
-} as const;
-
-export const AppAgentRouteUpdateSchema = {
-    properties: {
-        name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Name'
-        },
-        session_mode: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        prompt_examples: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Prompt Examples'
-        },
-        channel_app_mcp: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Channel App Mcp'
-        },
-        is_active: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Is Active'
-        },
-        auto_enable_for_users: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Auto Enable For Users'
-        }
-    },
-    type: 'object',
-    title: 'AppAgentRouteUpdate'
-} as const;
-
 export const AppDataVolumePublicSchema = {
     properties: {
         id: {
@@ -10503,8 +10169,8 @@ Surfaced on \`\`ExternalTargetPublic.bundle_version\`\` so native clients
 and offer an in-client update. Populated only for consumer installs
 (\`\`target_type="agent"\`\` with a \`\`bundle_uuid\`\` and
 \`\`is_publisher_install=False\`\`); \`\`None\`\` for the publisher's own
-working copy, shared routes, and identity contacts (none of which the
-caller updates).
+working copy and identity contacts (neither of which the caller
+updates).
 
 Computed read-only — building this never mutates \`\`Agent.pending_update\`\`
 (the discovery endpoint is write-free). \`\`update_available\`\` is derived
@@ -13970,8 +13636,8 @@ export const ExternalAgentListResponseSchema = {
     title: 'ExternalAgentListResponse',
     description: `Response schema for GET /api/v1/external/agents.
 
-Targets are ordered: personal agents first, then MCP shared agents,
-then identity contacts — each section sorted by name ascending.`
+Targets are ordered: personal agents first, then identity contacts —
+each section sorted by name ascending.`
 } as const;
 
 export const ExternalSessionPublicSchema = {
@@ -14161,7 +13827,7 @@ export const ExternalTargetPublicSchema = {
     properties: {
         target_type: {
             type: 'string',
-            enum: ['agent', 'app_mcp_route', 'identity'],
+            enum: ['agent', 'identity'],
             title: 'Target Type'
         },
         target_id: {
@@ -14272,10 +13938,9 @@ export const ExternalTargetPublicSchema = {
     title: 'ExternalTargetPublic',
     description: `A single addressable target returned by the external agent discovery endpoint.
 
-Covers three source types:
-- "agent"         — personal agent owned by (or cloned to) the user
-- "app_mcp_route" — agent shared with the user via an AppAgentRoute assignment
-- "identity"      — another user who has exposed agents via the Identity MCP server`
+Covers two source types:
+- "agent"    — personal agent owned by (or cloned to) the user
+- "identity" — another user who has exposed agents via the Identity MCP server`
 } as const;
 
 export const FileUploadPublicSchema = {
@@ -15027,17 +14692,6 @@ export const IdentityAgentBindingCreateSchema = {
             type: 'string',
             title: 'Trigger Prompt'
         },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
         prompt_examples: {
             anyOf: [
                 {
@@ -15095,17 +14749,6 @@ export const IdentityAgentBindingPublicSchema = {
             type: 'string',
             title: 'Trigger Prompt'
         },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
         prompt_examples: {
             anyOf: [
                 {
@@ -15145,7 +14788,7 @@ export const IdentityAgentBindingPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'agent_id', 'trigger_prompt', 'message_patterns', 'session_mode', 'is_active', 'created_at', 'updated_at'],
+    required: ['id', 'agent_id', 'trigger_prompt', 'session_mode', 'is_active', 'created_at', 'updated_at'],
     title: 'IdentityAgentBindingPublic'
 } as const;
 
@@ -15161,17 +14804,6 @@ export const IdentityAgentBindingUpdateSchema = {
                 }
             ],
             title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
         },
         prompt_examples: {
             anyOf: [
@@ -21183,63 +20815,6 @@ export const RevokeRequestSchema = {
     title: 'RevokeRequest'
 } as const;
 
-export const RouteConflictMatchSchema = {
-    properties: {
-        route_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Route Id'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        agent_name: {
-            type: 'string',
-            title: 'Agent Name'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        similarity: {
-            type: 'number',
-            title: 'Similarity'
-        }
-    },
-    type: 'object',
-    required: ['route_id', 'agent_id', 'agent_name', 'trigger_prompt', 'similarity'],
-    title: 'RouteConflictMatch',
-    description: `A single conflicting effective route the installer already has.
-
-Surfaced as a non-blocking toast on the install completion page when an
-agent's auto-created route looks similar (by lowercased token overlap)
-to another route already active for the installer. Helps the user
-spot near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
-Planner") that could confuse the App MCP router.`
-} as const;
-
-export const RouteConflictResponseSchema = {
-    properties: {
-        matches: {
-            items: {
-                '$ref': '#/components/schemas/RouteConflictMatch'
-            },
-            type: 'array',
-            title: 'Matches',
-            default: []
-        }
-    },
-    type: 'object',
-    title: 'RouteConflictResponse',
-    description: `Response payload for the install-time conflict check.
-
-\`\`matches\`\` is sorted by descending similarity. Empty when no
-effective route crosses the similarity threshold (or when the agent
-has no auto-managed route to compare against).`
-} as const;
-
 export const RouterTriggerPromptUpdateSchema = {
     properties: {
         router_trigger_prompt: {
@@ -21953,11 +21528,11 @@ export const RoutingNearMissSchema = {
 
 A *hint*, explicitly not a rule: the classifier is an LLM and there is no
 similarity cut-off anywhere in routing. This is the same Jaccard overlap
-\`\`AppAgentRouteService\`\` already uses for install-time route-conflict
-detection, borrowed to answer the question an admin actually asks about a
-\`\`no_match\`\` — "how close did it come?". Saying "0.31, below the threshold"
-would be a claim the router does not implement; the wording says "closest",
-not "just missed".`
+\`\`app/services/routing/text_similarity.py\`\` already uses for install-time
+route-conflict detection, borrowed to answer the question an admin
+actually asks about a \`\`no_match\`\` — "how close did it come?". Saying
+"0.31, below the threshold" would be a claim the router does not
+implement; the wording says "closest", not "just missed".`
 } as const;
 
 export const RoutingRecommendationPublicSchema = {
@@ -24300,86 +23875,6 @@ export const SharedCredentialsPublicSchema = {
     description: 'Response model for list of credentials shared with current user.'
 } as const;
 
-export const SharedRoutePublicSchema = {
-    properties: {
-        route_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Route Id'
-        },
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        agent_name: {
-            type: 'string',
-            title: 'Agent Name'
-        },
-        agent_owner_name: {
-            type: 'string',
-            title: 'Agent Owner Name',
-            default: ''
-        },
-        agent_owner_email: {
-            type: 'string',
-            title: 'Agent Owner Email',
-            default: ''
-        },
-        shared_by_name: {
-            type: 'string',
-            title: 'Shared By Name',
-            default: ''
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        prompt_examples: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Prompt Examples'
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active'
-        },
-        assignment_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Assignment Id'
-        },
-        is_enabled: {
-            type: 'boolean',
-            title: 'Is Enabled'
-        }
-    },
-    type: 'object',
-    required: ['route_id', 'name', 'agent_name', 'session_mode', 'trigger_prompt', 'is_active', 'assignment_id', 'is_enabled'],
-    title: 'SharedRoutePublic',
-    description: 'Route shared with a user (via assignment), as seen by the assignee.'
-} as const;
-
 export const SharedUserPublicSchema = {
     properties: {
         user_id: {
@@ -25877,199 +25372,6 @@ triggered in the background, or \`\`"ok"\`\` when no action was needed.
 \`\`environment_id\`\` is the *resolved* environment id, which may differ from
 the requested one when the request targeted a non-active environment and was
 redirected to the agent's active environment.`
-} as const;
-
-export const UserAppAgentRouteCreateSchema = {
-    properties: {
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode',
-            default: 'conversation'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        channel_app_mcp: {
-            type: 'boolean',
-            title: 'Channel App Mcp',
-            default: true
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active',
-            default: true
-        }
-    },
-    type: 'object',
-    required: ['agent_id', 'trigger_prompt'],
-    title: 'UserAppAgentRouteCreate'
-} as const;
-
-export const UserAppAgentRoutePublicSchema = {
-    properties: {
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        agent_name: {
-            type: 'string',
-            title: 'Agent Name',
-            default: ''
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        channel_app_mcp: {
-            type: 'boolean',
-            title: 'Channel App Mcp'
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        }
-    },
-    type: 'object',
-    required: ['id', 'user_id', 'agent_id', 'session_mode', 'trigger_prompt', 'message_patterns', 'channel_app_mcp', 'is_active', 'created_at', 'updated_at'],
-    title: 'UserAppAgentRoutePublic'
-} as const;
-
-export const UserAppAgentRouteUpdateSchema = {
-    properties: {
-        session_mode: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        channel_app_mcp: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Channel App Mcp'
-        },
-        is_active: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Is Active'
-        }
-    },
-    type: 'object',
-    title: 'UserAppAgentRouteUpdate'
-} as const;
-
-export const UserAppAgentRoutesResponseSchema = {
-    properties: {
-        personal_routes: {
-            items: {
-                '$ref': '#/components/schemas/UserAppAgentRoutePublic'
-            },
-            type: 'array',
-            title: 'Personal Routes'
-        },
-        shared_routes: {
-            items: {
-                '$ref': '#/components/schemas/SharedRoutePublic'
-            },
-            type: 'array',
-            title: 'Shared Routes'
-        }
-    },
-    type: 'object',
-    required: ['personal_routes', 'shared_routes'],
-    title: 'UserAppAgentRoutesResponse',
-    description: "Combined response for user's personal + shared routes."
 } as const;
 
 export const UserChannelPublicSchema = {

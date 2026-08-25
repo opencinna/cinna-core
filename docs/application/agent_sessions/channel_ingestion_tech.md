@@ -23,7 +23,7 @@
 ### Tests
 - `backend/tests/unit/models/test_session_sender.py` — Unit tests for the value type (kinds, constructors, properties, round-trip `from_a2a` ↔ `get_session_sender`).
 - `backend/tests/architecture/channel_ingestion_callers_test.py` — Contract test (above).
-- `backend/tests/api/external/external_a2a_route_test.py::test_route_streaming_creates_app_mcp_session_with_correct_ownership` — End-to-end check that `app_mcp` target type stamps `session.user_id == agent.owner_id` and `session.caller_id == caller`.
+- `backend/tests/api/app_mcp/app_mcp_session_test.py` — End-to-end check that App MCP sessions stamp `session.user_id == agent.owner_id` and `session.caller_id == caller`. (Formerly `backend/tests/api/external/external_a2a_route_test.py`, deleted in Phase 5 of the channels & identity unification along with the `app_mcp_route` external target type it tested.) <!-- nocheck -->
 
 ## `SessionSender` Constructors
 

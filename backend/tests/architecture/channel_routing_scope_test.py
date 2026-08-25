@@ -4,12 +4,18 @@ WHY THIS EXISTS
 ---------------
 ``docs/plans/channel_routing_scope_split_plan.md`` §3: each routing surface owns
 its **candidate provider**. A Server Channel routes over the agents the sender
-*owns*; the App MCP server routes over
-``AppAgentRouteService.get_effective_routes_for_user``, which answers a
-different question — "what can this user address through the App MCP server" —
-and gates it on ``channel_app_mcp``, ``AppAgentRoute.is_active`` and
-``AppAgentRouteAssignment.is_enabled``. The only things legitimately shared
-across the two surfaces are ``AgentClassifier.classify`` and ``RoutingTrace``.
+*owns*, built by ``ChannelCandidateProvider``. Since
+``docs/plans/channels_identity_unification/phase_5_app_mcp_channel.md``, App MCP
+is itself a channel and composes the *same* ``ChannelCandidateProvider`` (plus
+``IdentityCandidateProvider`` when ``allow_identity_routing`` allows it) —
+``AppAgentRouteService`` and the whole ``AppAgentRoute`` family it used to gate
+on (``channel_app_mcp``, route ``is_active``, assignment ``is_enabled``) are
+deleted. What remains a live risk is ``AppMCPRoutingService.route_message``
+itself: it is still App MCP's own thin composition layer over the two
+candidate providers plus ``AgentClassifier.classify``, and channel routing must
+not call it directly — that would hand channel routing App MCP's specific
+composition (its own gating, its own trace shape) instead of building its own
+candidate set the way it is meant to.
 
 Channel Pass 1 used to call ``AppMCPRoutingService.route_message`` and then try
 to correct the answer subtractively. That is the reported bug (§1): the sender's
@@ -29,8 +35,8 @@ a convention.
 WHAT IT ENFORCES
 ----------------
 Neither ``channel_routing_service.py`` nor ``channel_candidate_provider.py``
-imports ``AppMCPRoutingService`` or ``AppAgentRouteService`` — by symbol, by
-module path, at module level or nested inside a function.
+imports ``AppMCPRoutingService`` — by symbol, by module path, at module level
+or nested inside a function.
 
 RELATIONSHIP TO ``channel_routing_purity_test.py``
 --------------------------------------------------
@@ -46,17 +52,18 @@ WHY AST AND NOT A GREP
 ----------------------
 Following the section of the same name in ``channel_routing_purity_test.py``,
 and here it bites immediately rather than hypothetically: **both** guarded
-modules name both guarded services in prose, precisely to explain why they are
-absent. ``_route_installed``'s docstring walks through what
+modules name ``AppMCPRoutingService`` in prose, precisely to explain why it is
+absent from the imports. ``_route_installed``'s docstring walks through what
 ``AppMCPRoutingService.route_message`` used to return and why its ``only_one``
 short-circuit came back in a different, conditional form;
 ``channel_candidate_provider``'s module docstring opens by contrasting itself
-with ``AppAgentRouteService.get_effective_routes_for_user``. (Cited by symbol
-rather than by line number on purpose — a line citation in a test that exists to
-survive refactors is the first thing a refactor invalidates.) A text scan would fail
-on correct code — and would then be "fixed" by deleting the explanations, which
-is the worst possible outcome for a seam whose only defence is that somebody
-understood it.
+with the same service (and, historically, with the now-deleted
+``AppAgentRouteService.get_effective_routes_for_user`` it used to call
+through). (Cited by symbol rather than by line number on purpose — a line
+citation in a test that exists to survive refactors is the first thing a
+refactor invalidates.) A text scan would fail on correct code — and would then
+be "fixed" by deleting the explanations, which is the worst possible outcome
+for a seam whose only defence is that somebody understood it.
 
 So this asserts on **import nodes only**, not on ``Name``/``Attribute`` the way
 the purity test's name blocklist does. That is narrower on purpose. A bare
@@ -94,45 +101,37 @@ _GUARDED_MODULES: tuple[pathlib.Path, ...] = (
 #: just broke rather than only "forbidden import".
 _FORBIDDEN_SYMBOLS: dict[str, str] = {
     "AppMCPRoutingService": (
-        "is the App MCP surface's whole Pass 1. Calling it hands channel "
-        "routing a ballot built from AppAgentRoute rows — which omits the "
-        "sender's own standalone agents and includes other people's agents by "
-        "way of admin routes and identity contacts. That is plan §1's reported "
-        "incident, exactly"
-    ),
-    "AppAgentRouteService": (
-        "owns get_effective_routes_for_user and the App MCP enablement "
-        "toggles (channel_app_mcp, is_active, assignment is_enabled). A "
-        "channel must not inherit them: what a user chooses to expose over MCP "
-        "is not a statement about what they can reach from their own chat app "
-        "(plan §2.2)"
+        "is App MCP's own composition layer (ChannelCandidateProvider + "
+        "IdentityCandidateProvider + AgentClassifier.classify, per phase 5 of "
+        "docs/plans/channels_identity_unification/). Calling it from channel "
+        "routing hands the channel App MCP's specific gating and trace shape "
+        "instead of building the channel's own candidate set — the same "
+        "cross-surface coupling that produced plan §1's reported incident, in "
+        "a new shape"
     ),
 }
 
 #: The modules those symbols live in, so ``import ... as svc`` followed by
-#: ``svc.AppAgentRouteService`` cannot slip past a symbol-name check.
+#: ``svc.AppMCPRoutingService`` cannot slip past a symbol-name check.
 _FORBIDDEN_MODULES: dict[str, str] = {
     "app.services.app_mcp.app_mcp_routing_service": (
         "is the App MCP router module; importing it at all puts "
         "AppMCPRoutingService one attribute access away"
-    ),
-    "app.services.app_mcp.app_agent_route_service": (
-        "is the App MCP route module; importing it at all puts "
-        "AppAgentRouteService one attribute access away"
     ),
 }
 
 _REMEDY = (
     "\n\nEach routing surface owns its candidate provider (plan §3). Channel "
     "candidates come from ChannelCandidateProvider.build, which selects the "
-    "sender's OWN agents and reads no route, no assignment and no "
-    "channel_app_mcp flag. The only things shared across surfaces are "
-    "AgentClassifier.classify and RoutingTrace — if what you need is "
-    "classification, import AgentClassifier; if it is route data, it belongs "
-    "on the App MCP path, not here.\n\n"
-    "Both modules mention these names in prose on purpose, explaining why they "
-    "are absent. This test reads import nodes, not text, so leave the "
-    "explanations alone."
+    "sender's OWN agents. App MCP composes the same provider (plus "
+    "IdentityCandidateProvider when allow_identity_routing allows it) on its "
+    "own path — a channel module must build its own candidate set, not reach "
+    "into App MCP's composition for it. The only things shared across "
+    "surfaces are AgentClassifier.classify and RoutingTrace — if what you "
+    "need is classification, import AgentClassifier.\n\n"
+    "Both modules mention AppMCPRoutingService in prose on purpose, "
+    "explaining why it is absent. This test reads import nodes, not text, so "
+    "leave the explanations alone."
 )
 
 
@@ -163,7 +162,7 @@ def _imports(tree: ast.Module) -> tuple[set[str], set[str]]:
 
 
 def test_channel_routing_never_imports_the_app_mcp_candidate_set() -> None:
-    """Neither channel module imports AppMCPRoutingService/AppAgentRouteService."""
+    """Neither channel module imports AppMCPRoutingService."""
     offenders: list[str] = []
     for path in _GUARDED_MODULES:
         assert path.is_file(), f"Expected {path} to exist"

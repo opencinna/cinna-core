@@ -322,13 +322,15 @@ class ChannelIngestionService:
         identity sessions stay ``"identity_mcp"``.
 
         **Where the grant is actually verified.** ``assert_access`` consults
-        ``policy.identity_grant`` on its ``channel_caller`` arm only. App MCP's
-        ``mcp_caller`` arm does **not** consult it — App MCP re-verifies
-        identity per message on resume instead, which is what it has always
-        done, and the extraction did not add a second gate on its create path.
-        So for an ``mcp_caller`` the grant is carried and stamped but not
-        re-read. For a ``channel_caller`` it is a live check, performed by the
-        ``assert_access`` call below.
+        ``policy.identity_grant`` on both its ``channel_caller`` and its
+        ``mcp_caller`` arms, so the call below is a live check whichever
+        surface built the sender. The ``mcp_caller`` arm gained it when the
+        ``AppAgentRoute`` family was deleted: that arm used to rest on "the
+        routing layer verified the caller has a route to this agent", and with
+        no routes left the only thing that can authorise a session on somebody
+        else's agent is the grant. App MCP additionally re-verifies identity
+        per message on *resume*, in ``_check_identity_session_validity``, which
+        checks liveness only — the two are complementary, not redundant.
 
         Raises ``PermissionError`` when the sender kind is unsupported or a
         consulted grant does not re-verify, and ``NoActiveEnvironmentError``
@@ -368,7 +370,6 @@ class ChannelIngestionService:
         # let the two disagree about which claim is being honoured.
         policy = ChannelAccessPolicy(
             expected_owner_id=agent.owner_id,
-            require_caller_in_route=True,
             identity_grant=grant,
         )
         ChannelIngestionService.assert_access(
@@ -520,21 +521,55 @@ class ChannelIngestionService:
             return
 
         if kind == "mcp_caller":
-            # Routing has already gated this caller against the agent (§7.4).
-            # An `identity_grant` on the policy is carried but not consulted
-            # here. App MCP re-verifies identity per message on resume, in
-            # `_check_identity_session_validity` — which checks *liveness*
-            # (binding active, assignment active and enabled), not the grant
-            # arm's four linkage conditions. Those linkage facts are not
-            # re-derived on this path because App MCP never derived them here
-            # either: the routing decision that produced the ids ran in this
-            # same transaction moments ago. Keeping this arm as it was is what
-            # makes the extraction a refactor; tightening it is a behaviour
-            # change and needs its own reasoning.
-            if policy.require_caller_in_route and sender.platform_user_id is None:
+            # This arm used to lean on ``require_caller_in_route`` — "the App
+            # MCP routing layer verified the caller has a route to this agent"
+            # — and check nothing but a non-null ``platform_user_id``. With the
+            # ``AppAgentRoute`` family deleted there is no route to have been
+            # verified, so the guarantee is restated in terms of what actually
+            # authorises the session: **the caller owns the agent, or an
+            # identity grant says otherwise.**
+            #
+            # The grant check is the ``channel_caller`` arm's, called rather
+            # than copied. A second implementation of "is this identity claim
+            # still live" is the thing this file exists to prevent, and the six
+            # conditions are the agreed contract for that question on every
+            # surface.
+            #
+            # What this deliberately does NOT do is adopt ``channel_caller``'s
+            # three-way ``expected_owner_id`` invariant. App MCP has never
+            # satisfied it — its callers hold sessions on agents whose owner is
+            # the agent's owner, with ``expected_owner_id`` set from the agent
+            # rather than from the sender — so importing it here would be a
+            # behaviour change wearing a refactor's clothes.
+            if sender.platform_user_id is None:
                 raise ChannelDecline(
                     "mcp_caller missing platform_user_id "
                     "(routing layer should have rejected this)"
+                )
+            if agent.owner_id == sender.platform_user_id:
+                return
+
+            grant = policy.identity_grant
+            if grant is None:
+                raise ChannelDecline(
+                    "mcp_caller on a foreign agent with no identity grant: "
+                    f"agent.owner_id={agent.owner_id}, "
+                    f"sender.platform_user_id={sender.platform_user_id}"
+                )
+
+            from app.services.identity.identity_service import IdentityService
+
+            denial = IdentityService.verify_identity_access(
+                db,
+                owner_id=grant.owner_id,
+                binding_id=grant.binding_id,
+                assignment_id=grant.assignment_id,
+                caller_user_id=sender.platform_user_id,
+                agent_id=agent.id,
+            )
+            if denial:
+                raise ChannelDecline(
+                    f"mcp_caller identity grant rejected: {denial}"
                 )
             return
 

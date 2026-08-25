@@ -56,7 +56,7 @@ def test_identity_binding_lifecycle(
       3.  Create a binding — verify initial fields
       4.  Binding appears in list
       5.  Summary returns the same binding
-      6.  Update trigger_prompt and message_patterns — changes persist
+      6.  Update trigger_prompt — changes persist
       7.  Update session_mode and is_active — changes persist
       8.  Update binding owned by another user returns 404
       9.  Non-existent binding ID returns 404 on PUT
@@ -73,13 +73,11 @@ def test_identity_binding_lifecycle(
 
     # ── Phase 3: Create binding ────────────────────────────────────────────
     prompt = "Route to this agent for billing questions."
-    patterns = "billing|invoice|payment"
     binding = create_identity_binding(
         client,
         superuser_token_headers,
         agent_id=agent_id,
         trigger_prompt=prompt,
-        message_patterns=patterns,
         session_mode="conversation",
     )
     binding_id = binding["id"]
@@ -87,7 +85,7 @@ def test_identity_binding_lifecycle(
     assert binding["agent_id"] == agent_id
     assert binding["agent_name"] == agent["name"]
     assert binding["trigger_prompt"] == prompt
-    assert binding["message_patterns"] == patterns
+    assert "message_patterns" not in binding
     assert binding["session_mode"] == "conversation"
     assert binding["is_active"] is True
     assert "created_at" in binding
@@ -106,18 +104,15 @@ def test_identity_binding_lifecycle(
     list_ids = {b["id"] for b in bindings}
     assert summary_ids == list_ids
 
-    # ── Phase 6: Update trigger_prompt and message_patterns ───────────────
+    # ── Phase 6: Update trigger_prompt ─────────────────────────────────────
     new_prompt = "Route to this agent for technical support."
-    new_patterns = "error|crash|bug"
     updated = update_identity_binding(
         client,
         superuser_token_headers,
         binding_id,
         trigger_prompt=new_prompt,
-        message_patterns=new_patterns,
     )
     assert updated["trigger_prompt"] == new_prompt
-    assert updated["message_patterns"] == new_patterns
     assert updated["session_mode"] == "conversation"  # unchanged
     assert updated["is_active"] is True  # unchanged
 

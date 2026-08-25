@@ -18,7 +18,8 @@ These tests call handle_send_message() directly (not through MCP protocol)
 with the routing service and agent environment stubbed.
 
 The routing service is mocked to return a fixed agent, so we do not need
-a real AppAgentRoute configured — the handler's routing step is bypassed.
+real routing candidates (owned agents / identity bindings) configured — the
+handler's routing step is bypassed.
 The agent environment is stubbed via StubAgentEnvConnector to avoid Docker.
 """
 import asyncio
@@ -57,6 +58,15 @@ def _find_app_mcp_sessions(
     return [s for s in sessions if s.get("integration_type") == "app_mcp"]
 
 
+def _find_identity_mcp_sessions(
+    client: TestClient,
+    token_headers: dict[str, str],
+) -> list[dict]:
+    """Return all sessions with integration_type='identity_mcp'."""
+    sessions = list_sessions(client, token_headers)
+    return [s for s in sessions if s.get("integration_type") == "identity_mcp"]
+
+
 def _run_handle_send_message(
     user_id: uuid.UUID,
     message: str,
@@ -80,8 +90,7 @@ def _run_handle_send_message(
         agent_id=agent_id,
         agent_name=agent_name,
         session_mode="conversation",
-        route_id=uuid.uuid4(),
-        route_source="user",
+        source="owned",
         match_method="only_one",
     )
 
@@ -208,8 +217,7 @@ def test_app_mcp_context_id_reuses_existing_session(
         agent_id=agent_id,
         agent_name=agent["name"],
         session_mode="conversation",
-        route_id=uuid.uuid4(),
-        route_source="user",
+        source="owned",
         match_method="only_one",
     )
 
@@ -425,19 +433,37 @@ def test_app_mcp_session_owned_by_agent_owner_not_caller(
     db,
 ) -> None:
     """
-    App MCP sessions are owned by the agent owner (user_id = owner), with
-    the caller tracked separately (caller_id = caller):
+    App MCP sessions opened by someone other than the agent owner are owned
+    by the owner (user_id = owner), with the caller tracked separately:
 
       1. Superuser creates an agent (becomes agent owner)
-      2. A second user (caller) sends a message via App MCP
+      2. A second user (caller) sends a message via App MCP, reaching the
+         owner's agent through a real identity grant. Since the
+         ``AppAgentRoute`` family is deleted, ``ChannelIngestionService
+         .assert_access``'s ``mcp_caller`` arm now authorises a foreign
+         agent only via ownership or an identity grant re-verified against
+         the database — so a caller who does not own the agent can only
+         ever reach it this way, and the session it creates is stamped
+         ``integration_type="identity_mcp"`` with the caller tracked via
+         ``identity_caller_id``, not the plain-``app_mcp`` ``caller_id``
+         (which, post-deletion, can only ever equal the owner's own id: a
+         "owned"-source routing result is never produced for an agent the
+         caller does not own, so ``caller_id != user_id`` on a plain
+         ``app_mcp`` session is no longer reachable at all).
       3. Verify session.user_id == superuser.id (owner sees session)
-      4. Verify session.caller_id == caller.id (caller tracked)
+      4. Verify session.identity_caller_id == caller.id (caller tracked),
+         read back through GET /external/sessions — the surface that
+         projects the column (`GET /sessions/` deliberately does not)
       5. Verify the caller does NOT see the session in their own session list
-      6. Verify the owner sees the session via GET /sessions/{id}
-         and caller_email is returned
+      6. Verify the owner's session_metadata carries identity_caller_name,
+         which is what labels the caller's message in the owner's own list
     """
     from app.core.config import settings
-    from tests.utils.user import create_random_user_with_headers
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+    from app.services.app_mcp.app_mcp_routing_service import RoutingResult
+    from tests.utils.identity import create_identity_binding
+    from tests.utils.user import user_authentication_headers
+    from tests.utils.utils import random_email, random_lower_string
 
     # ── Phase 1: Superuser creates an agent ──────────────────────────────
     agent = _setup_agent(client, superuser_token_headers, name="Ownership Test Agent")
@@ -447,57 +473,116 @@ def test_app_mcp_session_owned_by_agent_owner_not_caller(
     assert r.status_code == 200
     owner_id = uuid.UUID(r.json()["id"])
 
-    # ── Phase 2: Create a second user (the MCP caller) ───────────────────
-    caller_user, caller_headers = create_random_user_with_headers(client)
+    # ── Phase 2: Create a second user (the MCP caller) and grant them
+    # identity access to the owner's agent. Signed up with an explicit
+    # full_name — a random-signup user has none, and
+    # AppMCPRequestHandler._create_identity_session stamps
+    # session_metadata["identity_caller_name"] from caller.full_name with no
+    # email fallback (unlike the channel and external-A2A identity paths,
+    # which both fall back to email), so a nameless caller would make this
+    # assertion depend on that gap rather than on the property under test.
+    caller_email = random_email()
+    caller_password = random_lower_string()
+    caller_full_name = f"Caller {random_lower_string()[:8]}"
+    r = client.post(
+        f"{settings.API_V1_STR}/users/signup",
+        json={
+            "email": caller_email,
+            "password": caller_password,
+            "full_name": caller_full_name,
+        },
+    )
+    assert r.status_code == 200, r.text
+    caller_user = r.json()
+    caller_headers = user_authentication_headers(
+        client=client, email=caller_email, password=caller_password
+    )
     caller_id = uuid.UUID(caller_user["id"])
-    caller_email = caller_user["email"]
+
+    binding = create_identity_binding(
+        client,
+        superuser_token_headers,
+        agent_id=agent["id"],
+        trigger_prompt="Route to this agent for ownership test.",
+        assigned_user_ids=[caller_user["id"]],
+        auto_enable=True,
+    )
+    binding_id = uuid.UUID(binding["id"])
+    assignments = binding.get("assignments", [])
+    assert len(assignments) == 1, f"Expected 1 assignment, got {assignments}"
+    assignment_id = uuid.UUID(assignments[0]["id"])
+
+    fixed_identity_result = RoutingResult(
+        agent_id=agent_id,
+        agent_name=agent["name"],
+        session_mode="conversation",
+        source="identity",
+        match_method="only_one",
+        is_identity=True,
+        identity_owner_id=owner_id,
+        identity_owner_name="Identity Owner",
+        identity_binding_id=binding_id,
+        identity_binding_assignment_id=assignment_id,
+    )
 
     # ── Phase 3: Caller sends a message via App MCP ──────────────────────
     stub = StubAgentEnvConnector(response_text="Response from owner's agent")
-    result = _run_handle_send_message(
-        user_id=caller_id,
-        message="Hello from the caller",
-        agent_id=agent_id,
-        agent_name=agent["name"],
-        agent_env_stub=stub,
-        context_id=None,
-    )
+
+    async def _run():
+        return await AppMCPRequestHandler.handle_send_message(
+            user_id=caller_id,
+            message="Hello from the caller",
+            context_id=None,
+            mcp_ctx=None,
+        )
+
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=fixed_identity_result,
+    ):
+        with patch(
+            "app.services.sessions.message_service.agent_env_connector",
+            stub,
+        ):
+            raw = asyncio.run(_run())
+    drain_tasks()
+    result = json.loads(raw)
 
     assert "error" not in result, f"Unexpected error: {result.get('error')}"
     context_id = result["context_id"]
     assert context_id
 
     # ── Phase 4: Owner sees the session ──────────────────────────────────
-    owner_mcp_sessions = _find_app_mcp_sessions(client, superuser_token_headers)
+    owner_mcp_sessions = _find_identity_mcp_sessions(client, superuser_token_headers)
     assert len(owner_mcp_sessions) == 1, (
-        f"Owner should see 1 app_mcp session, got {len(owner_mcp_sessions)}"
+        f"Owner should see 1 identity_mcp session, got {len(owner_mcp_sessions)}"
     )
     owner_session = owner_mcp_sessions[0]
+    assert owner_session["id"] == context_id
 
     # user_id is the agent owner
     assert owner_session["user_id"] == str(owner_id), (
         f"session.user_id should be owner {owner_id}, got {owner_session['user_id']}"
     )
-    # caller_id tracks who initiated via MCP
-    assert owner_session["caller_id"] == str(caller_id), (
-        f"session.caller_id should be caller {caller_id}, got {owner_session['caller_id']}"
+
+    # ── Phase 5: identity_caller_id tracks the caller, read back through
+    # GET /external/sessions — GET /sessions/ does not project the column ──
+    r = client.get(f"{settings.API_V1_STR}/external/sessions", headers=caller_headers)
+    assert r.status_code == 200, r.text
+    caller_external = [s for s in r.json() if s["id"] == context_id]
+    assert len(caller_external) == 1, r.json()
+    assert caller_external[0]["identity_caller_id"] == str(caller_id)
+
+    # ── Phase 6: Caller does NOT see the session in their own session list ─
+    caller_own_sessions = list_sessions(client, caller_headers)
+    assert all(s["id"] != context_id for s in caller_own_sessions), (
+        f"Caller should NOT see the owner's session in their own list, "
+        f"got {caller_own_sessions}"
     )
 
-    # ── Phase 5: Caller does NOT see the session in their own list ────────
-    caller_sessions = _find_app_mcp_sessions(client, caller_headers)
-    assert len(caller_sessions) == 0, (
-        f"Caller should NOT see app_mcp sessions in their list, got {len(caller_sessions)}"
-    )
-
-    # ── Phase 6: GET /sessions/{id} returns caller_email for the owner ───
-    r = client.get(
-        f"{settings.API_V1_STR}/sessions/{context_id}",
-        headers=superuser_token_headers,
-    )
-    assert r.status_code == 200
-    session_detail = r.json()
-    assert session_detail["caller_id"] == str(caller_id)
-    assert session_detail["caller_email"] == caller_email
+    # ── Phase 7: session_metadata carries identity_caller_name for the owner
+    metadata = owner_session.get("session_metadata") or {}
+    assert metadata.get("identity_caller_name") == caller_full_name, metadata
 
 
 def test_app_mcp_context_id_caller_isolation(
@@ -506,50 +591,107 @@ def test_app_mcp_context_id_caller_isolation(
     db,
 ) -> None:
     """
-    Context ID validation checks caller_id (not user_id) for app_mcp session resumption.
-    A different caller cannot resume another caller's session using their context_id:
+    Context ID validation checks identity_caller_id (not user_id) for
+    identity_mcp session resumption. A different caller cannot resume
+    another caller's session using their context_id:
 
-      1. Superuser creates an agent
+      1. Superuser creates an agent and grants both callers identity access
+         to it (``AppAgentRoute`` is deleted, so a non-owner caller now needs
+         a real, re-verified identity grant to reach the agent at all — see
+         ``test_app_mcp_session_owned_by_agent_owner_not_caller``, which is
+         also why these are ``identity_mcp`` sessions rather than plain
+         ``app_mcp`` ones: a caller who does not own the agent can only ever
+         reach it through an identity grant now)
       2. Caller A sends a message → gets context_id A
       3. Caller B tries to resume context_id A → gets a NEW session (not A's session)
-      4. Verify two distinct app_mcp sessions exist under the owner
+      4. Verify two distinct identity_mcp sessions exist under the owner,
+         each with the right caller's identity_caller_id
     """
     from app.core.config import settings
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+    from app.services.app_mcp.app_mcp_routing_service import RoutingResult
+    from tests.utils.identity import create_identity_binding
     from tests.utils.user import create_random_user_with_headers
 
     # ── Phase 1: Superuser creates an agent ──────────────────────────────
     agent = _setup_agent(client, superuser_token_headers, name="Isolation Test Agent")
     agent_id = uuid.UUID(agent["id"])
 
-    # ── Phase 2: Create two callers ──────────────────────────────────────
-    caller_a_user, _ = create_random_user_with_headers(client)
-    caller_b_user, _ = create_random_user_with_headers(client)
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = uuid.UUID(r.json()["id"])
+
+    # ── Phase 2: Create two callers, each with their own identity grant ──
+    caller_a_user, caller_a_headers = create_random_user_with_headers(client)
+    caller_b_user, caller_b_headers = create_random_user_with_headers(client)
     caller_a_id = uuid.UUID(caller_a_user["id"])
     caller_b_id = uuid.UUID(caller_b_user["id"])
 
+    binding = create_identity_binding(
+        client,
+        superuser_token_headers,
+        agent_id=agent["id"],
+        trigger_prompt="Route to this agent for isolation test.",
+        assigned_user_ids=[caller_a_user["id"], caller_b_user["id"]],
+        auto_enable=True,
+    )
+    binding_id = uuid.UUID(binding["id"])
+    assignments = {a["target_user_id"]: uuid.UUID(a["id"]) for a in binding.get("assignments", [])}
+    assert len(assignments) == 2, f"Expected 2 assignments, got {binding.get('assignments')}"
+
+    def _identity_result(caller_user: dict) -> "RoutingResult":
+        return RoutingResult(
+            agent_id=agent_id,
+            agent_name=agent["name"],
+            session_mode="conversation",
+            source="identity",
+            match_method="only_one",
+            is_identity=True,
+            identity_owner_id=owner_id,
+            identity_owner_name="Identity Owner",
+            identity_binding_id=binding_id,
+            identity_binding_assignment_id=assignments[caller_user["id"]],
+        )
+
+    async def _run(user_id, message, context_id):
+        return await AppMCPRequestHandler.handle_send_message(
+            user_id=user_id,
+            message=message,
+            context_id=context_id,
+            mcp_ctx=None,
+        )
+
     # ── Phase 3: Caller A sends a message → gets context_id A ────────────
     stub_a = StubAgentEnvConnector(response_text="Response to A")
-    result_a = _run_handle_send_message(
-        user_id=caller_a_id,
-        message="Hello from caller A",
-        agent_id=agent_id,
-        agent_name=agent["name"],
-        agent_env_stub=stub_a,
-        context_id=None,
-    )
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=_identity_result(caller_a_user),
+    ):
+        with patch(
+            "app.services.sessions.message_service.agent_env_connector",
+            stub_a,
+        ):
+            raw_a = asyncio.run(_run(caller_a_id, "Hello from caller A", None))
+    drain_tasks()
+    result_a = json.loads(raw_a)
     assert "error" not in result_a, f"Caller A failed: {result_a.get('error')}"
     context_id_a = result_a["context_id"]
 
     # ── Phase 4: Caller B tries to resume context_id A ───────────────────
     stub_b = StubAgentEnvConnector(response_text="Response to B with A's context")
-    result_b = _run_handle_send_message(
-        user_id=caller_b_id,
-        message="Caller B trying to resume A's session",
-        agent_id=agent_id,
-        agent_name=agent["name"],
-        agent_env_stub=stub_b,
-        context_id=context_id_a,
-    )
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=_identity_result(caller_b_user),
+    ):
+        with patch(
+            "app.services.sessions.message_service.agent_env_connector",
+            stub_b,
+        ):
+            raw_b = asyncio.run(
+                _run(caller_b_id, "Caller B trying to resume A's session", context_id_a)
+            )
+    drain_tasks()
+    result_b = json.loads(raw_b)
     assert "error" not in result_b, f"Caller B failed: {result_b.get('error')}"
 
     # Caller B should NOT reuse caller A's session — a new session is created
@@ -558,14 +700,25 @@ def test_app_mcp_context_id_caller_isolation(
     )
 
     # ── Phase 5: Owner sees two distinct sessions ─────────────────────────
-    owner_mcp_sessions = _find_app_mcp_sessions(client, superuser_token_headers)
+    owner_mcp_sessions = _find_identity_mcp_sessions(client, superuser_token_headers)
     assert len(owner_mcp_sessions) == 2, (
-        f"Expected 2 app_mcp sessions (one per caller), got {len(owner_mcp_sessions)}"
+        f"Expected 2 identity_mcp sessions (one per caller), got {len(owner_mcp_sessions)}"
     )
-    # Each session should have a different caller_id
-    caller_ids = {s["caller_id"] for s in owner_mcp_sessions}
-    assert str(caller_a_id) in caller_ids
-    assert str(caller_b_id) in caller_ids
+    ids_by_context = {s["id"]: s for s in owner_mcp_sessions}
+    assert set(ids_by_context) == {context_id_a, result_b["context_id"]}
+
+    # Each session's identity_caller_id is the right caller — read back
+    # through GET /external/sessions, the surface that projects the column
+    # (GET /sessions/ deliberately does not).
+    r = client.get(f"{settings.API_V1_STR}/external/sessions", headers=caller_a_headers)
+    assert r.status_code == 200, r.text
+    a_external = next(s for s in r.json() if s["id"] == context_id_a)
+    assert a_external["identity_caller_id"] == str(caller_a_id)
+
+    r = client.get(f"{settings.API_V1_STR}/external/sessions", headers=caller_b_headers)
+    assert r.status_code == 200, r.text
+    b_external = next(s for s in r.json() if s["id"] == result_b["context_id"])
+    assert b_external["identity_caller_id"] == str(caller_b_id)
 
 
 def test_app_mcp_identity_mcp_context_id_reuses_existing_session(
@@ -628,8 +781,7 @@ def test_app_mcp_identity_mcp_context_id_reuses_existing_session(
         agent_id=agent_id,
         agent_name=agent["name"],
         session_mode="conversation",
-        route_id=uuid.uuid4(),
-        route_source="identity",
+        source="identity",
         match_method="only_one",
         is_identity=True,
         identity_owner_id=owner_id,
@@ -762,8 +914,7 @@ def test_app_mcp_identity_binding_deactivated_mid_session_returns_error(
         agent_id=agent_id,
         agent_name=agent["name"],
         session_mode="conversation",
-        route_id=uuid.uuid4(),
-        route_source="identity",
+        source="identity",
         match_method="only_one",
         is_identity=True,
         identity_owner_id=owner_id,
@@ -830,3 +981,72 @@ def test_app_mcp_identity_binding_deactivated_mid_session_returns_error(
     assert result2.get("context_id") == "", (
         f"context_id should be empty string on validity error, got: {result2.get('context_id')!r}"
     )
+
+
+def test_app_mcp_reaches_a_standalone_agent_with_only_a_trigger_prompt(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """The case that motivated the whole channel/App-MCP scope split (plan
+    §1 of docs/plans/channels_identity_unification/phase_5_app_mcp_channel.md):
+    a standalone (non-bundle) agent with a router trigger prompt is reachable
+    over App MCP with no route, no assignment, no toggle — because none of
+    those exist any more.
+
+    Unlike every other test in this file, ``AppMCPRoutingService.route_
+    message`` is deliberately NOT mocked here — the whole point is that the
+    real routing path reaches this agent with nothing configured beyond the
+    trigger prompt. Only the LLM/agent-env connector is stubbed. A single
+    owned agent takes Stage 1's `only_one` short-circuit
+    (`routing_reachability_verdict_test.py` pins the same shortcut on the
+    channel side), so no classifier call is needed either.
+    """
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+    from tests.utils.agent import set_router_trigger_prompt
+
+    agent = _setup_agent(client, superuser_token_headers, name="Standalone Reachable Agent")
+    assert agent.get("bundle_uuid") is None, (
+        "Precondition: this must be a standalone (non-bundle) agent — the "
+        "shape that never got an auto-managed AppAgentRoute even before "
+        "the family was deleted."
+    )
+    set_router_trigger_prompt(
+        client, superuser_token_headers, agent["id"], "Handle anything for the owner"
+    )
+
+    from app.core.config import settings
+
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = r.json()["id"]
+
+    stub = StubAgentEnvConnector(response_text="Reached the standalone agent")
+
+    async def _run():
+        return await AppMCPRequestHandler.handle_send_message(
+            user_id=uuid.UUID(owner_id),
+            message="Hello, route me for real",
+            context_id=None,
+            mcp_ctx=None,
+        )
+
+    # Real routing — AppMCPRoutingService.route_message is NOT patched.
+    with patch(
+        "app.services.sessions.message_service.agent_env_connector",
+        stub,
+    ):
+        raw = asyncio.run(_run())
+    drain_tasks()
+    result = json.loads(raw)
+
+    assert "error" not in result, f"Unexpected error: {result.get('error')}"
+    assert "Reached the standalone agent" in result.get("response", "")
+    context_id = result.get("context_id")
+    assert context_id
+
+    app_mcp_sessions = _find_app_mcp_sessions(client, superuser_token_headers)
+    matching = [s for s in app_mcp_sessions if s["id"] == context_id]
+    assert len(matching) == 1, (
+        f"Expected the real-routing session to exist, got {app_mcp_sessions}"
+    )
+    assert matching[0]["agent_id"] == agent["id"]

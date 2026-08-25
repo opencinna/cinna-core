@@ -25,7 +25,6 @@ class IdentityAgentBinding(SQLModel, table=True):
     owner_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", index=True)
     agent_id: uuid.UUID = Field(foreign_key="agent.id", ondelete="CASCADE", index=True)
     trigger_prompt: str = Field(sa_column=Column(Text, nullable=False))
-    message_patterns: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     prompt_examples: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     session_mode: str = Field(max_length=20, default="conversation")
     is_active: bool = Field(default=True)
@@ -71,7 +70,6 @@ class IdentityBindingAssignment(SQLModel, table=True):
 class IdentityAgentBindingCreate(SQLModel):
     agent_id: uuid.UUID
     trigger_prompt: str
-    message_patterns: str | None = None
     prompt_examples: str | None = None
     session_mode: str = "conversation"
     assigned_user_ids: list[uuid.UUID] = []
@@ -80,7 +78,6 @@ class IdentityAgentBindingCreate(SQLModel):
 
 class IdentityAgentBindingUpdate(SQLModel):
     trigger_prompt: str | None = None
-    message_patterns: str | None = None
     prompt_examples: str | None = None
     session_mode: str | None = None
     is_active: bool | None = None
@@ -102,7 +99,6 @@ class IdentityAgentBindingPublic(SQLModel):
     agent_id: uuid.UUID
     agent_name: str = ""
     trigger_prompt: str
-    message_patterns: str | None
     prompt_examples: str | None = None
     session_mode: str
     is_active: bool

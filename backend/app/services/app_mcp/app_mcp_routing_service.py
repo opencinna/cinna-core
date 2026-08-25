@@ -1,90 +1,121 @@
-"""
-App MCP Routing Service — determines which agent should handle a message.
+"""App MCP Routing Service — determines which agent should handle a message.
 
-Stage 1's ballot is **composed** from two candidate providers rather than built
-by one query:
+Stage 1's ballot is **composed** from the same two candidate providers every
+other surface composes, in the same order:
 
-- ``AppAgentRouteService.get_effective_routes_for_user`` — the routes this user
-  can address (admin-assigned + personal). Dies with the ``AppAgentRoute``
-  family later in the same refactor.
-- ``IdentityCandidateProvider`` — the *people* this user can address, one
-  candidate per identity owner. Extracted out of the route service so any
-  surface can offer identity without inheriting the App MCP enablement toggles
-  that come with a route (channels/identity unification, phase 1 §2.1/§2.3).
+- ``ChannelCandidateProvider`` — the agents the caller owns, narrowed to the
+  App MCP channel's resolved agent scope.
+- ``IdentityCandidateProvider`` — the *people* the caller can address, one
+  candidate per identity owner, and only when the caller has switched identity
+  routing on for this channel.
 
-Routing priority is unchanged:
-  1. Pattern matching (fnmatch globs on a route; an identity candidate has
-     none, exactly as the identity *route* never had any)
-  2. AI classification over both providers' candidates together
-  3. Return None if no match found
+That composition is the whole point of the phase that produced it: App MCP is a
+``ServerChannel`` row like any other, so "what may this person address here" is
+answered by ``ChannelPolicyService`` and nothing else, and the answer is
+identical to the one a Google Chat sender gets. The ``AppAgentRoute`` family —
+admin routes, assignments, personal routes, ``is_auto_managed`` auto-creation,
+the backfill — is deleted; ``Agent.router_trigger_prompt`` plus
+``Agent.example_prompts`` are the sole routing source of truth.
+
+**Ordering is load-bearing and is copied from
+``ChannelRoutingService._route_installed``**: owned agents first, identities
+after — the common case before the exceptional one, so the trace and the prompt
+read top-down. Nothing turns on it (both providers sort internally and the
+classifier is handed a set), but the two surfaces are asserted to produce
+identical candidate lists for the same user, and ordering is part of that.
+
+Routing priority is now two steps, not three:
+  1. AI classification over the whole ballot (short-circuited when the ballot
+     holds exactly one candidate)
+  2. Return None if no match found
+
+Glob pre-matching is gone with ``message_patterns`` (settled decision §2.9): a
+second, silently-higher-priority routing mechanism that no trace explained
+well. ``routing_trace.MATCH_PATTERN`` survives as a *rendering* constant —
+historical ``routing_decision`` rows still carry it — exactly as
+``SKIP_IDENTITY_ROUTE`` did.
+
+**``allow_identity_routing`` defaults false and never inherits** (master plan
+§3.4), so identity contacts stop appearing on App MCP until the caller opts in
+from Settings → Channels. That is a deliberate, ruled behaviour change, not an
+oversight: routing into another person's workspace is opt-in, per person, by
+the person whose message it is, and an admin default must not consent on their
+behalf.
+
+**Not implemented here: pinned agents.** ``ResolvedChannelPolicy.pinned_agent_id``
+is honoured by ``ChannelRoutingService``, not by the candidate provider, so it
+would need its own arm on this path. Deliberately out of scope.
 
 When the winner is an identity candidate, Stage 2
-(``IdentityRoutingService.route_within_identity``) picks the agent.
+(``IdentityRoutingService.route_within_identity``) picks the agent and returns
+the binding + assignment ids that become the ``IdentityGrant``
+``ChannelIngestionService.assert_access`` re-verifies before any session opens.
 """
-import fnmatch
 import logging
 import uuid
 from dataclasses import dataclass
 
 from sqlmodel import Session as DBSession
 
-from app.services.app_mcp.app_agent_route_service import (
-    AppAgentRouteService,
-    EffectiveRoute,
-)
 from app.services.routing import routing_trace
 from app.services.routing.agent_classifier import Candidate
+from app.services.routing.channel_candidate_provider import (
+    SOURCE_OWNED,
+    ChannelCandidateProvider,
+)
 from app.services.routing.identity_candidate_provider import (
+    SOURCE_IDENTITY,
     IdentityCandidateProvider,
     parse_identity_ref,
 )
+from app.services.server_channels.adapters.app_mcp import AppMCPChannelAdapter
+from app.services.server_channels.channel_policy_service import ChannelPolicyService
+from app.services.server_channels.server_channel_service import ServerChannelService
 
 logger = logging.getLogger(__name__)
 
-#: ``RoutingResult.route_id`` for an identity pick. Identity has never had a
-#: route row behind it, and ``route_id`` is not optional on ``RoutingResult``,
-#: so the placeholder the old identity ``EffectiveRoute`` carried is preserved
-#: verbatim rather than replaced with something new. No identity path reads it:
-#: the plain App MCP path stamps ``session_metadata["app_mcp_route_id"]``, the
-#: identity path does not. It disappears with ``RoutingResult`` when the
-#: ``AppAgentRoute`` family is deleted.
-_IDENTITY_ROUTE_ID = uuid.UUID(int=0)
+#: ``RoutingResult.session_mode`` for a candidate this surface picked itself.
+#: There is no per-candidate session mode any more — it used to be a column on
+#: the route row, and every auto-created route carried this value — so the
+#: owned-agent path now uses the platform default, which is also what a channel
+#: session gets. Only Stage 2 supplies a real one, off
+#: ``IdentityAgentBinding.session_mode``, and that field is still owner-editable.
+DEFAULT_SESSION_MODE = "conversation"
 
 
 @dataclass(frozen=True)
 class IdentityPick:
-    """Stage 1's answer when the winner is a person rather than a route.
+    """Stage 1's answer when the winner is a person rather than an agent.
 
-    Field names mirror the identity half of ``EffectiveRoute``, which is where
-    this lived before the extraction — so ``_route_identity`` and the shared
-    log lines in ``route_message`` read the same attributes off either kind of
-    winner, and neither has to ask which one it holds.
-
-    ``agent_name`` duplicating ``identity_owner_name`` is the one wart, and it
-    is inherited rather than invented: on ``EffectiveRoute`` the two could
-    differ (``identity_owner_name`` fell back to empty, ``agent_name`` to the
-    email), and ``_route_identity`` still reads them as ``owner_name or
-    agent_name``. ``IdentityCandidateProvider`` collapses both fallbacks into
-    one ``Candidate.name``, so today they are always equal.
+    ``agent_name`` duplicating ``identity_owner_name`` is inherited rather than
+    invented: ``_route_identity`` still reads them as ``owner_name or
+    agent_name``, and ``IdentityCandidateProvider`` collapses both of the old
+    fallbacks into one ``Candidate.name``, so today they are always equal.
     """
 
     identity_owner_id: uuid.UUID
     identity_owner_name: str
     agent_name: str
-    route_id: uuid.UUID = _IDENTITY_ROUTE_ID
 
 
 @dataclass
 class RoutingResult:
-    """Result of routing a message to an agent."""
+    """Result of routing a message to an agent.
+
+    ``source`` is ``"owned"`` or ``"identity"`` — the two candidate providers'
+    own ``CandidateTrace.source`` strings, reused rather than re-spelled so a
+    result and the trace row behind it cannot disagree about where a candidate
+    came from. It replaces ``route_source`` (``"admin"``/``"user"``/
+    ``"identity"``), whose first two values named where a route row came from
+    and no longer describe anything.
+    """
 
     agent_id: uuid.UUID
     agent_name: str
     session_mode: str
-    route_id: uuid.UUID
-    route_source: str  # "admin" | "user" | "identity"
-    match_method: str  # "pattern" | "ai" | "only_one"
-    # Identity-specific fields (only set when route_source == "identity")
+    source: str  # SOURCE_OWNED | SOURCE_IDENTITY
+    match_method: str  # "ai" | "only_one"
+    # Identity-specific fields (only set when source == SOURCE_IDENTITY)
     is_identity: bool = False
     identity_owner_id: uuid.UUID | None = None
     identity_owner_name: str | None = None
@@ -96,63 +127,84 @@ class RoutingResult:
 
 
 class AppMCPRoutingService:
-    """Routes MCP messages to the appropriate agent."""
+    """Routes App MCP messages to the appropriate agent."""
 
     @staticmethod
     def route_message(
         db_session: DBSession,
         user_id: uuid.UUID,
         message: str,
-        channel: str = "app_mcp",
     ) -> RoutingResult | None:
         """Determine which agent should handle a message.
 
-        1. Compose the ballot: the user's effective routes + the identity
-           owners they can address.
-        2. Try pattern matching (identity candidates have no patterns).
-        3. Fall back to AI classification over the whole ballot.
+        1. Resolve the caller's policy on the App MCP channel.
+        2. Compose the ballot: the agents they own + (opt-in) the people they
+           can address.
+        3. Classify over the whole ballot.
         4. If an identity candidate won, invoke Stage 2 routing.
 
         Returns RoutingResult or None if routing fails.
-        """
-        effective_routes = AppAgentRouteService.get_effective_routes_for_user(
-            db_session=db_session,
-            user_id=user_id,
-            channel=channel,
-        )
-        identity_candidates = IdentityCandidateProvider.build(db_session, user_id)
 
-        if not effective_routes and not identity_candidates:
-            logger.debug("No effective routes or identity contacts for user %s", user_id)
+        ``policy.is_available`` is **not** re-checked here. It is the token
+        verifier's gate (``app_token_verifier.is_app_mcp_available``, cached and
+        fail-closed), and a second copy of an availability rule is exactly what
+        ``ChannelPolicyService``'s docstring forbids: two readers of the same
+        conjunction drift, and the one that drifts silently is the one nobody
+        is testing.
+        """
+        # ``get_or_create_singleton`` commits when it has to materialize the
+        # row, and it commits the *whole* transaction — so its precondition is
+        # that the caller has nothing staged on ``db_session``. That holds
+        # here: the handler has only read (a resume lookup and an agent get)
+        # before routing. In practice the row already exists by now anyway —
+        # every App MCP request passes ``AppMCPTokenVerifier`` first, and that
+        # asks the same question through the same function.
+        channel = ServerChannelService.get_or_create_singleton(
+            db_session, AppMCPChannelAdapter.channel_type
+        )
+        policy = ChannelPolicyService.resolve(db_session, channel, user_id)
+
+        # Owned agents first, identities after — mirroring
+        # ``ChannelRoutingService._route_installed`` exactly. See the module
+        # docstring on why the order is copied rather than re-decided.
+        candidates = ChannelCandidateProvider.build(db_session, user_id, policy=policy)
+        owned_count = len(candidates)
+        if policy.allow_identity_routing:
+            candidates += IdentityCandidateProvider.build(db_session, user_id)
+        # With the switch off the provider is simply not called, so identity
+        # owners this caller *could* have reached leave no trace rows at all,
+        # not even skips. That is the same deliberate inversion of master plan
+        # §3.5 the channel path makes, for the same reason: recording them
+        # would publish the existence of other people's identities into a trace
+        # the caller can trigger at will. Do not "fix" it by building the
+        # candidates and filtering them after.
+
+        if not candidates:
+            logger.debug("No routing candidates for user %s", user_id)
             return None
 
-        # Debug, not info: this line and the per-route dump below carry EXTERNAL
-        # users' message text and every candidate's trigger prompt. The routing
-        # trace is where that detail belongs now.
+        # Debug, not info: this line carries the caller's message text and
+        # every candidate's trigger prompt. The routing trace is where that
+        # detail belongs.
         logger.debug(
             "[Stage1] Routing message for user=%s | message=%r | "
-            "%d effective routes, %d identity contacts:",
-            user_id, message[:120], len(effective_routes), len(identity_candidates),
+            "%d candidates (%d owned, %d identity)",
+            user_id, message[:120], len(candidates),
+            owned_count, len(candidates) - owned_count,
         )
-        for i, r in enumerate(effective_routes):
-            logger.debug(
-                "[Stage1]   route[%d] source=%s agent=%s (%s) trigger=%r patterns=%r",
-                i, r.source, r.agent_name, r.agent_id,
-                (r.trigger_prompt or "")[:80],
-                (r.message_patterns or "")[:60] or None,
-            )
 
         stage1_transformed_message: str | None = None
-        selected: EffectiveRoute | IdentityPick
+        selected: Candidate | IdentityPick
 
         # If only one candidate in total, use it directly (no need to classify)
-        if len(effective_routes) + len(identity_candidates) == 1:
-            if effective_routes:
-                selected = effective_routes[0]
-            else:
-                only_identity = AppMCPRoutingService._identity_pick(
-                    identity_candidates[0]
-                )
+        if len(candidates) == 1:
+            only = candidates[0]
+            # Positional, not by value: ``Candidate`` is an unfrozen dataclass
+            # whose ``__eq__`` compares fields, so membership testing could
+            # match the wrong provider's candidate. The identity half is
+            # everything appended after the owned block.
+            if owned_count == 0:
+                only_identity = AppMCPRoutingService._identity_pick(only)
                 if only_identity is None:
                     logger.warning(
                         "[Stage1] Sole candidate has a malformed identity ref — "
@@ -160,41 +212,32 @@ class AppMCPRoutingService:
                     )
                     return None
                 selected = only_identity
+            else:
+                selected = only
             stage1_method = "only_one"
             routing_trace.record_match(method=routing_trace.MATCH_ONLY_ONE)
             logger.info(
                 "[Stage1] Single candidate — using directly: %s",
-                selected.agent_name,
+                selected.name if isinstance(selected, Candidate) else selected.agent_name,
             )
         else:
-            # 1. Try pattern matching (identity candidates have no patterns)
-            matched = AppMCPRoutingService._try_pattern_match(message, effective_routes)
-            if matched:
-                selected = matched
-                stage1_method = "pattern"
-                logger.info("[Stage1] Pattern match hit: %s (%s)", selected.agent_name, selected.agent_id)
-            else:
-                logger.info("[Stage1] No pattern match — falling back to AI classification")
-                # 2. Fall back to AI classification over the whole ballot
-                ai_result = AppMCPRoutingService._ai_classify(
-                    message, effective_routes, identity_candidates
-                )
-                if ai_result:
-                    selected, stage1_transformed_message = ai_result
-                    stage1_method = "ai"
-                    logger.debug(
-                        "[Stage1] AI selected: %s | transformed_message=%r",
-                        selected.agent_name,
-                        stage1_transformed_message[:120] if stage1_transformed_message else None,
-                    )
-                else:
-                    logger.info("[Stage1] AI classification returned no match (user=%s)", user_id)
-                    return None
+            ai_result = AppMCPRoutingService._ai_classify(candidates, message)
+            if ai_result is None:
+                logger.info("[Stage1] AI classification returned no match (user=%s)", user_id)
+                return None
+            selected, stage1_transformed_message = ai_result
+            stage1_method = "ai"
+            logger.debug(
+                "[Stage1] AI selected: %s | transformed_message=%r",
+                selected.name if isinstance(selected, Candidate) else selected.agent_name,
+                stage1_transformed_message[:120] if stage1_transformed_message else None,
+            )
 
         is_identity = isinstance(selected, IdentityPick)
+        selected_name = selected.agent_name if is_identity else selected.name
         logger.info(
             "[Stage1] Result: method=%s agent=%s is_identity=%s",
-            stage1_method, selected.agent_name, is_identity,
+            stage1_method, selected_name, is_identity,
         )
 
         # Stage 2: If the selected candidate is a person, invoke identity routing
@@ -216,8 +259,7 @@ class AppMCPRoutingService:
             # with nothing in the payload to give it away.
             with routing_trace.stage_scope(routing_trace.STAGE_IDENTITY_STAGE2):
                 result = AppMCPRoutingService._route_identity(
-                    db_session=db_session,
-                    selected_route=selected,
+                    selected_identity=selected,
                     caller_user_id=user_id,
                     message=message,
                     stage1_method=stage1_method,
@@ -235,12 +277,20 @@ class AppMCPRoutingService:
                 logger.info("[Stage1→Stage2] Stage 2 returned no result — routing failed")
             return result
 
+        try:
+            agent_id = uuid.UUID(selected.ref_id)
+        except ValueError:
+            # Unreachable by construction — ``ChannelCandidateProvider`` writes
+            # ``str(agent.id)`` — and handled rather than asserted because the
+            # alternative is handing a non-UUID on to ``db.get(Agent, ...)``.
+            logger.warning("[Stage1] Owned candidate has a non-UUID ref: %r", selected.ref_id)
+            return None
+
         return RoutingResult(
-            agent_id=selected.agent_id,
-            agent_name=selected.agent_name,
-            session_mode=selected.session_mode,
-            route_id=selected.route_id,
-            route_source=selected.source,
+            agent_id=agent_id,
+            agent_name=selected.name,
+            session_mode=DEFAULT_SESSION_MODE,
+            source=SOURCE_OWNED,
             match_method=stage1_method,
             transformed_message=stage1_transformed_message,
         )
@@ -265,8 +315,7 @@ class AppMCPRoutingService:
 
     @staticmethod
     def _route_identity(
-        db_session: DBSession,
-        selected_route: "IdentityPick",
+        selected_identity: "IdentityPick",
         caller_user_id: uuid.UUID,
         message: str,
         stage1_method: str,
@@ -280,14 +329,22 @@ class AppMCPRoutingService:
         The transformed_message from Stage 1 (if any) is passed as the message
         to Stage 2, so each stage strips one layer of routing prefixes.
 
-        ``db_session`` is not forwarded: Stage 2 opens its own short-lived read
-        session so it can be called from a context that must not hand its
-        transaction to a routing decision (see that module's docstring, fact 1).
+        No ``db_session`` is forwarded, and none is taken: Stage 2 opens its own
+        short-lived read session so it can be called from a context that must
+        not hand its transaction to a routing decision (see that module's
+        docstring, fact 1).
+
+        ``binding_id`` and ``binding_assignment_id`` come back non-null on every
+        Stage 2 success — the service aborts rather than returning a result with
+        a missing assignment — and they are what
+        ``AppMCPRequestHandler._create_identity_session`` turns into the
+        ``IdentityGrant`` that ``assert_access`` re-verifies. They are not
+        decoration on this result; they are the authorization.
         """
         from app.services.identity.identity_routing_service import IdentityRoutingService
 
-        owner_id = selected_route.identity_owner_id
-        owner_name = selected_route.identity_owner_name or selected_route.agent_name
+        owner_id = selected_identity.identity_owner_id
+        owner_name = selected_identity.identity_owner_name or selected_identity.agent_name
 
         # Pass Stage 1's transformed message to Stage 2 if available
         stage2_input_message = transformed_message or message
@@ -313,8 +370,7 @@ class AppMCPRoutingService:
             agent_id=stage2_result.agent_id,
             agent_name=owner_name,  # Return person's name, not internal agent name
             session_mode=stage2_result.session_mode,
-            route_id=selected_route.route_id,
-            route_source="identity",
+            source=SOURCE_IDENTITY,
             match_method=stage1_method,
             is_identity=True,
             identity_owner_id=owner_id,
@@ -326,68 +382,22 @@ class AppMCPRoutingService:
         )
 
     @staticmethod
-    def _try_pattern_match(
-        message: str,
-        routes: list[EffectiveRoute],
-    ) -> EffectiveRoute | None:
-        """Try each route's message_patterns against the message using fnmatch.
-
-        Patterns are newline-separated glob-style strings (e.g. 'sign this document *').
-        Returns the first matching route or None.
-        """
-        message_lower = message.lower()
-        for route in routes:
-            if not route.message_patterns:
-                continue
-            patterns = [
-                p.strip()
-                for p in route.message_patterns.splitlines()
-                if p.strip()
-            ]
-            for pattern in patterns:
-                if fnmatch.fnmatch(message_lower, pattern.lower()):
-                    routing_trace.record_match(
-                        method=routing_trace.MATCH_PATTERN,
-                        matched_pattern=pattern,
-                    )
-                    logger.debug(
-                        "Pattern match: route=%s pattern=%r message=%r",
-                        route.route_id,
-                        pattern,
-                        message[:80],
-                    )
-                    return route
-        return None
-
-    @staticmethod
     def _ai_classify(
+        candidates: list[Candidate],
         message: str,
-        routes: list[EffectiveRoute],
-        identity_candidates: list[Candidate] | None = None,
-    ) -> tuple["EffectiveRoute | IdentityPick", str | None] | None:
+    ) -> tuple["Candidate | IdentityPick", str | None] | None:
         """Classify the message against the composed ballot.
 
-        Builds :class:`Candidate` objects for the routes — the one candidate
-        shape every routing consumer uses — appends the identity candidates the
-        provider already built, and hands the lot to ``AgentClassifier``, which
-        owns prompt rendering (``prompt_examples`` included), parsing and trace
-        emission.
+        Both providers already build :class:`Candidate` objects — the one
+        candidate shape every routing consumer uses — so there is nothing to
+        convert here. ``AgentClassifier`` owns prompt rendering
+        (``prompt_examples`` included), parsing and trace emission.
 
-        Returns (matched_route_or_identity, transformed_message) or None.
-        The transformed_message is None when the AI did not strip a routing prefix.
+        Returns (matched_candidate_or_identity, transformed_message) or None.
+        The transformed_message is None when the AI did not strip a routing
+        prefix.
         """
         from app.services.routing.agent_classifier import AgentClassifier
-
-        identity_candidates = identity_candidates or []
-        candidates = [
-            Candidate(
-                ref_id=str(route.agent_id),
-                name=route.agent_name,
-                trigger_prompt=route.trigger_prompt,
-                prompt_examples=route.prompt_examples,
-            )
-            for route in routes
-        ] + identity_candidates
 
         routing_result = AgentClassifier.classify(candidates, message)
 
@@ -399,7 +409,7 @@ class AppMCPRoutingService:
         # which would otherwise reject it as malformed.
         owner_id = parse_identity_ref(routing_result.agent_id)
         if owner_id is not None:
-            for candidate in identity_candidates:
+            for candidate in candidates:
                 if candidate.ref_id == routing_result.agent_id:
                     pick = AppMCPRoutingService._identity_pick(candidate)
                     if pick is not None:
@@ -414,23 +424,16 @@ class AppMCPRoutingService:
             )
             return None
 
-        # Find the matching route
-        try:
-            agent_id = uuid.UUID(routing_result.agent_id)
-        except ValueError:
-            logger.warning("AI router returned invalid UUID: %r", routing_result.agent_id)
-            routing_trace.record_parse_outcome(
-                reason="classifier returned a value that is not a UUID"
-            )
-            return None
-
-        for route in routes:
-            if route.agent_id == agent_id:
+        for candidate in candidates:
+            if candidate.ref_id == routing_result.agent_id:
                 routing_trace.record_match(method=routing_trace.MATCH_AI)
-                return route, routing_result.transformed_message
+                return candidate, routing_result.transformed_message
 
-        logger.warning("AI router returned agent_id %s not in effective routes", routing_result.agent_id)
+        logger.warning(
+            "AI router returned agent_id %s not among the candidates",
+            routing_result.agent_id,
+        )
         routing_trace.record_parse_outcome(
-            reason="classifier picked an agent that is not among the effective routes"
+            reason="classifier picked an agent that is not among the candidates"
         )
         return None

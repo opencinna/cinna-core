@@ -66,11 +66,6 @@ class _Poison:
         raise RuntimeError(f"boom: attribute {name!r}")
 
 
-class _MissingAttrs:
-    """A stand-in for a route/candidate object with none of the attributes
-    the recorder normally reads via ``getattr(obj, name, default)``."""
-
-
 # --- 1. No-op without an active capture ---------------------------------
 
 
@@ -80,7 +75,6 @@ def test_record_functions_no_op_without_active_capture() -> None:
     assert rt.current() is None
 
     rt.begin_stage(rt.STAGE_PASS_1)
-    rt.record_effective_routes([_MissingAttrs()])
     rt.record_candidate(kind=rt.KIND_AGENT, ref_id=uuid.uuid4(), name="Agent")
     rt.record_skip(
         kind=rt.KIND_AGENT,
@@ -179,14 +173,8 @@ def test_record_functions_never_raise_with_malformed_arguments() -> None:
     module docstring) must never propagate.
     """
     poison = _Poison()
-    missing = _MissingAttrs()
 
     with rt.RoutingTrace.capture(origin=rt.ORIGIN_SERVER_CHANNEL) as trace:
-        # record_effective_routes: a mix of routes missing every attribute
-        # it reads, a route that explodes on attribute access, and outright
-        # wrong types (None / str / int) in the same batch.
-        rt.record_effective_routes([missing, poison, None, "not-a-route", 42])
-
         # record_candidate / record_skip: every string-ish field poisoned.
         rt.record_candidate(
             kind=poison,

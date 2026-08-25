@@ -104,12 +104,17 @@ function UserSettings() {
       title: "Channels",
       content: (
         <div className="space-y-6">
-          {/* The replacement for the two cards below: one place where every
-              channel an administrator has connected is listed with the user's
-              own settings. MCP Server / Identity Server are folded into it in
-              phase 5 and disappear from here then. Mail Servers already has:
-              it is server-owned infrastructure now and lives under
-              Admin → Server Configuration. */}
+          {/* One place where every channel an administrator has connected is
+              listed with the user's own settings: the on/off switch, the agent
+              scope, and the per-person identity toggles. Mail Servers moved out
+              entirely — it is server-owned infrastructure now and lives under
+              Admin → Server Configuration.
+
+              The two cards below are NOT older versions of this list. They hold
+              what a per-channel row has no place for: the App MCP endpoint plus
+              its connect walkthrough, and the authoring side of identity
+              sharing (which of my agents, exposed to whom). Both would be
+              unreachable if this card were the only thing on the tab. */}
           <UserChannelsCard />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <AppAgentRoutesCard />

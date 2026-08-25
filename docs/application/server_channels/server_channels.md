@@ -9,21 +9,25 @@ messages are verified, whitelisted, routed to the right agent (installing
 one automatically if needed), bound to a persistent conversation thread, and
 answered back through the same surface.
 
-Two channel types are registered today: **Google Chat**, a *pushed* transport
-(the outside world calls a webhook), and **Email**, a *polled* transport
-(the platform pulls a mailbox on a timer) — see
-[Transport shapes: webhook, polled, authenticated](#transport-shapes-webhook-polled-authenticated).
+Three channel types are registered today: **Google Chat**, a *pushed* transport
+(the outside world calls a webhook); **Email**, a *polled* transport
+(the platform pulls a mailbox on a timer); and, as of Phase 5 of the channels
+& identity unification, **App MCP**, an *authenticated* transport whose caller
+is already a platform user — see
+[Transport shapes: webhook, polled, authenticated](#transport-shapes-webhook-polled-authenticated)
+and [App MCP as a channel](#app-mcp-as-a-channel).
 Everything below "Business Rules → Routing" onward is shared by every
 transport; email's transport-specific behaviour (the `From:`-header trust
 tier, recipient validation on a shared mailbox, the durable outgoing queue)
 is documented in [Email Integration](../email_integration/email_integration.md)
-rather than duplicated here.
+rather than duplicated here, and App MCP's own business logic lives in
+[App MCP Server](../app_mcp_server/app_mcp_server.md).
 
 Routing normally chooses among the sender's **own** agents. Since Phase 3 of the channels & identity unification refactor a sender may also opt in, per channel, to addressing a **person** — "hey, ask HR what my time-off status is?" — in which case the message is answered by one of that person's agents, from inside that person's workspace. See [Identity routing](#identity-routing-whose-thread-whose-workspace).
 
 ## Core Concepts
 
-- **Server Channel** — one admin-configured instance of a channel type (Google Chat or Email today). Owns its own transport config, outbound credential, email whitelist, and auto-registration toggle, plus four admin-owned availability defaults (visibility, default enablement, default agent scope, auto-install permission — see [Availability and per-user settings](#availability-and-per-user-settings)). Superuser-only, managed from the **Channels** tab on `/admin/server-configuration`.
+- **Server Channel** — one admin-configured instance of a channel type (Google Chat, Email, or App MCP today; App MCP is a singleton — at most one may exist). Owns its own transport config, outbound credential, email whitelist, and auto-registration toggle (all inert/empty for App MCP, which has none of these), plus four admin-owned availability defaults (visibility, default enablement, default agent scope, auto-install permission — see [Availability and per-user settings](#availability-and-per-user-settings)). Superuser-only, managed from the **Channels** tab on `/admin/server-configuration`.
 - **Channel Adapter / Channel Transport** — the transport-specific implementation (Google Chat, Email) behind a shared contract: authenticate an inbound message (however this transport receives one), parse it into a normalized message, send a reply, describe its own setup steps. Since Phase 4 of the channels & identity unification, the contract is split into **transport shapes** — `webhook`, `polled`, `authenticated` — because a pull transport like email has no `Request` to verify and a webhook-shaped ABC forced it to fake one. See [Transport shapes](#transport-shapes-webhook-polled-authenticated). Adding a new channel type (Discord, Telegram, …) means writing one adapter module and registering it — no pipeline change, no migration.
 - **Webhook Token** — an unguessable, per-channel path segment (`POST /api/v1/channels/{webhook_token}/inbound`) that is a *webhook* channel's only "address." It is not a secret in the cryptographic sense (it doesn't prove who sent the request — the adapter's signature check does that); it is what keeps the endpoint from being guessed. A **polled** channel (email) has no webhook at all: `webhook_token` is `NULL` for it, and the setup panel shows no URL — see [Transport shapes](#transport-shapes-webhook-polled-authenticated).
 - **Email Whitelist** — a comma-separated list of glob patterns (`*@example.com, devops.*@support.com`) gating which verified senders may reach agents through this channel. Shared matching logic with the email integration's sender allowlist.
@@ -97,9 +101,13 @@ an adapter subclasses:
   [Email Integration](../email_integration/email_integration.md#trust-chain-from-is-spoofable)).
   A polled channel needs no webhook token (`ServerChannel.webhook_token` is
   `NULL` for it) and its admin setup panel shows no URL.
-- **`authenticated`** — reserved for a future channel (App MCP, Phase 5)
-  whose caller is already an authenticated platform user when the pipeline
-  is entered; not used by any adapter registered today.
+- **`authenticated`** (App MCP, since Phase 5): the caller is already an
+  authenticated platform user — a bearer token minted by this server's own
+  OAuth flow, bound to one `user_id` — when the pipeline is entered. There is
+  no external sender to whitelist and no request to verify: `needs_webhook_token`
+  and `needs_outbound_credentials` are both `False`, and the admin form
+  renders no webhook, secret, or whitelist field for it. See
+  [App MCP as a channel](#app-mcp-as-a-channel).
 
 A transport also declares `needs_outbound_credentials`: `True` (the default)
 means the outbound credential lives in `ServerChannel.encrypted_secrets`;
@@ -108,12 +116,74 @@ means the outbound credential lives in `ServerChannel.encrypted_secrets`;
 otherwise, since the inherited answer would report a working channel of that
 type as having no way to reply. Email declares `False`: its credential is
 the referenced SMTP `MailServerConfig` row, never anything in
-`encrypted_secrets`, and never anywhere near an agent.
+`encrypted_secrets`, and never anywhere near an agent. App MCP also declares
+`False`, for the opposite reason: there is no outbound credential at all — the
+reply *is* the synchronous response to the caller's own MCP request — so its
+adapter's `has_outbound_credentials()` always answers `True` rather than
+`False`, because a permanently-uncleared "no credential" admin badge would
+train an admin to ignore the same badge on a channel where it means replies
+really are failing to deliver.
 
 Adding a channel type is unchanged by the split: one adapter module plus one
 registry entry. A poller for a new `polled` transport needs no new scheduler
 code either — `ChannelPollService` enumerates polled channel *types* from the
 registry, not a hardcoded list.
+
+### App MCP as a channel
+
+As of Phase 5 of the channels & identity unification, [App MCP Server](../app_mcp_server/app_mcp_server.md)
+is a **singleton** `ServerChannel` row (`channel_type="app_mcp"`) — the
+platform's one `authenticated` transport, alongside Google Chat's `webhook`
+and Email's `polled`. What makes it worth its own channel row despite having
+no transport of its own to configure:
+
+- **Singleton, enforced twice.** `ServerChannelService.get_or_create_singleton`
+  refuses a second row at the application layer, and a partial unique index
+  (`uq_server_channel_singleton_type`, migration `867cacb5a827`) enforces the
+  same thing at the database layer — the two must never drift apart, since a
+  gap in either would let two rows exist with nothing to say which one wins.
+  The row is materialized **lazily**, on first admin read or first App MCP
+  use, with `enabled=True` and `visibility="public"` — an existing deployment
+  keeps working the moment it upgrades.
+- **No config, no secrets, no whitelist.** The admin form renders none of
+  these fields for this row — driven off the adapter's declared
+  `ChannelCapabilities`, never off a `channel_type == "app_mcp"` conditional
+  in the component. Submitting any non-empty `config` is rejected outright by
+  the adapter: a value nothing reads is worse than a refusal, because it looks
+  configured.
+- **What the admin gains that App MCP never had before this phase:** a
+  server-wide kill switch (`enabled`), `visibility` (`public` or `restricted`
+  + a grant allowlist), and a default agent scope — resolved by the exact same
+  `ChannelPolicyService.resolve` every other channel goes through. There is no
+  App MCP-specific policy engine.
+- **Availability is checked at token use, not at token issue.**
+  `AppMCPTokenVerifier` resolves `ChannelPolicyService.resolve(...).is_available`
+  on every MCP request, after token validity passes, and caches the answer per
+  user id for `settings.APP_MCP_AVAILABILITY_CACHE_TTL_SECONDS` (**default 45
+  seconds**) — **so an admin revoke, a withdrawn grant, or the user's own
+  toggle takes up to 45 seconds to actually bite.** The cache fails closed: a
+  lookup that raises denies the caller and is never cached in either
+  direction, so a transient database blip costs one denial, never a TTL-long
+  one. `app_mcp_token` rows themselves are never revoked by any of this —
+  the token stays valid; only the channel's willingness to honour it changes.
+- **Routing runs on the same candidate providers as every other channel.**
+  `AppMCPRoutingService.route_message` composes `ChannelCandidateProvider`
+  (the caller's own agents, narrowed to the resolved agent scope) with
+  `IdentityCandidateProvider` (only when `allow_identity_routing` is on) —
+  the identical composition, in the identical order, Pass 1 uses below. A
+  test asserts the two surfaces produce identical candidate lists for the
+  same user, which is the property this whole refactor exists to guarantee.
+  **Not shared:** Pass 2 (auto-install catalog) and pinning. App MCP routing
+  is two steps — classify, or return nothing — with no catalog fallback and
+  no `channel_user_setting.pinned_agent_id` honoured; `allow_auto_install` on
+  the App MCP channel row is therefore inert as of this phase.
+- **`ChannelIngestionService.assert_access`'s `mcp_caller` arm was tightened
+  in the same phase.** It used to trust that the (now-deleted) App MCP routing
+  layer had verified the caller has a route to the agent, checking nothing
+  else. It now requires the agent be owned by the caller, **or** a
+  re-verified identity grant (`IdentityService.verify_identity_access`, the
+  same six conditions `channel_caller` uses) — see
+  [App MCP Server — Access Control](../app_mcp_server/app_mcp_server.md#access-control-on-the-underlying-session).
 
 ### Trust chain and fail-closed defenses
 
@@ -138,7 +208,7 @@ A sender's email is trusted only because the adapter verified it came from a pay
 ### Routing
 
 - **A pin is answered before anything else runs.** If the sender has pinned one of their own agents to this channel (see [Availability and per-user settings](#availability-and-per-user-settings)), classification is skipped entirely — no candidates are built, no short-circuit is evaluated, and Pass 2 does not run, even if the pin fails to resolve (the agent was deleted, or changed hands). The decision still gets a full trace row (`match_method="pinned"`); everything below this bullet describes the unpinned path.
-- **Pass 1 — the sender's own agents, constructed directly, not filtered down from another surface's set.** The candidate list is built from `Agent.owner_id == user.id` — every agent the sender owns — narrowed to the resolved channel **agent scope**: `"all"` admits every owned agent (unchanged from before this phase), `"list"` admits only the sender's saved selection, `"none"` admits nothing. An agent excluded by scope is recorded as a skip (`SKIP_NOT_IN_CHANNEL_SCOPE`) rather than dropped. Within scope, an agent is an eligible candidate when it has a non-blank router trigger prompt **or** non-empty prompt examples; one with neither is recorded as a different skip (`SKIP_NO_TRIGGER_PROMPT`) — a candidate list showing only the finalists cannot explain the failure that actually bites. Nothing in this half of Pass 1 reads `AppAgentRoute`, `AppAgentRouteAssignment`, `UserAppAgentRoute`, or the `channel_app_mcp` flag — an owner's App MCP exposure toggles have **no effect** on what they can reach from their own chat app. (`SKIP_IDENTITY_ROUTE` is kept in the trace vocabulary purely so the admin UI can still render decisions captured before the scope split; it has no live producer.) Pass 1 shares only `AgentClassifier.classify` with the App MCP Server — never its candidate set, never its enablement state — see [Auto Routing Tuning](../routing_tuning/routing_tuning.md).
+- **Pass 1 — the sender's own agents, constructed directly, not filtered down from another surface's set.** The candidate list is built from `Agent.owner_id == user.id` — every agent the sender owns — narrowed to the resolved channel **agent scope**: `"all"` admits every owned agent (unchanged from before this phase), `"list"` admits only the sender's saved selection, `"none"` admits nothing. An agent excluded by scope is recorded as a skip (`SKIP_NOT_IN_CHANNEL_SCOPE`) rather than dropped. Within scope, an agent is an eligible candidate when it has a non-blank router trigger prompt **or** non-empty prompt examples; one with neither is recorded as a different skip (`SKIP_NO_TRIGGER_PROMPT`) — a candidate list showing only the finalists cannot explain the failure that actually bites. Nothing in this half of Pass 1 reads `AppAgentRoute`, `AppAgentRouteAssignment`, or `UserAppAgentRoute` — that whole family is deleted as of Phase 5. (`SKIP_IDENTITY_ROUTE` is kept in the trace vocabulary purely so the admin UI can still render decisions captured before the scope split; it has no live producer.) Pass 1's own candidate-building code — `ChannelCandidateProvider` — is now the same code [App MCP Server](../app_mcp_server/app_mcp_server.md) calls, not merely a parallel implementation, but each channel row (Google Chat, App MCP) resolves its **own** enablement state (`ChannelPolicyService.resolve` against that row) — toggling one channel's agent scope has no effect on another's. Pass 1 also shares `AgentClassifier.classify` with every other routing consumer — see [Auto Routing Tuning](../routing_tuning/routing_tuning.md).
 - **Pass 1, identity half — the people the sender may address, appended only on their own opt-in.** When the sender's resolved `allow_identity_routing` is on, `IdentityCandidateProvider` appends one candidate per identity **owner** they can currently reach (never one per binding), each with the namespaced `ref_id` `identity:{owner_id}` so a person can never be looked up as an agent. Owned agents are listed first and identities after — that ordering is for the trace and the prompt to read top-down, and nothing turns on it. When the classifier picks a person, the decision hands off to **identity Stage 2**, which picks one of *that person's* agents; see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md). Both of Stage 2's answers are terminal: an agent (routed, with a grant re-verified at ingest) or nothing (an ordinary `no_match` — Pass 2 does **not** run, because auto-installing a catalog bundle is not an answer to "ask HR about my time off"). An identity owner with nothing currently reachable is recorded as a `SKIP_IDENTITY_UNAVAILABLE` skip; an identity the sender could have reached with the switch **off** is deliberately recorded not at all — see [Availability and per-user settings](#availability-and-per-user-settings).
 - **A conditional `only_one` short-circuit.** When the whole Pass-1 ballot holds exactly one candidate, Pass 1 routes to it without asking a model — but only when Pass 2 has nothing to offer this sender either (an exhausted or unreachable auto-install catalog, **or Pass 2 barred by policy — see below**). The rule is that a short-circuit is sound only when there is genuinely no alternative to choose between, and Pass 2's candidates are part of that choice space: a newly auto-registered sender owns zero agents, and the moment Pass 2 onboards them they own exactly one — an unconditional short-circuit would make that onboarding message the last one that could ever reach the catalog. So the one-candidate branch probes the catalog for availability (not classification) before deciding: zero or unreachable ⇒ route without a model call; anything available ⇒ classify anyway so "none of mine" stays a reachable answer. Two or more eligible candidates always classify, and a failed catalog probe is treated as "something might be there" rather than "nothing is," so an outage costs an LLM call, never a silently different route. **That sole candidate can be an identity** — a sender who owns no agents and can reach exactly one identity owner is not a rare shape, especially right after auto-registration — in which case the short-circuit hands straight off to identity Stage 2 rather than to an agent. The probe still writes the full trace — the scanned-but-unclassified candidates land under the `pass_2` stage with a `stage.reason` note explaining they were an availability check, not a classification.
 - **Pass 2 — the server-wide auto-install list**, tried only when Pass 1 finds nothing **and** this sender's resolved channel policy allows it: `allow_auto_install` is on, the resolved agent scope is `"all"` (not `"list"` or `"none"` — see [Availability and per-user settings](#availability-and-per-user-settings) for why that is a product decision and not `allow_auto_install` read twice), and there is no pin. When Pass 2 is barred by policy the trace records why, rather than showing an empty catalog scan. Candidates are the union of bundles on the list that the sender hasn't already installed, filtered through the same catalog visibility check every other install path uses, and that carry a router trigger prompt to classify against. **Membership on the auto-install list is never an implicit permission grant** — a non-public bundle nobody has shared with the sender simply never becomes a candidate for them, no matter how loudly it "matches."
@@ -292,7 +362,7 @@ for the polled version of this diagram.
 
 - [Agent Sessions / Channel Ingestion](../agent_sessions/channel_ingestion.md) — Server Channels is a caller of the canonical inbound pipeline, adding a `channel_caller` `SessionSender` kind that behaves like `task_executor`: the session is owned by the sender's own resolved user, never the agent's publisher. **One exception, since Phase 3 of the channels & identity unification:** an identity-routed message opens the session in the *identity owner's* space, permitted solely by a `ChannelAccessPolicy.identity_grant` whose six conditions `ChannelIngestionService.assert_access` re-reads from the database on every message. The sender kind does not change — it names the *transport*, and the transport is still a channel.
 - [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md) — identity is a routing-layer concept, and Server Channels is its second consumer after App MCP. `IdentityCandidateProvider` supplies the person candidates; `IdentityRoutingService` is Stage 2, called from inside `ChannelRoutingService.decide`. The person-level contact toggle is shared with App MCP; the per-channel `allow_identity_routing` opt-in is the channel's own and never inherits.
-- [App MCP Server](../app_mcp_server/app_mcp_server.md) — Server Channels and the App MCP Server **share the classifier only**: both call `AgentClassifier.classify` (unified in [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5), but each surface owns its own candidate provider and its own enablement state — Pass 1 never reads `AppAgentRoute`, `AppAgentRouteAssignment`, `UserAppAgentRoute`, or `channel_app_mcp`, so toggling an agent's App MCP exposure has no effect on channel reachability. A freshly auto-installed agent is immediately reachable for future channel messages because bundle install auto-populates `Agent.router_trigger_prompt` from the revision snapshot — not because of the App MCP route the install also creates, which channel routing does not read.
+- [App MCP Server](../app_mcp_server/app_mcp_server.md) — as of Phase 5, App MCP **is** a `ServerChannel` row (`channel_type="app_mcp"`, the platform's `authenticated` transport) and shares this feature's admin model, `ChannelPolicyService`, `ChannelCandidateProvider`, and `AgentClassifier.classify` outright — not a parallel implementation reaching the same conclusions, but the same code, called with a different channel row. Each channel row still resolves its **own** enablement state, so toggling Google Chat's agent scope has no effect on App MCP's, and vice versa. A freshly auto-installed agent is immediately reachable on both surfaces for the same reason: bundle install auto-populates `Agent.router_trigger_prompt` from the revision snapshot, and both `ChannelCandidateProvider` callers read that field directly.
 - [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) — Pass-2 auto-install uses the same idempotent `InstallService.install_bundle` entry point every other programmatic install uses, and is gated by `CatalogService.user_can_install` visibility.
 - [Email Integration](../email_integration/email_integration.md) — since Phase 4 of the channels & identity unification, email **is** a Server Channels transport (`channel_type="email"`, a `PolledChannelTransport`), not a separate pipeline that merely mirrors this one's precedents. The email-specific behaviour — the `From:`-header trust tier, recipient validation on a shared mailbox, the durable `OutgoingEmailQueue` outbound path, the poll scheduler — is documented there; whitelisting, auto-registration (`UserService.create_external_user`, shared by both transports), two-pass routing, and thread bindings are the shared machinery documented here.
 - [Mail Servers](../email_integration/mail_servers.md) — the admin-owned IMAP/SMTP connections an email channel references by id in its `config`, the way a Google Chat channel references its own service account.

@@ -8,11 +8,9 @@ from app.api.routes import (
     admin_routing,
     agent_api,
     agent_api_public,
-    agent_app_mcp_routes,
     agent_git,
     agent_status,
     agent_webhooks,
-    app_agent_routes,
     app_data,
     app_sync,
     bundles,
@@ -60,7 +58,6 @@ from app.api.routes import (
     ssh_keys,
     task_agent_api,
     task_triggers,
-    user_app_agent_routes,
     user_channels,
     users,
     user_dashboards,
@@ -151,9 +148,6 @@ api_router.include_router(a2a.v03_router)    # /a2a/v0.3/{agent_id}/
 api_router.include_router(mcp_connectors.router)
 api_router.include_router(mcp_consent.router)
 api_router.include_router(mcp_providers.router)  # /mcp-providers/* (consumer connect helper)
-api_router.include_router(agent_app_mcp_routes.router)
-api_router.include_router(app_agent_routes.router)
-api_router.include_router(user_app_agent_routes.router)
 api_router.include_router(identity.router)
 api_router.include_router(identity_contacts.router)
 api_router.include_router(cli.router)

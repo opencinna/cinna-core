@@ -4,12 +4,12 @@ Agent tests exercise flows that depend on Docker environments, LLM streaming, an
 
 ## Topic Groups
 
-This is the largest test domain in the suite (82 files / 606 tests), so tests are split into **topic group** subpackages. Every group inherits the autouse fixtures from this directory's `conftest.py` automatically — there is no per-group `conftest.py` and none should be added unless a group genuinely needs extra stubbing.
+This is the largest test domain in the suite (80 files / 592 tests), so tests are split into **topic group** subpackages. Every group inherits the autouse fixtures from this directory's `conftest.py` automatically — there is no per-group `conftest.py` and none should be added unless a group genuinely needs extra stubbing.
 
 | Group | Covers |
 |---|---|
 | `bundles/` | Publishing: bundle + revision creation, workspace/metadata snapshots, publish settings, credential specs, template sharing, `service_uri`, per-user scope, permissions overview |
-| `bundles_install/` | Installing and updating: install context, credential resolution/matching, readiness gate, auto-update convergence, scheduler + MCP-route propagation, admin env enrichment |
+| `bundles_install/` | Installing and updating: install context, credential resolution/matching, readiness gate, auto-update convergence, scheduler propagation, admin env enrichment |
 | `agent_api/` | Agent REST API: owner preview, connect helper, proxy + policy, caller identity & scopes, external keys, automatic-credential drift |
 | `git/` | Git-backed agent versioning: checkout / pull / push, conflict resolution, baseline recovery, subdir-scoped update detection |
 | `improvement_requests/` | Agent Improvement Requests: targeting, lifecycle, prompt/memory capture, signals, archive + scrubbing, rate limits, CLI surfaces |
@@ -18,7 +18,7 @@ This is the largest test domain in the suite (82 files / 606 tests), so tests ar
 | `sessions/` | Session lifecycle and streaming: context, page context, recovery, reset, delete-interrupt, env detach, stream concurrency, message attachments |
 | `commands/` | Slash / CLI command surface: `/run`, CLI command sync, autocomplete, `/files` + env wakeup, non-LLM → LLM bridging, agent status + status refresh |
 | `guest_shares/` | Guest share links: CRUD, auth flow, security code, guest session access |
-| `integrations/` | Inbound/outbound integrations: webhooks, capability flags, router trigger prompt + backfill |
+| `integrations/` | Inbound/outbound integrations: webhooks, capability flags, router trigger prompt |
 | `core/` | Everything without a better home: create-flow, creation limits, prompt sync, resilient plugins, AI-credential slot matching, credential categorization, team task delegation, env token scoping, A2A access tokens |
 
 **Placement rule.** New test files go into the group that matches their topic — never loose at the root of `tests/api/agents/`. Create a new group only for a genuinely new topic you expect to reach ~3 files; give it an `__init__.py` and add a row above. If `core/` grows past ~12 files, split it instead of letting it sprawl.

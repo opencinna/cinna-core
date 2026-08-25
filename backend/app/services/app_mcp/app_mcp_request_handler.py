@@ -233,7 +233,6 @@ class AppMCPRequestHandler:
                 sender=sender,
                 policy=ChannelAccessPolicy(
                     expected_owner_id=agent.owner_id,
-                    require_caller_in_route=True,
                 ),
             )
             session, _ = ChannelIngestionService.resolve_or_create_session(
@@ -246,8 +245,12 @@ class AppMCPRequestHandler:
                     "mode": routing_result.session_mode,
                     "caller_id": user_id,
                     "session_metadata_extra": {
-                        "app_mcp_route_type": routing_result.route_source,
-                        "app_mcp_route_id": str(routing_result.route_id),
+                        # ``app_mcp_source`` replaces ``app_mcp_route_type``:
+                        # the value is now the candidate provider that supplied
+                        # the winner ("owned" / "identity"), not the kind of
+                        # route row behind it. ``app_mcp_route_id`` is gone with
+                        # the route table — there is no id to record.
+                        "app_mcp_source": routing_result.source,
                         "app_mcp_agent_name": routing_result.agent_name,
                         "app_mcp_session_mode": routing_result.session_mode,
                         "app_mcp_match_method": routing_result.match_method,
@@ -355,7 +358,7 @@ class AppMCPRequestHandler:
                     "identity_caller_name": caller.full_name if caller else str(caller_user_id),
                     "identity_owner_name": owner.full_name if owner else str(owner_id),
                     "identity_match_method": routing_result.identity_stage2_match_method or "",
-                    "app_mcp_route_type": "identity",
+                    "app_mcp_source": routing_result.source,
                     "app_mcp_match_method": routing_result.match_method,
                 },
             )

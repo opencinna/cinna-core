@@ -1,5 +1,5 @@
 """
-App MCP Server prompts — exposes user's active agent routes as MCP prompts.
+App MCP Server prompts — exposes the caller's routable targets as MCP prompts.
 
 This enables external AI clients (Claude Desktop, Cursor) to discover
 available agents via MCP prompts/list without guessing.
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _slugify(name: str) -> str:
-    """Convert a route name to a slug suitable for use as a prompt name."""
+    """Convert a candidate name to a slug suitable for use as a prompt name."""
     slug = name.lower()
     slug = re.sub(r"[^a-z0-9]+", "_", slug)
     slug = slug.strip("_")
@@ -30,17 +30,32 @@ def register_app_mcp_prompts(server) -> None:
 
         Returns prompts representing each addressable target's trigger
         description. The set mirrors what App MCP Stage 1 would put on the
-        ballot — the user's effective routes **and** the identity owners they
-        can address — because a discovery list that omits half the routable
-        targets teaches the client the wrong vocabulary. The two are composed
-        here for the same reason ``AppMCPRoutingService.route_message``
-        composes them: identity stopped being an arm inside the route service
-        in phase 1 of the channels/identity unification.
+        ballot — the agents this user owns **and** the identity owners they can
+        address — because a discovery list that omits half the routable targets
+        teaches the client the wrong vocabulary. The two providers are composed
+        here in the same order, behind the same
+        ``policy.allow_identity_routing`` gate, for exactly that reason: a
+        prompt list built from a different question than the router asks is a
+        vocabulary the router will refuse.
+
+        Examples come from ``Agent.example_prompts`` (via
+        ``ChannelCandidateProvider``) and ``IdentityAgentBinding.prompt_examples``
+        (via ``IdentityCandidateProvider``, which keeps the owner-name
+        prefixing). Neither is re-derived here.
         """
         from app.core.db import create_session
-        from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
+        from app.services.routing.channel_candidate_provider import (
+            ChannelCandidateProvider,
+        )
         from app.services.routing.identity_candidate_provider import (
             IdentityCandidateProvider,
+        )
+        from app.services.server_channels.adapters.app_mcp import AppMCPChannelAdapter
+        from app.services.server_channels.channel_policy_service import (
+            ChannelPolicyService,
+        )
+        from app.services.server_channels.server_channel_service import (
+            ServerChannelService,
         )
 
         auth_user_id_str = mcp_authenticated_user_id_var.get(None)
@@ -54,12 +69,13 @@ def register_app_mcp_prompts(server) -> None:
 
         try:
             with create_session() as db:
-                effective_routes = AppAgentRouteService.get_effective_routes_for_user(
-                    db_session=db,
-                    user_id=user_id,
-                    channel="app_mcp",
+                channel = ServerChannelService.get_or_create_singleton(
+                    db, AppMCPChannelAdapter.channel_type
                 )
-                identity_candidates = IdentityCandidateProvider.build(db, user_id)
+                policy = ChannelPolicyService.resolve(db, channel, user_id)
+                candidates = ChannelCandidateProvider.build(db, user_id, policy=policy)
+                if policy.allow_identity_routing:
+                    candidates += IdentityCandidateProvider.build(db, user_id)
         except Exception as e:
             logger.error("[AppMCP] Failed to load prompts for user %s: %s", user_id, e)
             return []
@@ -85,8 +101,6 @@ def register_app_mcp_prompts(server) -> None:
             return messages
 
         prompts = []
-        for route in effective_routes:
-            prompts.extend(_entry(route.trigger_prompt, route.prompt_examples))
-        for candidate in identity_candidates:
+        for candidate in candidates:
             prompts.extend(_entry(candidate.trigger_prompt, candidate.prompt_examples))
         return prompts

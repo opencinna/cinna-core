@@ -35,39 +35,6 @@ Auto-generated from OpenAPI spec. Tag: `external-a2a`
 
 ---
 
-## GET `/api/v1/external/a2a/route/{route_id}/`
-**Get External Route Card**
-
-**Path parameters:**
-- `route_id`: uuid
-
-**Query parameters:**
-- `protocol`: string | null
-
----
-
-## POST `/api/v1/external/a2a/route/{route_id}/`
-**Handle External Route Jsonrpc**
-
-**Path parameters:**
-- `route_id`: uuid
-
-**Query parameters:**
-- `protocol`: string | null
-
----
-
-## GET `/api/v1/external/a2a/route/{route_id}/.well-known/agent-card.json`
-**Get External Route Card Well Known**
-
-**Path parameters:**
-- `route_id`: uuid
-
-**Query parameters:**
-- `protocol`: string | null
-
----
-
 ## GET `/api/v1/external/a2a/identity/{owner_id}/`
 **Get External Identity Card**
 

@@ -26,6 +26,7 @@ from app.models.a2a.agent_access_token import A2ATokenPayload
 from app.models.sessions.session import Session
 from app.models.sessions.session_sender import (
     ChannelAccessPolicy,
+    IdentityGrant,
     IngestionResult,
     SessionSender,
     SessionSenderKind,
@@ -337,23 +338,28 @@ class TestChannelAccessPolicy:
         assert policy.allow_system_trigger_fastpath is False
         assert policy.require_owner_match is True
         assert policy.require_access_token_scope is None
-        assert policy.require_caller_in_route is False
+        assert policy.identity_grant is None
 
     def test_constructs_with_explicit_values(self) -> None:
         uid = uuid.uuid4()
         token = _make_token_payload()
+        grant = IdentityGrant(
+            owner_id=uuid.uuid4(),
+            binding_id=uuid.uuid4(),
+            assignment_id=uuid.uuid4(),
+        )
         policy = ChannelAccessPolicy(
             expected_owner_id=uid,
             allow_system_trigger_fastpath=True,
             require_owner_match=False,
             require_access_token_scope=token,
-            require_caller_in_route=True,
+            identity_grant=grant,
         )
         assert policy.expected_owner_id == uid
         assert policy.allow_system_trigger_fastpath is True
         assert policy.require_owner_match is False
         assert policy.require_access_token_scope is token
-        assert policy.require_caller_in_route is True
+        assert policy.identity_grant is grant
 
     def test_not_frozen_allows_mutation(self) -> None:
         """ChannelAccessPolicy is intentionally NOT frozen (per §3.4)."""

@@ -1225,15 +1225,14 @@ def update_router_trigger_prompt(
     id: uuid.UUID,
     data: RouterTriggerPromptUpdate,
 ) -> Any:
-    """Owner-only update of the App MCP router trigger prompt.
+    """Owner-only update of the agent's router trigger prompt.
 
     Available to ``agent-user`` accounts on their installs (the generic
-    ``PUT /agents/{id}`` is gated to developers/admins). Also propagates
-    the new value into the matching auto-managed ``AppAgentRoute`` so the
-    router sees it immediately.
+    ``PUT /agents/{id}`` is gated to developers/admins). The field is the
+    routing source of truth on its own — every surface classifies over
+    ``Agent.router_trigger_prompt`` and ``Agent.example_prompts`` directly —
+    so saving it is all there is to do.
     """
-    from app.services.app_mcp.app_agent_route_service import AppAgentRouteService
-
     agent = session.get(Agent, id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1247,24 +1246,6 @@ def update_router_trigger_prompt(
     session.add(agent)
     session.commit()
     session.refresh(agent)
-
-    # Propagate to the install's auto-managed route, if any.
-    try:
-        AppAgentRouteService.sync_router_trigger_prompt_from_agent(
-            db_session=session, agent=agent,
-        )
-    except Exception as exc:  # noqa: BLE001 — defensive
-        # A failed statement leaves the transaction aborted; every later
-        # query on this session (including the ``_agent_to_public``
-        # projection below) would raise ``InFailedSqlTransaction`` and turn
-        # this best-effort sync into a 500. Roll back so the session stays
-        # usable — the agent write is already committed above.
-        session.rollback()
-        logger.warning(
-            "Failed to sync router_trigger_prompt to auto-managed route for "
-            "agent %s: %s",
-            id, exc,
-        )
 
     return _agent_to_public(session, agent)
 

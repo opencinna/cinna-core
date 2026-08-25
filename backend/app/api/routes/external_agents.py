@@ -61,17 +61,17 @@ def list_external_agents(
         default=None,
         description=(
             "Optional workspace filter. When provided, limits the personal agents "
-            "section to agents in this workspace. MCP shared agents and identity "
-            "contacts are not filtered."
+            "section to agents in this workspace. Identity contacts are not "
+            "filtered."
         ),
     ),
 ) -> Any:
     """Return all addressable targets for the authenticated user.
 
     Used by native clients to render their home screen agent list. Returns
-    three sections (personal agents, MCP shared agents, identity contacts)
-    in a single response, each with an ``agent_card_url`` pointing at the
-    target's A2A endpoint for chat.
+    two sections (personal agents, identity contacts) in a single response,
+    each with an ``agent_card_url`` pointing at the target's A2A endpoint
+    for chat.
     """
     return ExternalAgentCatalogService.list_targets(
         db=session,
@@ -174,8 +174,9 @@ def list_external_sessions(
     """Return all sessions where the current user is owner, caller, or identity_caller.
 
     Sessions are ordered by last_message_at DESC (most recent first). Covers
-    all integration types created via the external surface: "external" (personal
-    agents), "app_mcp" (shared agents), "identity_mcp" (identity contacts).
+    all integration types the caller can see: "external" (personal agents),
+    "app_mcp" (the caller's own agents reached over the App MCP server),
+    "identity_mcp" (identity contacts).
 
     Intended for native clients to restore their thread list at launch without
     opening a full A2A connection per thread.
