@@ -25,9 +25,10 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models import CHANNEL_BINDING_ACTIVE, ChannelThreadBinding
+from app.models import CHANNEL_BINDING_ACTIVE, CHANNEL_BINDING_FAILED, ChannelThreadBinding
 from app.services.server_channels.channel_inbound_service import (
     _MAX_PARKED_MESSAGES,
+    REPLY_SETUP_FAILED,
     REPLY_STILL_SETTING_UP,
     REPLY_TOO_MANY_QUEUED,
 )
@@ -44,6 +45,7 @@ from tests.utils.server_channel import (
     build_message_event,
     create_server_channel,
     flush_pending_bindings,
+    list_debug_events,
     post_webhook,
 )
 from tests.utils.routing import refuse_to_classify
@@ -405,3 +407,158 @@ def test_post_drain_repark_at_the_cap_tells_the_sender_instead_of_dropping(
         "A cap-refused message after a failed drain was dropped in silence. "
         f"Texts actually delivered: {sent_texts!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Deterministic vs transient failures while draining (channels/identity
+# unification, phase 4)
+# ---------------------------------------------------------------------------
+
+_INGEST_TARGET = (
+    "app.services.sessions.channel_ingestion_service"
+    ".ChannelIngestionService.ingest_inbound_message"
+)
+
+
+def _binding_by_thread_key(db: Session, thread_key: str) -> ChannelThreadBinding | None:
+    return db.exec(
+        select(ChannelThreadBinding).where(ChannelThreadBinding.thread_key == thread_key)
+    ).first()
+
+
+def test_deterministic_decline_while_draining_fails_binding_drops_queue_and_self_heals(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """
+    `_drain_parked` classifies a bare `PermissionError` from `_ingest` as a
+    DETERMINISTIC decline — one that will recur identically on every retry
+    (the sender's `allow_identity_routing` consent off, a revoked identity
+    grant, or the `user.id != binding.user_id` invariant guard) — and fails
+    the binding instead of leaving it parked forever, which used to wedge the
+    thread until the parked-message cap.
+
+      1. A `pending_install` binding with one parked message; the environment
+         comes up and `_ingest` declines deterministically.
+      2. The binding ends `failed` — not left `pending_install`/`active` with
+         the message still queued — which is what arms the self-heal.
+      3. The parked queue is dropped, and the debug feed's structured detail
+         records that the decline was deterministic and how many messages
+         were dropped. Asserted on those facts (deterministic-ness, the
+         count), not on exact prose.
+      4. The sender gets the SAME generic setup-failed notice every other
+         failure gets — no oracle for which gate closed.
+      5. The next message on that thread deletes the failed binding and
+         re-routes from scratch: the thread is not wedged.
+    """
+    setup = _setup_pending_install(client, superuser_token_headers)
+    channel, signer = setup["channel"], setup["signer"]
+    thread_key, email = setup["thread_key"], setup["consumer_email"]
+
+    set_environment_status(db, setup["env_id"], "running")
+    db.commit()
+
+    with patch(_STREAM_TARGET, setup["stub"]), patch(
+        _SEND_TARGET, AsyncMock(return_value="x")
+    ) as send_mock, patch(
+        _INGEST_TARGET,
+        AsyncMock(
+            side_effect=PermissionError(
+                "identity routing is switched off for this sender on this channel"
+            )
+        ),
+    ):
+        advanced = flush_pending_bindings(db)
+        drain_tasks()
+
+    # `_flush_one` flips the binding to `active` and commits BEFORE draining,
+    # so it still counts as "advanced" even though the drain then fails it.
+    assert advanced == 1
+
+    binding = _binding_by_thread_key(db, thread_key)
+    assert binding is not None
+    db.refresh(binding)
+    failed_binding_id = binding.id
+    assert binding.status == CHANNEL_BINDING_FAILED
+    assert not binding.pending_messages, binding.pending_messages
+    assert "deterministic" in (binding.last_error or "").lower()
+
+    feed = list_debug_events(client, superuser_token_headers, channel["id"])
+    parked_drain_events = [
+        e for e in feed["events"] if (e.get("detail") or {}).get("stage") == "parked_drain"
+    ]
+    assert len(parked_drain_events) == 1, feed["events"]
+    detail = parked_drain_events[0]["detail"]
+    assert detail["failure_class"] == "deterministic"
+    assert detail["dropped_parked_messages"] == "1"
+
+    sent_texts = [c.args[-1] for c in send_mock.await_args_list]
+    assert REPLY_SETUP_FAILED in sent_texts, sent_texts
+
+    # ── Self-heal: the next message deletes the failed binding and re-routes ──
+    event2 = build_message_event(
+        thread_key=thread_key, text="are you still there?", sender_email=email
+    )
+    token2 = signer.token(audience=channel["config"]["project_number"])
+    stub2 = StubAgentEnvConnector(response_text="back online")
+    with signer.patched(), patch(_STREAM_TARGET, stub2), patch(
+        _SEND_TARGET, AsyncMock(return_value="x")
+    ), patch(_CLASSIFY_TARGET, refuse_to_classify):
+        resp2 = post_webhook(client, channel["webhook_token"], event2, bearer_token=token2)
+        drain_tasks()
+    assert resp2.status_code == 200
+
+    sessions = [
+        s for s in list_sessions(client, setup["consumer_headers"])
+        if s["agent_id"] == setup["installed_agent"]["id"]
+    ]
+    assert len(sessions) == 1, sessions
+    user_msgs = [
+        m for m in list_messages(client, setup["consumer_headers"], sessions[0]["id"])
+        if m["role"] == "user"
+    ]
+    assert any("are you still there?" in (m["content"] or "") for m in user_msgs)
+
+    healed_binding = _binding_by_thread_key(db, thread_key)
+    assert healed_binding is not None
+    # A genuinely different row: the failed one was deleted, not repaired.
+    assert healed_binding.id != failed_binding_id
+    assert healed_binding.status == CHANNEL_BINDING_ACTIVE
+
+
+def test_transient_failure_while_draining_leaves_binding_active_with_messages_still_parked(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """
+    The arm that must not regress. Anything other than a bare `PermissionError`
+    from `_ingest` during the parked-queue drain is a TRANSIENT failure — a
+    later attempt (the next inbound message, or the next scheduler tick) might
+    succeed — so the binding must NOT be failed and the parked messages must
+    NOT be dropped. This is the whole reason the two arms exist: before this
+    change every failure here took this branch, including the deterministic
+    ones, which retried forever and wedged the thread.
+    """
+    setup = _setup_pending_install(client, superuser_token_headers)
+    thread_key = setup["thread_key"]
+
+    set_environment_status(db, setup["env_id"], "running")
+    db.commit()
+
+    with patch(_STREAM_TARGET, setup["stub"]), patch(
+        _SEND_TARGET, AsyncMock(return_value="x")
+    ) as send_mock, patch(
+        _INGEST_TARGET, AsyncMock(side_effect=RuntimeError("transient boom"))
+    ):
+        flush_pending_bindings(db)
+        drain_tasks()
+
+    binding = _binding_by_thread_key(db, thread_key)
+    assert binding is not None
+    db.refresh(binding)
+    assert binding.status == CHANNEL_BINDING_ACTIVE  # NOT failed
+    assert len(binding.pending_messages or []) == 1, binding.pending_messages
+    assert "deterministic" not in (binding.last_error or "").lower()
+
+    # Same generic notice as the deterministic arm — indistinguishable to the
+    # sender, only the binding's fate differs.
+    sent_texts = [c.args[-1] for c in send_mock.await_args_list]
+    assert REPLY_SETUP_FAILED in sent_texts, sent_texts

@@ -1604,7 +1604,43 @@ class ChannelInboundService:
         them. Stops on the first failure: the messages are a conversation, and
         replaying later ones out of order past a gap would be worse than
         waiting.
+
+        **Two kinds of failure, two dispositions.** Keeping the messages parked
+        is the right answer only for a failure a later attempt might not hit.
+        ``_ingest`` also raises a bare ``PermissionError`` for declines that
+        will recur identically on every retry — the sender's
+        ``allow_identity_routing`` consent being off (re-read per message from
+        ``policy``), ``assert_access`` refusing a revoked or invalid identity
+        grant, and the ``user.id != binding.user_id`` invariant guard. Retrying
+        one of those forever would wedge the thread until the parked-message
+        cap is hit, sending the person a setup-failed notice each time and
+        never arming the ``failed`` self-heal that is the actual recovery. So a
+        deterministic decline fails the binding instead; see the handler.
+
+        **This is pre-emptive, not a live bug fix.** Today identity-routed
+        messages and parked messages are disjoint: parking requires binding
+        status ``pending_install``, which only routing Pass 2 (auto-install)
+        creates, and Pass 2 is barred on the identity branch — so no identity
+        message can currently reach this drain. The invariant guard is likewise
+        unreachable from here (every caller loads ``db.get(User,
+        binding.user_id)``). What this removes is a wedge that any later phase
+        making an identity message parkable would otherwise discover in
+        production, where the symptom — a thread answering nothing, forever,
+        with no failed binding to explain it — is expensive to diagnose.
         """
+        # Read the binding's identity ONCE, here, outside every exception
+        # handler below — the same fix ``_route_and_bind`` uses and the one
+        # ``_debug_channel_key``'s docstring calls the better of the two.
+        # ``_flush_one`` commits immediately before calling this, so these
+        # instance attributes are expired and reading one is a lazy reload that
+        # raises ``ObjectDeletedError`` if the row went away. Out here that
+        # propagates to ``flush_pending_bindings``' per-binding guard, which is
+        # correct; inside the handler it would *replace* the exception being
+        # recorded, which is the failure mode ``ChannelOutboundService._deliver``
+        # documents from a real incident.
+        binding_id = binding.id
+        binding_thread_key = binding.thread_key
+
         while True:
             parked = list(binding.pending_messages or [])
             if not parked:
@@ -1624,14 +1660,119 @@ class ChannelInboundService:
                         sender_external_id=entry.get("external_user_id"),
                         policy=policy,
                     )
+                except PermissionError as exc:
+                    # ---- Deterministic decline ----
+                    #
+                    # Every argument expression that could raise is resolved
+                    # first, through the total helpers, before anything records:
+                    # Python evaluates a call's arguments before entering it, so
+                    # ``ChannelDebugBuffer.record``'s never-raises guard covers
+                    # none of them. ``binding_id`` / ``binding_thread_key`` are
+                    # already plain locals from the top of the method.
+                    debug_channel_id = _debug_channel_key(channel)
+                    detail = _log_detail(exc)
+                    failure = routing_trace.describe_exception(exc)
+                    dropped = len(parked)
+
+                    # The failed ingest may have poisoned the transaction; the
+                    # writes below would otherwise raise out of this handler.
+                    db.rollback()
+
+                    # **Disposition: drop the parked queue, deliberately and
+                    # visibly.** The binding is about to be failed, and a failed
+                    # binding self-heals by being *deleted* on the next inbound
+                    # message so routing runs again from scratch. Nothing
+                    # carries a pending_messages queue across that delete, and
+                    # leaving the entries on a doomed row would be a silent
+                    # loss dressed up as a queue. Nor could they be replayed
+                    # afterwards: the re-route may pick a different agent (for a
+                    # withdrawn identity consent it deliberately will — the
+                    # sender falls back to their own agents), so the parked text
+                    # would be delivered somewhere it was never addressed. The
+                    # count is logged, persisted in ``last_error`` and published
+                    # to the debug feed, so the drop is observable rather than
+                    # silent — which is this feature's standing rule.
+                    binding.pending_messages = []
+                    flag_modified(binding, "pending_messages")
+                    ChannelInboundService._fail_binding(
+                        db,
+                        binding,
+                        "Deterministic decline while draining parked messages "
+                        f"({failure}) — binding failed to arm the self-heal; "
+                        f"dropped {dropped} parked message(s). Cause: {detail}",
+                    )
+                    logger.warning(
+                        "%s Deterministic decline draining parked messages: "
+                        "binding=%s channel=%s — failing the binding so the "
+                        "next message re-routes, and dropping %d parked "
+                        "message(s). Cause: %s",
+                        _LOG_PREFIX,
+                        binding_id,
+                        debug_channel_id or "unknown",
+                        dropped,
+                        # ``_log_detail(exc)``, not ``exc``: see that helper.
+                        # ``logging``'s lazy interpolation is not covered by
+                        # anything this handler controls, and pytest's capture
+                        # handler re-raises what production would swallow.
+                        detail,
+                    )
+                    if debug_channel_id is not None:
+                        ChannelDebugBuffer.record(
+                            channel_id=debug_channel_id,
+                            direction="inbound",
+                            kind=DEBUG_REJECTED,
+                            summary=(
+                                "Parked message declined deterministically "
+                                "while draining — the binding was failed so "
+                                "the next message re-routes from scratch, and "
+                                f"{dropped} parked message(s) were dropped"
+                            ),
+                            thread_key=binding_thread_key,
+                            detail={
+                                "stage": "parked_drain",
+                                "failure_class": "deterministic",
+                                # De-tainted (type + status), not
+                                # ``str(exc)``: the buffer is a superuser read
+                                # surface and this file already draws that line
+                                # in ``_reply``. The untainted text is in the
+                                # log line above, an operator surface.
+                                "failure": failure or "unknown",
+                                "dropped_parked_messages": str(dropped),
+                                "binding_id": str(binding_id),
+                            },
+                        )
+                    # The SAME generic notice every other refusal gets. A reply
+                    # this sender could tell apart from a transient setup
+                    # failure would be an oracle for the channel's
+                    # configuration — see the comments around the
+                    # ``PermissionError`` raise in ``_ingest``.
+                    await ChannelOutboundService.notify_progress(
+                        db=db,
+                        channel=channel,
+                        binding=binding,
+                        text=REPLY_SETUP_FAILED,
+                    )
+                    return
                 except Exception as exc:  # noqa: BLE001
+                    # ---- Transient failure ----
+                    #
+                    # Unchanged: record the diagnosis, keep the messages parked
+                    # for a later attempt, and tell the person now.
                     logger.exception(
                         "%s Failed to deliver parked message for binding %s",
                         _LOG_PREFIX,
-                        binding.id,
+                        binding_id,
                     )
                     db.rollback()
-                    binding.last_error = str(exc)[:2000]
+                    # ``_log_detail(exc)``, not ``str(exc)``: this is inside an
+                    # ``except`` block, exactly the unguarded-``__str__`` shape
+                    # ``_log_detail`` exists for — a raise from ``exc.__str__``
+                    # here would replace the exception being recorded and lose
+                    # the diagnosis entirely. ``_log_detail`` cannot raise and
+                    # is identical to ``str(exc)`` for every real exception, so
+                    # this is hardening, not a behaviour change. Already
+                    # truncates to 2000 internally; no need to slice again.
+                    binding.last_error = _log_detail(exc)
                     db.add(binding)
                     db.commit()
                     # Never strand silently: the remaining messages stay parked
