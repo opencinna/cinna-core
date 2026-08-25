@@ -8,7 +8,7 @@ An **Agent** is the logical definition layer of the platform — a persistent co
 
 - **Agent** — a named, owned entity with prompts, SDK selection, credentials, and integration settings; workspace-scoped
 - **Active Environment** — the environment the agent currently routes sessions to (`active_environment_id`); can be swapped for blue-green deployment
-- **Agent Config** — the union of the core agent record plus its linked sub-entities (schedules, handover configs, plugins, email settings, MCP connectors)
+- **Agent Config** — the union of the core agent record plus its linked sub-entities (schedules, handover configs, plugins, MCP connectors)
 - **Install** — a user's running copy of a published bundle; seeded from the latest bundle revision and linked to a persistent per-user App Data volume
 
 ## Agent Configuration Areas
@@ -62,10 +62,13 @@ See [Agent Schedulers](../../agents/agent_schedulers/agent_schedulers.md)
 
 See [Agent Handover](../../agents/agent_handover/agent_handover.md) · [Input Tasks](../../application/input_tasks/input_tasks.md)
 
-### Email Integration
-Per-agent email settings (`AgentEmailIntegration`) configure IMAP/SMTP mailbox binding, sender access rules, processing mode (new session vs. new task), and isolation mode (shared vs. per-sender clone).
-
-See [Email Integration](../../application/email_integration/email_integration.md)
+### ~~Email Integration~~ (removed)
+Per-agent email settings (`AgentEmailIntegration`) are gone as of Phase 4 of
+the channels & identity unification refactor. An agent can no longer own an
+inbound mailbox from its own Integrations tab — email is now a single,
+admin-configured [Server Channel](../../application/server_channels/server_channels.md),
+the same as Google Chat. See
+[Email Integration](../../application/email_integration/email_integration.md#capabilities-removed-in-this-refactor).
 
 ### A2A Protocol
 `a2a_config` stores auto-extracted skills (derived from `workflow_prompt`) and an enabled flag. Skills are regenerated whenever the workflow prompt changes and are exposed publicly via the A2A agent card.
@@ -109,7 +112,6 @@ Agent (config entity)
   ├── Webhooks ───────────────────────→ Trigger sessions/scripts from external HTTP calls
   ├── Handover Configs ───────────────→ Delegate tasks to other agents
   │
-  ├── Email Integration ──────────────→ Receive emails → create sessions/tasks
   ├── A2A Config (skills) ────────────→ Expose agent to external A2A clients
   ├── MCP Connectors ─────────────────→ Expose agent as MCP tool server
   │
@@ -143,7 +145,6 @@ The `/agents` route renders one `AgentCard` per agent. Each card communicates th
   | Bundle | `bundle_uuid` set **and** `is_publisher_install` (bundle publisher install) | Package |
   | API | `agent_api_enabled` | Network |
   | Web App | `webapp_enabled` | Globe |
-  | Email | `has_email_integration` | Mail |
   | MCP | `has_mcp_connectors` | Unplug |
   | Webhooks | `has_webhooks` | Webhook |
   | GIT | `git_versioning_enabled` | GitBranch |
@@ -155,7 +156,7 @@ The `/agents` route renders one `AgentCard` per agent. Each card communicates th
 
 - **Card ordering** — the list is ordered deterministically by **creation date ascending (newest agents last)**, with the agent `id` as a stable tiebreaker. This is enforced server-side in `AgentService.list_agents` via `order_by(Agent.created_at, Agent.id)`; without an explicit `ORDER BY` Postgres returns rows in an unstable order, which made the cards appear to shuffle between refetches.
 
-The four computed capability flags (`has_email_integration`, `has_mcp_connectors`, `has_webhooks`, `git_versioning_enabled`) are derived server-side and carried on `AgentPublic` (batched in `compute_capability_flags`). They reflect only *actively enabled* integrations — `AgentEmailIntegration.enabled`, `MCPConnector.is_active`, `AgentWebhook.enabled`, and presence of an `AgentGitSource` row respectively. The other three flags (`agent_api_enabled`, `webapp_enabled`, `a2a_config.enabled`) are pre-existing fields on the agent record.
+The three computed capability flags (`has_mcp_connectors`, `has_webhooks`, `git_versioning_enabled`) are derived server-side and carried on `AgentPublic` (batched in `compute_capability_flags`). They reflect only *actively enabled* integrations — `MCPConnector.is_active`, `AgentWebhook.enabled`, and presence of an `AgentGitSource` row respectively. The other three flags (`agent_api_enabled`, `webapp_enabled`, `a2a_config.enabled`) are pre-existing fields on the agent record. (A fourth flag, `has_email_integration`, existed before Phase 4 of the channels & identity unification refactor and was removed along with per-agent Email Integration — there is no longer a per-agent email capability to flag.)
 
 See [Agent Status Tracking — Tech](../../agents/agent_status_tracking/agent_status_tracking_tech.md) for the `AgentPublic` model changes and `compute_capability_flags` service method that backs this feature.
 

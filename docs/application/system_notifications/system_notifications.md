@@ -143,7 +143,7 @@ See [Agent Environment Critical State](../../agents/agent_environments/agent_env
 - [Agent Environment Critical State](../../agents/agent_environments/agent_env_critical_state.md) — the `environment_critical` notification type is dispatched on the `false → true` critical-state transition (setup failure) and on each CRON skip (throttled).
 - [Auth / Users](../auth/auth.md) — preferences live in a new table FK-referenced to `user`; no new column on the `user` table. The recipient address is `User.email`.
 - [Realtime Events](../realtime_events/event_bus_system.md) — the `STREAM_ERROR` and `SESSION_STATE_UPDATED` events on the event bus are what trigger the two error paths in `ActivityService`.
-- [Email Integration / Mail Servers](../email_integration/mail_servers.md) — **distinct** from per-user IMAP/SMTP mail servers used for agent email automation. System notifications use the platform-level SMTP sender configured via `SMTP_*` environment variables, not the `mail_server_config` table.
+- [Email Integration / Mail Servers](../email_integration/mail_servers.md) — **distinct** from the admin-owned, server-scoped IMAP/SMTP mail servers used by email server channels. System notifications use the platform-level SMTP sender configured via `SMTP_*` environment variables, not the `mail_server_config` table.
 
 ## Settings UI Location
 

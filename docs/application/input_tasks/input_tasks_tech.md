@@ -92,8 +92,6 @@ Core fields (existing):
 - `agent_initiated` (bool)
 - `auto_execute` (bool)
 - `source_session_id` (UUID FK → session.id, nullable)
-- `source_email_message_id` (UUID FK → email_message.id, nullable)
-- `source_agent_id` (UUID FK → agent.id, nullable)
 - `auto_feedback` (bool, default=True)
 - `feedback_delivered` (bool, default=False)
 - `refinement_history` (JSON array — `{role, content, timestamp}` items, append-only)
@@ -212,7 +210,6 @@ Index: `ix_task_status_history_task_id`
 **Task Actions:**
 - `POST /api/v1/tasks/{id}/refine` — AI-assisted refinement
 - `POST /api/v1/tasks/{id}/execute` — execute task (creates session)
-- `POST /api/v1/tasks/{id}/send-answer` — email reply for email-originated tasks
 - `POST /api/v1/tasks/{id}/archive` — archive task
 - `GET /api/v1/tasks/{id}/sessions` — list all sessions for a task
 - `GET /api/v1/tasks/by-source-session/{session_id}` — list tasks created by a source session
@@ -313,9 +310,7 @@ Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, 
 - `deliver_feedback_to_source()` — replaced by `_notify_parent_task()`
 - `respond_to_task()` — replaced by `add_comment` on parent task
 
-**Email task methods:**
-- `send_email_answer()` — generates AI email reply, queues for SMTP delivery; deletes `email_task_reply_pending` activity
-- `update_status()` — emits `TASK_STATUS_UPDATED` for email-originated tasks
+**Also removed (Phase 4 of the channels & identity unification):** `send_email_answer()` (AI-generated email reply for an email-originated task) and the `source_email_message_id` / `source_agent_id` columns it depended on. Email no longer creates `InputTask` rows at all — see [Email Integration](../email_integration/email_integration.md#capabilities-removed-in-this-refactor).
 
 ### `MessageService` — task context enrichment (`backend/app/services/sessions/message_service.py`)
 

@@ -284,12 +284,20 @@ class EmailPollingService:
         Moved here verbatim from the deleted ``EmailProcessingService``: it is
         pure formatting over an ``EmailMessage`` row with no dependency on the
         removed per-agent integration, and the email channel transport needs
-        exactly this to build ``ChannelInboundMessage.text``. It has no caller
-        for one commit.
+        exactly this to build ``ChannelInboundMessage.text``.
 
-        Note: the authoritative sender/subject metadata is in the session
-        context (system prompt and GET /session/context endpoint), not in this
-        message text. This formatting is for readability only.
+        Note: this is **not** merely a readability convenience any more. The
+        session-context enrichment
+        (``message_service._build_session_context``'s ``email_subject`` field,
+        surfaced via the system prompt and ``GET /session/context``) only
+        fires when a session's ``integration_type`` is literally ``"email"``.
+        Every channel-routed email session is stamped ``"channel_email"``
+        instead, so that enrichment never runs for mail arriving through this
+        transport — the subject reaches the agent **only** through this
+        formatted message text (the ``Subject:`` line above), not through the
+        server-verified session context. See
+        ``docs/application/email_integration/email_integration_tech.md`` for
+        the full account of this gap.
         """
         parts = ["--- Forwarded email content ---"]
 

@@ -2,15 +2,30 @@
 
 ## Purpose
 
-Let people **outside the platform** — company employees on a chat app, starting with Google Chat — talk to platform agents without ever logging in. A superuser configures one or more channel instances server-wide; inbound messages are verified, whitelisted, routed to the right agent (installing one automatically if needed), bound to a persistent conversation thread, and answered back through the same chat app.
+Let people **outside the platform** — company employees on a chat app or a
+shared mailbox — talk to platform agents without ever logging in. A
+superuser configures one or more channel instances server-wide; inbound
+messages are verified, whitelisted, routed to the right agent (installing
+one automatically if needed), bound to a persistent conversation thread, and
+answered back through the same surface.
+
+Two channel types are registered today: **Google Chat**, a *pushed* transport
+(the outside world calls a webhook), and **Email**, a *polled* transport
+(the platform pulls a mailbox on a timer) — see
+[Transport shapes: webhook, polled, authenticated](#transport-shapes-webhook-polled-authenticated).
+Everything below "Business Rules → Routing" onward is shared by every
+transport; email's transport-specific behaviour (the `From:`-header trust
+tier, recipient validation on a shared mailbox, the durable outgoing queue)
+is documented in [Email Integration](../email_integration/email_integration.md)
+rather than duplicated here.
 
 Routing normally chooses among the sender's **own** agents. Since Phase 3 of the channels & identity unification refactor a sender may also opt in, per channel, to addressing a **person** — "hey, ask HR what my time-off status is?" — in which case the message is answered by one of that person's agents, from inside that person's workspace. See [Identity routing](#identity-routing-whose-thread-whose-workspace).
 
 ## Core Concepts
 
-- **Server Channel** — one admin-configured instance of a channel type (currently only Google Chat). Owns its own webhook URL, outbound credential, email whitelist, and auto-registration toggle, plus four admin-owned availability defaults (visibility, default enablement, default agent scope, auto-install permission — see [Availability and per-user settings](#availability-and-per-user-settings)). Superuser-only, managed from the **Channels** tab on `/admin/server-configuration`.
-- **Channel Adapter** — the transport-specific implementation (Google Chat today) behind a shared contract: verify an inbound request, parse it into a normalized message, send a reply, describe its own setup steps. Adding a new channel type (Discord, Telegram, …) means writing one adapter module and registering it — no pipeline change, no migration.
-- **Webhook Token** — an unguessable, per-channel path segment (`POST /api/v1/channels/{webhook_token}/inbound`) that is the channel's only "address." It is not a secret in the cryptographic sense (it doesn't prove who sent the request — the adapter's signature check does that); it is what keeps the endpoint from being guessed.
+- **Server Channel** — one admin-configured instance of a channel type (Google Chat or Email today). Owns its own transport config, outbound credential, email whitelist, and auto-registration toggle, plus four admin-owned availability defaults (visibility, default enablement, default agent scope, auto-install permission — see [Availability and per-user settings](#availability-and-per-user-settings)). Superuser-only, managed from the **Channels** tab on `/admin/server-configuration`.
+- **Channel Adapter / Channel Transport** — the transport-specific implementation (Google Chat, Email) behind a shared contract: authenticate an inbound message (however this transport receives one), parse it into a normalized message, send a reply, describe its own setup steps. Since Phase 4 of the channels & identity unification, the contract is split into **transport shapes** — `webhook`, `polled`, `authenticated` — because a pull transport like email has no `Request` to verify and a webhook-shaped ABC forced it to fake one. See [Transport shapes](#transport-shapes-webhook-polled-authenticated). Adding a new channel type (Discord, Telegram, …) means writing one adapter module and registering it — no pipeline change, no migration.
+- **Webhook Token** — an unguessable, per-channel path segment (`POST /api/v1/channels/{webhook_token}/inbound`) that is a *webhook* channel's only "address." It is not a secret in the cryptographic sense (it doesn't prove who sent the request — the adapter's signature check does that); it is what keeps the endpoint from being guessed. A **polled** channel (email) has no webhook at all: `webhook_token` is `NULL` for it, and the setup panel shows no URL — see [Transport shapes](#transport-shapes-webhook-polled-authenticated).
 - **Email Whitelist** — a comma-separated list of glob patterns (`*@example.com, devops.*@support.com`) gating which verified senders may reach agents through this channel. Shared matching logic with the email integration's sender allowlist.
 - **Auto-Registration** — when enabled, a whitelisted sender with no platform account gets one created automatically, passwordless and already email-confirmed.
 - **Channel Thread Binding** — the record that pins one external conversation thread to one platform `(user, agent, session)` triple. This is the feature's conversation state; there is no user-facing view of it — its lifecycle is only observable through the replies a sender sees and the sessions that appear under their account.
@@ -22,7 +37,7 @@ Routing normally chooses among the sender's **own** agents. Since Phase 3 of the
 ### 1. Admin sets up a channel
 
 1. Superuser opens **Admin → Server Configuration → Channels**.
-2. Clicks **Add Channel**, picks a type from the card list (Google Chat), then on the form that opens names it and enters the GCP project number (the value Google puts in the webhook JWT's audience claim).
+2. Clicks **Add Channel**, picks a type from the card list (Google Chat or Email), then configures that type's fields — for Google Chat, names the channel and enters the GCP project number (the value Google puts in the webhook JWT's audience claim); for Email, picks an incoming (IMAP) and outgoing (SMTP) mail server from [Mail Servers](../email_integration/mail_servers.md) plus the mailbox to poll and the reply-from address. The rest of this flow describes the Google Chat (webhook) case; see [Email Integration](../email_integration/email_integration.md) for the email-specific setup steps.
 3. Pastes the Google Chat service-account JSON key — a write-only field; once saved it can only be replaced, never re-displayed.
 4. Sets the email whitelist (patterns, or `*` for "anyone Google verifies") and decides whether unknown senders should be auto-registered.
 5. Saves. The **setup instructions** panel opens automatically, showing the webhook URL to paste into the Google Chat app's configuration and a step-by-step checklist.
@@ -61,13 +76,52 @@ The webhook URL is built from the backend's public origin (`BACKEND_BASE_URL`, f
 
 ## Business Rules
 
+### Transport shapes: webhook, polled, authenticated
+
+Since Phase 4 of the channels & identity unification, `ChannelCapabilities`
+declares one of three inbound shapes (`ChannelInboundMode`), and every
+dispatch on transport shape — the registry, `ServerChannelService`, the
+pollers — reads that declaration rather than guessing from which base class
+an adapter subclasses:
+
+- **`webhook`** (Google Chat, and the default every pre-existing adapter kept
+  byte-for-byte): the outside world pushes an HTTP request to
+  `POST /api/v1/channels/{webhook_token}/inbound`. `verify_inbound` is the
+  authentication chokepoint — see below.
+- **`polled`** (Email): there is no inbound `Request` at all. A scheduler
+  pulls the transport on a timer (`poll(channel)`), and authentication for
+  the fetched messages happens *inside that method* — it is required to make
+  the same "nothing downstream re-checks this" promise `verify_inbound`
+  makes for a webhook, and to state **how strong** that promise is for its
+  own transport (email's is markedly weaker — see
+  [Email Integration](../email_integration/email_integration.md#trust-chain-from-is-spoofable)).
+  A polled channel needs no webhook token (`ServerChannel.webhook_token` is
+  `NULL` for it) and its admin setup panel shows no URL.
+- **`authenticated`** — reserved for a future channel (App MCP, Phase 5)
+  whose caller is already an authenticated platform user when the pipeline
+  is entered; not used by any adapter registered today.
+
+A transport also declares `needs_outbound_credentials`: `True` (the default)
+means the outbound credential lives in `ServerChannel.encrypted_secrets`;
+`False` means it lives elsewhere and the adapter **must** override
+`has_outbound_credentials()` to say where — the registry refuses to import
+otherwise, since the inherited answer would report a working channel of that
+type as having no way to reply. Email declares `False`: its credential is
+the referenced SMTP `MailServerConfig` row, never anything in
+`encrypted_secrets`, and never anywhere near an agent.
+
+Adding a channel type is unchanged by the split: one adapter module plus one
+registry entry. A poller for a new `polled` transport needs no new scheduler
+code either — `ChannelPollService` enumerates polled channel *types* from the
+registry, not a hardcoded list.
+
 ### Trust chain and fail-closed defenses
 
 The inbound webhook is **platform-unauthenticated by design** — anyone on the internet can `POST` to it. What actually stands between the open internet and creating an agent session, in the order it is checked:
 
 1. **Rate limiting and a body-size cap** run before anything else is even parsed.
 2. **Webhook-token resolution** — an unknown token *and* a disabled channel both answer with an identical, detail-free 404. Disabling a channel must not become an oracle that tells a prober "this token used to exist."
-3. **Adapter verification is the single authentication chokepoint and runs before anything else touches the payload.** For Google Chat this means checking a bearer JWT against Google's public keys (issuer, audience, signature) — nothing downstream re-checks it, and the whole request is rejected (403, no detail) if it fails.
+3. **Adapter verification is the single authentication chokepoint and runs before anything else touches the payload.** For Google Chat this means checking a bearer JWT against Google's public keys (issuer, audience, signature) — nothing downstream re-checks it, and the whole request is rejected (403, no detail) if it fails. A **polled** channel has no request to run this check against at all — a `POST` to the webhook route for a polled channel's token is refused outright (`ChannelTransportMisuseError`, a `ChannelVerificationError` subclass, so it gets the identical detail-free 403) rather than silently accepted; its authentication instead happens inside `poll()`, on the timer, before a fetched message ever reaches this pipeline. See [Transport shapes](#transport-shapes-webhook-polled-authenticated).
 4. **The email whitelist fails closed.** A null or empty whitelist denies *everyone* — an unconfigured channel is a channel nobody can use, not an open one. `*` is the only pattern that allows all verified senders. The whitelist is a comma-separated list matched by any-token-matches semantics, so `"*, ops@corp.com"` is still a blanket allow, not a scoped list with one extra address — this is the single easiest thing to misread about the feature, and both the admin help text and the admin UI itself surface it as an explicit warning rather than leaving it implicit.
 5. Only after all of the above does a sender's email get resolved to (or used to create) a platform account.
 6. **Channel policy — the admin kill switch, the access grant, and the sender's own toggle — is resolved once and gates every path below it, not only a brand-new thread.** A sender whose access has since been revoked is declined on an existing, already-bound thread exactly as a first-time sender would be; see [Availability and per-user settings](#availability-and-per-user-settings).
@@ -223,13 +277,25 @@ Agent reply (STREAM_COMPLETED) ──▶ ChannelOutboundService ──▶ bindin
 Agent error (STREAM_ERROR)     ──▶ same path, generic failure notice
 ```
 
+This diagram is the **webhook** path (Google Chat). A **polled** channel
+(Email) has no webhook and no `POST` at all: `channel_poll_scheduler` calls
+`ChannelPollService.poll_enabled_channels` on a timer, which calls
+`adapter.poll(channel)` per enabled polled channel and feeds each returned
+message into `ChannelInboundService.process_inbound` — the identical
+post-verification entry point step 4 onward reaches after `verify_inbound`
+succeeds above. Everything from "binding lookup" downward is unchanged
+between the two transports. See
+[Email Sessions — Architecture Overview](../email_integration/email_sessions.md#architecture-overview)
+for the polled version of this diagram.
+
 ## Integration Points
 
 - [Agent Sessions / Channel Ingestion](../agent_sessions/channel_ingestion.md) — Server Channels is a caller of the canonical inbound pipeline, adding a `channel_caller` `SessionSender` kind that behaves like `task_executor`: the session is owned by the sender's own resolved user, never the agent's publisher. **One exception, since Phase 3 of the channels & identity unification:** an identity-routed message opens the session in the *identity owner's* space, permitted solely by a `ChannelAccessPolicy.identity_grant` whose six conditions `ChannelIngestionService.assert_access` re-reads from the database on every message. The sender kind does not change — it names the *transport*, and the transport is still a channel.
 - [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md) — identity is a routing-layer concept, and Server Channels is its second consumer after App MCP. `IdentityCandidateProvider` supplies the person candidates; `IdentityRoutingService` is Stage 2, called from inside `ChannelRoutingService.decide`. The person-level contact toggle is shared with App MCP; the per-channel `allow_identity_routing` opt-in is the channel's own and never inherits.
 - [App MCP Server](../app_mcp_server/app_mcp_server.md) — Server Channels and the App MCP Server **share the classifier only**: both call `AgentClassifier.classify` (unified in [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5), but each surface owns its own candidate provider and its own enablement state — Pass 1 never reads `AppAgentRoute`, `AppAgentRouteAssignment`, `UserAppAgentRoute`, or `channel_app_mcp`, so toggling an agent's App MCP exposure has no effect on channel reachability. A freshly auto-installed agent is immediately reachable for future channel messages because bundle install auto-populates `Agent.router_trigger_prompt` from the revision snapshot — not because of the App MCP route the install also creates, which channel routing does not read.
 - [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) — Pass-2 auto-install uses the same idempotent `InstallService.install_bundle` entry point every other programmatic install uses, and is gated by `CatalogService.user_can_install` visibility.
-- [Email Integration](../email_integration/email_integration.md) — Server Channels deliberately mirrors the email integration's precedents: fail-closed sender-pattern matching, "the feature's own whitelist is the registration gate, not the signup allowlist," and best-effort outbound delivery with a persistent queue as a future enhancement, not a v1 requirement. A shared user-creation helper (`UserService.create_external_user`) now backs both features' auto-registration.
+- [Email Integration](../email_integration/email_integration.md) — since Phase 4 of the channels & identity unification, email **is** a Server Channels transport (`channel_type="email"`, a `PolledChannelTransport`), not a separate pipeline that merely mirrors this one's precedents. The email-specific behaviour — the `From:`-header trust tier, recipient validation on a shared mailbox, the durable `OutgoingEmailQueue` outbound path, the poll scheduler — is documented there; whitelisting, auto-registration (`UserService.create_external_user`, shared by both transports), two-pass routing, and thread bindings are the shared machinery documented here.
+- [Mail Servers](../email_integration/mail_servers.md) — the admin-owned IMAP/SMTP connections an email channel references by id in its `config`, the way a Google Chat channel references its own service account.
 - [Google OAuth](../auth/google_oauth.md) — the Google Chat adapter's JWT verification reuses the same generalized, cached JWKS verifier the Google OAuth login path uses, pointed at a different issuer and key set.
 - [Server Configuration](../server_configuration/disclaimer.md) — Channels is a new tab on the same `/admin/server-configuration` admin page as the Disclaimer feature, following the same superuser-guard and HashTabs conventions.
 - [Realtime Events](../realtime_events/event_bus_system.md) — outbound delivery subscribes to `STREAM_COMPLETED` / `STREAM_ERROR` the same way the email integration's sending service does.
@@ -239,8 +305,8 @@ Agent error (STREAM_ERROR)     ──▶ same path, generic failure notice
 ## Known Limitations
 
 - **The admin UI has not been visually verified in a browser.** It passed TypeScript, lint, and build checks, but no interactive/visual QA pass was available during development — treat the first real admin session as the first real look at it.
-- **Outbound delivery is best-effort**: three immediate retries inside the adapter, then the failure is recorded on the binding and logged. There is no persistent outbound queue (the email integration's `OutgoingEmailQueue` pattern is a listed future enhancement) — a sender whose reply was lost can only ask again.
-- **The pending-binding scheduler assumes a single backend process.** There is no leader election; a multi-worker deployment would need the same advisory-lock leader pattern (and the same connection-pool caveat) used by the model-discovery scheduler, or parked messages could be delivered more than once.
+- **Outbound delivery is best-effort for webhook transports (Google Chat)**: three immediate retries inside the adapter, then the failure is recorded on the binding and logged. There is no persistent outbound queue for this transport — a sender whose reply was lost can only ask again. **Email is the exception**: since Phase 4, its outbound goes through the existing, durable `OutgoingEmailQueue` (retried by the pre-existing sending scheduler) rather than through this best-effort path — see [Email Sessions](../email_integration/email_sessions.md).
+- **The pending-binding scheduler assumes a single backend process.** There is no leader election; a multi-worker deployment would need the same advisory-lock leader pattern (and the same connection-pool caveat) used by the model-discovery scheduler, or parked messages could be delivered more than once. The email channel poll scheduler (`channel_poll_scheduler`, added in Phase 4) makes the identical single-process assumption, for the identical reason — see [Email Integration](../email_integration/email_integration.md#single-process-poller-known-limitation). Neither should be "fixed" by copying the model-discovery scheduler's advisory-lock leader pattern: it has a known connection leak on pooled connections.
 - **Deferred (known, intentionally not fixed here):** rejection/verification-failure audit events are attributed to the channel's creator (`ServerChannel.created_by`); if that superuser account is later deleted, the foreign key nulls out and denial/verification-failure auditing for that channel silently stops being written as `SecurityEvent` rows (it still reaches the application log).
 - **Identity routing is not reachable from `POST /admin/routing/simulate`.** The real channel path reaches identity Stage 2, and so does a **replay** of a stored channel trace (which resolves the trace's own `channel_id` back into a real policy). A hand-typed simulate cannot: `RoutingSimulateRequest` carries no `channel_id`, so it resolves `ResolvedChannelPolicy.for_no_channel()`, whose `allow_identity_routing` is `False` — permissive on everything else, deliberately not on this, because the absence of a channel is not a person's consent. Closing that gap is deferred to Phase 6 of the channels & identity unification refactor.
 - **A channel decision can now *carry* `SKIP_IDENTITY_UNAVAILABLE`, but a channel user cannot yet *read* the explanation.** The channel-voiced remedy text exists in `RoutingReachabilityService`; the only branch that renders a skip explanation is keyed by a `uuid.UUID` `expected_agent_id`, and an identity candidate's `ref_id` is `identity:{owner_id}`. Producible and explainable are facts about different layers, and only the first is true today. Also deferred to Phase 6.

@@ -114,19 +114,6 @@ Auto-generated from OpenAPI spec. Tag: `tasks`
 
 ---
 
-## POST `/api/v1/tasks/{id}/send-answer`
-**Send Task Email Answer**
-
-**Path parameters:**
-- `id`: uuid
-
-**Request body** (`SendAnswerRequest`):
-  - `custom_message`: string | null
-
-**Response:** `SendAnswerResponse`
-
----
-
 ## POST `/api/v1/tasks/{id}/archive`
 **Archive Task**
 

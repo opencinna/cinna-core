@@ -15,7 +15,7 @@ A session is a persistent chat conversation between a user (or external system) 
 - **Interaction Status** — Real-time streaming state: `""` (idle), `"running"` (stream active), `"pending_stream"` (waiting for environment to activate)
 - **Result State** — Agent-declared outcome set via `update_session_state` tool: `completed`, `needs_input`, `error`. Auto-reset to `null` when user sends the next message
 - **Result Summary** — Agent-provided description accompanying the result state (question, error message, completion note)
-- **Integration Type** — How the session was initiated: `null` (manual), `"email"`, `"a2a"`, or `"mcp"` (tracked via `mcp_connector_id`)
+- **Integration Type** — How the session was initiated: `null` (manual), `"a2a"`, `"mcp"` (tracked via `mcp_connector_id`), `"app_mcp"` / `"identity_mcp"`, `"schedule"`, `"webhook"`, `"external"`, or `"channel_<type>"` (e.g. `"channel_google_chat"`, `"channel_email"`) for every [Server Channel](../server_channels/server_channels.md)-originated session, including email — since Phase 4 of the channels & identity unification refactor, plain `"email"` is never stamped any more (it predates email becoming a channel transport)
 - **Source Task** — Input task that spawned this session, tracked via `source_task_id` backlink
 - **Todo Progress** — Real-time task completion progress captured from agent's TodoWrite tool calls
 - **External Session ID** — SDK-level session identifier stored in `session_metadata`, used to resume conversation context across messages
@@ -41,13 +41,20 @@ A session is a persistent chat conversation between a user (or external system) 
 4. Task status syncs with session state in real time
 5. When agent calls `update_session_state(state, summary)` → task transitions to corresponding status
 
-### Flow 3: Email-Initiated Session
+### Flow 3: Channel-Initiated Session (including Email)
 
-1. IMAP polling detects new email for an email-enabled agent
-2. System creates session with `integration_type="email"` and `email_thread_id`
-3. Email body injected as first user message; agent auto-responds
-4. Subsequent emails in the same thread are matched to the existing session via `email_thread_id`
-5. Agent response is queued and delivered via SMTP to the original sender
+Since Phase 4 of the channels & identity unification refactor, email is a
+[Server Channel](../server_channels/server_channels.md) transport, not its
+own session flow. See
+[Channel Ingestion](channel_ingestion.md) for the shared flow every channel
+(Google Chat, Email) follows, and
+[Email Sessions](../email_integration/email_sessions.md) for what remains
+email-specific (threading by root Message-ID, the durable outgoing queue).
+In outline: a channel poll or webhook resolves the sender, routes to an
+agent, creates a session stamped `integration_type="channel_<type>"` (e.g.
+`"channel_email"`) with `sender_email` and `email_thread_id` set, injects the
+message, and — on completion — delivers the reply back through the
+originating channel.
 
 ### Flow 4: A2A-Initiated Session
 
@@ -156,7 +163,7 @@ The same helper also handles the stale-but-not-detached case: a session pointing
 Session Initiators:
   User (manual)        → Frontend → POST /api/v1/sessions
   Input Task execution → InputTaskService → SessionService.create_session()
-  Email polling        → EmailProcessingService → SessionService
+  Server Channel       → ChannelInboundService → ChannelIngestionService (Google Chat webhook, Email poll)
   A2A client           → A2ARequestHandler → SessionService.send_session_message()
   MCP client           → MCPRequestHandler → SessionService.get_or_create_mcp_session()
   Agent handover tool  → create_agent_task → InputTaskService → SessionService
@@ -184,7 +191,7 @@ Message Flow:
 - **Back button** — Navigates to sessions list
 - **Session title** — Auto-generated from first message content; shows animated "Generating..." placeholder while the title is being created (only when the session has at least one message); shows the static muted label "New session" when no messages exist yet
 - **Mode indicator** — Color-coded dot: orange for Building mode, blue for Conversation mode
-- **Integration badges** — `Email` badge (indigo) when `integration_type="email"`, `A2A` badge (purple) when `integration_type="a2a"`
+- **Integration badges** — `A2A` badge (purple) when `integration_type="a2a"`; a violet "Via Identity — {caller}" badge for an identity-routed session (App MCP or a channel — matched by the `channel_` prefix). The `Email` badge (indigo) code path still exists but checks the literal value `integration_type==="email"`, which nothing sets any more since email became a channel transport in Phase 4 — a plain, non-identity-routed channel session (Google Chat or Email) currently renders **no** integration badge at all. See [Email Integration](../email_integration/email_integration.md) and [Server Channels](../server_channels/server_channels.md).
 - **Tasks button** — Visible when session has sub-tasks (created via `create_agent_task` tool). Shows colored badge counts per status: violet (new), blue (running), amber (needs input), red (error), green (completed). Toggles sub-tasks side panel
 - **App button** — Opens the Environment Panel showing agent workspace files. Displays three distinct states:
   - "Activating…" (spinner) — environment is `activating`, `starting`, or `rebuilding`
@@ -222,7 +229,8 @@ Message Flow:
 - **[Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md)** — Server running inside Docker containers that processes messages via SDK adapters and streams responses
 - **[Streaming Architecture](../realtime_events/frontend_backend_agentenv_streaming.md)** — WebSocket (frontend ↔ backend) and SSE (backend ↔ agent env) streaming pipeline, event sequencing, deduplication
 - **[Input Tasks](../input_tasks/input_tasks.md)** — Tasks that execute by creating sessions with `source_task_id`; session result states sync back to task status
-- **[Email Integration / Email Sessions](../email_integration/email_sessions.md)** — Email-initiated sessions with threading, auto-reply, and session context injection
+- **[Server Channels / Channel Ingestion](channel_ingestion.md)** — the shared inbound pipeline every channel session (Google Chat, Email) is created through
+- **[Email Integration / Email Sessions](../email_integration/email_sessions.md)** — what remains specific to the email channel transport: threading by root Message-ID and the durable outgoing queue
 - **[A2A Protocol](../a2a_integration/a2a_protocol/a2a_protocol.md)** — External A2A clients create and manage sessions via JSON-RPC; session maps 1:1 to A2A Task concept
 - **[MCP Integration](../mcp_integration/agent_mcp_connector.md)** — MCP connector calls create platform sessions; `MCPSessionMeta` tracks authenticated MCP user identity
 - **[Guest Sharing](../../agents/guest_sharing/guest_sharing.md)** — Guest sessions use owner's environment with `guest_share_id` scoping; conversation mode only; token-based unauthenticated access to an agent install

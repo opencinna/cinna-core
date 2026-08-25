@@ -2,165 +2,185 @@
 
 ## Purpose
 
-Define how incoming emails are processed into agent sessions or tasks, how replies are generated and sent, and how email conversations maintain threading continuity. This covers session modes, processing modes, the polling-to-sending pipeline, and agent-side session context awareness.
+Since Phase 4 of the channels & identity unification refactor, incoming
+email no longer has its own session/task **processing modes** — it is routed
+by [Server Channels](../server_channels/server_channels.md) the same way a
+Google Chat message is. What survives, and what this document now covers, is
+what is genuinely email-specific about a channel-routed email conversation:
+**threading continuity** (mapping `Message-ID` / `In-Reply-To` / `References`
+onto a persistent conversation) and the **durable outgoing email queue** that
+delivers replies. Session *modes* (`install` / `owner`) and processing
+*modes* (`new_session` / `new_task`) are gone — see
+[What is gone](#what-is-gone) below.
 
 ## Core Concepts
 
-- **Session Mode** — Determines where email sessions run: `install` (isolated per sender — each new sender gets their own install of the agent's bundle) or `owner` (shared on the owner's agent)
-- **Processing Mode** — Determines what happens with incoming emails: `new_session` (auto-respond) or `new_task` (human review first)
-- **Email Threading** — Mapping email Message-ID / In-Reply-To / References headers to session continuity
-- **Session Context** — HMAC-verified metadata (sender, subject, session_id) injected into agent's system prompt and exposed via API
-- **Outgoing Email Queue** — Asynchronous queue for agent replies sent via SMTP
-- **Pending Install Creation** — Emails queued until the sender's install environment is ready
+- **Email Threading** — mapping the email's `Message-ID` / `In-Reply-To` /
+  `References` headers onto a `ChannelThreadBinding`'s `thread_key`, which is
+  always the **root** Message-ID of the conversation, never the latest.
+- **Outgoing Email Queue** — the durable, retried SMTP delivery queue every
+  agent reply to an email channel goes through (`OutgoingEmailQueue`).
+- **Session Context** — HMAC-verified metadata (sender, subject, session id)
+  the platform can inject into an agent's system prompt. Still exists as
+  infrastructure, but its `email_subject` enrichment does not currently reach
+  a channel-routed email session — see
+  [A note on session context](#a-note-on-session-context) below.
+- **Channel Thread Binding** — the shared Server Channels concept that
+  replaces "session mode": one binding pins one email thread to one platform
+  `(user, agent, session)` triple, built the same way a Google Chat thread
+  binding is.
 
 ## User Stories / Flows
 
-### 1. Auto-Response Flow (New Session Mode)
+### 1. First message on a new thread
 
-1. Polling scheduler fetches unread emails from IMAP (every 5 min)
-2. Routing service determines the target agent:
-   - **Install mode**: calls `InstallService.install_bundle_for_email(publisher_agent_id, recipient_user_id)` to find or create the sender's install of the agent's bundle; on first email the publisher's agent is auto-published if it has no revisions yet
-   - **Owner mode**: routes directly to the owner's agent
-3. If the target install is still building → email queued with `pending_clone_creation=True` (field name preserved for DB compatibility)
-4. Processing service matches email to an existing session via threading headers
-5. If no existing session → new session created with `email_thread_id` and `integration_type="email"`
-6. Email body injected as user message; agent streaming begins
-7. On `STREAM_COMPLETED` event → last agent message queued in outgoing email queue
-8. Sending scheduler delivers reply via SMTP (every 2 min) with proper threading headers
+1. The channel poll scheduler fetches the mail (see
+   [Email Integration](email_integration.md)).
+2. The sender is whitelist-checked and resolved to (or auto-registered as) a
+   platform user.
+3. Routing runs: the sender's own agents first, then the server's
+   auto-install catalog. If an auto-install bundle matches, it is installed
+   for that sender and the message is parked until the environment is ready.
+4. A `ChannelThreadBinding` is created, keyed on the thread's root
+   `Message-ID`. Once the target agent's session exists, the email body is
+   injected as the first user message and the agent begins streaming.
+5. On stream completion, the agent's last message is enqueued into
+   `OutgoingEmailQueue` with `In-Reply-To` / `References` headers pointing at
+   the message that was just answered.
+6. The existing sending scheduler drains the queue over SMTP, with up to
+   three retries per entry.
 
-### 2. Review-Then-Respond Flow (New Task Mode)
+### 2. Continuing a thread
 
-1. Email polling and parsing happen identically
-2. Processing service creates an **InputTask** instead of a session
-3. Task pre-populated with email content, email agent pre-selected
-4. Owner reviews task in Tasks UI, optionally refines or reassigns agent
-5. Owner executes task → session created, agent processes it
-6. Owner clicks **"Send Answer"** → AI generates reply from session results
-7. Reply queued and sent via the original email agent's SMTP config
-8. Alternative: owner provides `custom_message` to skip AI generation
+1. The sender replies to the agent's email.
+2. The reply's `In-Reply-To` (or the first entry of its `References` chain)
+   resolves to the same thread root, so the existing
+   `ChannelThreadBinding` is found and the message is fed straight into the
+   already-existing session — no re-routing.
+3. The new agent reply is queued the same way, referencing the **latest**
+   inbound message id (not the thread root) in its own `In-Reply-To`, while
+   the `References` chain carries both.
 
-### 3. Email Thread Continuation
+### 3. A message that cannot be delivered
 
-1. User replies to an agent's email response
-2. Reply's `In-Reply-To` header matches the original `Message-ID`
-3. System finds the existing session via `email_thread_id` lookup
-4. New message injected into the same session — conversation continues
-5. Agent's response is threaded back with proper `References` chain
+1. The agent's reply cannot be sent — the channel has no `from_address`
+   configured, the referenced SMTP server no longer exists, or SMTP itself
+   rejects the send.
+2. The queue entry accumulates `retry_count`; after the third failed attempt
+   it is marked permanently failed and the failure is recorded on the
+   binding.
+3. There is no notice sent to the sender about the failure — a polled
+   transport has no side channel for that — so a lost reply can currently
+   only be discovered by an admin looking at the debug feed, or by the
+   sender asking again.
 
-### 4. Pending Install Retry
+## What is gone
 
-1. First email from a new sender triggers install creation via `InstallService.install_bundle_for_email`
-2. Email marked `pending_clone_creation=True` (field name preserved for DB compatibility)
-3. Polling scheduler periodically retries pending messages
-4. Once install environment reaches `running` status → email is processed normally
-5. Sender receives no immediate feedback (response arrives when agent processes)
+Deleted with the per-agent Email Integration, no replacement:
+
+- **Session Mode** (`install` / `owner`) — where an email session ran used
+  to be a per-agent choice. Every channel-routed email session now runs
+  exactly where Server Channels routing decides: on the sender's own agent,
+  or — with identity routing opted in — on an identity owner's agent (see
+  [Server Channels — Identity routing](../server_channels/server_channels.md#identity-routing-whose-thread-whose-workspace)).
+  There is no "shared owner environment" mode any more.
+- **Processing Mode** (`new_session` / `new_task`) — every channel-routed
+  email now auto-responds; there is no "create a reviewable task instead"
+  path. See [Input Tasks](../input_tasks/input_tasks.md) — the
+  email-originated task flow described there previously is gone.
+- **"Send Answer"** — the manually-triggered, AI-generated email reply from
+  a completed task's results. Gone along with task mode itself.
+- **Pending clone creation** — replaced by the shared auto-install parking
+  mechanism (`ChannelThreadBinding.status = pending_install`) every channel
+  uses while an environment is still building.
 
 ## Business Rules
 
-### Session Modes
+### Threading rules
 
-**Install Mode** (`agent_session_mode = 'clone'`, value preserved for DB compatibility):
-- Each email sender gets a dedicated install of the agent's bundle with isolated Docker environment
-- Install created via `InstallService.install_bundle_for_email(publisher_agent_id, recipient_user_id)`; on first call the publisher's agent is auto-published if it has no revisions yet
-- Sessions belong to the sender's user account
-- Per-user App Data volume attached to the install persists across email conversations
-- Ideal for: multi-user bots, customer support, public-facing agents
+- **The binding's `thread_key` is always the thread's root Message-ID** —
+  `References[0]` if present, else `In-Reply-To`, else the message's own
+  `Message-ID`. Never the latest message in the thread. Binding on the
+  latest instead would open a fresh binding on every reply — a symptom that
+  reads as "the agent forgot the conversation," not as a threading bug.
+- The **stored** binding's `thread_key` is exactly that root id — nothing
+  else. The reply headers a sender's mail client needs (`In-Reply-To`,
+  `References`) are derived separately, at send time, from the binding's
+  `last_external_message_id` (already tracked by the inbound pipeline) — see
+  the tech doc for the composite key mechanics.
+- A first message with no `References`/`In-Reply-To` is the root of its own
+  thread by construction (its own `Message-ID` becomes the `thread_key`).
 
-**Owner Mode** (`agent_session_mode = 'owner'`):
-- Sessions created directly on the owner's agent
-- No install creation — all emails processed in the same environment
-- `sender_email` stored on the session to route replies back to original sender
-- Ideal for: personal automation, single-user workflows
+### Outgoing queue rules
 
-### Processing Modes
+- Every agent reply on an email channel is enqueued into
+  `OutgoingEmailQueue`, never sent synchronously — this is the one channel
+  transport with a durable, retried outbound path (Google Chat's outbound
+  stays best-effort).
+- SMTP configuration is resolved **per queue entry**, through
+  `entry.session_id` → `ChannelThreadBinding` → the bound channel's `config`
+  — never through a per-agent setting, since none exists any more.
+- Up to three retry attempts; a permanently failed entry keeps its
+  `last_error` and is never retried again, but it is also never silently
+  dropped.
+- The reply's recipient is always the platform account's own email address
+  (resolved from the binding), never the raw `From:` header the original
+  mail arrived with — the header is spoofable, and replying to it would let
+  a forged sender redirect an agent's answer to somewhere else.
 
-**New Session** (`process_as = 'new_session'`, default):
-- Incoming emails immediately create/continue agent sessions
-- Agent auto-responds — full routing/clone/session flow executes automatically
-- Ideal for: automated workflows, customer support bots, always-on agents
+### A note on session context
 
-**New Task** (`process_as = 'new_task'`):
-- Incoming emails create InputTasks assigned to the agent owner
-- No automatic session or response — owner reviews first
-- Task pre-populated with email content; email agent pre-selected
-- Owner can refine description, change assigned agent, then execute manually
-- After execution, "Send Answer" generates AI-crafted reply from session results
-- `source_agent_id` always points to original email agent (for SMTP config), even if task reassigned
-- Ideal for: review-before-respond workflows, complex requests, human oversight
-
-### Email Threading Rules
-
-- `Message-ID` header → `email_thread_id` on session
-- `In-Reply-To` / `References` headers used to match follow-up emails to existing sessions
-- Agent replies include proper `In-Reply-To` and `References` for email client threading
-- New emails (no `In-Reply-To`) create new sessions; replies join existing sessions
-
-### Outgoing Email Rules
-
-- **Auto-reply path** (new_session): `STREAM_COMPLETED` event triggers queue entry from last agent message
-- **Manual reply path** (new_task): "Send Answer" generates AI reply or uses custom_message, queues it
-- SMTP delivery uses parent agent's outgoing server config in both cases
-- Max 3 retry attempts for failed sends
-- Threading headers (`In-Reply-To`, `References`) preserved for proper email client threading
-
-## Session Context for Agent Scripts
-
-Agent scripts running inside environments can detect email sessions and access metadata:
-
-**Three-Layer Security:**
-
-1. **System Prompt Injection** — Server-verified metadata (sender, subject, session_id) injected into LLM system prompt under "Session Context (Server-Verified, Read-Only)". LLM instructed to trust these values over message content (mitigates prompt injection via email body)
-
-2. **HMAC-Verified Per-Session Context Store** — Backend HMAC-signs `session_context` with `AGENT_AUTH_TOKEN`. Agent-env verifies signature before storing. Context stored in dict keyed by `backend_session_id`, supporting parallel sessions without cross-session leakage. Context cleaned up on stream end with TTL-based cleanup (24h) as fallback
-
-3. **Helper Script** — `/app/core/scripts/get_session_context.py` provides stdlib-only CLI/import access. LLM passes `backend_session_id` from system prompt to scripts as CLI argument. Scripts query core server directly, bypassing LLM for authoritative context
-
-**Context Fields:**
-- `integration_type` — e.g., `"email"`
-- `sender_email` — original sender
-- `email_subject` — subject of the initiating email (fetched from linked `EmailMessage`)
-- `email_thread_id` — email Message-ID for threading
-- `agent_id`, `is_clone`, `parent_agent_id`
-- `backend_session_id`
-
-**HTTP Endpoint:** `GET /session/context?session_id=<backend_session_id>` (localhost-only, no auth)
+The platform still has session-context infrastructure (HMAC-signed,
+system-prompt-injected metadata, plus a `GET /session/context` endpoint for
+agent scripts) and it still populates `sender_email` and `email_thread_id`
+for a channel-routed email session. **`email_subject` currently does not
+reach that context on a channel-routed email session** — the enrichment code
+only fires when a session's `integration_type` is literally `"email"`, and
+every channel-routed email session is stamped `"channel_email"` instead. This
+is a real gap left by this refactor, not a deliberate design choice; the
+subject still reaches the agent through the message text itself (the
+formatted email includes a `Subject:` line), just not through the
+server-verified session-context channel. See
+[Email Integration — Technical Details](email_integration_tech.md#a-real-non-obvious-gap-email_subject-context)
+for the exact code location.
 
 ## Architecture Overview
 
 ```
-Polling Scheduler (5 min)
-    → EmailPollingService.poll_all_enabled_agents()
-        → IMAP connect → fetch UNSEEN → parse → store EmailMessage
-            → EmailProcessingService
-                → process_as = new_session?
-                    → EmailRoutingService.route_email()
-                        → Clone mode: find/create clone + auto-share
-                        → Owner mode: route to parent
-                    → Find/create session (thread matching)
-                    → Inject message → Agent streaming
-                → process_as = new_task?
-                    → Create InputTask for owner review
+channel_poll_scheduler (60s, TESTING-gated)
+    → ChannelPollService.poll_enabled_channels(db)
+        → EmailChannelAdapter.poll(channel)
+            → IMAP fetch → parse → store EmailMessage (agent_id NULL) → filter redeliveries
+        → ChannelInboundService.process_inbound(...) per message
+            → whitelist / channel policy / user resolution
+            → existing binding?  → feed straight into the bound session
+            → new thread?        → ChannelRoutingService.decide(...) (Pass 1 / Pass 2)
+                                  → bind (root Message-ID) → install if needed → ingest
 
-STREAM_COMPLETED event (auto-reply)
-    → EmailSendingService.handle_stream_completed()
-        → Queue last agent message in outgoing_email_queue
+STREAM_COMPLETED (agent reply)
+    → ChannelOutboundService._deliver
+        → EmailChannelAdapter.send_message(channel, composite_thread_key, text)
+            → resolve binding → resolve recipient (platform account email)
+            → enqueue OutgoingEmailQueue (In-Reply-To / References set)
 
-"Send Answer" button (manual reply)
-    → InputTaskService.send_email_answer()
-        → AIFunctionsService.generate_email_reply() or custom_message
-        → Queue reply in outgoing_email_queue
-
-Sending Scheduler (2 min)
-    → EmailSendingService.send_pending_emails()
-        → SMTP connect → send → mark sent / retry on failure
+sending_scheduler (2 min, pre-existing, unchanged)
+    → EmailSendingService.send_pending_emails(db)
+        → resolve channel via entry.session_id → ChannelThreadBinding → ServerChannel
+        → SMTP connect → send → mark sent / retry (max 3)
 ```
 
 ## Integration Points
 
-- [Email Integration](email_integration.md) — Parent feature: access control, security model, overall architecture
-- [Mail Servers](mail_servers.md) — IMAP/SMTP server credentials used by polling and sending services
-- Agent Sessions — Session lifecycle, streaming, message injection <!-- TODO: link when agents/agent_sessions docs are created -->
-- [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) — Auto-install for email senders via `InstallService.install_bundle_for_email`; publisher's agent is auto-published on first email if it has no revisions
-- [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md) — Session context injection, prompt generation, helper scripts
-- [Input Tasks](../input_tasks/input_tasks.md) — Task creation from emails, "Send Answer" flow
-- [Agent Activities](../agent_activities/agent_activities.md) — Email-originated tasks create `email_task_incoming` and `email_task_reply_pending` activities that notify the agent owner via the sidebar bell indicator
+- [Email Integration](email_integration.md) — the parent feature: the
+  transport, the trust model, the removed capabilities.
+- [Server Channels](../server_channels/server_channels.md) — routing,
+  bindings, admin policy — the shared machinery this document assumes.
+- [Mail Servers](mail_servers.md) — the IMAP/SMTP credentials the poll and
+  send paths use, resolved per channel rather than per agent.
+- ~~[Input Tasks](../input_tasks/input_tasks.md)~~ — the email-originated
+  task flow previously documented there is gone; see
+  [What is gone](#what-is-gone).
+- ~~[Agent Activities](../agent_activities/agent_activities.md)~~ — the
+  `email_task_incoming` / `email_task_reply_pending` activities that used to
+  fire for email-originated tasks no longer fire, since task mode itself is
+  gone.

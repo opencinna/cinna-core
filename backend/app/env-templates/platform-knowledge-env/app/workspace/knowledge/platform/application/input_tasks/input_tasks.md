@@ -81,13 +81,6 @@ The task system also serves as the primary **collaboration surface** for agent w
 10. Lead agent's session completes; parent task transitions to `completed`
 11. User sees the full task tree with all subtask work at a glance
 
-### Flow 5: Email-Originated Task
-
-1. Incoming email creates a task automatically (via email integration)
-2. System assigns short code, derives title from email subject
-3. Assigned agent's session starts; agent posts progress comments
-4. User can trigger `send-answer` to email the result back to the sender
-
 ## Business Rules
 
 ### Task Status Lifecycle
@@ -245,6 +238,6 @@ Parent Task ──create_subtask──> Subtask ──auto_execute──> Target
 - **Agent Environment Core**: Six MCP tools (`mcp__agent_task__*`) let agents interact with tasks from inside environments. `get_details` automatically uploads task files to the agent workspace. `add_comment` validates attached file paths locally before sending — see [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md) and [Agent Task Tools](../../agents/agent_environment_core/create_agent_task_tool.md)
 - **Task Triggers**: Automated rules (CRON, webhook, date) that fire task execution; gains short-codes automatically — see [Task Triggers](task_triggers.md)
 - **Activities**: Session state events generate activities for user notification — see [Agent Activities](../agent_activities/agent_activities.md)
-- **Email Integration**: Incoming emails can create tasks automatically — see [Email Integration](../email_integration/email_integration.md)
+- ~~**Email Integration**~~: Incoming email can no longer create tasks — the email-originated task flow (and the "Send Answer" AI reply) was removed when email became a [Server Channel](../server_channels/server_channels.md) (Phase 4 of the channels & identity unification); see [Email Integration — Capabilities removed](../email_integration/email_integration.md#capabilities-removed-in-this-refactor)
 - **File Management**: Task attachments use the same storage infrastructure as agent file management — see [Agent File Management](../../agents/agent_file_management/agent_file_management.md)
 - **Real-time Events**: `TASK_COMMENT_ADDED`, `TASK_STATUS_CHANGED`, `TASK_ATTACHMENT_ADDED`, `SUBTASK_COMPLETED` events notify the frontend — see [Real-time Events](../realtime_events/event_bus_system.md)
