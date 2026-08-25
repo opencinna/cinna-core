@@ -47,6 +47,7 @@ Auto-generated from OpenAPI spec. Tag: `admin-routing`
 **Request body** (`RoutingSimulateRequest`):
   - `message`: string (required)
   - `as_user_id`: uuid (required)
+  - `channel_id`: string | null
   - `include_catalog`: boolean
 
 **Response:** `RoutingDecisionPublic`

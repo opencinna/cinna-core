@@ -6,6 +6,8 @@ Gives a superuser a live view of what a [server channel](server_channels.md) is 
 
 The feature is deliberately named for *channels*, not for Google Chat: it reads its rows from the adapter-agnostic pipeline, so every present and future channel type gets it with no extra work.
 
+**Which transports it actually covers, stated exactly.** The hooks live at the decision points of `ChannelInboundService.process_inbound` and around outbound delivery — so **Google Chat and email are both covered, and email always was**: the email poller feeds messages into the same `process_inbound` a webhook reaches after verification, so it inherited every inbound hook the day it was added rather than needing hooks of its own. **App MCP emits no debug events at all, and that is by design, not a gap.** It is a `ServerChannel` like the others, but its reply *is* the synchronous MCP response — there is no `ChannelOutboundService` delivery to wrap and no asynchronous inbound pipeline to instrument, so there is no feed to go looking for. What App MCP does have, since Phase 6 of the channels & identity unification, is the *durable* counterpart: its routing decisions are written to `routing_decision` with `origin="app_mcp"` — see [Auto Routing Tuning](../routing_tuning/routing_tuning.md).
+
 ## Core Concepts
 
 - **Captured event** — one line in the feed: a message arriving, a rejection with its reason, a routing outcome, or an outbound delivery. Events are recorded at the decision points of the inbound pipeline, not merely at the door.
@@ -63,17 +65,21 @@ The feature is deliberately named for *channels*, not for Google Chat: it reads 
 ### Access
 
 - Every debug route is **superuser-only**, both reading and clearing, because the feed carries sender identity and message text.
-- Deleting a channel drops its captured events.
+- Deleting a channel drops its captured events. A **singleton** channel type (App MCP today) cannot be deleted at all — `ServerChannelService.delete_channel` refuses it, because the row is materialized lazily and a delete would silently re-create it with default settings, i.e. reset the kill switch to on. Disabling is the operation an admin actually wants, and it is one switch away on the same row.
 - An admin test send writes a security event recording who sent something where — the message body is deliberately not included.
 
 ## Architecture Overview
 
 ```
 Provider ──webhook──▶ inbound pipeline ──┐
-                       (verify, whitelist,│ records decisions
+Mailbox ──poll──────▶  (verify, whitelist,│ records decisions
                         route, install)   │
                                           ▼
 outbound delivery ──────────────▶  in-memory capture buffer (per channel, bounded)
+                                          │
+   (App MCP reaches neither: it has no    │
+    inbound pipeline and no outbound      │
+    delivery — its reply IS the response) │
                                           │
         Admin UI ◀──polls while open──── superuser-only admin routes
              │
@@ -86,7 +92,7 @@ outbound delivery ──────────────▶  in-memory captu
 
 - **[Server Channels](server_channels.md)** — the parent feature. The monitor observes its inbound pipeline and outbound delivery; it adds no routing behaviour of its own.
 - **[Agent Activities & Security Events](../agent_activities/agent_activities.md)** — the durable counterpart. Verification failures, whitelist denials, auto-registration, auto-install and admin test sends are recorded there and survive restarts; the monitor is the live view beside it.
-- **[Auto Routing Tuning](../routing_tuning/routing_tuning.md)** — the other durable counterpart, specifically for routing: each captured event carries `detail.trace_id` linking this live row to its persisted `routing_decision`, which survives a restart and carries the full candidate list and verdict this feed only summarizes.
+- **[Auto Routing Tuning](../routing_tuning/routing_tuning.md)** — the other durable counterpart, specifically for routing: each captured event carries `detail.trace_id` linking this live row to its persisted `routing_decision`, which survives a restart and carries the full candidate list and verdict this feed only summarizes. The two surfaces do **not** cover the same set of transports, and the asymmetry is deliberate: this feed covers the channel transports (Google Chat, email) and not App MCP; the durable trace covers all of them, App MCP included.
 - **Adapters** — the monitor reads only adapter-agnostic pipeline values, so a new channel type is covered without touching it.
 
 ## Technical Details

@@ -384,12 +384,12 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
     # ``?expected_agent_id=identity:{owner_id}`` — a real ref, not the
     # forged bare-UUID one that earlier comment refused, and still refuses.
     # **This base entry — the App MCP voice of the same reason — is
-    # reachable now but has no test of its own.** Reaching it needs an
-    # ``origin="app_mcp"`` trace carrying a candidate list, and a seeded
-    # row carries none, so it belongs beside the other candidate-list
-    # branches in ``tests/unit/test_routing_reachability.py`` rather than
-    # on the API surface. Not written yet; said here rather than left to
-    # be assumed.
+    # pinned by ``tests/unit/test_routing_reachability.py``'s
+    # ``test_the_identity_unavailable_base_entry_speaks_in_app_mcp_voice``.**
+    # It lives there rather than on the API surface for the reason it was
+    # always going to: reaching it needs an ``origin="app_mcp"`` trace
+    # carrying a candidate list, and a seeded row carries none, so it
+    # belongs beside the other candidate-list branches.
     routing_trace.SKIP_IDENTITY_UNAVAILABLE: (
         "this person shared an agent with the sender, but none of what they "
         "shared is switched on right now, so they were not on the ballot at all",

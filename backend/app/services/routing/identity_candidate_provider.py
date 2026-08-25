@@ -40,16 +40,22 @@ boundary is deliberate: an owner who never named this caller produces no row
 here, because nobody expected to reach them and a list of every identity owner
 on the platform is not a diagnosis.
 
-Those rows are **visible on the channel path and nowhere else.** Since Phase 3
-of the channels & identity unification ``ChannelRoutingService._route_installed``
+Those rows are **visible wherever a capture is open, which is now every routing
+surface.** Since Phase 3 of the channels & identity unification
+``ChannelRoutingService._route_installed``
 calls this provider inside Pass 1's ``RoutingTrace.capture()``, so a channel
 decision carries both the eligible identity candidates and the
 ``SKIP_IDENTITY_UNAVAILABLE`` rows (the reachability verdict has a channel-voiced
-explanation for that reason, added in the same change). The App MCP request
-handler still opens no capture, so on that surface every recorder call here is
-still a no-op — which is what the skips being written before a capture existed
-bought: the instrumentation was already correct on the day a capture appeared,
-rather than being added after somebody needed it.
+explanation for that reason, added in the same change). **They are recorded on
+the App MCP path too since phase 6 of that refactor**: ``AppMCPRoutingService.
+route_message`` opens a capture of its own (``origin="app_mcp"``), and every
+recorder call here — written years before there was anywhere for it to land —
+became live in that one change, without an edit. That is what writing the skips
+before a capture existed bought: the instrumentation was already correct on the
+day a capture appeared, rather than being added after somebody needed it. How
+much of an App MCP row survives is ``ROUTING_TRACE_APP_MCP_MODE``'s business,
+not this module's; at ``off`` no capture is opened and these calls no-op again,
+exactly as they did before phase 6.
 
 **One thing is deliberately NOT recorded**, and it is the feature's single
 inversion of master plan §3.5: when the sender has not switched identity
