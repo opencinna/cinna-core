@@ -35,8 +35,9 @@ well. ``routing_trace.MATCH_PATTERN`` survives as a *rendering* constant —
 historical ``routing_decision`` rows still carry it — exactly as
 ``SKIP_IDENTITY_ROUTE`` did.
 
-**``allow_identity_routing`` defaults false and never inherits** (master plan
-§3.4), so identity contacts stop appearing on App MCP until the caller opts in
+**``allow_identity_routing`` defaults false and never inherits**
+(``ChannelUserSetting``'s module docstring, and the glossary entry in
+``docs/README.md``), so identity contacts stop appearing on App MCP until the caller opts in
 from Settings → Channels. That is a deliberate, ruled behaviour change, not an
 oversight: routing into another person's workspace is opt-in, per person, by
 the person whose message it is, and an admin default must not consent on their

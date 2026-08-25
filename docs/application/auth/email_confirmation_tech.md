@@ -201,9 +201,7 @@ Every outbound email path checks `EmailConfirmationService.is_outbound_email_all
 | Surface | Location | Decision | Notes |
 |---------|----------|----------|-------|
 | All system notifications | `notification_service.py :: SystemNotificationService.notify()` | **GATE** on recipient user | Single choke point — covers all current and future notification types |
-| Agent email reply — enqueue | `sending_service.py :: EmailSendingService.queue_outgoing_email()` | **GATE** on agent/install owner | Primary UX check — returns `None` on failure (no queue entry created) |
-| Agent email reply — send | `sending_service.py :: EmailSendingService._send_single_email()` | **GATE** on agent/install owner | Defense-in-depth; marks entry `BLOCKED_UNCONFIRMED` (terminal) |
-| Manual "Send Answer" | `input_task_service.py :: InputTaskService.send_email_answer()` | **GATE** on task owner | Returns `{"success": False, "error": "Your email is not confirmed..."}` |
+| Agent email reply — send | `sending_service.py :: EmailSendingService._send_single_email()` | **GATE** on responsible user | The only remaining email gate. Marks the `OutgoingEmailQueue` entry `BLOCKED_UNCONFIRMED` (terminal). The former enqueue-time gate (`queue_outgoing_email()`) went with per-agent Email Integration in Phase 4 of the channels & identity unification — enqueueing is now `EmailChannelAdapter`'s job |
 | Password recovery | `user_service.py :: UserService.recover_password()` | **BYPASS** (always allowed) | Cooldown only; recovery must always work |
 | Welcome/new-account email | `routes/users.py :: create_user()` | **BYPASS** (admin-initiated) | Carries temporary password; sent regardless of gate (D3) |
 | Admin test-email | `routes/utils.py :: test_email()` | **BYPASS** (superuser diagnostic) | Arbitrary address; superuser-only |

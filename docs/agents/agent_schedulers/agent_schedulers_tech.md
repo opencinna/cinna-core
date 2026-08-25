@@ -273,11 +273,11 @@ Called from `_publish_locked` after credential spec collection. Calls `AgentSche
 
 ### Install materialisation — `InstallService._materialise_schedules`
 
-Called as step 7 of `_install_from_revision` (after the App MCP route step). Thin wrapper over `schedule_sync.materialise` that owns the commit. Best-effort: a failure logs a warning and marks the install `last_update_status="degraded"` but does not abort the install. The created `AgentSchedule` rows are ordinary rows — the background scheduler picks them up and executes them in the consumer's own environment and sessions with no special handling.
+Called as step 6 of `_install_from_revision` (after credential setup; plugin materialisation is step 7). There is no App MCP route step any more — Phase 5 of the channels & identity unification deleted it. Thin wrapper over `schedule_sync.materialise` that owns the commit. Best-effort: a failure logs a warning and marks the install `last_update_status="degraded"` but does not abort the install. The created `AgentSchedule` rows are ordinary rows — the background scheduler picks them up and executes them in the consumer's own environment and sessions with no special handling.
 
 ### Apply-update merge — `InstallService.apply_update`
 
-After prompt sync and App MCP route refresh, `schedule_sync.merge(session, install, revision)` is called. Best-effort: a failure logs a warning but does not fail the update.
+After prompt sync and the `_apply_revision_metadata` refresh, `schedule_sync.merge(session, install, revision)` is called. Best-effort: a failure logs a warning but does not fail the update.
 
 Merge algorithm:
 1. Group new revision definitions by `sig()` into `new_by_sig`

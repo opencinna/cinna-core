@@ -60,7 +60,7 @@
 - `workflow_prompt: str | None` - System prompt for conversation mode (WORKFLOW_PROMPT.md content)
 - `entrypoint_prompt: str | None` - Trigger message for workflow execution (ENTRYPOINT_PROMPT.md content)
 - `refiner_prompt: str | None` - Task refinement instructions (REFINER_PROMPT.md content, Text column)
-- `router_trigger_prompt: str | None` - Short natural-language description for the App MCP router (Text column, nullable). NOT injected into building or conversation system prompts. Snapshotted into `AgentBundleRevision.router_trigger_prompt` at publish time
+- `router_trigger_prompt: str | None` - Short natural-language description read by the shared routing classifier `AgentClassifier.classify` — Server Channels Pass 1 and Pass 2, App MCP Stage 1, identity Stage 2 (Text column, nullable). NOT injected into building or conversation system prompts. Snapshotted into `AgentBundleRevision.router_trigger_prompt` at publish time
 - `workflow_prompt_updated_at: datetime | None` — per-prompt logical clock; bumped whenever `workflow_prompt` changes in the DB (UI edit, env→DB pull, bundle apply-update). `None` treated as "−∞" (oldest) in the LWW tiebreak
 - `entrypoint_prompt_updated_at: datetime | None` — same for `entrypoint_prompt`
 - `refiner_prompt_updated_at: datetime | None` — same for `refiner_prompt`

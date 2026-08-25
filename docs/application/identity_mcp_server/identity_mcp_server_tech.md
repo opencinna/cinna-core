@@ -31,7 +31,7 @@
 ### Frontend
 
 - `frontend/src/components/UserSettings/IdentityServerCard.tsx` -- Settings > Channels tab card for identity owner management (list bindings, add/edit/delete, manage user assignments). **As of Phase 5, this is the sole creation entry point**: an "Add Agent" button in the card header opens an "Add Agent to Identity" dialog (agent picker via `AgentSelectorDialog`, trigger prompt, session mode, `UserAllowlistPicker`). `McpConnectorsCard.tsx` no longer offers an "Identity MCP Server Integration" option at all
-- `frontend/src/components/UserSettings/UserChannelsCard.tsx` -- renders the identity-contacts list (received identity contacts with per-person enable/disable toggle); the sole surface for it since `AppAgentRoutesCard` was stripped down to just the MCP Server URL
+- `frontend/src/components/UserSettings/UserChannelsCard.tsx` -- renders the identity-contacts list (received identity contacts with per-person enable/disable toggle); the sole surface for it since `AppAgentRoutesCard` (renamed `AppMcpServerCard.tsx` in Phase 7) was stripped down to just the MCP Server URL
 
 ## Database Schema
 
@@ -284,7 +284,7 @@ identity_binding_assignment_id: uuid.UUID | None = None
 
 ### `AppMCPRoutingService.route_message()` (identity handling)
 
-Composes `ChannelCandidateProvider` (owned agents) with `IdentityCandidateProvider` (people, only when `policy.allow_identity_routing`) into one ballot. When the single-candidate shortcut or `AgentClassifier.classify` selects an identity `Candidate` (identified by its namespaced `identity:{owner_id}` `ref_id`, resolved via `_identity_pick`):
+Composes `ChannelCandidateProvider` (owned agents) with `IdentityCandidateProvider` (people) into one ballot. Both providers are handed the resolved `policy`; since Phase 7 of the channels & identity unification `IdentityCandidateProvider.build` requires it keyword-only and self-gates on `policy.allow_identity_routing`, returning `[]` when the sender has not opted in. There is no call-site `if` — do not re-add one. When the single-candidate shortcut or `AgentClassifier.classify` selects an identity `Candidate` (identified by its namespaced `identity:{owner_id}` `ref_id`, resolved via `_identity_pick`):
 - Calls `_route_identity()` which delegates to `IdentityRoutingService.route_within_identity()`
 - Returns a `RoutingResult` with `is_identity=True`, `source="identity"`, and all identity fields populated
 - `agent_name` in the result is the identity owner's name, not the internal agent name
@@ -367,7 +367,7 @@ Owner-only card. Loads from `["identity-bindings"]` query key via `GET /api/v1/i
 
 ### `UserChannelsCard.tsx` (Settings > Channels, identity contacts list)
 
-Renders the received-identity-contacts list — owner name, owner email, per-person enable/disable toggle — loaded from `["identity-contacts"]` via `GET /api/v1/users/me/identity-contacts/`. Toggle calls `PATCH /api/v1/users/me/identity-contacts/{owner_id}` with `{ is_enabled: bool }`. As of Phase 5 this is the **sole** surface for the list — it used to be duplicated on the now-stripped `AppAgentRoutesCard`, over a raw `fetch` and without the consent copy explaining which way the switch points.
+Renders the received-identity-contacts list — owner name, owner email, per-person enable/disable toggle — loaded from `["identity-contacts"]` via `GET /api/v1/users/me/identity-contacts/`. Toggle calls `PATCH /api/v1/users/me/identity-contacts/{owner_id}` with `{ is_enabled: bool }`. As of Phase 5 this is the **sole** surface for the list — it used to be duplicated on the now-stripped `AppAgentRoutesCard` (renamed `AppMcpServerCard.tsx` in Phase 7), over a raw `fetch` and without the consent copy explaining which way the switch points.
 
 ### `McpConnectorsCard.tsx` (Agent > Integrations tab)
 

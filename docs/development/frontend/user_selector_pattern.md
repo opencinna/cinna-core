@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A single, reusable way to let a user pick *other users* to share something with — credentials, App MCP routes, identity bindings, bundle access grants. One component (`UserAllowlistPicker`) backed by one endpoint (`GET /users/search`), so every sharing surface behaves identically and works for **non-admin** owners (agent-developers), not just admins.
+A single, reusable way to let a user pick *other users* to share something with — credentials, direct/agent-to-agent MCP connector ACLs, identity bindings, bundle access grants, Agent REST API scopes. One component (`UserAllowlistPicker`) backed by one endpoint (`GET /users/search`), so every sharing surface behaves identically and works for **non-admin** owners (agent-developers), not just admins.
 
 ## The component
 
@@ -34,7 +34,7 @@ Most pickers share *something with someone else*, so self-selection is meaningle
 ## Callers
 
 - `frontend/src/components/Credentials/CredentialSharing.tsx` — credential direct sharing (pills = existing `CredentialShare` rows; `onAdd` shares by email, `onRemove` revokes).
-- `frontend/src/components/Agents/McpConnectorsCard.tsx` — App MCP route create + edit pickers, and the identity create + edit pickers.
+- `frontend/src/components/Agents/McpConnectorsCard.tsx` — the direct-connector `allowed_user_ids` ACL and the agent-to-agent connector ACL. (The App MCP route and identity options were removed from this dialog in Phase 5 of the channels & identity unification; identity binding pickers live on `IdentityServerCard.tsx` below.)
 - `frontend/src/components/UserSettings/IdentityServerCard.tsx` — identity binding edit picker.
 - `frontend/src/components/Agents/BundlePermissionsAddUserModal.tsx` — the Bundle tab's unified Permissions management add/edit dialog (single-user selection; the dialog body scrolls, hence the portalled results list).
 - `frontend/src/components/Agents/AgentApiAccessScopesCard.tsx` — Agent REST API per-user scope grants; passes `includeSelf` (owner-grants-self is valid here).
@@ -46,7 +46,6 @@ Most pickers share *something with someone else*, so self-selection is meaningle
 When a picker shows *existing* assignments (edit dialogs), the assignment record must carry the user's display info so the pill renders without a user-list lookup:
 
 - `IdentityBindingAssignmentPublic` carries `target_user_name` / `target_user_email`.
-- `AppAgentRouteAssignmentPublic` carries `user_email` / `user_full_name`, resolved in `app_agent_route_service.py:_assignment_to_public()`; lists are serialized via `app_agent_route_service.py:_assignments_to_public()`, which batch-resolves the assigned users in one query to avoid an N+1 per assignment.
 - `CredentialSharePublic` carries `shared_with_email` (+ `shared_with_user_id`).
 
 ## Exception
@@ -56,6 +55,5 @@ When a picker shows *existing* assignments (edit dialogs), the assignment record
 ## Integration Points
 
 - [Credential Sharing](../../agents/agent_credentials/credential_sharing.md)
-- [App MCP Server](../../application/app_mcp_server/app_mcp_server.md)
 - [Identity MCP Server](../../application/identity_mcp_server/identity_mcp_server.md)
 - [Agent Bundles](../../agents/agent_bundles/agent_bundles.md)

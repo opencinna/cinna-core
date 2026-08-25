@@ -61,13 +61,13 @@ App MCP now has an admin-facing side it never had before, on the **Channels** ta
 The Stage 1 ballot is composed from exactly the same two providers [Server Channels](../server_channels/server_channels.md) uses, in the same order:
 
 1. `ChannelCandidateProvider.build(db, user_id, policy=policy)` — every agent the caller owns, narrowed to the resolved agent scope (`"all"` / `"list"` / `"none"`), eligible when it has a non-blank `router_trigger_prompt` or non-empty `example_prompts`. An agent excluded by scope or wording is recorded as a skipped candidate, never silently dropped.
-2. `IdentityCandidateProvider.build(db, user_id)` — one candidate per identity owner the caller may currently address, appended **only when `policy.allow_identity_routing` is on**. With the switch off the provider is not called at all, so no identity trace row exists either — see [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md).
+2. `IdentityCandidateProvider.build(db, user_id, policy=policy)` — one candidate per identity owner the caller may currently address. **`policy` is required and keyword-only**, and the consent gate lives *inside* `build`: with `policy.allow_identity_routing` off it returns `[]` immediately, before any query and without writing a trace row of any kind. The provider is therefore always called; what changes is what it returns. (Until Phase 7 of the channels & identity unification the gate was an `if` copied out at each of the three call sites — do not re-add one. The observable outcome is unchanged: no identity candidate, and no identity trace row.) See [Identity MCP Server](../identity_mcp_server/identity_mcp_server.md).
 
 Neither surface borrows the other's candidate set or enablement toggles; they compose the same building blocks independently. A standalone (non-bundle) agent needs nothing special any more — the old motivating bug ("a standalone agent has no `AppAgentRoute` by construction and is invisible to routing") no longer exists, because there is no route in the story at all.
 
 ### ⚠️ Identity Routing Is Opt-In and Does Not Inherit
 
-**`allow_identity_routing` defaults to `false` and never inherits from a channel default** (master plan §3, principle 4 — anything that can route into another person's workspace is opt-in, per person, by the receiving message's *sender*). This is a **deliberate behaviour change**, not an oversight, and its effect is immediate on every existing deployment: **every App MCP user who could previously reach an identity contact loses that reach until they turn the switch on themselves**, from **Settings → Channels → App MCP Server → Identity routing**. There is no admin override that can restore it on their behalf.
+**`allow_identity_routing` defaults to `false` and never inherits from a channel default.** It is the **sender's own** consent that a message of theirs may open a session inside somebody else's workspace, where that person can read it — not the receiver's control over who reaches them (that is the identity owner's bindings and per-person assignments). An admin default must therefore not be able to switch it on for someone who never agreed, which is why it is `NOT NULL DEFAULT false` with no channel-level default to inherit; see `ChannelUserSetting`'s module docstring for the full semantics. **Scope of the switch:** it governs identity routing on **channels and App MCP** only. **External A2A identity access is authorized by a separate mechanism** — `ExternalAccessPolicy.require_identity_access` plus the identity owner's binding assignments — and is **not** closed by this switch. This is a **deliberate behaviour change**, not an oversight, and its effect is immediate on every existing deployment: **every App MCP user who could previously reach an identity contact loses that reach until they turn the switch on themselves**, from **Settings → Channels → App MCP Server → Identity routing**. There is no admin override that can restore it on their behalf.
 
 ### Availability Is Checked at Token Use, Not at Issue
 
@@ -175,7 +175,8 @@ App MCP Server (/mcp/app/mcp)
     |
     +-- 2. AppMCPRoutingService.route_message:
     |      - ChannelCandidateProvider (owned agents, agent-scope narrowed)
-    |      - + IdentityCandidateProvider, only if allow_identity_routing
+    |      - + IdentityCandidateProvider (returns [] unless the caller's own
+    |        allow_identity_routing is on — gate is inside build)
     |      - single-candidate shortcut, else AgentClassifier.classify
     |      - a person wins -> Stage 2 (IdentityRoutingService) picks the agent
     |

@@ -121,7 +121,9 @@ class ResolvedChannelPolicy:
 
     #: The routing pass consults this when composing the candidate ballot, and
     #: the ingest path re-reads it per message on an existing identity thread.
-    #: Never inherited from the channel — master plan §3.4. Resolved for the
+    #: Never inherited from the channel — see ``ChannelUserSetting``'s module
+    #: docstring for why (an admin default must not consent on a user's
+    #: behalf). Resolved for the
     #: **sender**: their consent to a message of theirs being routed into
     #: another person's workspace. Not the receiver's gate — see
     #: ``ChannelUserSetting``'s docstring.
@@ -156,9 +158,11 @@ class ResolvedChannelPolicy:
         exists to reproduce.
 
         ``allow_identity_routing`` is ``False`` while everything else is
-        permissive, and that asymmetry is the point (master plan §3.4):
-        routing into another person's workspace is opt-in, per person, by that
-        person. The absence of a channel is not their consent.
+        permissive, and that asymmetry is the point: a message may only be
+        routed into another person's workspace with the **sender's** own
+        consent, recorded per channel on their ``ChannelUserSetting`` row (see
+        that model's module docstring). The absence of a channel is not that
+        consent — it is the absence of anywhere to have given it.
         """
         return cls(
             channel_id=None,

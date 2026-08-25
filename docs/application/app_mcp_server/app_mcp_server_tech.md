@@ -26,8 +26,8 @@
 ### Backend -- Services
 
 - `backend/app/services/routing/channel_candidate_provider.py` -- `ChannelCandidateProvider.build(db, user_id, policy=policy)` — the caller's own eligible agents, narrowed to the resolved agent scope. Shared verbatim with [Server Channels](../server_channels/server_channels_tech.md); App MCP's `route_message` calls it directly
-- `backend/app/services/routing/identity_candidate_provider.py` -- `IdentityCandidateProvider.build(db, caller_user_id)` -- the identity half of Stage 1's ballot, one `Candidate` per identity owner; `identity_ref_id()` / `parse_identity_ref()` own the `identity:{owner_id}` `ref_id` namespace
-- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `AppMCPRoutingService.route_message(db_session, user_id, message)`: resolves the App MCP channel + policy (`ServerChannelService.get_or_create_singleton` + `ChannelPolicyService.resolve`), composes `ChannelCandidateProvider` with `IdentityCandidateProvider` (only when `policy.allow_identity_routing`), single-candidate shortcut or `_ai_classify`, hands off to Stage 2 via `_route_identity` when a person wins. `IdentityPick` is Stage 1's answer shape when a person wins; `RoutingResult.source` is `"owned"` or `"identity"` (replacing the old `route_source` "admin"/"user"/"identity"). No `_try_pattern_match` any more — `message_patterns` is gone
+- `backend/app/services/routing/identity_candidate_provider.py` -- `IdentityCandidateProvider.build(db, caller_user_id, *, policy)` -- the identity half of Stage 1's ballot, one `Candidate` per identity owner. `policy` is **required and keyword-only** since Phase 7 of the channels & identity unification, and `build` itself returns `[]` when `policy.allow_identity_routing` is off — the consent gate is inside the provider, not at its call sites; `identity_ref_id()` / `parse_identity_ref()` own the `identity:{owner_id}` `ref_id` namespace
+- `backend/app/services/app_mcp/app_mcp_routing_service.py` -- `AppMCPRoutingService.route_message(db_session, user_id, message)`: resolves the App MCP channel + policy (`ServerChannelService.get_or_create_singleton` + `ChannelPolicyService.resolve`), composes `ChannelCandidateProvider` with `IdentityCandidateProvider` (always called, handed the resolved `policy`; it returns `[]` when `allow_identity_routing` is off), single-candidate shortcut or `_ai_classify`, hands off to Stage 2 via `_route_identity` when a person wins. `IdentityPick` is Stage 1's answer shape when a person wins; `RoutingResult.source` is `"owned"` or `"identity"` (replacing the old `route_source` "admin"/"user"/"identity"). No `_try_pattern_match` any more — `message_patterns` is gone
 - `backend/app/services/app_mcp/app_mcp_request_handler.py` -- `AppMCPRequestHandler` with `handle_send_message()`, `_resolve_session()`, session lock management; uses `routing_result.transformed_message` as `effective_message` for message creation and title generation; stores `app_mcp_original_message` in session metadata when transformation occurs
 - `backend/app/services/app_mcp/app_mcp_oauth_service.py` -- `AppMCPOAuthService` for app-level OAuth token lifecycle
 - `backend/app/services/server_channels/adapters/app_mcp.py` -- `AppMCPChannelAdapter`: the transport declaration only (`inbound_mode="authenticated"`, `needs_webhook_token=False`, `needs_outbound_credentials=False`, `is_singleton=True`); `validate_config` rejects any non-empty config; `has_outbound_credentials` always returns `True` (there is nothing to be missing); `get_setup_instructions` renders the admin panel's "already connected" copy, including the revocation-delay sentence
@@ -70,12 +70,12 @@
 - `frontend/src/components/Agents/McpConnectorsCardSimple.tsx` -- purely explanatory for `agent-user`: takes `routerTriggerPrompt` as a prop (no longer fetches `app-mcp-routes`), renders a read-only mirror of the trigger prompt, and states the agent is reachable — no per-user toggle, since there is nothing left to toggle per agent
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` -- passes `agent.router_trigger_prompt` into `McpConnectorsCardSimple`
 - `frontend/src/components/Agents/EditRouterTriggerPromptModal.tsx` -- no longer invalidates an `["app-mcp-routes", agentId]` query key (nothing reads it any more) and drops the copy promising a route "will appear here automatically"
-- `frontend/src/components/UserSettings/AppAgentRoutesCard.tsx` -- stripped to the **MCP Server URL** (copyable) + connect-instructions button only. Everything else — "MCP Shared Agents", "Personal Routes", per-route toggles — is gone; `UserChannelsCard`'s App MCP row now owns the on/off + agent-scope + identity-routing controls
-- `frontend/src/components/UserSettings/UserChannelsCard.tsx` -- renders the App MCP channel row like any other channel; the identity-contacts toggle list this card fetches is now the **sole** surface for that list (previously duplicated on `AppAgentRoutesCard`)
+- `frontend/src/components/UserSettings/AppMcpServerCard.tsx` -- stripped to the **MCP Server URL** (copyable) + connect-instructions button only, and renamed from `AppAgentRoutesCard.tsx` in Phase 7 of the channels & identity unification, since there are no routes left for it to be named after. Everything else — "MCP Shared Agents", "Personal Routes", per-route toggles — is gone; `UserChannelsCard`'s App MCP row now owns the on/off + agent-scope + identity-routing controls
+- `frontend/src/components/UserSettings/UserChannelsCard.tsx` -- renders the App MCP channel row like any other channel; the identity-contacts toggle list this card fetches is now the **sole** surface for that list (previously duplicated on `AppAgentRoutesCard`, renamed `AppMcpServerCard.tsx` in Phase 7)
 - `frontend/src/components/Onboarding/GettingStartedModal.tsx` -- "After Connecting" article rewritten: routing is by trigger prompt, not "configured agent routes"; points at the App MCP Server row under Settings → Channels for the on/off + scope controls
 - `frontend/src/routes/oauth/mcp-consent.tsx` -- adapted for `app_mcp=true` query param (unchanged by this phase)
 
-**Deleted in this phase:** nothing frontend-side was deleted outright — `McpConnectorsCard.tsx` and `AppAgentRoutesCard.tsx` were stripped down rather than removed, since both still carry live functionality (direct/agent-to-agent connectors, and the MCP Server URL respectively).
+**Deleted in this phase:** nothing frontend-side was deleted outright — `McpConnectorsCard.tsx` and `AppAgentRoutesCard.tsx` were stripped down rather than removed, since both still carry live functionality (direct/agent-to-agent connectors, and the MCP Server URL respectively) — the latter renamed to `AppMcpServerCard.tsx` in Phase 7.
 
 ### Tests
 
@@ -161,7 +161,7 @@ Shared verbatim with [Server Channels](../server_channels/server_channels_tech.m
 
 ### `AppMCPRoutingService`
 
-- `route_message(db_session, user_id, message) -> RoutingResult | None` -- resolves the channel (`ServerChannelService.get_or_create_singleton`) and policy (`ChannelPolicyService.resolve`), composes `ChannelCandidateProvider.build` with `IdentityCandidateProvider.build` (only when `policy.allow_identity_routing`), applies the single-candidate shortcut or `_ai_classify` over the whole ballot, hands off to `_route_identity` (Stage 2) when the winner is a person. `policy.is_available` is **not** re-checked here — that is the token verifier's job, and re-checking it here would be a second copy of a rule `ChannelPolicyService` exists to own
+- `route_message(db_session, user_id, message) -> RoutingResult | None` -- resolves the channel (`ServerChannelService.get_or_create_singleton`) and policy (`ChannelPolicyService.resolve`), composes `ChannelCandidateProvider.build` with `IdentityCandidateProvider.build` (both handed the resolved `policy`; the identity provider self-gates on `policy.allow_identity_routing` and returns `[]` when it is off — there is no call-site `if`), applies the single-candidate shortcut or `_ai_classify` over the whole ballot, hands off to `_route_identity` (Stage 2) when the winner is a person. `policy.is_available` is **not** re-checked here — that is the token verifier's job, and re-checking it here would be a second copy of a rule `ChannelPolicyService` exists to own
 - `_identity_pick(candidate)` -- turns an identity `Candidate` back into Stage 1's `IdentityPick` answer shape
 - `_route_identity(selected_identity, caller_user_id, message, stage1_method, transformed_message)` -- Stage 2 delegation to `IdentityRoutingService.route_within_identity`; passes Stage 1's transformed message through; applies cascade logic (Stage 2 wins > Stage 1 fallback > None). No `db_session` is forwarded — Stage 2 opens its own short-lived read session
 - `_ai_classify(candidates, message)` -- calls `AgentClassifier.classify(candidates, message)` directly (`backend/app/services/routing/agent_classifier.py`, not `AIFunctionsService.route_to_agent()`); resolves an identity ref **before** the UUID parse, which would otherwise reject it; returns `(Candidate | IdentityPick, transformed_message)` or `None`
@@ -222,7 +222,7 @@ Degraded view rendered for the `agent-user` role via `AgentIntegrationsTab`. Now
 - When set: two labelled read-only sections — "Available in external MCP clients" (states the agent is reachable, unconditionally, since reachability is no longer per-user) and "When this agent gets picked" (the trigger prompt, quoted as a `blockquote`, with a link to the Configuration tab to edit it).
 - A footer states the negative space (this only affects MCP client reachability) and links to `/settings#channels` for the MCP Server URL.
 
-### AppAgentRoutesCard (`AppAgentRoutesCard.tsx`)
+### AppMcpServerCard (`AppMcpServerCard.tsx`)
 
 Stripped to the one thing nothing else renders: the **MCP Server URL** and the connect walkthrough.
 
@@ -235,7 +235,7 @@ Stripped to the one thing nothing else renders: the **MCP Server URL** and the c
 
 ### UserChannelsCard (`UserChannelsCard.tsx`)
 
-Renders the App MCP channel row like any other channel — on/off, agent scope, `allow_identity_routing` — and is now the **sole** surface for the identity-contacts toggle list (previously duplicated, without the consent copy, on `AppAgentRoutesCard`).
+Renders the App MCP channel row like any other channel — on/off, agent scope, `allow_identity_routing` — and is now the **sole** surface for the identity-contacts toggle list (previously duplicated, without the consent copy, on `AppAgentRoutesCard`, renamed `AppMcpServerCard.tsx` in Phase 7).
 
 ## Security
 

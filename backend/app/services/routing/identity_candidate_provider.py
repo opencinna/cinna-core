@@ -57,9 +57,11 @@ much of an App MCP row survives is ``ROUTING_TRACE_APP_MCP_MODE``'s business,
 not this module's; at ``off`` no capture is opened and these calls no-op again,
 exactly as they did before phase 6.
 
-**The consent gate lives here, not at the call sites.** Identity routing is
-opt-in per person (master plan §3.4) and the switch is
-``ResolvedChannelPolicy.allow_identity_routing`` — the *sender's* own consent
+**The consent gate lives here, not at the call sites.** The switch is
+``ResolvedChannelPolicy.allow_identity_routing``, whose semantics are the
+``channel_user_setting.allow_identity_routing`` ones — see that model's module
+docstring, ``docs/application/server_channels/server_channels.md`` and the
+glossary entry in ``docs/README.md``. It is the *sender's* own consent
 that a message of theirs may open a session in somebody else's workspace, where
 that person can read it. Until Phase 7 that gate was an ``if`` written out at
 each of the three surfaces that compose this provider (channel routing, App MCP
@@ -224,8 +226,12 @@ class IdentityCandidateProvider:
         until phase 7, so a call site that simply omitted the keyword got
         identity candidates — the wrong direction for the one switch whose
         failure mode is routing a stranger's message into a stranger's
-        workspace (master plan §3.4: opt-in, per person, by the receiving
-        user). A default that has to be permissive to be a default is a
+        workspace. (Not master plan §3.4, which is the *receiver*-side
+        principle — identity defaults off and the receiving user opts in per
+        person via bindings and assignments. This switch points the other way:
+        it is the sender's own consent, and ``ChannelUserSetting``'s module
+        docstring is the rationale it belongs to.) A default that has to be
+        permissive to be a default is a
         restriction that silently stops applying the day somebody adds a
         consumer and does not read this docstring, and an architecture test can
         only *detect* that; requiring the argument makes it unspellable.

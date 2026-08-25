@@ -28,18 +28,21 @@ by a **different system at a different moment** — do not conflate them.
 | `workflow_prompt` | The **conversation-mode system prompt** — the agent's real execution instructions | Every conversation-mode session (the main prompt) | Operational: which scripts to run, how to parse their output (JSON/CSV), how to present results, decision logic. The agent is a *bridge* — it runs scripts, parses, and rephrases conversationally. |
 | `entrypoint_prompt` | A short, human-like trigger message (1–2 sentences) | First user message for scheduled / automated runs | Conversational, **not** technical. ✅ *"What is my time-off balance?"* ❌ *"Query Odoo API and return JSON."* Must be **self-contained** — it is sent automatically with nobody there to fill anything in, so never leave a placeholder in it. |
 | `refiner_prompt` | Instructions for turning a vague request into a structured task | During AI task refinement, before execution | Default-fill rules + mandatory fields. *"If no period is given, default to the current week. Always capture account id and currency."* |
-| `router_trigger_prompt` | A single capability-verb sentence used to route incoming messages to this agent | Only by the App MCP router classifier — never in any system prompt | *"Reconciles Stripe payouts and flags ledger mismatches."* Describes *when to route here*, not how to behave. |
-| `example_prompts` | Ready-to-use task suggestions (`list[str]`) surfaced *for the agent* | Shown in the A2A / external agent catalog and as MCP slash commands (not the same as route-level `prompt_examples`) | Short imperative **templates a stranger can use**, never a replay of your build data. `["reconcile last week", "show failed payouts"]`. See [Writing `example_prompts`](#writing-example_prompts-templates-not-a-replay-of-your-build) — this is the field that goes wrong most often. |
+| `router_trigger_prompt` | A single capability-verb sentence used to route incoming messages to this agent | Only by the routing classifier (`AgentClassifier.classify`) — never in any system prompt. Four consumers share it: Server Channels Pass 1 and Pass 2, App MCP Stage 1, and identity Stage 2 | *"Reconciles Stripe payouts and flags ledger mismatches."* Describes *when to route here*, not how to behave. |
+| `example_prompts` | Ready-to-use task suggestions (`list[str]`) surfaced *for the agent* — **and a first-class routing input**: the classifier reads it alongside `router_trigger_prompt`, and an agent with neither is not routable | Shown in the A2A / external agent catalog and as MCP slash commands, **and rendered into the routing prompt** on every surface | Short imperative **templates a stranger can use**, never a replay of your build data. `["reconcile last week", "show failed payouts"]`. See [Writing `example_prompts`](#writing-example_prompts-templates-not-a-replay-of-your-build) — this is the field that goes wrong most often. |
 
-### Don't confuse `example_prompts` with route `prompt_examples`
+### Don't confuse `example_prompts` with binding `prompt_examples`
 
 - **`example_prompts`** (this guide) is an **agent-level** field — a list of
   ready-to-use task suggestions surfaced for the agent (e.g. in the A2A /
-  external agent catalog). Set it via the bulk write below.
-- **`prompt_examples`** is a *different*, **route/binding-level** field on App
-  MCP routes and Identity bindings (surfaced in MCP `prompts/list`). It is not
-  part of agent prompt authoring. Leave it alone unless you are configuring a
-  route. (When you *do* configure one, the authoring rules below apply to it
+  external agent catalog). It is also one of the two fields the routing
+  classifier reads, so writing it well makes the agent easier to reach, not
+  just easier to start. Set it via the bulk write below.
+- **`prompt_examples`** is a *different*, **binding-level** field. It survives
+  on `IdentityAgentBinding` only (surfaced in MCP `prompts/list`); the App MCP
+  routes that used to carry it are gone. It is not part of agent prompt
+  authoring — leave it alone unless you are configuring an identity binding.
+  (When you *do* configure one, the authoring rules below apply to it
   verbatim — same audience, same failure mode.)
 
 ## Writing `example_prompts`: templates, not a replay of your build

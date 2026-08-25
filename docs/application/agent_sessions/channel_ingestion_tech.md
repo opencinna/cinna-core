@@ -11,7 +11,7 @@
 ### Backend — Channel callers (consumers of the service)
 - `backend/app/services/a2a/a2a_request_handler.py` — core A2A surface; uses `ingest_inbound_message` for `message/send` and `resolve_or_create_session` for `message/stream` (streaming kicks via `SessionStreamProcessor`, not the service).
 - `backend/app/services/external/external_a2a_context_handler.py` — External A2A surface (`A2ARequestHandler` subclass); overrides `_extra_session_kwargs` to thread `session_owner_id` through for non-owner target types.
-- `backend/app/services/external/external_a2a_request_handler.py` — builds `TargetContext` per target type (`agent` → `session_owner_id=user.id`; `app_mcp_route` → `agent.owner_id` + separate `caller_id`; `identity` → `owner_id` + `identity_caller_id`).
+- `backend/app/services/external/external_a2a_request_handler.py` — builds `TargetContext` per target type — two arms only: `agent` → `session_owner_id=user.id`; `identity` → `owner_id` + `identity_caller_id`. Any other value falls through to `InvalidExternalParamsError("Unsupported target_type: ...")`.
 - `backend/app/services/app_mcp/app_mcp_request_handler.py` — App MCP handlers; the plain path uses `assert_access` + `resolve_or_create_session`, the identity path delegates to `create_identity_session`. Keeps legacy `MessageService.create_message` + `stream_and_collect_response` for message injection due to session-lock conflict.
 - `backend/app/api/routes/sessions.py` — `POST /sessions`; uses `resolve_or_create_session` directly (no message body, first message lands via `/messages/stream` later).
 - `backend/app/services/agents/agent_schedule_scheduler.py` — cron-fired and handover paths; uses `ingest_inbound_message` with `system_trigger` sender.

@@ -77,8 +77,8 @@ Channel policy resolved once for this message (ChannelPolicyService)
 Stage 1: Channel routing Pass 1
   - ChannelCandidateProvider.build  -> the sender's own in-scope agents
   - IdentityCandidateProvider.build -> one candidate per person they may address
-    (ONLY when allow_identity_routing is on; when it is off the provider is
-     not called at all, so no identity even appears in the trace)
+    (always called, handed the resolved policy; it returns [] when the sender's
+     allow_identity_routing is off, so no identity even appears in the trace)
   - AI classifies -> selects "HR" (an identity:{owner_id} candidate)
        |
        v
@@ -130,7 +130,7 @@ Stage 2 only considers agents where the caller has an active, enabled binding as
 
 ### Caller: Enable and Use an Identity Contact
 
-1. Opens Settings > Channels tab and finds the identity contacts list on `UserChannelsCard` (as of Phase 5 the sole surface for this list — it used to be duplicated, without the consent copy, on the now-stripped `AppAgentRoutesCard` / "MCP Server" card)
+1. Opens Settings > Channels tab and finds the identity contacts list on `UserChannelsCard` (as of Phase 5 the sole surface for this list — it used to be duplicated, without the consent copy, on the now-stripped `AppAgentRoutesCard` / "MCP Server" card, renamed `AppMcpServerCard.tsx` in Phase 7)
 2. Each row shows an identity owner's name, email, and an enable/disable toggle
 4. Enables the desired contact
 5. In their MCP client, types a message addressing that person: "Ask User B to prepare the annual report"
@@ -169,7 +169,7 @@ Stage 2 only considers agents where the caller has an active, enabled binding as
 Every candidate a routing pass rejects is normally recorded with a `skip_reason`, because a candidate list showing only the finalists cannot diagnose the failure that actually bites. Identity has **one deliberate inversion** of that rule, and it exists in exactly one place:
 
 - An identity owner the caller *can* address but who currently has nothing reachable (binding inactive, assignment inactive, or the caller's own contact toggle off) **is** recorded, as `SKIP_IDENTITY_UNAVAILABLE`.
-- An identity owner the sender could have reached with `allow_identity_routing` **off** is **not** recorded at all — not even as a skip. With the switch off `ChannelRoutingService` never calls the provider, so no rows exist. Recording them would publish the existence of other people's identities into a trace an external sender can trigger at will, one row per person who has ever named them on a binding. The diagnosis is not lost, only moved: the sender's own Settings → Channels page says whether the switch is on, and that is the one control that changes the outcome.
+- An identity owner the sender could have reached with `allow_identity_routing` **off** is **not** recorded at all — not even as a skip. With the switch off `IdentityCandidateProvider.build` returns `[]` before it queries anything and without recording a single row, so no rows exist. (Phase 7 moved that gate from the call sites into `build` itself; the outcome is unchanged, and the reason for it — do not record what you must not enumerate — now lives in one place.) Recording them would publish the existence of other people's identities into a trace an external sender can trigger at will, one row per person who has ever named them on a binding. The diagnosis is not lost, only moved: the sender's own Settings → Channels page says whether the switch is on, and that is the one control that changes the outcome.
 
 A `SKIP_IDENTITY_UNAVAILABLE` row on a channel trace is therefore itself evidence that the sender's channel-level switch was already on.
 
@@ -189,7 +189,7 @@ This is the single easiest thing to get backwards, and the direction matters bec
 | `IdentityAgentBinding.is_active` | the **identity owner** (receiver) | "this agent of mine is exposed at all" — the receiver's control over who may reach them |
 | `IdentityBindingAssignment.is_active` | the **identity owner** (receiver) | "this specific person may reach this specific agent of mine" — also the receiver's control |
 | `IdentityBindingAssignment.is_enabled` | the **caller** (sender) | the caller's own per-person opt-out of *addressing* that owner. The row is keyed by `target_user_id`, and `IdentityService.toggle_identity_contact` filters on `target_user_id == current_user.id`. It is **not** the receiver's gate |
-| `channel_user_setting.allow_identity_routing` | the **sender** | the sender's per-channel consent that a message of theirs may be routed into somebody else's workspace, where they can read it. Never inherits from a channel default |
+| `channel_user_setting.allow_identity_routing` | the **sender** | the sender's per-channel consent that a message of theirs may be routed into somebody else's workspace, where they can read it. Never inherits from a channel default. **Scope: channels and App MCP only** — External A2A identity access is authorized by `ExternalAccessPolicy.require_identity_access` plus binding assignments, and is not closed by this switch |
 
 ### Toggles and Visibility
 
@@ -254,7 +254,7 @@ See **[Prompt Examples](../app_mcp_server/prompt_examples.md)** for full details
 ## Integration Points
 
 - **[App MCP Server](../app_mcp_server/app_mcp_server.md)** — `AppMCPRoutingService.route_message()` composes two candidate providers for Stage 1: `ChannelCandidateProvider` (the caller's own eligible agents), and `IdentityCandidateProvider` (one candidate per identity owner, with an `identity:{owner_id}` ref so a person can never be mistaken for an agent). When an identity candidate wins, Stage 2 routing runs
-- **[Server Channels](../server_channels/server_channels.md)** — the second consumer, since Phase 3 of the channels & identity unification. `ChannelRoutingService._route_installed` appends `IdentityCandidateProvider.build(...)` to the sender's own-agent candidates **only when `policy.allow_identity_routing` is on**, and `ChannelRoutingService.decide` calls Stage 2 itself when a person wins. What crosses back is an `IdentityGrant`, re-verified in full at ingest. The sender opts in per channel from Settings → Channels; the per-person contact toggle is the *same* `IdentityBindingAssignment.is_enabled` switch App MCP uses, reused rather than duplicated per channel
+- **[Server Channels](../server_channels/server_channels.md)** — the second consumer, since Phase 3 of the channels & identity unification. `ChannelRoutingService._route_installed` appends `IdentityCandidateProvider.build(..., policy=policy)` to the sender's own-agent candidates — unconditionally as a call, since Phase 7 moved the consent gate inside `build`, which returns `[]` when `policy.allow_identity_routing` is off — and `ChannelRoutingService.decide` calls Stage 2 itself when a person wins. What crosses back is an `IdentityGrant`, re-verified in full at ingest. The sender opts in per channel from Settings → Channels; the per-person contact toggle is the *same* `IdentityBindingAssignment.is_enabled` switch App MCP uses, reused rather than duplicated per channel
 - **[Auto Routing Tuning](../routing_tuning/routing_tuning.md)** — since Phase 3 the channel Pass-1 capture is open around this feature's Stage-1 candidates *and* around Stage 2 (recorded under the `identity_stage2` stage), so identity routing finally writes durable trace rows. An identity owner with nothing currently reachable is recorded as a `SKIP_IDENTITY_UNAVAILABLE` skip; an owner the sender could have reached with the channel switch **off** is deliberately not recorded at all (see Business Rules below)
 - **[Agent Sessions](../agent_sessions/agent_sessions.md)** — identity sessions use the same `Session` model with three additional columns: `identity_caller_id`, `identity_binding_id`, `identity_binding_assignment_id`. `integration_type` is `"identity_mcp"` on the App MCP path; on the channel path it stays `"channel_<type>"`, which is load-bearing — `ChannelOutboundService._resolve_channel_session` gates reply delivery on that prefix, so a session stamped `identity_mcp` there would route correctly, run correctly, and never deliver a word
 - **[MCP Integration](../mcp_integration/agent_mcp_architecture.md)** — uses the same shared OAuth AS and App MCP token infrastructure; no separate OAuth flow
@@ -272,6 +272,7 @@ See **[Prompt Examples](../app_mcp_server/prompt_examples.md)** for full details
 | View received identity contacts | Target user only |
 | Route messages to an identity (App MCP) | Any user with at least one active, enabled binding assignment |
 | Route messages to an identity (Server Channels) | The same, **plus** the sender's own `allow_identity_routing` opt-in on that channel — off by default, never inheritable from an admin channel default |
+| Message an identity over **External A2A** (`target_type="identity"`) | Bindings only: `ExternalAccessPolicy.require_identity_access(db, user, owner_id)` requires at least one active binding with an active assignment for the caller. **`allow_identity_routing` is not consulted on this path** — the External A2A surface resolves no `ResolvedChannelPolicy` — so the channel switch neither opens nor closes it. Documented as built; whether it should is an open product question, tracked separately |
 
 ## Error Handling
 

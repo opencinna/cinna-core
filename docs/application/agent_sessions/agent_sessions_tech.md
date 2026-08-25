@@ -108,7 +108,7 @@
 | `result_state` | VARCHAR, nullable | Agent-declared: `"completed"` \| `"needs_input"` \| `"error"` |
 | `result_summary` | VARCHAR, nullable | Agent's description accompanying result_state |
 | `email_thread_id` | VARCHAR, nullable | Email Message-ID for threading |
-| `integration_type` | VARCHAR, nullable | `"email"` \| `"a2a"` |
+| `integration_type` | VARCHAR, nullable | What opened the session. Values actually written: `channel_<type>` (e.g. `channel_email`, `channel_google_chat`), `a2a`, `app_mcp`, `identity_mcp`, `mcp`, `task`, `webhook`, `schedule`, `external`; `NULL` for web-UI sessions, which are deliberately untagged. **`"email"` is written by nothing** since Phase 4 of the channels & identity unification, though rows created before it may still carry the value |
 | `sender_email` | VARCHAR, nullable | Original email sender (owner mode only) |
 | `streaming_started_at` | DATETIME, nullable | Set when `interaction_status="running"`, cleared on end |
 | `created_at` | DATETIME | |
