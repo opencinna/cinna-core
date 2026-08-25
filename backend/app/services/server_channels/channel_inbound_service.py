@@ -99,6 +99,7 @@ from app.services.server_channels.channel_debug_buffer import (
 )
 from app.services.routing import routing_trace
 from app.services.sessions.channel_ingestion_service import (
+    ChannelDecline,
     ChannelIngestionService,
     NoActiveEnvironmentError,
 )
@@ -1607,7 +1608,7 @@ class ChannelInboundService:
 
         **Two kinds of failure, two dispositions.** Keeping the messages parked
         is the right answer only for a failure a later attempt might not hit.
-        ``_ingest`` also raises a bare ``PermissionError`` for declines that
+        ``_ingest`` also raises ``ChannelDecline`` for declines that
         will recur identically on every retry — the sender's
         ``allow_identity_routing`` consent being off (re-read per message from
         ``policy``), ``assert_access`` refusing a revoked or invalid identity
@@ -1616,6 +1617,15 @@ class ChannelInboundService:
         cap is hit, sending the person a setup-failed notice each time and
         never arming the ``failed`` self-heal that is the actual recovery. So a
         deterministic decline fails the binding instead; see the handler.
+
+        The classifier gates on ``ChannelDecline`` and not on
+        ``PermissionError``, deliberately: ``PermissionError`` is an
+        ``OSError``, so the first real I/O under ``_ingest`` would start
+        raising the "will never succeed" marker for failures that are merely
+        transient — and the disposition for those is the opposite one. Every
+        decline path below this method raises the narrower type (see its own
+        docstring); the broad ``except`` further down still catches anything
+        that does not.
 
         **This is pre-emptive, not a live bug fix.** Today identity-routed
         messages and parked messages are disjoint: parking requires binding
@@ -1660,7 +1670,7 @@ class ChannelInboundService:
                         sender_external_id=entry.get("external_user_id"),
                         policy=policy,
                     )
-                except PermissionError as exc:
+                except ChannelDecline as exc:
                     # ---- Deterministic decline ----
                     #
                     # Every argument expression that could raise is resolved
@@ -1745,7 +1755,7 @@ class ChannelInboundService:
                     # this sender could tell apart from a transient setup
                     # failure would be an oracle for the channel's
                     # configuration — see the comments around the
-                    # ``PermissionError`` raise in ``_ingest``.
+                    # ``ChannelDecline`` raise in ``_ingest``.
                     await ChannelOutboundService.notify_progress(
                         db=db,
                         channel=channel,
@@ -1857,7 +1867,7 @@ class ChannelInboundService:
           is honored on the next turn rather than at the next thread. That
           extends Phase 2's decided semantic — a revoked sender is declined on
           an existing thread exactly as on a new one — and, like it, the
-          decline is detail-free: the ``PermissionError`` is caught by
+          decline is detail-free: the ``ChannelDecline`` is caught by
           ``_ingest_or_fail``, which sends the same generic reply every other
           failure gets.
 
@@ -1887,7 +1897,7 @@ class ChannelInboundService:
         # comparison and cannot be forgotten by a future caller the way a
         # docstring can.
         if user.id != binding.user_id:
-            raise PermissionError(
+            raise ChannelDecline(
                 "channel ingest sender does not own the binding: "
                 f"user.id={user.id}, binding.user_id={binding.user_id}"
             )
@@ -1929,13 +1939,13 @@ class ChannelInboundService:
         # the docstring). Short-circuited on `grant is None`, so an ordinary
         # channel thread never reaches the flag and is unaffected.
         #
-        # Raised bare and detail-free on purpose: `_ingest_or_fail` turns it
+        # Raised detail-free on purpose: `_ingest_or_fail` turns it
         # into the one generic reply every other refusal gets, so this decline
         # is indistinguishable from a revoked grant, a vanished binding, or a
         # failed environment. A reply that named it would be an oracle telling
         # an external sender which gate closed.
         if grant is not None and not policy.allow_identity_routing:
-            raise PermissionError(
+            raise ChannelDecline(
                 "identity routing is switched off for this sender on this "
                 "channel"
             )
@@ -2005,6 +2015,68 @@ class ChannelInboundService:
             binding.updated_at = datetime.now(UTC)
             db.add(binding)
             db.commit()
+
+        ChannelInboundService._record_routing_outcome(
+            db=db,
+            channel=channel,
+            thread_key=binding.thread_key,
+            agent_id=agent.id,
+            session_id=result.session.id,
+        )
+
+    @staticmethod
+    def _record_routing_outcome(
+        *,
+        db: DBSession,
+        channel: ServerChannel,
+        thread_key: str,
+        agent_id: uuid.UUID,
+        session_id: uuid.UUID,
+    ) -> None:
+        """Tell the transport which agent and session this thread ended up on.
+
+        A no-op for every transport that keeps no durable record of an arrival,
+        which is all of them but email. Email persists each polled mail
+        *before* classification — the messages worth recording most are the
+        ones a denial stops before an agent exists — so the row is written
+        without an agent and stamped here, at the one point in the pipeline
+        where both answers are known and every successful ingest passes
+        through.
+
+        Placed after the binding commit rather than before it: this is
+        bookkeeping riding on a delivery that has already happened, not a step
+        the delivery depends on.
+
+        **Swallowed on failure, deliberately.** An audit stamp that could fail
+        an ingest would turn a message the agent has already received into a
+        failed binding, a setup-failed notice to the sender, and a thread that
+        self-heals by re-routing text that was delivered once already. The
+        stamp is worth having; it is not worth that. The rollback keeps a
+        poisoned transaction from surfacing as an unrelated error in the
+        caller.
+        """
+        try:
+            adapter = get_adapter(channel.channel_type)
+            adapter.record_routing_outcome(
+                db,
+                channel,
+                thread_key=thread_key,
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+        except Exception:  # noqa: BLE001 — see the docstring
+            logger.warning(
+                "%s Could not record the routing outcome for thread %s on "
+                "channel %s — the message was delivered regardless",
+                _LOG_PREFIX,
+                thread_key,
+                _debug_channel_key(channel) or "unknown",
+                exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001 — nothing left to salvage
+                pass
 
     @staticmethod
     def _resume_identity_grant(session: "ChatSession") -> IdentityGrant | None:

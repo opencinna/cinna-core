@@ -337,6 +337,12 @@ class ServerChannelService:
         transport = get_transport(data.channel_type)  # raises UnknownChannelTypeError
         config = data.config or {}
         transport.adapter.validate_config(config)
+        # Shape first, then references. Splitting the two is what lets the
+        # shape check run without a session while the cross-row check runs on
+        # *this* one — the transaction the channel is about to be written in,
+        # so an adapter can never validate against a different snapshot than
+        # the caller persists into.
+        transport.adapter.validate_config_references(session, config)
         ServerChannelService._validate_policy(
             visibility=data.visibility, agent_scope=data.default_agent_scope
         )
@@ -446,6 +452,7 @@ class ServerChannelService:
                     "so its config cannot be validated."
                 )
             transport.adapter.validate_config(config)
+            transport.adapter.validate_config_references(session, config)
             channel.config = config
             flag_modified(channel, "config")
 
@@ -815,14 +822,20 @@ class ServerChannelService:
         """Whether an outbound credential has been configured for ``channel``.
 
         Derived, never a column — and *where* it derives from is the
-        transport's call. A transport that declares
-        ``needs_outbound_credentials`` keeps its credential in
-        ``encrypted_secrets``, so the presence of that blob is the whole
-        answer. One that declares False keeps it somewhere else entirely (the
-        email transport will reference a server-scoped SMTP config), and until
-        such a transport exists the honest answer for it is False: nothing has
-        been stored *here*, and reporting True would tell an admin their
-        channel can reply when nothing has been configured.
+        transport's call, so this method asks it and does not decide. The
+        default reading (``ChannelAdapter.has_outbound_credentials``) is the
+        presence of the ``encrypted_secrets`` blob, which is where a transport
+        declaring ``needs_outbound_credentials=True`` keeps its credential.
+        Email declares ``False`` and overrides: its credential is the
+        server-scoped SMTP config its ``outgoing_server_id`` names, so a fully
+        operational email channel has an empty ``encrypted_secrets`` and the
+        old reading reported it — wrongly, and on the one screen an admin
+        checks to see whether a channel can reply — as having no way to answer.
+
+        The delegation is what keeps that knowledge in one place. This service
+        must not learn what an ``outgoing_server_id`` is, and the registry
+        refuses to import an adapter that declares ``False`` without saying
+        where its credential actually lives.
 
         Public rather than private because ``ServerChannelPublic`` declares
         this field required-with-no-default on purpose — a service that forgets
@@ -853,9 +866,7 @@ class ServerChannelService:
             # before the transport split, and with no transport to ask there is
             # nothing better to derive from than the column itself.
             return bool(channel.encrypted_secrets)
-        if not transport.needs_outbound_credentials:
-            return False
-        return bool(channel.encrypted_secrets)
+        return transport.adapter.has_outbound_credentials(channel)
 
     @staticmethod
     def _invalidate_adapter_caches(channel: ServerChannel) -> None:

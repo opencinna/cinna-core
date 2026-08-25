@@ -20,6 +20,32 @@ export const WHITELIST_WILDCARD_WARNING =
 export const AUTO_REGISTER_HELP =
   "Creates a passwordless account for a whitelisted sender the first time they message. The whitelist above is the only gate — the sign-up domain allowlist is not re-checked."
 
+// ---------------------------------------------------------------------------
+// Email-transport copy
+//
+// Both strings below exist because the email adapter differs from Google Chat
+// in a way an admin cannot see from the form: the sender is unverified, and a
+// denial produces no reply. Neither is a tooltip — the first changes what a
+// safe whitelist looks like, the second changes where you go when a sender
+// says nothing came back.
+//
+// Referenced from the `email` entry in `channelTypes.ts`, so a second polled
+// or unverified transport reuses them by pointing at them.
+// ---------------------------------------------------------------------------
+
+/**
+ * The trust tier, next to the controls whose safety depends on it.
+ *
+ * Mirrors the adapter's own docstring (`adapters/email.py`) — deliberately, so
+ * the two do not drift into disagreeing about how strong this channel is.
+ */
+export const EMAIL_SENDER_SPOOFABLE_WARNING =
+  "The sender's address comes from the From: header, and anyone who can deliver mail to this mailbox can forge it. Nothing checks it again: a forged address passes the whitelist below, can auto-register an account, and routes into that person's own agents. Google Chat's sender identity is signed; this one is only as strong as your mail server's SPF/DKIM/DMARC enforcement."
+
+/** Where a rejected sender's answer went, and where to look for the reason. */
+export const EMAIL_SILENT_DECLINE_NOTE =
+  "Declines are silent on email. A sender who is not on the whitelist, is not allowed by this channel's policy, or has no account that could be created gets no reply at all — answering them would confirm which addresses exist and turn this mailbox into a spam auto-responder. Every one of those denials is recorded in this channel's debug feed (the bug icon on the channel row); look there when someone says they never heard back."
+
 /** Why a bundle on the auto-install list still won't be installed. */
 export const VISIBILITY_WARNING =
   "Not public: external users can't install this until the bundle is made public or granted to them. It will simply never be offered."

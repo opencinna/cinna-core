@@ -35,7 +35,11 @@ from app.models import (
 )
 from app.services.routing import routing_trace
 from app.services.server_channels.adapters.base import ChannelError
-from app.services.server_channels.adapters.registry import get_adapter
+from app.services.server_channels.adapters.email import build_reply_thread_key
+from app.services.server_channels.adapters.registry import (
+    get_adapter,
+    get_transport,
+)
 from app.services.server_channels.channel_debug_buffer import (
     DEBUG_REPLIED,
     DEBUG_SEND_FAILED,
@@ -47,8 +51,13 @@ logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[ChannelOutbound]"
 
 
-def _binding_thread_key(binding: ChannelThreadBinding) -> str | None:
-    """``binding``'s thread key, or ``None``. **Total by construction.**
+def _binding_thread_key(
+    binding: ChannelThreadBinding, channel: ServerChannel | None = None
+) -> str | None:
+    """The transport-facing thread key for ``binding``, or ``None``.
+
+    **Total by construction**, and the single place a transport-facing thread
+    key is derived from a binding.
 
     The binding-shaped sibling of
     ``channel_inbound_service._debug_channel_key``, and it exists rather than
@@ -65,9 +74,36 @@ def _binding_thread_key(binding: ChannelThreadBinding) -> str | None:
     to send rather than posting to a null thread — the same bargain
     ``_debug_channel_key`` strikes, for the same reason: a delivery aimed at
     nothing is worse than an honest, logged non-delivery.
+
+    **``channel`` and the reply context (settled decision §2.7).** A polled
+    transport's reply needs more than a thread id: an email answer carries
+    ``In-Reply-To`` and ``References``, which name the *last* inbound message,
+    not the thread root. ``send_message(channel, thread_key, text)`` has no
+    room for them, so the polled key is a composite —
+    ``"<root-message-id>|<last-message-id>"`` — built here and parsed by the
+    transport. The **stored** ``binding.thread_key`` is untouched: it stays the
+    bare root and remains the unique key everything binds by.
+
+    ``binding.last_external_message_id`` is read **inside the same ``try``**,
+    and that placement is the whole point rather than tidiness. It is the same
+    expired-instance lazy reload ``thread_key`` is, so a read outside the guard
+    would let a concurrently deleted binding raise out of a helper whose
+    callers rely on it never raising — turning an honest declined delivery into
+    a crash on the delivery path.
+
+    ``channel`` is optional and defaults to "no reply context", which is
+    exactly right for every webhook transport (Google Chat's key is already
+    complete) and is what a caller that has no channel to hand gets. Only the
+    transport shape decides: ``inbound_mode == "polled"``. The composite's
+    format belongs to the polled transport that reads it back —
+    ``adapters.email`` defines the separator, the builder and the parser in one
+    place — so a second polled transport with a different reply shape needs
+    its own branch here, not a different spelling of this one.
     """
     try:
-        return str(binding.thread_key)
+        thread_key = str(binding.thread_key)
+        # Same reload, same guard. See the docstring.
+        last_external_message_id = binding.last_external_message_id
     except Exception:  # noqa: BLE001 — see the docstring
         logger.warning(
             "%s Could not read a thread key from the binding (instance expired "
@@ -76,6 +112,30 @@ def _binding_thread_key(binding: ChannelThreadBinding) -> str | None:
             exc_info=True,
         )
         return None
+
+    if channel is None:
+        return thread_key
+
+    try:
+        # ``channel.channel_type`` is a lazy reload too, and this helper may
+        # not raise. A channel we cannot classify degrades to the bare thread
+        # key rather than to ``None``: the key is still the right address, and
+        # only the threading headers are lost. (``_deliver``'s own
+        # ``get_adapter`` call raises on the same row a moment later and is
+        # handled there — this is not the place to answer for it.)
+        transport = get_transport(channel.channel_type)
+    except Exception:  # noqa: BLE001 — degrade, never raise
+        logger.warning(
+            "%s Could not resolve the transport for a delivery; sending with "
+            "the bare thread key",
+            _LOG_PREFIX,
+            exc_info=True,
+        )
+        return thread_key
+
+    if transport.inbound_mode != "polled":
+        return thread_key
+    return build_reply_thread_key(thread_key, last_external_message_id)
 
 
 # Prefix used for the integration_type stamped on channel sessions.
@@ -297,7 +357,7 @@ class ChannelOutboundService:
         # ``ImportError`` raised inside the handler would destroy the exception
         # just as surely as an attribute reload.
         debug_channel_id = _debug_channel_key(channel)
-        thread_key = _binding_thread_key(binding)
+        thread_key = _binding_thread_key(binding, channel)
         if thread_key is None:
             # Nothing to address the message to. Sending anyway would post to a
             # null thread; the warning is already logged by the helper.

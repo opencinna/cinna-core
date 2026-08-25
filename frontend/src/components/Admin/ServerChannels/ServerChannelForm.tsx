@@ -15,7 +15,7 @@ import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { DialogFooter } from "@/components/ui/dialog"
 import {
@@ -56,6 +56,7 @@ import {
   WHITELIST_WILDCARD_WARNING,
 } from "./channelCopy"
 import { getChannelTypeMeta } from "./channelTypes"
+import { MailServerSelect } from "./MailServerSelect"
 
 interface Props {
   /** Fixed for the lifetime of this form: picked in step 1, immutable on edit. */
@@ -212,6 +213,9 @@ export function ServerChannelForm({
   const isEdit = channel !== null
   const meta = getChannelTypeMeta(channelType)
   const isRawConfig = meta.configFields.length === 0
+  // Hoisted so the JSX below narrows on a const rather than on a property
+  // access, which TypeScript re-widens inside every callback.
+  const secretsMeta = meta.secrets
 
   const schema = useMemo(() => {
     const configShape: Record<string, z.ZodString> = {}
@@ -437,7 +441,9 @@ export function ServerChannelForm({
           meta.configFields.map((f) => [f.key, values.config[f.key].trim()]),
         )
     const whitelist = values.email_whitelist.trim()
-    const secrets = values.secrets.trim()
+    // Structurally empty for a transport with no secrets field, rather than
+    // empty because nothing rendered the input.
+    const secrets = secretsMeta ? values.secrets.trim() : ""
 
     if (isEdit) {
       // `secrets` is only sent when non-empty — an untouched field must leave
@@ -529,11 +535,19 @@ export function ServerChannelForm({
                 <FormItem>
                   <FormLabel>{cfgField.label}</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder={cfgField.placeholder}
-                      inputMode={cfgField.inputMode}
-                      {...field}
-                    />
+                    {cfgField.picker ? (
+                      <MailServerSelect
+                        serverType={cfgField.picker.serverType}
+                        value={field.value}
+                        onChange={field.onChange}
+                      />
+                    ) : (
+                      <Input
+                        placeholder={cfgField.placeholder}
+                        inputMode={cfgField.inputMode}
+                        {...field}
+                      />
+                    )}
                   </FormControl>
                   {cfgField.description && (
                     <FormDescription>{cfgField.description}</FormDescription>
@@ -545,33 +559,55 @@ export function ServerChannelForm({
           ))
         )}
 
-        <FormField
-          control={form.control}
-          name="secrets"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>{meta.secrets.label}</FormLabel>
-              <FormControl>
-                <Textarea
-                  rows={4}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="font-mono text-xs"
-                  placeholder={
-                    isEdit && channel?.has_outbound_credentials
-                      ? "•••• credential saved — paste a new one to replace it"
-                      : meta.secrets.placeholder
-                  }
-                  {...field}
-                />
-              </FormControl>
-              <FormDescription>
-                {isEdit ? meta.secrets.helpEdit : meta.secrets.helpNew}
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        {/* Absent for a transport that stores no channel secret. The field is
+            write-only, so offering it where nothing reads it would let an admin
+            paste an SMTP password into a value that is silently ignored — see
+            `ChannelTypeMeta.secrets`. */}
+        {secretsMeta && (
+          <FormField
+            control={form.control}
+            name="secrets"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{secretsMeta.label}</FormLabel>
+                <FormControl>
+                  <Textarea
+                    rows={4}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="font-mono text-xs"
+                    placeholder={
+                      isEdit && channel?.has_outbound_credentials
+                        ? "•••• credential saved — paste a new one to replace it"
+                        : secretsMeta.placeholder
+                    }
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {isEdit ? secretsMeta.helpEdit : secretsMeta.helpNew}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+
+        {/* Immediately above the whitelist and the auto-register switch,
+            because those two controls are where an unverified sender identity
+            actually costs something. */}
+        {meta.senderTrustWarning && (
+          /* Amber, not destructive: this is a permanent property of the
+             transport, not something this admin has misconfigured, and the red
+             variant below is reserved for the whitelist state they *can* get
+             wrong. Red on every email channel forever would teach them to skip
+             both. */
+          <Alert className="border-amber-500/50 text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Sender identity is not verified</AlertTitle>
+            <AlertDescription>{meta.senderTrustWarning}</AlertDescription>
+          </Alert>
+        )}
 
         <FormField
           control={form.control}

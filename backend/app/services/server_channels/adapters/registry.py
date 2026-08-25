@@ -22,10 +22,12 @@ from app.services.server_channels.adapters.base import (
     PolledChannelTransport,
     UnknownChannelTypeError,
 )
+from app.services.server_channels.adapters.email import EmailChannelAdapter
 from app.services.server_channels.adapters.google_chat import GoogleChatAdapter
 
 CHANNEL_ADAPTERS: dict[str, ChannelAdapter] = {
     GoogleChatAdapter.channel_type: GoogleChatAdapter(),
+    EmailChannelAdapter.channel_type: EmailChannelAdapter(),
 }
 
 
@@ -128,7 +130,12 @@ def _assert_declared_modes_agree() -> None:
 
     The token rule rides along for the same reason: a transport that declares
     a non-``webhook`` mode and ``needs_webhook_token=True`` has asked for a
-    token on a door it says it does not have.
+    token on a door it says it does not have. So does the outbound-credential
+    rule: a transport that declares its credential lives outside
+    ``encrypted_secrets`` and then inherits the default
+    ``has_outbound_credentials`` has said where its credential is *not* without
+    ever saying where it is, and the admin projection answers "none configured"
+    for every channel of that type.
 
     Cheap to catch at import; miserable to diagnose in production.
     """
@@ -143,6 +150,19 @@ def _assert_declared_modes_agree() -> None:
                 "PolledChannelTransport. The two must agree: the declaration "
                 "is what the registry and the poller dispatch on, and the base "
                 "class is what supplies (or refuses) the matching methods."
+            )
+        if not capabilities.needs_outbound_credentials and (
+            type(adapter).has_outbound_credentials
+            is ChannelAdapter.has_outbound_credentials
+        ):
+            raise RuntimeError(
+                f"Channel adapter {channel_type!r} declares "
+                "needs_outbound_credentials=False but does not override "
+                "has_outbound_credentials(). The declaration says the outbound "
+                "credential lives somewhere other than encrypted_secrets; the "
+                "method is what says where. Inheriting the default makes the "
+                "admin projection report a confident 'no outbound credential' "
+                "for every channel of this type, operational or not."
             )
         if mode != "webhook" and capabilities.needs_webhook_token:
             raise RuntimeError(

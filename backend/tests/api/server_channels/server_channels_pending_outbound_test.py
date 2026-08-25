@@ -26,6 +26,7 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models import CHANNEL_BINDING_ACTIVE, CHANNEL_BINDING_FAILED, ChannelThreadBinding
+from app.services.sessions.channel_ingestion_service import ChannelDecline
 from app.services.server_channels.channel_inbound_service import (
     _MAX_PARKED_MESSAGES,
     REPLY_SETUP_FAILED,
@@ -430,7 +431,7 @@ def test_deterministic_decline_while_draining_fails_binding_drops_queue_and_self
     client: TestClient, superuser_token_headers: dict[str, str], db: Session
 ) -> None:
     """
-    `_drain_parked` classifies a bare `PermissionError` from `_ingest` as a
+    `_drain_parked` classifies a `ChannelDecline` from `_ingest` as a
     DETERMINISTIC decline — one that will recur identically on every retry
     (the sender's `allow_identity_routing` consent off, a revoked identity
     grant, or the `user.id != binding.user_id` invariant guard) — and fails
@@ -462,7 +463,7 @@ def test_deterministic_decline_while_draining_fails_binding_drops_queue_and_self
     ) as send_mock, patch(
         _INGEST_TARGET,
         AsyncMock(
-            side_effect=PermissionError(
+            side_effect=ChannelDecline(
                 "identity routing is switched off for this sender on this channel"
             )
         ),
@@ -529,7 +530,7 @@ def test_transient_failure_while_draining_leaves_binding_active_with_messages_st
     client: TestClient, superuser_token_headers: dict[str, str], db: Session
 ) -> None:
     """
-    The arm that must not regress. Anything other than a bare `PermissionError`
+    The arm that must not regress. Anything other than a `ChannelDecline`
     from `_ingest` during the parked-queue drain is a TRANSIENT failure — a
     later attempt (the next inbound message, or the next scheduler tick) might
     succeed — so the binding must NOT be failed and the parked messages must

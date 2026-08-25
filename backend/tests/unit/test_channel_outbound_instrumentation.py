@@ -122,6 +122,12 @@ class _LiveBinding:
         self.status = status
         self.last_error = last_error
         self.server_channel_id = uuid.uuid4()
+        # Present on the real model, and read by ``_binding_thread_key`` for
+        # the polled transports' reply context (settled decision §2.7). A fake
+        # missing it would raise AttributeError inside that helper's guard and
+        # be mistaken for the vanished-row case ``_BindingVanished`` exists to
+        # cover.
+        self.last_external_message_id = None
 
 
 class _BindingVanished:
@@ -253,8 +259,12 @@ def _spy_binding_thread_key(monkeypatch) -> list[tuple[object, str | None]]:
     calls: list[tuple[object, str | None]] = []
     original = _outbound_svc._binding_thread_key
 
-    def _spy(binding):
-        result = original(binding)
+    def _spy(binding, channel=None):
+        # ``channel`` is the reply-context argument the polled transports
+        # added (settled decision §2.7); mirrored here so the spy keeps the
+        # helper's real signature. Forwarded unchanged — the spy observes, it
+        # never decides.
+        result = original(binding, channel)
         calls.append((binding, result))
         return result
 

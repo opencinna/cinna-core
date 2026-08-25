@@ -38,11 +38,13 @@ where an admin can read it.
 """
 from __future__ import annotations
 
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 from fastapi import Request
+from sqlmodel import Session as DBSession
 
 from app.models import ServerChannel
 
@@ -200,6 +202,31 @@ class ChannelAdapter(ABC):
         on create and update, before anything is persisted.
         """
 
+    def validate_config_references(
+        self, db: DBSession, config: dict[str, Any]
+    ) -> None:
+        """Validate config values that point at *other rows*. Default: no-op.
+
+        Split from :meth:`validate_config` rather than folded into it because
+        the two answer different questions with different inputs.
+        ``validate_config`` is a pure shape check — every fact it needs is in
+        the dict, so it can run anywhere, including where no session exists.
+        This one asks whether the things the config *names* actually exist and
+        are of the right kind, which is a database question.
+
+        The session is a parameter, never opened here, and that is the whole
+        point of the method existing at all: an adapter that opened its own
+        connection would validate against a different snapshot from the one
+        the caller is about to persist into — and under test, against a
+        different transaction entirely, so a row the caller just created would
+        read as missing.
+
+        Raises ``ChannelConfigError`` with an admin-readable message, exactly
+        like ``validate_config``. A transport whose config references nothing
+        (Google Chat's is a bare project number) inherits the no-op.
+        """
+        return None
+
     @abstractmethod
     async def verify_inbound(
         self, request: Request, channel: ServerChannel, body: bytes
@@ -216,6 +243,71 @@ class ChannelAdapter(ABC):
         sender identity. Returning an ``ignored`` message is for *authentic*
         events the pipeline doesn't act on — never for auth failures.
         """
+
+    def has_outbound_credentials(self, channel: ServerChannel) -> bool:
+        """Whether an outbound credential has been configured for ``channel``.
+
+        The derivation behind the admin projection's field of the same name,
+        and it lives here because only the transport knows *where* its
+        credential is kept. ``needs_outbound_credentials`` declares that fact;
+        this method acts on it.
+
+        The default is the reading of ``needs_outbound_credentials=True``, which
+        is what every adapter was before the transport split: the credential is
+        the ``encrypted_secrets`` blob, so its presence is the whole answer. A
+        transport that declares ``False`` keeps its credential somewhere else
+        and **must** override this — the registry refuses to import otherwise,
+        because the inherited answer for such a transport is a confident
+        ``False`` about a channel that may be perfectly operational.
+
+        **Must not raise, and must not need a session.** It is called per row
+        inside a list comprehension in the admin list route, where an exception
+        blanks the entire Channels tab — including the offending channel the
+        admin would need in order to fix it.
+        """
+        return bool(channel.encrypted_secrets)
+
+    def record_routing_outcome(
+        self,
+        db: DBSession,
+        channel: ServerChannel,
+        *,
+        thread_key: str,
+        agent_id: uuid.UUID,
+        session_id: uuid.UUID,
+    ) -> None:
+        """Attach a routing outcome to whatever durable record this transport
+        kept of the inbound message. Default: no-op.
+
+        The second half of a two-step store, and the *only* reason the pipeline
+        knows this method exists. A transport that persists arrivals cannot
+        persist them with an agent on them: the agent is what classification
+        produces, and classification happens after arrival — while the whole
+        value of the durable row is that it exists for the messages that never
+        reach classification at all (a sender denied by the whitelist, by the
+        channel policy, or by user resolution). So the row is written on
+        arrival with nothing routed on it, and this hook stamps it once the
+        pipeline has an answer.
+
+        Same shape and the same reasoning as
+        :meth:`validate_config_references`: the question is transport-specific,
+        the answer needs a database, and the session is a **parameter** rather
+        than something opened here — the caller is mid-transaction and an
+        adapter that opened its own connection would be writing against a
+        different snapshot from the one the caller is about to commit (and,
+        under test, a different transaction entirely).
+
+        Keyed on ``thread_key`` rather than on a message id because that is
+        what the pipeline still holds at the point it can answer, and because
+        thread-wide is the more useful grain: it heals any earlier arrival on
+        the same thread that was stored before the thread had an agent.
+
+        **Must not raise, and must not be load-bearing.** The caller wraps it,
+        but the contract is stated here too: this is an audit stamp riding
+        along on a successful ingest. A transport that lets a bookkeeping
+        failure escape would turn a delivered message into a failed binding.
+        """
+        return None
 
     @abstractmethod
     async def send_message(

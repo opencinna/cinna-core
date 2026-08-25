@@ -130,6 +130,10 @@ from app.services.server_channels.channel_pending_scheduler import (
     start_scheduler as start_channel_pending_scheduler,
     shutdown_scheduler as shutdown_channel_pending_scheduler
 )
+from app.services.server_channels.channel_poll_scheduler import (
+    start_scheduler as start_channel_poll_scheduler,
+    shutdown_scheduler as shutdown_channel_poll_scheduler
+)
 from app.services.environments.environment_status_scheduler import (
     start_scheduler as start_env_status_scheduler,
     shutdown_scheduler as shutdown_env_status_scheduler
@@ -185,6 +189,7 @@ async def lifespan(app: FastAPI):
         start_agent_schedule_scheduler()
         start_email_sending_scheduler()
         start_channel_pending_scheduler()
+        start_channel_poll_scheduler()
         start_env_status_scheduler()
         start_cli_cleanup_scheduler()
         start_device_login_cleanup_scheduler()
@@ -382,6 +387,7 @@ async def lifespan(app: FastAPI):
         shutdown_agent_schedule_scheduler()
         shutdown_email_sending_scheduler()
         shutdown_channel_pending_scheduler()
+        shutdown_channel_poll_scheduler()
         shutdown_env_status_scheduler()
         shutdown_cli_cleanup_scheduler()
         shutdown_device_login_cleanup_scheduler()

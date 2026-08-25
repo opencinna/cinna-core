@@ -56,6 +56,38 @@ _IDENTITY_SESSION_SENDER_KINDS: frozenset[str] = frozenset(
 )
 
 
+class ChannelDecline(PermissionError):
+    """An access decline that will recur identically on every retry.
+
+    Every refusal in this module raises this, and so do the two invariant
+    refusals in ``ChannelInboundService._ingest``. It is the marker a caller
+    uses to tell "this sender is not allowed to do this" apart from "something
+    went wrong while trying".
+
+    **Why it subclasses ``PermissionError`` rather than replacing it.** Every
+    existing ``except PermissionError`` handler — the A2A handler, the App MCP
+    handler, the CLI routes, ``api/deps`` — keeps working untouched, so this
+    is a raise-site change and nothing else. Behaviour is identical everywhere
+    that does not opt in.
+
+    **Why a bare ``PermissionError`` was not good enough.**
+    ``ChannelInboundService._drain_parked`` classifies on the exception type to
+    decide a *disposition*: a deterministic decline fails the binding (which
+    then self-heals by re-routing), while anything else leaves the parked
+    messages parked for a later attempt. ``PermissionError`` is a subclass of
+    ``OSError``, so the moment real I/O runs under ``_ingest`` — attachment
+    fetching is the near one — a disk or socket error would arrive at that
+    handler wearing the marker for "this will never succeed", and a transient
+    failure would silently drop a queue of parked messages and fail the thread.
+    The classifier needs a type that only a *decision* can raise, and
+    ``OSError`` is not it.
+
+    The decline text is for logs and the binding's ``last_error`` only. What
+    the sender is told is always the one generic refusal every other denial
+    gets — a reply that named the reason would be an oracle.
+    """
+
+
 class NoActiveEnvironmentError(RuntimeError):
     """Raised by resolve_or_create_session when the agent has no active environment.
 
@@ -319,14 +351,14 @@ class ChannelIngestionService:
         the allowlist so the two lists agree, not because a channel calls this.
         """
         if sender.kind not in _IDENTITY_SESSION_SENDER_KINDS:
-            raise PermissionError(
+            raise ChannelDecline(
                 f"identity session not supported for sender kind {sender.kind!r} "
                 f"(supported: {sorted(_IDENTITY_SESSION_SENDER_KINDS)})"
             )
 
         caller_id = sender.platform_user_id
         if caller_id is None:
-            raise PermissionError(
+            raise ChannelDecline(
                 "identity session requires a sender with a platform_user_id"
             )
 
@@ -388,7 +420,7 @@ class ChannelIngestionService:
         if kind == "webui_user":
             if policy.require_owner_match:
                 if policy.expected_owner_id is None:
-                    raise PermissionError(
+                    raise ChannelDecline(
                         "webui_user requires expected_owner_id when require_owner_match=True"
                     )
                 if not (
@@ -396,7 +428,7 @@ class ChannelIngestionService:
                     == policy.expected_owner_id
                     == sender.platform_user_id
                 ):
-                    raise PermissionError(
+                    raise ChannelDecline(
                         "webui_user owner mismatch: "
                         f"agent.owner_id={agent.owner_id}, "
                         f"expected_owner_id={policy.expected_owner_id}, "
@@ -407,9 +439,9 @@ class ChannelIngestionService:
         if kind == "task_executor":
             # Real check, not a fast-path — replicates session_service.py:1250.
             if policy.expected_owner_id is None:
-                raise PermissionError("task_executor requires policy.expected_owner_id")
+                raise ChannelDecline("task_executor requires policy.expected_owner_id")
             if policy.expected_owner_id != sender.platform_user_id:
-                raise PermissionError(
+                raise ChannelDecline(
                     "task_executor sender does not match expected owner: "
                     f"expected_owner_id={policy.expected_owner_id}, "
                     f"sender.platform_user_id={sender.platform_user_id}"
@@ -422,7 +454,7 @@ class ChannelIngestionService:
             # created/resumed under exactly that user. Never a fast-path — a
             # channel that mis-resolves the sender is denied here.
             if policy.expected_owner_id is None:
-                raise PermissionError(
+                raise ChannelDecline(
                     "channel_caller requires policy.expected_owner_id"
                 )
             # Three-way structural invariant, deliberately stricter than
@@ -458,7 +490,7 @@ class ChannelIngestionService:
             # worse than one that is merely minimal.
             grant = policy.identity_grant
             if grant is None:
-                raise PermissionError(
+                raise ChannelDecline(
                     "channel_caller invariant violated: "
                     f"agent.owner_id={agent.owner_id}, "
                     f"expected_owner_id={policy.expected_owner_id}, "
@@ -476,7 +508,7 @@ class ChannelIngestionService:
                 agent_id=agent.id,
             )
             if denial:
-                raise PermissionError(
+                raise ChannelDecline(
                     f"channel_caller identity grant rejected: {denial}"
                 )
             return
@@ -500,7 +532,7 @@ class ChannelIngestionService:
             # makes the extraction a refactor; tightening it is a behaviour
             # change and needs its own reasoning.
             if policy.require_caller_in_route and sender.platform_user_id is None:
-                raise PermissionError(
+                raise ChannelDecline(
                     "mcp_caller missing platform_user_id "
                     "(routing layer should have rejected this)"
                 )
@@ -509,7 +541,7 @@ class ChannelIngestionService:
         if kind == "system_trigger":
             # Fastpath only after asserting the structural invariant — not a skip.
             if not policy.allow_system_trigger_fastpath:
-                raise PermissionError(
+                raise ChannelDecline(
                     "system_trigger requires policy.allow_system_trigger_fastpath=True"
                 )
             if not (
@@ -517,7 +549,7 @@ class ChannelIngestionService:
                 == agent.owner_id
                 == sender.platform_user_id
             ):
-                raise PermissionError(
+                raise ChannelDecline(
                     "system_trigger invariant violated: "
                     f"policy.expected_owner_id={policy.expected_owner_id}, "
                     f"agent.owner_id={agent.owner_id}, "
@@ -532,7 +564,7 @@ class ChannelIngestionService:
                 and policy.expected_owner_id is not None
                 and policy.expected_owner_id != sender.platform_user_id
             ):
-                raise PermissionError(
+                raise ChannelDecline(
                     "platform_user owner mismatch: "
                     f"expected_owner_id={policy.expected_owner_id}, "
                     f"sender.platform_user_id={sender.platform_user_id}"
@@ -540,7 +572,7 @@ class ChannelIngestionService:
             return
 
         # `anonymous` is reserved for future use; not supported in Phase 1.
-        raise PermissionError(f"sender kind not supported in Phase 1: {kind!r}")
+        raise ChannelDecline(f"sender kind not supported in Phase 1: {kind!r}")
 
     # ------------------------------------------------------------------
     # Internal helpers.
@@ -615,13 +647,13 @@ class ChannelIngestionService:
                 return sender.platform_user_id
             grant = policy.identity_grant if policy is not None else None
             if grant is None:
-                raise PermissionError(
+                raise ChannelDecline(
                     "channel_caller identity_owner_id requires an identity "
                     "grant on the access policy: "
                     f"identity_owner_id={identity_owner_id}"
                 )
             if not (grant.owner_id == agent.owner_id == identity_owner_id):
-                raise PermissionError(
+                raise ChannelDecline(
                     "channel_caller identity owner mismatch: "
                     f"identity_owner_id={identity_owner_id}, "
                     f"agent.owner_id={agent.owner_id}, "
@@ -657,7 +689,7 @@ class ChannelIngestionService:
             override = extra_session_kwargs.pop("session_owner_id", None)
             return override or agent.owner_id
 
-        raise PermissionError(f"sender kind not supported in Phase 1: {kind!r}")
+        raise ChannelDecline(f"sender kind not supported in Phase 1: {kind!r}")
 
     @staticmethod
     def _verify_resume_sender(
@@ -714,7 +746,7 @@ class ChannelIngestionService:
                     and existing.identity_caller_id is not None
                     and existing.identity_caller_id == sender.platform_user_id
                 ):
-                    raise PermissionError(
+                    raise ChannelDecline(
                         f"session.user_id={existing.user_id} does not match "
                         f"sender.platform_user_id={sender.platform_user_id} "
                         f"(kind={kind})"
@@ -729,7 +761,7 @@ class ChannelIngestionService:
             # for an mcp_caller sender. If a new MCP channel ever needs
             # service-level resume verification, reintroduce the
             # caller_id / identity_caller_id branch here.
-            raise PermissionError(
+            raise ChannelDecline(
                 "mcp_caller resume is not handled by ChannelIngestionService; "
                 "channels must perform their own resume verification "
                 "(see app_mcp_request_handler._try_resume_session)"
@@ -746,7 +778,7 @@ class ChannelIngestionService:
                     sender.external_id != token_id_str
                     and sender.external_id != str(existing.user_id)
                 ):
-                    raise PermissionError(
+                    raise ChannelDecline(
                         "a2a_caller resume mismatch: "
                         f"session.access_token_id={existing.access_token_id}, "
                         f"sender.external_id={sender.external_id}"
@@ -757,12 +789,12 @@ class ChannelIngestionService:
             # System triggers do not resume — every cron fire is a fresh
             # session. If a `thread_key` reaches the service for this kind
             # it is a caller bug.
-            raise PermissionError(
+            raise ChannelDecline(
                 "system_trigger does not support thread_key (resume); "
                 "every trigger fires a fresh session"
             )
 
-        raise PermissionError(f"sender kind not supported in Phase 1: {kind!r}")
+        raise ChannelDecline(f"sender kind not supported in Phase 1: {kind!r}")
 
     # Columns that callers may stamp directly via `extra_session_kwargs`.
     # Mirrors what A2A's `_stamp_new_session` overrides and App MCP's
@@ -811,4 +843,8 @@ class ChannelIngestionService:
             db.refresh(session)
 
 
-__all__ = ["ChannelIngestionService", "NoActiveEnvironmentError"]
+__all__ = [
+    "ChannelDecline",
+    "ChannelIngestionService",
+    "NoActiveEnvironmentError",
+]

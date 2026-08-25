@@ -63,15 +63,23 @@ def create_server_channel(
     project_number: str = "123456789012",
     email_whitelist: str | None = None,
     secrets: str | None = None,
+    config: dict[str, Any] | None = None,
     expected_status: int = 200,
 ) -> dict:
-    """Create a server channel via POST /admin/server-channels."""
+    """Create a server channel via POST /admin/server-channels.
+
+    ``config`` overrides the default Google-Chat-shaped ``{"project_number":
+    ...}`` body entirely — pass it for any other transport (the email
+    transport's shape is built by ``tests/utils/email_channel.py
+    ::create_email_channel``, which composes this helper rather than
+    duplicating the POST).
+    """
     payload: dict[str, Any] = {
         "channel_type": channel_type,
         "name": name or f"channel-{random_lower_string()[:8]}",
         "enabled": enabled,
         "auto_register_users": auto_register_users,
-        "config": {"project_number": project_number},
+        "config": config if config is not None else {"project_number": project_number},
     }
     if email_whitelist is not None:
         payload["email_whitelist"] = email_whitelist
@@ -557,6 +565,52 @@ def build_channel_candidate(
     )
 
 
+# ---------------------------------------------------------------------------
+# Outbound delivery internals — Rule-1 exemptions
+# ---------------------------------------------------------------------------
+
+
+def binding_thread_key(binding, channel=None) -> str | None:
+    """Directly invoke ``channel_outbound_service._binding_thread_key``.
+
+    EXEMPTION — same shape as ``route_installed``/``verify_resume_sender``
+    above: this is the single, private seam that derives a transport-facing
+    thread key from a binding, and its totality guarantee (never raises, even
+    when the binding row was concurrently deleted after the caller's
+    ``db.commit()`` expired the instance) has no HTTP surface of its own to
+    exercise it through — every real caller is deep inside an event handler
+    (``handle_stream_completed`` / ``handle_stream_error``). Channels &
+    identity unification phase 4 §6 asks to "assert on the extended helper
+    specifically", which is exactly what calling it directly gives.
+    """
+    from app.services.server_channels.channel_outbound_service import (
+        _binding_thread_key,
+    )
+
+    return _binding_thread_key(binding, channel)
+
+
+def deliver_via_binding(db: Session, channel, binding, text: str) -> bool:
+    """Directly invoke ``ChannelOutboundService._deliver``.
+
+    EXEMPTION — same posture as ``binding_thread_key`` above: proves the
+    downstream half of phase 4 §6's requirement ("a declined send, not an
+    exception") end to end through the real delivery method, for a binding
+    whose row is gone. Returns ``False`` for a declined send, exactly as the
+    method does; never raises for that case, which is the property under
+    test.
+    """
+    import asyncio
+
+    from app.services.server_channels.channel_outbound_service import (
+        ChannelOutboundService,
+    )
+
+    return asyncio.run(
+        ChannelOutboundService._deliver(db=db, channel=channel, binding=binding, text=text)
+    )
+
+
 __all__ = [
     "create_server_channel",
     "list_server_channels",
@@ -576,5 +630,7 @@ __all__ = [
     "route_installed",
     "verify_resume_sender",
     "build_channel_candidate",
+    "binding_thread_key",
+    "deliver_via_binding",
     "CHAT_ISSUER",
 ]

@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { LoadingButton } from "@/components/ui/loading-button"
 import {
   Select,
   SelectContent,
@@ -34,10 +35,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { LoadingButton } from "@/components/ui/loading-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import useCustomToast from "@/hooks/useCustomToast"
 import { getErrorMessage } from "@/utils"
+import { getChannelTypeMeta } from "./channelTypes"
 
 /** Sentinel for the "type a raw id instead" option. A non-email string so it
  *  can never collide with a real sender address in the same Select. */
@@ -193,6 +194,10 @@ export function ChannelSetupInstructionsPanel({
   // channel would just earn a 422 from the backend, which refuses it.
   const hasWebhook = channel.webhook_token != null
 
+  // Every transport-specific sentence in this panel comes from here rather
+  // than being written for Google Chat and left to be wrong everywhere else.
+  const meta = getChannelTypeMeta(channel.channel_type)
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -247,13 +252,22 @@ export function ChannelSetupInstructionsPanel({
                 </div>
               )}
 
+              {/* Behaviour the backend's own setup steps can't carry, and
+                  that an admin would otherwise only learn from the adapter
+                  source: what happens to a sender this channel turns away. */}
+              {meta.setupNote && (
+                <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+                  {meta.setupNote}
+                </p>
+              )}
+
               <div className="space-y-2 rounded-lg border p-3">
                 <div className="space-y-0.5">
                   <p className="text-sm font-medium">Test outbound</p>
                   <p className="text-xs text-muted-foreground">
-                    Posts a message to prove the stored credential works. Pick
-                    someone who has messaged the app — the test lands in the
-                    conversation they already have with it.
+                    Sends a message through this channel to prove its outbound
+                    path works. Pick someone who has messaged the app — the test
+                    lands in the conversation they already have with it.
                   </p>
                 </div>
 
@@ -279,7 +293,7 @@ export function ChannelSetupInstructionsPanel({
                       </SelectItem>
                     ))}
                     <SelectItem value={CUSTOM_TARGET}>
-                      Custom space or thread ID…
+                      {meta.outboundTest.customTargetLabel}
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -290,8 +304,8 @@ export function ChannelSetupInstructionsPanel({
                 {target !== CUSTOM_TARGET &&
                   (sendersError ? (
                     <p className="text-xs text-destructive">
-                      Couldn't load recent senders. You can still send to a
-                      space or thread ID with "Custom space or thread ID…".
+                      Couldn't load recent senders. You can still send to a raw
+                      destination with "{meta.outboundTest.customTargetLabel}".
                     </p>
                   ) : sendersLoading ? (
                     <p className="text-xs text-muted-foreground">
@@ -301,7 +315,7 @@ export function ChannelSetupInstructionsPanel({
                     <p className="text-xs text-muted-foreground">
                       Nobody has messaged this channel yet. An email can only be
                       resolved once the app has seen a message from that person,
-                      so until then use a space or thread ID.
+                      so until then use "{meta.outboundTest.customTargetLabel}".
                     </p>
                   ) : null)}
 
@@ -313,7 +327,7 @@ export function ChannelSetupInstructionsPanel({
                         setThreadKey(e.target.value)
                         setTestResult(null)
                       }}
-                      placeholder="spaces/AAAA"
+                      placeholder={meta.outboundTest.customTargetPlaceholder}
                       className="font-mono text-xs"
                     />
                   )}
@@ -342,8 +356,7 @@ export function ChannelSetupInstructionsPanel({
                 </div>
                 {!channel.has_outbound_credentials && (
                   <p className="text-xs text-amber-600 dark:text-amber-400">
-                    No credential stored yet — add the service account JSON to
-                    this channel first.
+                    {meta.outboundTest.missingCredentialsHint}
                   </p>
                 )}
                 {/* The whole point of this control is the reason for failure,

@@ -71,10 +71,12 @@ class EmailPollingService:
 
         # Parse sender
         from_header = msg.get("From", "")
-        _, sender_email = parseaddr(from_header)
+        display_name, sender_email = parseaddr(from_header)
         if not sender_email:
             logger.warning(f"Email has no valid sender address (From: '{from_header}'), skipping")
             return None
+        # RFC 2047 applies to the display part too ("=?utf-8?B?...?= <a@b>").
+        display_name = EmailPollingService._decode_header_value(display_name).strip()
         logger.debug(f"  Sender: {sender_email}")
 
         # Parse recipients (To, CC) for address matching
@@ -119,6 +121,10 @@ class EmailPollingService:
         return {
             "message_id": message_id,
             "sender": sender_email.lower(),
+            # The From: display part, for ChannelInboundMessage.
+            # sender_display_name. Non-authoritative in every sense — it is
+            # the same spoofable header the address comes from.
+            "sender_display_name": display_name or None,
             "recipients": recipients,
             "subject": subject[:1000] if subject else "",
             "body": body,
@@ -248,16 +254,22 @@ class EmailPollingService:
             logger.warning(f"Failed to mark email {msg_id} as read: {e}")
 
     @staticmethod
-    def _is_addressed_to_agent(
+    def _is_addressed_to_channel(
         recipients: list[str],
         incoming_mailbox: str,
     ) -> bool:
         """
-        Check if the agent's incoming_mailbox is among the email recipients (To/CC).
+        Check if the channel's incoming_mailbox is among the recipients (To/CC).
 
-        This is a mandatory check to ensure emails are only processed by the agent
-        they were actually sent to. An IMAP mailbox can contain emails addressed to
-        groups, aliases, or other addresses that don't belong to this agent.
+        Mandatory, and its reason is unchanged by the move from a per-agent
+        integration to a channel: one IMAP account can carry mail addressed to
+        groups, aliases, or other mailboxes entirely. Only the target moved —
+        it is now ``ServerChannel.config["incoming_mailbox"]``, so several
+        channels may share one account and each answers only its own mail.
+
+        An empty target rejects everything, deliberately: with nothing to
+        compare against there is no way to tell this channel's mail from
+        anybody else's, and answering all of it is the worse failure.
         """
         if not incoming_mailbox:
             # No mailbox configured - cannot verify, reject by default

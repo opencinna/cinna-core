@@ -44,6 +44,7 @@ import { getErrorMessage } from "@/utils"
 import { ChannelDebugDialog } from "./ChannelDebugDialog"
 import { ChannelSetupInstructionsPanel } from "./ChannelSetupInstructionsPanel"
 import { parseWhitelist, WHITELIST_EMPTY_WARNING } from "./channelCopy"
+import { getChannelTypeMeta } from "./channelTypes"
 import { ServerChannelDialog } from "./ServerChannelDialog"
 
 export function ServerChannelsCard() {
@@ -164,6 +165,10 @@ export function ServerChannelsCard() {
                 const hasNoAllowedSenders = parseWhitelist(
                   channel.email_whitelist ?? "",
                 ).isEmpty
+                // "No credential" means something different per transport —
+                // a service account key for Google Chat, an SMTP server for
+                // email — so the badge's explanation comes from the registry.
+                const meta = getChannelTypeMeta(channel.channel_type)
                 return (
                   <div
                     key={channel.id}
@@ -218,9 +223,7 @@ export function ServerChannelsCard() {
                               </Badge>
                             </TooltipTrigger>
                             <TooltipContent className="max-w-xs text-xs">
-                              No service account key stored, so the agent's
-                              replies can't be delivered. Edit the channel to
-                              add one.
+                              {meta.outboundTest.missingCredentialsHint}
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
@@ -361,9 +364,9 @@ export function ServerChannelsCard() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              The webhook stops working immediately and every conversation bound
-              to it is discarded. People who message the bot afterwards will be
-              routed as if for the first time.
+              The channel stops accepting messages immediately and every
+              conversation bound to it is discarded. People who message it
+              afterwards will be routed as if for the first time.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
