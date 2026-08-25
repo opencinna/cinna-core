@@ -4777,246 +4777,6 @@ export const AgentCredentialLinkRequestSchema = {
     title: 'AgentCredentialLinkRequest'
 } as const;
 
-export const AgentEmailIntegrationCreateSchema = {
-    properties: {
-        enabled: {
-            type: 'boolean',
-            title: 'Enabled',
-            default: false
-        },
-        access_mode: {
-            '$ref': '#/components/schemas/EmailAccessMode',
-            default: 'restricted'
-        },
-        process_as: {
-            '$ref': '#/components/schemas/EmailProcessAs',
-            default: 'new_session'
-        },
-        auto_approve_email_pattern: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 1024
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Auto Approve Email Pattern'
-        },
-        allowed_domains: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 1024
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Allowed Domains'
-        },
-        max_clones: {
-            type: 'integer',
-            maximum: 1000,
-            minimum: 1,
-            title: 'Max Clones',
-            default: 50
-        },
-        clone_share_mode: {
-            '$ref': '#/components/schemas/EmailCloneShareMode',
-            default: 'user'
-        },
-        agent_session_mode: {
-            '$ref': '#/components/schemas/AgentSessionMode',
-            default: 'clone'
-        },
-        incoming_server_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Incoming Server Id'
-        },
-        incoming_mailbox: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Incoming Mailbox'
-        },
-        outgoing_server_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Outgoing Server Id'
-        },
-        outgoing_from_address: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Outgoing From Address'
-        }
-    },
-    type: 'object',
-    title: 'AgentEmailIntegrationCreate'
-} as const;
-
-export const AgentEmailIntegrationPublicSchema = {
-    properties: {
-        enabled: {
-            type: 'boolean',
-            title: 'Enabled',
-            default: false
-        },
-        access_mode: {
-            '$ref': '#/components/schemas/EmailAccessMode',
-            default: 'restricted'
-        },
-        process_as: {
-            '$ref': '#/components/schemas/EmailProcessAs',
-            default: 'new_session'
-        },
-        auto_approve_email_pattern: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 1024
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Auto Approve Email Pattern'
-        },
-        allowed_domains: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 1024
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Allowed Domains'
-        },
-        max_clones: {
-            type: 'integer',
-            maximum: 1000,
-            minimum: 1,
-            title: 'Max Clones',
-            default: 50
-        },
-        clone_share_mode: {
-            '$ref': '#/components/schemas/EmailCloneShareMode',
-            default: 'user'
-        },
-        agent_session_mode: {
-            '$ref': '#/components/schemas/AgentSessionMode',
-            default: 'clone'
-        },
-        incoming_server_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Incoming Server Id'
-        },
-        incoming_mailbox: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Incoming Mailbox'
-        },
-        outgoing_server_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Outgoing Server Id'
-        },
-        outgoing_from_address: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Outgoing From Address'
-        },
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        email_clone_count: {
-            type: 'integer',
-            title: 'Email Clone Count',
-            default: 0
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        }
-    },
-    type: 'object',
-    required: ['id', 'agent_id', 'created_at', 'updated_at'],
-    title: 'AgentEmailIntegrationPublic'
-} as const;
-
 export const AgentEnvActionLogPublicSchema = {
     properties: {
         id: {
@@ -6572,11 +6332,6 @@ export const AgentPublicSchema = {
             title: 'Agent Api External Access Enabled',
             default: false
         },
-        has_email_integration: {
-            type: 'boolean',
-            title: 'Has Email Integration',
-            default: false
-        },
         has_mcp_connectors: {
             type: 'boolean',
             title: 'Has Mcp Connectors',
@@ -6985,12 +6740,6 @@ export const AgentSdkConfigSchema = {
     type: 'object',
     title: 'AgentSdkConfig',
     description: 'Schema for agent SDK configuration'
-} as const;
-
-export const AgentSessionModeSchema = {
-    type: 'string',
-    enum: ['clone', 'owner'],
-    title: 'AgentSessionMode'
 } as const;
 
 export const AgentStatusListPublicSchema = {
@@ -11517,7 +11266,14 @@ export const ChannelSetupInstructionsSchema = {
             title: 'Channel Type'
         },
         webhook_url: {
-            type: 'string',
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Webhook Url'
         },
         details: {
@@ -13767,24 +13523,6 @@ Only valid for the publisher install of a bundle that has not yet been
 published (no revisions exist). Once a revision is published, mutating
 the bundle id would silently orphan installed app-data — the API
 rejects with 409.`
-} as const;
-
-export const EmailAccessModeSchema = {
-    type: 'string',
-    enum: ['open', 'restricted'],
-    title: 'EmailAccessMode'
-} as const;
-
-export const EmailCloneShareModeSchema = {
-    type: 'string',
-    enum: ['user', 'builder'],
-    title: 'EmailCloneShareMode'
-} as const;
-
-export const EmailProcessAsSchema = {
-    type: 'string',
-    enum: ['new_session', 'new_task'],
-    title: 'EmailProcessAs'
 } as const;
 
 export const EncryptionInitRequestSchema = {
@@ -16278,30 +16016,6 @@ export const InputTaskDetailPublicSchema = {
             ],
             title: 'Source Session Id'
         },
-        source_email_message_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Email Message Id'
-        },
-        source_agent_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Agent Id'
-        },
         auto_feedback: {
             type: 'boolean',
             title: 'Auto Feedback'
@@ -16662,30 +16376,6 @@ export const InputTaskPublicSchema = {
             ],
             title: 'Source Session Id'
         },
-        source_email_message_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Email Message Id'
-        },
-        source_agent_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Agent Id'
-        },
         auto_feedback: {
             type: 'boolean',
             title: 'Auto Feedback'
@@ -16928,30 +16618,6 @@ export const InputTaskPublicExtendedSchema = {
                 }
             ],
             title: 'Source Session Id'
-        },
-        source_email_message_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Email Message Id'
-        },
-        source_agent_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Agent Id'
         },
         auto_feedback: {
             type: 'boolean',
@@ -19188,11 +18854,6 @@ export const MailServerConfigPublicSchema = {
             format: 'uuid',
             title: 'Id'
         },
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
         has_password: {
             type: 'boolean',
             title: 'Has Password',
@@ -19210,7 +18871,7 @@ export const MailServerConfigPublicSchema = {
         }
     },
     type: 'object',
-    required: ['name', 'server_type', 'host', 'port', 'username', 'id', 'user_id', 'created_at', 'updated_at'],
+    required: ['name', 'server_type', 'host', 'port', 'username', 'id', 'created_at', 'updated_at'],
     title: 'MailServerConfigPublic'
 } as const;
 
@@ -20999,38 +20660,6 @@ export const PrivateUserCreateSchema = {
     type: 'object',
     required: ['email', 'password', 'full_name'],
     title: 'PrivateUserCreate'
-} as const;
-
-export const ProcessEmailsResultSchema = {
-    properties: {
-        polled: {
-            type: 'integer',
-            title: 'Polled',
-            default: 0
-        },
-        processed: {
-            type: 'integer',
-            title: 'Processed',
-            default: 0
-        },
-        pending: {
-            type: 'integer',
-            title: 'Pending',
-            default: 0
-        },
-        errors: {
-            type: 'integer',
-            title: 'Errors',
-            default: 0
-        },
-        message: {
-            type: 'string',
-            title: 'Message',
-            default: ''
-        }
-    },
-    type: 'object',
-    title: 'ProcessEmailsResult'
 } as const;
 
 export const PublishRequestSchema = {
@@ -23092,73 +22721,6 @@ export const SecurityEventsPublicSchema = {
     title: 'SecurityEventsPublic'
 } as const;
 
-export const SendAnswerRequestSchema = {
-    properties: {
-        custom_message: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 10000
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Custom Message'
-        }
-    },
-    type: 'object',
-    title: 'SendAnswerRequest',
-    description: 'Request to send an email reply for an email-originated task'
-} as const;
-
-export const SendAnswerResponseSchema = {
-    properties: {
-        success: {
-            type: 'boolean',
-            title: 'Success'
-        },
-        queue_entry_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Queue Entry Id'
-        },
-        generated_reply: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Generated Reply'
-        },
-        error: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Error'
-        }
-    },
-    type: 'object',
-    required: ['success'],
-    title: 'SendAnswerResponse',
-    description: 'Response from sending an email reply'
-} as const;
-
 export const ServerChannelCreateSchema = {
     properties: {
         channel_type: {
@@ -23307,11 +22869,25 @@ export const ServerChannelPublicSchema = {
             title: 'Email Whitelist'
         },
         webhook_token: {
-            type: 'string',
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Webhook Token'
         },
         webhook_url: {
-            type: 'string',
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Webhook Url'
         },
         has_outbound_credentials: {

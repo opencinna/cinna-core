@@ -1,13 +1,13 @@
 """
-Integration tests: AgentPublic capability flags — has_email_integration,
-has_mcp_connectors, has_webhooks.
+Integration tests: AgentPublic capability flags — has_mcp_connectors,
+has_webhooks.
 
 Verifies that GET /agents/ (the list endpoint) returns correct computed boolean
 capability flags per agent:
 
   1. Both flags default to False on fresh agents (no integrations configured).
-  2. Enabling email integration, creating an MCP connector, and creating a
-     webhook on agent A flips all three flags to True for that agent.
+  2. Creating an MCP connector and creating a webhook on agent A flips both
+     flags to True for that agent.
   3. Agent B (same owner, no integrations) keeps all flags False throughout —
      proving the batched capability query is isolated per-agent and does not
      bleed across agents.
@@ -19,13 +19,10 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.utils.agent import (
-    configure_email_integration,
     create_agent_via_api,
-    enable_email_integration,
     list_agents,
 )
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.mail_server import create_imap_server, create_smtp_server
 from tests.utils.mcp import create_mcp_connector
 from tests.utils.webhook import create_session_webhook, update_webhook
 
@@ -40,14 +37,14 @@ def test_capability_flags_lifecycle(
     Scenario: capability flags on GET /agents/ list.
 
       1. Create two agents (A and B) for the same user.
-      2. GET /agents/ — both agents appear; all three flags are False on both.
-      3. For agent A: enable email integration (IMAP+SMTP+configure+enable),
-         create an active MCP connector, create an enabled session webhook.
-      4. GET /agents/ — agent A has all three flags True; agent B still has all
-         three flags False (per-agent isolation proof).
+      2. GET /agents/ — both agents appear; both flags are False on both.
+      3. For agent A: create an active MCP connector, create an enabled
+         session webhook.
+      4. GET /agents/ — agent A has both flags True; agent B still has both
+         flags False (per-agent isolation proof).
       5. Disable the webhook on agent A (enabled=False).
-      6. GET /agents/ — agent A now has has_webhooks=False; email and MCP flags
-         remain True (validates the "actively enabled" predicate).
+      6. GET /agents/ — agent A now has has_webhooks=False; the MCP flag
+         remains True (validates the "actively enabled" predicate).
     """
 
     # ── Phase 1: Create two agents ────────────────────────────────────────
@@ -83,7 +80,6 @@ def test_capability_flags_lifecycle(
     assert agent_b_id in agents_by_id, "Agent B missing from /agents/ list"
 
     for flag in (
-        "has_email_integration",
         "has_mcp_connectors",
         "has_webhooks",
         "git_versioning_enabled",
@@ -97,22 +93,10 @@ def test_capability_flags_lifecycle(
 
     # ── Phase 3: Enable integrations on agent A ───────────────────────────
 
-    # 3a. Email integration: create mail servers → configure → enable
-    imap_server = create_imap_server(client, superuser_token_headers)
-    smtp_server = create_smtp_server(client, superuser_token_headers)
-    configure_email_integration(
-        client,
-        superuser_token_headers,
-        agent_a_id,
-        incoming_server_id=imap_server["id"],
-        outgoing_server_id=smtp_server["id"],
-    )
-    enable_email_integration(client, superuser_token_headers, agent_a_id)
-
-    # 3b. MCP connector — created with is_active=True by default
+    # MCP connector — created with is_active=True by default
     create_mcp_connector(client, superuser_token_headers, agent_a_id, name="Test MCP")
 
-    # 3c. Session webhook — created with enabled=True by default
+    # Session webhook — created with enabled=True by default
     webhook = create_session_webhook(
         client, superuser_token_headers, agent_a_id, name="Test Session Webhook"
     )
@@ -123,9 +107,6 @@ def test_capability_flags_lifecycle(
     body = list_agents(client, superuser_token_headers)
     agents_by_id = {a["id"]: a for a in body["data"]}
 
-    assert agents_by_id[agent_a_id]["has_email_integration"] is True, (
-        "Agent A: expected has_email_integration=True after enabling integration"
-    )
     assert agents_by_id[agent_a_id]["has_mcp_connectors"] is True, (
         "Agent A: expected has_mcp_connectors=True after creating active MCP connector"
     )
@@ -134,9 +115,6 @@ def test_capability_flags_lifecycle(
     )
 
     # Agent B must be completely unaffected
-    assert agents_by_id[agent_b_id]["has_email_integration"] is False, (
-        "Agent B: has_email_integration must remain False (cross-agent bleed)"
-    )
     assert agents_by_id[agent_b_id]["has_mcp_connectors"] is False, (
         "Agent B: has_mcp_connectors must remain False (cross-agent bleed)"
     )
@@ -156,10 +134,7 @@ def test_capability_flags_lifecycle(
     assert agents_by_id[agent_a_id]["has_webhooks"] is False, (
         "Agent A: expected has_webhooks=False after disabling the webhook"
     )
-    # Email and MCP flags must still be True — disabling webhook only
-    assert agents_by_id[agent_a_id]["has_email_integration"] is True, (
-        "Agent A: has_email_integration should remain True after webhook disable"
-    )
+    # MCP flag must still be True — disabling webhook only
     assert agents_by_id[agent_a_id]["has_mcp_connectors"] is True, (
         "Agent A: has_mcp_connectors should remain True after webhook disable"
     )

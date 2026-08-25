@@ -10,7 +10,6 @@ import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import { DesktopSessionsCard } from "@/components/UserSettings/DesktopSessionsCard"
 import { IdentityServerCard } from "@/components/UserSettings/IdentityServerCard"
 import { LocalDevelopmentCard } from "@/components/UserSettings/LocalDevelopmentCard"
-import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
 import { NotificationSettings } from "@/components/UserSettings/NotificationSettings"
 import OAuthAccounts from "@/components/UserSettings/OAuthAccounts"
 import PasswordCard from "@/components/UserSettings/PasswordCard"
@@ -105,13 +104,14 @@ function UserSettings() {
       title: "Channels",
       content: (
         <div className="space-y-6">
-          {/* The replacement for the three cards below: one place where every
+          {/* The replacement for the two cards below: one place where every
               channel an administrator has connected is listed with the user's
-              own settings. Mail Servers / MCP Server / Identity Server are
-              folded into it in phases 4-5 and disappear from here then. */}
+              own settings. MCP Server / Identity Server are folded into it in
+              phase 5 and disappear from here then. Mail Servers already has:
+              it is server-owned infrastructure now and lives under
+              Admin → Server Configuration. */}
           <UserChannelsCard />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <MailServerSettings />
             <AppAgentRoutesCard />
             <IdentityServerCard />
           </div>

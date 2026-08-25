@@ -242,12 +242,17 @@ class ChannelAdapter(ABC):
 
     @abstractmethod
     def get_setup_instructions(
-        self, channel: ServerChannel, webhook_url: str
+        self, channel: ServerChannel, webhook_url: str | None
     ) -> tuple[dict[str, str], list[str]]:
         """Return ``(details, steps)`` for the admin setup panel.
 
         ``details`` is a flat label→value map (audience, bot scopes, …);
         ``steps`` is an ordered list of human-readable instructions.
+
+        ``webhook_url`` is ``None`` for a transport that is not reached by a
+        webhook. An adapter that weaves the URL into its steps must say "this
+        channel has no inbound URL" rather than render the ``None`` — the panel
+        is copy-paste material for an admin.
         """
 
     def build_sync_response(self, text: str | None) -> dict[str, Any]:

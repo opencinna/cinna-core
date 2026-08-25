@@ -469,16 +469,22 @@ def _build_session_context(
             context["task_priority"] = task.priority or "normal"
             context["task_status"] = task.status or "in_progress"
 
-            # Creator info
-            if task.agent_initiated and task.source_agent_id:
-                source_agent = db.get(Agent, task.source_agent_id)
-                context["task_created_by_name"] = source_agent.name if source_agent else "Unknown Agent"
-                context["task_created_by_type"] = "agent"
-            else:
-                from app.models.users.user import User as UserModel
-                creator = db.get(UserModel, task.owner_id)
-                context["task_created_by_name"] = (creator.full_name or creator.email) if creator else "Unknown User"
-                context["task_created_by_type"] = "user"
+            # Creator info.
+            #
+            # This used to branch on ``task.agent_initiated and
+            # task.source_agent_id`` to name a creating *agent*. That branch was
+            # unreachable: ``source_agent_id`` existed solely for the deleted
+            # email→task flow (it was set only when an inbound email created a
+            # task, to find that agent's SMTP config) and no agent-initiated
+            # creation path ever populated it — they set ``source_session_id``
+            # instead. Handover-created tasks therefore always reported the
+            # owning user, which is what this does. The column is gone; if
+            # agent attribution is ever wanted here, derive it from
+            # ``task.source_session_id``'s agent rather than reintroducing it.
+            from app.models.users.user import User as UserModel
+            creator = db.get(UserModel, task.owner_id)
+            context["task_created_by_name"] = (creator.full_name or creator.email) if creator else "Unknown User"
+            context["task_created_by_type"] = "user"
 
             # Parent task context (subtasks)
             parent_task = None

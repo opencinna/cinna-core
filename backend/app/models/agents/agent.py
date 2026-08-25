@@ -281,7 +281,6 @@ class AgentPublic(SQLModel):
     # Computed capability flags — surface the agent's "purpose" on list cards
     # without per-card queries. Reflect whether each integration is actively
     # enabled (not merely configured). Populated in the public conversion.
-    has_email_integration: bool = False
     has_mcp_connectors: bool = False
     has_webhooks: bool = False
     # Whether an AgentGitSource is attached (git versioning connected). Lets the

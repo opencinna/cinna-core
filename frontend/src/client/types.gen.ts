@@ -927,41 +927,6 @@ export type AgentCredentialLinkRequest = {
     credential_id: string;
 };
 
-export type AgentEmailIntegrationCreate = {
-    enabled?: boolean;
-    access_mode?: EmailAccessMode;
-    process_as?: EmailProcessAs;
-    auto_approve_email_pattern?: (string | null);
-    allowed_domains?: (string | null);
-    max_clones?: number;
-    clone_share_mode?: EmailCloneShareMode;
-    agent_session_mode?: AgentSessionMode;
-    incoming_server_id?: (string | null);
-    incoming_mailbox?: (string | null);
-    outgoing_server_id?: (string | null);
-    outgoing_from_address?: (string | null);
-};
-
-export type AgentEmailIntegrationPublic = {
-    enabled?: boolean;
-    access_mode?: EmailAccessMode;
-    process_as?: EmailProcessAs;
-    auto_approve_email_pattern?: (string | null);
-    allowed_domains?: (string | null);
-    max_clones?: number;
-    clone_share_mode?: EmailCloneShareMode;
-    agent_session_mode?: AgentSessionMode;
-    incoming_server_id?: (string | null);
-    incoming_mailbox?: (string | null);
-    outgoing_server_id?: (string | null);
-    outgoing_from_address?: (string | null);
-    id: string;
-    agent_id: string;
-    email_clone_count?: number;
-    created_at: string;
-    updated_at: string;
-};
-
 /**
  * Public response model for AgentEnvActionLog.
  */
@@ -1363,7 +1328,6 @@ export type AgentPublic = {
     agent_api_enabled?: boolean;
     agent_api_identity_enabled?: boolean;
     agent_api_external_access_enabled?: boolean;
-    has_email_integration?: boolean;
     has_mcp_connectors?: boolean;
     has_webhooks?: boolean;
     git_versioning_enabled?: boolean;
@@ -1447,8 +1411,6 @@ export type AgentSdkConfig = {
     sdk_tools?: Array<(string)>;
     allowed_tools?: Array<(string)>;
 };
-
-export type AgentSessionMode = 'clone' | 'owner';
 
 export type AgentsPublic = {
     data: Array<AgentPublic>;
@@ -2497,7 +2459,7 @@ export type ChannelRecentSender = {
  */
 export type ChannelSetupInstructions = {
     channel_type: string;
-    webhook_url: string;
+    webhook_url: (string | null);
     details?: {
         [key: string]: (string);
     };
@@ -3149,12 +3111,6 @@ export type EditBundleIdRequest = {
     bundle_id: string;
 };
 
-export type EmailAccessMode = 'open' | 'restricted';
-
-export type EmailCloneShareMode = 'user' | 'builder';
-
-export type EmailProcessAs = 'new_session' | 'new_task';
-
 export type EncryptionInitRequest = {
     device: DeviceInput;
     envelopes?: Array<KeyEnvelopeInput>;
@@ -3760,8 +3716,6 @@ export type InputTaskDetailPublic = {
     agent_initiated: boolean;
     auto_execute: boolean;
     source_session_id: (string | null);
-    source_email_message_id?: (string | null);
-    source_agent_id?: (string | null);
     auto_feedback: boolean;
     error_message: (string | null);
     created_at: string;
@@ -3807,8 +3761,6 @@ export type InputTaskPublic = {
     agent_initiated: boolean;
     auto_execute: boolean;
     source_session_id: (string | null);
-    source_email_message_id?: (string | null);
-    source_agent_id?: (string | null);
     auto_feedback: boolean;
     error_message: (string | null);
     created_at: string;
@@ -3843,8 +3795,6 @@ export type InputTaskPublicExtended = {
     agent_initiated: boolean;
     auto_execute: boolean;
     source_session_id: (string | null);
-    source_email_message_id?: (string | null);
-    source_agent_id?: (string | null);
     auto_feedback: boolean;
     error_message: (string | null);
     created_at: string;
@@ -4181,7 +4131,6 @@ export type MailServerConfigPublic = {
     encryption_type?: EncryptionType;
     username: string;
     id: string;
-    user_id: string;
     has_password?: boolean;
     created_at: string;
     updated_at: string;
@@ -4827,14 +4776,6 @@ export type PrivateUserCreate = {
     is_verified?: boolean;
 };
 
-export type ProcessEmailsResult = {
-    polled?: number;
-    processed?: number;
-    pending?: number;
-    errors?: number;
-    message?: string;
-};
-
 /**
  * Body of ``POST /agents/{agent_id}/publish``.
  *
@@ -5316,23 +5257,6 @@ export type SecurityEventsPublic = {
 };
 
 /**
- * Request to send an email reply for an email-originated task
- */
-export type SendAnswerRequest = {
-    custom_message?: (string | null);
-};
-
-/**
- * Response from sending an email reply
- */
-export type SendAnswerResponse = {
-    success: boolean;
-    queue_entry_id?: (string | null);
-    generated_reply?: (string | null);
-    error?: (string | null);
-};
-
-/**
  * Admin create payload.
  */
 export type ServerChannelCreate = {
@@ -5368,8 +5292,8 @@ export type ServerChannelPublic = {
         [key: string]: unknown;
     };
     email_whitelist?: (string | null);
-    webhook_token: string;
-    webhook_url: string;
+    webhook_token: (string | null);
+    webhook_url: (string | null);
     has_outbound_credentials: boolean;
     created_by?: (string | null);
     created_at: string;
@@ -8490,43 +8414,6 @@ export type DesktopAuthCinnaDesktopDiscoveryResponse = ({
     [key: string]: unknown;
 });
 
-export type EmailIntegrationGetEmailIntegrationData = {
-    agentId: string;
-};
-
-export type EmailIntegrationGetEmailIntegrationResponse = ((AgentEmailIntegrationPublic | null));
-
-export type EmailIntegrationCreateOrUpdateEmailIntegrationData = {
-    agentId: string;
-    requestBody: AgentEmailIntegrationCreate;
-};
-
-export type EmailIntegrationCreateOrUpdateEmailIntegrationResponse = (AgentEmailIntegrationPublic);
-
-export type EmailIntegrationDeleteEmailIntegrationData = {
-    agentId: string;
-};
-
-export type EmailIntegrationDeleteEmailIntegrationResponse = (Message);
-
-export type EmailIntegrationEnableEmailIntegrationData = {
-    agentId: string;
-};
-
-export type EmailIntegrationEnableEmailIntegrationResponse = (AgentEmailIntegrationPublic);
-
-export type EmailIntegrationDisableEmailIntegrationData = {
-    agentId: string;
-};
-
-export type EmailIntegrationDisableEmailIntegrationResponse = (AgentEmailIntegrationPublic);
-
-export type EmailIntegrationProcessEmailsData = {
-    agentId: string;
-};
-
-export type EmailIntegrationProcessEmailsResponse = (ProcessEmailsResult);
-
 export type EnvironmentsGetEnvironmentData = {
     id: string;
 };
@@ -9919,13 +9806,6 @@ export type TasksExecuteTaskData = {
 };
 
 export type TasksExecuteTaskResponse = (ExecuteTaskResponse);
-
-export type TasksSendTaskEmailAnswerData = {
-    id: string;
-    requestBody: SendAnswerRequest;
-};
-
-export type TasksSendTaskEmailAnswerResponse = (SendAnswerResponse);
 
 export type TasksArchiveTaskData = {
     id: string;

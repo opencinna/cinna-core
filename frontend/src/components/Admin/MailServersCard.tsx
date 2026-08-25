@@ -1,3 +1,12 @@
+/**
+ * Mail Servers — server-owned IMAP/SMTP infrastructure, administered from
+ * Admin → Server Configuration.
+ *
+ * A mail server is referenced by id from an email channel's `config`, the way a
+ * Google Chat channel references its service account, which is why this sits as
+ * a peer of the Channels tab rather than in a user's own settings. The route
+ * behind it (`/api/v1/mail-servers/*`) is superuser-only.
+ */
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Plus, Pencil, Trash2, Plug, Server, Loader2 } from "lucide-react"
@@ -79,7 +88,52 @@ const emptyForm: MailServerFormData = {
   password: "",
 }
 
-export function MailServerSettings() {
+/**
+ * DELIBERATE, TEMPORARY DIVERGENCE from the credential-deletion precedent — Phase 7
+ * should converge this on that pattern instead of hand-rolling the shape here.
+ *
+ * Backend already has `MailServerChannelUsage` / `MailServerDeletionImpact`
+ * (backend/app/models/email/mail_server_config.py), but no route declares
+ * `response_model=` with them, so they never reach the OpenAPI schema or the
+ * generated client (frontend/src/client). Compare the credential precedent:
+ * `GET /credentials/{id}/deletion-impact` in backend/app/api/routes/credentials.py
+ * is declared with `response_model=CredentialDeletionImpact`, and
+ * frontend/src/components/Credentials/DeleteCredential.tsx casts the 409 body to
+ * that generated type instead of a local interface.
+ *
+ * Consequences of the divergence, until Phase 7 fixes it:
+ * - Every field below is optional, so a backend rename silently degrades to the
+ *   generic "Failed to delete mail server" fallback with no typecheck failure.
+ * - This card can only explain the conflict after the failed delete; the
+ *   credential precedent's deletion-impact endpoint lets the UI warn the admin
+ *   before the destructive click.
+ */
+interface ChannelUsage {
+  channel_name?: string
+  role?: string
+}
+
+/**
+ * Turn a failed delete into something an admin can act on. The in-use case
+ * answers 409 with `{ channel_usages: [...] }`; anything else falls back to the
+ * usual FastAPI string detail.
+ */
+function describeDeleteError(error: unknown): string {
+  const detail = (error as { body?: { detail?: unknown } })?.body?.detail
+  if (typeof detail === "string" && detail) return detail
+  const usages = (detail as { channel_usages?: ChannelUsage[] })?.channel_usages
+  if (Array.isArray(usages) && usages.length > 0) {
+    const names = usages
+      .map((u) =>
+        u.role ? `${u.channel_name ?? "Unnamed channel"} (${u.role})` : u.channel_name ?? "Unnamed channel",
+      )
+      .join(", ")
+    return `Still used by ${names}. Detach it from the channel before deleting.`
+  }
+  return "Failed to delete mail server"
+}
+
+export function MailServersCard() {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
@@ -126,7 +180,11 @@ export function MailServerSettings() {
     },
   })
 
-  // Delete mutation
+  // Delete mutation. Deletion is blocked with 409 while an email channel still
+  // references the server, and that 409's `detail` is a structured impact
+  // object — toasting it raw would print "[object Object]", so the referencing
+  // channels are named instead. There is no force: the fix is to detach the
+  // server from the channel first.
   const deleteMutation = useMutation({
     mutationFn: (serverId: string) =>
       MailServersService.deleteMailServer({ serverId }),
@@ -136,7 +194,7 @@ export function MailServerSettings() {
       setDeleteServerId(null)
     },
     onError: (error: any) => {
-      showErrorToast(error?.body?.detail || "Failed to delete mail server")
+      showErrorToast(describeDeleteError(error))
     },
   })
 
@@ -229,7 +287,8 @@ export function MailServerSettings() {
             </Button>
           </div>
           <CardDescription>
-            IMAP and SMTP servers for email integrations
+            Server-wide IMAP and SMTP servers that email channels send and
+            receive through
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -239,7 +298,7 @@ export function MailServerSettings() {
             <div className="text-sm text-muted-foreground py-6 text-center">
               <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
               <p>No mail servers configured</p>
-              <p className="text-xs mt-1">Add an IMAP or SMTP server to enable email integrations</p>
+              <p className="text-xs mt-1">Add an IMAP or SMTP server so an email channel has somewhere to send and receive</p>
             </div>
           ) : (
             <div className="space-y-1.5">
@@ -451,8 +510,8 @@ export function MailServerSettings() {
             <AlertDialogTitle>Delete Mail Server</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete this mail server? This action cannot be undone.
-              If this server is used by an email integration, the integration will need to be
-              reconfigured.
+              Deletion is refused while an email channel still references the server — detach
+              it from the channel first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

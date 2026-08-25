@@ -177,12 +177,21 @@ export function ChannelSetupInstructionsPanel({
       queryClient.invalidateQueries({
         queryKey: ["serverChannelSetup", channel.id],
       })
-      showSuccessToast("Webhook token regenerated — update the Google Chat app")
+      showSuccessToast(
+        "Webhook token regenerated — paste the new URL into the channel's app",
+      )
       setConfirmRegenerate(false)
     },
     onError: (err) =>
       showErrorToast(getErrorMessage(err, "Failed to regenerate token")),
   })
+
+  // Not every transport is reached by a webhook — a polled one (email) has no
+  // URL and no token. `webhook_token` is the stored fact and is NULL exactly
+  // when `webhook_url` is, so it decides both the copy above and whether the
+  // regenerate control exists at all. Offering regenerate on a tokenless
+  // channel would just earn a 422 from the backend, which refuses it.
+  const hasWebhook = channel.webhook_token != null
 
   return (
     <>
@@ -191,8 +200,9 @@ export function ChannelSetupInstructionsPanel({
           <DialogHeader>
             <DialogTitle>Set up {channel.name}</DialogTitle>
             <DialogDescription>
-              Paste the webhook URL into the channel's app configuration, then
-              send the bot a message to test it.
+              {hasWebhook
+                ? "Paste the webhook URL into the channel's app configuration, then send the bot a message to test it."
+                : "This channel isn't reached by a webhook — it polls for new messages, so there is nothing to paste anywhere."}
             </DialogDescription>
           </DialogHeader>
 
@@ -207,7 +217,17 @@ export function ChannelSetupInstructionsPanel({
             </div>
           ) : (
             <div className="space-y-4">
-              <CopyableValue label="Webhook URL" value={data.webhook_url} />
+              {/* A blank field with a copy button beside it is worse than no
+                  field: an admin copies nothing and pastes it somewhere. Say
+                  there is no URL instead. */}
+              {data.webhook_url ? (
+                <CopyableValue label="Webhook URL" value={data.webhook_url} />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  This transport has no webhook — the platform polls it for new
+                  messages, so there is no URL to configure.
+                </p>
+              )}
 
               {Object.entries(data.details ?? {}).map(([label, value]) => (
                 <div key={label} className="space-y-1">
@@ -340,26 +360,28 @@ export function ChannelSetupInstructionsPanel({
                   ))}
               </div>
 
-              <div className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 p-3">
-                <div className="min-w-0 space-y-0.5">
-                  <p className="text-sm font-medium">
-                    Regenerate webhook token
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Issues a new URL and immediately invalidates the current
-                    one.
-                  </p>
+              {hasWebhook && (
+                <div className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 p-3">
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="text-sm font-medium">
+                      Regenerate webhook token
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Issues a new URL and immediately invalidates the current
+                      one.
+                    </p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => setConfirmRegenerate(true)}
+                  >
+                    <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                    Regenerate
+                  </Button>
                 </div>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={() => setConfirmRegenerate(true)}
-                >
-                  <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                  Regenerate
-                </Button>
-              </div>
+              )}
             </div>
           )}
         </DialogContent>

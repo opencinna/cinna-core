@@ -434,7 +434,7 @@ class GoogleChatAdapter(ChannelAdapter):
     # ------------------------------------------------------------------
 
     def get_setup_instructions(
-        self, channel: ServerChannel, webhook_url: str
+        self, channel: ServerChannel, webhook_url: str | None
     ) -> tuple[dict[str, str], list[str]]:
         """Return ``(details, steps)`` for the admin setup panel.
 

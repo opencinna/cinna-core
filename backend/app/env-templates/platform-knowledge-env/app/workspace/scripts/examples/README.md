@@ -16,8 +16,6 @@ These scripts use `platform_helper.py` for authenticated requests.
 | create_session_and_send_message.py | Create session for an agent | POST /sessions/ |
 | list_credentials.py | List available credentials | GET /credentials/ |
 | link_credential_to_agent.py | Link credential to agent | POST /agents/{id}/credentials |
-| setup_email_integration.py | Set up email automation | POST /agents/{id}/email-integration |
-| list_mail_servers.py | List mail servers | GET /mail-servers/ |
 | create_scheduler.py | Create CRON schedule | POST /agents/{id}/schedules/ |
 | create_handover.py | Set up agent handover | POST /agents/{id}/handovers/ |
 

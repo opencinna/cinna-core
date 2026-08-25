@@ -122,10 +122,6 @@ from app.services.agents.agent_schedule_scheduler import (
     start_scheduler as start_agent_schedule_scheduler,
     shutdown_scheduler as shutdown_agent_schedule_scheduler
 )
-from app.services.email.polling_scheduler import (
-    start_scheduler as start_email_polling_scheduler,
-    shutdown_scheduler as shutdown_email_polling_scheduler
-)
 from app.services.email.sending_scheduler import (
     start_scheduler as start_email_sending_scheduler,
     shutdown_scheduler as shutdown_email_sending_scheduler
@@ -187,7 +183,6 @@ async def lifespan(app: FastAPI):
         start_bundle_auto_update_scheduler()
         start_task_trigger_scheduler()
         start_agent_schedule_scheduler()
-        start_email_polling_scheduler()
         start_email_sending_scheduler()
         start_channel_pending_scheduler()
         start_env_status_scheduler()
@@ -329,11 +324,7 @@ async def lifespan(app: FastAPI):
         handler=InputTaskService.handle_todo_list_updated
     )
 
-    # Email task activity handlers
-    event_service.register_handler(
-        event_type=EventType.TASK_CREATED,
-        handler=ActivityService.handle_task_created
-    )
+    # Task lifecycle activity handler
     event_service.register_handler(
         event_type=EventType.TASK_STATUS_UPDATED,
         handler=ActivityService.handle_task_status_changed
@@ -347,14 +338,6 @@ async def lifespan(app: FastAPI):
     event_service.register_handler(
         event_type=EventType.SESSION_STATE_UPDATED,
         handler=InputTaskService.handle_session_state_updated
-    )
-
-    # Email sending handler: queue outgoing email when agent responds in email session
-    from app.services.email.sending_service import EmailSendingService
-
-    event_service.register_handler(
-        event_type=EventType.STREAM_COMPLETED,
-        handler=EmailSendingService.handle_stream_completed
     )
 
     # Server channels: deliver the agent's reply back out through the channel
@@ -373,7 +356,7 @@ async def lifespan(app: FastAPI):
         handler=ChannelOutboundService.handle_stream_error
     )
 
-    logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, EmailSendingService, ChannelOutboundService)")
+    logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, ChannelOutboundService)")
 
     # Availability check for the platform email sender.
     if not settings.emails_enabled:
@@ -397,7 +380,6 @@ async def lifespan(app: FastAPI):
         shutdown_bundle_auto_update_scheduler()
         shutdown_task_trigger_scheduler()
         shutdown_agent_schedule_scheduler()
-        shutdown_email_polling_scheduler()
         shutdown_email_sending_scheduler()
         shutdown_channel_pending_scheduler()
         shutdown_env_status_scheduler()

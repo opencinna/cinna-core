@@ -1,152 +1,32 @@
 """
-Email Polling Service - Polls IMAP mailboxes for enabled agents and stores incoming emails.
+Email polling mechanics — transport-agnostic IMAP/MIME helpers.
 
-Connects to configured IMAP servers, fetches unread emails, parses them,
-and stores them in the email_message table for later processing.
+Connects to configured IMAP servers, fetches unread mail, parses MIME into a
+plain dict, stores it in ``email_message`` and marks it read on the server.
+
+These are *mechanics only*. The per-agent driver that used to sit on top of
+them (``poll_agent_mailbox`` / ``poll_all_enabled_agents``, keyed on the
+deleted ``AgentEmailIntegration``) is gone; the email **channel transport**
+under ``app/services/server_channels/adapters/`` becomes their only caller and
+will absorb them. Until then this class is a bag of statics with no driver —
+deliberately, for one commit.
 """
 import email
 import imaplib
 import logging
-import ssl
 import uuid
 from datetime import UTC, datetime
 from email.header import decode_header
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
-from sqlmodel import Session, select
+from sqlmodel import Session
 
-from app.models.email.agent_email_integration import AgentEmailIntegration
 from app.models.email.email_message import EmailMessage
-from app.models.email.mail_server_config import MailServerConfig, EncryptionType
-from app.services.email.imap_connector import imap_connector
-from app.services.email.mail_server_service import MailServerService
 
 logger = logging.getLogger(__name__)
 
 
 class EmailPollingService:
-
-    @staticmethod
-    def poll_agent_mailbox(
-        session: Session,
-        agent_id: uuid.UUID,
-    ) -> list[uuid.UUID]:
-        """
-        Poll a single agent's IMAP mailbox for new emails.
-
-        Returns list of stored EmailMessage IDs for processing.
-        """
-        # Get integration config
-        stmt = select(AgentEmailIntegration).where(
-            AgentEmailIntegration.agent_id == agent_id,
-            AgentEmailIntegration.enabled == True,  # noqa: E712
-        )
-        integration = session.exec(stmt).first()
-        if not integration:
-            return []
-
-        if not integration.incoming_server_id:
-            logger.warning(f"Agent {agent_id}: no incoming server configured")
-            return []
-
-        # Get IMAP server with decrypted credentials
-        result = MailServerService.get_mail_server_with_credentials(
-            session, integration.incoming_server_id
-        )
-        if not result:
-            logger.warning(f"Agent {agent_id}: incoming server {integration.incoming_server_id} not found")
-            return []
-
-        server, password = result
-
-        logger.debug(f"Agent {agent_id}: connecting to IMAP server {server.host}:{server.port}")
-        try:
-            conn = imap_connector.connect(server, password)
-            logger.debug(f"Agent {agent_id}: IMAP connection established")
-        except Exception as e:
-            logger.error(f"Agent {agent_id}: IMAP connection failed: {e}")
-            return []
-
-        try:
-            logger.debug(f"Agent {agent_id}: fetching unread emails")
-            raw_emails = EmailPollingService._fetch_unread_emails(conn)
-            if not raw_emails:
-                logger.debug(f"Agent {agent_id}: no unread emails found")
-                return []
-
-            logger.debug(f"Agent {agent_id}: found {len(raw_emails)} unread email(s)")
-            stored_ids: list[uuid.UUID] = []
-            for idx, (msg_id, raw_data) in enumerate(raw_emails, 1):
-                try:
-                    logger.debug(
-                        f"Agent {agent_id}: parsing email {idx}/{len(raw_emails)} "
-                        f"(IMAP id={msg_id}, size={len(raw_data)} bytes)"
-                    )
-                    parsed = EmailPollingService._parse_email(raw_data)
-                    if not parsed:
-                        logger.debug(f"Agent {agent_id}: email {msg_id} could not be parsed, skipping")
-                        continue
-
-                    logger.debug(
-                        f"Agent {agent_id}: parsed email - "
-                        f"from={parsed['sender']}, subject='{parsed['subject'][:80]}', "
-                        f"message_id={parsed['message_id']}, "
-                        f"body_len={len(parsed['body'])}, "
-                        f"attachments={len(parsed['attachments_metadata']) if parsed['attachments_metadata'] else 0}"
-                    )
-
-                    # Check if this email is addressed to the agent's incoming mailbox
-                    if not EmailPollingService._is_addressed_to_agent(
-                        parsed.get("recipients", []),
-                        integration.incoming_mailbox or "",
-                    ):
-                        logger.debug(
-                            f"Agent {agent_id}: email from {parsed['sender']} not addressed to "
-                            f"{integration.incoming_mailbox}, skipping "
-                            f"(recipients: {parsed.get('recipients', [])})"
-                        )
-                        # Don't mark as read - it may belong to another consumer of this mailbox
-                        continue
-
-                    # Check for duplicate (by email Message-ID header)
-                    if parsed["message_id"]:
-                        existing = session.exec(
-                            select(EmailMessage).where(
-                                EmailMessage.agent_id == agent_id,
-                                EmailMessage.email_message_id == parsed["message_id"],
-                            )
-                        ).first()
-                        if existing:
-                            logger.debug(
-                                f"Agent {agent_id}: skipping duplicate email {parsed['message_id']}"
-                            )
-                            # Still mark as read on server
-                            EmailPollingService._mark_email_read(conn, msg_id)
-                            continue
-
-                    email_msg = EmailPollingService._store_email_message(session, agent_id, parsed)
-                    EmailPollingService._mark_email_read(conn, msg_id)
-                    stored_ids.append(email_msg.id)
-                    logger.debug(
-                        f"Agent {agent_id}: stored email {email_msg.id} from {parsed['sender']}"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Agent {agent_id}: failed to process email {msg_id}: {e}",
-                        exc_info=True,
-                    )
-                    continue
-
-            logger.info(f"Agent {agent_id}: polled {len(raw_emails)} emails, stored {len(stored_ids)} new")
-            return stored_ids
-
-        finally:
-            try:
-                conn.close()
-                conn.logout()
-                logger.debug(f"Agent {agent_id}: IMAP connection closed")
-            except Exception:
-                pass
 
     @staticmethod
     def _fetch_unread_emails(
@@ -386,35 +266,38 @@ class EmailPollingService:
         return target in recipients
 
     @staticmethod
-    def poll_all_enabled_agents(session: Session) -> list[uuid.UUID]:
+    def format_email_as_message(email_msg: EmailMessage) -> str:
+        """Format a stored email into the message text handed to an agent.
+
+        Moved here verbatim from the deleted ``EmailProcessingService``: it is
+        pure formatting over an ``EmailMessage`` row with no dependency on the
+        removed per-agent integration, and the email channel transport needs
+        exactly this to build ``ChannelInboundMessage.text``. It has no caller
+        for one commit.
+
+        Note: the authoritative sender/subject metadata is in the session
+        context (system prompt and GET /session/context endpoint), not in this
+        message text. This formatting is for readability only.
         """
-        Poll mailboxes for all agents with enabled email integration.
+        parts = ["--- Forwarded email content ---"]
 
-        Returns list of all stored EmailMessage IDs across all agents.
-        """
-        stmt = select(AgentEmailIntegration).where(
-            AgentEmailIntegration.enabled == True,  # noqa: E712
-        )
-        integrations = session.exec(stmt).all()
+        if email_msg.subject:
+            parts.append(f"Subject: {email_msg.subject}")
+        parts.append(f"From: {email_msg.sender}")
 
-        if not integrations:
-            logger.debug("No enabled email integrations to poll")
-            return []
+        parts.append("")  # blank line separator
 
-        logger.info(f"Polling {len(integrations)} enabled email integrations")
+        parts.append(email_msg.body or "")
 
-        all_stored_ids: list[uuid.UUID] = []
-        for integration in integrations:
-            try:
-                stored_ids = EmailPollingService.poll_agent_mailbox(
-                    session, integration.agent_id
-                )
-                all_stored_ids.extend(stored_ids)
-            except Exception as e:
-                logger.error(
-                    f"Failed to poll agent {integration.agent_id}: {e}",
-                    exc_info=True,
-                )
-                continue
+        # Add attachment info if present
+        if email_msg.attachments_metadata:
+            parts.append("")
+            parts.append("Attachments:")
+            for att in email_msg.attachments_metadata:
+                name = att.get("filename", "unknown")
+                size = att.get("size", 0)
+                parts.append(f"  - {name} ({size} bytes)")
 
-        return all_stored_ids
+        parts.append("--- End of forwarded email content ---")
+
+        return "\n".join(parts)

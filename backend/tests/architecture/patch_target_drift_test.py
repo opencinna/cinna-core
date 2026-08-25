@@ -21,12 +21,31 @@ is exactly the isolation-escape failure mode this test guards against.
 
 WHAT IT ENFORCES
 ----------------
-Every module under ``backend/app/`` that imports ``create_session`` (from
-``app.core.db``) or ``create_task_with_error_logging`` (from ``app.utils``)
-**at module level** must either:
+This module enforces the invariant in BOTH directions:
+
+FORWARD — every real importer is covered. Every module under ``backend/app/``
+that imports ``create_session`` (from ``app.core.db``) or
+``create_task_with_error_logging`` (from ``app.utils``) **at module level**
+must either:
   * appear in the union of patch-target lists (``tests/utils/fixtures.py``
     constants + the inline extensions in domain ``conftest.py`` files), or
   * be explicitly allowlisted below with a justifying comment.
+
+REVERSE — every listed target still points at something real. Every patch
+target string already in that same union must resolve to a module that still
+exists and an attribute that is still importable on it. This direction
+catches the opposite drift: a module gets deleted or moved (or its
+``create_session`` import gets renamed/removed) but the dotted string
+lingers in ``CREATE_SESSION_TARGETS_AGENT`` / ``BACKGROUND_TASK_TARGETS_FULL``
+/ a conftest's inline extension. ``unittest.mock.patch()`` raises on an
+unresolvable dotted path, and since the autouse ``patch_create_session``
+fixture in nearly every domain ``conftest.py`` consumes these lists, one
+stale entry breaks test *setup* across most of the backend suite — while
+this architecture module itself would stay green under the forward-only
+check, because that check never looks at existing entries, only at real
+importers. This exact failure mode hit the suite when Phase 4 deleted
+``app/services/email/processing_service.py`` and left its
+``create_session`` target behind in ``CREATE_SESSION_TARGETS_AGENT``.
 
 IMPORTANT — module-level vs. function-local imports
 ---------------------------------------------------
@@ -57,6 +76,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import importlib
 import pathlib
 import re
 
@@ -280,6 +300,81 @@ def test_create_task_importers_are_patched() -> None:
     assert not missing, _format_failure(
         "create_task_with_error_logging", missing, "ALLOWED_UNPATCHED_BG_TARGETS"
     )
+
+
+def _split_patch_target(target: str) -> tuple[str, str]:
+    """Split ``"app.a.b.create_session"`` into ``("app.a.b", "create_session")``."""
+    module_path, _, attr = target.rpartition(".")
+    return module_path, attr
+
+
+def _resolve_patch_target(target: str) -> tuple[bool, str]:
+    """Check that ``target`` resolves to a real module + importable attribute.
+
+    Returns ``(ok, detail)``; ``detail`` is empty on success and a human-readable
+    reason on failure.
+
+    NOTE on distinguishing failure causes: ``importlib.import_module`` can raise
+    for two very different reasons — (a) the module genuinely no longer exists
+    (deleted/moved, the bug this test targets), or (b) the module exists but
+    raises at import time for some unrelated reason (e.g. a broken third-party
+    dependency). We cannot cleanly tell these apart from here without importing
+    every module's transitive dependency graph and reasoning about it, so per
+    the module docstring's design (fail loud rather than hide a real problem),
+    ANY exception on import is treated as a broken target, not silently skipped.
+    A false positive here (module fine, unrelated import blip) is loud and cheap
+    to diagnose; a false negative (real drift silently passing) is exactly the
+    class of bug this test exists to catch.
+    """
+    module_path, attr = _split_patch_target(target)
+    if not module_path or not attr:
+        return False, f"malformed target string {target!r} (expected 'module.path.attr')"
+    try:
+        module = importlib.import_module(module_path)
+    except Exception as exc:  # noqa: BLE001 - see docstring note above
+        return False, f"module {module_path!r} could not be imported ({exc!r})"
+    if not hasattr(module, attr):
+        return False, (
+            f"module {module_path!r} exists but has no attribute {attr!r} "
+            f"(the create_session/create_task_with_error_logging import was "
+            f"likely renamed or removed from it)"
+        )
+    return True, ""
+
+
+def _format_broken_targets_failure(broken: dict[str, str]) -> str:
+    listed = "\n  ".join(f"{target!r}: {detail}" for target, detail in sorted(broken.items()))
+    return (
+        f"{len(broken)} patch-target string(s) no longer resolve to a real, "
+        f"importable module attribute:\n  {listed}\n\n"
+        f"The module was probably deleted or moved (or the create_session / "
+        f"create_task_with_error_logging import was renamed or removed from it "
+        f"during a refactor). unittest.mock.patch() raises on an unresolvable "
+        f"dotted path, and the autouse patch_create_session fixture in nearly "
+        f"every domain conftest.py consumes these lists — so a single stale "
+        f"entry breaks test SETUP across most of the backend suite, surfacing "
+        f"as a confusing error in an unrelated domain's tests rather than here.\n\n"
+        f"Fix: remove or update the stale entry. It lives in one of "
+        f"CREATE_SESSION_TARGETS_BASE / CREATE_SESSION_TARGETS_AGENT / "
+        f"BACKGROUND_TASK_TARGETS_BASE / BACKGROUND_TASK_TARGETS_FULL in "
+        f"tests/utils/fixtures.py, or in the inline patch-target extension of "
+        f"whichever domain conftest.py added it."
+    )
+
+
+def test_patch_targets_resolve_to_real_importable_modules() -> None:
+    """Every patch target in the union still resolves — the reverse of the two
+    tests above. Those check "every real importer is covered by a target
+    string"; this checks "every target string still points at something real".
+    See the module docstring's REVERSE section for why this matters.
+    """
+    targets = _session_target_union() | _bg_target_union()
+    broken = {}
+    for target in sorted(targets):
+        ok, detail = _resolve_patch_target(target)
+        if not ok:
+            broken[target] = detail
+    assert not broken, _format_broken_targets_failure(broken)
 
 
 def test_allowlist_entries_are_real_importers() -> None:

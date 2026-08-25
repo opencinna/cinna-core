@@ -136,12 +136,20 @@ class ServerChannelService:
         return channel
 
     @staticmethod
-    def get_by_webhook_token(session: Session, token: str) -> ServerChannel | None:
+    def get_by_webhook_token(
+        session: Session, token: str | None
+    ) -> ServerChannel | None:
         """Resolve an ENABLED channel by webhook token.
 
         Enabled-only on purpose: the webhook returns the same 404 for an
         unknown token and a disabled channel, so toggling a channel off does
         not become an oracle for "this token exists".
+
+        A tokenless channel is unreachable through here, doubly. SQL ``=``
+        against NULL is never true, so a row with a NULL ``webhook_token``
+        cannot match any string a request could supply; and the empty-string
+        guard below refuses a falsy token before a query is issued, so no
+        caller can turn "no token" into a lookup either.
         """
         if not token:
             return None
@@ -157,15 +165,24 @@ class ServerChannelService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def webhook_url(channel: ServerChannel) -> str:
-        """Public webhook URL for this channel.
+    def webhook_url(channel: ServerChannel) -> str | None:
+        """Public webhook URL for this channel, or ``None`` if it has no webhook.
 
         Built from ``settings.webhook_base_url`` — the externally reachable
         backend origin (``WEBHOOK_BASE_URL``, falling back to
         ``FRONTEND_HOST``) — never from the request, so the value an admin
         pastes into Google is right even when they reached the admin page over
         an internal address.
+
+        ``None`` when the channel has no token. A URL assembled without one
+        would read as live and resolve to nothing — the webhook route matches
+        on the token segment, so the only thing such a URL can ever do is 404.
+        That is precisely the hazard ``needs_webhook_token`` exists to name, and
+        the token's presence is the whole test: it is minted iff the transport
+        declares it needs one.
         """
+        if not channel.webhook_token:
+            return None
         base = settings.webhook_base_url
         return f"{base}{settings.API_V1_STR}/channels/{channel.webhook_token}/inbound"
 
@@ -196,6 +213,13 @@ class ServerChannelService:
 
     @staticmethod
     def get_setup_instructions(channel: ServerChannel) -> ChannelSetupInstructions:
+        """Adapter-shaped setup guidance.
+
+        ``webhook_url`` is ``None`` for a transport with no webhook, and the
+        adapter is handed that ``None`` rather than a fabricated URL: the panel
+        is what an admin copies from, so a live-looking address here is the
+        most expensive place to invent one.
+        """
         adapter = get_adapter(channel.channel_type)
         url = ServerChannelService.webhook_url(channel)
         details, steps = adapter.get_setup_instructions(channel, url)
@@ -337,20 +361,12 @@ class ServerChannelService:
             encrypted_secrets=(
                 encrypt_field(data.secrets) if (data.secrets or "").strip() else None
             ),
-            # Minted unconditionally while ``webhook_token`` is still NOT NULL.
-            # ``_ensure_webhook_token`` below is the mode-driven rule; once the
-            # column is nullable this becomes ``None`` and that rule mints it
-            # (or deliberately does not) from the transport's declaration
-            # alone. ``None``, never ``""``: ``__table_args__`` carries a
-            # ``UniqueConstraint`` on ``webhook_token`` and in PostgreSQL ``''``
-            # is a value, so the *second* token-less channel created would trip
-            # it with an unhandled IntegrityError, whereas UNIQUE permits any
-            # number of NULLs. The same change turns both
-            # ``ServerChannel.webhook_token`` and
-            # ``ServerChannelPublic.webhook_token`` into ``str | None``; the
-            # update DTO needs nothing, since it carries the
-            # ``regenerate_webhook_token`` flag rather than the token itself.
-            webhook_token=ServerChannelService.generate_webhook_token(),
+            # No token here. ``_ensure_webhook_token`` below is the *only* rule:
+            # a transport declaring ``needs_webhook_token=True`` gets one minted,
+            # one declaring False keeps ``None``. Minting unconditionally here
+            # would hand a polled channel a token, and a token is what
+            # ``webhook_url`` reads to decide a channel has a reachable inbound
+            # URL — so the row would advertise a door it does not have.
             created_by=user.id,
         )
         ServerChannelService._ensure_webhook_token(channel, transport)
@@ -769,11 +785,16 @@ class ServerChannelService:
         """Give ``channel`` a webhook token iff its transport is reached by one.
 
         The requirement is the transport's declaration, not the channel type:
-        a webhook channel with no token is not reachable at all, and once
-        ``ServerChannel.webhook_token`` becomes nullable that stops being
-        impossible and starts being a channel that silently receives nothing.
-        Enforced here, at both write paths, rather than checked at the webhook —
-        by then the symptom is a 404 with no way to tell it from a bad URL.
+        a webhook channel with no token is not reachable at all, and now that
+        ``ServerChannel.webhook_token`` is nullable that is no longer impossible
+        — it is a channel that silently receives nothing. Enforced here, at both
+        write paths, rather than checked at the webhook — by then the symptom is
+        a 404 with no way to tell it from a bad URL.
+
+        This is the **only** place a token is minted on create. ``create_channel``
+        constructs the row with ``webhook_token=None`` and defers entirely to
+        this rule, so "does this channel have a token?" has exactly one answer
+        and it is the transport's.
 
         Minting rather than raising is deliberate: the token is generated by
         this service and an admin has no way to supply one, so refusing a
@@ -781,7 +802,10 @@ class ServerChannelService:
         provide.
 
         A transport that declares ``needs_webhook_token=False`` is left alone.
-        It gets no token here and none is required of it.
+        It gets no token here and none is required of it. Left alone rather than
+        cleared: on the update path a ``channel_type`` flip is reversible, and
+        discarding the token would silently invalidate the URL an admin has
+        already pasted into the platform on the other side.
         """
         if transport.needs_webhook_token and not channel.webhook_token:
             channel.webhook_token = ServerChannelService.generate_webhook_token()

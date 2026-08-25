@@ -107,51 +107,6 @@ def enable_a2a(
     return r.json()
 
 
-def configure_email_integration(
-    client: TestClient,
-    token_headers: dict[str, str],
-    agent_id: str,
-    incoming_server_id: str,
-    outgoing_server_id: str,
-    agent_session_mode: str = "owner",
-    access_mode: str = "open",
-    incoming_mailbox: str = "agent@test.com",
-    outgoing_from_address: str = "agent@test.com",
-) -> dict:
-    """Configure email integration via POST /api/v1/agents/{id}/email-integration."""
-    data = {
-        "agent_session_mode": agent_session_mode,
-        "access_mode": access_mode,
-        "incoming_server_id": incoming_server_id,
-        "outgoing_server_id": outgoing_server_id,
-        "incoming_mailbox": incoming_mailbox,
-        "outgoing_from_address": outgoing_from_address,
-    }
-    r = client.post(
-        f"{settings.API_V1_STR}/agents/{agent_id}/email-integration",
-        headers=token_headers,
-        json=data,
-    )
-    assert r.status_code == 200, f"Email integration config failed: {r.text}"
-    return r.json()
-
-
-def enable_email_integration(
-    client: TestClient,
-    token_headers: dict[str, str],
-    agent_id: str,
-) -> dict:
-    """Enable email integration via PUT /api/v1/agents/{id}/email-integration/enable."""
-    r = client.put(
-        f"{settings.API_V1_STR}/agents/{agent_id}/email-integration/enable",
-        headers=token_headers,
-    )
-    assert r.status_code == 200, f"Email integration enable failed: {r.text}"
-    body = r.json()
-    assert body["enabled"] is True
-    return body
-
-
 # ---------------------------------------------------------------------------
 # Agent-status rate-limit helpers
 #

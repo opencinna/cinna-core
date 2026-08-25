@@ -142,11 +142,21 @@ class ServerChannel(ServerChannelBase, table=True):
         default=None, sa_column=Column(Text, nullable=True)
     )
 
-    # Unguessable path segment of the public webhook URL. Generated at create
-    # time; regenerable via the update DTO's ``regenerate_webhook_token`` flag.
+    # Unguessable path segment of the public webhook URL. Minted at create time
+    # *only* for a transport that declares ``needs_webhook_token``; regenerable
+    # via the update DTO's ``regenerate_webhook_token`` flag. A transport that
+    # is not reached by a webhook (a polled one) keeps ``None`` here, and that
+    # is the sole signal ``webhook_url`` reads to decide there is no URL to
+    # show.
+    #
+    # ``None``, never ``""``: ``__table_args__`` carries a plain
+    # ``UniqueConstraint`` on this column, and in PostgreSQL ``''`` is a value
+    # — so the *second* tokenless channel would trip the constraint with an
+    # unhandled IntegrityError, whereas UNIQUE permits any number of NULLs.
+    #
     # No separate `index=True`: the unique constraint above already backs it
     # with a btree index, which is what the per-request token lookup uses.
-    webhook_token: str = Field(max_length=64)
+    webhook_token: str | None = Field(default=None, max_length=64)
 
     created_by: uuid.UUID | None = Field(
         default=None, foreign_key="user.id", ondelete="SET NULL"
@@ -198,12 +208,18 @@ class ServerChannelPublic(ServerChannelBase):
     id: uuid.UUID
     config: dict = Field(default_factory=dict)
     email_whitelist: str | None = None
-    webhook_token: str
+    # NULL for a channel whose transport is not reached by a webhook. Nullable
+    # but still *required* (no default), like the two below: the point is that a
+    # projection which forgets the field fails loudly rather than reporting a
+    # plausible-looking absence.
+    webhook_token: str | None
     # Both fields below are derived by the service, not columns. Deliberately
     # required (no default): a service method that forgets to populate them
     # fails loudly instead of returning a plausible ""/false.
     # Full public webhook URL, assembled from the configured backend host.
-    webhook_url: str
+    # NULL exactly when ``webhook_token`` is — a URL built without a token
+    # would point at an endpoint that can only ever refuse.
+    webhook_url: str | None
     # True when outbound credentials are stored (never the credential itself).
     has_outbound_credentials: bool
     created_by: uuid.UUID | None = None
@@ -316,7 +332,11 @@ class ChannelSetupInstructions(SQLModel):
     """Adapter-shaped setup guidance shown after create / on demand."""
 
     channel_type: str
-    webhook_url: str
+    # NULL for a transport with no webhook. Required-but-nullable on purpose:
+    # a caller that forgets to populate it fails loudly, while a channel that
+    # genuinely has no inbound URL says so instead of being handed a
+    # live-looking one that nothing will ever answer.
+    webhook_url: str | None
     # Adapter-specific key/value reminders, e.g. {"audience": "<project number>"}.
     details: dict[str, str] = Field(default_factory=dict)
     # Ordered, human-readable configuration steps.

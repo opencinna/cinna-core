@@ -133,7 +133,7 @@ tests/
     agent_environments/
     agentic_teams/
     agents/                # conftest.py: env stubs, background task collector, create_session patches.
-                           #   Largest domain (84 files / 610 tests) — split into topic groups.
+                           #   Largest domain (82 files / 606 tests) — split into topic groups.
                            #   Subdirs inherit agents/conftest.py; see agents/README.md for the map.
       bundles/             #   publish: revisions, snapshots, credential specs, template sharing
       bundles_install/     #   install/update: credential resolution, readiness gate, propagation
@@ -145,7 +145,7 @@ tests/
       sessions/            #   session lifecycle + streaming, message attachments
       commands/            #   slash/CLI commands, /files, /run, agent status
       guest_shares/        #   guest share links: CRUD, auth, security code, sessions
-      integrations/        #   email, webhooks, capability flags, router trigger
+      integrations/        #   webhooks, capability flags, router trigger
       core/                #   create-flow, limits, prompt sync, plugins, tokens, delegation
     ai_credentials/        # conftest.py: env stubs for credential propagation tests
     app_auth/
@@ -161,6 +161,7 @@ tests/
     identity/
     input_tasks/
     knowledge_sources/
+    mail_servers/          # MailServerConfig CRUD (server-scoped, superuser-only) + deletion guard
     mcp_integration/       # conftest.py: MCP OAuth + tool-handler create_session patches
     notifications/
     security_events/
@@ -180,7 +181,7 @@ tests/
   utils/
     utils.py               # random_lower_string(), random_email(), get_superuser_token_headers()
     user.py                # create_random_user(), user_authentication_headers()
-    agent.py               # create_agent_via_api(), get_agent(), enable_a2a(), configure/enable_email_integration()
+    agent.py               # create_agent_via_api(), get_agent(), enable_a2a()
     ai_credential.py       # create_random_ai_credential(), set/update/delete/get helpers
     a2a.py                 # setup_a2a_agent(), a2a_headers(), extract_parts_from_sse_event(), extract_task_id(), etc.
     background_tasks.py    # drain_tasks() for deferred background task execution
@@ -189,7 +190,7 @@ tests/
     desktop_auth.py        # obtain_desktop_tokens() — full authorize/consent/exchange dance
     environment.py         # set_environment_status(), link_ai_credential_to_environment() (documented DB-seam helpers)
     fixtures.py            # shared stub fixtures, CREATE_SESSION_TARGETS_*, BACKGROUND_TASK_TARGETS_* patch lists
-    mail_server.py         # create_imap_server(), create_smtp_server(), process_emails_with_stub()
+    mail_server.py         # create_imap_server(), create_smtp_server() — superuser-only route
     platform_token.py      # mint_platform_token() — raw/expired/scoped JWTs (documented app.core.security exemption)
     session.py             # get_agent_session(), get_session(), list_sessions()
     message.py             # get_messages_by_role(), list_messages()

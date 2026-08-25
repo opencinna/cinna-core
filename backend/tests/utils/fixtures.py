@@ -36,7 +36,6 @@ CREATE_SESSION_TARGETS_BASE = [
 ]
 
 CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
-    "app.services.email.processing_service.create_session",
     "app.services.sessions.session_service.create_session",
     "app.services.tasks.input_task_service.create_session",
     "app.services.agents.commands.files_command.create_session",
