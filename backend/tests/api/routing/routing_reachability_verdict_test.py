@@ -45,6 +45,11 @@ writes real rows — with a populated `channel_id`, under
 wording is unchanged by the scope split; these tests exist to prove it stayed
 unchanged, not to re-derive it.
 
+A third section, at the bottom, covers the remedy **profiles** themselves —
+the generic arm an unmapped origin degrades to, and email's mapping onto the
+channel arm. Both are seeded for the same reason App MCP is, and both are
+failures that would otherwise be invisible: see that section's own header.
+
 Branches that need a candidate list on a non-live origin, and skip reasons no
 surface can produce any more (`identity_route`, `foreign_owner`, `agent_missing`
 — see `routing_reachability_service`'s explanation tables), are pinned in
@@ -1180,6 +1185,167 @@ def test_app_mcp_verdict_when_the_agent_was_given_a_trigger_prompt_after_the_dec
         f"prompts are set now. Re-run this decision — an agent created, "
         f"transferred or given wording after the trace was captured explains "
         f"exactly this, and the re-run will show it as a candidate."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Remedy profiles — the two arms the surfaces above cannot reach
+#
+# `RoutingReachabilityService` picks its remedy wording from a profile mapped
+# off `trace.origin` (`_ORIGIN_PROFILES`). Two of those arms have no live
+# producer that can be driven from here, and both are the kind that fails
+# quietly:
+#
+# - **generic**, for an origin the map does not know. It replaced a default
+#   that handed every unmapped origin the *App MCP* wording, on the argument
+#   that App MCP's is the narrower of two. Narrow is not neutral, so the
+#   sentence below must name no surface at all.
+# - **email**, which is mapped to the channel profile. That mapping is not a
+#   wording nicety: the channel arm is the one that consults channel policy,
+#   and an email trace outside it loses `no_candidates_channel_scope` /
+#   `no_candidates_auto_install_off` outright. The end-to-end proof over the
+#   real polled path is
+#   `tests/api/server_channels/server_channels_email_test.py`'s
+#   `test_an_email_verdict_still_speaks_in_channel_terms`; what is pinned here
+#   is the mapping itself, on a branch that says the surface's name out loud.
+#
+# Seeded rather than simulated, for the reason the App MCP section gives: these
+# are branches whose answer comes from the database, and `POST
+# /admin/routing/simulate` only ever produces a channel decision — it cannot
+# forge an origin.
+# ---------------------------------------------------------------------------
+
+
+def _seed_trace(user_id: str, origin: str) -> dict:
+    """A stored decision on `origin`, with no candidate list. See above."""
+    trace_id = seed_routing_trace(
+        created_at=datetime.now(UTC),
+        origin=origin,
+        user_id=user_id,
+        outcome="no_match",
+        message="please do the thing",
+    )
+    assert trace_id is not None, "seeded trace was not persisted"
+    return {"id": str(trace_id)}
+
+
+def test_an_unknown_origin_gets_the_generic_remedy_rather_than_app_mcps(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """An origin no build has heard of is described, not mis-described.
+
+    The foreign-owner branch is the one place a verdict still names the surface
+    out loud, so it is where an unknown origin's wording is visible at all. It
+    used to read "App MCP routes over the caller's own agents" — a claim about
+    a surface this decision demonstrably did not run on, and the §2.4 defect in
+    its purest form: confidently wrong beats coarse nowhere in this module.
+
+    Two assertions, and the second is the one that would catch a regression to
+    the old default: the sentence names no surface by name.
+    """
+    owner, owner_headers = _user(client, superuser_token_headers)
+    sender, _ = _user(client, superuser_token_headers)
+    agent = _agent(client, owner_headers, "SomebodyElses")
+    trace = _seed_trace(sender["id"], "a_surface_from_the_future")
+
+    diagnosis = _diagnosis(
+        client, superuser_token_headers, trace, expected_agent_id=agent["id"]
+    )
+    assert diagnosis["code"] == "expected_agent_foreign_owner"
+    assert diagnosis["verdict"] == (
+        f"This user has 0 eligible candidates; {agent['name']} is not among "
+        f"them because it belongs to a different account, and this surface "
+        f"routes over the caller's own agents. Share its bundle with this user "
+        f"and have them install it — the session runs on the caller's own "
+        f"install, so the install they own is the only thing this surface can "
+        f"reach. (Reaching somebody else's agent is what identity contacts are "
+        f"for, and that is a different question from this one.)"
+    )
+    assert "App MCP" not in diagnosis["verdict"]
+
+
+def test_an_unknown_origin_still_gets_a_verdict_rather_than_an_error(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """Degrading, not raising, is the whole contract of the generic arm.
+
+    `diagnose` is total — a failure comes back as `unavailable` and the trace
+    detail survives — so an origin lookup that raised would not show up as a
+    500 here. It would show up as every verdict on that origin collapsing into
+    "could not be computed", which reads like nothing happened. So this pins
+    the real code, not merely the absence of an exception.
+    """
+    user, _ = _user(client, superuser_token_headers)
+    trace = _seed_trace(user["id"], "a_surface_from_the_future")
+
+    diagnosis = _diagnosis(client, superuser_token_headers, trace)
+    assert diagnosis["code"] == "no_candidates"
+    assert diagnosis["verdict"] == (
+        "This user had no routing candidates at all: they own no agent the "
+        "classifier could consider, so no message from them can route "
+        "anywhere. Give this user an agent with a router trigger prompt (or "
+        "example prompts) on its Configuration tab."
+    )
+
+
+def test_an_email_trace_is_diagnosed_as_a_channel_not_as_app_mcp(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """`origin="email"` maps to the channel profile, and says so out loud.
+
+    Same branch as the unknown-origin test above, for the discrimination it
+    gives: the surface noun is "a channel" and not "App MCP" or the generic
+    "this surface". An email channel *is* a `ServerChannel` — policy, Pass 2,
+    the pin — and phase 6 changed only its label.
+    """
+    owner, owner_headers = _user(client, superuser_token_headers)
+    sender, _ = _user(client, superuser_token_headers)
+    agent = _agent(client, owner_headers, "SomebodyElses")
+    trace = _seed_trace(sender["id"], "email")
+
+    diagnosis = _diagnosis(
+        client, superuser_token_headers, trace, expected_agent_id=agent["id"]
+    )
+    assert diagnosis["code"] == "expected_agent_foreign_owner"
+    assert "and a channel routes over the caller's own agents" in (
+        diagnosis["verdict"]
+    ), diagnosis
+    assert "App MCP" not in diagnosis["verdict"]
+    assert "this surface routes over" not in diagnosis["verdict"]
+
+
+def test_an_email_verdict_keeps_the_channel_arms_auto_install_remedy(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The half of the email mapping that is not wording at all.
+
+    Only a profile that reads channel policy calls `_channel_pass_2_block`, and
+    only that call can return `no_candidates_channel_scope` /
+    `no_candidates_auto_install_off`. An email trace mapped to any other
+    profile would lose those two codes silently — no test would go red, and the
+    reader would simply never be told that the channel's own settings stopped
+    Pass 2. What this pins is the cheapest visible consequence of being in that
+    arm at all: the auto-install clause, which the non-channel `no_candidates`
+    sentence does not contain.
+
+    The seeded row names no channel, so `_channel_pass_2_block` finds no policy
+    to blame and the branch falls through to the channel arm's own base
+    sentence — which is exactly the discrimination wanted here. The end-to-end
+    version over a real polled email is
+    `tests/api/server_channels/server_channels_email_test.py`'s
+    `test_an_email_verdict_still_speaks_in_channel_terms`.
+    """
+    user, _ = _user(client, superuser_token_headers)
+    trace = _seed_trace(user["id"], "email")
+
+    diagnosis = _diagnosis(client, superuser_token_headers, trace)
+    assert diagnosis["code"] == "no_candidates"
+    assert diagnosis["verdict"] == (
+        "This user had no routing candidates at all: they own no agent the "
+        "classifier could consider and no auto-install bundle was eligible, so "
+        "no message from them can route anywhere. Set a router trigger prompt "
+        "(or example prompts) on the agent you expected, from its "
+        "Configuration tab, or add its bundle to the auto-install list."
     )
 
 

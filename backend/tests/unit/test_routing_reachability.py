@@ -48,6 +48,15 @@ Four properties, each one there because its failure mode is silent:
    left here to assert; `test_the_counted_noun_follows_the_origin` and
    `test_an_unknown_origin_gets_the_app_mcp_wording`, which pinned the old
    per-origin wording, were deleted with it.
+
+   The second of those two named a rule that no longer holds either way. An
+   unknown origin used to be given the App MCP wording deliberately, on the
+   argument that it was the narrower of two arms. Phase 6 of the channels &
+   identity unification replaced the boolean with a remedy **profile** per
+   origin and an explicit generic default, so an unmapped origin now names no
+   surface at all — pinned in
+   `tests/api/routing/routing_reachability_verdict_test.py`'s remedy-profile
+   section, where a seeded origin can be handed to the API.
 """
 from __future__ import annotations
 

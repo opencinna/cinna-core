@@ -20,20 +20,20 @@ MCP builds its ballot from the same two candidate providers a channel does, so
 there is no route, assignment or ``channel_app_mcp`` flag left for any verdict
 to name.
 
-What survives of that split is :data:`_CHANNEL_ORIGINS` and the ``channel``
-flag threaded through everything below — now carrying **wording**, not
-findings. The two surfaces reach the same conclusions by the same tests; they
-differ in what they call the thing the reader routes over, and in what Pass 2
-means (a channel has one, App MCP does not). **The split is by origin, never by
-candidate kind.** That distinction is worth keeping stated, because gating on
-``kind == KIND_AGENT`` looks equivalent and is not: ``SKIP_ALREADY_INSTALLED``,
-``SKIP_NOT_INSTALLABLE`` and ``SKIP_NO_REVISION`` are recorded by Pass 2's
-auto-install scan as ``KIND_BUNDLE``, Pass 2 runs on channel decisions, and
-``SKIP_ALREADY_INSTALLED``'s remedy used to read *"Check the installed agent's
-App MCP route"* — a live §2.4 defect that a ``kind`` gate would have walked
-straight past. ``kind`` is consulted in exactly one place
-(:data:`_CHANNEL_AGENT_SKIP_EXPLANATIONS`) and only to tell two *facts* apart,
-never to decide which surface the reader is on.
+What survives of that split is :data:`_ORIGIN_PROFILES` and the
+:class:`_RemedyProfile` threaded through everything below — now carrying
+**wording**, not findings. Every surface reaches the same conclusions by the
+same tests; they differ in what they call the thing the reader routes over, and
+in what Pass 2 means (a channel has one, App MCP does not). **The split is by
+origin, never by candidate kind.** That distinction is worth keeping stated,
+because gating on ``kind == KIND_AGENT`` looks equivalent and is not:
+``SKIP_ALREADY_INSTALLED``, ``SKIP_NOT_INSTALLABLE`` and ``SKIP_NO_REVISION``
+are recorded by Pass 2's auto-install scan as ``KIND_BUNDLE``, Pass 2 runs on
+channel decisions, and ``SKIP_ALREADY_INSTALLED``'s remedy used to read
+*"Check the installed agent's App MCP route"* — a live §2.4 defect that a
+``kind`` gate would have walked straight past. ``kind`` is consulted in exactly
+one place (:data:`_CHANNEL_AGENT_SKIP_EXPLANATIONS`) and only to tell two
+*facts* apart, never to decide which surface the reader is on.
 
 The line the split is drawn along:
 
@@ -124,6 +124,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlmodel import Session as DBSession
@@ -255,52 +256,6 @@ CODE_EXPECTED_LOOKS_REACHABLE = "expected_agent_looks_reachable"
 CODE_UNAVAILABLE = "unavailable"
 
 
-#: The origins whose decisions run the **two-pass channel pipeline** — Pass 1
-#: over the sender's own agents, Pass 2 over the auto-install catalog, under a
-#: resolved channel policy.
-#:
-#: Since the ``AppAgentRoute`` deletion this set no longer separates two ways of
-#: being reachable — every surface routes over the same two candidate providers
-#: — only two ways of being *described*. What still hangs off it: Pass 2 and
-#: channel-policy sentences (an App MCP decision has neither), and the noun for
-#: the surface itself.
-#:
-#: ``ORIGIN_SIMULATE`` is in the set because ``POST /admin/routing/simulate``
-#: and ``.../traces/{id}/replay`` open their capture around
-#: ``ChannelRoutingService.decide`` (``routing_tuning_service.py``) — a simulate
-#: row *is* a channel decision, re-run by an admin. If simulate ever learns to
-#: re-run an App MCP decision it must record which surface it simulated and this
-#: set must read that, rather than go on assuming; a simulate row silently
-#: diagnosed as a channel would send the reader to the wrong control, which is
-#: the defect §2.4 names.
-#:
-#: ``ORIGIN_EMAIL`` is in the set for the plainest reason of all: an email
-#: channel *is* a ``ServerChannel``. It resolves a ``ResolvedChannelPolicy``,
-#: runs Pass 2, and has every switch the channel sentences name — agent scope,
-#: auto-install, the pin. It reached routing through the same
-#: ``ChannelInboundService`` before phase 6 too and was diagnosed as a channel
-#: because it *was* labelled ``server_channel``; the label changed in phase 6
-#: and the diagnosis must not. Leaving it out is not a wording nicety: the
-#: channel arm of ``_general_verdict`` is what calls
-#: :func:`_channel_pass_2_block` and returns ``CODE_NO_CANDIDATES_CHANNEL_SCOPE``
-#: / ``CODE_NO_CANDIDATES_AUTO_INSTALL_OFF`` at all. An email trace outside this
-#: set loses those two codes outright, and is never told that the channel's own
-#: settings were what stopped Pass 2 — while being offered remedies for
-#: machinery it does have.
-#:
-#: An origin this set does not know — ``app_mcp``, ``identity``, or one added
-#: later — gets the App MCP wording, which is now the *narrower* of the two: it
-#: promises no Pass 2 and no channel policy, so an unknown origin is described
-#: in terms of the machinery every surface has rather than machinery it may not.
-_CHANNEL_ORIGINS = frozenset(
-    {
-        routing_trace.ORIGIN_SERVER_CHANNEL,
-        routing_trace.ORIGIN_SIMULATE,
-        routing_trace.ORIGIN_EMAIL,
-    }
-)
-
-
 #: Why a near-miss ranking is missing. Named rather than left as an empty list:
 #: an empty ranking under a ``no_match`` reads as "nothing came close", which is
 #: a finding, and it must not be indistinguishable from "we could not measure".
@@ -364,12 +319,19 @@ NEAR_MISS_LIMIT = 5
 # build has no explanation for it", which is a worse diagnosis but never a wrong
 # one.
 #
-# Three tables, consulted narrowest-first — channel+agent, then channel, then
-# this one, which is the App MCP / origin-neutral base. The overrides are
-# deliberately sparse rather than a parallel copy: an explanation restates what
-# the recorder wrote during that decision, and history reads the same on every
-# surface. Only where a *remedy* would point at the wrong control, or where the
-# same ``skip_reason`` names two different missing things, does an entry appear.
+# Consulted narrowest-first, and *which* tables come first is a property of the
+# remedy profile rather than of a boolean: the profile's agent-only overrides,
+# then its overrides, then this one, which is the origin-neutral base every
+# profile falls through to (see :class:`_RemedyProfile` and
+# :func:`_skip_explanation`). The overrides are deliberately sparse rather than
+# a parallel copy: an explanation restates what the recorder wrote during that
+# decision, and history reads the same on every surface. Only where a *remedy*
+# would point at the wrong control, or where the same ``skip_reason`` names two
+# different missing things, does an entry appear.
+#
+# A profile with no override tables — App MCP, generic, identity — reads this
+# base table alone, which is exactly the lookup the two-arm version made for
+# everything that was not a channel.
 
 _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
     routing_trace.SKIP_ROUTE_INACTIVE: (
@@ -498,9 +460,11 @@ _SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
 }
 
 
-#: Channel-origin overrides, **gated on the origin alone**. Every entry here is
-#: a reason a channel decision can actually record, whose base remedy above
-#: sends the reader to an App MCP control that a channel does not read.
+#: The ``channel`` profile's overrides — :data:`_PROFILE_CHANNEL`'s
+#: ``skip_overrides``, shared by :data:`_PROFILE_EMAIL`, and **gated on the
+#: profile alone**, never on the candidate's ``kind``. Every entry here is a
+#: reason a channel decision can actually record, whose base remedy above sends
+#: the reader to an App MCP control that a channel does not read.
 #:
 #: All three are reachable on a channel and none of them is ``KIND_AGENT``-only,
 #: which is why this table is keyed by origin and not by kind:
@@ -606,8 +570,9 @@ _CHANNEL_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
 }
 
 
-#: Channel-origin overrides for ``KIND_AGENT`` candidates only — the one place
-#: ``kind`` is consulted, and not as a stand-in for the surface.
+#: The ``channel`` profile's ``agent_skip_overrides``: entries that apply to
+#: ``KIND_AGENT`` candidates only — the one place ``kind`` is consulted, and
+#: not as a stand-in for the surface.
 #:
 #: ``SKIP_NO_TRIGGER_PROMPT`` has two producers a single channel decision can
 #: reach: ``ChannelCandidateProvider`` records it for an **agent** the sender
@@ -624,6 +589,168 @@ _CHANNEL_AGENT_SKIP_EXPLANATIONS: dict[str, tuple[str, str]] = {
         "Set a router trigger prompt (or example prompts) on the agent's "
         "Configuration tab.",
     ),
+}
+
+
+# ── Remedy profiles ──────────────────────────────────────────────────
+#
+# **The origin picks the remedies, and nothing else.** Which branch fires and
+# which code comes back is identical on every surface — since the
+# ``AppAgentRoute`` deletion they all route over the same two candidate
+# providers, so they reach the same findings by the same tests. What still
+# differs is *wording*: the noun for the thing the reader routes over, whether
+# there is a Pass 2 and a channel policy to name at all, and which skip-reason
+# remedies point at a control this surface actually has.
+#
+# **This used to be a boolean, and a boolean has a far end.**
+# ``_is_channel_origin`` sorted every origin into channel-or-not, so everything
+# that was not a channel got the App MCP wording — including every origin the
+# set had never heard of. The comment here argued that was the safe end,
+# because App MCP's wording is the *narrower* of the two: it promises no Pass 2
+# and no channel policy, so it describes only machinery every surface has.
+#
+# **That argument is wrong, and the counter-example is already in this file.**
+# See :data:`_CHANNEL_SKIP_EXPLANATIONS`'s comment on
+# ``SKIP_IDENTITY_UNAVAILABLE``: its base entry, written in App MCP's voice,
+# "would send a channel user to an MCP card", and stopping it took a
+# hand-written Phase 3 override. Narrow is not neutral. A narrower surface's
+# wording is still *one surface's* wording, and handed to a reader on another
+# surface it names controls they do not have — which is the §2.4 defect, not a
+# safe degradation of it. The two-arm model failed at its default on an origin
+# the set *did* know about; an origin it does not know has nobody to notice and
+# write an override for it.
+#
+# So an unknown origin now degrades to :data:`_PROFILE_GENERIC`, which claims
+# no machinery beyond what every surface has and names no control that might
+# not be there: where the App MCP arm said "App MCP routes over the caller's
+# own agents" it says "this surface". Coarser, and true of a surface that does
+# not exist yet — which is exactly what an unknown origin is.
+#
+# **A profile is data, not a branch.** Adding a surface is a row in
+# :data:`_ORIGIN_PROFILES`; forgetting one costs a generic verdict rather than
+# a confidently wrong one, and the profile is resolved **once** per diagnosis
+# and threaded down (see :func:`_diagnose`).
+
+
+@dataclass(frozen=True)
+class _RemedyProfile:
+    """How one origin's remedies are worded.
+
+    ``name`` is for reading and for tests; nothing branches on it. The other
+    four fields are each a place a verdict differs by surface, and each one is
+    a way to be wrong about a surface a reader is actually on:
+
+    - ``surface`` — the noun in :func:`_verdict_from_configuration`'s
+      foreign-owner clause, the one sentence that still says out loud what the
+      reader routes over.
+    - ``reads_channel_policy`` — whether this surface has a Pass 2 and a
+      resolved ``ResolvedChannelPolicy`` behind it. **Not wording**: it is what
+      gates the call to :func:`_channel_pass_2_block` and therefore whether
+      :data:`CODE_NO_CANDIDATES_CHANNEL_SCOPE` and
+      :data:`CODE_NO_CANDIDATES_AUTO_INSTALL_OFF` can be returned at all. A
+      surface wrongly marked ``False`` here does not get blander sentences; it
+      loses two verdict codes outright and is never told that the channel's own
+      settings were what stopped Pass 2.
+    - ``skip_overrides`` / ``agent_skip_overrides`` — the narrowest-first
+      override tables :func:`_skip_explanation` consults before the
+      origin-neutral base. Empty means "the base table is already right for
+      this surface", which is the honest default: an explanation restates what
+      the recorder wrote, and history reads the same everywhere. An entry
+      appears only where a *remedy* would point at the wrong control.
+    """
+
+    name: str
+    surface: str
+    reads_channel_policy: bool
+    skip_overrides: dict[str, tuple[str, str]]
+    agent_skip_overrides: dict[str, tuple[str, str]]
+
+
+#: Decisions that ran the **two-pass channel pipeline** — Pass 1 over the
+#: sender's own agents, Pass 2 over the auto-install catalog, under a resolved
+#: channel policy — and are described in those terms.
+_PROFILE_CHANNEL = _RemedyProfile(
+    name="channel",
+    surface="a channel",
+    reads_channel_policy=True,
+    skip_overrides=_CHANNEL_SKIP_EXPLANATIONS,
+    agent_skip_overrides=_CHANNEL_AGENT_SKIP_EXPLANATIONS,
+)
+
+#: Email — **the channel profile under its own name**, deliberately built from
+#: it rather than written out again, so the two cannot drift.
+#:
+#: An email channel *is* a ``ServerChannel``: it resolves a
+#: ``ResolvedChannelPolicy``, runs Pass 2, and has every switch the channel
+#: sentences name — agent scope, auto-install, the pin. It reached routing
+#: through the same ``ChannelInboundService`` before phase 6 too and was
+#: diagnosed as a channel because it *was* labelled ``server_channel``; phase 6
+#: of the channels & identity unification changed the label, and the diagnosis
+#: must not change with it.
+#:
+#: Its own entry rather than a second ``ORIGIN_EMAIL: _PROFILE_CHANNEL`` row
+#: because email is a surface an admin can name, and a verdict that had to be
+#: explained would otherwise have to be explained as "email is a channel here
+#: for historical reasons". It is a channel *now*; if it ever stops being one —
+#: a mail-only remedy, a control email has and Google Chat does not — this is
+#: the line that changes, and it changes without touching the channel profile.
+_PROFILE_EMAIL = replace(_PROFILE_CHANNEL, name="email")
+
+#: App MCP: no Pass 2, no channel policy, base explanations. Kept **verbatim**
+#: through the profile refactor — every sentence it selects is the one it
+#: selected before, which is what makes this a relabelling.
+_PROFILE_APP_MCP = _RemedyProfile(
+    name="app_mcp",
+    surface="App MCP",
+    reads_channel_policy=False,
+    skip_overrides={},
+    agent_skip_overrides={},
+)
+
+#: The default for an origin :data:`_ORIGIN_PROFILES` does not know — one added
+#: by a producer that forgot this file, or read off a row written by a build
+#: that had a surface this one does not. It names no machinery a surface might
+#: lack: no Pass 2, no channel policy, no override tables, and a ``surface``
+#: noun that asserts nothing about which one it is.
+_PROFILE_GENERIC = _RemedyProfile(
+    name="generic",
+    surface="this surface",
+    reads_channel_policy=False,
+    skip_overrides={},
+    agent_skip_overrides={},
+)
+
+#: Declared so the map covers every origin constant, and **unreachable on
+#: purpose**: ``ORIGIN_IDENTITY`` is reserved and nothing emits it (settled
+#: decision D3 — identity stays a *stage*, reached inside a ``server_channel``
+#: or ``app_mcp`` decision, so an identity handoff is diagnosed under the
+#: profile of the decision that made it).
+#:
+#: It is the generic profile under its own name rather than a guess at what an
+#: identity-origin decision would want to say, because there is no such
+#: decision to check a guess against — and this file treats an unverifiable
+#: claim as a defect. A producer that ever opens an ``origin="identity"``
+#: capture has to decide these remedies then, with a real decision in front of
+#: it, and the diff will land on this line.
+_PROFILE_IDENTITY = replace(_PROFILE_GENERIC, name="identity")
+
+#: Origin → remedy profile. Every origin ``routing_trace`` declares appears
+#: here; anything else resolves to :data:`_PROFILE_GENERIC`.
+#:
+#: ``ORIGIN_SIMULATE`` is a channel because ``POST /admin/routing/simulate``
+#: and ``.../traces/{id}/replay`` open their capture around
+#: ``ChannelRoutingService.decide`` (``routing_tuning_service.py``) — a
+#: simulate row *is* a channel decision, re-run by an admin. If simulate ever
+#: learns to re-run an App MCP decision it must record which surface it
+#: simulated and this map must read that, rather than go on assuming; a
+#: simulate row silently diagnosed as a channel sends the reader to the wrong
+#: control, which is the defect §2.4 names.
+_ORIGIN_PROFILES: dict[str, _RemedyProfile] = {
+    routing_trace.ORIGIN_SERVER_CHANNEL: _PROFILE_CHANNEL,
+    routing_trace.ORIGIN_SIMULATE: _PROFILE_CHANNEL,
+    routing_trace.ORIGIN_EMAIL: _PROFILE_EMAIL,
+    routing_trace.ORIGIN_APP_MCP: _PROFILE_APP_MCP,
+    routing_trace.ORIGIN_IDENTITY: _PROFILE_IDENTITY,
 }
 
 
@@ -709,11 +836,11 @@ def _diagnose(
     # in one verdict has to describe the same surface, and a second reader of
     # ``trace.origin`` further down is how half a verdict ends up written for
     # the other one.
-    channel = _is_channel_origin(trace.origin)
+    profile = _origin_profile(trace.origin)
 
     if expected_agent_id is None:
         code, problem, action = _general_verdict(
-            db, trace, eligible, candidates, channel=channel
+            db, trace, eligible, candidates, profile=profile
         )
         name = owner_email = None
     else:
@@ -724,7 +851,7 @@ def _diagnose(
             eligible,
             expected_agent_id,
             near_misses,
-            channel=channel,
+            profile=profile,
         )
 
     return RoutingDiagnosisPublic(
@@ -750,14 +877,21 @@ def _general_verdict(
     eligible: list[dict],
     candidates: list[dict],
     *,
-    channel: bool,
+    profile: _RemedyProfile,
 ) -> tuple[str, str, str]:
     """The verdict with no expected agent named: (code, problem, action).
 
     ``routed`` and ``error`` read the same on every surface — one names the
     agent that won, the other names the provider cascade, and neither mentions
-    a route or a trigger prompt. The three negative branches all do, so all
-    three are written twice.
+    a route or a trigger prompt.
+
+    **Exactly one branch below is written twice**, and it is written twice
+    because of what the surface *has*, not what it is called: ``no_candidates``
+    asks :func:`_channel_pass_2_block` only under a profile that reads channel
+    policy, because the base sentence's remedy ("…or add its bundle to the
+    auto-install list") names a pass a surface without one never runs. The
+    other two negative branches — everything skipped, and nothing matched —
+    are origin-neutral as written and are served to every profile unchanged.
 
     A pinned decision splits twice more, and **not by origin**: once under
     ``routed``, because the generic remedy (tighten the winner's trigger
@@ -766,11 +900,12 @@ def _general_verdict(
     candidate scan whose winner was rejected — a scan that never happened.
     Both are splits by ``match_method``, which is a fact about what the router
     did rather than about which surface it ran on, so neither needs a
-    counterpart in the App MCP half: nothing there records ``pinned``.
+    per-profile counterpart: only a channel pipeline records ``pinned`` at all.
 
-    ``db`` is here for exactly one branch — the channel ``no_candidates`` one,
-    which asks :func:`_channel_pass_2_block` whether this sender's channel
-    policy is what kept Pass 2 from running. The lookup is made **inside** that
+    ``db`` is here for exactly one branch — the ``no_candidates`` one, and only
+    under a profile that reads channel policy, where it asks
+    :func:`_channel_pass_2_block` whether this sender's channel policy is what
+    kept Pass 2 from running. The lookup is made **inside** that
     branch rather than up front deliberately: it is two to five ``SELECT``s
     depending on the channel's shape, this function runs on every trace read,
     and every other branch has its answer already.
@@ -857,7 +992,7 @@ def _general_verdict(
         )
 
     if not candidates:
-        if channel:
+        if profile.reads_channel_policy:
             # Before the base sentence, because the base sentence's remedy
             # ("…or add its bundle to the auto-install list") is only true when
             # Pass 2 could actually have run for this sender. On a channel
@@ -968,7 +1103,7 @@ def _expected_agent_verdict(
     expected_agent_id: str,
     near_misses: list[RoutingNearMiss],
     *,
-    channel: bool,
+    profile: _RemedyProfile,
 ) -> tuple[str, str, str, str | None, str | None]:
     """The verdict about one named agent: (code, problem, action, name, email).
 
@@ -988,7 +1123,7 @@ def _expected_agent_verdict(
 
     if row is not None:
         return (
-            *_verdict_from_trace(trace, row, name, near_misses, channel=channel),
+            *_verdict_from_trace(trace, row, name, near_misses, profile=profile),
             name,
             owner_email,
         )
@@ -1027,7 +1162,7 @@ def _expected_agent_verdict(
         f"{name} is not among them because"
     )
     code, problem, action = _verdict_from_configuration(
-        trace, agent, prefix, channel=channel
+        trace, agent, prefix, profile=profile
     )
     return code, problem, action, name, owner_email
 
@@ -1038,7 +1173,7 @@ def _verdict_from_trace(
     name: str,
     near_misses: list[RoutingNearMiss],
     *,
-    channel: bool,
+    profile: _RemedyProfile,
 ) -> tuple[str, str, str]:
     """The agent WAS in this decision's candidate list. Say what happened to it.
 
@@ -1059,7 +1194,7 @@ def _verdict_from_trace(
     if not row.get("eligible"):
         reason = str(row.get("skip_reason") or "")
         explanation, action = _skip_explanation(
-            reason, kind=str(row.get("kind") or ""), channel=channel
+            reason, kind=str(row.get("kind") or ""), profile=profile
         )
         return (
             CODE_EXPECTED_SKIPPED,
@@ -1096,7 +1231,7 @@ def _verdict_from_configuration(
     agent: Agent,
     prefix: str,
     *,
-    channel: bool,
+    profile: _RemedyProfile,
 ) -> tuple[str, str, str]:
     """The agent was never a candidate. Explain from what is configured now.
 
@@ -1111,8 +1246,10 @@ def _verdict_from_configuration(
     **who owns it**, and **whether its owner wrote anything for the classifier
     to match on**.
 
-    ``channel`` therefore no longer picks the *findings*. It names the surface
-    in one clause, and that is all it is still for here. Written as one
+    ``profile`` therefore no longer picks the *findings*. It names the surface
+    in one clause — ``profile.surface`` — and that is all it is still for here,
+    which is why an origin nobody mapped can say "this surface" and still be
+    right. Written as one
     function rather than two near-identical ones deliberately — two copies of a
     branch table drift, and this module's whole contract is that a verdict is
     never confidently wrong.
@@ -1151,7 +1288,7 @@ def _verdict_from_configuration(
     one created or transferred to this sender *since*, or a trace captured
     before its surface routed this way.
     """
-    surface = "a channel" if channel else "App MCP"
+    surface = profile.surface
 
     # Ownership asked positively, so the ``user_id is None`` case cannot fall
     # through into a sentence that asserts an owner. See CODE_EXPECTED_SENDER_GONE.
@@ -1347,23 +1484,29 @@ def _owner_email(db: DBSession, row: dict | None, agent: Agent | None) -> str | 
     return owner.email if owner is not None else None
 
 
-def _skip_explanation(reason: str, *, kind: str, channel: bool) -> tuple[str, str]:
+def _skip_explanation(
+    reason: str, *, kind: str, profile: _RemedyProfile
+) -> tuple[str, str]:
     """The (explanation, action) pair for one recorded ``skip_reason``.
 
-    Narrowest table first: channel+agent, then channel, then the App MCP /
-    origin-neutral base. The fallback is what makes all three safe to leave
-    incomplete — an unmapped reason is reported by name with an honest "this
-    build has no explanation for it", which is a worse diagnosis but never a
-    wrong one.
+    Narrowest table first: the profile's agent-only overrides, then its
+    overrides, then the origin-neutral base. A profile with neither table —
+    App MCP, generic, identity — resolves straight to the base, which is the
+    same lookup it made before the profiles existed.
+
+    The fallback is what makes all three safe to leave incomplete: an unmapped
+    reason is reported by name with an honest "this build has no explanation
+    for it", which is a worse diagnosis but never a wrong one. That is also why
+    an unmapped *origin* is safe here — it selects fewer tables, never a
+    different surface's.
     """
-    if channel:
-        if kind == routing_trace.KIND_AGENT:
-            override = _CHANNEL_AGENT_SKIP_EXPLANATIONS.get(reason)
-            if override is not None:
-                return override
-        override = _CHANNEL_SKIP_EXPLANATIONS.get(reason)
+    if kind == routing_trace.KIND_AGENT:
+        override = profile.agent_skip_overrides.get(reason)
         if override is not None:
             return override
+    override = profile.skip_overrides.get(reason)
+    if override is not None:
+        return override
     return _SKIP_EXPLANATIONS.get(
         reason,
         (
@@ -1495,13 +1638,16 @@ def _channel_pass_2_block(
     return None
 
 
-def _is_channel_origin(origin: str | None) -> bool:
-    """Did this decision route over the sender's own agents?
+def _origin_profile(origin: str | None) -> _RemedyProfile:
+    """Which surface's wording this decision's verdict is written in.
 
-    See :data:`_CHANNEL_ORIGINS`, which also says where an unknown origin lands
-    and why that is the safe end.
+    Total by construction: an origin :data:`_ORIGIN_PROFILES` does not know —
+    including ``None``, which a row written before ``origin`` existed could
+    still carry — resolves to :data:`_PROFILE_GENERIC` rather than to another
+    surface's voice. The comment above the profiles says why that end is the
+    safe one and why the old boolean's far end was not.
     """
-    return (origin or "") in _CHANNEL_ORIGINS
+    return _ORIGIN_PROFILES.get(origin or "", _PROFILE_GENERIC)
 
 
 def _has_router_wording(agent: Agent) -> bool:
