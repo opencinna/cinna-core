@@ -37,6 +37,7 @@ Every row the provider reads (agent, binding, assignment) is created through
 the identity/agent APIs — only the function call under test bypasses HTTP,
 exactly as the rest of this domain does.
 """
+import dataclasses
 import uuid
 
 from fastapi.testclient import TestClient
@@ -47,6 +48,7 @@ from app.services.routing.identity_candidate_provider import (
     IdentityCandidateProvider,
     identity_ref_id,
 )
+from app.services.server_channels.channel_policy_service import ResolvedChannelPolicy
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.identity import (
@@ -55,6 +57,24 @@ from tests.utils.identity import (
     update_identity_binding,
 )
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
+
+
+CONSENTING_POLICY = dataclasses.replace(
+    ResolvedChannelPolicy.for_no_channel(), allow_identity_routing=True
+)
+"""The channel-less policy, with the sender's identity opt-in switched on.
+
+Both tests below ask the provider a question about *its own* mechanics — how
+two bindings collapse into one candidate, and where the line between a skip row
+and no row at all falls — none of which is about consent. They used to reach
+that state by omitting ``policy=`` entirely and taking the permissive default;
+phase 7 removed that default (a gate that can route into somebody else's
+workspace does not get a permissive one), so the precondition those questions
+always assumed is now stated rather than inherited. ``for_no_channel()`` is the
+real policy for a decision belonging to no channel, and its
+``allow_identity_routing=False`` is the only field these tests are not asking
+about — hence the ``replace``. Nothing else about either test changed.
+"""
 
 
 def _me(client: TestClient, headers: dict[str, str]) -> dict:
@@ -121,7 +141,9 @@ def test_two_bindings_from_one_owner_collapse_into_one_candidate_with_pinned_tex
     # this owner's assignments to them at once (per-person, not per-binding).
     toggle_identity_contact(client, caller_headers, owner["id"], is_enabled=True)
 
-    candidates = IdentityCandidateProvider.build(db, caller_id)
+    candidates = IdentityCandidateProvider.build(
+        db, caller_id, policy=CONSENTING_POLICY
+    )
 
     assert len(candidates) == 1, (
         f"Two bindings from one owner must collapse into ONE candidate, got "
@@ -220,7 +242,9 @@ def test_owner_with_only_inactive_bindings_is_a_recorded_skip_not_a_drop(
     with routing_trace.RoutingTrace.capture(
         origin=routing_trace.ORIGIN_APP_MCP, message="who can help me?"
     ) as trace:
-        candidates = IdentityCandidateProvider.build(db, caller_id)
+        candidates = IdentityCandidateProvider.build(
+            db, caller_id, policy=CONSENTING_POLICY
+        )
 
     # ── Returned candidates: neither owner appears ─────────────────────────
     # Owner A is skipped (excluded, not returned); Owner B never matched the

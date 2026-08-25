@@ -68,10 +68,14 @@ over one shared provider, whose failure mode is routing a stranger's message
 into a stranger's workspace: the fourth consumer inherits the gate only if
 whoever writes it reads one of the other three first. It is enforced in
 :meth:`IdentityCandidateProvider.build` instead, so forgetting it is not a thing
-a call site can do — and ``tests/architecture/channel_routing_scope_test.py``
-holds the other half, that every call site under ``app/`` actually hands its
-resolved policy in rather than falling back on the permissive default this
-module keeps for direct, channel-less unit use.
+a call site can do. Phase 7 finished the job: ``policy`` is **required**, so
+omitting it is not spellable rather than merely detectable, and there is no
+permissive default left to fall back on. ``tests/architecture/
+channel_routing_scope_test.py`` still holds the belt to that braces — on a gate
+whose failure mode is routing a stranger's message into a stranger's workspace,
+one enforcement mechanism is not enough — and it now also rejects an explicit
+``policy=None``, the one spelling the signature alone would let a caller reach
+for before the type checker caught them.
 
 **One thing is deliberately NOT recorded**, and it is the feature's single
 inversion of master plan §3.5: when the sender has not switched identity
@@ -204,7 +208,7 @@ class IdentityCandidateProvider:
         db: DBSession,
         caller_user_id: uuid.UUID,
         *,
-        policy: ResolvedChannelPolicy | None = None,
+        policy: ResolvedChannelPolicy,
     ) -> list[Candidate]:
         """Every identity owner ``caller_user_id`` can currently address.
 
@@ -214,20 +218,25 @@ class IdentityCandidateProvider:
         this returns ``[]`` immediately — no query, and, deliberately, no trace
         rows of any kind (see the module docstring's §3.5 inversion).
 
-        ``policy`` is keyword-only, and ``None`` means "no channel governs this
-        call". It is **not** the shape ``ChannelCandidateProvider.build`` uses,
-        which requires its policy and argues in its own docstring that a
-        permissive default is a restriction that silently stops applying. The
-        difference is deliberate and is the narrower of two evils: this
-        provider's unit tests, and the App MCP domain's documented convention
-        of entering at ``build()`` directly, ask the channel-less question
-        ("who has named this caller on a binding at all"), and that question is
-        real. The hole a permissive default would otherwise leave — a new
-        production consumer that simply omits ``policy=`` — is closed by
-        ``tests/architecture/channel_routing_scope_test.py``, which walks every
-        call to this method under ``app/`` and fails the one that does not pass
-        a policy in. Promote this parameter to required the day that
-        channel-less question stops being asked.
+        ``policy`` is **required and keyword-only**, exactly as
+        ``ChannelCandidateProvider.build``'s is, and for a sharper version of
+        the reason that one gives. It carried a permissive ``None`` default
+        until phase 7, so a call site that simply omitted the keyword got
+        identity candidates — the wrong direction for the one switch whose
+        failure mode is routing a stranger's message into a stranger's
+        workspace (master plan §3.4: opt-in, per person, by the receiving
+        user). A default that has to be permissive to be a default is a
+        restriction that silently stops applying the day somebody adds a
+        consumer and does not read this docstring, and an architecture test can
+        only *detect* that; requiring the argument makes it unspellable.
+
+        A caller with no channel is not thereby exempt: it says so, with
+        ``ResolvedChannelPolicy.for_no_channel()``, whose
+        ``allow_identity_routing`` is ``False`` precisely because the absence
+        of a channel is nobody's consent. A unit test that wants the
+        channel-less question ("who has named this caller on a binding at all")
+        answers it by handing in a consenting policy, which states the
+        precondition it is assuming instead of inheriting it from a default.
 
         One query, not one per owner: the join below returns every
         ``(owner, binding, assignment)`` triple naming this caller — switched
@@ -252,7 +261,7 @@ class IdentityCandidateProvider:
         example lines *within* one owner, which the channel provider has no
         equivalent of.
         """
-        if policy is not None and not policy.allow_identity_routing:
+        if not policy.allow_identity_routing:
             # Consent is off. Return before the query and before any recorder
             # call: the identity owners this caller *could* have reached must
             # leave no trace rows at all, not even skips, because a trace an

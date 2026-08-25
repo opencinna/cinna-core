@@ -403,10 +403,22 @@ def test_a_lexical_hit_on_a_trigger_prompt_never_beats_the_classifier(
     fields that stay in the read vocabulary for stored history but must never
     gain a new producer.
 
-    This replaces the deleted `..._pattern_hit_reports_its_match_method` test.
-    That one asserted the pattern branch recorded its match honestly; the
-    branch is gone, so the equivalent-or-stronger statement is that nothing
-    short-circuits the classifier and no decision claims a pattern took it.
+    This stands in the place of the deleted
+    `..._pattern_hit_reports_its_match_method` test, but it is **not** the same
+    statement at equal or greater strength, and should not be read as one.
+    That test asserted the pattern branch recorded its match honestly, and a
+    branch that no longer exists cannot have that asserted about it. The
+    `match_method != "pattern"` assertion below is, on today's tree, trivially
+    true: nothing writes that value any more, so it would hold with the
+    classifier removed entirely.
+
+    What this test genuinely proves is the *other* half, and the half that can
+    still regress: with a verbatim lexical hit sitting on one candidate's
+    trigger prompt, the decision is still the classifier's — nothing
+    short-circuits ahead of it and takes the obvious-looking match. The
+    match_method assertion is kept as a cheap tripwire for the day somebody
+    reintroduces a pre-classification shortcut and reaches for the old wire
+    value to name it.
     """
     channel = _channel(client, superuser_token_headers)
     signer = GoogleChatJWTSigner()

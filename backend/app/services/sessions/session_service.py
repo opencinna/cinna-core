@@ -40,9 +40,22 @@ class SessionService:
             data: Session creation data
             access_token_id: Optional access token ID (for A2A token-created sessions)
             source_task_id: Optional task ID that spawned this session (for task management)
-            email_thread_id: Optional email Message-ID for threading
-            integration_type: Optional integration source ("email", "a2a", "external", "app_mcp", "identity_mcp", etc.)
-            sender_email: Optional sender email address (owner mode: track original sender)
+            email_thread_id: Retention-era plumbing, and **dead**: no caller
+                passes it. It survives the deleted per-agent email integration
+                because historical `session` rows still carry the column (the
+                email *channel* keeps its thread state on
+                `ChannelThreadBinding.thread_key` instead). Kept so the write
+                path can still set a column readers still forward.
+            integration_type: How this session was opened. Written today as one
+                of "channel_<type>" (server channels — "channel_email",
+                "channel_google_chat", ...), "a2a", "app_mcp", "identity_mcp",
+                "mcp", "task", "webhook", "schedule", "external", or None for
+                web-UI sessions. Historical rows may also carry "email" from
+                the deleted per-agent email integration — readers must still
+                tolerate it, but no producer emits it any more.
+            sender_email: The original sender's address. Dead for the same
+                reason as `email_thread_id` and on the same terms: no caller
+                passes it, historical rows still carry values.
             guest_share_id: Optional guest share ID (for guest share sessions)
             webapp_share_id: Optional webapp share ID (for webapp chat sessions)
             dashboard_block_id: Optional dashboard block ID (for prompt action session reuse)

@@ -222,8 +222,12 @@ class AppMCPRequestHandler:
                 if resumed is not None:
                     session, agent_or_err, is_new_session = resumed
                     if session is None:
-                        # Identity session found but binding/assignment no
-                        # longer valid — surface the validity error.
+                        # Identity session found, but it is no longer valid to
+                        # resume: the caller has withdrawn their
+                        # allow_identity_routing consent, or the binding or
+                        # assignment behind it was switched off. Surface the
+                        # validity error rather than falling through to
+                        # routing.
                         return None, agent_or_err, False, None
                     return session, agent_or_err, is_new_session, None
 

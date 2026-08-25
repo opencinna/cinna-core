@@ -146,6 +146,17 @@ def _imports(tree: ast.Module) -> tuple[set[str], set[str]]:
     because either alone is a hole: a symbol check misses
     ``import app...app_agent_route_service as svc``, and a module check misses
     a re-export imported from somewhere else.
+
+    ``from X import Y`` contributes **two** module paths: ``X``, and ``X.Y``.
+    The second is not pedantry — when ``Y`` is a submodule rather than a name
+    inside ``X``, that statement binds the module ``X.Y`` just as surely as
+    ``import X.Y`` does, and recording only ``X`` let the fenced module through
+    under the spelling authors actually reach for first. ``from
+    app.services.routing import routing_trace`` is how 13 modules under
+    ``app/`` say it today — including ``identity_candidate_provider`` itself,
+    one of the files these boundaries guard. Recording ``X.Y`` when ``Y`` is an
+    ordinary name (``from app.models import User`` -> ``app.models.User``)
+    costs nothing: no boundary names a path that is not a module.
     """
     symbols: set[str] = set()
     modules: set[str] = set()
@@ -161,6 +172,8 @@ def _imports(tree: ast.Module) -> tuple[set[str], set[str]]:
                 symbols.add(alias.name)
                 if alias.asname:
                     symbols.add(alias.asname)
+                if node.module:
+                    modules.add(f"{node.module}.{alias.name}")
     return symbols, modules
 
 
@@ -518,15 +531,38 @@ _BOUNDARY_IDS = [
 
 def _module_imports_of(
     tree: ast.Module, module_path: str
-) -> list[ast.Import | ast.ImportFrom]:
-    """Every import statement in ``tree`` that touches ``module_path``."""
-    hits: list[ast.Import | ast.ImportFrom] = []
+) -> list[tuple[ast.Import | ast.ImportFrom, frozenset[str] | None]]:
+    """Every import statement in ``tree`` that reaches ``module_path``.
+
+    The second element of each pair is the set of names taken *out of* the
+    module, or ``None`` when the statement binds the **module object itself**
+    — the shape an allowlist cannot fence, because every name in the module is
+    then one attribute access away from the bound name.
+
+    Two spellings bind the module. ``import a.b.c`` is the obvious one.
+    ``from a.b import c`` is the one this helper was blind to until phase 7:
+    ``node.module`` is ``a.b`` there, so an equality test against ``a.b.c``
+    never fired, and the fenced module was reachable through the import form
+    authors reach for *first* — see ``_imports``' docstring for how common that
+    spelling is in this tree.
+    """
+    hits: list[tuple[ast.Import | ast.ImportFrom, frozenset[str] | None]] = []
+    parent, _, tail = module_path.rpartition(".")
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             if any(alias.name == module_path for alias in node.names):
-                hits.append(node)
-        elif isinstance(node, ast.ImportFrom) and node.module == module_path:
-            hits.append(node)
+                hits.append((node, None))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == module_path:
+                hits.append(
+                    (node, frozenset(alias.name for alias in node.names))
+                )
+            elif (
+                parent
+                and node.module == parent
+                and any(alias.name == tail for alias in node.names)
+            ):
+                hits.append((node, None))
     return hits
 
 
@@ -551,17 +587,17 @@ def test_routing_surface_boundary_is_not_crossed(
             offenders.append(f"  - {rel} imports {name}, which {why}.")
 
     for module_path, allowed in boundary.only_from:
-        for node in _module_imports_of(tree, module_path):
-            if isinstance(node, ast.Import):
+        for node, taken in _module_imports_of(tree, module_path):
+            if taken is None:
                 offenders.append(
-                    f"  - {rel} imports the module {module_path} directly "
+                    f"  - {rel} binds the module {module_path} itself "
                     f"(line {node.lineno}). Only "
                     f"`from {module_path} import {', '.join(sorted(allowed))}` "
-                    "is permitted here — a bare module import binds no name to "
-                    "check and puts everything on it one attribute away."
+                    "is permitted here — binding the module binds no name to "
+                    "check and puts everything on it one attribute away. Both "
+                    "`import a.b.c` and `from a.b import c` do that."
                 )
                 continue
-            taken = {alias.name for alias in node.names}
             if not taken <= allowed:
                 offenders.append(
                     f"  - {rel} imports {sorted(taken - allowed)} from "
@@ -604,14 +640,72 @@ def _app_source_files() -> list[pathlib.Path]:
     ]
 
 
+_PROVIDER_CLASS = "IdentityCandidateProvider"
+
+
+def _identity_provider_names(tree: ast.Module) -> set[str]:
+    """Every local name in ``tree`` that refers to the provider class.
+
+    The class's own name, plus the two ways a module can give it another one:
+    an import alias (``from ... import IdentityCandidateProvider as ICP``) and
+    a plain rebind (``P = IdentityCandidateProvider``), the latter chased to a
+    fixed point so ``Q = P`` is covered too. Both were invisible to the
+    matcher until phase 7 — a call through either satisfied the guard by never
+    being seen by it, which is the failure mode the call-site floor below
+    exists to make noisy rather than silent.
+
+    **What is still not covered**, stated rather than implied: a reference that
+    leaves the syntax — ``getattr(module, name)``, the class handed in as a
+    function parameter, or ``build = IdentityCandidateProvider.build`` followed
+    by a bare ``build(...)``, which detaches the call from the class entirely
+    and has no attribute node left to match. Modelling those means dataflow,
+    not pattern matching. For them the only defence is
+    ``_MIN_IDENTITY_BUILD_CALL_SITES``: rewriting a known call site into one of
+    those shapes drops the count and fails the floor. A *new* consumer written
+    that way from the start would pass unseen, and that is a real, accepted gap
+    — the provider's required ``policy`` parameter is what actually stops it,
+    with this test as the second line rather than the first.
+    """
+    names = {_PROVIDER_CLASS}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == _PROVIDER_CLASS and alias.asname:
+                    names.add(alias.asname)
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            value = node.value
+            referent = (
+                value.id
+                if isinstance(value, ast.Name)
+                else value.attr
+                if isinstance(value, ast.Attribute)
+                else None
+            )
+            if referent not in names:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id not in names:
+                    names.add(target.id)
+                    changed = True
+    return names
+
+
 def _identity_build_calls(tree: ast.Module) -> list[ast.Call]:
     """Every ``IdentityCandidateProvider.build(...)`` call in one module.
 
-    Matched on the AST shape ``<anything ending in the class name>.build(...)``
+    Matched on the AST shape ``<anything naming the provider>.build(...)``
     rather than on text, for this file's usual reason: several modules discuss
     the provider in prose, and one of them (``identity_candidate_provider``
-    itself) documents this very call in its docstring.
+    itself) documents this very call in its docstring. "Naming the provider"
+    is :func:`_identity_provider_names`, so an alias or a rebind is matched
+    too.
     """
+    provider_names = _identity_provider_names(tree)
     calls: list[ast.Call] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -627,7 +721,7 @@ def _identity_build_calls(tree: ast.Module) -> list[ast.Call]:
             if isinstance(owner, ast.Attribute)
             else None
         )
-        if name == "IdentityCandidateProvider":
+        if name in provider_names:
             calls.append(node)
     return calls
 
@@ -643,13 +737,17 @@ def test_every_identity_candidate_build_call_passes_a_policy() -> None:
     handed says the caller has not opted in.
 
     That relocation only closes the hole if the policy actually arrives.
-    ``policy`` is keyword-only with a permissive ``None`` default — kept, and
-    argued for, in the provider's own docstring, because the provider's unit
-    tests and the App MCP domain's documented "enter at ``build()`` directly"
-    convention ask the channel-less question — so a new consumer that simply
-    omits ``policy=`` would route a stranger into a stranger's workspace and
-    look perfectly ordinary in review. This is the half of the guarantee a
-    signature cannot carry: every call under ``app/`` names the policy.
+    Phase 7 made ``policy`` **required** — it used to be keyword-only with a
+    permissive ``None`` default, so a consumer that simply omitted it routed a
+    stranger into a stranger's workspace and looked perfectly ordinary in
+    review — which means a type checker now catches the plain omission and
+    this test is the second line rather than the first. It is kept, and
+    extended, because one enforcement mechanism is thin for a gate whose
+    failure mode is a stranger's message opening a session in a stranger's
+    workspace, and because a signature cannot see two things this walk can:
+    an explicit ``policy=None`` (still a valid *call* shape, and exactly the
+    fail-open value the old default handed out), and a call reached through an
+    alias or a rebind of the class.
 
     Deliberately a walk over the whole application tree rather than a fixed
     module list. The property being defended is about the call site that does
@@ -665,10 +763,27 @@ def test_every_identity_candidate_build_call_passes_a_policy() -> None:
             continue
         for call in _identity_build_calls(tree):
             found += 1
-            if not any(keyword.arg == "policy" for keyword in call.keywords):
+            where = f"{path.relative_to(_BACKEND_ROOT)}:{call.lineno}"
+            policy_kw = next(
+                (kw for kw in call.keywords if kw.arg == "policy"), None
+            )
+            if policy_kw is None:
                 offenders.append(
-                    f"  - {path.relative_to(_BACKEND_ROOT)}:{call.lineno} calls "
-                    "IdentityCandidateProvider.build without policy=."
+                    f"  - {where} calls "
+                    f"{_PROVIDER_CLASS}.build without policy=."
+                )
+            elif (
+                isinstance(policy_kw.value, ast.Constant)
+                and policy_kw.value.value is None
+            ):
+                # Presence is not consent. `policy=None` satisfies a check that
+                # only looks for the keyword while being precisely the value
+                # the removed permissive default used to supply, so a guard
+                # that accepts it fences the spelling and not the behaviour.
+                offenders.append(
+                    f"  - {where} calls "
+                    f"{_PROVIDER_CLASS}.build with policy=None, which names "
+                    "the argument without answering it."
                 )
 
     assert found >= _MIN_IDENTITY_BUILD_CALL_SITES, (
@@ -689,6 +804,10 @@ def test_every_identity_candidate_build_call_passes_a_policy() -> None:
         "provider enforces allow_identity_routing itself and returns an empty "
         "list — recording nothing, not even skips — when consent is off, so "
         "there is no 'if' for you to write and none for you to forget. "
-        "Omitting the argument opts your surface OUT of the gate, which is "
-        "the one outcome nobody would choose on purpose."
+        "Omitting the argument — or passing None to quiet a type checker — "
+        "opts your surface OUT of the gate, which is the one outcome nobody "
+        "would choose on purpose. A caller that genuinely has no channel says "
+        "so with ResolvedChannelPolicy.for_no_channel(), whose "
+        "allow_identity_routing is False: the absence of a channel is nobody's "
+        "consent."
     )
