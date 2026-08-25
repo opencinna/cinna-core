@@ -21,6 +21,20 @@ Two rules the pipeline depends on:
    which is which; the pipeline treats ``sender_email`` as transitively
    trusted only because the adapter verified the platform's signature over
    it.
+
+Both rules survive the transport split; what changes is *which method* holds
+rule 1 for a given transport. A push transport authenticates in
+``verify_inbound``; a pull transport authenticates inside ``poll``, which
+restates the same promise for messages nobody pushed. The mode is a **declared
+capability** (``ChannelCapabilities.inbound_mode``), never inferred from which
+ABC an adapter happens to subclass — the declaration is what the registry, the
+channel service and the pollers dispatch on.
+
+Rule 2 gains a corollary the split makes unavoidable: *how strong* "verified"
+is now differs per transport. Google Chat's ``sender_email`` comes out of a
+Google-signed JWT; email's comes out of a ``From:`` header and is spoofable.
+Both feed the same pipeline, so each transport must say which tier it offers
+where an admin can read it.
 """
 from __future__ import annotations
 
@@ -58,9 +72,43 @@ class ChannelSendError(ChannelError):
     """Outbound delivery failed after retries."""
 
 
+class ChannelTransportMisuseError(ChannelVerificationError):
+    """A channel was driven through an entry point its transport does not have.
+
+    Concretely: something POSTed at the webhook route for a channel whose
+    transport is ``polled`` or ``authenticated``. That is a deployment or
+    configuration bug rather than an attack — but it arrives on the *public*
+    webhook, so it deliberately subclasses ``ChannelVerificationError``: the
+    caller gets the same detail-free 403 every other verification failure
+    gets, the attempt lands on the same throttled audit bucket, and the route
+    needs no new branch. Fail-closed by inheritance.
+
+    A distinct type all the same, so a log reader can tell "someone forged a
+    signature" apart from "this channel has no webhook to forge one at". That
+    distinction survives in exactly one place: the ``logger.warning`` in
+    ``ChannelInboundService.handle_inbound``'s ``except`` block, which renders
+    this exception. Not in the 403 (detail-free by design) and not in the admin
+    debug feed, whose summary on that path is hardcoded — so the log line is
+    load-bearing for this type meaning anything at all.
+    """
+
+
 # What kind of event the adapter found in the payload. The pipeline branches
 # on this rather than on any platform-specific event name.
 ChannelEventKind = Literal["message", "added_to_space", "ignored"]
+
+# How a transport's inbound events reach the pipeline, and therefore where its
+# authentication chokepoint lives:
+#
+#   "webhook"       the platform pushes an HTTP request; ``verify_inbound``
+#                   proves it came from there. The original and the default.
+#   "polled"        the platform is pulled on a timer; ``poll`` authenticates
+#                   what it fetched. No ``Request`` exists.
+#   "authenticated" no inbound driver at all — the caller is already an
+#                   authenticated platform user when the pipeline is entered.
+#
+# Declared, not inferred. Every dispatch on transport shape reads this value.
+ChannelInboundMode = Literal["webhook", "polled", "authenticated"]
 
 
 @dataclass(frozen=True)
@@ -106,6 +154,29 @@ class ChannelCapabilities:
     supports_markdown: bool = False
     max_message_chars: int | None = None
     supports_sync_reply: bool = False
+
+    # --- Transport shape -------------------------------------------------
+    #
+    # The three defaults below describe a push webhook with its own outbound
+    # credential — i.e. exactly what every adapter was before the transport
+    # split — so an adapter that says nothing keeps its previous behaviour
+    # byte for byte.
+
+    #: Where this transport's authentication chokepoint lives. See
+    #: ``ChannelInboundMode``.
+    inbound_mode: ChannelInboundMode = "webhook"
+    #: Whether the channel is reachable at ``/channels/{token}/inbound`` and
+    #: therefore needs an unguessable token minted for it. False for a
+    #: transport with no webhook: a token nothing can be reached through is
+    #: dead weight, and publishing a URL that answers nothing misleads the
+    #: admin who pastes it somewhere.
+    needs_webhook_token: bool = True
+    #: Whether this transport's outbound credential lives in
+    #: ``ServerChannel.encrypted_secrets``. False for a transport whose
+    #: credential lives elsewhere (email references a server-scoped SMTP
+    #: config), which is why ``has_outbound_credentials`` on the admin
+    #: projection is *derived* rather than read straight off that column.
+    needs_outbound_credentials: bool = True
 
 
 class ChannelAdapter(ABC):
@@ -186,17 +257,99 @@ class ChannelAdapter(ABC):
         (Google Chat does) can answer without any outbound credential — which
         is what makes denial replies possible before setup is complete.
         ``None`` means "acknowledge silently".
+
+        The base returns ``{}`` for everything, which is the right answer for a
+        transport with no sync-reply surface and is what a polled transport
+        inherits: its denials reach the sender as nothing at all. Deliberate —
+        pushing declines back down a pull channel is a probing oracle and a
+        spam amplifier — and never invisible to the operator, since every
+        denial branch in ``process_inbound`` records to the debug buffer first.
         """
         return {}
 
 
+class PolledChannelTransport(ChannelAdapter):
+    """A transport the platform is *pulled* from on a timer, not pushed to.
+
+    Email is the first of these: there is no request to verify because there
+    is no request — a scheduler asks the mail server what arrived. Everything
+    below the transport is unchanged. ``poll`` returns the same
+    ``ChannelInboundMessage`` values ``verify_inbound`` would have produced,
+    and the pipeline is entered at its post-verification step.
+
+    Subclasses **must** declare ``inbound_mode="polled"`` in ``capabilities``.
+    Subclassing this ABC is how a transport inherits the webhook refusal
+    below; it is never a substitute for the declaration, because nothing
+    dispatches on the class — the registry, ``ServerChannelService`` and the
+    poller all read the declared capability.
+    """
+
+    async def verify_inbound(
+        self, request: Request, channel: ServerChannel, body: bytes
+    ) -> ChannelInboundMessage:
+        """Refuse: this transport has no webhook, so there is nothing to verify.
+
+        Not a ``NotImplementedError`` stub and not a silent ``ignored``
+        message. Reaching here means a request arrived at
+        ``/channels/{token}/inbound`` for a channel that is polled — the route
+        has no way to authenticate it, and *pretending* to (by acking, or by
+        parsing the body) would put an unverified payload into a pipeline
+        whose whole ordering rests on step 2 having really run.
+
+        ``ChannelTransportMisuseError`` is a ``ChannelVerificationError``, so
+        the caller gets the standard detail-free 403 and the attempt is
+        audited like any other verification failure. Fail closed, loudly, in
+        the logs only.
+        """
+        raise ChannelTransportMisuseError(
+            f"Channel type {self.channel_type!r} is a polled transport and has "
+            "no webhook; inbound messages arrive through poll()."
+        )
+
+    @abstractmethod
+    async def poll(self, channel: ServerChannel) -> list[ChannelInboundMessage]:
+        """Fetch and authenticate everything new on ``channel``, oldest first.
+
+        This is rule 1 of the module docstring restated for a pull transport.
+        ``verify_inbound`` promises that nothing downstream re-checks the
+        sender; **so does this method**. Every ``sender_email`` returned here
+        must come from a source this transport considers authenticated,
+        because the whitelist, user resolution, auto-registration and identity
+        routing all treat that address as the sender's identity, and there is
+        no second gate anywhere below.
+
+        A pull transport must additionally document **how strong** that
+        guarantee is, because — unlike a signed webhook — it is not the same
+        answer for every transport. For **email the source is the ``From:``
+        header, and it is spoofable**: anyone who can get a message into the
+        polled mailbox can claim any address in it. That is a materially
+        weaker trust tier than Google Chat's Google-signed JWT, and both now
+        feed the same pipeline, so the difference has to be stated wherever an
+        admin picks a whitelist — in the transport's own docstring, in the
+        feature docs, and in the admin UI.
+
+        Returning an empty list is the ordinary "nothing new" answer. A
+        transient fetch failure (the mail server is down) is the transport's
+        own problem to raise or swallow for its scheduler to retry; it is not
+        an inbound event and must never be returned as one.
+
+        Marking a message consumed — IMAP ``\\Seen``, an ack, a stored cursor —
+        is the transport's job too. The pipeline does dedup on
+        ``external_message_id``, but that is a safety net for redelivery, not
+        the mechanism that stops the same mail being answered on every tick.
+        """
+
+
 __all__ = [
     "ChannelAdapter",
+    "PolledChannelTransport",
     "ChannelCapabilities",
     "ChannelInboundMessage",
     "ChannelEventKind",
+    "ChannelInboundMode",
     "ChannelError",
     "ChannelVerificationError",
+    "ChannelTransportMisuseError",
     "UnknownChannelTypeError",
     "ChannelConfigError",
     "ChannelSendError",

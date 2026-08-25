@@ -458,7 +458,7 @@ class ChannelRoutingService:
         second application of the same filter — that method's docstring is
         where it is argued. What it does **not** do here is
         gate on ``is_available``. That term is the inbound pipeline's, checked
-        in ``ChannelInboundService.handle_inbound`` before routing is ever
+        in ``ChannelInboundService.process_inbound`` before routing is ever
         scheduled, and it produces a *reply* rather than a route. Two reasons
         it is not re-checked here, and the second is the one that decides it:
         this function has no way to express "declined" (its whole vocabulary is

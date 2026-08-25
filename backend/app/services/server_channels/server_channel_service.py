@@ -47,8 +47,15 @@ from app.models import (
     ServerChannelUserGrant,
     User,
 )
-from app.services.server_channels.adapters.base import ChannelError
-from app.services.server_channels.adapters.registry import get_adapter
+from app.services.server_channels.adapters.base import (
+    ChannelError,
+    UnknownChannelTypeError,
+)
+from app.services.server_channels.adapters.registry import (
+    RegisteredTransport,
+    get_adapter,
+    get_transport,
+)
 from app.services.server_channels.channel_debug_buffer import ChannelDebugBuffer
 
 logger = logging.getLogger(__name__)
@@ -95,6 +102,17 @@ class InvalidChannelPolicyError(ChannelError):
     The write boundary is stricter on purpose: a typo from the admin API would
     otherwise be stored, silently degrade to the conservative branch, and read
     back as a legitimate setting."""
+
+
+class UnsupportedChannelOperationError(ChannelError):
+    """The requested operation does not exist for this channel's transport.
+
+    Not every channel is a webhook since the transport split, so a few admin
+    actions stopped being universal — regenerating a webhook token on a polled
+    channel is the first. Refused explicitly rather than quietly ignored: an
+    admin who clicks "regenerate" and is told nothing will assume the old URL
+    is dead and go looking for the new one that was never minted.
+    """
 
 
 class ServerChannelService:
@@ -168,7 +186,9 @@ class ServerChannelService:
             email_whitelist=channel.email_whitelist,
             webhook_token=channel.webhook_token,
             webhook_url=ServerChannelService.webhook_url(channel),
-            has_outbound_credentials=bool(channel.encrypted_secrets),
+            has_outbound_credentials=(
+                ServerChannelService.has_outbound_credentials(channel)
+            ),
             created_by=channel.created_by,
             created_at=channel.created_at,
             updated_at=channel.updated_at,
@@ -290,9 +310,9 @@ class ServerChannelService:
         session: Session, data: ServerChannelCreate, user: User
     ) -> ServerChannel:
         """Create a channel. Validates type + config before persisting."""
-        adapter = get_adapter(data.channel_type)  # raises UnknownChannelTypeError
+        transport = get_transport(data.channel_type)  # raises UnknownChannelTypeError
         config = data.config or {}
-        adapter.validate_config(config)
+        transport.adapter.validate_config(config)
         ServerChannelService._validate_policy(
             visibility=data.visibility, agent_scope=data.default_agent_scope
         )
@@ -317,9 +337,23 @@ class ServerChannelService:
             encrypted_secrets=(
                 encrypt_field(data.secrets) if (data.secrets or "").strip() else None
             ),
+            # Minted unconditionally while ``webhook_token`` is still NOT NULL.
+            # ``_ensure_webhook_token`` below is the mode-driven rule; once the
+            # column is nullable this becomes ``None`` and that rule mints it
+            # (or deliberately does not) from the transport's declaration
+            # alone. ``None``, never ``""``: ``__table_args__`` carries a
+            # ``UniqueConstraint`` on ``webhook_token`` and in PostgreSQL ``''``
+            # is a value, so the *second* token-less channel created would trip
+            # it with an unhandled IntegrityError, whereas UNIQUE permits any
+            # number of NULLs. The same change turns both
+            # ``ServerChannel.webhook_token`` and
+            # ``ServerChannelPublic.webhook_token`` into ``str | None``; the
+            # update DTO needs nothing, since it carries the
+            # ``regenerate_webhook_token`` flag rather than the token itself.
             webhook_token=ServerChannelService.generate_webhook_token(),
             created_by=user.id,
         )
+        ServerChannelService._ensure_webhook_token(channel, transport)
         session.add(channel)
         session.commit()
         session.refresh(channel)
@@ -348,13 +382,54 @@ class ServerChannelService:
         raw_secrets = patch.pop("secrets", None)
         regenerate = patch.pop("regenerate_webhook_token", False)
 
-        channel_type = patch.get("channel_type", channel.channel_type)
+        # Resolved once, up front, rather than per-branch: the token rules at
+        # the bottom of this method need the transport whether or not the type
+        # is being changed.
+        #
+        # The two cases are deliberately asymmetric. A ``channel_type`` *in the
+        # patch* is admin input under validation, so one with no adapter must
+        # still raise ``UnknownChannelTypeError`` here — accepting it would
+        # persist a row nothing can drive. A *stored* type with no adapter is a
+        # row that already exists and whose adapter left the registry; refusing
+        # the patch would strand the admin, unable even to send
+        # ``{"enabled": false}`` to switch off the channel that broke. So the
+        # stored type resolves leniently to ``None``, and the two rules that
+        # genuinely need a transport are guarded on it below.
         if "channel_type" in patch:
-            get_adapter(channel_type)  # validate the new type exists
+            channel_type: str = patch["channel_type"]
+            transport: RegisteredTransport | None = get_transport(channel_type)
+        else:
+            channel_type = channel.channel_type
+            try:
+                transport = get_transport(channel_type)
+            except ChannelError:
+                transport = None
+
+        # Refused here rather than beside the mint below, with every other
+        # validation, so the raise happens before anything on ``channel`` has
+        # been mutated. A refusal that leaves a half-applied patch on a live
+        # session instance is a landmine for whatever commits next.
+        #
+        # Checked against the *patched* type: switching a channel onto a
+        # transport with no webhook and asking for a fresh token in the same
+        # request is exactly the confusion this refusal exists to name.
+        if regenerate and transport is not None and not transport.needs_webhook_token:
+            raise UnsupportedChannelOperationError(
+                f"Channel type {channel_type!r} has no webhook, so there is "
+                "no token to regenerate."
+            )
 
         if "config" in patch:
             config = patch.pop("config") or {}
-            get_adapter(channel_type).validate_config(config)
+            if transport is None:
+                # The leniency above is for patches that need no adapter. A
+                # config patch needs one — it is the validator — and accepting
+                # config nothing checked would persist it unvalidated.
+                raise UnknownChannelTypeError(
+                    f"Channel type {channel_type!r} has no registered adapter, "
+                    "so its config cannot be validated."
+                )
+            transport.adapter.validate_config(config)
             channel.config = config
             flag_modified(channel, "config")
 
@@ -412,6 +487,14 @@ class ServerChannelService:
         if regenerate:
             channel.webhook_token = ServerChannelService.generate_webhook_token()
             logger.info("Regenerated webhook token for channel %s", channel.id)
+
+        # After ``sqlmodel_update``, because a ``channel_type`` patch can move a
+        # channel onto a transport with different requirements from the one it
+        # was created under. Skipped entirely when the stored type has no
+        # adapter: there is no declaration to apply, and the row keeps whatever
+        # token it already has.
+        if transport is not None:
+            ServerChannelService._ensure_webhook_token(channel, transport)
 
         channel.updated_at = datetime.now(UTC)
         session.add(channel)
@@ -680,6 +763,77 @@ class ServerChannelService:
         return cleaned or None
 
     @staticmethod
+    def _ensure_webhook_token(
+        channel: ServerChannel, transport: RegisteredTransport
+    ) -> None:
+        """Give ``channel`` a webhook token iff its transport is reached by one.
+
+        The requirement is the transport's declaration, not the channel type:
+        a webhook channel with no token is not reachable at all, and once
+        ``ServerChannel.webhook_token`` becomes nullable that stops being
+        impossible and starts being a channel that silently receives nothing.
+        Enforced here, at both write paths, rather than checked at the webhook —
+        by then the symptom is a 404 with no way to tell it from a bad URL.
+
+        Minting rather than raising is deliberate: the token is generated by
+        this service and an admin has no way to supply one, so refusing a
+        create over a missing token would blame them for something they cannot
+        provide.
+
+        A transport that declares ``needs_webhook_token=False`` is left alone.
+        It gets no token here and none is required of it.
+        """
+        if transport.needs_webhook_token and not channel.webhook_token:
+            channel.webhook_token = ServerChannelService.generate_webhook_token()
+
+    @staticmethod
+    def has_outbound_credentials(channel: ServerChannel) -> bool:
+        """Whether an outbound credential has been configured for ``channel``.
+
+        Derived, never a column — and *where* it derives from is the
+        transport's call. A transport that declares
+        ``needs_outbound_credentials`` keeps its credential in
+        ``encrypted_secrets``, so the presence of that blob is the whole
+        answer. One that declares False keeps it somewhere else entirely (the
+        email transport will reference a server-scoped SMTP config), and until
+        such a transport exists the honest answer for it is False: nothing has
+        been stored *here*, and reporting True would tell an admin their
+        channel can reply when nothing has been configured.
+
+        Public rather than private because ``ServerChannelPublic`` declares
+        this field required-with-no-default on purpose — a service that forgets
+        to populate it should fail loudly — so any future projection needs the
+        same derivation available, not a second copy of it.
+
+        **Total.** Asking the transport is what introduced a way for this to
+        fail, and this is not a place that may fail: see the degrade below.
+        """
+        try:
+            transport = get_transport(channel.channel_type)
+        except ChannelError:
+            # A stored row whose adapter is no longer registered. ``to_public``
+            # calls this per row inside a list comprehension in the admin list
+            # route, so raising here would 500 the whole Channels tab — and the
+            # admin would then see *no* channels, including the offending one
+            # they need to disable or delete. The row becomes unmanageable
+            # through the very surface that manages it.
+            #
+            # Same degrade ``_invalidate_adapter_caches`` makes eleven lines
+            # below on the same lookup; the same one ``ServerChannel``'s
+            # ``channel_type`` docs ask of any reader meeting an unrecognised
+            # value; and the same one the webhook route makes deliberately for
+            # ``UnknownChannelTypeError`` ("a 500 here would be an oracle").
+            #
+            # ``bool(channel.encrypted_secrets)`` is the honest fallback rather
+            # than a flat False: it is exactly the answer this method gave
+            # before the transport split, and with no transport to ask there is
+            # nothing better to derive from than the column itself.
+            return bool(channel.encrypted_secrets)
+        if not transport.needs_outbound_credentials:
+            return False
+        return bool(channel.encrypted_secrets)
+
+    @staticmethod
     def _invalidate_adapter_caches(channel: ServerChannel) -> None:
         """Drop any per-channel adapter state (e.g. cached OAuth tokens)."""
         try:
@@ -696,4 +850,5 @@ __all__ = [
     "ChannelNotFoundError",
     "DuplicateChannelNameError",
     "InvalidChannelPolicyError",
+    "UnsupportedChannelOperationError",
 ]

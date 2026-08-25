@@ -21,6 +21,15 @@ routing call, an install, an environment build), so it runs as a background
 task and the webhook answers immediately with a short static acknowledgement.
 The real reply arrives asynchronously through ``ChannelOutboundService``.
 
+The list splits at the chokepoint, and so does the code. ``handle_inbound``
+owns steps 1–2 — the parts that are webhook-shaped, because only a webhook has
+a token to resolve and a request to verify. ``process_inbound`` owns everything
+from there and is transport-agnostic: a polled transport authenticates inside
+its own ``poll`` (see ``PolledChannelTransport.poll``, which restates step 2's
+promise for a pull driver) and enters the pipeline at the second method. What
+does **not** change is the ordering below the split, or the rule that nothing
+under it re-checks the sender.
+
 **Step 6 gates every path below it, not only new threads.** A sender whose
 access was revoked — the admin disabled the channel, withdrew their grant, or
 they switched the channel off themselves — is declined on their *existing*
@@ -94,6 +103,7 @@ from app.services.sessions.channel_ingestion_service import (
     NoActiveEnvironmentError,
 )
 from app.services.server_channels.adapters.base import (
+    ChannelAdapter,
     ChannelInboundMessage,
     ChannelVerificationError,
 )
@@ -287,6 +297,12 @@ class ChannelInboundService:
     ) -> dict[str, Any]:
         """Run the inbound pipeline. Returns the webhook's sync response body.
 
+        The webhook half: steps 1–2 (resolve the channel by token, then
+        verify), after which it hands off to ``process_inbound`` for the rest.
+        Only the two steps here are webhook-shaped; keeping them separate is
+        what lets a polled transport reuse everything below without a
+        ``Request`` to hand it.
+
         Raises ``ChannelNotFound`` (404) and ``ChannelVerificationError`` (403);
         every other outcome is a 200 with a static body, because a channel that
         gets a non-2xx retries the event forever.
@@ -303,7 +319,27 @@ class ChannelInboundService:
         # signature over this exact body checked out.
         try:
             inbound = await adapter.verify_inbound(request, channel, body)
-        except ChannelVerificationError:
+        except ChannelVerificationError as exc:
+            # The only place the *reason* survives. The caller gets a
+            # detail-free 403 (a specific reason is a probing oracle) and the
+            # debug-feed summary below is hardcoded, so without this line every
+            # subclass — a forged signature and a
+            # ``ChannelTransportMisuseError`` alike — reads to an operator as
+            # "signature verification failed", and the misuse case actively
+            # mislabels itself. The log is the operator surface where the
+            # distinction is the whole diagnosis.
+            #
+            # ``_debug_channel_key`` and ``_log_detail`` rather than ``channel.id``
+            # and ``exc``: both are total by construction, for the reasons their
+            # own docstrings give. A diagnostic that can raise while handling a
+            # rejection would replace the rejection with a 500 — see
+            # ``_deliver`` in ``channel_outbound_service`` for the same rule.
+            logger.warning(
+                "%s Inbound verification rejected for channel %s (403): %s",
+                _LOG_PREFIX,
+                _debug_channel_key(channel),
+                _log_detail(exc),
+            )
             await ChannelInboundService._audit_throttled(
                 db=db,
                 key=f"verify:{channel.id}",
@@ -321,6 +357,53 @@ class ChannelInboundService:
             )
             raise
 
+        return await ChannelInboundService.process_inbound(
+            db=db, channel=channel, adapter=adapter, inbound=inbound
+        )
+
+    @staticmethod
+    async def process_inbound(
+        *,
+        db: DBSession,
+        channel: ServerChannel,
+        adapter: ChannelAdapter,
+        inbound: ChannelInboundMessage,
+    ) -> dict[str, Any]:
+        """The pipeline from step 3 down — everything after authentication.
+
+        Split out of ``handle_inbound`` because the *chokepoint* moved, not the
+        pipeline. A webhook transport authenticates in ``verify_inbound`` and
+        arrives here; a polled transport authenticates inside ``poll``, against
+        a source whose strength it documents, and arrives here too. Nothing
+        from here down knows or cares which door the message came through, and
+        the module docstring's ordering is load-bearing for both.
+
+        **The caller is the authentication chokepoint.** Nothing below
+        re-verifies the sender — ``inbound.sender_email`` is treated as the
+        sender's identity from the first line, and it is what the whitelist,
+        user resolution, auto-registration and identity routing all key on. A
+        caller that reaches this method with an ``inbound`` it did not
+        authenticate has voided the promise the whole module rests on.
+
+        Returns the body the caller answers with. For a webhook that is the
+        sync HTTP response. For a polled transport it is **inert**:
+        ``PolledChannelTransport`` does not override ``build_sync_response``
+        and the base default returns ``{}``, so every denial below —
+        ``REPLY_DENIED``, ``REPLY_THREAD_OWNED``, ``REPLY_WORKING`` and the
+        rest — collapses to the same empty body as the branches that ack in
+        silence.
+
+        That is the decided behaviour, not a gap left open. A polled transport
+        has no sync-reply surface, and mailing declines back down the pull
+        channel would be both a probing oracle (an unlisted sender learns which
+        addresses the platform knows) and a spam amplifier (every unsolicited
+        message earns a reply to an address the sender chose).
+
+        Silent to the *sender*; never to the *operator*. Every denial branch
+        writes a ``ChannelDebugBuffer`` record with its own summary and stage
+        before returning, and that feed — not the response body — is where an
+        admin diagnoses a channel that is dropping messages.
+        """
         # ---- Non-message events: ack cheaply, never error ----
         if inbound.event_kind == "ignored":
             ChannelDebugBuffer.record(
@@ -710,7 +793,7 @@ class ChannelInboundService:
     ) -> None:
         """Feed a message into the session an active binding already owns.
 
-        ``policy`` is ``handle_inbound``'s resolution, carried in rather than
+        ``policy`` is ``process_inbound``'s resolution, carried in rather than
         re-read here. **One reading per message, and on this path the carried
         one is the only one** — the decline gate that let the message through
         and the identity-consent check in ``_ingest`` are answering from the
@@ -819,7 +902,7 @@ class ChannelInboundService:
         construction: simulate calls ``decide`` and stops, so there is no
         ``simulate`` flag in this method to get a branch wrong about.
 
-        ``policy`` is the resolution ``handle_inbound`` already made — the same
+        ``policy`` is the resolution ``process_inbound`` already made — the same
         one its decline gate consulted — carried in rather than resolved again
         here. It is a frozen dataclass of scalars, so it crosses into this
         background task the way ids and text do, and this method's

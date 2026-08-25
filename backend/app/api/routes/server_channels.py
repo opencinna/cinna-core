@@ -66,6 +66,7 @@ from app.services.server_channels.server_channel_service import (
     DuplicateChannelNameError,
     InvalidChannelPolicyError,
     ServerChannelService,
+    UnsupportedChannelOperationError,
 )
 
 router = APIRouter(tags=["server-channels"])
@@ -301,7 +302,11 @@ async def update_channel(
         channel = ServerChannelService.update_channel(session, channel, data)
     except UnknownChannelTypeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except (ChannelConfigError, InvalidChannelPolicyError) as exc:
+    except (
+        ChannelConfigError,
+        InvalidChannelPolicyError,
+        UnsupportedChannelOperationError,
+    ) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except DuplicateChannelNameError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
