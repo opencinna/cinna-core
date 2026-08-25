@@ -256,6 +256,22 @@ NOT_RUN_AUTO_INSTALL_OFF = "auto_install_off"
 #: persisted nowhere.
 NOT_RUN_SIMULATE_TOGGLE = "simulate_toggle"
 
+#: The vocabulary as a set, so membership is checkable rather than asserted.
+#: :func:`record_parse_outcome` is public and ``update_stage`` takes arbitrary
+#: field names, so "only vocabulary values reach this field" was a property no
+#: code enforced — the same shape ``reason`` failed at. Coercing to ``None`` on
+#: a miss also keeps :data:`SAFE_STAGE_FIELDS` total: a value whose ``__str__``
+#: raises would otherwise reach the payload and fail at ``asdict``/JSON time,
+#: taking the whole row down where a lost field would do.
+NOT_RUN_CODES: frozenset[str] = frozenset(
+    {
+        NOT_RUN_PINNED,
+        NOT_RUN_CHANNEL_SCOPE,
+        NOT_RUN_AUTO_INSTALL_OFF,
+        NOT_RUN_SIMULATE_TOGGLE,
+    }
+)
+
 KIND_AGENT = "agent"
 KIND_BUNDLE = "bundle"
 
@@ -1184,7 +1200,7 @@ def record_parse_outcome(
         reason=clamped_reason,
         confidence=confidence,
         runner_up_id=runner_up_id,
-        not_run_code=not_run_code,
+        not_run_code=not_run_code if not_run_code in NOT_RUN_CODES else None,
     )
 
 
@@ -1333,6 +1349,7 @@ __all__ = [
     "MATCH_PINNED",
     "NOT_RUN_AUTO_INSTALL_OFF",
     "NOT_RUN_CHANNEL_SCOPE",
+    "NOT_RUN_CODES",
     "NOT_RUN_PINNED",
     "NOT_RUN_SIMULATE_TOGGLE",
     "SKIP_AGENT_MISSING",

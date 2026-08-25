@@ -750,6 +750,7 @@ def test_pass2_does_not_run_when_the_channel_scope_is_restricted(
     assert stage is not None, "policy barred Pass 2 but the trace does not say so"
     assert stage["candidates"] == []
     assert "limited to an explicitly chosen set" in (stage["reason"] or "")
+    assert stage["not_run_code"] == "channel_scope", stage
 
 
 def _scope_list_containing(db: Session, channel: dict, user: dict, agent: dict) -> None:

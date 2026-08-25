@@ -13,6 +13,7 @@ Verifies that AppMCPRequestHandler.handle_send_message() correctly:
   - Returns caller_email in session list/get responses when caller_id is set
   - Reuses an existing identity_mcp session when a valid context_id is passed back
   - Returns an error (not raises) when the identity binding is deactivated mid-session
+  - Falls back to the caller's email for `identity_caller_name` when their `full_name` is empty
 
 These tests call handle_send_message() directly (not through MCP protocol)
 with the routing service and agent environment stubbed.

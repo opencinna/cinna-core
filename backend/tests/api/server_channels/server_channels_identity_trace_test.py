@@ -5,13 +5,17 @@ separates this file from the two `xfail`ed tests it replaces
 (`tests/api/routing/routing_identity_stage2_capture_test.py`, deleted in the
 same change).
 
-Those two drove `POST /admin/routing/simulate`, and could never pass:
-`RoutingSimulateRequest` carries no `channel_id`, so simulate always resolves
+Those two drove `POST /admin/routing/simulate`, and could never pass as they
+stood: a simulate that names no channel resolves
 `ResolvedChannelPolicy.for_no_channel()`, whose `allow_identity_routing` is
-`False` by design. Identity therefore cannot enter a *simulated* ballot at all,
-and no amount of setup on the target user changes that. (Giving simulate a
-`channel_id` was considered and deferred to phase 6 of the channels & identity
-unification; do not add it here.) The second of the pair also asserted
+`False` by design, so identity cannot enter that ballot at all, whatever the
+setup on the target user. `RoutingSimulateRequest` has since gained a
+`channel_id` (phase 6 of the channels & identity unification), so a simulate
+*can* now decide under a real channel's policy — but that does not make it the
+vehicle for these facts either. What is pinned below is what a real inbound
+identity decision writes into the trace, which needs the trace to belong to a
+real channel **and** to have been produced by the real inbound path; simulate
+satisfies only the first. The second of the pair also asserted
 `match_method == "pattern"`, a mechanism deleted by settled decision §2.9 —
 `IdentityAgentBinding.message_patterns` is no longer read by anything. Both
 facts they were reaching for are re-asserted below, at equal or greater

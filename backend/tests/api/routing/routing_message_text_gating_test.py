@@ -634,18 +634,6 @@ def test_candidate_owner_config_survives_the_gate_while_sender_text_does_not(
 # ── The allowlist admits a server-CHOSEN code where it refuses the sentence ──
 
 
-def _publish_public_bundle(client, publisher_headers, *, trigger_prompt: str) -> str:
-    """A public, listed bundle with a router trigger prompt — the Pass-2 shape."""
-    agent = create_agent_via_api(
-        client, publisher_headers, name=f"NotRunCode-{random_lower_string()[:6]}"
-    )
-    drain_tasks()
-    set_router_trigger_prompt(client, publisher_headers, agent["id"], trigger_prompt)
-    publish_bundle_and_make_public(client, publisher_headers, agent["id"])
-    detail = client.get(f"{API}/agents/{agent['id']}", headers=publisher_headers).json()
-    return detail["bundle_uuid"]
-
-
 def test_pass_2_not_run_code_survives_the_gate_that_withholds_its_sentence(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
@@ -685,12 +673,7 @@ def test_pass_2_not_run_code_survives_the_gate_that_withholds_its_sentence(
         client, superuser_token_headers, channel["id"], allow_auto_install=False
     )
 
-    publisher, publisher_headers = make_user_and_headers(client)
-    promote_to_developer(client, superuser_token_headers, publisher["id"])
-    bundle_uuid = _publish_public_bundle(
-        client, publisher_headers, trigger_prompt="Handle auto-install-off requests"
-    )
-    add_auto_install_bundle(client, superuser_token_headers, bundle_uuid)
+    _publish_catalog_bundle(client, superuser_token_headers)
 
     def _post(store_text: bool) -> str:
         before = {

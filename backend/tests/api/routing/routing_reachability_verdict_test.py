@@ -242,11 +242,13 @@ def _deliver_from_a_sender_who_owns_nothing(
     """One real webhook delivery, and the `no_match` trace it leaves.
 
     Driven through the **webhook**, not through simulate, and that is forced
-    rather than stylistic: `RoutingSimulateRequest` carries no `channel_id`, so
-    every simulate decides under `ResolvedChannelPolicy.for_no_channel` and
-    stores a trace whose `channel_id` is NULL — which is exactly the branch the
-    verdicts below are *not* about. A channel-policy verdict needs a decision
-    that genuinely belonged to a channel.
+    rather than stylistic: a channel-policy verdict needs a decision that
+    genuinely belonged to a channel *and* was produced by the real inbound
+    path. `RoutingSimulateRequest` can now name a `channel_id`, so the first
+    half is no longer simulate's to fail — but the second half still is. These
+    verdicts are about what an actual delivery left behind: a real sender, a
+    real thread, a real 200 back to Google Chat. A simulate names a channel
+    while deciding for nobody in particular, with no delivery underneath it.
 
     No classifier answer is named, on purpose: the sender owns nothing, so the
     ballot is empty and `post_channel_message`'s stub raises if it is ever

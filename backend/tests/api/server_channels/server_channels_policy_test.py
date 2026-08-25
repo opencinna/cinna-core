@@ -693,6 +693,7 @@ def test_pass2_pinned_note_recorded_when_the_pin_resolution_races_the_background
     assert stage is not None, "the pin barred Pass 2 but the trace does not say so"
     assert stage["candidates"] == []
     assert "this sender has pinned an agent to this channel" in (stage["reason"] or ""), stage
+    assert stage["not_run_code"] == "pinned", stage
 
 
 def test_pass2_note_suppressed_when_pass1_already_recorded_an_error(

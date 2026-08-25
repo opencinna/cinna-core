@@ -320,7 +320,14 @@ function StageBlock({
           closed, while this code is on the backend's stage allowlist and
           survives it. Nesting it inside the `reason` block would hide it in
           exactly the case it was added for. */}
-      {notRun && <p className="text-xs font-medium">{notRun}</p>}
+      {notRun && (
+        <p className="flex flex-wrap items-center gap-1.5 text-xs font-medium">
+          <Badge variant="outline" className="text-[10px]">
+            Not run
+          </Badge>
+          {notRun}
+        </p>
+      )}
 
       {stage.reason && (
         <p className="text-xs break-words text-muted-foreground">

@@ -72,7 +72,7 @@ const SKIP_REASON_LABELS: Record<string, string> = {
  */
 const NOT_RUN_LABELS: Record<string, string> = {
   pinned: "Sender pinned an agent",
-  channel_scope: "Channel limited to chosen agents",
+  channel_scope: "Routing limited to chosen agents",
   auto_install_off: "Auto-install off for this channel",
   simulate_toggle: "Catalog pass not requested",
 }

@@ -20,6 +20,7 @@ from app.models import (
     IdentityGrant,
     Session,
     SessionSender,
+    User,
 )
 from app.services.sessions.session_service import SessionService
 from app.services.sessions.message_service import MessageService
@@ -31,7 +32,7 @@ from app.utils import create_task_with_error_logging
 logger = logging.getLogger(__name__)
 
 
-def _display_name(user, fallback: uuid.UUID) -> str:
+def _display_name(user: User | None, fallback: uuid.UUID | None) -> str:
     """Full name, else email, else the raw id — the shape both siblings use.
 
     The identity metadata this feeds is read back as a **person**: the session
