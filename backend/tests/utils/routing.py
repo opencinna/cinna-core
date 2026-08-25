@@ -367,6 +367,7 @@ def simulate_routing(
     *,
     message: str,
     as_user_id: str,
+    channel_id: str | None = None,
     include_catalog: bool = True,
     expected_status: int = 200,
 ) -> Any:
@@ -376,15 +377,26 @@ def simulate_routing(
     route returns ``RoutingTraceService.get``'s output rather than projecting
     anything of its own. A test comparing the two is comparing one function's
     output with itself, which is the point.
+
+    ``channel_id`` names the channel to decide **under** (phase 6). Omitted, the
+    request carries no channel at all and the run resolves
+    ``ResolvedChannelPolicy.for_no_channel()`` — whose ``allow_identity_routing``
+    is ``False`` by design, so an identity candidate can never reach that
+    ballot. The key is left out of the body entirely rather than sent as
+    ``null``, so the "no channel named" case exercises the shape a client
+    actually sends.
     """
+    body: dict[str, Any] = {
+        "message": message,
+        "as_user_id": as_user_id,
+        "include_catalog": include_catalog,
+    }
+    if channel_id is not None:
+        body["channel_id"] = channel_id
     r = client.post(
         f"{API}/admin/routing/simulate",
         headers=token_headers,
-        json={
-            "message": message,
-            "as_user_id": as_user_id,
-            "include_catalog": include_catalog,
-        },
+        json=body,
     )
     assert r.status_code == expected_status, (
         f"Simulate routing failed: {r.status_code} {r.text}"

@@ -681,3 +681,71 @@ def test_a_bundle_deleted_mid_decision_is_not_told_to_publish_itself() -> None:
         "follows it. Re-run this decision. Nothing is wrong with the routing "
         "rules: the bundle that matched simply stopped existing mid-decision."
     )
+
+
+def test_the_identity_unavailable_base_entry_speaks_in_app_mcp_voice() -> None:
+    """`SKIP_IDENTITY_UNAVAILABLE`'s **base** entry — the other half of the one
+    reason phase 6 made explainable.
+
+    The channel override is pinned by a real decision, in
+    `tests/api/routing/routing_reachability_verdict_test.py`'s
+    `test_verdict_for_an_identity_owner_who_shared_nothing_reachable`. The base
+    entry cannot be reached the same way: it needs an `origin="app_mcp"` trace
+    **carrying a candidate list**, and no test can seed one — `seed_routing_trace`
+    persists a decision with no candidates at all, and driving an App MCP
+    decision that records this skip would mean standing up an MCP handler call
+    for a sentence whose whole content is a table lookup. So it belongs here,
+    beside the other candidate-list branches, exactly as
+    `routing_reachability_service`'s comment on the entry says.
+
+    The ref is the namespaced `identity:{owner_id}` a real producer writes, not
+    a bare UUID: `_agent_uuid` returns `None` for it, so this also exercises the
+    branch where the sentence is built with no `Agent` row behind the subject —
+    which is the only shape this reason ever arrives in.
+
+    The discriminator is inverted from the channel sibling's. That test asserts
+    `"MCP Server card" not in verdict`, because the channel override must not
+    send a channel reader to an App MCP control. This one is the entry that
+    *does* speak in App MCP's voice, so the same phrase must be present — and
+    the channel override's own subject ("Identity Server card" on the owner's
+    screen) must be absent. Pinning the shared finding alone would pass on
+    either table.
+    """
+    owner_id = uuid.uuid4()
+    ref = f"identity:{owner_id}"
+    row = _candidate(
+        ref,
+        "hr@example.test",
+        eligible=False,
+        skip_reason=routing_trace.SKIP_IDENTITY_UNAVAILABLE,
+    )
+    trace = _trace(
+        [{"stage": routing_trace.STAGE_PASS_1, "candidates": [row]}],
+        origin=routing_trace.ORIGIN_APP_MCP,
+    )
+
+    diagnosis = RoutingReachabilityService.diagnose(
+        _DB(),  # no agent row, and no lookup either — the ref names a person
+        trace,
+        expected_agent_id=ref,
+    )
+
+    assert diagnosis.code == "expected_agent_skipped"
+    assert diagnosis.expected_agent_id == ref, diagnosis
+    assert diagnosis.verdict == (
+        "hr@example.test was considered for this decision and then excluded: "
+        "this person shared an agent with the sender, but none of what they "
+        "shared is switched on right now, so they were not on the ballot at "
+        "all. Three switches can each cause this, and they live on two "
+        "different people's screens. The owner's binding is inactive, or the "
+        "owner disabled it for this specific caller — both on the owner's "
+        "Settings > Channels > Identity Server card. Or the caller has not "
+        "enabled the contact, which is the Identity Contacts section of the "
+        "MCP Server card on the CALLER'S Settings > Channels. Check them in "
+        "that order."
+    )
+    assert diagnosis.action in diagnosis.verdict, diagnosis
+    # The base entry, not the channel override — the two carry the same finding
+    # and differ only in which screen they send the reader to.
+    assert "MCP Server card" in diagnosis.verdict, diagnosis
+    assert "was already on" not in diagnosis.verdict, diagnosis
