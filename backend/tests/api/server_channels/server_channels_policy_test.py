@@ -72,7 +72,7 @@ API = settings.API_V1_STR
 _SEND_TARGET = "app.services.server_channels.adapters.google_chat.GoogleChatAdapter.send_message"
 _STREAM_TARGET = "app.services.sessions.message_service.agent_env_connector"
 
-_REPLY_WORKING = "Got it — finding the right assistant for you…"
+_REPLY_WORKING = "🔎 Finding the right assistant for you…"
 _REPLY_DENIED = (
     "Sorry, you don't have access to this assistant. "
     "Please contact your administrator."
@@ -170,7 +170,16 @@ def test_no_settings_row_channel_defaults_apply_to_an_auto_registered_sender(
 
     # --- Default ON (the model default) ----------------------------------
     channel_on = create_server_channel(
-        client, superuser_token_headers, auto_register_users=True, email_whitelist="*"
+        client,
+        superuser_token_headers,
+        auto_register_users=True,
+        email_whitelist="*",
+        # Load-bearing for the silent ack asserted below: the sync reply is
+        # only dropped when the channel can actually POST the status notice
+        # that replaced it. A Google Chat channel with no outbound credential
+        # keeps answering `REPLY_WORKING` synchronously, precisely so an
+        # accepted sender is never left with no reply from any surface.
+        secrets='{"client_email": "bot@test.iam.gserviceaccount.com", "private_key": "x"}',
     )
     event_on = build_message_event(
         thread_key=f"spaces/AAA/threads/{random_lower_string()}",
@@ -181,12 +190,17 @@ def test_no_settings_row_channel_defaults_apply_to_an_auto_registered_sender(
     # auto-install list is empty, so both passes' ballots are empty.
     resp_on, send_mock_on = post_channel_message(client, channel_on, signer, event_on)
     assert resp_on.status_code == 200
-    # The synchronous reply is the tell: REPLY_WORKING means the policy gate
-    # let them through to routing, despite no row ever having existed.
-    assert resp_on.json().get("text") == _REPLY_WORKING, resp_on.json()
-    # Routing itself finds nothing (empty catalog) — a later, async reply,
-    # and not what this test is about.
+    # An ACCEPTED message acks in silence on a transport that runs a status
+    # notice AND has the credential to post one: the narration moved out of the
+    # sync response and into a message the pipeline can rewrite and delete (see
+    # `REPLY_WORKING` below). The tell
+    # that the policy gate let this sender through is therefore the absence of
+    # a denial plus the presence of the notice — not a reply body.
+    assert resp_on.json() == {}, resp_on.json()
     reply_texts = [c.args[-1] for c in send_mock_on.await_args_list]
+    assert _REPLY_WORKING in reply_texts, reply_texts
+    # Routing itself finds nothing (empty catalog) — a later state of that same
+    # notice, and not what this test is about.
     assert any(_REPLY_NO_MATCH_SNIPPET in t for t in reply_texts), reply_texts
 
     # --- Default OFF --------------------------------------------------------
@@ -253,10 +267,19 @@ def test_visibility_restricted_declines_without_grant_same_shape_as_whitelist_mi
     resp_b, _ = post_channel_message(client, channel_restricted, signer, event_b)
     assert resp_b.status_code == 200
 
-    # Same shape: status and body are byte-identical, so a client cannot tell
+    # Same shape: status and reply TEXT are identical, so a client cannot tell
     # "not whitelisted" apart from "not granted" from the reply alone.
+    #
+    # The bodies are compared field by field rather than whole, because a
+    # denial now echoes the thread it is answering — Google Chat posts an
+    # unthreaded sync response into the space instead of the conversation. That
+    # field is the sender's own thread key, handed to us in their request, so
+    # it distinguishes two threads and never two channel configurations.
     assert resp_a.status_code == resp_b.status_code
-    assert resp_a.json() == resp_b.json()
+    assert resp_a.json().keys() == resp_b.json().keys()
+    assert resp_a.json()["text"] == resp_b.json()["text"]
+    assert resp_a.json()["thread"] == {"name": event_a["message"]["thread"]["name"]}
+    assert resp_b.json()["thread"] == {"name": event_b["message"]["thread"]["name"]}
     assert resp_b.json().get("text") == _REPLY_DENIED
     assert list_sessions(client, consumer_headers) == []
 

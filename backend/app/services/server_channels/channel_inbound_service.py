@@ -18,8 +18,19 @@ so the ordering below is load-bearing, not stylistic:
 
 Steps 1–6 are cheap and run inline. Everything from 7 on can be slow (an LLM
 routing call, an install, an environment build), so it runs as a background
-task and the webhook answers immediately with a short static acknowledgement.
-The real reply arrives asynchronously through ``ChannelOutboundService``.
+task and the webhook answers immediately. The real reply arrives
+asynchronously through ``ChannelOutboundService``.
+
+What that immediate answer *is* depends on the transport. A **decline** is
+always the sync response: it needs no outbound credential, which is what lets
+a channel refuse a sender before setup is finished. An **accepted** message
+acks with an empty body on a transport that can run a status notice, and the
+background task posts the narration itself — see ``REPLY_WORKING`` and the
+notice helpers on ``ChannelOutboundService``. The reason is not stylistic:
+Google Chat creates the synchronous message but never tells us its id, so a
+notice answered inline can be neither rewritten as the work advances nor
+removed when the answer lands, which is the whole behaviour. Transports
+without that capability keep the sync acknowledgement they always had.
 
 The list splits at the chokepoint, and so does the code. ``handle_inbound``
 owns steps 1–2 — the parts that are webhook-shaped, because only a webhook has
@@ -180,6 +191,40 @@ def _debug_channel_key(channel: ServerChannel) -> str | None:
         return None
 
 
+def _status_notice_supported(channel: ServerChannel) -> bool:
+    """Whether ``channel``'s transport can run a mutating status notice.
+
+    Total, like every other reader in this file's instrumentation band: a
+    channel whose adapter cannot be resolved, or whose row went away, answers
+    False and the caller simply says less. False is always a safe answer here —
+    it means "narrate the old way, or not at all" — while a raise would come
+    out of a progress notice and abort work that had already succeeded.
+    """
+    try:
+        return get_adapter(channel.channel_type).capabilities.supports_status_notice
+    except Exception:  # noqa: BLE001 — see the docstring
+        return False
+
+
+def _outbound_credentials_configured(channel: ServerChannel) -> bool:
+    """Whether ``channel`` has something to send an outbound message *with*.
+
+    Delegates to ``ServerChannelService.has_outbound_credentials``, which is
+    the one place that knows where a given transport keeps its credential
+    (``encrypted_secrets`` for a webhook transport, the referenced SMTP server
+    for email) — a fact this module must not learn a second time.
+
+    Total, like every other reader in this band, and it degrades toward
+    **saying something**: an unanswerable channel reports False, which sends
+    the caller down the synchronous-ack path. That is a possible duplicate
+    message in the worst case, against total silence in the other direction.
+    """
+    try:
+        return ServerChannelService.has_outbound_credentials(channel)
+    except Exception:  # noqa: BLE001 — see the docstring
+        return False
+
+
 #: Which routing-trace ``origin`` each transport's decisions carry, keyed on
 #: ``ChannelAdapter.channel_type``.
 #:
@@ -272,7 +317,12 @@ REPLY_WELCOME = (
     "Hi! Send me a message describing what you need and I'll find the right "
     "assistant for you."
 )
-REPLY_WORKING = "Got it — finding the right assistant for you…"
+# The status-notice texts. On a transport with
+# ``supports_status_notice`` these are successive states of ONE message, not
+# four messages — which is why they read as states ("finding…", "setting up…",
+# "working…") rather than as announcements, and why they are short: the person
+# reads each one exactly once, in place.
+REPLY_WORKING = "🔎 Finding the right assistant for you…"
 REPLY_STILL_SETTING_UP = (
     "Still setting up your assistant — I'll answer here as soon as it's ready."
 )
@@ -281,10 +331,14 @@ REPLY_NO_MATCH = (
     "Please contact your administrator."
 )
 REPLY_INSTALLING = (
-    "Setting up **{agent_name}** for you — first-time setup takes a few "
+    "⚙️ Setting up **{agent_name}** for you — first-time setup takes a few "
     "minutes. I'll reply here when it's ready."
 )
-REPLY_READY = "Your assistant is ready. Working on your message now…"
+REPLY_READY = "💬 Your assistant is ready — working on your message…"
+# The plain spinner: a thread that is already bound and simply working. Posted
+# only where it can be taken away again (``supports_status_notice``); a
+# transport that would leave it standing forever is better off silent.
+REPLY_WORKING_ON_IT = "💬 Working on your message…"
 REPLY_SETUP_FAILED = (
     "Sorry — setting up your assistant failed. Please contact your "
     "administrator."
@@ -430,9 +484,13 @@ class ChannelInboundService:
         sync HTTP response. For a polled transport it is **inert**:
         ``PolledChannelTransport`` does not override ``build_sync_response``
         and the base default returns ``{}``, so every denial below —
-        ``REPLY_DENIED``, ``REPLY_THREAD_OWNED``, ``REPLY_WORKING`` and the
-        rest — collapses to the same empty body as the branches that ack in
-        silence.
+        ``REPLY_DENIED``, ``REPLY_THREAD_OWNED`` and the rest — collapses to
+        the same empty body as the branches that ack in silence.
+
+        Every sync response that *is* rendered carries the thread the message
+        arrived on. Google Chat posts an unthreaded one as a new top-level
+        message in the space, so a denial that omitted it answered somewhere
+        other than the conversation it was declining.
 
         That is the decided behaviour, not a gap left open. A polled transport
         has no sync-reply surface, and mailing declines back down the pull
@@ -465,6 +523,8 @@ class ChannelInboundService:
                 thread_key=inbound.thread_key,
                 detail={"stage": "added_to_space"},
             )
+            # No ``thread_key``: an ``added_to_space`` event has no thread
+            # yet, and a space-level welcome is the correct shape for it.
             return adapter.build_sync_response(REPLY_WELCOME)
 
         ChannelDebugBuffer.record(
@@ -497,7 +557,7 @@ class ChannelInboundService:
                 thread_key=inbound.thread_key,
                 detail={"stage": "sender_identity"},
             )
-            return adapter.build_sync_response(REPLY_DENIED)
+            return adapter.build_sync_response(REPLY_DENIED, inbound.thread_key)
         if not inbound.thread_key:
             # No binding key means nothing can be bound; ack and drop.
             return {}
@@ -577,7 +637,7 @@ class ChannelInboundService:
                     "whitelist": channel.email_whitelist or "(empty)",
                 },
             )
-            return adapter.build_sync_response(REPLY_DENIED)
+            return adapter.build_sync_response(REPLY_DENIED, inbound.thread_key)
 
         # ---- 5. User resolution (auto-register only if opted in) ----
         user = await ChannelInboundService._resolve_user(
@@ -597,7 +657,7 @@ class ChannelInboundService:
                 thread_key=inbound.thread_key,
                 detail={"stage": "user_resolution"},
             )
-            return adapter.build_sync_response(REPLY_DENIED)
+            return adapter.build_sync_response(REPLY_DENIED, inbound.thread_key)
 
         # ---- 6. Channel policy — resolved once, for every path below ----
         #
@@ -662,7 +722,7 @@ class ChannelInboundService:
             # channel is switched off" must be one answer to an unauthenticated
             # sender, or the reply becomes an oracle that enumerates a server's
             # channel configuration one probe at a time.
-            return adapter.build_sync_response(REPLY_DENIED)
+            return adapter.build_sync_response(REPLY_DENIED, inbound.thread_key)
 
         # ---- 7. Binding dispatch ----
         if binding is not None:
@@ -681,7 +741,9 @@ class ChannelInboundService:
                     binding.thread_key,
                     binding.user_id,
                 )
-                return adapter.build_sync_response(REPLY_THREAD_OWNED)
+                return adapter.build_sync_response(
+                    REPLY_THREAD_OWNED, inbound.thread_key
+                )
 
             if binding.status == CHANNEL_BINDING_ACTIVE:
                 ChannelInboundService._schedule(
@@ -708,7 +770,8 @@ class ChannelInboundService:
                 # Tell the truth when the queue is full: "I'll answer shortly"
                 # would be a promise about a message we just dropped.
                 return adapter.build_sync_response(
-                    REPLY_STILL_SETTING_UP if accepted else REPLY_TOO_MANY_QUEUED
+                    REPLY_STILL_SETTING_UP if accepted else REPLY_TOO_MANY_QUEUED,
+                    inbound.thread_key,
                 )
 
             # `failed` — self-heal: drop the binding and route again from
@@ -746,7 +809,45 @@ class ChannelInboundService:
             ),
             "channel_route_new_thread",
         )
-        return adapter.build_sync_response(REPLY_WORKING)
+        if _status_notice_supported(channel) and _outbound_credentials_configured(
+            channel
+        ):
+            # Ack in silence and let the background task own the narration.
+            #
+            # The sync response is the wrong vehicle for a notice that is going
+            # to change: Chat creates the message but never tells us its id, so
+            # a "finding an assistant…" answered here can be neither rewritten
+            # when the answer is known nor removed when the reply lands — it is
+            # a permanent message by construction. ``_route_new_thread`` posts
+            # the same text through the API instead, keeps the id, and mutates
+            # that one message the rest of the way.
+            #
+            # Read through ``_status_notice_supported`` rather than off
+            # ``adapter.capabilities`` directly, because every other reader in
+            # this file goes through that helper and the two can disagree: the
+            # helper is total and answers False for a channel whose adapter no
+            # longer resolves, so an ungated read here could ack in silence for
+            # a transport the *notice* path had already decided cannot narrate.
+            # Silence plus no notice is the one combination with no observable
+            # difference from the message never arriving.
+            #
+            # The credential check guards the same outcome by the other route.
+            # This module's own docstring makes a point of the sync reply
+            # needing no outbound credential — "which is what lets a channel
+            # refuse a sender before setup is finished" — and moving the
+            # narration into a posted message quietly narrowed that property to
+            # declines only. A channel whose inbound verification works but
+            # whose outbound does not (key rotated away, egress blocked, app
+            # removed from the space) would answer an ACCEPTED sender with
+            # nothing at all, traced only by a ring-buffer entry that is gone
+            # on the next restart. When the credential is provably absent the
+            # notice provably cannot be posted, so the old sync ack is strictly
+            # better than silence.
+            return {}
+        # Transports that cannot run a notice — and channels that could but have
+        # nothing to post it with — keep the sync reply, which is still the
+        # fastest acknowledgement available to them.
+        return adapter.build_sync_response(REPLY_WORKING, inbound.thread_key)
 
     # ==================================================================
     # Step 5 — user resolution
@@ -897,6 +998,22 @@ class ChannelInboundService:
                         )
                     return
 
+            # A bound thread used to say nothing at all while it worked — the
+            # webhook acked in silence and the next thing the person saw was
+            # the answer, however long that took. It can say something now
+            # because it can take it back: the notice is deleted the moment the
+            # reply lands (``handle_stream_completed``), so the thread ends up
+            # exactly as quiet as before.
+            #
+            # Gated on the notice capability rather than on
+            # ``supports_progress_updates``: a transport that can post but not
+            # delete would leave one of these standing on every single turn,
+            # which is worse than the silence it replaced.
+            if _status_notice_supported(channel):
+                await ChannelOutboundService.set_binding_status(
+                    db=db, channel=channel, binding=binding, text=REPLY_WORKING_ON_IT
+                )
+
             await ChannelInboundService._ingest_or_fail(
                 db=db,
                 channel=channel,
@@ -988,6 +1105,123 @@ class ChannelInboundService:
             # database, whatever happens to the session or to the rows.
             debug_channel_id = channel.id
             sender_email = user.email
+
+            # Read with the two above, and for the third reason as well: the
+            # notice below runs on a detached ``channel``, so an adapter lookup
+            # off a live instance has to happen here or not at all.
+            notice_supported = _status_notice_supported(channel)
+
+            # Opened before the slow part, because the slow part is what it
+            # exists to narrate: ``decide()`` is an LLM call, and an install
+            # behind it is minutes. Posted through the API rather than answered
+            # synchronously so the id comes back — every state below rewrites
+            # THIS message rather than adding another one.
+            #
+            # A plain local, carried down the branches exactly as ``policy`` and
+            # ``origin`` are, until there is a binding to hand it to. It cannot
+            # live on the binding yet: routing is what decides whether there
+            # will be one.
+            status_message_id: str | None = None
+            # The binding that has TAKEN OVER the notice, once one exists.
+            #
+            # The id lives in exactly one place at a time, and this is what
+            # keeps that true. Adopting it onto a binding used to leave a
+            # second copy in ``status_message_id``, and the failure handler at
+            # the bottom of this method could only settle *that* one: the
+            # binding row kept the id, and 45 seconds later the flush loop
+            # found it and patched "💬 Your assistant is ready — working on
+            # your message…" straight over the "setup failed" the sender had
+            # just been shown. Every adopt below therefore clears the local and
+            # records the owner here instead, and the handler settles through
+            # whichever of the two actually holds it.
+            bound: ChannelThreadBinding | None = None
+            if notice_supported:
+                # ---- Release the outer connection, THEN narrate ----
+                #
+                # The status notice is an HTTP call — up to ``_SEND_ATTEMPTS``
+                # requests at a 30s timeout each, plus backoff — and it used to
+                # go out *below* this commit, with the transaction the two
+                # ``db.get`` calls opened still held. That is precisely what
+                # the comment inside this block forbids, one statement too
+                # late: a Chat API slowdown pinned one pooled connection per
+                # inbound new thread.
+                #
+                # Committing alone does not fix it. ``commit`` expires both
+                # instances, so the notice's first attribute read
+                # (``channel.channel_type``, then ``encrypted_secrets``) is a
+                # lazy reload that opens a *new* transaction and holds that
+                # connection for the whole HTTP call — the same pin, moved. So
+                # both instances are expunged first: detached and fully loaded,
+                # they answer the adapter's column reads out of memory and
+                # touch no connection at all. They are re-fetched below, once
+                # there is DB work to do again.
+                #
+                # All of it lives INSIDE the ``notice_supported`` gate: a
+                # transport with no status notice (email, App MCP) does nothing
+                # between the expunge and the re-fetch, so it was paying a
+                # commit and two extra ``SELECT``s per new thread to protect a
+                # window in which nothing happens. The ``db.commit()`` that
+                # releases the connection for ``decide()`` is the first
+                # statement of the ``try`` below and covers those transports.
+                db.expunge(channel)
+                db.expunge(user)
+                db.commit()
+
+                status_message_id = await ChannelOutboundService.set_status(
+                    channel=channel,
+                    thread_key=thread_key,
+                    message_id=None,
+                    text=REPLY_WORKING,
+                )
+                if status_message_id is None:
+                    # The transport declares it can run a notice and the post
+                    # failed anyway. That matters more than a failed notice
+                    # normally would: ``handle_inbound`` acks such a channel in
+                    # SILENCE, on the strength of this message being the
+                    # sender's acknowledgement, so unless the credential gate
+                    # there sent the synchronous fallback instead this turn has
+                    # reached the sender with nothing at all. The only other
+                    # trace is a ``DEBUG_SEND_FAILED`` row in a process-local
+                    # ring buffer, which is empty again after a restart — hence
+                    # a log line rather than leaving it to the debug panel.
+                    logger.warning(
+                        "%s Status notice could not be posted for channel %s "
+                        "thread %s — this turn may have reached the sender "
+                        "with no acknowledgement at all; check the channel's "
+                        "outbound credential and egress",
+                        _LOG_PREFIX,
+                        channel_id,
+                        thread_key,
+                    )
+
+                # Re-attached now the network work is done: everything below
+                # writes through this session, and a detached instance handed
+                # to ``_upsert_binding`` or ``_ingest_or_fail`` would be a
+                # defect waiting on the first relationship access.
+                #
+                # The detached one is KEPT rather than overwritten. It is fully
+                # loaded — outbound credentials included — so it can still
+                # address the notice we just posted even when the row it came
+                # from is gone; reassigning ``channel`` first threw that away
+                # and left the sender on "finding an assistant…" forever, with
+                # nothing in the process able to settle it.
+                notice_channel = channel
+                channel = db.get(ServerChannel, channel_id)
+                user = db.get(User, user_id)
+                if channel is None or user is None:
+                    # Deleted while the notice was in flight. Nothing left to
+                    # route to — but the notice is ours and is still narrating,
+                    # so it gets the last word out of the detached instance
+                    # rather than being abandoned mid-sentence.
+                    if status_message_id:
+                        await ChannelInboundService._settle_notice(
+                            db,
+                            notice_channel,
+                            thread_key,
+                            status_message_id,
+                            REPLY_SETUP_FAILED,
+                        )
+                    return
 
             try:
                 # ---- Decide ----
@@ -1088,6 +1322,13 @@ class ChannelInboundService:
                         # race and already picked an agent. Defer to its
                         # binding — continuing with our own would create a
                         # session on a different agent than the binding names.
+                        #
+                        # Our notice goes with our routing result — handed
+                        # down so the refusal is written INTO it rather than
+                        # posted under it. The winner posted a notice of its
+                        # own and the binding points at that one; leaving ours
+                        # behind would strand a second "finding an assistant…"
+                        # on the thread that nothing owns and nothing rewrites.
                         await ChannelInboundService._handle_lost_race(
                             db=db,
                             channel=channel,
@@ -1098,8 +1339,38 @@ class ChannelInboundService:
                             external_message_id=external_message_id,
                             external_user_id=external_user_id,
                             policy=policy,
+                            status_message_id=status_message_id,
                         )
                         return
+                    # The thread has a binding now, so the notice gets an owner
+                    # — and its last state before the answer: "working on it".
+                    had_notice = status_message_id is not None
+                    ChannelOutboundService.adopt_status_notice(
+                        db, binding, status_message_id
+                    )
+                    # Recorded IMMEDIATELY after the adopt, and above the
+                    # announcement rather than below it. Ownership transfers at
+                    # the adopt — the id is on the row from that statement on —
+                    # so the bookkeeping has to transfer there too. It used to
+                    # sit under ``set_binding_status``, which is a full network
+                    # round trip and is NOT never-raise (see ``set_status``: the
+                    # adapter lookup is a lazy reload on an expired instance).
+                    # A raise inside that window left ``bound`` at ``None``
+                    # while the row already held the id, so the handler at the
+                    # bottom settled the stale local and the flush loop found
+                    # the row's id minutes later and patched "ready" over
+                    # whatever the sender had last been shown.
+                    # See ``bound`` above for why the local is cleared rather
+                    # than left as a second copy.
+                    bound = binding
+                    status_message_id = None
+                    if had_notice:
+                        await ChannelOutboundService.set_binding_status(
+                            db=db,
+                            channel=channel,
+                            binding=binding,
+                            text=REPLY_WORKING_ON_IT,
+                        )
                     await ChannelInboundService._ingest_or_fail(
                         db=db,
                         channel=channel,
@@ -1234,11 +1505,18 @@ class ChannelInboundService:
                             **_decision_detail(decision_id),
                         },
                     )
-                    await ChannelInboundService._reply(db, channel, thread_key, REPLY_NO_MATCH)
+                    # Settles the notice rather than clearing it: "nothing
+                    # matched" IS the answer, so it takes the notice's place
+                    # instead of being posted under it. Nothing owns the id
+                    # afterwards — there is no binding, and the message is
+                    # meant to stay.
+                    await ChannelInboundService._settle_notice(
+                        db, channel, thread_key, status_message_id, REPLY_NO_MATCH
+                    )
                     return
 
                 try:
-                    await ChannelInboundService._install_and_park(
+                    bound = await ChannelInboundService._install_and_park(
                         db=db,
                         channel=channel,
                         user=user,
@@ -1248,6 +1526,7 @@ class ChannelInboundService:
                         external_message_id=external_message_id,
                         external_user_id=external_user_id,
                         policy=policy,
+                        status_message_id=status_message_id,
                     )
                 except Exception as exc:
                     # The park is what ``parked_install`` asserts, so a failed
@@ -1259,6 +1538,10 @@ class ChannelInboundService:
                         pass2_trace.record_error(exc)
                     await ChannelRoutingService.run_in_thread(decision.persist_call())
                     raise
+                # Either the binding now owns the notice (``bound``) or the
+                # lost-race path already settled it into a refusal. Neither
+                # leaves anything for this method to write into.
+                status_message_id = None
 
                 decision_id = await ChannelRoutingService.run_in_thread(
                     decision.persist_call()
@@ -1283,9 +1566,69 @@ class ChannelInboundService:
                     channel_id,
                     thread_key,
                 )
-                await ChannelInboundService._reply(
-                    db, channel, thread_key, REPLY_SETUP_FAILED
-                )
+                # Both branches below bottom out in ``set_status``, and this
+                # handler is the one place its totality is not a nicety. The
+                # exception being handled is often a DB error, which leaves
+                # ``channel`` expired AND the session poisoned — so the
+                # adapter lookup's ``channel.channel_type`` read is a lazy
+                # reload that raises ``PendingRollbackError``. If that escaped,
+                # it would escape the handler itself and the sender's notice
+                # would be stranded on "Setting up…" forever, with no further
+                # code path able to touch it. ``set_status`` catches every
+                # exception for exactly this reason.
+                if bound is not None:
+                    # Settled THROUGH the binding, which is where the id lives
+                    # once it has been adopted. ``settle=True`` also releases
+                    # it, and that release is the point: an id left on the row
+                    # is one the pending-flush loop will find minutes later and
+                    # patch "ready — working on your message…" over the failure
+                    # the sender was just shown.
+                    await ChannelOutboundService.set_binding_status(
+                        db=db,
+                        channel=channel,
+                        binding=bound,
+                        text=REPLY_SETUP_FAILED,
+                        settle=True,
+                    )
+                else:
+                    await ChannelInboundService._settle_notice(
+                        db, channel, thread_key, status_message_id, REPLY_SETUP_FAILED
+                    )
+
+    @staticmethod
+    async def _settle_notice(
+        db: DBSession,
+        channel: ServerChannel,
+        thread_key: str,
+        status_message_id: str | None,
+        text: str,
+    ) -> None:
+        """Write the last word into an unbound thread's status notice.
+
+        The thread-keyed twin of ``set_binding_status(settle=True)``, for the
+        two outcomes that end a new thread before it ever gets a binding: no
+        agent matched, and routing failed outright. Both are the reply, not a
+        state on the way to one, so the notice is rewritten and left standing.
+
+        Falls back to :meth:`_reply` when there is no notice to rewrite — which
+        is every transport that cannot mutate its own messages, and any thread
+        whose opening notice failed to post. Same text, same thread, one extra
+        message.
+
+        Also used by :meth:`_handle_lost_race` to dispose of the *loser's*
+        orphan notice, which is the same operation seen from the other side:
+        the refusal is written into the message that was narrating, rather than
+        posted under it and the notice deleted.
+        """
+        if status_message_id:
+            await ChannelOutboundService.set_status(
+                channel=channel,
+                thread_key=thread_key,
+                message_id=status_message_id,
+                text=text,
+            )
+            return
+        await ChannelInboundService._reply(db, channel, thread_key, text)
 
     @staticmethod
     async def _handle_lost_race(
@@ -1299,8 +1642,16 @@ class ChannelInboundService:
         external_message_id: str | None,
         external_user_id: str | None,
         policy: ResolvedChannelPolicy,
+        status_message_id: str | None = None,
     ) -> None:
         """Deliver this message via the binding that won the creation race.
+
+        ``status_message_id`` is the **loser's** own status notice, which is
+        now an orphan: the thread's notice is whichever one the winner's
+        binding points at. Both refusal branches below settle their text into
+        it, which disposes of it and answers the sender in one message. The
+        third branch — delivering through the winner's binding — has no text
+        for it and deletes it, one of the two places that is the right move.
 
         Never proceeds with the loser's own routing result: the winner's
         binding already names an agent, and creating a session on a different
@@ -1325,8 +1676,8 @@ class ChannelInboundService:
                 thread_key,
                 binding.user_id,
             )
-            await ChannelInboundService._reply(
-                db, channel, thread_key, REPLY_THREAD_OWNED
+            await ChannelInboundService._settle_notice(
+                db, channel, thread_key, status_message_id, REPLY_THREAD_OWNED
             )
             return
 
@@ -1338,14 +1689,22 @@ class ChannelInboundService:
             db.commit()
             # Never drop in silence: at the cap the message is gone, so say so
             # rather than leaving the sender waiting for an answer to it.
-            await ChannelInboundService._reply(
+            await ChannelInboundService._settle_notice(
                 db,
                 channel,
                 thread_key,
+                status_message_id,
                 REPLY_STILL_SETTING_UP if accepted else REPLY_TOO_MANY_QUEUED,
             )
             return
 
+        # Delivering through the winner's binding: this notice has nothing left
+        # to say and no thread state of its own, so it goes. See
+        # ``ChannelOutboundService.clear_status`` for why deletion is the
+        # exception rather than the rule.
+        await ChannelOutboundService.clear_status(
+            channel=channel, thread_key=thread_key, message_id=status_message_id
+        )
         agent = db.get(Agent, binding.agent_id)
         user = db.get(User, binding.user_id)
         if agent is None or user is None:
@@ -1425,8 +1784,16 @@ class ChannelInboundService:
             ChannelInboundService._fail_binding(
                 db, binding, "Agent has no active environment"
             )
-            await ChannelOutboundService.notify_progress(
-                db=db, channel=channel, binding=binding, text=REPLY_SETUP_FAILED
+            # ``settle``: the failure is the reply, so it takes the notice's
+            # place and stays. Releasing the id is what stops the next turn
+            # from rewriting a message that is now the last thing this thread
+            # was told.
+            await ChannelOutboundService.set_binding_status(
+                db=db,
+                channel=channel,
+                binding=binding,
+                text=REPLY_SETUP_FAILED,
+                settle=True,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception(
@@ -1437,8 +1804,16 @@ class ChannelInboundService:
             # the handler.
             db.rollback()
             ChannelInboundService._fail_binding(db, binding, str(exc))
-            await ChannelOutboundService.notify_progress(
-                db=db, channel=channel, binding=binding, text=REPLY_SETUP_FAILED
+            # ``settle``: the failure is the reply, so it takes the notice's
+            # place and stays. Releasing the id is what stops the next turn
+            # from rewriting a message that is now the last thing this thread
+            # was told.
+            await ChannelOutboundService.set_binding_status(
+                db=db,
+                channel=channel,
+                binding=binding,
+                text=REPLY_SETUP_FAILED,
+                settle=True,
             )
 
     @staticmethod
@@ -1453,12 +1828,26 @@ class ChannelInboundService:
         external_message_id: str | None,
         external_user_id: str | None,
         policy: ResolvedChannelPolicy,
-    ) -> None:
+        status_message_id: str | None = None,
+    ) -> ChannelThreadBinding | None:
         """Install the matched bundle and park the message until the env is up.
 
         ``policy`` is carried only to hand on to :meth:`_handle_lost_race`,
         which needs the sender's reading for *this* message and has no safe
         default to fall back on.
+
+        ``status_message_id`` is the thread's open status notice, handed over
+        so the install announces itself by rewriting it instead of posting
+        underneath it. ``None`` is a transport that has no such notice, and the
+        announcement falls back to an ordinary message.
+
+        **Returns the binding that now owns that notice**, or ``None`` when
+        nothing does — which is the lost-race branch, where the refusal has
+        already been settled into it. The caller needs the distinction because
+        it is the caller's failure handler that has to write the last word: an
+        adopted notice must be settled *through the binding*, so the id is
+        released and the pending-flush loop cannot come back minutes later and
+        patch "ready" over a failure message.
         """
         from app.services.bundles.install_service import InstallService
 
@@ -1489,7 +1878,9 @@ class ChannelInboundService:
         if not created:
             # Raced. Defer to the winner — parking onto an already-`active`
             # binding would strand the message, since the flush loop only ever
-            # selects `pending_install`.
+            # selects `pending_install`. Our notice goes with our result and is
+            # handed down to be settled with the refusal; the winner's binding
+            # owns the thread's notice from here.
             await ChannelInboundService._handle_lost_race(
                 db=db,
                 channel=channel,
@@ -1500,8 +1891,12 @@ class ChannelInboundService:
                 external_message_id=external_message_id,
                 external_user_id=external_user_id,
                 policy=policy,
+                status_message_id=status_message_id,
             )
-            return
+            # ``_handle_lost_race`` disposed of the notice — settled with a
+            # refusal, or deleted when it delivered through the winner. Nothing
+            # owns it now, and nothing should rewrite it again.
+            return None
 
         ChannelInboundService._append_parked(
             db, binding, text, external_message_id, external_user_id
@@ -1512,12 +1907,29 @@ class ChannelInboundService:
         # Announced only now: before the binding is confirmed ours, a lost race
         # would have told the sender "setting up X for you" and then declined
         # them in the next breath.
-        await ChannelInboundService._reply(
-            db,
-            channel,
-            thread_key,
-            REPLY_INSTALLING.format(agent_name=bundle.display_name),
+        #
+        # The notice is adopted first so the announcement rewrites it in place
+        # — and so the flush loop, which runs minutes later in a different task
+        # with nothing but this row to go on, can find it and carry it through
+        # "ready" to deletion.
+        #
+        # Between the adopt and the ``return`` the row owns the notice and the
+        # caller does not know it yet: ``bound`` is only assigned from the
+        # return value. That window is safe ONLY because both statements below
+        # are total — ``adopt_status_notice`` by its own contract, and
+        # ``set_binding_status`` because ``set_status`` guards its adapter
+        # lookup against every exception rather than just ``ChannelError``.
+        # Narrow that guard back and this window reopens: the caller's handler
+        # would settle a local it no longer owns and leave the row's id for the
+        # flush loop to patch "ready" over the failure the sender was shown.
+        ChannelOutboundService.adopt_status_notice(db, binding, status_message_id)
+        await ChannelOutboundService.set_binding_status(
+            db=db,
+            channel=channel,
+            binding=binding,
+            text=REPLY_INSTALLING.format(agent_name=bundle.display_name),
         )
+        return binding
 
     # ==================================================================
     # Pending flush (scheduler entry point)
@@ -1610,8 +2022,16 @@ class ChannelInboundService:
 
         if failure is not None:
             ChannelInboundService._fail_binding(db, binding, failure)
-            await ChannelOutboundService.notify_progress(
-                db=db, channel=channel, binding=binding, text=REPLY_SETUP_FAILED
+            # ``settle``: the failure is the reply, so it takes the notice's
+            # place and stays. Releasing the id is what stops the next turn
+            # from rewriting a message that is now the last thing this thread
+            # was told.
+            await ChannelOutboundService.set_binding_status(
+                db=db,
+                channel=channel,
+                binding=binding,
+                text=REPLY_SETUP_FAILED,
+                settle=True,
             )
             return False
 
@@ -1620,7 +2040,12 @@ class ChannelInboundService:
         # what stops a mid-drain failure from re-announcing "ready" and
         # re-delivering messages on every 45-second tick.
         if binding.pending_messages:
-            await ChannelOutboundService.notify_progress(
+            # Advances the same notice the install opened, minutes ago and in
+            # another task — the id is on the binding, which is why it was
+            # adopted there rather than kept in ``_route_new_thread``'s frame.
+            # Not settled: the drain below produces a real reply, and
+            # ``handle_stream_completed`` deletes the notice when it lands.
+            await ChannelOutboundService.set_binding_status(
                 db=db, channel=channel, binding=binding, text=REPLY_READY
             )
         binding.status = CHANNEL_BINDING_ACTIVE
@@ -1817,11 +2242,12 @@ class ChannelInboundService:
                     # failure would be an oracle for the channel's
                     # configuration — see the comments around the
                     # ``ChannelDecline`` raise in ``_ingest``.
-                    await ChannelOutboundService.notify_progress(
+                    await ChannelOutboundService.set_binding_status(
                         db=db,
                         channel=channel,
                         binding=binding,
                         text=REPLY_SETUP_FAILED,
+                        settle=True,
                     )
                     return
                 except Exception as exc:  # noqa: BLE001
@@ -1849,11 +2275,12 @@ class ChannelInboundService:
                     # Never strand silently: the remaining messages stay parked
                     # and will be retried on the next inbound message, but the
                     # person is owed an answer now.
-                    await ChannelOutboundService.notify_progress(
+                    await ChannelOutboundService.set_binding_status(
                         db=db,
                         channel=channel,
                         binding=binding,
                         text=REPLY_SETUP_FAILED,
+                        settle=True,
                     )
                     return
 

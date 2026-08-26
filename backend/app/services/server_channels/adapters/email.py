@@ -171,10 +171,12 @@ class EmailChannelAdapter(PolledChannelTransport):
     @property
     def capabilities(self) -> ChannelCapabilities:
         return ChannelCapabilities(
-            # No progress notices. The pipeline calls ``notify_progress``
-            # unconditionally, and a transport that answered it would mail the
-            # sender "working on it", "still setting up" and "ready" as three
-            # separate messages before the actual answer.
+            # No progress notices. The pipeline narrates unconditionally
+            # (``ChannelOutboundService.set_status`` and friends), and a
+            # transport that answered would mail the sender "working on it",
+            # "still setting up" and "ready" as three separate messages before
+            # the actual answer — this flag is what turns the whole narration
+            # into a no-op instead.
             supports_progress_updates=False,
             supports_message_edit=False,
             # Replies go out as ``text/plain`` (see

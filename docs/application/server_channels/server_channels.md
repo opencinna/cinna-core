@@ -55,21 +55,47 @@ The webhook URL is built from the backend's public origin (`BACKEND_BASE_URL`, f
 
 1. An employee DMs the Google Chat app, or the app is added to a space and mentioned there.
 2. The message arrives at the webhook, is verified, whitelist-checked, and the sender is resolved (auto-registered if new and allowed).
-3. Since this is a brand-new thread, the platform tries to route it: first against the sender's own installed agents, then — if none match — against the server's auto-install list.
-4. If a match is found on the auto-install list, the matching bundle is installed for that sender behind the scenes and a "Setting up **X** for you…" reply appears in the thread while the environment builds.
-5. Once ready, the agent's real reply lands in the same thread, and a short "Your assistant is ready" notice precedes it if there was a wait.
-6. If nothing matches, the sender gets a polite "couldn't find an agent for that — contact your admin" reply.
+3. A short **status notice** appears in the thread — "🔎 Finding the right assistant for you…" — and stays there, rewriting itself, for as long as the work takes. See [The status notice](#the-status-notice).
+4. Since this is a brand-new thread, the platform tries to route it: first against the sender's own installed agents, then — if none match — against the server's auto-install list.
+5. If a match is found on the auto-install list, the matching bundle is installed for that sender behind the scenes and the notice becomes "⚙️ Setting up **X** for you…" while the environment builds.
+6. Once ready, the notice becomes "💬 Your assistant is ready — working on your message…", and when the agent answers, that same message is rewritten one last time to hold the reply.
+7. If nothing matches, the notice is replaced one last time by a polite "couldn't find an agent for that — contact your admin" — which stays, because it is the answer.
 
 ### 3. Continuing a conversation
 
 1. The employee replies in the same Google Chat thread.
 2. Because the thread already has an active binding, the platform skips routing entirely and feeds the message straight into the same session — the same principle App MCP uses for a caller's already-resolved context.
-3. The agent's reply streams back to the thread as it completes.
+3. A "💬 Working on your message…" notice appears while the agent thinks.
+4. When the agent finishes, that notice becomes the reply — one bot message per turn.
+
+### The status notice
+
+Everything the pipeline says on a turn is **one message**. It is posted into the thread when the work starts, rewritten in place as the work advances, and rewritten one final time to hold the agent's answer. A finished exchange reads as the question and the answer — the narration was the same message all along, arriving in stages.
+
+Three things can happen to it:
+
+| | What it means | What the reader sees |
+|---|---|---|
+| **rewritten** | The work moved on — routing → installing → working → *the reply* | The same message, new text |
+| **settled** | This *is* the answer — "nothing matched", "setup failed" | The message stays, permanently |
+| **cleared** | Rare: the turn ended with nothing at all to say | The message disappears |
+
+The reply **takes the notice's slot** rather than being posted below it, and the reason is worth stating because the alternative was tried: deleting the notice once the reply was posted leaves Google Chat's "Message deleted by its author" tombstone, which appeared above every single answer. Deletion is now the exception — a stream that produced no message, or a routing race whose loser has no thread left to narrate.
+
+A reply too long for one Chat message still fits: the first part takes the slot and the rest follows underneath it.
+
+All of this depends on the channel being able to edit its own posts. Google Chat can (`spaces.messages.patch`, restricted to messages the app itself posted). A channel that cannot falls back to posting each notice as a separate message — which is what every channel did before this existed — and email, which has no progress surface at all, stays silent throughout and simply answers when it has something to say.
+
+One consequence worth knowing when reading a channel's debug feed: an accepted message now gets an **empty** webhook acknowledgement — but only on a channel that actually has outbound credentials configured, since that is what lets it post the notice at all. The first thing the sender is told then arrives as a posted message a moment later, not as the webhook's own reply. A channel with no outbound credentials configured keeps the old synchronous "finding the right assistant for you…" acknowledgement instead — the notice provably cannot be posted, so answering inline is still better than answering with nothing. Declines are still answered inline in every case, which is what lets a channel refuse someone before its outbound credentials are even configured.
+
+### Formatting
+
+Agents write Markdown. Google Chat does not read Markdown — it has its own smaller markup, and there is no way to ask its API for anything else — so the platform translates on the way out: `**bold**` becomes Chat's bold, links become Chat links, and headings and tables, which Chat has no notion of, become bold lines and aligned monospace blocks. Code blocks are passed through untouched and are never split across a message boundary. Email is unaffected: its replies go out as plain text.
 
 ### 4. Environment build fails during auto-install
 
 1. A Pass-2 auto-install starts building an environment; the sender's message is parked in the meantime.
-2. If the build fails outright, the binding is marked failed and the sender gets a "setting up your assistant failed — contact your admin" notice.
+2. If the build fails outright, the binding is marked failed and the status notice is settled as "setting up your assistant failed — contact your admin".
 3. The *next* message the sender sends into that same thread deletes the failed binding and re-runs routing from scratch — a transient failure never permanently wedges the thread.
 
 ### 5. Cross-user thread collision (group spaces)

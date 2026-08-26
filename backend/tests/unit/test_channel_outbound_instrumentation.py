@@ -59,10 +59,12 @@ import uuid
 from contextlib import contextmanager
 
 import pytest
+from sqlalchemy.exc import OperationalError, PendingRollbackError
 
 from app.models import CHANNEL_BINDING_FAILED
 from app.services.server_channels import channel_inbound_service as _cis
 from app.services.server_channels import channel_outbound_service as _outbound_svc
+from app.services.server_channels.adapters.base import ChannelError
 from app.services.server_channels.channel_debug_buffer import (
     DEBUG_REPLIED,
     DEBUG_SEND_FAILED,
@@ -128,6 +130,10 @@ class _LiveBinding:
         # be mistaken for the vanished-row case ``_BindingVanished`` exists to
         # cover.
         self.last_external_message_id = None
+        # Read by ``_binding_status_message_id`` on every status-notice path,
+        # for the same reason: a fake missing it raises AttributeError inside
+        # that helper's guard and looks like a vanished row.
+        self.status_message_id: str | None = None
 
 
 class _BindingVanished:
@@ -592,4 +598,107 @@ def test_record_error_never_writes_over_an_existing_diagnosis() -> None:
     ChannelOutboundService._record_error(db, binding, "later noise")
 
     assert binding.last_error == "earlier diagnosis"
+    assert db.commits == 0
+
+
+# ── ``set_status`` must be TOTAL, not merely ``ChannelError``-safe ────────────
+#
+# The band comment above the status-notice verbs states the contract out loud:
+# "Every one of them is best-effort and none of them raise". The only
+# unguarded expression in ``set_status`` is its adapter lookup, and
+# ``channel.channel_type`` inside it is the same expired-instance lazy reload
+# every helper in this file exists for — so a guard that named only
+# ``ChannelError`` did not deliver that contract.
+#
+# Three callers depend on it, and none of them can absorb a raise:
+#
+#  * ``_route_new_thread``'s Pass 1 hand-off — a raise between the adopt and
+#    ``bound = binding`` leaves the row owning the notice while the failure
+#    handler settles a stale local, so the flush loop patches "ready" over the
+#    sender's last word.
+#  * ``_install_and_park`` — the same window, across its ``return``.
+#  * The outer failure handler itself, which settles THROUGH these verbs. The
+#    exception it is handling is often a DB error, so the session is poisoned
+#    and the reload raises ``PendingRollbackError`` out of the handler — the
+#    notice is then stranded on "Setting up…" with no code path left to touch
+#    it.
+
+
+class _NoticeChannelVanished:
+    """A channel whose row is gone: even ``channel_type`` is a failed reload."""
+
+    def __getattr__(self, name: str):  # noqa: ANN401 — deliberate catch-all
+        raise _Vanished(f"could not refresh {name}: row is gone")
+
+
+def _set_status(channel) -> str | None:
+    return asyncio.run(
+        ChannelOutboundService.set_status(
+            channel=channel,
+            thread_key="spaces/AAA/threads/BBB",
+            message_id=None,
+            text="🔎 Finding the right assistant for you…",
+        )
+    )
+
+
+def test_set_status_survives_an_expired_channel_instance() -> None:
+    """``channel.channel_type`` is a reload, and reloads of deleted rows raise.
+
+    ``ObjectDeletedError`` is not a ``ChannelError``; ``_Vanished`` stands in
+    for it (a unit test has no session to expire). ``None`` is the documented
+    answer for "no notice", which every caller already handles.
+    """
+    assert _set_status(_NoticeChannelVanished()) is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # Pool timeout / connection dropped mid-reload.
+        OperationalError("SELECT 1", {}, Exception("connection lost")),
+        # The failure handler's own case: the session is already poisoned by
+        # the exception being handled, so ANY reload raises this.
+        PendingRollbackError("session must be rolled back"),
+        # And the case the original guard did name, kept so the broadening
+        # cannot silently drop it.
+        ChannelError("no adapter for 'nope'"),
+    ],
+)
+def test_set_status_survives_a_failed_adapter_lookup(monkeypatch, error) -> None:
+    def _boom(_channel_type: str):
+        raise error
+
+    monkeypatch.setattr(_MODULE + ".get_adapter", _boom)
+    assert _set_status(_LiveChannel()) is None
+
+
+def test_set_binding_status_is_total_by_extension(monkeypatch) -> None:
+    """The verb the inbound pipeline actually calls, and the one that matters.
+
+    It has no ``try`` of its own — its totality is entirely inherited from
+    ``set_status`` and ``_persist_status_message_id``. Asserted separately
+    because it is this signature, not ``set_status``, that sits inside the
+    ownership hand-off windows described above.
+    """
+    monkeypatch.setattr(
+        _MODULE + ".get_adapter",
+        lambda _type: (_ for _ in ()).throw(
+            PendingRollbackError("session must be rolled back")
+        ),
+    )
+    db = _FakeDB()
+
+    asyncio.run(
+        ChannelOutboundService.set_binding_status(
+            db=db,
+            channel=_LiveChannel(),
+            binding=_LiveBinding(),
+            text="💬 Working on your message…",
+            settle=True,
+        )
+    )
+
+    # Nothing to release: the notice was never posted, so the row's id (already
+    # ``None``) is left alone rather than written redundantly.
     assert db.commits == 0

@@ -168,8 +168,27 @@ def _owner_sessions(client, cast) -> list[dict]:
     ]
 
 
+# States of the thread's *status notice* — the one message the pipeline
+# rewrites while it works and deletes when the answer lands. Against the real
+# adapter those are `patch` calls on a single message; against a mocked
+# `send_message` (which cannot return a usable message id) each state falls
+# back to a fresh post and shows up here.
+#
+# Filtered out below because every assertion in this file is about what the
+# sender was TOLD — an answer, or a refusal — and a spinner is neither. The
+# notice's own behaviour is covered in `server_channels_status_notice_test.py`.
+_STATUS_NOTICE_TEXTS = {
+    "🔎 Finding the right assistant for you…",
+    "💬 Working on your message…",
+}
+
+
 def _texts(send_mock) -> list[str]:
-    return [c.args[-1] or "" for c in send_mock.await_args_list]
+    return [
+        text
+        for text in (c.args[-1] or "" for c in send_mock.await_args_list)
+        if text not in _STATUS_NOTICE_TEXTS
+    ]
 
 
 # ---------------------------------------------------------------------------

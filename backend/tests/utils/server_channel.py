@@ -20,6 +20,16 @@ Covers three things:
    the feature plan's own testing checklist). This is the single, named place
    that import lives so individual test files stay free of ``app.services``
    imports.
+4. ``get_binding_status_message_id`` — a narrow, read-only Rule-1 exemption.
+   ``ChannelThreadBinding`` deliberately has no admin/user-facing GET endpoint
+   (see "No binding read API" in ``tests/api/server_channels/README.md``), so
+   every other test in this domain verifies binding state through observable
+   effects — the reply text a sender got, whether a NEW notice was posted on
+   the next turn. That is the right default, but one invariant needs to be
+   pinned directly rather than only inferred from a second turn behaving as if
+   it held: that the status notice id is actually released (set to ``NULL``)
+   on the binding once a reply takes its slot. Kept to one field, read-only,
+   named so it stays easy to grep for and does not encourage a second one.
 """
 from __future__ import annotations
 
@@ -36,7 +46,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.config import settings
 from tests.utils.utils import random_lower_string
@@ -466,6 +476,42 @@ def flush_pending_bindings(db: Session) -> int:
     )
 
     return asyncio.run(ChannelInboundService.flush_pending_bindings(db))
+
+
+# ---------------------------------------------------------------------------
+# Binding status-notice id — read-only Rule-1 exemption
+# ---------------------------------------------------------------------------
+
+
+def get_binding_status_message_id(
+    db: Session, channel_id: str | uuid.UUID, thread_key: str
+) -> str | None:
+    """The binding's live status-notice id, read straight off the row.
+
+    EXEMPTION — see point 4 of the module docstring. ``ChannelThreadBinding``
+    has no read API by design, and every other assertion about its lifecycle
+    in this domain goes through an observable effect instead. This one field
+    is the exception: a test that wants to pin "the id was actually released"
+    as its own fact, not merely infer it from a second turn behaving as if it
+    were released, has no other seam to reach it through.
+
+    Read-only, and narrow on purpose — one field, one row, looked up by the
+    same ``(server_channel_id, thread_key)`` pair the table's own unique
+    constraint uses. Returns ``None`` for either "no notice outstanding" or
+    "no such binding", which a caller that just drove the binding into
+    existence cannot confuse for one another.
+    """
+    from app.models import ChannelThreadBinding
+
+    if isinstance(channel_id, str):
+        channel_id = uuid.UUID(channel_id)
+    row = db.exec(
+        select(ChannelThreadBinding).where(
+            ChannelThreadBinding.server_channel_id == channel_id,
+            ChannelThreadBinding.thread_key == thread_key,
+        )
+    ).first()
+    return row.status_message_id if row else None
 
 
 # ---------------------------------------------------------------------------

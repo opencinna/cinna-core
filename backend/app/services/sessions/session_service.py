@@ -655,27 +655,47 @@ class SessionService:
         if not environment:
             return
 
+        session_id = session.id
+
         try:
             from app.services.sessions.message_service import MessageService
 
             base_url = MessageService.get_environment_url(environment)
             auth_headers = MessageService.get_auth_headers(environment)
+        except Exception as exc:  # noqa: BLE001 — best-effort, never block delete
+            logger.warning(
+                "Best-effort interrupt for deleted session %s failed: %s",
+                session_id, exc,
+            )
+            return
 
-            # Route is sync (runs in a threadpool worker), so there is no running
-            # loop here — asyncio.run is safe. forward_interrupt_to_environment
-            # has its own 5s timeout; we still guard the whole thing.
-            asyncio.run(
-                MessageService.forward_interrupt_to_environment(
+        async def _interrupt() -> None:
+            # Swallows everything: this is fire-and-forget, and it may run
+            # detached from the caller (see the scheduling branch below), where
+            # a raise would surface as an unhandled task error.
+            try:
+                await MessageService.forward_interrupt_to_environment(
                     base_url=base_url,
                     auth_headers=auth_headers,
                     external_session_id=external_session_id,
                 )
-            )
-        except Exception as exc:  # noqa: BLE001 — best-effort, never block delete
-            logger.warning(
-                "Best-effort interrupt for deleted session %s failed: %s",
-                session.id, exc,
-            )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Best-effort interrupt for deleted session %s failed: %s",
+                    session_id, exc,
+                )
+
+        # The delete route is sync, so normally this runs on a threadpool worker
+        # with no loop of its own and asyncio.run is safe (forward_interrupt_to_
+        # environment has its own 5s timeout). A caller that is already inside a
+        # running loop is the exception: asyncio.run would raise there and leave
+        # the coroutine un-awaited, so hand it to that loop instead.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(_interrupt())
+        else:
+            create_task_with_error_logging(_interrupt(), "session_delete_interrupt")
 
     @staticmethod
     def delete_session(db_session: DBSession, session_id: UUID) -> UUID | None:

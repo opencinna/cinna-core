@@ -5,7 +5,7 @@ admin-configured channels (Google Chat first) that let external people reach
 platform agents from outside the platform, routed and bound per-thread to a
 session.
 
-Not split into topic groups — small enough (12 files) that the domain root is
+Not split into topic groups — small enough (13 files) that the domain root is
 the right home; see `tests/README.md` for the split-domain threshold (~20
 files, `tests/api/agents/` is the one example today).
 
@@ -24,10 +24,27 @@ files, `tests/api/agents/` is the one example today).
 | `server_channels_identity_trace_test.py` | What an identity decision writes into the routing trace and what it must not: the deliberate silence when the switch is off (no `identity_unavailable` skip, no `identity:` `ref_id`, no `source="identity"` — the one inversion of master plan §3.5, paired with the switched-on delivery so the absence is not vacuous), the `identity_stage2` ballot with each binding's trigger prompt and `prompt_examples`, `match_method` in the current vocabulary (`only_one` on the shortcut, never `pattern`), a lexical hit on a binding's trigger prompt never beating the classifier's verdict (the glob it replaces can no longer be fed at all — `message_patterns` is gone as a column), and the `SKIP_IDENTITY_UNAVAILABLE` reachability verdict. **Replaces `tests/api/routing/routing_identity_stage2_capture_test.py`**, which was deleted: simulate has no `channel_id`, so `ResolvedChannelPolicy.for_no_channel()` keeps `allow_identity_routing` false and identity can never enter a simulated ballot. |
 | `server_channels_pending_outbound_test.py` | `flush_pending_bindings` parking/flush/env-failure paths, `STREAM_COMPLETED` outbound gating + binding lookup. |
 | `server_channels_app_mcp_test.py` | App MCP as a channel (Phase 5 of the channels/identity refactor): the **singleton** row nothing creates — materialized lazily by `ServerChannelService.get_or_create_singleton`, so its presence in a listing *is* the assertion that the one shared accessor ran — its authenticated-transport projection (no webhook token or URL, `has_outbound_credentials=True` because nothing is missing rather than because something is stored, empty `config`, NULL-and-inert `email_whitelist`), the `/channel-types` transport shape the admin form branches on instead of on `channel_type`, and the four refusals: a second `app_mcp` channel (409), a `channel_type` patch moving an existing channel onto the type (the same 409, and the door that is easier to forget), any config at all (422), a webhook-token regeneration (422), and deletion (422 — the row would be re-materialized with **default** settings, turning "delete" into a silent reset of the kill switch). Plus the user surfacing: a brand-new user sees the row in Settings → Channels with no settings row of their own, and it follows `visibility`/grants/`enabled` like any channel. The enforcement half — that those switches actually refuse a live App MCP token — is `tests/api/app_mcp/app_mcp_channel_availability_test.py`, which needs the OAuth flow and that domain's fixtures. |
+| `server_channels_status_notice_test.py` | The thread **status notice**: one message the pipeline posts, rewrites in place as the work advances (routing → installing → working), and rewrites one final time to hold the agent's own reply — replacing the three permanent notices a first contact used to leave behind. The reply takes the notice's **slot** rather than being posted under it and the notice deleted, because Chat renders a deletion as a "Message deleted by its author" tombstone and that appeared above every answer; deletion survives only for a turn with nothing to say. Covers the full post → patch → become-the-reply life of one notice, the second turn (silent before, and the place the **released id** is observable — a retained one would patch the next spinner over the previous answer), no-match **settling** the notice instead of posting under it, and the install → flush hand-off, which is the reason the id lives on the binding at all: "ready" is emitted minutes later from the scheduler task with nothing but the binding row to go on. Also the sync-response regression guard — an accepted message must ack `{}`. |
 | `server_channels_policy_test.py` | `ChannelPolicyService` observed through a real routing decision (Phase 2 of the channels/identity refactor): no-settings-row inheritance for an auto-registered sender who can never have one, `visibility="restricted"` declining with the same reply shape as a whitelist miss and routing once granted, `channel.enabled=False` overriding an explicit user `is_enabled=True` (proved as total invisibility — the webhook 404s and the user-facing routes 404/omit, since a disabled channel is filtered out before `ChannelPolicyService` is ever consulted), `agent_scope="list"`/`"none"` recording out-of-scope owned agents as skips rather than absences, `pinned_agent_id` skipping classification while still leaving a `match_method="pinned"` trace row (and self-healing when the pinned agent is deleted or changes hands), `allow_auto_install=False` and a raced pin both barring Pass 2 with their own trace note (`PASS_2_NOT_ALLOWED_NOTE` / `PASS_2_PINNED_NOTE`), that note being suppressed when Pass 1 already recorded an error, and the decline gate applying to an already-bound thread on all three revocation shapes (admin disables the channel, admin withdraws a grant, user switches it off). |
 
 Chunking (`GoogleChatAdapter._chunk`) is pure text-splitting logic with no I/O
 and is unit-tested instead: `tests/unit/test_google_chat_adapter_chunk.py`.
+So are the other pure pieces of the outbound path — the CommonMark → Chat
+markup translation (`tests/unit/test_google_chat_format.py`), the webhook's
+own reply body (`tests/unit/test_google_chat_sync_response.py`, which pins the
+`thread` field that keeps a sync reply out of the space and inside the
+conversation), and `replace_message`'s composition
+(`tests/unit/test_google_chat_replace_message.py`: which chunk takes the slot,
+the fallback when the patch fails, the message-resource-name guard, and the
+partial failure — a patch that landed followed by a remainder that did not
+still reports `replaced=True`, because ownership of that message transferred
+at the patch and losing it lets the next turn's spinner overwrite a delivered
+reply). The status-notice verbs' **totality** — `set_status` must return
+`None`, never raise, when its adapter lookup hits an expired instance or a
+poisoned session — is pinned in
+`tests/unit/test_channel_outbound_instrumentation.py`; three callers settle
+notices through it from inside failure handlers that have nowhere left to put
+an exception.
 The debug buffer's bounds (ring-buffer eviction, text clamp, per-channel
 isolation) are likewise pure in-memory logic:
 `tests/unit/test_channel_debug_buffer.py`.
@@ -47,8 +64,22 @@ patch to stay on the test thread/transaction.
 - **No binding read API.** `ChannelThreadBinding` has no admin/user-facing GET
   endpoint by design (it is internal pipeline state). Binding lifecycle is
   verified through *observable* effects instead: the webhook's synchronous
-  reply text (`REPLY_WORKING`, `REPLY_STILL_SETTING_UP`, `REPLY_THREAD_OWNED`,
+  reply text (`REPLY_STILL_SETTING_UP`, `REPLY_THREAD_OWNED`, `REPLY_DENIED`,
   …), session creation/count via `GET /sessions/`, and outbound adapter calls.
+  **An accepted new-thread message is not one of them any more.** Its
+  narration moved into the status notice, so the sync body is `{}` and
+  `REPLY_WORKING` is observed as a `send_message` call — see
+  `server_channels_status_notice_test.py`. Tests asserting what a sender was
+  *told* should filter the notice's intermediate states out (the pattern is
+  `_STATUS_NOTICE_TEXTS` in `server_channels_identity_revocation_test.py`):
+  against the real adapter those are `patch` calls on one message, but a
+  mocked `send_message` cannot return a usable id so each state falls back to
+  a fresh post and shows up in the call list. A test that wants the real
+  behaviour must mock **all four** verbs — `send_message`, `update_message`,
+  `replace_message`, `delete_message` — and hand back a real-shaped
+  `spaces/AAA/messages/…` id from `send_message`; anything else is refused by
+  `GoogleChatAdapter._message_url` and degrades to a plain post. See `_Chat`
+  in `server_channels_status_notice_test.py`.
 - **Deterministic Pass 1 setup.** Give the sender an agent with its own
   `router_trigger_prompt` (`tests/utils/agent.py::set_router_trigger_prompt`).
   Channel Pass 1 builds its candidates from the **agents the sender owns**
@@ -114,3 +145,12 @@ patch to stay on the test thread/transaction.
   `tests/utils/server_channel.py::flush_pending_bindings` is a documented
   Rule-1 exemption (same pattern as `tests/utils/platform_token.py` and the
   active-streaming-manager helpers in `tests/utils/session.py`).
+- **The status notice id has one, narrow, read-only exemption.** "No binding
+  read API" (above) is the default and stays the default — every lifecycle
+  fact but one is still verified through an observable effect. The exception
+  is `tests/utils/server_channel.py::get_binding_status_message_id`: a test
+  that wants to pin "the id was actually released" as its own fact, rather
+  than only infer it from a later turn behaving as if it were, has no other
+  seam to reach `ChannelThreadBinding.status_message_id` through. See
+  `server_channels_status_notice_test.py::
+  test_the_notice_id_is_cleared_on_the_binding_between_turns`.

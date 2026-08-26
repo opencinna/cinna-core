@@ -155,6 +155,15 @@ The free pinggy tier generates a **random subdomain** that expires after a few h
 
 Consider activating a **paid pinggy account** (or at least the 7-day free trial) to get a stable custom subdomain. This avoids having to reset and update the tunnel domain every time it expires, and saves time reconfiguring MCP clients.
 
+With a paid account, put the token in `.env` and every tunnel target (`make mcp-tunnel`, `make webhook-tunnel`, `make dev-tunnel`) switches from the free tier to `pro.pinggy.io` automatically:
+
+```bash
+PINGGY_TOKEN=your-token          # empty = free tier
+PINGGY_URL=https://your-stable-subdomain.a.pinggy.link
+```
+
+`PINGGY_URL` is the stable https URL that tunnel prints. Once it is set, `make mcp-set-url` and `make webhook-set-url` can be run without `URL=...` — an explicit `URL=` on the command line still wins. `PINGGY_PORT` (default `8000`) and `PINGGY_SERVER` (default `pro.pinggy.io`) are the remaining overrides.
+
 ### Step-by-Step
 
 #### 1. Start the Tunnel

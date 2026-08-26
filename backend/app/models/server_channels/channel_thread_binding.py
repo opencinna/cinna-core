@@ -98,6 +98,23 @@ class ChannelThreadBinding(SQLModel, table=True):
     )
     # Webhook redelivery dedup — channels re-send on a slow ack.
     last_external_message_id: str | None = Field(default=None, max_length=255)
+    # The thread's live *status notice*: the single progress message the
+    # pipeline posts, rewrites in place as the work advances (routing →
+    # installing → working), and deletes once the agent's real reply lands.
+    #
+    # NULL means "no notice is outstanding", which is the resting state of
+    # every thread between turns and the permanent state of every transport
+    # that cannot edit and delete its own messages (see
+    # ``ChannelCapabilities.supports_status_notice`` — those post each notice
+    # separately and have nothing to remember).
+    #
+    # It holds a transport-native message id, not a platform one, and it is
+    # written only by ``ChannelOutboundService``'s status helpers. Cleared
+    # rather than left stale on every terminal outcome: a notice id that
+    # outlives its message would make the next turn patch a message that is
+    # gone, and the *fallback* for a failed patch is to post a fresh notice —
+    # so a stale id costs an extra round trip, never a lost update.
+    status_message_id: str | None = Field(default=None, max_length=255)
     last_error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

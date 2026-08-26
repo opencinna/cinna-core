@@ -144,6 +144,41 @@ class ChannelInboundMessage:
 
 
 @dataclass(frozen=True)
+class ChannelReplaceResult:
+    """What :meth:`ChannelAdapter.replace_message` actually did.
+
+    ``replaced`` is the load-bearing half, and the reason this is a result
+    object rather than a bare id. ``replace_message`` degrades to an ordinary
+    post when the message it was told to reuse cannot be patched — deleted by
+    hand, an id from before a redeploy, a scope that has gone away — and the
+    caller has to be able to see the difference, because the two outcomes
+    imply *opposite* things about the status notice id it is holding:
+
+    * **replaced** — the notice now holds the answer. The id must be released,
+      or the next turn's "working on your message…" is patched straight over
+      the reply.
+    * **not replaced** — the notice is still standing, still saying "working
+      on your message…", with the answer posted underneath it. The id must be
+      **kept**: releasing it orphans that message, and it cannot be tidied
+      away by deleting it either, because Chat leaves a "Message deleted by
+      its author" tombstone — the exact thing reusing the slot exists to
+      avoid. Keeping it lets the next turn patch that same message back to
+      "working…" and self-heal, so a transport whose patches are permanently
+      broken leaves one stale notice on the thread rather than one per turn.
+
+    Without the flag the fallback is invisible: the caller sees a successful
+    delivery, releases the id, and files a debug summary saying the reply went
+    into the notice when it did not.
+
+    ``message_id`` is the id of the last message written, whichever path was
+    taken — the same value the old bare return carried.
+    """
+
+    message_id: str | None
+    replaced: bool
+
+
+@dataclass(frozen=True)
 class ChannelCapabilities:
     """What a transport can do, so the pipeline can degrade instead of fail.
 
@@ -156,6 +191,12 @@ class ChannelCapabilities:
 
     supports_progress_updates: bool = False
     supports_message_edit: bool = False
+    #: Whether a message this app posted can be removed again. NOT part of
+    #: :attr:`supports_status_notice` — the notice is reused as the reply's
+    #: slot rather than deleted, precisely because Chat leaves a "Message
+    #: deleted by its author" tombstone. This gates only the two edges that
+    #: end a turn with nothing to say; see ``ChannelOutboundService``.
+    supports_message_delete: bool = False
     supports_markdown: bool = False
     max_message_chars: int | None = None
     supports_sync_reply: bool = False
@@ -196,6 +237,34 @@ class ChannelCapabilities:
     #: belongs to the transport, and a hardcoded type check is a rule that has
     #: to be found and edited again for the next such transport.
     is_singleton: bool = False
+
+    @property
+    def supports_status_notice(self) -> bool:
+        """Whether this transport can run a single, mutating progress notice.
+
+        The pipeline narrates slow work — routing, installing, ready — and the
+        naive way to do that is one message per state, which leaves a thread
+        littered with three notices nobody wants to read again once the answer
+        arrives. A transport that can *edit* its own posts keeps one message
+        instead, rewrites it as the work advances, and finally rewrites it one
+        last time **with the agent's own reply** — so the narration does not
+        merely disappear, it becomes the answer.
+
+        Editing is the whole requirement, and deliberately so. An earlier
+        version derived this from edit **and** delete, because the notice used
+        to be deleted once the real reply had been posted underneath it. Google
+        Chat renders a deleted message as a "Message deleted by its author"
+        tombstone, so every single answer arrived under one. Reusing the notice
+        as the reply's slot removes the deletion from the common path
+        entirely; ``supports_message_delete`` still gates the two edges that
+        genuinely have nothing to say (see ``clear_status``), and it is checked
+        there rather than folded in here, where it would bar a transport that
+        can do everything that actually matters.
+
+        Transports that answer False fall back to posting each notice
+        separately — exactly what every transport did before this existed.
+        """
+        return self.supports_progress_updates and self.supports_message_edit
 
 
 class ChannelAdapter(ABC):
@@ -349,6 +418,56 @@ class ChannelAdapter(ABC):
         """
         return None
 
+    async def replace_message(
+        self,
+        channel: ServerChannel,
+        thread_key: str,
+        external_message_id: str,
+        text: str,
+    ) -> ChannelReplaceResult:
+        """Deliver ``text``, **reusing** ``external_message_id`` as its first
+        message rather than posting below it.
+
+        This is how the agent's reply lands in the status notice's slot: the
+        message that said "working on your message…" becomes the answer, in
+        place, with no second message and — the reason this exists rather than
+        a delete-then-send — no deletion tombstone above every reply.
+
+        Unlike :meth:`update_message` this is a *delivery*, so it carries
+        delivery's obligations: oversized text is chunked, with the first chunk
+        replacing the named message and the remainder posted after it.
+
+        Returns a :class:`ChannelReplaceResult`, **not** a bare id: an
+        implementation that falls back to posting when the patch fails has to
+        say so, or the caller releases a status notice id whose message is
+        still standing. Read that class before writing an override.
+
+        The default ignores the id and posts normally — the right answer for a
+        transport that cannot edit, which never had a notice to reuse, since
+        ``set_status`` hands one back only when ``supports_status_notice``
+        holds. It reports ``replaced=False`` for the same reason: nothing was
+        taken over, so there is nothing for the caller to let go of.
+        """
+        return ChannelReplaceResult(
+            message_id=await self.send_message(channel, thread_key, text),
+            replaced=False,
+        )
+
+    async def delete_message(
+        self,
+        channel: ServerChannel,
+        thread_key: str,
+        external_message_id: str,
+    ) -> None:
+        """Remove a message this app posted. No-op unless overridden.
+
+        Only called when ``capabilities.supports_message_delete`` is True.
+        Deleting something the app did not post is not in this contract — no
+        transport grants it, and the pipeline only ever passes back an id it
+        was handed by :meth:`send_message`.
+        """
+        return None
+
     @abstractmethod
     def get_setup_instructions(
         self, channel: ServerChannel, webhook_url: str | None
@@ -364,13 +483,24 @@ class ChannelAdapter(ABC):
         is copy-paste material for an admin.
         """
 
-    def build_sync_response(self, text: str | None) -> dict[str, Any]:
+    def build_sync_response(
+        self, text: str | None, thread_key: str | None = None
+    ) -> dict[str, Any]:
         """Payload for the webhook's own HTTP response.
 
         Channels that render the webhook response as a message in-thread
         (Google Chat does) can answer without any outbound credential — which
         is what makes denial replies possible before setup is complete.
         ``None`` means "acknowledge silently".
+
+        ``thread_key`` is the thread the triggering message arrived on, and it
+        is **not** optional information for a transport whose sync reply has to
+        be addressed. Google Chat posts an unthreaded response as a new
+        top-level message in the space, so a denial or a "working on it" that
+        omits it lands somewhere other than the conversation it answers — the
+        one place the sender is looking. It defaults to ``None`` for the one
+        caller that genuinely has no thread yet (the ``added_to_space``
+        welcome) and for transports that ignore it entirely.
 
         The base returns ``{}`` for everything, which is the right answer for a
         transport with no sync-reply surface and is what a polled transport
@@ -542,6 +672,7 @@ __all__ = [
     "PolledChannelTransport",
     "AuthenticatedChannelTransport",
     "ChannelCapabilities",
+    "ChannelReplaceResult",
     "ChannelInboundMessage",
     "ChannelEventKind",
     "ChannelInboundMode",
