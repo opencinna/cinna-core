@@ -3,6 +3,25 @@ default: help
 -include .env
 export
 
+# --- Pinggy tunnel ---------------------------------------------------------
+# Free tier by default (random subdomain, expires after a few hours). Set
+# PINGGY_TOKEN in .env to use a paid account instead: the token's tunnel keeps
+# a stable subdomain, so the *-set-url targets only ever need running once.
+# PINGGY_URL (also .env) is that stable https URL; with it set, `make
+# webhook-set-url` / `make mcp-set-url` can be run without URL=...
+PINGGY_PORT ?= 8000
+PINGGY_SERVER ?= pro.pinggy.io
+ifeq ($(strip $(PINGGY_TOKEN)),)
+TUNNEL_SSH = ssh -p 443 -R0:localhost:$(PINGGY_PORT) free.pinggy.io
+TUNNEL_MODE = free tier (random subdomain, expires after a few hours)
+else
+TUNNEL_SSH = ssh -p 443 -R0:localhost:$(PINGGY_PORT) -o StrictHostKeyChecking=no -o ServerAliveInterval=30 $(PINGGY_TOKEN)@$(PINGGY_SERVER)
+TUNNEL_MODE = paid account via $(PINGGY_SERVER) (stable subdomain)
+endif
+# Lets the set-url targets fall back to the stable URL of a paid tunnel.
+# An explicit URL=... on the command line still wins.
+URL ?= $(PINGGY_URL)
+
 .PHONY: help
 help: # Show help for each of the Makefile recipes.
 	@grep -E '^[a-zA-Z0-9 -]+:.*#'  Makefile | sort | while read -r l; do printf "\033[1;32m$$(echo $$l | cut -f 1 -d':')\033[00m:$$(echo $$l | cut -f 2- -d'#')\n"; done
@@ -118,7 +137,8 @@ start: # starts app
 
 .PHONY: dev-tunnel
 dev-tunnel: # starts dev web tunnel to send queries to local DB
-	ssh -p 443 -R0:localhost:8000 free.pinggy.io
+	@echo "Pinggy: $(TUNNEL_MODE)"
+	$(TUNNEL_SSH)
 
 .PHONY: mcp-tunnel
 mcp-tunnel: # starts tunnel for MCP connector testing, updates .env, recreates backend
@@ -126,12 +146,14 @@ mcp-tunnel: # starts tunnel for MCP connector testing, updates .env, recreates b
 	@echo "1) Copy the HTTPS URL from the tunnel output"
 	@echo "2) In another terminal, run:"
 	@echo "   make mcp-set-url URL=https://YOUR-TUNNEL.a.free.pinggy.link"
+	@echo "   (with PINGGY_URL set in .env, plain \`make mcp-set-url\` is enough)"
 	@echo ""
-	ssh -p 443 -R0:localhost:8000 free.pinggy.io
+	@echo "Pinggy: $(TUNNEL_MODE)"
+	$(TUNNEL_SSH)
 
 .PHONY: mcp-set-url
 mcp-set-url: # sets MCP_SERVER_BASE_URL in .env and recreates backend (usage: make mcp-set-url URL=https://xxx.pinggy.link)
-	@if [ -z "$(URL)" ]; then echo "Usage: make mcp-set-url URL=https://xxx.a.free.pinggy.link"; exit 1; fi
+	@if [ -z "$(URL)" ]; then echo "Usage: make mcp-set-url URL=https://xxx.a.free.pinggy.link (or set PINGGY_URL in .env)"; exit 1; fi
 	@sed -i '' 's|^MCP_SERVER_BASE_URL=.*|MCP_SERVER_BASE_URL=$(URL)/mcp|' .env
 	@echo "Updated .env: MCP_SERVER_BASE_URL=$(URL)/mcp"
 	@# Inline for the same reason as webhook-set-url: make's stale export of the
@@ -149,12 +171,14 @@ webhook-tunnel: # starts a public HTTPS tunnel to the local backend for inbound 
 	@echo "   make webhook-set-url URL=https://YOUR-TUNNEL.a.free.pinggy.link"
 	@echo "3) Reopen the channel in Admin > Server Configuration > Channels and copy the webhook URL"
 	@echo "   (keep this tunnel running for the whole test session)"
+	@echo "   (with PINGGY_URL set in .env, plain \`make webhook-set-url\` is enough)"
 	@echo ""
-	ssh -p 443 -R0:localhost:8000 free.pinggy.io
+	@echo "Pinggy: $(TUNNEL_MODE)"
+	$(TUNNEL_SSH)
 
 .PHONY: webhook-set-url
 webhook-set-url: # sets BACKEND_BASE_URL in .env and recreates backend (usage: make webhook-set-url URL=https://xxx.pinggy.link)
-	@if [ -z "$(URL)" ]; then echo "Usage: make webhook-set-url URL=https://xxx.a.free.pinggy.link"; exit 1; fi
+	@if [ -z "$(URL)" ]; then echo "Usage: make webhook-set-url URL=https://xxx.a.free.pinggy.link (or set PINGGY_URL in .env)"; exit 1; fi
 	@if grep -q '^BACKEND_BASE_URL=' .env; then \
 		sed -i '' 's|^BACKEND_BASE_URL=.*|BACKEND_BASE_URL=$(URL)|' .env; \
 	else \
