@@ -6,7 +6,7 @@ event dict so the SSE loop can demultiplex the serve-wide ``GET /global/event``
 stream and drop events that belong to a different (e.g. orphaned) session.
 
 End-to-end / API-observable behavior for this fix is covered in
-``tests/api/agents/agents_session_delete_interrupt_test.py``.
+``tests/api/agents/sessions/agents_session_delete_interrupt_test.py``.
 
 Run:
     cd backend && python -m pytest tests/unit/test_opencode_session_filter.py -v

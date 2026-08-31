@@ -124,6 +124,13 @@ class EventType:
     # frontend can refetch ``["currentUser"]`` and re-route on demote.
     USER_ROLE_CHANGED = "user_role_changed"
 
+    # Improvement requests — a session owner shared a session with the agent's
+    # owner (bundle publisher, or themselves). Emitted to the RECIPIENT's user
+    # room so the Configuration-tab card badge updates live. Meta carries
+    # `request_id`, `target_agent_id`, `source_agent_id`, `bundle_uuid`, `status`.
+    IMPROVEMENT_REQUEST_CREATED = "improvement_request_created"
+    IMPROVEMENT_REQUEST_UPDATED = "improvement_request_updated"
+
     # Generic notification
     NOTIFICATION = "notification"
 

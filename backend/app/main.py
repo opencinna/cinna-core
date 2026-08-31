@@ -60,7 +60,10 @@ def cinna_desktop_discovery() -> dict:
     Metadata): ``authorization_endpoint``, ``token_endpoint``,
     ``userinfo_endpoint``.
     """
-    base = f"{settings.FRONTEND_HOST}{settings.API_V1_STR}/desktop-auth"
+    # Backend origin: these are API endpoints a native client calls
+    # directly (token, userinfo) or sends a browser to (authorize).
+    # On a split-host deployment the SPA origin has no /api/v1.
+    base = f"{settings.backend_base_url}{settings.API_V1_STR}/desktop-auth"
     return {
         "instance_name": settings.PROJECT_NAME,
         "authorization_endpoint": f"{base}/authorize",
@@ -83,7 +86,10 @@ def cinna_app_discovery() -> dict:
     Server Metadata): ``authorization_endpoint``, ``token_endpoint``,
     ``userinfo_endpoint``.
     """
-    base = f"{settings.FRONTEND_HOST}{settings.API_V1_STR}/app-auth"
+    # Backend origin: these are API endpoints a native client calls
+    # directly (token, userinfo) or sends a browser to (authorize).
+    # On a split-host deployment the SPA origin has no /api/v1.
+    base = f"{settings.backend_base_url}{settings.API_V1_STR}/app-auth"
     return {
         "instance_name": settings.PROJECT_NAME,
         "authorization_endpoint": f"{base}/authorize",
@@ -104,6 +110,10 @@ from app.services.environments.environment_suspension_scheduler import (
     start_scheduler as start_suspension_scheduler,
     shutdown_scheduler as shutdown_suspension_scheduler
 )
+from app.services.environments.bundle_auto_update_scheduler import (
+    start_scheduler as start_bundle_auto_update_scheduler,
+    shutdown_scheduler as shutdown_bundle_auto_update_scheduler,
+)
 from app.services.tasks.task_trigger_scheduler import (
     start_scheduler as start_task_trigger_scheduler,
     shutdown_scheduler as shutdown_task_trigger_scheduler
@@ -112,13 +122,17 @@ from app.services.agents.agent_schedule_scheduler import (
     start_scheduler as start_agent_schedule_scheduler,
     shutdown_scheduler as shutdown_agent_schedule_scheduler
 )
-from app.services.email.polling_scheduler import (
-    start_scheduler as start_email_polling_scheduler,
-    shutdown_scheduler as shutdown_email_polling_scheduler
-)
 from app.services.email.sending_scheduler import (
     start_scheduler as start_email_sending_scheduler,
     shutdown_scheduler as shutdown_email_sending_scheduler
+)
+from app.services.server_channels.channel_pending_scheduler import (
+    start_scheduler as start_channel_pending_scheduler,
+    shutdown_scheduler as shutdown_channel_pending_scheduler
+)
+from app.services.server_channels.channel_poll_scheduler import (
+    start_scheduler as start_channel_poll_scheduler,
+    shutdown_scheduler as shutdown_channel_poll_scheduler
 )
 from app.services.environments.environment_status_scheduler import (
     start_scheduler as start_env_status_scheduler,
@@ -152,6 +166,10 @@ from app.services.credentials.model_discovery_scheduler import (
     start_scheduler as start_model_discovery_scheduler,
     shutdown_scheduler as shutdown_model_discovery_scheduler,
 )
+from app.services.routing.routing_trace_scheduler import (
+    start_scheduler as start_routing_trace_scheduler,
+    shutdown_scheduler as shutdown_routing_trace_scheduler,
+)
 
 
 @asynccontextmanager
@@ -166,10 +184,12 @@ async def lifespan(app: FastAPI):
     if not settings.TESTING:
         start_file_cleanup_scheduler()
         start_suspension_scheduler()
+        start_bundle_auto_update_scheduler()
         start_task_trigger_scheduler()
         start_agent_schedule_scheduler()
-        start_email_polling_scheduler()
         start_email_sending_scheduler()
+        start_channel_pending_scheduler()
+        start_channel_poll_scheduler()
         start_env_status_scheduler()
         start_cli_cleanup_scheduler()
         start_device_login_cleanup_scheduler()
@@ -178,6 +198,7 @@ async def lifespan(app: FastAPI):
         start_app_data_gc_scheduler()
         start_mfa_cleanup_scheduler()
         start_model_discovery_scheduler()
+        start_routing_trace_scheduler()
 
     # Register backend event handlers
     from app.models.events.event import EventType
@@ -308,11 +329,7 @@ async def lifespan(app: FastAPI):
         handler=InputTaskService.handle_todo_list_updated
     )
 
-    # Email task activity handlers
-    event_service.register_handler(
-        event_type=EventType.TASK_CREATED,
-        handler=ActivityService.handle_task_created
-    )
+    # Task lifecycle activity handler
     event_service.register_handler(
         event_type=EventType.TASK_STATUS_UPDATED,
         handler=ActivityService.handle_task_status_changed
@@ -328,15 +345,23 @@ async def lifespan(app: FastAPI):
         handler=InputTaskService.handle_session_state_updated
     )
 
-    # Email sending handler: queue outgoing email when agent responds in email session
-    from app.services.email.sending_service import EmailSendingService
+    # Server channels: deliver the agent's reply back out through the channel
+    # the message arrived on. Both handlers gate on
+    # `session.integration_type.startswith("channel_")` before doing any work.
+    from app.services.server_channels.channel_outbound_service import (
+        ChannelOutboundService,
+    )
 
     event_service.register_handler(
         event_type=EventType.STREAM_COMPLETED,
-        handler=EmailSendingService.handle_stream_completed
+        handler=ChannelOutboundService.handle_stream_completed
+    )
+    event_service.register_handler(
+        event_type=EventType.STREAM_ERROR,
+        handler=ChannelOutboundService.handle_stream_error
     )
 
-    logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, EmailSendingService)")
+    logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, ChannelOutboundService)")
 
     # Availability check for the platform email sender.
     if not settings.emails_enabled:
@@ -357,10 +382,12 @@ async def lifespan(app: FastAPI):
     if not settings.TESTING:
         shutdown_file_cleanup_scheduler()
         shutdown_suspension_scheduler()
+        shutdown_bundle_auto_update_scheduler()
         shutdown_task_trigger_scheduler()
         shutdown_agent_schedule_scheduler()
-        shutdown_email_polling_scheduler()
         shutdown_email_sending_scheduler()
+        shutdown_channel_pending_scheduler()
+        shutdown_channel_poll_scheduler()
         shutdown_env_status_scheduler()
         shutdown_cli_cleanup_scheduler()
         shutdown_device_login_cleanup_scheduler()
@@ -369,6 +396,7 @@ async def lifespan(app: FastAPI):
         shutdown_app_data_gc_scheduler()
         shutdown_mfa_cleanup_scheduler()
         shutdown_model_discovery_scheduler()
+        shutdown_routing_trace_scheduler()
     event_service.shutdown()
     logger.info("Application shutdown complete")
 

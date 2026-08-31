@@ -66,7 +66,7 @@ class AgentStatusCommandHandler(CommandHandler):
                 )
                 if refresh_command_warning:
                     content = f"⚠️ _{refresh_command_warning}_\n\n{content}"
-                return CommandResult(content=content)
+                return CommandResult(content=content, display="document")
 
             # Build markdown response
             severity = snapshot.severity or "unknown"
@@ -110,4 +110,4 @@ class AgentStatusCommandHandler(CommandHandler):
             if body:
                 lines.append(body)
 
-            return CommandResult(content="\n".join(lines))
+            return CommandResult(content="\n".join(lines), display="document")

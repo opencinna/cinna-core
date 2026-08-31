@@ -140,3 +140,26 @@ This is the inbound counterpart to the outbound mechanism described above. Outbo
 agent → user attachments travel over A2A as `FilePart` / `FileWithUri` carrying
 `cinna.file_*` metadata. Inbound client → agent files travel via `cinna_file_ids`
 on `message.metadata` — A2A native `FilePart` in the inbound direction is not used.
+
+---
+
+## Inbound file attachments over a Server Channel
+
+Files a person attaches to a message on a **Server Channel** (a Google Chat
+attachment, an email's MIME attachment part) reach you by the **identical
+mechanism** as any other inbound upload: they are materialized into your
+workspace and their paths are prepended to the message body as an
+`Uploaded files:` block, one path per line — relative to `/app/workspace`,
+your working directory — before the sender's text:
+
+```
+Uploaded files:
+- ./app-data/uploads/report.pdf
+---
+
+Please summarize this.
+```
+
+There is nothing channel-specific to handle. Whether the message arrived
+through the web UI, A2A, Google Chat, or email, you see the same block and the
+same kind of workspace-relative path — just read the file at the path given.

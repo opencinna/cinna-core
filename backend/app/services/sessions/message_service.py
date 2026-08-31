@@ -469,16 +469,22 @@ def _build_session_context(
             context["task_priority"] = task.priority or "normal"
             context["task_status"] = task.status or "in_progress"
 
-            # Creator info
-            if task.agent_initiated and task.source_agent_id:
-                source_agent = db.get(Agent, task.source_agent_id)
-                context["task_created_by_name"] = source_agent.name if source_agent else "Unknown Agent"
-                context["task_created_by_type"] = "agent"
-            else:
-                from app.models.users.user import User as UserModel
-                creator = db.get(UserModel, task.owner_id)
-                context["task_created_by_name"] = (creator.full_name or creator.email) if creator else "Unknown User"
-                context["task_created_by_type"] = "user"
+            # Creator info.
+            #
+            # This used to branch on ``task.agent_initiated and
+            # task.source_agent_id`` to name a creating *agent*. That branch was
+            # unreachable: ``source_agent_id`` existed solely for the deleted
+            # email→task flow (it was set only when an inbound email created a
+            # task, to find that agent's SMTP config) and no agent-initiated
+            # creation path ever populated it — they set ``source_session_id``
+            # instead. Handover-created tasks therefore always reported the
+            # owning user, which is what this does. The column is gone; if
+            # agent attribution is ever wanted here, derive it from
+            # ``task.source_session_id``'s agent rather than reintroducing it.
+            from app.models.users.user import User as UserModel
+            creator = db.get(UserModel, task.owner_id)
+            context["task_created_by_name"] = (creator.full_name or creator.email) if creator else "Unknown User"
+            context["task_created_by_type"] = "user"
 
             # Parent task context (subtasks)
             parent_task = None
@@ -633,6 +639,9 @@ class MessageService:
         user_id: UUID,
         answers_to_message_id: UUID | None = None,
         message_metadata: dict | None = None,
+        *,
+        uploader_user_id: UUID | None = None,
+        redelivered_file_ids: set[UUID] | None = None,
     ) -> tuple[SessionMessage, str]:
         """
         Prepare user message with file attachments.
@@ -643,6 +652,40 @@ class MessageService:
         3. Creates user message with file associations
         4. Updates message_files with agent_env_paths
         5. Marks files as attached
+
+        Args:
+            uploader_user_id: Who actually uploaded the files in ``file_ids``,
+                when that is not the session owner. **Never request data and
+                never a value a caller computes from a payload.** There is
+                exactly one non-``None`` caller — the server-channel inbound
+                pipeline — and it passes an already-*enforced*
+                ``binding.user_id``; the authorisation that this uploader may
+                write into this session was established upstream by
+                ``assert_access``, which re-reads the whole grant on every
+                message. This parameter answers *who uploaded these bytes*,
+                not *may they*. ``None`` collapses to the session-owner
+                behaviour every other caller has always had.
+            redelivered_file_ids: The ids that are a **redelivery of a message
+                that already owns them**, and may therefore be re-attached
+                although their status is no longer ``"temporary"``.
+
+                Also never request data. The one non-``None`` caller is the
+                server-channel inbound pipeline, and the set it passes is
+                ``ChannelAttachmentService``'s own ``reused_file_ids`` — rows
+                that its ``(binding, external_message_id, attachment position)``
+                idempotency lookup matched, i.e. files a previous delivery of
+                *this same external message* materialised and attached before
+                something downstream failed. Re-delivering that message is not
+                a second message; re-attaching its own files is not double
+                attachment.
+
+                **Scoped to the ids, never to the call.** This is not a
+                leniency mode and must never become one: every id outside the
+                set is checked exactly as before, so the guard that stops a
+                file drifting into an *unrelated* message is untouched. The
+                alternative — minting a fresh row over the same stored bytes —
+                was considered and rejected: it charges the sender's storage
+                quota twice for one attachment.
 
         Raises:
             MessageServiceError: If validation fails or upload errors
@@ -658,14 +701,22 @@ class MessageService:
         if len(files) != len(file_ids):
             raise MessageServiceError("Some files not found", status_code=400)
 
-        # Check ownership and status
+        # Check ownership and status. The uploader is the session owner unless
+        # a caller says otherwise — see ``uploader_user_id`` above. On an
+        # identity-routed channel thread the two genuinely differ: the session
+        # belongs to the identity owner while the files belong to the external
+        # sender who attached them.
+        expected_owner_id = uploader_user_id or user_id
+        # Named ids only — never a flag, never the whole call. See the
+        # ``redelivered_file_ids`` entry in this method's docstring.
+        redelivered: frozenset[UUID] | set[UUID] = redelivered_file_ids or frozenset()
         for file in files:
-            if file.user_id != user_id:
+            if file.user_id != expected_owner_id:
                 raise MessageServiceError(
                     f"Not authorized for file: {file.filename}",
                     status_code=403,
                 )
-            if file.status != "temporary":
+            if file.status != "temporary" and file.id not in redelivered:
                 raise MessageServiceError(
                     f"File already attached: {file.filename}",
                     status_code=400,
@@ -1343,62 +1394,98 @@ class MessageService:
         """
         logger.info(f"process_pending_messages called for session {session_id}")
 
-        from app.services.sessions.stream_processor import SessionStreamProcessor
+        from app.services.sessions.stream_processor import (
+            SessionStreamProcessor,
+            get_session_lock,
+        )
         from app.services.sessions.stream_event_handlers import WebSocketEventHandler
 
-        # Quick check: reset session state if no pending messages exist
-        with get_fresh_db_session() as db:
-            chat_session = db.get(ChatSession, session_id)
-            if not chat_session:
-                logger.error(f"Session {session_id} not found")
-                return
-            pending_check, _ = MessageService.collect_pending_messages(db, session_id)
-            if not pending_check:
-                logger.info(f"No pending messages found for session {session_id}")
-                chat_session.pending_messages_count = 0
-                chat_session.interaction_status = ""
-                db.add(chat_session)
-                db.commit()
-                return
+        # ── Same-session serialization (concurrency fix) ──────────────────────
+        # Acquire the shared per-session lock in WAIT mode (plain ``async with``,
+        # NOT MCP's reject-if-busy ``SessionLockBusyError`` semantics) and hold it
+        # around the ENTIRE body — quick-check, ``processor.process()``, AND the
+        # ``finally`` teardown clear. This is the one send path that historically
+        # opted out of the lock (``use_session_lock=False`` below), which let two
+        # near-simultaneous sends to the same session spawn fully independent,
+        # uncoordinated processing tasks whose separate finalizers reset
+        # ``interaction_status`` to "" while the other stream was still working
+        # for minutes — a false "done" in the UI.
+        #
+        # The teardown clear MUST be inside the lock, not just ``process()``:
+        # if the lock only wrapped ``process()`` (as ``use_session_lock=True``
+        # does inside the processor), task A's teardown would run AFTER the lock
+        # released and could race task B's freshly-set "running" state and nuke
+        # it. Wrapping the whole body means that in the normal (and single-
+        # cancellation) path task A is completely done — teardown included —
+        # before task B (queued on this lock) does anything. The processor stays
+        # ``use_session_lock=False`` so we do not double-lock. Do NOT "simplify"
+        # this lock away.
+        #
+        # Residual (accepted; see plan §3 / §2.1): the teardown clear below is
+        # wrapped in ``asyncio.shield``. If a cancellation lands *at* that await,
+        # the shielded clear runs detached and this ``async with`` releases the
+        # lock while it is still running, so it could momentarily clear a queued
+        # task B's "running". This is pre-existing, no worse than the old fully-
+        # unlocked behavior, and self-healing (the 3s session poll re-derives
+        # state from the DB). The no-migration fix is the deferred stream-epoch
+        # guard in ``session_metadata``, not tightening this lock.
+        lock = get_session_lock(str(session_id))
+        async with lock:
+            # Quick check: reset session state if no pending messages exist
+            with get_fresh_db_session() as db:
+                chat_session = db.get(ChatSession, session_id)
+                if not chat_session:
+                    logger.error(f"Session {session_id} not found")
+                    return
+                pending_check, _ = MessageService.collect_pending_messages(db, session_id)
+                if not pending_check:
+                    logger.info(f"No pending messages found for session {session_id}")
+                    chat_session.pending_messages_count = 0
+                    chat_session.interaction_status = ""
+                    db.add(chat_session)
+                    db.commit()
+                    return
 
-        handler = WebSocketEventHandler(session_id, get_fresh_db_session)
+            handler = WebSocketEventHandler(session_id, get_fresh_db_session)
 
-        processor = SessionStreamProcessor(
-            session_id=session_id,
-            get_fresh_db_session=get_fresh_db_session,
-            event_handler=handler,
-            use_session_lock=False,
-            ensure_env_ready=False,  # UI path handles env readiness in initiate_stream
-            inject_recovery_context=True,
-            inject_webapp_context=True,
-            log_prefix="[UI]",
-        )
+            processor = SessionStreamProcessor(
+                session_id=session_id,
+                get_fresh_db_session=get_fresh_db_session,
+                event_handler=handler,
+                use_session_lock=False,  # lock is held here in process_pending_messages
+                ensure_env_ready=False,  # UI path handles env readiness in initiate_stream
+                inject_recovery_context=True,
+                inject_webapp_context=True,
+                log_prefix="[UI]",
+            )
 
-        try:
-            await processor.process()
-        except Exception as e:
-            logger.error(f"Error in process_pending_messages for session {session_id}: {e}", exc_info=True)
-            await handler.on_error(e)
-            raise
-        finally:
-            # Safety net: guarantee the session never stays stuck "streaming".
-            # The happy path clears interaction_status via on_complete / the
-            # terminal STREAM_* events, but a cancellation (client disconnect,
-            # interrupt) or an error that bypasses a terminal event would leave
-            # it set. Shielded so a cancel propagating through this finally
-            # can't abort the clear. Idempotent — a no-op once already cleared.
-            from app.services.sessions.session_service import SessionService
             try:
-                await asyncio.shield(
-                    SessionService.clear_interaction_status(
-                        session_id, reason="process_pending_messages teardown"
+                await processor.process()
+            except Exception as e:
+                logger.error(f"Error in process_pending_messages for session {session_id}: {e}", exc_info=True)
+                await handler.on_error(e)
+                raise
+            finally:
+                # Safety net: guarantee the session never stays stuck "streaming".
+                # The happy path clears interaction_status via on_complete / the
+                # terminal STREAM_* events, but a cancellation (client disconnect,
+                # interrupt) or an error that bypasses a terminal event would leave
+                # it set. Shielded so a cancel propagating through this finally
+                # can't abort the clear. Idempotent — a no-op once already cleared.
+                # Runs INSIDE the session lock (see comment above) so a queued
+                # second send cannot have started streaming yet.
+                from app.services.sessions.session_service import SessionService
+                try:
+                    await asyncio.shield(
+                        SessionService.clear_interaction_status(
+                            session_id, reason="process_pending_messages teardown"
+                        )
                     )
-                )
-            except Exception as clear_err:  # noqa: BLE001 — best-effort net
-                logger.warning(
-                    f"Defensive interaction_status clear failed for session "
-                    f"{session_id}: {clear_err}"
-                )
+                except Exception as clear_err:  # noqa: BLE001 — best-effort net
+                    logger.warning(
+                        f"Defensive interaction_status clear failed for session "
+                        f"{session_id}: {clear_err}"
+                    )
 
     @staticmethod
     def detect_ask_user_question_tool(streaming_events: list[dict]) -> bool:

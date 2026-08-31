@@ -157,7 +157,7 @@ class AgentWebhookService:
         The ``/agent-hooks/`` path is mounted at the root of the backend app
         (not under ``/api/v1``), matching the task-trigger ``/hooks/`` pattern.
         """
-        base = (settings.FRONTEND_HOST or "https://localhost").rstrip("/")
+        base = settings.webhook_base_url
         return f"{base}/agent-hooks/{webhook_id}"
 
     # ==================== Header / payload helpers ====================
@@ -848,6 +848,18 @@ class AgentWebhookService:
             )
             status = "error"
             error_message = str(exc)
+            # A pull blocked by local drift carries the drifted field list on the
+            # exception; ``str(exc)`` alone is now a constant sentence, so the
+            # webhook log would say only *that* it was blocked and never *by
+            # what*. This log row is the ONLY diagnostic a GitOps caller gets —
+            # there is no dialog on this path — so name the fields.
+            blocking = getattr(exc, "blocking", None)
+            if blocking:
+                fields = ", ".join(
+                    str(change.get("label") or change.get("field"))
+                    for change in blocking
+                )
+                error_message = f"{error_message} Blocking changes: {fields}."
 
         return cls._create_log(
             db_session,

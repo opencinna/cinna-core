@@ -87,10 +87,6 @@ export function EditRouterTriggerPromptModal({
       showSuccessToast("Trigger prompt updated successfully")
       queryClient.invalidateQueries({ queryKey: ["agents"] })
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
-      // Keep this key aligned with ``McpConnectorsCardSimple`` so the
-      // trigger-prompt mirror on the Integrations tab refreshes after
-      // a save. Both components must use ``["app-mcp-routes", agentId]``.
-      queryClient.invalidateQueries({ queryKey: ["app-mcp-routes", agentId] })
       onClose()
     },
     onError: handleError.bind(showErrorToast),

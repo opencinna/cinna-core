@@ -26,7 +26,10 @@ def run_email_sending():
             if sent_count > 0:
                 logger.info(f"Email sending complete: {sent_count} emails sent")
             else:
-                logger.debug("Email sending complete: no pending emails")
+                # Not necessarily an idle tick: a batch in which every
+                # entry failed terminally also lands here with 0 sent. The
+                # per-batch counts are logged by ``send_pending_emails``.
+                logger.debug("Email sending complete: no emails sent")
     except Exception as e:
         logger.error(f"Email sending job failed: {e}", exc_info=True)
 

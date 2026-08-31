@@ -25,7 +25,7 @@ cinna-core/
 │   │   │   ├── plugins/         # llm_plugin.py
 │   │   │   ├── events/          # event.py, security_event.py
 │   │   │   ├── a2a/             # agent_access_token.py
-│   │   │   └── email/           # agent_email_integration.py, mail_server_config.py, etc.
+│   │   │   └── email/           # mail_server_config.py, email_message.py, outgoing_email_queue.py
 │   │   ├── services/            # Business logic layer (organized by domain subfolder)
 │   │   │   ├── agents/          # agent_service.py, agent_handover_service.py, command_service.py, commands/
 │   │   │   ├── environments/    # environment_service.py, environment_lifecycle.py, adapters/

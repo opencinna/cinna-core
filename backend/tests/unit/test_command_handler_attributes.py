@@ -4,7 +4,7 @@ command handlers.
 
 Pure attribute introspection — imports the handler classes and asserts their
 opt-in/opt-out flags, no I/O. The handler-registration and bridge behavior is
-covered in ``tests/api/agents/agents_non_llm_bridge_test.py``.
+covered in ``tests/api/agents/commands/agents_non_llm_bridge_test.py``.
 """
 
 

@@ -190,14 +190,17 @@ The single source of truth is `CredentialsService.classify_credential_category(*
 
 | Credential | Rule | Tab |
 |-----------|------|-----|
-| Owned, type `agent_api` | Always automatic | **Automatic Credentials** |
+| Owned, type `agent_api`, `AgentApiToken.kind != "external"` (a **connection**, or legacy/no bound token) | Auto-created by "Connect Agent API" → automatic | **Automatic Credentials** |
+| Owned, type `agent_api`, `AgentApiToken.kind == "external"` | Hand-issued **external key** → mine | **My Credentials** |
 | Owned, type `mcp_provider`, `mcp_auth_mode == "agent2agent"` | Auto-managed pair → automatic | **Automatic Credentials** |
 | Owned, type `mcp_provider`, external (`none` / `fixed_token` / `oauth_dcr` / NULL) | Manually managed → mine | **My Credentials** |
 | Owned, any other type | | **My Credentials** |
 | Shared (received), `share.source == "bundle_install"` | Bundle-installed → bundle | **Bundle Credentials** |
 | Shared (received), `share.source ∈ {"direct", NULL}` | NULL is read as "direct" | **My Credentials** |
 
-`agent_api` and **agent2agent** `mcp_provider` connection credentials are always owned (a shared `agent_api` credential still belongs to the recipient as an owned credential after connect); they appear under Automatic Credentials regardless of whether they are shared further. An **external** `mcp_provider` server is a manually-managed credential and appears under My Credentials. The `mcp_auth_mode` discriminator is a cheap non-secret column on `Credential` (mirrored out of the encrypted blob), so the classifier never decrypts to decide the tab.
+`agent_api` **connection** credentials and **agent2agent** `mcp_provider` credentials are always owned (a shared `agent_api` connection still belongs to the recipient as an owned credential after connect); they appear under Automatic Credentials regardless of whether they are shared further. An **external** `mcp_provider` server, and an `agent_api` **external key**, are manually/hand-issued credentials and appear under My Credentials instead — the same automatic-vs-manual split applied to two different credential types. The `mcp_auth_mode` discriminator is a cheap non-secret column on `Credential` (mirrored out of the encrypted blob); the `agent_api` split instead requires one batched lookup of the bound `AgentApiToken.kind` (`AgentApiTokenService.get_kinds_by_credential`) since `kind` lives on a separate table, not on `Credential` itself. Either way the classifier never decrypts `credential_data` to decide the tab.
+
+An `agent_api` **external key** additionally has `allow_sharing` forced `False` at creation (and rejected on any later attempt via `assert_sharing_allowed`) — sharing an identity-bound key would mean "here, act as user X"; cross-user access to a producer belongs to the `agent_api_access_grant` scope grant, not credential sharing — and is **never synced** into a consumer agent environment's `credentials.json` (`CredentialsService._drop_external_agent_api_keys` strips it before the env-sync whitelist filter, mirroring the `mcp_provider` external-server exclusion). See [Agent REST API — External Keys](../agent_api/agent_api.md#external-keys-calling-from-outside-the-platform) for the full model.
 
 ### URL hash navigation
 

@@ -146,7 +146,7 @@ async def _execute_files_listing(
     if total_files == 0:
         return CommandResult(content="No files found in workspace.")
 
-    return CommandResult(content="\n".join(lines))
+    return CommandResult(content="\n".join(lines), display="document")
 
 
 class FilesCommandHandler(CommandHandler):

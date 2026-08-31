@@ -56,6 +56,12 @@ All schemas live in `backend/app/models/environments/environment.py` alongside t
 | `last_build_at` | `datetime \| None` | From `AgentEnvironment.last_build_at` |
 | `sync_active` | `bool` | From `AgentEnvironment.sync_active` |
 | `model_health_warning` | `bool` | `True` when any mode's configured model is deprecated/unavailable. Computed by `evaluate_environment` per row. Distinct from `is_stale`: config health, not image-tag staleness. |
+| `bundle_id` | `str \| None` | Reverse-DNS bundle identifier (`Agent.bundle_id`), populated only when `Agent.bundle_uuid IS NOT NULL`. `None` for standalone agents that were never published or installed from a bundle — even though every `Agent` row carries an internal `bundle_id` string, it names nothing actionable there |
+| `is_publisher_install` | `bool` | From `Agent.is_publisher_install` |
+| `update_mode` | `str \| None` | From `Agent.update_mode` (`"manual"` \| `"automatic"`); `None` for non-bundle agents |
+| `installed_revision_number` / `installed_revision_version` | `int \| None` / `str \| None` | Resolved from `Agent.installed_revision_id` via the batched revision lookup (see service logic below) |
+| `latest_revision_number` / `latest_revision_version` | `int \| None` / `str \| None` | Resolved from `AgentBundle.latest_revision_id` via the same batched lookup |
+| `update_available` | `bool` | `bundle is not None and latest_revision_id is not None and agent.installed_revision_id != latest_revision_id and not agent.is_publisher_install`. Always `False` for publisher installs and non-bundle agents. A third staleness axis, distinct from `is_stale` (image tag → rebuild) and `model_health_warning` (model config → reconfigure); this one's remediation is apply-update. See [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) |
 
 **`AdminAgentEnvironmentsPublic`** (list response):
 
@@ -115,6 +121,7 @@ List all environments with admin enrichment.
 | `status` | `str \| None` | Exact match on `status` |
 | `is_stale` | `bool \| None` | Filter by computed staleness (post-enrichment) |
 | `in_use` | `bool \| None` | Filter by computed in-use flag (post-enrichment) |
+| `update_available` | `bool \| None` | Filter by computed bundle `update_available` flag (post-enrichment) |
 | `owner_id` | `uuid.UUID \| None` | Filter by agent owner user ID |
 | `search` | `str \| None` | ILIKE match against agent name, instance name, owner email/username |
 | `skip` | `int` | Pagination offset (default 0) |
@@ -122,7 +129,7 @@ List all environments with admin enrichment.
 
 **Response:** `AdminAgentEnvironmentsPublic`
 
-Note: `is_stale` and `in_use` filters are applied after enrichment because they are computed fields. `template`, `status`, `owner_id`, and `search` are pushed down to the SQL query.
+Note: `is_stale`, `in_use`, and `update_available` filters are applied after enrichment because they are computed fields. `template`, `status`, `owner_id`, and `search` are pushed down to the SQL query.
 
 ### `POST /bulk-rebuild`
 
@@ -150,15 +157,16 @@ Thin wrapper around the existing rebuild path. Uses `EnvironmentService.get_envi
 
 ### `list_environments`
 
-1. Executes a single SQL query joining `AgentEnvironment → Agent → User` (agent owner).
+1. Executes a single SQL query joining `AgentEnvironment → Agent → User` (agent owner), **additionally LEFT JOINed to `AgentBundle` on `Agent.bundle_uuid`** so bundle enrichment needs no extra query.
 2. Applies `template`, `status`, `owner_id`, and `search` filters at the SQL level.
 3. Batch-loads recent session counts for all result environments in a second aggregated query (avoids N+1). Threshold: `last_message_at >= now() - 10min`.
-4. Iterates result rows. Per unique `env_name`, computes `(expected_image_tag, expected_hash)` once via `TemplateImageService` and caches them in a local dict.
-5. For each row: derives `is_stale` (tag comparison or NULL check), derives `in_use` via `_derive_in_use`, builds `AdminAgentEnvironmentPublic`.
-6. Applies `is_stale` and `in_use` post-query filters.
-7. Computes aggregate counts (`stale_count`, `in_use_count`) from the full filtered set before paginating.
-8. Paginates with `skip`/`limit`.
-9. Calls `list_templates` and attaches the result as `templates`.
+4. Iterates result rows. Per unique `env_name`, computes `(expected_image_tag, expected_hash)` once via `TemplateImageService` and caches them in a local dict (`_tag_cache`).
+5. Collects every `AgentBundleRevision` id referenced across the page — both `agent.installed_revision_id` and `bundle.latest_revision_id` — into one `set`, then resolves them all in a **single batched `IN` query** cached in `revisions_by_id: dict[uuid.UUID, AgentBundleRevision]`. Deliberately not `session.get()` per row: this list is fleet-wide and per-row lookups are exactly the N+1 that already bit the model-health rollup.
+6. For each row: derives `is_stale` (tag comparison or NULL check), derives `in_use` via `_derive_in_use`, computes `model_health_warning` via `evaluate_environment`, computes `update_available` from the batched revision dict (`bundle is not None and latest_revision_id is not None and installed_revision_id != latest_revision_id and not agent.is_publisher_install`), builds `AdminAgentEnvironmentPublic` with the bundle fields (`bundle_id`, `is_publisher_install`, `update_mode`, `installed_revision_number`/`version`, `latest_revision_number`/`version`, `update_available`).
+7. Applies `is_stale`, `in_use`, and `update_available` post-query filters.
+8. Computes aggregate counts (`stale_count`, `in_use_count`) from the full filtered set before paginating.
+9. Paginates with `skip`/`limit`.
+10. Calls `list_templates` and attaches the result as `templates`.
 
 ### `list_templates`
 
@@ -273,11 +281,12 @@ On mount, the route subscribes to `EventTypes.ENVIRONMENT_STATUS_CHANGED` via `e
 
 **`AdminEnvTable`**: TanStack Table (`useReactTable`) with:
 - Checkbox column; rows in transitional statuses have `enableRowSelection = false` and render at 60% opacity.
-- Columns: Agent (name + owner email), Instance, Template (badge), Status (`StatusBadge`), In use (`InUseBadge`), Stale (`StaleBadge`), Model Health (`ModelHealthCell` — amber indicator when `model_health_warning`), Current tag (`ImageTagCell`), Expected tag (`ImageTagCell`), Last built, Last activity.
+- Columns: Agent (name + owner email), **Bundle** (`BundleCell` — bundle ID mono/truncated with tooltip; placed immediately after Agent), Instance, Template (badge), Status (`StatusBadge`), In use (`InUseBadge`), Stale (`StaleBadge`), Model Health (`ModelHealthCell` — amber indicator when `model_health_warning`), Current tag (`ImageTagCell`), Expected tag (`ImageTagCell`), Last built, Last activity.
+- `BundleCell`: em dash when `bundle_id` is null; for a bundle row, shows the bundle ID plus an installed-version badge (`v1.4`, from `revisionLabel`); when `update_available` is true (never for publisher installs) an additional amber `→ v1.5` badge appears — deliberately amber and arrow-shaped rather than reusing `StaleBadge`'s styling, since bundle revision drift (apply-update) and image-tag staleness (rebuild) are different axes and must not read as the same problem. `revisionLabel` is imported from `frontend/src/utils/bundleRevision.ts`, the same helper used by `UpdateAvailableBanner` / `BundleInstallationCard` on the agent page.
 - Bulk action bar (shown when `selectedRows.length > 0`): "N envs selected", "Rebuild Selected" button, "Clear" button.
 - Delegates confirm dialog to `AdminEnvBulkRebuildDialog`.
 
-**`AdminEnvFiltersBar`**: Template `<Select>` (populated from `data.templates`), Status `<Select>`, "Only stale" toggle `<Button>`, "Only in use" toggle `<Button>`, debounced text search (350ms). Filter state is owned by the route component.
+**`AdminEnvFiltersBar`**: Template `<Select>` (populated from `data.templates`), Status `<Select>`, "Only stale" toggle `<Button>`, "Only in use" toggle `<Button>`, "Bundle update available" toggle `<Button>` (amber when active, matching the Bundle column's badge color and deliberately distinct from the stale toggle's orange — wired to the `update_available` query param via the same `true ↔ null` two-state toggle pattern as the stale/in-use buttons), debounced text search (350ms). Filter state is owned by the route component (`_layout/admin/agent-envs.tsx`).
 
 **`AdminEnvStaleBanner`**: Renders only when `staleCount > 0`. Hidden when the stale filter is already active (would produce "N of N" noise). The "Select all stale" button sets `isStale = true` on the filter, causing only stale rows to appear so the header checkbox can select all.
 

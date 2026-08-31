@@ -100,7 +100,10 @@ def _build_file_download_uri(file_id: str, session_id: str) -> str:
         )
     except (ValueError, TypeError):
         token = ""
-    base = settings.FRONTEND_HOST.rstrip("/")
+    # Backend origin, not FRONTEND_HOST: this link is sent to a remote agent
+    # and must resolve to the API host, which is a different origin whenever
+    # the SPA and API are served separately.
+    base = settings.backend_base_url
     suffix = f"?token={token}" if token else ""
     return f"{base}{settings.API_V1_STR}/files/{file_id}/download{suffix}"
 

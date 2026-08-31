@@ -3,19 +3,23 @@ Integration tests for the external agents catalog (GET /external/agents).
 
 Scenarios covered:
   1. Unauthenticated request is rejected (401)
-  2. Empty result when user has no agents, routes, or identity contacts
+  2. Empty result when user has no agents or identity contacts
   3. Personal active agent appears in results with correct fields
   4. Inactive personal agent is filtered out
-  5. MCP Shared Agent appears when assignment is enabled by the caller
-  6. MCP Shared Agent is absent when assignment is disabled
-  7. Identity contact appears when is_enabled=True
-  8. Identity contact is absent when is_enabled=False (default)
-  9. Identity contact example prompts are prefixed with owner name
-  10. All three sections coexist in a single response
-  11. agent_card_url patterns are correct for each target type
-  12. protocol_versions is ["1.0", "0.3.0"] for every target
-  13. workspace_id filter limits personal agents to the given workspace
-  14. workspace_id filter does not affect shared MCP route entries
+  5. Identity contact appears when is_enabled=True
+  6. Identity contact is absent when is_enabled=False (default)
+  7. Identity contact example prompts are prefixed with owner name
+  8. Both sections coexist in a single response
+  9. agent_card_url patterns are correct for each target type
+  10. protocol_versions is ["1.0", "0.3.0"] for every target
+  11. workspace_id filter limits personal agents to the given workspace
+
+The third source this catalog used to build from — the "MCP Shared Agent"
+section, backed by ``AppAgentRoute`` / ``AppAgentRouteAssignment`` and
+surfaced as ``target_type == "app_mcp_route"`` — was deleted in phase 5 of
+``docs/plans/channels_identity_unification/``. Personal agents and identity
+contacts are the two sources that remain; see
+``app/services/external/external_agent_catalog_service.py``.
 """
 
 from fastapi.testclient import TestClient
@@ -23,7 +27,6 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from tests.utils.agent import create_agent_via_api, update_agent
 from tests.utils.ai_credential import create_random_ai_credential
-from tests.utils.app_agent_route import create_admin_route, toggle_admin_assignment
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.identity import (
     create_identity_binding,
@@ -164,86 +167,7 @@ def test_inactive_personal_agent_filtered(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 5 & 6: MCP Shared Agents
-# ---------------------------------------------------------------------------
-
-
-def test_shared_route_appears_when_assignment_enabled(
-    client: TestClient,
-    superuser_token_headers: dict,
-) -> None:
-    """A route shared with a user appears when the user enables their assignment."""
-    # Owner creates agent and route, assigns caller
-    caller, caller_headers = create_random_user_with_headers(client)
-    caller_id = caller["id"]
-
-    owner_agent = create_agent_via_api(
-        client, superuser_token_headers, name="Shared Agent Owner"
-    )
-    route = create_admin_route(
-        client,
-        superuser_token_headers,
-        agent_id=owner_agent["id"],
-        trigger_prompt="Handle reports",
-        assigned_user_ids=[caller_id],
-        auto_enable_for_users=False,
-    )
-    route_id = route["id"]
-
-    # Assignment is disabled by default — should not appear yet
-    targets_before = _list_external_agents(client, caller_headers)
-    route_ids_before = [t["target_id"] for t in _targets_by_type(targets_before, "app_mcp_route")]
-    assert route_id not in route_ids_before, "Disabled route must not appear"
-
-    # Caller enables the assignment
-    assignment_id = next(
-        a["id"] for a in route["assignments"] if a["user_id"] == caller_id
-    )
-    toggle_admin_assignment(client, caller_headers, assignment_id, is_enabled=True)
-
-    # Now the route should appear
-    targets_after = _list_external_agents(client, caller_headers)
-    route_targets = _targets_by_type(targets_after, "app_mcp_route")
-    route_ids_after = [t["target_id"] for t in route_targets]
-    assert route_id in route_ids_after, f"Enabled route must appear. Got: {route_ids_after}"
-
-    # Verify required fields
-    target = next(t for t in route_targets if t["target_id"] == route_id)
-    assert target["target_type"] == "app_mcp_route"
-    assert "agent_card_url" in target
-    assert f"/api/v1/external/a2a/route/{route_id}/" in target["agent_card_url"]
-    assert target["protocol_versions"] == ["1.0", "0.3.0"]
-    assert target["description"] == "Handle reports"  # trigger_prompt used as description
-
-
-def test_shared_route_absent_when_assignment_disabled(
-    client: TestClient,
-    superuser_token_headers: dict,
-) -> None:
-    """A route shared with a user does not appear when the assignment is disabled."""
-    caller, caller_headers = create_random_user_with_headers(client)
-    caller_id = caller["id"]
-
-    owner_agent = create_agent_via_api(
-        client, superuser_token_headers, name="Shared Agent Disabled"
-    )
-    route = create_admin_route(
-        client,
-        superuser_token_headers,
-        agent_id=owner_agent["id"],
-        trigger_prompt="Handle disabled route",
-        assigned_user_ids=[caller_id],
-        auto_enable_for_users=False,  # assignment is_enabled=False by default
-    )
-    route_id = route["id"]
-
-    targets = _list_external_agents(client, caller_headers)
-    route_ids = [t["target_id"] for t in _targets_by_type(targets, "app_mcp_route")]
-    assert route_id not in route_ids, "Disabled assignment must not surface the route"
-
-
-# ---------------------------------------------------------------------------
-# Scenario 7 & 8: Identity Contacts
+# Scenario 5 & 6: Identity Contacts
 # ---------------------------------------------------------------------------
 
 
@@ -377,15 +301,20 @@ def test_identity_contact_example_prompts_are_prefixed(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 10: All three sections coexist
+# Scenario 8: Both sections coexist
 # ---------------------------------------------------------------------------
 
 
-def test_all_three_sections_coexist(
+def test_both_sections_coexist(
     client: TestClient,
     superuser_token_headers: dict,
 ) -> None:
-    """Personal agents, shared routes, and identity contacts can all appear together."""
+    """Personal agents and identity contacts can both appear together.
+
+    Used to be three sections (personal agents, MCP shared routes, identity
+    contacts) — the middle one was deleted with the AppAgentRoute family in
+    phase 5 of docs/plans/channels_identity_unification/.
+    """
     caller, caller_headers = create_random_user_with_headers(client)
     caller_id = caller["id"]
 
@@ -397,21 +326,7 @@ def test_all_three_sections_coexist(
     )
     personal_agent_id = personal_agent["id"]
 
-    # 2. Superuser creates a route and assigns the caller
-    route_agent = create_agent_via_api(
-        client, superuser_token_headers, name="Route Owner Agent"
-    )
-    route = create_admin_route(
-        client,
-        superuser_token_headers,
-        agent_id=route_agent["id"],
-        trigger_prompt="Handle routed stuff",
-        assigned_user_ids=[caller_id],
-        auto_enable_for_users=True,  # superuser auto-enables
-    )
-    route_id = route["id"]
-
-    # 3. A third user owns an agent and exposes it as an identity contact for the caller
+    # 2. A second user owns an agent and exposes it as an identity contact for the caller
     identity_owner, identity_owner_headers = create_random_user_with_headers(client)
     _promote_to_developer(client, superuser_token_headers, identity_owner["id"])
     _ensure_user_can_create_agents(client, identity_owner_headers)
@@ -432,11 +347,9 @@ def test_all_three_sections_coexist(
     targets = _list_external_agents(client, caller_headers)
 
     agent_target_ids = [t["target_id"] for t in _targets_by_type(targets, "agent")]
-    route_target_ids = [t["target_id"] for t in _targets_by_type(targets, "app_mcp_route")]
     identity_target_ids = [t["target_id"] for t in _targets_by_type(targets, "identity")]
 
     assert personal_agent_id in agent_target_ids, "Personal agent must appear"
-    assert route_id in route_target_ids, "Shared route must appear"
     assert identity_owner["id"] in identity_target_ids, "Identity contact must appear"
 
 
@@ -514,53 +427,6 @@ def test_discovery_mcp_slugs_are_unique_across_response(
     all_slugs = [t["mcp"]["tool_name"] for t in targets if t.get("mcp")]
     assert len(all_slugs) == len(set(all_slugs)), (
         f"Tool slugs must be unique across the response, got {all_slugs}"
-    )
-
-
-def test_discovery_mcp_for_shared_route_uses_route_identity(
-    client: TestClient,
-    superuser_token_headers: dict,
-) -> None:
-    """A shared-route target's mcp descriptor uses the ROUTE's name/trigger prompt.
-
-    The route name is deliberately distinct from the underlying agent name so
-    this catches descriptor identity divergence: the descriptor's display_name
-    and tool_name must reflect the route name (matching the card path), not the
-    underlying agent name. Mirrors the card test
-    test_route_card_cinna_mcp_uses_route_identity.
-    """
-    caller, caller_headers = create_random_user_with_headers(client)
-    caller_id = caller["id"]
-
-    owner_agent = create_agent_via_api(
-        client, superuser_token_headers, name="Underlying Route Agent"
-    )
-    route = create_admin_route(
-        client,
-        superuser_token_headers,
-        agent_id=owner_agent["id"],
-        name="Discovery Route Display Name",
-        trigger_prompt="Route trigger summary",
-        assigned_user_ids=[caller_id],
-        auto_enable_for_users=True,
-    )
-    route_id = route["id"]
-
-    targets = _list_external_agents(client, caller_headers)
-    route_target = next(
-        t for t in _targets_by_type(targets, "app_mcp_route")
-        if t["target_id"] == route_id
-    )
-
-    mcp = route_target["mcp"]
-    assert mcp is not None, "Shared-route target must carry an mcp descriptor"
-    assert mcp["description"] == "Route trigger summary"
-    # Descriptor identity must come from the route, not the underlying agent.
-    assert mcp["display_name"] == "Discovery Route Display Name", (
-        f"display_name should be the route name, got {mcp['display_name']!r}"
-    )
-    assert mcp["tool_name"] == "discovery_route_display_name", (
-        f"tool_name should derive from the route name, got {mcp['tool_name']!r}"
     )
 
 
@@ -679,53 +545,4 @@ def test_workspace_id_filter_limits_personal_agents(
     assert agent_ws["id"] in filtered_agent_ids, "workspace agent missing with filter"
     assert agent_no_ws["id"] not in filtered_agent_ids, (
         "no-workspace agent should be excluded by workspace_id filter"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Scenario 14: workspace_id filter does not affect shared MCP routes
-# ---------------------------------------------------------------------------
-
-
-def test_workspace_id_filter_does_not_affect_shared_routes(
-    client: TestClient,
-    superuser_token_headers: dict,
-) -> None:
-    """
-    workspace_id filter applies only to personal agents — MCP shared agent
-    entries are always returned regardless of the filter.
-    """
-    # ── Phase 1: Create workspace ────────────────────────────────────────
-    ws = _create_workspace(client, superuser_token_headers, "test-workspace-agents-b")
-    workspace_id = ws["id"]
-
-    # ── Phase 2: Create a caller user ────────────────────────────────────
-    _, caller_hdrs = create_random_user_with_headers(client)
-    caller_r = client.get(f"{settings.API_V1_STR}/users/me", headers=caller_hdrs)
-    caller_id = caller_r.json()["id"]
-
-    # ── Phase 3: Create an agent + route accessible to the caller ─────────
-    agent = create_agent_via_api(client, superuser_token_headers)
-    drain_tasks()
-    route = create_admin_route(
-        client,
-        superuser_token_headers,
-        agent_id=agent["id"],
-        trigger_prompt="Handle shared things",
-        assigned_user_ids=[caller_id],
-        auto_enable_for_users=True,
-    )
-    route_id = route["id"]
-
-    # ── Phase 4: Apply workspace filter for the caller ─────────────────
-    # The caller has no personal agents in the workspace, but the shared
-    # route must still appear.
-    filtered_targets = _list_external_agents(
-        client, caller_hdrs, workspace_id=workspace_id
-    )
-    shared_ids = [
-        t["target_id"] for t in filtered_targets if t["target_type"] == "app_mcp_route"
-    ]
-    assert route_id in shared_ids, (
-        "MCP shared route should appear even when workspace_id filter is set"
     )

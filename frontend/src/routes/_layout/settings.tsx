@@ -1,26 +1,26 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { useEffect } from "react"
-
+import { AgenticTeamSettings } from "@/components/AgenticTeams/AgenticTeamSettings"
+import { HashTabs, type TabConfig } from "@/components/Common/HashTabs"
 import { AICredentialsSettings } from "@/components/UserSettings/AICredentials"
 import { AppDataTab } from "@/components/UserSettings/AppData/AppDataTab"
+import { AppMcpServerCard } from "@/components/UserSettings/AppMcpServerCard"
+import { DashboardSettings } from "@/components/UserSettings/DashboardSettings"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
-import { AppAgentRoutesCard } from "@/components/UserSettings/AppAgentRoutesCard"
 import { DesktopSessionsCard } from "@/components/UserSettings/DesktopSessionsCard"
 import { IdentityServerCard } from "@/components/UserSettings/IdentityServerCard"
 import { LocalDevelopmentCard } from "@/components/UserSettings/LocalDevelopmentCard"
-import { MailServerSettings } from "@/components/UserSettings/MailServerSettings"
 import { NotificationSettings } from "@/components/UserSettings/NotificationSettings"
 import OAuthAccounts from "@/components/UserSettings/OAuthAccounts"
 import PasswordCard from "@/components/UserSettings/PasswordCard"
 import { SecurityTab } from "@/components/UserSettings/Security/SecurityTab"
 import { SSHKeys } from "@/components/UserSettings/SSHKeys"
+import { ThemeAndColors } from "@/components/UserSettings/ThemeAndColors"
+import { UserChannelsCard } from "@/components/UserSettings/UserChannelsCard"
 import { UserDetailsSettings } from "@/components/UserSettings/UserDetailsSettings"
 import UserInformation from "@/components/UserSettings/UserInformation"
 import UserPreferences from "@/components/UserSettings/UserPreferences"
 import { WorkspaceSettings } from "@/components/UserSettings/WorkspaceSettings"
-import { AgenticTeamSettings } from "@/components/AgenticTeams/AgenticTeamSettings"
-import { DashboardSettings } from "@/components/UserSettings/DashboardSettings"
-import { HashTabs, TabConfig } from "@/components/Common/HashTabs"
 import useAuth from "@/hooks/useAuth"
 import { usePageHeader } from "@/routes/_layout"
 import { APP_NAME } from "@/utils"
@@ -44,8 +44,10 @@ function UserSettings() {
     setHeaderContent(
       <div className="min-w-0">
         <h1 className="text-lg font-semibold truncate">User Settings</h1>
-        <p className="text-xs text-muted-foreground">Manage your account settings</p>
-      </div>
+        <p className="text-xs text-muted-foreground">
+          Manage your account settings
+        </p>
+      </div>,
     )
     return () => setHeaderContent(null)
   }, [setHeaderContent])
@@ -85,21 +87,39 @@ function UserSettings() {
       title: "Interface",
       content: (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <ThemeAndColors />
           <WorkspaceSettings />
           <AgenticTeamSettings />
           <DashboardSettings />
         </div>
       ),
     },
-    { value: "ai-credentials", title: "AI Credentials", content: <AICredentialsSettings /> },
+    {
+      value: "ai-credentials",
+      title: "AI Credentials",
+      content: <AICredentialsSettings />,
+    },
     {
       value: "channels",
       title: "Channels",
       content: (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <MailServerSettings />
-          <AppAgentRoutesCard />
-          <IdentityServerCard />
+        <div className="space-y-6">
+          {/* One place where every channel an administrator has connected is
+              listed with the user's own settings: the on/off switch, the agent
+              scope, and the per-person identity toggles. Mail Servers moved out
+              entirely — it is server-owned infrastructure now and lives under
+              Admin → Server Configuration.
+
+              The two cards below are NOT older versions of this list. They hold
+              what a per-channel row has no place for: the App MCP endpoint plus
+              its connect walkthrough, and the authoring side of identity
+              sharing (which of my agents, exposed to whom). Both would be
+              unreachable if this card were the only thing on the tab. */}
+          <UserChannelsCard />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <AppMcpServerCard />
+            <IdentityServerCard />
+          </div>
         </div>
       ),
     },

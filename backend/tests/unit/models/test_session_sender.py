@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import FrozenInstanceError
+from typing import get_args
 
 import pytest
 
@@ -25,6 +26,7 @@ from app.models.a2a.agent_access_token import A2ATokenPayload
 from app.models.sessions.session import Session
 from app.models.sessions.session_sender import (
     ChannelAccessPolicy,
+    IdentityGrant,
     IngestionResult,
     SessionSender,
     SessionSenderKind,
@@ -36,7 +38,13 @@ from app.models.users.user import User
 # Helpers
 # ---------------------------------------------------------------------------
 
-_VALID_KINDS: list[SessionSenderKind] = [
+# Derived from the Literal itself, so adding a kind to `SessionSenderKind`
+# without covering it here fails loudly instead of silently under-testing.
+_VALID_KINDS: list[SessionSenderKind] = list(get_args(SessionSenderKind))
+
+# The kinds each property parametrization below must cover. Kept as an
+# explicit set so the drift guard names the missing kind.
+_EXPECTED_KINDS = {
     "platform_user",
     "a2a_caller",
     "mcp_caller",
@@ -44,7 +52,13 @@ _VALID_KINDS: list[SessionSenderKind] = [
     "task_executor",
     "system_trigger",
     "anonymous",
-]
+    "channel_caller",
+}
+
+
+def test_kind_literal_has_not_drifted() -> None:
+    """Every declared sender kind is covered by this file's parametrizations."""
+    assert set(_VALID_KINDS) == _EXPECTED_KINDS
 
 
 def _make_token_payload(agent_id: uuid.UUID | None = None) -> A2ATokenPayload:
@@ -176,6 +190,7 @@ class TestSessionSenderProperties:
         "kind, expected",
         [
             ("anonymous", True),
+            ("channel_caller", False),
             ("webui_user", False),
             ("a2a_caller", False),
             ("system_trigger", False),
@@ -205,6 +220,7 @@ class TestSessionSenderProperties:
             ("task_executor", uuid.uuid4(), True),
             ("system_trigger", uuid.uuid4(), True),
             ("platform_user", uuid.uuid4(), True),
+            ("channel_caller", uuid.uuid4(), True),
             # anonymous — always False regardless of platform_user_id presence.
             ("anonymous", None, False),
             # platform_user_id None — no bound user.
@@ -237,6 +253,7 @@ class TestSessionSenderProperties:
             ("mcp_caller", False),
             ("anonymous", False),
             ("platform_user", False),
+            ("channel_caller", False),
         ],
     )
     def test_is_system(self, kind: SessionSenderKind, expected: bool) -> None:
@@ -321,23 +338,28 @@ class TestChannelAccessPolicy:
         assert policy.allow_system_trigger_fastpath is False
         assert policy.require_owner_match is True
         assert policy.require_access_token_scope is None
-        assert policy.require_caller_in_route is False
+        assert policy.identity_grant is None
 
     def test_constructs_with_explicit_values(self) -> None:
         uid = uuid.uuid4()
         token = _make_token_payload()
+        grant = IdentityGrant(
+            owner_id=uuid.uuid4(),
+            binding_id=uuid.uuid4(),
+            assignment_id=uuid.uuid4(),
+        )
         policy = ChannelAccessPolicy(
             expected_owner_id=uid,
             allow_system_trigger_fastpath=True,
             require_owner_match=False,
             require_access_token_scope=token,
-            require_caller_in_route=True,
+            identity_grant=grant,
         )
         assert policy.expected_owner_id == uid
         assert policy.allow_system_trigger_fastpath is True
         assert policy.require_owner_match is False
         assert policy.require_access_token_scope is token
-        assert policy.require_caller_in_route is True
+        assert policy.identity_grant is grant
 
     def test_not_frozen_allows_mutation(self) -> None:
         """ChannelAccessPolicy is intentionally NOT frozen (per §3.4)."""
@@ -601,6 +623,80 @@ class TestFromSystemTrigger:
 
 
 # ===========================================================================
+# SessionSender.from_channel — server channels (Google Chat, ...)
+# ===========================================================================
+
+
+class TestFromChannel:
+    """from_channel stamps the channel-namespaced external_id convention."""
+
+    def test_kind_is_channel_caller(self) -> None:
+        sender = SessionSender.from_channel(
+            channel_type="google_chat",
+            external_user_id="users/123456",
+            platform_user_id=uuid.uuid4(),
+        )
+        assert sender.kind == "channel_caller"
+
+    def test_external_id_is_channel_namespaced(self) -> None:
+        sender = SessionSender.from_channel(
+            channel_type="google_chat",
+            external_user_id="users/123456",
+            platform_user_id=uuid.uuid4(),
+        )
+        assert sender.external_id == "google_chat:users/123456"
+
+    def test_same_external_user_on_two_channels_does_not_collide(self) -> None:
+        """The channel_type prefix is what keeps two transports apart."""
+        user_id = uuid.uuid4()
+        a = SessionSender.from_channel(
+            channel_type="google_chat",
+            external_user_id="u1",
+            platform_user_id=user_id,
+        )
+        b = SessionSender.from_channel(
+            channel_type="slack",
+            external_user_id="u1",
+            platform_user_id=user_id,
+        )
+        assert a.external_id != b.external_id
+
+    def test_platform_user_id_is_the_sender_not_the_agent_owner(self) -> None:
+        """
+        Security-critical: channel sessions are owned by the external
+        sender's own account, so an external caller can only ever reach
+        their own installs.
+        """
+        sender_user_id = uuid.uuid4()
+        sender = SessionSender.from_channel(
+            channel_type="google_chat",
+            external_user_id="users/123456",
+            platform_user_id=sender_user_id,
+        )
+        assert sender.platform_user_id == sender_user_id
+        assert sender.is_platform_user is True
+        assert sender.is_anonymous is False
+        assert sender.is_system is False
+
+    def test_display_name_default_is_none(self) -> None:
+        sender = SessionSender.from_channel(
+            channel_type="google_chat",
+            external_user_id="users/123456",
+            platform_user_id=uuid.uuid4(),
+        )
+        assert sender.display_name is None
+
+    def test_display_name_when_provided(self) -> None:
+        sender = SessionSender.from_channel(
+            channel_type="google_chat",
+            external_user_id="users/123456",
+            platform_user_id=uuid.uuid4(),
+            display_name="Jane Doe",
+        )
+        assert sender.display_name == "Jane Doe"
+
+
+# ===========================================================================
 # get_session_sender — integration_type → kind mapping (§3.2 table)
 # ===========================================================================
 
@@ -765,6 +861,142 @@ class TestGetSessionSender:
         sender = get_session_sender(session)
         assert sender.kind == "system_trigger"
         assert sender.external_id == str(owner)
+
+    # ── channel_* (server channels) ──────────────────────────────────────
+
+    def test_channel_with_sender_external_id_in_metadata(self) -> None:
+        owner = uuid.uuid4()
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            session_metadata={"sender_external_id": "google_chat:users/123"},
+        )
+        sender = get_session_sender(session)
+        assert sender.kind == "channel_caller"
+        assert sender.external_id == "google_chat:users/123"
+        # The session owner IS the external sender's platform user.
+        assert sender.platform_user_id == owner
+
+    def test_channel_without_metadata_falls_back_to_user_id(self) -> None:
+        owner = uuid.uuid4()
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            session_metadata={},
+        )
+        sender = get_session_sender(session)
+        assert sender.kind == "channel_caller"
+        assert sender.external_id == str(owner)
+
+    @pytest.mark.parametrize(
+        "integration_type",
+        ["channel_google_chat", "channel_slack", "channel_telegram"],
+    )
+    def test_channel_prefix_match_covers_every_channel_type(
+        self, integration_type: str
+    ) -> None:
+        """Any `channel_<type>` maps to channel_caller — no per-adapter wiring."""
+        session = _make_session(
+            user_id=uuid.uuid4(),
+            integration_type=integration_type,
+        )
+        assert get_session_sender(session).kind == "channel_caller"
+
+    # ── channel_* + identity routing (channels & identity unification, ph. 3) ──
+    #
+    # The API-observable end of this pair — an identity-routed Google Chat
+    # session appearing in the OWNER's session list while the reply goes back
+    # to the SENDER's thread — is covered in
+    # `tests/api/server_channels/server_channels_identity_routing_test.py`.
+
+    def test_channel_with_identity_caller_reports_the_caller_not_the_owner(
+        self,
+    ) -> None:
+        """An identity-routed channel session is owned by the identity OWNER.
+
+        `session.user_id` is HR; the human who actually wrote the message is
+        `identity_caller_id`. This reader answers "who sent this?", and it has
+        no second gate behind it to catch a wrong answer, so naming HR as the
+        sender of a message HR never wrote is exactly the mistake it exists to
+        prevent.
+        """
+        owner = uuid.uuid4()
+        caller = uuid.uuid4()
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            identity_caller_id=caller,
+            session_metadata={"sender_external_id": "google_chat:users/999"},
+        )
+        sender = get_session_sender(session)
+        assert sender.kind == "channel_caller"
+        assert sender.platform_user_id == caller
+        assert sender.platform_user_id != owner
+        # `external_id` already records the real sender at create time, so it
+        # needs no identity branch of its own.
+        assert sender.external_id == "google_chat:users/999"
+
+    def test_channel_with_identity_caller_and_no_metadata_uses_the_caller_id(
+        self,
+    ) -> None:
+        """The fallback follows the caller too, not the owner.
+
+        With no `sender_external_id` stamped, `external_id` falls back to the
+        same person `platform_user_id` names — which on this branch is the
+        identity caller. Falling back to `session.user_id` here would surface
+        HR's id as the external sender's identifier.
+        """
+        owner = uuid.uuid4()
+        caller = uuid.uuid4()
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            identity_caller_id=caller,
+            session_metadata={},
+        )
+        sender = get_session_sender(session)
+        assert sender.kind == "channel_caller"
+        assert sender.external_id == str(caller)
+        assert sender.platform_user_id == caller
+
+    def test_channel_without_identity_caller_still_reports_the_owner(self) -> None:
+        """The other direction, so the branch above cannot be over-applied.
+
+        An ordinary channel session leaves `identity_caller_id` NULL, and there
+        the session owner IS the external sender's platform user. Asserted
+        explicitly because the `or` fallback makes the two branches one
+        expression: a change that reversed the operands would break only this
+        case, and only this test would say so.
+        """
+        owner = uuid.uuid4()
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            identity_caller_id=None,
+            session_metadata={},
+        )
+        sender = get_session_sender(session)
+        assert sender.kind == "channel_caller"
+        assert sender.external_id == str(owner)
+        assert sender.platform_user_id == owner
+
+    def test_channel_round_trip_with_from_channel(self) -> None:
+        """The constructor's external_id survives a round-trip through the reader."""
+        owner = uuid.uuid4()
+        built = SessionSender.from_channel(
+            channel_type="google_chat",
+            external_user_id="users/123",
+            platform_user_id=owner,
+        )
+        session = _make_session(
+            user_id=owner,
+            integration_type="channel_google_chat",
+            session_metadata={"sender_external_id": built.external_id},
+        )
+        read = get_session_sender(session)
+        assert read.kind == built.kind
+        assert read.external_id == built.external_id
+        assert read.platform_user_id == built.platform_user_id
 
     # ── unknown integration_type (forward-compat fallback) ────────────────
 

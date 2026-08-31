@@ -46,17 +46,18 @@ class TargetContext:
 
     agent: Any  # Agent
     environment: Any  # AgentEnvironment
-    integration_type: str  # "external", "app_mcp", "identity_mcp"
+    integration_type: str  # "external" | "identity_mcp"
     session_owner_id: UUID  # user_id for the session
-    caller_id: Optional[UUID] = None  # for app_mcp: the calling user's ID
     identity_caller_id: Optional[UUID] = None  # for identity_mcp
-    match_method: Optional[str] = None  # for app_mcp: "external_direct"
-    route_id: Optional[UUID] = None  # for app_mcp: the AppAgentRoute.id
-    route_source: Optional[str] = None  # for app_mcp: "admin" or "user"
+    # How the target was reached, stamped into session_metadata as
+    # ``app_mcp_match_method``. Only producer today is the identity resolver,
+    # which passes "identity"; the App MCP surface builds its own sessions in
+    # ``app_mcp_request_handler`` and never comes through here.
+    match_method: Optional[str] = None
     # Identity-specific fields (only set when integration_type == "identity_mcp")
     identity_binding_id: Optional[UUID] = None
     identity_binding_assignment_id: Optional[UUID] = None
-    identity_stage2_match_method: Optional[str] = None  # "only_one" | "pattern" | "ai"
+    identity_stage2_match_method: Optional[str] = None  # "only_one" | "ai"
     identity_owner_name: Optional[str] = None
     identity_caller_name: Optional[str] = None
     # Client attribution — populated from JWT claims when the request originates
@@ -75,8 +76,8 @@ class ExternalA2AContextHandler(A2ARequestHandler):
     """A2ARequestHandler subclass for the External Agent Access surface.
 
     Overrides the base hooks to enforce caller-scope per integration_type
-    and stamp session metadata (caller_id, identity bindings, client
-    attribution) into newly created sessions.
+    and stamp session metadata (identity bindings, client attribution) into
+    newly created sessions.
     """
 
     log_prefix = "[ExternalA2A]"
@@ -106,7 +107,6 @@ class ExternalA2AContextHandler(A2ARequestHandler):
         """Parse task_id and enforce caller-scope per context.integration_type.
 
         - "external":     session.user_id must equal context.session_owner_id
-        - "app_mcp":      session.caller_id must equal context.caller_id
         - "identity_mcp": session.identity_caller_id must equal
                           context.identity_caller_id; binding validity re-checked
 
@@ -130,10 +130,7 @@ class ExternalA2AContextHandler(A2ARequestHandler):
             if session is None:
                 return None
 
-            if self.context.integration_type == "app_mcp":
-                if session.caller_id != self.context.caller_id:
-                    raise TaskScopeViolationError()
-            elif self.context.integration_type == "identity_mcp":
+            if self.context.integration_type == "identity_mcp":
                 if session.identity_caller_id != self.context.identity_caller_id:
                     raise TaskScopeViolationError()
                 if session.user_id != self.context.session_owner_id:
@@ -154,7 +151,7 @@ class ExternalA2AContextHandler(A2ARequestHandler):
             raise TaskScopeViolationError()
 
     def _stamp_new_session(self, session_id: UUID) -> None:
-        """Write caller_id / metadata for a newly created context-scoped session.
+        """Write identity columns / metadata for a new context-scoped session.
 
         Also stamps client attribution claims (client_kind / external_client_id)
         into session_metadata for all integration types when present.
@@ -166,7 +163,7 @@ class ExternalA2AContextHandler(A2ARequestHandler):
                 return
 
             if context.integration_type == "external":
-                # Owner-only sessions: no caller_id / identity stamping needed.
+                # Owner-only sessions: no identity stamping needed.
                 # Only write client attribution if present.
                 if context.client_kind is not None:
                     meta: dict[str, Any] = dict(session.session_metadata or {})
@@ -178,22 +175,7 @@ class ExternalA2AContextHandler(A2ARequestHandler):
                     db.commit()
                 return
 
-            if context.integration_type == "app_mcp":
-                session.caller_id = context.caller_id
-                meta = dict(session.session_metadata or {})
-                if context.route_id is not None:
-                    meta["app_mcp_route_id"] = str(context.route_id)
-                if context.route_source is not None:
-                    meta["app_mcp_route_type"] = context.route_source
-                if context.match_method is not None:
-                    meta["app_mcp_match_method"] = context.match_method
-                meta.setdefault("app_mcp_agent_name", context.agent.name)
-                if context.client_kind is not None:
-                    meta["client_kind"] = context.client_kind
-                    if context.external_client_id is not None:
-                        meta["external_client_id"] = context.external_client_id
-                session.session_metadata = meta
-            elif context.integration_type == "identity_mcp":
+            if context.integration_type == "identity_mcp":
                 session.identity_caller_id = context.identity_caller_id
                 if context.identity_binding_id is not None:
                     session.identity_binding_id = context.identity_binding_id
@@ -212,7 +194,7 @@ class ExternalA2AContextHandler(A2ARequestHandler):
                     )
                 if context.match_method is not None:
                     meta["app_mcp_match_method"] = context.match_method
-                meta.setdefault("app_mcp_route_type", "identity")
+                meta.setdefault("app_mcp_source", "identity")
                 if context.client_kind is not None:
                     meta["client_kind"] = context.client_kind
                     if context.external_client_id is not None:
@@ -259,13 +241,10 @@ class ExternalA2AContextHandler(A2ARequestHandler):
     def _session_matches_context(self, session: ChatSession) -> bool:
         """Caller-scope check: compare session fields to ``self.context``.
 
-        - app_mcp:      session.caller_id == context.caller_id
         - identity_mcp: session.identity_caller_id == context.identity_caller_id
         - external:     session.user_id == context.session_owner_id
         """
         context = self.context
-        if context.integration_type == "app_mcp":
-            return session.caller_id == context.caller_id
         if context.integration_type == "identity_mcp":
             return (
                 session.identity_caller_id == context.identity_caller_id

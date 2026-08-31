@@ -5,7 +5,7 @@ import { useEffect } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
-import type { CredentialWithData } from "@/client"
+import type { CredentialPublic } from "@/client"
 import { CredentialsService } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -45,11 +45,16 @@ type FormData = z.infer<typeof formSchema>
  * internally (never shown or edited); this view surfaces the connection itself:
  * which producer it proxies, which consumer agents are wired to it, and a
  * "View Spec" shortcut. Deleting the credential disconnects the agents.
+ *
+ * Takes ``CredentialPublic``, not ``CredentialWithData``: a connection's token
+ * is machine-only and never rendered, so this view has no reason to hold the
+ * decrypted payload at all. Its sibling (an external key) does show a value,
+ * but through its own audited reveal endpoint (plan D4).
  */
 export function AgentApiConnectionView({
   credential,
 }: {
-  credential: CredentialWithData
+  credential: CredentialPublic
 }) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -89,10 +94,13 @@ export function AgentApiConnectionView({
     },
   })
 
-  const producerName =
-    connection?.producer_agent_name ||
-    (credential.credential_data?.label as string | undefined) ||
-    "Producer agent"
+  // The connection endpoint is the only source for the producer's name. The
+  // credential's own ``label`` is NOT a fallback: it is this connection's
+  // user-editable name, so using it here would render the connection's name
+  // where the producer's belongs. When the producer is gone or unreadable both
+  // id and name come back null, and the neutral placeholder is the honest
+  // answer — matching the disabled badge link and "no longer accessible" hint.
+  const producerName = connection?.producer_agent_name || "Producer agent"
   const consumers = connection?.consumer_agents ?? []
 
   return (

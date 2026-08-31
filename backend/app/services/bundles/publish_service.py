@@ -385,10 +385,16 @@ class PublishService:
     async def notify_installs(
         session: Session, bundle: AgentBundle, revision: AgentBundleRevision
     ) -> None:
-        """Mark foreign installs pending-update and emit per-user events.
+        """Mark foreign installs pending-update, emit events, kick the sweep.
 
-        Automatic installs stay pending here too — the suspension scheduler
-        applies updates while the env is idle to avoid mid-stream disruption.
+        Automatic installs are not applied inline — the update is applied while
+        the environment is idle to avoid mid-stream disruption. Two paths get
+        them there: the running → suspended hook in the suspension scheduler,
+        and the bundle-auto-update sweep. The sweep is additionally fired here,
+        bundle-scoped, as a detached background task so an already-suspended
+        install converges within seconds of the publish instead of waiting for
+        the next periodic run. Publish must return immediately and must never
+        fail because of the sweep.
         """
         from app.services.events.event_service import event_service
 
@@ -425,6 +431,32 @@ class PublishService:
                 logger.warning(
                     "Failed to emit INSTALL_UPDATE_AVAILABLE for install %s: %s",
                     install.id, e,
+                )
+
+        # Publish-time fast path: converge already-idle automatic installs now.
+        # Detached task with its own session — the request session is closed as
+        # soon as publish returns.
+        if settings.BUNDLE_AUTO_UPDATE_ENABLED:
+            coro = None
+            try:
+                from app.services.bundles.install_service import InstallService
+                from app.utils import create_task_with_error_logging
+
+                coro = InstallService.sweep_bundle_updates_background(bundle.id)
+                create_task_with_error_logging(
+                    coro,
+                    task_name=f"bundle_auto_update_sweep:{bundle.id}",
+                )
+                coro = None  # handed off — the task owns it now
+            except Exception as e:
+                if coro is not None:
+                    # Close the coroutine we never handed off, or Python emits
+                    # "coroutine was never awaited".
+                    coro.close()
+                logger.warning(
+                    "Failed to schedule publish-time auto-update sweep for "
+                    "bundle %s: %s",
+                    bundle.id, e,
                 )
 
     # ── Snapshot helpers ───────────────────────────────────────────

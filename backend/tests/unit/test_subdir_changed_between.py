@@ -22,7 +22,7 @@ manager itself), so it still executes even with the clone mocked out.
 
 The API-observable behavior — subdir-scoped and root-path update detection
 through both API endpoints — is covered by
-``tests/api/agents/agents_git_subdir_update_test.py``.
+``tests/api/agents/git/agents_git_subdir_update_test.py``.
 """
 
 from contextlib import contextmanager

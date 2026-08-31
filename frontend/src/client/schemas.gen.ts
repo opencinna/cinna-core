@@ -2680,6 +2680,82 @@ export const AdminAgentEnvironmentPublicSchema = {
             type: 'boolean',
             title: 'Model Health Warning',
             default: false
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        is_publisher_install: {
+            type: 'boolean',
+            title: 'Is Publisher Install',
+            default: false
+        },
+        update_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Update Mode'
+        },
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
+        },
+        installed_revision_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Version'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        latest_revision_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Version'
+        },
+        update_available: {
+            type: 'boolean',
+            title: 'Update Available',
+            default: false
         }
     },
     type: 'object',
@@ -3413,6 +3489,345 @@ export const AgentApiGrantUserSchema = {
     type: 'object',
     required: ['id', 'email'],
     title: 'AgentApiGrantUser'
+} as const;
+
+export const AgentApiKeyCreateSchema = {
+    properties: {
+        label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        subject_user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Subject User Id'
+        },
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        },
+        read_only_override: {
+            type: 'boolean',
+            title: 'Read Only Override',
+            default: false
+        },
+        expires_in_days: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 3650,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires In Days'
+        }
+    },
+    type: 'object',
+    required: ['subject_user_id'],
+    title: 'AgentApiKeyCreate',
+    description: `Request to mint an external API key on a producer agent (plan D9).
+
+\`\`scopes\`\` is a convenience: it **upserts** the \`\`agent_api_access_grant\`\`
+for \`\`(producer, subject_user_id)\`\`. Scopes live on the grant, never on the
+key (plan D5) — the same row the producer's Access & Scopes card edits.`
+} as const;
+
+export const AgentApiKeyCreatedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        subject: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiKeySubject'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        is_usable: {
+            type: 'boolean',
+            title: 'Is Usable'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        token: {
+            type: 'string',
+            title: 'Token'
+        },
+        base_url: {
+            type: 'string',
+            title: 'Base Url'
+        },
+        spec_url: {
+            type: 'string',
+            title: 'Spec Url'
+        }
+    },
+    type: 'object',
+    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'subject', 'read_only', 'is_active', 'is_usable', 'expires_at', 'last_used_at', 'created_at', 'token', 'base_url', 'spec_url'],
+    title: 'AgentApiKeyCreated',
+    description: 'Returned on mint — carries the token value plus where to call it.'
+} as const;
+
+export const AgentApiKeyPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        },
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        subject: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiKeySubject'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        is_usable: {
+            type: 'boolean',
+            title: 'Is Usable'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'subject', 'read_only', 'is_active', 'is_usable', 'expires_at', 'last_used_at', 'created_at'],
+    title: 'AgentApiKeyPublic',
+    description: 'One external key as listed on the producer card. Never the value.'
+} as const;
+
+export const AgentApiKeyRevealResponseSchema = {
+    properties: {
+        token: {
+            type: 'string',
+            title: 'Token'
+        }
+    },
+    type: 'object',
+    required: ['token'],
+    title: 'AgentApiKeyRevealResponse',
+    description: `The value of an external key, returned by the dedicated reveal endpoint.
+
+The **only** way to read a key back after mint (plan D4): \`\`with-data\`\`
+deliberately strips it, so every reveal goes through one audited call.`
+} as const;
+
+export const AgentApiKeySubjectSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        }
+    },
+    type: 'object',
+    required: ['id'],
+    title: 'AgentApiKeySubject',
+    description: 'The platform user an external key is bound to.'
+} as const;
+
+export const AgentApiKeysPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiKeyPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentApiKeysPublic'
 } as const;
 
 export const AgentApiProducerConnectionSchema = {
@@ -4360,246 +4775,6 @@ export const AgentCredentialLinkRequestSchema = {
     type: 'object',
     required: ['credential_id'],
     title: 'AgentCredentialLinkRequest'
-} as const;
-
-export const AgentEmailIntegrationCreateSchema = {
-    properties: {
-        enabled: {
-            type: 'boolean',
-            title: 'Enabled',
-            default: false
-        },
-        access_mode: {
-            '$ref': '#/components/schemas/EmailAccessMode',
-            default: 'restricted'
-        },
-        process_as: {
-            '$ref': '#/components/schemas/EmailProcessAs',
-            default: 'new_session'
-        },
-        auto_approve_email_pattern: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 1024
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Auto Approve Email Pattern'
-        },
-        allowed_domains: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 1024
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Allowed Domains'
-        },
-        max_clones: {
-            type: 'integer',
-            maximum: 1000,
-            minimum: 1,
-            title: 'Max Clones',
-            default: 50
-        },
-        clone_share_mode: {
-            '$ref': '#/components/schemas/EmailCloneShareMode',
-            default: 'user'
-        },
-        agent_session_mode: {
-            '$ref': '#/components/schemas/AgentSessionMode',
-            default: 'clone'
-        },
-        incoming_server_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Incoming Server Id'
-        },
-        incoming_mailbox: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Incoming Mailbox'
-        },
-        outgoing_server_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Outgoing Server Id'
-        },
-        outgoing_from_address: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Outgoing From Address'
-        }
-    },
-    type: 'object',
-    title: 'AgentEmailIntegrationCreate'
-} as const;
-
-export const AgentEmailIntegrationPublicSchema = {
-    properties: {
-        enabled: {
-            type: 'boolean',
-            title: 'Enabled',
-            default: false
-        },
-        access_mode: {
-            '$ref': '#/components/schemas/EmailAccessMode',
-            default: 'restricted'
-        },
-        process_as: {
-            '$ref': '#/components/schemas/EmailProcessAs',
-            default: 'new_session'
-        },
-        auto_approve_email_pattern: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 1024
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Auto Approve Email Pattern'
-        },
-        allowed_domains: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 1024
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Allowed Domains'
-        },
-        max_clones: {
-            type: 'integer',
-            maximum: 1000,
-            minimum: 1,
-            title: 'Max Clones',
-            default: 50
-        },
-        clone_share_mode: {
-            '$ref': '#/components/schemas/EmailCloneShareMode',
-            default: 'user'
-        },
-        agent_session_mode: {
-            '$ref': '#/components/schemas/AgentSessionMode',
-            default: 'clone'
-        },
-        incoming_server_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Incoming Server Id'
-        },
-        incoming_mailbox: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Incoming Mailbox'
-        },
-        outgoing_server_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Outgoing Server Id'
-        },
-        outgoing_from_address: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Outgoing From Address'
-        },
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        email_clone_count: {
-            type: 'integer',
-            title: 'Email Clone Count',
-            default: 0
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        }
-    },
-    type: 'object',
-    required: ['id', 'agent_id', 'created_at', 'updated_at'],
-    title: 'AgentEmailIntegrationPublic'
 } as const;
 
 export const AgentEnvActionLogPublicSchema = {
@@ -6152,9 +6327,9 @@ export const AgentPublicSchema = {
             title: 'Agent Api Identity Enabled',
             default: false
         },
-        has_email_integration: {
+        agent_api_external_access_enabled: {
             type: 'boolean',
-            title: 'Has Email Integration',
+            title: 'Agent Api External Access Enabled',
             default: false
         },
         has_mcp_connectors: {
@@ -6565,12 +6740,6 @@ export const AgentSdkConfigSchema = {
     type: 'object',
     title: 'AgentSdkConfig',
     description: 'Schema for agent SDK configuration'
-} as const;
-
-export const AgentSessionModeSchema = {
-    type: 'string',
-    enum: ['clone', 'owner'],
-    title: 'AgentSessionMode'
 } as const;
 
 export const AgentStatusListPublicSchema = {
@@ -7210,6 +7379,17 @@ export const AgentUpdateSchema = {
                 }
             ],
             title: 'Agent Api Identity Enabled'
+        },
+        agent_api_external_access_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api External Access Enabled'
         },
         update_mode: {
             anyOf: [
@@ -8859,340 +9039,6 @@ export const AllowedToolsUpdateSchema = {
     description: 'Schema for updating allowed tools list'
 } as const;
 
-export const AppAgentRouteAssignmentPublicSchema = {
-    properties: {
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        route_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Route Id'
-        },
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
-        user_email: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'User Email'
-        },
-        user_full_name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'User Full Name'
-        },
-        is_enabled: {
-            type: 'boolean',
-            title: 'Is Enabled'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        }
-    },
-    type: 'object',
-    required: ['id', 'route_id', 'user_id', 'is_enabled', 'created_at'],
-    title: 'AppAgentRouteAssignmentPublic'
-} as const;
-
-export const AppAgentRouteCreateSchema = {
-    properties: {
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode',
-            default: 'conversation'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        prompt_examples: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Prompt Examples'
-        },
-        channel_app_mcp: {
-            type: 'boolean',
-            title: 'Channel App Mcp',
-            default: true
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active',
-            default: true
-        },
-        auto_enable_for_users: {
-            type: 'boolean',
-            title: 'Auto Enable For Users',
-            default: false
-        },
-        activate_for_myself: {
-            type: 'boolean',
-            title: 'Activate For Myself',
-            default: false
-        },
-        assigned_user_ids: {
-            items: {
-                type: 'string',
-                format: 'uuid'
-            },
-            type: 'array',
-            title: 'Assigned User Ids',
-            default: []
-        }
-    },
-    type: 'object',
-    required: ['name', 'agent_id', 'trigger_prompt'],
-    title: 'AppAgentRouteCreate'
-} as const;
-
-export const AppAgentRoutePublicSchema = {
-    properties: {
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        agent_name: {
-            type: 'string',
-            title: 'Agent Name',
-            default: ''
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        prompt_examples: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Prompt Examples'
-        },
-        channel_app_mcp: {
-            type: 'boolean',
-            title: 'Channel App Mcp'
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active'
-        },
-        auto_enable_for_users: {
-            type: 'boolean',
-            title: 'Auto Enable For Users',
-            default: false
-        },
-        is_auto_managed: {
-            type: 'boolean',
-            title: 'Is Auto Managed',
-            default: false
-        },
-        agent_owner_name: {
-            type: 'string',
-            title: 'Agent Owner Name',
-            default: ''
-        },
-        agent_owner_email: {
-            type: 'string',
-            title: 'Agent Owner Email',
-            default: ''
-        },
-        created_by: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Created By'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        },
-        assignments: {
-            items: {
-                '$ref': '#/components/schemas/AppAgentRouteAssignmentPublic'
-            },
-            type: 'array',
-            title: 'Assignments',
-            default: []
-        }
-    },
-    type: 'object',
-    required: ['id', 'name', 'agent_id', 'session_mode', 'trigger_prompt', 'message_patterns', 'channel_app_mcp', 'is_active', 'created_by', 'created_at', 'updated_at'],
-    title: 'AppAgentRoutePublic'
-} as const;
-
-export const AppAgentRouteUpdateSchema = {
-    properties: {
-        name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Name'
-        },
-        session_mode: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        prompt_examples: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Prompt Examples'
-        },
-        channel_app_mcp: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Channel App Mcp'
-        },
-        is_active: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Is Active'
-        },
-        auto_enable_for_users: {
-            anyOf: [
-                {
-                    type: 'boolean'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Auto Enable For Users'
-        }
-    },
-    type: 'object',
-    title: 'AppAgentRouteUpdate'
-} as const;
-
 export const AppDataVolumePublicSchema = {
     properties: {
         id: {
@@ -9508,6 +9354,83 @@ export const ArticleListItemSchema = {
     required: ['id', 'title', 'description', 'tags', 'features', 'source_name', 'git_repo_id'],
     title: 'ArticleListItem',
     description: 'Article metadata for discovery step.'
+} as const;
+
+export const AutoInstallBundleAddSchema = {
+    properties: {
+        bundle_uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Bundle Uuid'
+        }
+    },
+    type: 'object',
+    required: ['bundle_uuid'],
+    title: 'AutoInstallBundleAdd',
+    description: 'Admin request body for adding a bundle to the auto-install list.'
+} as const;
+
+export const AutoInstallBundlePublicSchema = {
+    properties: {
+        bundle_uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Bundle Uuid'
+        },
+        bundle_id: {
+            type: 'string',
+            title: 'Bundle Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        visibility: {
+            type: 'string',
+            title: 'Visibility'
+        },
+        has_trigger_prompt: {
+            type: 'boolean',
+            title: 'Has Trigger Prompt',
+            default: false
+        },
+        router_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Router Trigger Prompt'
+        },
+        added_by: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Added By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['bundle_uuid', 'bundle_id', 'display_name', 'visibility', 'created_at'],
+    title: 'AutoInstallBundlePublic',
+    description: `Joined projection for the admin list.
+
+\`\`has_trigger_prompt\`\` is False when the bundle's latest revision carries
+no \`\`router_trigger_prompt\`\` — such a bundle can never win Pass 2, so the
+admin UI flags it.`
 } as const;
 
 export const BeginPasskeyRegistrationResponseSchema = {
@@ -10246,8 +10169,8 @@ Surfaced on \`\`ExternalTargetPublic.bundle_version\`\` so native clients
 and offer an in-client update. Populated only for consumer installs
 (\`\`target_type="agent"\`\` with a \`\`bundle_uuid\`\` and
 \`\`is_publisher_install=False\`\`); \`\`None\`\` for the publisher's own
-working copy, shared routes, and identity contacts (none of which the
-caller updates).
+working copy and identity contacts (neither of which the caller
+updates).
 
 Computed read-only — building this never mutates \`\`Agent.pending_update\`\`
 (the discovery endpoint is write-free). \`\`update_available\`\` is derived
@@ -10766,6 +10689,424 @@ export const CatalogPublicSchema = {
     title: 'CatalogPublic'
 } as const;
 
+export const ChannelDebugEventPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            title: 'Id'
+        },
+        at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'At'
+        },
+        direction: {
+            type: 'string',
+            title: 'Direction'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind'
+        },
+        summary: {
+            type: 'string',
+            title: 'Summary'
+        },
+        sender_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sender Email'
+        },
+        sender_display_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sender Display Name'
+        },
+        thread_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Thread Key'
+        },
+        text: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Text'
+        },
+        detail: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Detail'
+        },
+        repeat: {
+            type: 'integer',
+            title: 'Repeat',
+            default: 1
+        }
+    },
+    type: 'object',
+    required: ['id', 'at', 'direction', 'kind', 'summary'],
+    title: 'ChannelDebugEventPublic',
+    description: `One captured event in the admin debug feed.
+
+Read-only projection of the in-memory ring buffer — see
+\`\`services/server_channels/channel_debug_buffer.py\`\` for why this is not
+persisted.`
+} as const;
+
+export const ChannelDebugEventsPublicSchema = {
+    properties: {
+        events: {
+            items: {
+                '$ref': '#/components/schemas/ChannelDebugEventPublic'
+            },
+            type: 'array',
+            title: 'Events'
+        },
+        buffer_size: {
+            type: 'integer',
+            title: 'Buffer Size'
+        },
+        capturing_since: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Capturing Since'
+        }
+    },
+    type: 'object',
+    required: ['buffer_size', 'capturing_since'],
+    title: 'ChannelDebugEventsPublic',
+    description: 'The debug feed plus the bound it is subject to.'
+} as const;
+
+export const ChannelGrantPublicSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        email: {
+            type: 'string',
+            format: 'email',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        },
+        granted_by: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Granted By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'email', 'created_at'],
+    title: 'ChannelGrantPublic',
+    description: `One grant, joined with enough of the user to render a row.
+
+The picker needs a name, not a UUID. This is the same minimal projection
+\`\`UserSearchResult\`\` uses — id, email, full name — and nothing more: a
+grant list is an admin-only view of *who may use a channel*, not a user
+directory.`
+} as const;
+
+export const ChannelGrantsUpdateSchema = {
+    properties: {
+        user_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'User Ids'
+        }
+    },
+    type: 'object',
+    title: 'ChannelGrantsUpdate',
+    description: `Admin PUT body — the complete grant set, not a delta.
+
+Replace-the-set rather than add/remove verbs: the admin UI edits a picker
+whose state *is* the whole list, and a delta API against a multi-admin form
+silently loses a concurrent revocation.`
+} as const;
+
+export const ChannelRecentSenderSchema = {
+    properties: {
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        display_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Display Name'
+        },
+        thread_key: {
+            type: 'string',
+            title: 'Thread Key'
+        },
+        last_seen: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Seen'
+        },
+        bound: {
+            type: 'boolean',
+            title: 'Bound',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['email', 'thread_key'],
+    title: 'ChannelRecentSender',
+    description: `A person this channel has seen, and the thread to reach them on.
+
+Sourced from thread bindings (durable) merged with the debug buffer (live),
+so someone who has only just messaged is selectable before their binding
+exists.`
+} as const;
+
+export const ChannelSetupInstructionsSchema = {
+    properties: {
+        channel_type: {
+            type: 'string',
+            title: 'Channel Type'
+        },
+        webhook_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Url'
+        },
+        details: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Details'
+        },
+        steps: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Steps'
+        }
+    },
+    type: 'object',
+    required: ['channel_type', 'webhook_url'],
+    title: 'ChannelSetupInstructions',
+    description: 'Adapter-shaped setup guidance shown after create / on demand.'
+} as const;
+
+export const ChannelTestOutboundRequestSchema = {
+    properties: {
+        email: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email'
+        },
+        thread_key: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 512,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Thread Key'
+        },
+        text: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 4000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Text'
+        }
+    },
+    type: 'object',
+    title: 'ChannelTestOutboundRequest',
+    description: `Admin "does the credential work?" probe.
+
+Exactly one target must be supplied:
+
+- \`\`email\`\` — a person the platform has already seen on this channel. It is
+  resolved *locally*, to a thread we recorded from one of their inbound
+  events, never handed to the provider. Google Chat's \`\`users/{email}\`\`
+  alias exists but is documented as user-authentication only, and this
+  adapter authenticates as an app — so an email the platform has never
+  observed cannot be turned into a destination at all. That is a real
+  limit, surfaced as an actionable error rather than a silent failure.
+- \`\`thread_key\`\` — the channel-native identity (Google Chat: \`\`spaces/AAA\`\`
+  or \`\`spaces/AAA/threads/BBB\`\`). The escape hatch, and what the debug
+  panel's "reply here" action sends.`
+} as const;
+
+export const ChannelTestOutboundResultSchema = {
+    properties: {
+        success: {
+            type: 'boolean',
+            title: 'Success'
+        },
+        external_message_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'External Message Id'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['success'],
+    title: 'ChannelTestOutboundResult',
+    description: 'Outcome of a test send. ``error`` is admin-facing, never the raw secret.'
+} as const;
+
+export const ChannelTypePublicSchema = {
+    properties: {
+        channel_type: {
+            type: 'string',
+            title: 'Channel Type'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        inbound_mode: {
+            type: 'string',
+            title: 'Inbound Mode'
+        },
+        needs_webhook_token: {
+            type: 'boolean',
+            title: 'Needs Webhook Token'
+        },
+        needs_outbound_credentials: {
+            type: 'boolean',
+            title: 'Needs Outbound Credentials'
+        },
+        is_singleton: {
+            type: 'boolean',
+            title: 'Is Singleton'
+        }
+    },
+    type: 'object',
+    required: ['channel_type', 'display_name', 'inbound_mode', 'needs_webhook_token', 'needs_outbound_credentials', 'is_singleton'],
+    title: 'ChannelTypePublic',
+    description: `One registered adapter, for the admin type picker *and its form*.
+
+Carries the transport shape as well as the label, because the admin form
+has to decide which controls exist at all — a transport with no webhook,
+no channel secret and no external senders must not be offered a secrets
+box, a sender whitelist or an auto-registration switch. Every one of those
+would be a value nothing reads, and the whitelist is worse than useless:
+it is fail-closed, so an empty one renders as "this channel denies
+everyone" on a channel where it denies nobody.
+
+Declared facts, projected — never re-derived. The frontend must branch on
+these fields and never on \`\`channel_type\`\`, for the same reason nothing in
+the backend does: a type check is a rule that has to be found and edited
+again for the next transport, and the one that gets missed is the one that
+silently shows the wrong form.
+
+All four are required (no defaults), like the derived fields on
+\`\`ServerChannelPublic\`\`: a projection that forgets one fails loudly rather
+than reporting a plausible-looking \`\`False\`\`.`
+} as const;
+
 export const CheckAccessResponseSchema = {
     properties: {
         accessible: {
@@ -10832,6 +11173,29 @@ export const CheckUpdatesResponseSchema = {
                 }
             ],
             title: 'Latest Version'
+        },
+        latest_release_notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Release Notes'
+        },
+        latest_published_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Published At'
         },
         last_update_status: {
             anyOf: [
@@ -11260,6 +11624,24 @@ export const ConsentResponseSchema = {
     type: 'object',
     required: ['redirect_to'],
     title: 'ConsentResponse'
+} as const;
+
+export const ContextPackageVersionPublicSchema = {
+    properties: {
+        version: {
+            type: 'string',
+            title: 'Version'
+        }
+    },
+    type: 'object',
+    required: ['version'],
+    title: 'ContextPackageVersionPublic',
+    description: `Staleness probe for an already-extracted context package.
+
+The CLI reads \`\`context/VERSION\`\` out of the workspace and compares it with
+\`\`version\`\` here. Equal means the workspace is current; different means a
+\`\`cinna account refresh-context\`\` is due. A workspace that predates the
+stamp has no \`\`VERSION\`\` file at all, which is itself the answer.`
 } as const;
 
 export const CreateAgentTaskRequestSchema = {
@@ -12843,24 +13225,6 @@ the bundle id would silently orphan installed app-data — the API
 rejects with 409.`
 } as const;
 
-export const EmailAccessModeSchema = {
-    type: 'string',
-    enum: ['open', 'restricted'],
-    title: 'EmailAccessMode'
-} as const;
-
-export const EmailCloneShareModeSchema = {
-    type: 'string',
-    enum: ['user', 'builder'],
-    title: 'EmailCloneShareMode'
-} as const;
-
-export const EmailProcessAsSchema = {
-    type: 'string',
-    enum: ['new_session', 'new_task'],
-    title: 'EmailProcessAs'
-} as const;
-
 export const EncryptionInitRequestSchema = {
     properties: {
         device: {
@@ -13272,8 +13636,8 @@ export const ExternalAgentListResponseSchema = {
     title: 'ExternalAgentListResponse',
     description: `Response schema for GET /api/v1/external/agents.
 
-Targets are ordered: personal agents first, then MCP shared agents,
-then identity contacts — each section sorted by name ascending.`
+Targets are ordered: personal agents first, then identity contacts —
+each section sorted by name ascending.`
 } as const;
 
 export const ExternalSessionPublicSchema = {
@@ -13463,7 +13827,7 @@ export const ExternalTargetPublicSchema = {
     properties: {
         target_type: {
             type: 'string',
-            enum: ['agent', 'app_mcp_route', 'identity'],
+            enum: ['agent', 'identity'],
             title: 'Target Type'
         },
         target_id: {
@@ -13574,10 +13938,9 @@ export const ExternalTargetPublicSchema = {
     title: 'ExternalTargetPublic',
     description: `A single addressable target returned by the external agent discovery endpoint.
 
-Covers three source types:
-- "agent"         — personal agent owned by (or cloned to) the user
-- "app_mcp_route" — agent shared with the user via an AppAgentRoute assignment
-- "identity"      — another user who has exposed agents via the Identity MCP server`
+Covers two source types:
+- "agent"    — personal agent owned by (or cloned to) the user
+- "identity" — another user who has exposed agents via the Identity MCP server`
 } as const;
 
 export const FileUploadPublicSchema = {
@@ -13828,6 +14191,46 @@ export const GitCommitListSchema = {
     description: 'Response of ``GET /agents/{agent_id}/git/commits``.'
 } as const;
 
+export const GitDiffSchema = {
+    properties: {
+        section: {
+            type: 'string',
+            title: 'Section'
+        },
+        key: {
+            type: 'string',
+            title: 'Key'
+        },
+        label: {
+            type: 'string',
+            title: 'Label'
+        },
+        change_type: {
+            type: 'string',
+            title: 'Change Type'
+        },
+        diff: {
+            type: 'string',
+            title: 'Diff',
+            default: ''
+        },
+        binary: {
+            type: 'boolean',
+            title: 'Binary',
+            default: false
+        },
+        truncated: {
+            type: 'boolean',
+            title: 'Truncated',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['section', 'key', 'label', 'change_type'],
+    title: 'GitDiff',
+    description: "Response of ``GET /agents/{agent_id}/git/diff`` — one item's diff."
+} as const;
+
 export const GitDirtyStatusSchema = {
     properties: {
         dirty: {
@@ -13837,6 +14240,11 @@ export const GitDirtyStatusSchema = {
         prompts_dirty: {
             type: 'boolean',
             title: 'Prompts Dirty'
+        },
+        settings_dirty: {
+            type: 'boolean',
+            title: 'Settings Dirty',
+            default: false
         },
         workspace_dirty: {
             type: 'boolean',
@@ -13878,7 +14286,12 @@ export const GitFileChangeSchema = {
     type: 'object',
     required: ['path', 'change_type'],
     title: 'GitFileChange',
-    description: 'One changed workspace file in the commit preview.'
+    description: `One changed workspace file in the commit preview.
+
+Deliberately has NO \`\`blocks_pull\`\`: workspace files never block a pull,
+they are *replaced* by it wholesale whenever an env exists. That is a
+property of the operation, not of a file, so the UI states it once as a
+section header rather than repeating a flag per row.`
 } as const;
 
 export const GitPromptChangeSchema = {
@@ -13887,15 +14300,57 @@ export const GitPromptChangeSchema = {
             type: 'string',
             title: 'Field'
         },
+        key: {
+            type: 'string',
+            title: 'Key',
+            default: ''
+        },
+        section: {
+            type: 'string',
+            title: 'Section',
+            default: 'prompt'
+        },
         change_type: {
             type: 'string',
             title: 'Change Type'
+        },
+        blocks_pull: {
+            type: 'boolean',
+            title: 'Blocks Pull',
+            default: false
         }
     },
     type: 'object',
     required: ['field', 'change_type'],
     title: 'GitPromptChange',
     description: 'One changed prompt field in the commit preview.'
+} as const;
+
+export const GitPullRequestSchema = {
+    properties: {
+        conflict_resolution: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conflict Resolution',
+            description: 'How to resolve local changes a pull would overwrite. One of: take_remote, keep_local. Omit to fail loud with a recoverable 409 instead.'
+        }
+    },
+    type: 'object',
+    title: 'GitPullRequest',
+    description: `Optional body of \`\`POST /agents/{agent_id}/git/pull\`\`.
+
+\`\`conflict_resolution\`\` is one of :data:\`GIT_PULL_RESOLUTIONS\`
+(\`\`keep_local\`\` / \`\`take_remote\`\`); omitting it — or the whole body — keeps
+the fail-loud 409 behavior the GitOps webhook path depends on. Shaped as a
+single scalar so a future per-field resolution (\`\`keep_fields: [...]\`\`) can
+be added without a breaking change. Validated in the service, not here, so
+the service stays the sole enforcement point.`
 } as const;
 
 export const GitPushRequestSchema = {
@@ -13927,6 +14382,38 @@ export const GitPushRequestSchema = {
     description: 'Body of ``POST /agents/{agent_id}/git/push``.'
 } as const;
 
+export const GitSettingChangeSchema = {
+    properties: {
+        field: {
+            type: 'string',
+            title: 'Field'
+        },
+        key: {
+            type: 'string',
+            title: 'Key',
+            default: ''
+        },
+        section: {
+            type: 'string',
+            title: 'Section',
+            default: ''
+        },
+        change_type: {
+            type: 'string',
+            title: 'Change Type'
+        },
+        blocks_pull: {
+            type: 'boolean',
+            title: 'Blocks Pull',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['field', 'change_type'],
+    title: 'GitSettingChange',
+    description: 'One changed agent-settings field (``cinna.agent.json``) in the preview.'
+} as const;
+
 export const GitStatusSchema = {
     properties: {
         dirty: {
@@ -13948,12 +14435,25 @@ export const GitStatusSchema = {
             ],
             title: 'Last Synced Commit'
         },
+        pull_blocked: {
+            type: 'boolean',
+            title: 'Pull Blocked',
+            default: false
+        },
         prompt_changes: {
             items: {
                 '$ref': '#/components/schemas/GitPromptChange'
             },
             type: 'array',
             title: 'Prompt Changes',
+            default: []
+        },
+        setting_changes: {
+            items: {
+                '$ref': '#/components/schemas/GitSettingChange'
+            },
+            type: 'array',
+            title: 'Setting Changes',
             default: []
         },
         file_changes: {
@@ -14192,17 +14692,6 @@ export const IdentityAgentBindingCreateSchema = {
             type: 'string',
             title: 'Trigger Prompt'
         },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
         prompt_examples: {
             anyOf: [
                 {
@@ -14260,17 +14749,6 @@ export const IdentityAgentBindingPublicSchema = {
             type: 'string',
             title: 'Trigger Prompt'
         },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
         prompt_examples: {
             anyOf: [
                 {
@@ -14310,7 +14788,7 @@ export const IdentityAgentBindingPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'agent_id', 'trigger_prompt', 'message_patterns', 'session_mode', 'is_active', 'created_at', 'updated_at'],
+    required: ['id', 'agent_id', 'trigger_prompt', 'session_mode', 'is_active', 'created_at', 'updated_at'],
     title: 'IdentityAgentBindingPublic'
 } as const;
 
@@ -14326,17 +14804,6 @@ export const IdentityAgentBindingUpdateSchema = {
                 }
             ],
             title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
         },
         prompt_examples: {
             anyOf: [
@@ -14458,6 +14925,553 @@ export const IdentityContactPublicSchema = {
     required: ['owner_id', 'owner_name', 'owner_email', 'is_enabled', 'agent_count', 'assignment_ids'],
     title: 'IdentityContactPublic',
     description: 'Represents a person who has shared agents with the current user via identity.'
+} as const;
+
+export const ImprovementContextPublicSchema = {
+    properties: {
+        eligible: {
+            type: 'boolean',
+            title: 'Eligible'
+        },
+        reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reason'
+        },
+        is_shared_externally: {
+            type: 'boolean',
+            title: 'Is Shared Externally',
+            default: false
+        },
+        recipient_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Recipient Display'
+        },
+        target_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Agent Name'
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        message_count: {
+            type: 'integer',
+            title: 'Message Count',
+            default: 0
+        },
+        existing_request_count: {
+            type: 'integer',
+            title: 'Existing Request Count',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['eligible'],
+    title: 'ImprovementContextPublic',
+    description: `The consent modal's pre-flight payload.
+
+Produced by the same gate + target resolution the submission runs, so the
+modal's copy can never disagree with what submitting will actually do.`
+} as const;
+
+export const ImprovementRequestCreateSchema = {
+    properties: {
+        session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Session Id'
+        },
+        comment: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 4000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Comment'
+        },
+        include_memory: {
+            type: 'boolean',
+            title: 'Include Memory',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['session_id'],
+    title: 'ImprovementRequestCreate',
+    description: 'Submission payload — the consent action.'
+} as const;
+
+export const ImprovementRequestDetailPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        target_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Agent Id'
+        },
+        target_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Agent Name'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        source_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Name'
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        is_bundle_install: {
+            type: 'boolean',
+            title: 'Is Bundle Install',
+            default: false
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
+        },
+        requester_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Display'
+        },
+        requester_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Email'
+        },
+        comment: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Comment'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        },
+        source: {
+            type: 'string',
+            title: 'Source'
+        },
+        snapshot_message_count: {
+            type: 'integer',
+            title: 'Snapshot Message Count'
+        },
+        snapshot_truncated: {
+            type: 'boolean',
+            title: 'Snapshot Truncated'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        status_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Changed At'
+        },
+        context: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Context'
+        },
+        session_title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Title'
+        }
+    },
+    type: 'object',
+    required: ['id', 'target_agent_id', 'status', 'source', 'snapshot_message_count', 'snapshot_truncated', 'created_at'],
+    title: 'ImprovementRequestDetailPublic',
+    description: 'Detail projection — adds the whole frozen context block.'
+} as const;
+
+export const ImprovementRequestPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        target_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Agent Id'
+        },
+        target_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Agent Name'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        source_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Name'
+        },
+        bundle_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Id'
+        },
+        is_bundle_install: {
+            type: 'boolean',
+            title: 'Is Bundle Install',
+            default: false
+        },
+        installed_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Version'
+        },
+        installed_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Installed Revision Number'
+        },
+        requester_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Display'
+        },
+        requester_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Email'
+        },
+        comment: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Comment'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        },
+        source: {
+            type: 'string',
+            title: 'Source'
+        },
+        snapshot_message_count: {
+            type: 'integer',
+            title: 'Snapshot Message Count'
+        },
+        snapshot_truncated: {
+            type: 'boolean',
+            title: 'Snapshot Truncated'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        status_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Changed At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'target_agent_id', 'status', 'source', 'snapshot_message_count', 'snapshot_truncated', 'created_at'],
+    title: 'ImprovementRequestPublic',
+    description: `List/row projection.
+
+\`\`requester_display\`\` / \`\`requester_email\`\` identify the person who shared
+the session. They are meaningful to the recipient; the requester's own
+projection of their submitted requests carries them too (it is their data).`
+} as const;
+
+export const ImprovementRequestUpdateSchema = {
+    properties: {
+        status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        }
+    },
+    type: 'object',
+    title: 'ImprovementRequestUpdate',
+    description: 'Recipient-only status / resolution-note edit.'
+} as const;
+
+export const ImprovementRequestsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/ImprovementRequestPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'ImprovementRequestsPublic'
 } as const;
 
 export const InputTaskCreateSchema = {
@@ -14667,30 +15681,6 @@ export const InputTaskDetailPublicSchema = {
                 }
             ],
             title: 'Source Session Id'
-        },
-        source_email_message_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Email Message Id'
-        },
-        source_agent_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Agent Id'
         },
         auto_feedback: {
             type: 'boolean',
@@ -15052,30 +16042,6 @@ export const InputTaskPublicSchema = {
             ],
             title: 'Source Session Id'
         },
-        source_email_message_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Email Message Id'
-        },
-        source_agent_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Agent Id'
-        },
         auto_feedback: {
             type: 'boolean',
             title: 'Auto Feedback'
@@ -15318,30 +16284,6 @@ export const InputTaskPublicExtendedSchema = {
                 }
             ],
             title: 'Source Session Id'
-        },
-        source_email_message_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Email Message Id'
-        },
-        source_agent_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Source Agent Id'
         },
         auto_feedback: {
             type: 'boolean',
@@ -17578,11 +18520,6 @@ export const MailServerConfigPublicSchema = {
             format: 'uuid',
             title: 'Id'
         },
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
         has_password: {
             type: 'boolean',
             title: 'Has Password',
@@ -17600,7 +18537,7 @@ export const MailServerConfigPublicSchema = {
         }
     },
     type: 'object',
-    required: ['name', 'server_type', 'host', 'port', 'username', 'id', 'user_id', 'created_at', 'updated_at'],
+    required: ['name', 'server_type', 'host', 'port', 'username', 'id', 'created_at', 'updated_at'],
     title: 'MailServerConfigPublic'
 } as const;
 
@@ -19391,38 +20328,6 @@ export const PrivateUserCreateSchema = {
     title: 'PrivateUserCreate'
 } as const;
 
-export const ProcessEmailsResultSchema = {
-    properties: {
-        polled: {
-            type: 'integer',
-            title: 'Polled',
-            default: 0
-        },
-        processed: {
-            type: 'integer',
-            title: 'Processed',
-            default: 0
-        },
-        pending: {
-            type: 'integer',
-            title: 'Pending',
-            default: 0
-        },
-        errors: {
-            type: 'integer',
-            title: 'Errors',
-            default: 0
-        },
-        message: {
-            type: 'string',
-            title: 'Message',
-            default: ''
-        }
-    },
-    type: 'object',
-    title: 'ProcessEmailsResult'
-} as const;
-
 export const PublishRequestSchema = {
     properties: {
         release_notes: {
@@ -19910,63 +20815,6 @@ export const RevokeRequestSchema = {
     title: 'RevokeRequest'
 } as const;
 
-export const RouteConflictMatchSchema = {
-    properties: {
-        route_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Route Id'
-        },
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        agent_name: {
-            type: 'string',
-            title: 'Agent Name'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        similarity: {
-            type: 'number',
-            title: 'Similarity'
-        }
-    },
-    type: 'object',
-    required: ['route_id', 'agent_id', 'agent_name', 'trigger_prompt', 'similarity'],
-    title: 'RouteConflictMatch',
-    description: `A single conflicting effective route the installer already has.
-
-Surfaced as a non-blocking toast on the install completion page when an
-agent's auto-created route looks similar (by lowercased token overlap)
-to another route already active for the installer. Helps the user
-spot near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
-Planner") that could confuse the App MCP router.`
-} as const;
-
-export const RouteConflictResponseSchema = {
-    properties: {
-        matches: {
-            items: {
-                '$ref': '#/components/schemas/RouteConflictMatch'
-            },
-            type: 'array',
-            title: 'Matches',
-            default: []
-        }
-    },
-    type: 'object',
-    title: 'RouteConflictResponse',
-    description: `Response payload for the install-time conflict check.
-
-\`\`matches\`\` is sorted by descending similarity. Empty when no
-effective route crosses the similarity threshold (or when the agent
-has no auto-managed route to compare against).`
-} as const;
-
 export const RouterTriggerPromptUpdateSchema = {
     properties: {
         router_trigger_prompt: {
@@ -19984,6 +20832,1022 @@ export const RouterTriggerPromptUpdateSchema = {
     type: 'object',
     title: 'RouterTriggerPromptUpdate',
     description: 'Owner-only update payload for ``Agent.router_trigger_prompt``.'
+} as const;
+
+export const RoutingDecisionPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        origin: {
+            type: 'string',
+            title: 'Origin'
+        },
+        channel_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Id'
+        },
+        channel_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Name'
+        },
+        user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Id'
+        },
+        user_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Email'
+        },
+        actor_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Actor User Id'
+        },
+        thread_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Thread Key'
+        },
+        message_text: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Text'
+        },
+        message_sha256: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Sha256'
+        },
+        message_text_hidden: {
+            type: 'boolean',
+            title: 'Message Text Hidden',
+            default: false
+        },
+        message_text_notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Text Notice'
+        },
+        outcome: {
+            type: 'string',
+            title: 'Outcome'
+        },
+        match_method: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Match Method'
+        },
+        selected_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Agent Id'
+        },
+        selected_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Agent Name'
+        },
+        selected_bundle_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Bundle Uuid'
+        },
+        selected_bundle_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Bundle Name'
+        },
+        confidence: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Confidence'
+        },
+        latency_ms: {
+            type: 'integer',
+            title: 'Latency Ms',
+            default: 0
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        candidate_count: {
+            type: 'integer',
+            title: 'Candidate Count',
+            default: 0
+        },
+        skipped_count: {
+            type: 'integer',
+            title: 'Skipped Count',
+            default: 0
+        },
+        provider: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        stages: {
+            items: {},
+            type: 'array',
+            title: 'Stages'
+        },
+        diagnosis: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/RoutingDiagnosisPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    required: ['id', 'created_at', 'origin', 'outcome'],
+    title: 'RoutingDecisionPublic',
+    description: 'Full detail — the summary plus the stage trace.'
+} as const;
+
+export const RoutingDecisionSummarySchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        origin: {
+            type: 'string',
+            title: 'Origin'
+        },
+        channel_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Id'
+        },
+        channel_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Name'
+        },
+        user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Id'
+        },
+        user_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Email'
+        },
+        actor_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Actor User Id'
+        },
+        thread_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Thread Key'
+        },
+        message_text: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Text'
+        },
+        message_sha256: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Sha256'
+        },
+        message_text_hidden: {
+            type: 'boolean',
+            title: 'Message Text Hidden',
+            default: false
+        },
+        message_text_notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message Text Notice'
+        },
+        outcome: {
+            type: 'string',
+            title: 'Outcome'
+        },
+        match_method: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Match Method'
+        },
+        selected_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Agent Id'
+        },
+        selected_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Agent Name'
+        },
+        selected_bundle_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Bundle Uuid'
+        },
+        selected_bundle_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selected Bundle Name'
+        },
+        confidence: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Confidence'
+        },
+        latency_ms: {
+            type: 'integer',
+            title: 'Latency Ms',
+            default: 0
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        candidate_count: {
+            type: 'integer',
+            title: 'Candidate Count',
+            default: 0
+        },
+        skipped_count: {
+            type: 'integer',
+            title: 'Skipped Count',
+            default: 0
+        },
+        provider: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        }
+    },
+    type: 'object',
+    required: ['id', 'created_at', 'origin', 'outcome'],
+    title: 'RoutingDecisionSummary',
+    description: `List-row projection — everything the table needs, without \`\`stages\`\`.
+
+\`\`stages\`\` is the large field and the only one a list view never reads;
+keeping it out means a page of 50 rows does not haul 50 rendered prompts
+and raw LLM responses across the wire.`
+} as const;
+
+export const RoutingDecisionsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/RoutingDecisionSummary'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Notice'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'RoutingDecisionsPublic',
+    description: 'Paginated list envelope.'
+} as const;
+
+export const RoutingDiagnosisPublicSchema = {
+    properties: {
+        code: {
+            type: 'string',
+            title: 'Code'
+        },
+        verdict: {
+            type: 'string',
+            title: 'Verdict'
+        },
+        action: {
+            type: 'string',
+            title: 'Action'
+        },
+        eligible_candidate_count: {
+            type: 'integer',
+            title: 'Eligible Candidate Count',
+            default: 0
+        },
+        skipped_by_reason: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Skipped By Reason'
+        },
+        expected_agent_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Agent Id'
+        },
+        expected_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Agent Name'
+        },
+        expected_agent_owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expected Agent Owner Email'
+        },
+        near_misses: {
+            items: {
+                '$ref': '#/components/schemas/RoutingNearMiss'
+            },
+            type: 'array',
+            title: 'Near Misses'
+        },
+        near_miss_notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Near Miss Notice'
+        }
+    },
+    type: 'object',
+    required: ['code', 'verdict', 'action'],
+    title: 'RoutingDiagnosisPublic',
+    description: `Why this decision went the way it did, in a sentence, plus near-misses.
+
+**Computed on the backend on purpose** (plan §10, Phase 4): the wording is
+the feature for the motivating case, so it has to be testable and it has to
+live next to the rules it describes. In a component it could be neither —
+nothing would fail when the rule it paraphrases changed.
+
+\`\`verdict\`\` is the sentence; \`\`code\`\` is the branch that produced it, so a
+client can style or group without parsing prose and a test can pin both
+independently. Every branch names a remedy: a diagnosis that says only what
+is wrong leaves the reader exactly where they started.
+
+**What this exposes about the expected agent is an allowlist of two fields**
+— \`\`expected_agent_name\`\` and \`\`expected_agent_owner_email\`\` — chosen by the
+same standard §7 applies to \`\`candidates[].trigger_prompt\`\`: they are the
+agent owner's own configuration, not sender-derived, and already visible to
+a superuser. Nothing else about the agent is read into the response, and a
+field wanted here later has to clear that bar when it is added.`
+} as const;
+
+export const RoutingNearMissSchema = {
+    properties: {
+        ref_id: {
+            type: 'string',
+            title: 'Ref Id'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        similarity: {
+            type: 'number',
+            title: 'Similarity'
+        },
+        eligible: {
+            type: 'boolean',
+            title: 'Eligible',
+            default: true
+        },
+        skip_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skip Reason'
+        }
+    },
+    type: 'object',
+    required: ['ref_id', 'kind', 'name', 'similarity'],
+    title: 'RoutingNearMiss',
+    description: `One candidate ranked by token overlap against the routed message.
+
+A *hint*, explicitly not a rule: the classifier is an LLM and there is no
+similarity cut-off anywhere in routing. This is the same Jaccard overlap
+\`\`app/services/routing/text_similarity.py\`\` already uses for install-time
+route-conflict detection, borrowed to answer the question an admin
+actually asks about a \`\`no_match\`\` — "how close did it come?". Saying
+"0.31, below the threshold" would be a claim the router does not
+implement; the wording says "closest", not "just missed".`
+} as const;
+
+export const RoutingRecommendationPublicSchema = {
+    properties: {
+        trace_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Trace Id'
+        },
+        ref_id: {
+            type: 'string',
+            title: 'Ref Id'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
+        },
+        current_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Trigger Prompt'
+        },
+        suggested_trigger_prompt: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Suggested Trigger Prompt'
+        },
+        success: {
+            type: 'boolean',
+            title: 'Success',
+            default: false
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        notice: {
+            type: 'string',
+            title: 'Notice',
+            default: "Draft only — nothing has been changed. This endpoint never edits an agent, a trigger prompt or a bundle, including ones you own. Send this wording to the agent's owner, who can apply it themselves; for a bundle, the owner applies it and republishes."
+        }
+    },
+    type: 'object',
+    required: ['trace_id', 'ref_id', 'kind', 'name'],
+    title: 'RoutingRecommendationPublic',
+    description: 'A copyable trigger-prompt draft for one candidate. Writes nothing.'
+} as const;
+
+export const RoutingRecommendationRequestSchema = {
+    properties: {
+        ref_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ref Id'
+        }
+    },
+    type: 'object',
+    title: 'RoutingRecommendationRequest',
+    description: 'Ask for a drafted trigger prompt for one candidate from a trace.'
+} as const;
+
+export const RoutingReplayDiffSchema = {
+    properties: {
+        changed: {
+            type: 'boolean',
+            title: 'Changed',
+            default: false
+        },
+        outcome_changed: {
+            type: 'boolean',
+            title: 'Outcome Changed',
+            default: false
+        },
+        original_outcome: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Original Outcome'
+        },
+        replay_outcome: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Replay Outcome'
+        },
+        selection_changed: {
+            type: 'boolean',
+            title: 'Selection Changed',
+            default: false
+        },
+        original_selection: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Original Selection'
+        },
+        replay_selection: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Replay Selection'
+        },
+        match_method_changed: {
+            type: 'boolean',
+            title: 'Match Method Changed',
+            default: false
+        },
+        original_match_method: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Original Match Method'
+        },
+        replay_match_method: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Replay Match Method'
+        },
+        original_confidence: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Original Confidence'
+        },
+        replay_confidence: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Replay Confidence'
+        },
+        original_candidate_count: {
+            type: 'integer',
+            title: 'Original Candidate Count',
+            default: 0
+        },
+        replay_candidate_count: {
+            type: 'integer',
+            title: 'Replay Candidate Count',
+            default: 0
+        },
+        candidates_added: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Candidates Added'
+        },
+        candidates_removed: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Candidates Removed'
+        },
+        summary: {
+            type: 'string',
+            title: 'Summary',
+            default: ''
+        }
+    },
+    type: 'object',
+    title: 'RoutingReplayDiff',
+    description: `What changed between a stored decision and its re-run.
+
+Field-by-field rather than a text blob: the card renders the changed rows,
+and a test can assert on one property without parsing prose. \`\`summary\`\` is
+server-authored so the wording lives with the rules it describes (same call
+as the reachability verdict in plan §9).`
+} as const;
+
+export const RoutingReplayRequestSchema = {
+    properties: {
+        include_catalog: {
+            type: 'boolean',
+            title: 'Include Catalog',
+            default: true
+        }
+    },
+    type: 'object',
+    title: 'RoutingReplayRequest',
+    description: "Re-run a stored trace's message against current state."
+} as const;
+
+export const RoutingReplayResultSchema = {
+    properties: {
+        original: {
+            '$ref': '#/components/schemas/RoutingDecisionPublic'
+        },
+        replay: {
+            '$ref': '#/components/schemas/RoutingDecisionPublic'
+        },
+        diff: {
+            '$ref': '#/components/schemas/RoutingReplayDiff'
+        }
+    },
+    type: 'object',
+    required: ['original', 'replay', 'diff'],
+    title: 'RoutingReplayResult',
+    description: 'The original decision, the re-run, and the diff between them.'
+} as const;
+
+export const RoutingSimulateRequestSchema = {
+    properties: {
+        message: {
+            type: 'string',
+            maxLength: 8000,
+            title: 'Message'
+        },
+        as_user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'As User Id'
+        },
+        channel_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Id'
+        },
+        include_catalog: {
+            type: 'boolean',
+            title: 'Include Catalog',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['message', 'as_user_id'],
+    title: 'RoutingSimulateRequest',
+    description: 'Run one message through routing for another user, with no effects.'
 } as const;
 
 export const SSHKeyGenerateSchema = {
@@ -20477,33 +22341,180 @@ export const SecurityEventsPublicSchema = {
     title: 'SecurityEventsPublic'
 } as const;
 
-export const SendAnswerRequestSchema = {
+export const ServerChannelCreateSchema = {
     properties: {
-        custom_message: {
+        channel_type: {
+            type: 'string',
+            maxLength: 64,
+            minLength: 1,
+            title: 'Channel Type'
+        },
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: true
+        },
+        auto_register_users: {
+            type: 'boolean',
+            title: 'Auto Register Users',
+            default: false
+        },
+        visibility: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Visibility',
+            default: 'public'
+        },
+        default_enabled_for_users: {
+            type: 'boolean',
+            title: 'Default Enabled For Users',
+            default: true
+        },
+        default_agent_scope: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Default Agent Scope',
+            default: 'all'
+        },
+        allow_auto_install: {
+            type: 'boolean',
+            title: 'Allow Auto Install',
+            default: true
+        },
+        config: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Config'
+        },
+        email_whitelist: {
             anyOf: [
                 {
-                    type: 'string',
-                    maxLength: 10000
+                    type: 'string'
                 },
                 {
                     type: 'null'
                 }
             ],
-            title: 'Custom Message'
+            title: 'Email Whitelist'
+        },
+        secrets: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Secrets'
         }
     },
     type: 'object',
-    title: 'SendAnswerRequest',
-    description: 'Request to send an email reply for an email-originated task'
+    required: ['channel_type', 'name'],
+    title: 'ServerChannelCreate',
+    description: 'Admin create payload.'
 } as const;
 
-export const SendAnswerResponseSchema = {
+export const ServerChannelPublicSchema = {
     properties: {
-        success: {
-            type: 'boolean',
-            title: 'Success'
+        channel_type: {
+            type: 'string',
+            maxLength: 64,
+            minLength: 1,
+            title: 'Channel Type'
         },
-        queue_entry_id: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: true
+        },
+        auto_register_users: {
+            type: 'boolean',
+            title: 'Auto Register Users',
+            default: false
+        },
+        visibility: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Visibility',
+            default: 'public'
+        },
+        default_enabled_for_users: {
+            type: 'boolean',
+            title: 'Default Enabled For Users',
+            default: true
+        },
+        default_agent_scope: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Default Agent Scope',
+            default: 'all'
+        },
+        allow_auto_install: {
+            type: 'boolean',
+            title: 'Allow Auto Install',
+            default: true
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        config: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Config'
+        },
+        email_whitelist: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Whitelist'
+        },
+        webhook_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Token'
+        },
+        webhook_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Webhook Url'
+        },
+        has_outbound_credentials: {
+            type: 'boolean',
+            title: 'Has Outbound Credentials'
+        },
+        created_by: {
             anyOf: [
                 {
                     type: 'string',
@@ -20513,35 +22524,168 @@ export const SendAnswerResponseSchema = {
                     type: 'null'
                 }
             ],
-            title: 'Queue Entry Id'
+            title: 'Created By'
         },
-        generated_reply: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Generated Reply'
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
         },
-        error: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Error'
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
         }
     },
     type: 'object',
-    required: ['success'],
-    title: 'SendAnswerResponse',
-    description: 'Response from sending an email reply'
+    required: ['channel_type', 'name', 'id', 'webhook_token', 'webhook_url', 'has_outbound_credentials', 'created_at', 'updated_at'],
+    title: 'ServerChannelPublic',
+    description: 'Admin read projection. Carries no secret material.'
+} as const;
+
+export const ServerChannelUpdateSchema = {
+    properties: {
+        channel_type: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Channel Type'
+        },
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Enabled'
+        },
+        auto_register_users: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Auto Register Users'
+        },
+        visibility: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 32
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Visibility'
+        },
+        default_enabled_for_users: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Enabled For Users'
+        },
+        default_agent_scope: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 32
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Agent Scope'
+        },
+        allow_auto_install: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Auto Install'
+        },
+        config: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Config'
+        },
+        email_whitelist: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email Whitelist'
+        },
+        secrets: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Secrets'
+        },
+        regenerate_webhook_token: {
+            type: 'boolean',
+            title: 'Regenerate Webhook Token',
+            default: false
+        }
+    },
+    type: 'object',
+    title: 'ServerChannelUpdate',
+    description: `Admin patch payload — every field optional.
+
+\`\`secrets\`\` is only written when a non-empty value is supplied, so a form
+round-trip that leaves the write-only field untouched keeps the stored
+credential.`
 } as const;
 
 export const ServerConfigSchema = {
@@ -21740,86 +23884,6 @@ export const SharedCredentialsPublicSchema = {
     required: ['data', 'count'],
     title: 'SharedCredentialsPublic',
     description: 'Response model for list of credentials shared with current user.'
-} as const;
-
-export const SharedRoutePublicSchema = {
-    properties: {
-        route_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Route Id'
-        },
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        agent_name: {
-            type: 'string',
-            title: 'Agent Name'
-        },
-        agent_owner_name: {
-            type: 'string',
-            title: 'Agent Owner Name',
-            default: ''
-        },
-        agent_owner_email: {
-            type: 'string',
-            title: 'Agent Owner Email',
-            default: ''
-        },
-        shared_by_name: {
-            type: 'string',
-            title: 'Shared By Name',
-            default: ''
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        prompt_examples: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Prompt Examples'
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active'
-        },
-        assignment_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Assignment Id'
-        },
-        is_enabled: {
-            type: 'boolean',
-            title: 'Is Enabled'
-        }
-    },
-    type: 'object',
-    required: ['route_id', 'name', 'agent_name', 'session_mode', 'trigger_prompt', 'is_active', 'assignment_id', 'is_enabled'],
-    title: 'SharedRoutePublic',
-    description: 'Route shared with a user (via assignment), as seen by the assignee.'
 } as const;
 
 export const SharedUserPublicSchema = {
@@ -23321,150 +25385,99 @@ the requested one when the request targeted a non-active environment and was
 redirected to the agent's active environment.`
 } as const;
 
-export const UserAppAgentRouteCreateSchema = {
-    properties: {
-        agent_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
-        },
-        session_mode: {
-            type: 'string',
-            title: 'Session Mode',
-            default: 'conversation'
-        },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        channel_app_mcp: {
-            type: 'boolean',
-            title: 'Channel App Mcp',
-            default: true
-        },
-        is_active: {
-            type: 'boolean',
-            title: 'Is Active',
-            default: true
-        }
-    },
-    type: 'object',
-    required: ['agent_id', 'trigger_prompt'],
-    title: 'UserAppAgentRouteCreate'
-} as const;
-
-export const UserAppAgentRoutePublicSchema = {
+export const UserChannelPublicSchema = {
     properties: {
         id: {
             type: 'string',
             format: 'uuid',
             title: 'Id'
         },
-        user_id: {
+        channel_type: {
             type: 'string',
-            format: 'uuid',
-            title: 'User Id'
+            title: 'Channel Type'
         },
-        agent_id: {
+        name: {
             type: 'string',
-            format: 'uuid',
-            title: 'Agent Id'
+            title: 'Name'
         },
-        agent_name: {
+        is_available: {
+            type: 'boolean',
+            title: 'Is Available'
+        },
+        is_enabled: {
+            type: 'boolean',
+            title: 'Is Enabled'
+        },
+        is_enabled_inherited: {
+            type: 'boolean',
+            title: 'Is Enabled Inherited'
+        },
+        channel_default_enabled: {
+            type: 'boolean',
+            title: 'Channel Default Enabled'
+        },
+        agent_scope: {
             type: 'string',
-            title: 'Agent Name',
-            default: ''
+            title: 'Agent Scope'
         },
-        session_mode: {
+        agent_scope_inherited: {
+            type: 'boolean',
+            title: 'Agent Scope Inherited'
+        },
+        channel_default_agent_scope: {
             type: 'string',
-            title: 'Session Mode'
+            title: 'Channel Default Agent Scope'
         },
-        trigger_prompt: {
-            type: 'string',
-            title: 'Trigger Prompt'
+        agent_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Agent Ids'
         },
-        message_patterns: {
+        pinned_agent_id: {
             anyOf: [
                 {
-                    type: 'string'
+                    type: 'string',
+                    format: 'uuid'
                 },
                 {
                     type: 'null'
                 }
             ],
-            title: 'Message Patterns'
+            title: 'Pinned Agent Id'
         },
-        channel_app_mcp: {
+        allow_identity_routing: {
             type: 'boolean',
-            title: 'Channel App Mcp'
+            title: 'Allow Identity Routing',
+            default: false
         },
-        is_active: {
+        has_settings: {
             type: 'boolean',
-            title: 'Is Active'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
+            title: 'Has Settings',
+            default: false
         }
     },
     type: 'object',
-    required: ['id', 'user_id', 'agent_id', 'session_mode', 'trigger_prompt', 'message_patterns', 'channel_app_mcp', 'is_active', 'created_at', 'updated_at'],
-    title: 'UserAppAgentRoutePublic'
+    required: ['id', 'channel_type', 'name', 'is_available', 'is_enabled', 'is_enabled_inherited', 'channel_default_enabled', 'agent_scope', 'agent_scope_inherited', 'channel_default_agent_scope'],
+    title: 'UserChannelPublic',
+    description: `One channel as its user sees it: resolved policy plus provenance.
+
+Every value here is already resolved — the client never re-applies the
+inherit rules, because a second implementation of them is exactly how the
+UI and the router come to disagree about whether a channel is on.
+
+The \`\`*_inherited\`\` flags exist so the UI can be honest about *why* a value
+is what it is. A setting the user has never touched must render as
+"following the admin default (on)", not as a plain switch that looks
+user-owned; the corresponding \`\`channel_default_*\`\` field carries the value
+being followed, so the label can name it without a second request.`
 } as const;
 
-export const UserAppAgentRouteUpdateSchema = {
+export const UserChannelUpdateSchema = {
     properties: {
-        session_mode: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Session Mode'
-        },
-        trigger_prompt: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Trigger Prompt'
-        },
-        message_patterns: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Message Patterns'
-        },
-        channel_app_mcp: {
+        is_enabled: {
             anyOf: [
                 {
                     type: 'boolean'
@@ -23473,9 +25486,48 @@ export const UserAppAgentRouteUpdateSchema = {
                     type: 'null'
                 }
             ],
-            title: 'Channel App Mcp'
+            title: 'Is Enabled'
         },
-        is_active: {
+        agent_scope: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 32
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Scope'
+        },
+        agent_ids: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'uuid'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Ids'
+        },
+        pinned_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Agent Id'
+        },
+        allow_identity_routing: {
             anyOf: [
                 {
                     type: 'boolean'
@@ -23484,34 +25536,21 @@ export const UserAppAgentRouteUpdateSchema = {
                     type: 'null'
                 }
             ],
-            title: 'Is Active'
+            title: 'Allow Identity Routing'
         }
     },
     type: 'object',
-    title: 'UserAppAgentRouteUpdate'
-} as const;
+    title: 'UserChannelUpdate',
+    description: `User PUT body. Omitted field = unchanged; explicit \`\`null\`\` = inherit.
 
-export const UserAppAgentRoutesResponseSchema = {
-    properties: {
-        personal_routes: {
-            items: {
-                '$ref': '#/components/schemas/UserAppAgentRoutePublic'
-            },
-            type: 'array',
-            title: 'Personal Routes'
-        },
-        shared_routes: {
-            items: {
-                '$ref': '#/components/schemas/SharedRoutePublic'
-            },
-            type: 'array',
-            title: 'Shared Routes'
-        }
-    },
-    type: 'object',
-    required: ['personal_routes', 'shared_routes'],
-    title: 'UserAppAgentRoutesResponse',
-    description: "Combined response for user's personal + shared routes."
+The distinction is read with \`\`model_dump(exclude_unset=True)\`\`, and it is
+the only way a nullable-meaning-inherit column can be *cleared* through an
+API whose "unset" marker is also \`\`None\`\`. A body of \`\`{}\`\` changes
+nothing; \`\`{"is_enabled": null}\`\` reverts that one field to the channel
+default while keeping the rest of the row.
+
+\`\`allow_identity_routing\`\` has no inherited state (master plan §3.4), so an
+explicit \`\`null\`\` for it is rejected rather than quietly ignored.`
 } as const;
 
 export const UserCreateSchema = {

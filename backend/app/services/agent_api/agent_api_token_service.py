@@ -11,8 +11,11 @@ Security model (mirrors AccessTokenService + the webapp share token):
 - The token value is a ``secrets.token_urlsafe`` string surfaced **once** inside
   the credential it is minted into; only its SHA256 hash is stored, plus an
   8-char prefix for display.
-- Validation is a hash lookup; active check; ``last_used_at`` is bumped on use.
-  Tokens are internal machine credentials and never expire.
+- Validation is a hash lookup; active check; expiry check; ``last_used_at`` is
+  bumped on use. Connection tokens are internal machine credentials and never
+  expire; external keys (``kind="external"``, minted by ``AgentApiKeyService``)
+  may carry an ``expires_at``. ``validate_token`` is the ONE validation path for
+  both kinds.
 - Ownership: the caller must own the producer agent to connect. Lookups that
   cannot find / are not owned return 404 (not 403) to avoid leaking existence.
 - ``read_only_override`` may only NARROW the producer's policy, never widen it
@@ -36,6 +39,7 @@ from app.models import (
     AgentApiToken,
     AgentApiTokenCreate,
     AgentApiTokenCreated,
+    AgentApiTokenKind,
     AgentApiTokenPublic,
     ConnectAgentApiRequest,
     ConnectAgentApiResponse,
@@ -89,8 +93,13 @@ class AgentApiTokenService:
 
     @staticmethod
     def build_base_url(agent_id: uuid.UUID) -> str:
-        """Absolute consumer-facing base URL for the producer's proxy."""
-        host = settings.FRONTEND_HOST.rstrip("/")
+        """Absolute consumer-facing base URL for the producer's proxy.
+
+        Built from the backend origin, not FRONTEND_HOST: this URL is handed to
+        other people's code, and on a split-host deployment (SPA on
+        dashboard.example.com, API on api.example.com) the SPA origin 404s.
+        """
+        host = settings.backend_base_url
         return f"{host}{settings.API_V1_STR}/agent-api/{agent_id}"
 
     @staticmethod
@@ -103,8 +112,13 @@ class AgentApiTokenService:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _hash_token(token: str) -> str:
-        """SHA256 hex digest of the opaque token value."""
+    def hash_token(token: str) -> str:
+        """SHA256 hex digest of the opaque token value.
+
+        Public because external-key minting (``AgentApiKeyService``) must produce
+        hashes that ``validate_token`` below can look up — one hashing rule for
+        both token kinds.
+        """
         return hashlib.sha256(token.encode()).hexdigest()
 
     # ------------------------------------------------------------------ #
@@ -167,7 +181,7 @@ class AgentApiTokenService:
         )
 
         token_value = secrets.token_urlsafe(32)
-        token_hash = AgentApiTokenService._hash_token(token_value)
+        token_hash = AgentApiTokenService.hash_token(token_value)
         token_prefix = token_value[:8]
 
         token = AgentApiToken(
@@ -409,6 +423,10 @@ class AgentApiTokenService:
         it. Each connection is one ``agent_api`` credential (minted by the
         connect helper for this producer) plus the consumer agents it is linked
         to. Surfaced on the producer's "Agent REST API" card. Owner-only.
+
+        External keys are a separate product with their own list (see
+        ``AgentApiKeyService.list_keys``) and are excluded here — the two
+        surfaces stay disjoint.
         """
         from app.services.credentials.credentials_service import CredentialsService
 
@@ -418,7 +436,10 @@ class AgentApiTokenService:
 
         tokens = session.exec(
             select(AgentApiToken)
-            .where(AgentApiToken.agent_id == agent_id)
+            .where(
+                AgentApiToken.agent_id == agent_id,
+                AgentApiToken.kind == AgentApiTokenKind.CONNECTION.value,
+            )
             .order_by(AgentApiToken.created_at.desc())
         ).all()
 
@@ -480,6 +501,11 @@ class AgentApiTokenService:
         Deduped by ``producer_agent_id`` (the first linked credential wins;
         multiple credentials pointing at the same producer is unusual but
         possible).
+
+        Connections only: an external key that an owner happened to link to one
+        of their agents is not a connection and must not appear here, keeping
+        this surface disjoint from the key list exactly like
+        ``list_producer_connections``.
         """
         from app.services.credentials.credentials_service import CredentialsService
 
@@ -487,11 +513,19 @@ class AgentApiTokenService:
             session, consumer_agent_id
         )
 
+        # One batched lookup for the whole link set (no per-credential query).
+        kinds = AgentApiTokenService.get_kinds_by_credential(
+            session,
+            [c.id for c in credentials if c.type == CredentialType.AGENT_API],
+        )
+
         rows: list[ConnectedProducerRow] = []
         seen_producers: set[uuid.UUID] = set()
 
         for credential in credentials:
             if credential.type != CredentialType.AGENT_API:
+                continue
+            if kinds.get(credential.id) != AgentApiTokenKind.CONNECTION.value:
                 continue
             try:
                 data = CredentialsService.decrypt_credential_data(
@@ -556,8 +590,9 @@ class AgentApiTokenService:
         """
         Disconnect one connection from the producer side: deletes the connection
         credential (which cascade-deletes the token) when present, else deletes
-        the orphaned token directly. Owner-only; 404 if the token is unknown or
-        not on this producer agent.
+        the orphaned token directly. Owner-only; 404 if the token is unknown,
+        not on this producer agent, or is an external key (those are revoked
+        through their own route so the two surfaces stay disjoint).
         """
         from app.services.credentials.credentials_service import CredentialsService
 
@@ -566,7 +601,11 @@ class AgentApiTokenService:
         )
 
         token = session.get(AgentApiToken, token_id)
-        if not token or token.agent_id != agent_id:
+        if (
+            not token
+            or token.agent_id != agent_id
+            or token.kind != AgentApiTokenKind.CONNECTION.value
+        ):
             raise AgentApiTokenNotFoundError("Connection not found")
 
         if token.credential_id is not None:
@@ -600,16 +639,30 @@ class AgentApiTokenService:
         session: Session,
         agent_id: uuid.UUID,
         token_value: str,
+        external_access_enabled: bool = True,
     ) -> AgentApiToken | None:
         """
         Validate a presented token value for the given producer agent.
 
         Returns the active token row (and bumps ``last_used_at``), or None if
-        invalid / revoked / wrong agent. Tokens never expire.
+        invalid / revoked / wrong agent / expired / disabled by the producer's
+        external-access kill switch. THE single validation path for both token
+        kinds — every rejection reason lives here, so none of them can bump
+        ``last_used_at`` or write to the DB on the way out.
+
+        Connection tokens never expire (``expires_at`` is NULL). External keys
+        may (plan D8): an expired key returns None so the caller raises the SAME
+        401 as an invalid one — the distinction is deliberately not leaked.
+
+        ``external_access_enabled`` is the producer's
+        ``agent_api_external_access_enabled`` opt-in, passed in by the proxy
+        (which has already loaded the Agent). It is the KILL SWITCH: off means
+        every external key stops authenticating at once, while agent-to-agent
+        connections keep working.
         """
         if not token_value:
             return None
-        token_hash = AgentApiTokenService._hash_token(token_value)
+        token_hash = AgentApiTokenService.hash_token(token_value)
         token = session.exec(
             select(AgentApiToken).where(
                 AgentApiToken.token_hash == token_hash,
@@ -618,6 +671,13 @@ class AgentApiTokenService:
             )
         ).first()
         if not token:
+            return None
+        if AgentApiTokenService.is_expired(token):
+            return None
+        if (
+            token.kind == AgentApiTokenKind.EXTERNAL.value
+            and not external_access_enabled
+        ):
             return None
 
         token.last_used_at = datetime.now(UTC)
@@ -629,6 +689,75 @@ class AgentApiTokenService:
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def is_expired(token: AgentApiToken, now: datetime | None = None) -> bool:
+        """Whether the token is past its ``expires_at`` (NULL = never expires).
+
+        The column is TIMESTAMPTZ, but a value that round-trips through a driver
+        or a test fixture can still arrive naive; those are read as UTC so the
+        comparison never raises.
+        """
+        expires_at = token.expires_at
+        if expires_at is None:
+            return False
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return (now or datetime.now(UTC)) >= expires_at
+
+    @staticmethod
+    def get_kinds_by_credential(
+        session: Session,
+        credential_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, str]:
+        """Map ``credential_id -> AgentApiToken.kind`` for a page of credentials.
+
+        Batched (one query) so the credentials list can classify ``agent_api``
+        rows into "connection" vs "external" without an N+1. Credentials with no
+        bound token are simply absent from the result; callers treat a missing
+        entry as a connection (the legacy shape).
+        """
+        if not credential_ids:
+            return {}
+        rows = session.exec(
+            select(AgentApiToken.credential_id, AgentApiToken.kind).where(
+                AgentApiToken.credential_id.in_(credential_ids)
+            )
+        ).all()
+        return {credential_id: kind for credential_id, kind in rows if credential_id}
+
+    @staticmethod
+    def get_kind_for_credential(
+        session: Session, credential_id: uuid.UUID
+    ) -> str | None:
+        """``AgentApiToken.kind`` for one credential, or None when unbound."""
+        return AgentApiTokenService.get_kinds_by_credential(
+            session, [credential_id]
+        ).get(credential_id)
+
+    @staticmethod
+    def is_restricted_agent_api_credential(
+        session: Session, credential_id: uuid.UUID
+    ) -> bool:
+        """Whether this ``agent_api`` credential must NOT be shared or synced.
+
+        The single predicate behind the two *security* rules for agent_api
+        credentials (the cosmetic tab split is separate — see
+        ``classify_credential_category``). Two cases, both fail-closed:
+
+        - ``kind == "external"`` — an identity-bound key. Sharing it means "act
+          as user X"; syncing it into a container bypasses the anonymous
+          connection model (plan D4).
+        - **No bound token row at all.** An ``agent_api`` credential whose token
+          is gone is dead in either mode — the stored value authenticates
+          nothing — and we can no longer tell which mode it was. Handing a dead
+          secret to a container or another user has no upside, so an orphan is
+          treated as restricted rather than as a connection.
+        """
+        return (
+            AgentApiTokenService.get_kind_for_credential(session, credential_id)
+            != AgentApiTokenKind.CONNECTION.value
+        )
 
     @staticmethod
     def _to_public(token: AgentApiToken) -> AgentApiTokenPublic:

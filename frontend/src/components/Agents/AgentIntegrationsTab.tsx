@@ -19,7 +19,6 @@ import useAuth from "@/hooks/useAuth"
 import useRole from "@/hooks/useRole"
 import { A2aAccessTokensManager } from "./A2aAccessTokensManager"
 import { AgentRestApiCard } from "./AgentRestApiCard"
-import { EmailIntegrationCard } from "./EmailIntegrationCard"
 import { GuestShareCard } from "./GuestShareCard"
 import { McpConnectorsCard } from "./McpConnectorsCard"
 import { McpConnectorsCardSimple } from "./McpConnectorsCardSimple"
@@ -41,12 +40,14 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
   const isOwner = !!user && user.id === agent.owner_id
 
   // Agent-users see only a simplified MCP Connectors card — no A2A,
-  // access tokens, guest shares, email, webhooks, or local-dev cards.
+  // access tokens, guest shares, webhooks, or local-dev cards.
   if (isAgentUser) {
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <McpConnectorsCardSimple agentId={agent.id} />
+          <McpConnectorsCardSimple
+            routerTriggerPrompt={agent.router_trigger_prompt}
+          />
         </div>
       </div>
     )
@@ -183,6 +184,9 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
           agentId={agent.id}
           agentApiEnabled={agent.agent_api_enabled ?? false}
           agentApiIdentityEnabled={agent.agent_api_identity_enabled ?? false}
+          agentApiExternalAccessEnabled={
+            agent.agent_api_external_access_enabled ?? false
+          }
         />
 
         {/* Git Versioning Card - owner-only (connect/push/pull are developer-gated) */}
@@ -199,14 +203,6 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
 
         {/* Local Development Card */}
         <LocalDevCard agentId={agent.id} />
-
-        {/* Email Integration Card — only for the publisher install (or
-            unpublished agents). Foreign installs of a published bundle
-            inherit email integration from the publisher and don't get
-            their own. */}
-        {(agent.is_publisher_install || !agent.bundle_uuid) && (
-          <EmailIntegrationCard agentId={agent.id} />
-        )}
       </div>
     </div>
   )

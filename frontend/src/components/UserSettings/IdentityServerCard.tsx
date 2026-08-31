@@ -15,10 +15,16 @@ import {
   Users,
   ChevronDown,
   ChevronUp,
+  Plus,
+  Bot,
 } from "lucide-react"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
+import { AgentsService, IdentityService } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
+import { getErrorMessage } from "@/utils"
+import { getColorPreset } from "@/utils/colorPresets"
+import { cn } from "@/lib/utils"
 import {
   Card,
   CardContent,
@@ -64,6 +70,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { UserAllowlistPicker } from "@/components/Common/UserAllowlistPicker"
+import type { UserAllowlistSelectedItem } from "@/components/Common/UserAllowlistPicker"
+import { AgentSelectorDialog } from "@/components/Common/AgentSelectorDialog"
+import type { AgentOption } from "@/components/Common/AgentSelectorDialog"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -95,7 +104,6 @@ interface IdentityAgentBinding {
   agent_id: string
   agent_name: string
   trigger_prompt: string
-  message_patterns: string | null
   prompt_examples: string | null
   session_mode: string
   is_active: boolean
@@ -119,9 +127,22 @@ export function IdentityServerCard() {
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [editingBinding, setEditingBinding] = useState<IdentityAgentBinding | null>(null)
   const [editTriggerPrompt, setEditTriggerPrompt] = useState("")
-  const [editMessagePatterns, setEditMessagePatterns] = useState("")
   const [editSessionMode, setEditSessionMode] = useState("conversation")
   const [editPromptExamples, setEditPromptExamples] = useState("")
+
+  // Add binding dialog state. Mirrors the edit dialog's fields so the same
+  // binding reads the same way whether it is being created or changed. The
+  // assignment list is local here (the binding does not exist yet) and is sent
+  // with the create call as `assigned_user_ids`.
+  const [addDialogOpen, setAddDialogOpen] = useState(false)
+  const [agentSelectorOpen, setAgentSelectorOpen] = useState(false)
+  const [addAgentId, setAddAgentId] = useState("")
+  const [addTriggerPrompt, setAddTriggerPrompt] = useState("")
+  const [addSessionMode, setAddSessionMode] = useState("conversation")
+  const [addPromptExamples, setAddPromptExamples] = useState("")
+  const [addAssignedUsers, setAddAssignedUsers] = useState<
+    UserAllowlistSelectedItem[]
+  >([])
 
   // ---------------------------------------------------------------------------
   // Queries
@@ -138,6 +159,38 @@ export function IdentityServerCard() {
     },
   })
 
+  // Agents to choose from when adding a binding. Owner-scoped server-side —
+  // `GET /agents/` returns only the caller's own agents, which is the set the
+  // identity binding endpoint will accept. Same query key and page size as the
+  // other agent pickers so the cache is shared rather than duplicated; only
+  // fetched once the add dialog is open. The list is passed to
+  // `AgentSelectorDialog` (instead of letting it fetch) because the trigger
+  // button needs the selected agent's name and colour.
+  const {
+    data: agentsData,
+    isLoading: isAgentsLoading,
+    isError: isAgentsError,
+  } = useQuery({
+    queryKey: ["allAgents"],
+    queryFn: () => AgentsService.readAgents({ skip: 0, limit: 200 }),
+    enabled: addDialogOpen,
+  })
+
+  const agentOptions: AgentOption[] = useMemo(
+    () =>
+      (agentsData?.data ?? []).map((a) => ({
+        id: a.id,
+        name: a.name,
+        colorPreset: a.ui_color_preset,
+      })),
+    [agentsData],
+  )
+
+  const selectedAgent = agentOptions.find((a) => a.id === addAgentId) ?? null
+  const selectedAgentPreset = selectedAgent
+    ? getColorPreset(selectedAgent.colorPreset)
+    : null
+
   // Edit dialog: live binding data for real-time assignment updates
   const editBindingLive = editingBinding
     ? bindings.find((b) => b.id === editingBinding.id) ?? editingBinding
@@ -148,6 +201,43 @@ export function IdentityServerCard() {
   // Mutations
   // ---------------------------------------------------------------------------
 
+  // Uses the generated client rather than the raw `fetch` the sibling
+  // mutations here still use: the project convention is the generated client,
+  // and the create payload is the one call in this card whose shape must stay
+  // in step with the backend schema (`IdentityAgentBindingCreate`) — a hand-
+  // written body would silently drift the moment a field is added or dropped.
+  const createBindingMutation = useMutation({
+    mutationFn: ({
+      agentId,
+      triggerPrompt,
+      promptExamples,
+      sessionMode,
+      assignedUserIds,
+    }: {
+      agentId: string
+      triggerPrompt: string
+      promptExamples: string | null
+      sessionMode: string
+      assignedUserIds: string[]
+    }) =>
+      IdentityService.createIdentityBinding({
+        requestBody: {
+          agent_id: agentId,
+          trigger_prompt: triggerPrompt,
+          prompt_examples: promptExamples,
+          session_mode: sessionMode,
+          assigned_user_ids: assignedUserIds,
+        },
+      }),
+    onSuccess: () => {
+      showSuccessToast("Agent added to identity")
+      setAddDialogOpen(false)
+      queryClient.invalidateQueries({ queryKey: ["identity-bindings"] })
+    },
+    onError: (error) =>
+      showErrorToast(getErrorMessage(error, "Failed to add agent to identity")),
+  })
+
   const updateBindingMutation = useMutation({
     mutationFn: async ({
       bindingId,
@@ -156,7 +246,6 @@ export function IdentityServerCard() {
       bindingId: string
       body: {
         trigger_prompt?: string
-        message_patterns?: string | null
         prompt_examples?: string | null
         session_mode?: string
         is_active?: boolean
@@ -276,10 +365,29 @@ export function IdentityServerCard() {
   // Handlers
   // ---------------------------------------------------------------------------
 
+  const handleAddOpen = () => {
+    setAddAgentId("")
+    setAddTriggerPrompt("")
+    setAddSessionMode("conversation")
+    setAddPromptExamples("")
+    setAddAssignedUsers([])
+    setAddDialogOpen(true)
+  }
+
+  const handleAddSave = () => {
+    if (!addAgentId || !addTriggerPrompt.trim()) return
+    createBindingMutation.mutate({
+      agentId: addAgentId,
+      triggerPrompt: addTriggerPrompt.trim(),
+      promptExamples: addPromptExamples.trim() || null,
+      sessionMode: addSessionMode,
+      assignedUserIds: addAssignedUsers.map((s) => s.userId),
+    })
+  }
+
   const handleEditOpen = (binding: IdentityAgentBinding) => {
     setEditingBinding(binding)
     setEditTriggerPrompt(binding.trigger_prompt)
-    setEditMessagePatterns(binding.message_patterns ?? "")
     setEditPromptExamples(binding.prompt_examples ?? "")
     setEditSessionMode(binding.session_mode)
     setEditDialogOpen(true)
@@ -291,7 +399,6 @@ export function IdentityServerCard() {
       bindingId: editingBinding.id,
       body: {
         trigger_prompt: editTriggerPrompt.trim(),
-        message_patterns: editMessagePatterns.trim() || null,
         prompt_examples: editPromptExamples.trim() || null,
         session_mode: editSessionMode,
       },
@@ -317,10 +424,16 @@ export function IdentityServerCard() {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2">
-          <UserCircle className="h-4 w-4 text-violet-500" />
-          Identity Server
-        </CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2">
+            <UserCircle className="h-4 w-4 text-violet-500" />
+            Identity Server
+          </CardTitle>
+          <Button size="sm" onClick={handleAddOpen}>
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            Add Agent
+          </Button>
+        </div>
         <CardDescription>
           Expose your agents through your personal identity. Other users can address you by name
           and the system routes to the right agent automatically.
@@ -335,7 +448,8 @@ export function IdentityServerCard() {
             {/* ---- Binding list ---- */}
             {bindings.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                No agents in your identity yet. Add agents via the Integrations tab on each agent.
+                No agents in your identity yet. Use "Add Agent" above to put one behind your
+                identity.
               </p>
             )}
 
@@ -527,6 +641,155 @@ export function IdentityServerCard() {
         )}
       </CardContent>
 
+      {/* ---- Add Binding Dialog ---- */}
+      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Agent to Identity</DialogTitle>
+            <DialogDescription>
+              Expose one of your agents behind your identity. Other users can address you by
+              name and the system routes to this agent automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+            <div className="space-y-2">
+              <Label>Agent</Label>
+              {/* Disabled until the agent list has actually landed: the
+                  selector renders an empty list as "No agents available", so
+                  opening it mid-fetch would state something untrue about the
+                  user's agents. */}
+              <button
+                type="button"
+                onClick={() => setAgentSelectorOpen(true)}
+                disabled={isAgentsLoading || isAgentsError}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed",
+                  selectedAgentPreset
+                    ? `${selectedAgentPreset.badgeBg} ${selectedAgentPreset.badgeText} ${selectedAgentPreset.badgeHover}`
+                    : "bg-muted text-muted-foreground hover:bg-muted/80",
+                )}
+              >
+                <Bot className="h-3.5 w-3.5" />
+                <span className="truncate max-w-[200px]">
+                  {isAgentsLoading
+                    ? "Loading agents..."
+                    : selectedAgent?.name || "Select agent..."}
+                </span>
+              </button>
+              {isAgentsError && (
+                <p className="text-xs text-destructive">
+                  Couldn't load your agents. Close this dialog and try again.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>Session Mode</Label>
+              <Select value={addSessionMode} onValueChange={setAddSessionMode}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="conversation">Conversation</SelectItem>
+                  <SelectItem value="building">Building</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="add-identity-trigger">Trigger Prompt</Label>
+              <Textarea
+                id="add-identity-trigger"
+                value={addTriggerPrompt}
+                onChange={(e) => setAddTriggerPrompt(e.target.value)}
+                rows={3}
+                placeholder="Describe when to route to this agent (e.g. 'Handle annual report requests and financial analysis')"
+              />
+              <p className="text-xs text-muted-foreground">
+                Used by the AI router to select this agent when someone addresses you.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="add-identity-prompt-examples">Prompt Examples (optional)</Label>
+              <Textarea
+                id="add-identity-prompt-examples"
+                value={addPromptExamples}
+                onChange={(e) => setAddPromptExamples(e.target.value)}
+                rows={3}
+                placeholder={"generate employee report\nprepare quarterly analysis"}
+                className="font-mono text-sm"
+              />
+              <p className="text-xs text-muted-foreground">
+                Short example prompts. MCP clients will see these prefixed with your name (e.g., 'ask Your Name to generate employee report').
+              </p>
+            </div>
+
+            {/* User assignments — held locally and sent with the create call,
+                since there is no binding to assign against yet. */}
+            <div className="space-y-2">
+              <UserAllowlistPicker
+                enabled={addDialogOpen}
+                selected={addAssignedUsers}
+                onAdd={(u) =>
+                  setAddAssignedUsers((prev) =>
+                    prev.some((s) => s.userId === u.id)
+                      ? prev
+                      : [
+                          ...prev,
+                          {
+                            id: u.id,
+                            userId: u.id,
+                            fallbackLabel: u.full_name || u.email,
+                          },
+                        ],
+                  )
+                }
+                onRemove={(item) =>
+                  setAddAssignedUsers((prev) =>
+                    prev.filter((s) => s.userId !== item.userId),
+                  )
+                }
+                label={
+                  <Label className="flex items-center gap-2">
+                    <Users className="h-4 w-4" />
+                    Share with Users
+                  </Label>
+                }
+                searchPlaceholder="Search users..."
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddSave}
+              disabled={
+                !addAgentId ||
+                !addTriggerPrompt.trim() ||
+                createBindingMutation.isPending
+              }
+            >
+              {createBindingMutation.isPending ? "Adding..." : "Add to Identity"}
+            </Button>
+          </DialogFooter>
+
+          {/* Agents already in the identity are excluded — one binding per
+              agent, so re-picking a bound agent would only fail server-side. */}
+          <AgentSelectorDialog
+            open={agentSelectorOpen}
+            onOpenChange={setAgentSelectorOpen}
+            onSelect={setAddAgentId}
+            selectedAgentId={addAgentId}
+            agents={agentOptions}
+            excludeAgentIds={bindings.map((b) => b.agent_id)}
+            title="Select Agent"
+          />
+        </DialogContent>
+      </Dialog>
+
       {/* ---- Edit Binding Dialog ---- */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
         <DialogContent>
@@ -562,19 +825,6 @@ export function IdentityServerCard() {
                 Used by the AI router to select this agent when someone addresses you.
               </p>
             </div>
-            <div className="space-y-2">
-              <Label>Message Patterns (optional)</Label>
-              <Textarea
-                value={editMessagePatterns}
-                onChange={(e) => setEditMessagePatterns(e.target.value)}
-                rows={2}
-                placeholder={"annual report *\nfinancial analysis *"}
-              />
-              <p className="text-xs text-muted-foreground">
-                One glob-style pattern per line. Matched before AI routing.
-              </p>
-            </div>
-
             <div className="space-y-2">
               <Label>Prompt Examples (optional)</Label>
               <Textarea

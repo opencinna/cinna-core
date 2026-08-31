@@ -336,8 +336,10 @@ const articles: Article[] = [
           <h3 className="font-medium text-base mb-2">After Connecting</h3>
           <p className="text-sm text-muted-foreground leading-relaxed">
             Your MCP client will have access to a <code className="text-xs bg-muted px-1 py-0.5 rounded">send_message</code> tool.
-            Messages are automatically routed to the right agent based on your configured agent routes
-            and trigger prompts. You can manage which agents are available in the <strong>MCP Server</strong> card.
+            Messages are automatically routed to the right agent based on each agent's trigger prompt —
+            every agent you own with one is reachable, along with any identities you have enabled.
+            You can switch the channel off, or narrow it to specific agents, on the
+            <strong> App MCP Server</strong> row under <strong>Settings → Channels</strong>.
           </p>
         </div>
       </div>

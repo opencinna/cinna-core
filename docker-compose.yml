@@ -16,6 +16,8 @@ services:
       - DOMAIN=${DOMAIN}
       - FRONTEND_HOST=${FRONTEND_HOST?Variable not set}
       - MCP_SERVER_BASE_URL=${MCP_SERVER_BASE_URL}
+      - BACKEND_BASE_URL=${BACKEND_BASE_URL}
+      - WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL}
       - ENVIRONMENT=${ENVIRONMENT}
       - BACKEND_CORS_ORIGINS=${BACKEND_CORS_ORIGINS}
       - SECRET_KEY=${SECRET_KEY?Variable not set}
@@ -37,6 +39,7 @@ services:
       - ENV_INSTANCES_DIR=/agent-environments
       - HOST_AGENT_ENVIRONMENTS_DIR=${HOST_AGENT_ENVIRONMENTS_DIR:-./backend/agent-environments}
       - HOST_APP_DATA_DIR=${HOST_APP_DATA_DIR:-./backend/data/agents/app-data}
+      - HOST_BUNDLE_STORAGE_DIR=${HOST_BUNDLE_STORAGE_DIR:-./backend/data/bundles}
       - AGENT_ENV_CPU_LIMIT=${AGENT_ENV_CPU_LIMIT:-1.0}
       - AGENT_ENV_MEMORY_LIMIT=${AGENT_ENV_MEMORY_LIMIT:-512M}
       - AGENT_ENV_CPU_RESERVATION=${AGENT_ENV_CPU_RESERVATION:-0.25}
@@ -56,6 +59,10 @@ services:
       # Per-(user, bundle) App Data — shared with host so Docker can bind-mount
       # this path into agent containers (see AppDataService.host_path_for)
       - ${HOST_APP_DATA_DIR:-./backend/data/agents/app-data}:/app/data/app-data
+      # Bundle revision snapshots (BUNDLE_STORAGE_DIR) — must persist across
+      # backend container recreation, else git-versioning baselines are lost
+      # and the dirty check silently reports "no changes"
+      - ${HOST_BUNDLE_STORAGE_DIR:-./backend/data/bundles}:/app/data/bundles
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
       interval: 10s

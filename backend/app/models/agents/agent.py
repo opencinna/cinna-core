@@ -24,11 +24,12 @@ class AgentBase(SQLModel):
     entrypoint_prompt: str | None = Field(default=None)
     refiner_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     # Short, capability-verb-focused natural-language description of what to
-    # ask the agent to do. Used by the App MCP router for AI classification
-    # of incoming external messages. Edited by the agent owner on the
-    # Prompts tab; snapshotted onto each bundle revision at publish time
-    # and propagated back into auto-managed AppAgentRoute rows on install
-    # / apply-update.
+    # ask the agent to do. With ``example_prompts``, the sole routing source
+    # of truth: every surface — App MCP, Server Channels, identity Stage 2 —
+    # classifies over these two fields on the agent row itself. Edited by the
+    # agent owner on the Prompts tab and snapshotted onto each bundle revision
+    # at publish time; nothing is propagated anywhere on install, because
+    # there is nowhere left to propagate it to.
     router_trigger_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     # Command executed inside the agent container before every live/forced
     # status refresh (REST force_refresh, A2A agent/status force, /agent-status).
@@ -70,6 +71,11 @@ class AgentUpdate(SQLModel):
     # this producer (injects X-Cinna-Caller-Scopes from the live grant). When
     # False, callers are attributed but carry no scopes. See plan D5.
     agent_api_identity_enabled: bool | None = None
+    # Opt-in that allows minting **external API keys** for this producer — keys a
+    # human copies into a laptop script / cron job. Off by default: making the
+    # API reachable from the public internet by a copy-pasteable key must be a
+    # deliberate act. Also the proxy's cheap kill switch. See plan D1.
+    agent_api_external_access_enabled: bool | None = None
     # Install owners can update update mode for bundle updates
     update_mode: str | None = None  # "automatic" | "manual"
     # Publisher override map (Phase 5). Only meaningful on the publisher
@@ -156,6 +162,10 @@ class Agent(AgentBase, table=True):
     # Whether the agent-api proxy honors per-user identity + scope grants for
     # this producer (L2). Default off — opt-in for UI clarity (plan D5).
     agent_api_identity_enabled: bool = Field(default=False)
+    # Whether external API keys may be minted for this producer (plan D1).
+    # Default off — an external key is copy-pasteable and identity-bound, so
+    # enabling the surface is an explicit owner decision.
+    agent_api_external_access_enabled: bool = Field(default=False)
     # Status refresh pre-command (see AgentBase). Stored as VARCHAR(1024),
     # nullable, with a server default so existing rows backfill to "/run:status"
     # on migration. The Python model default governs new rows.
@@ -189,6 +199,16 @@ class Agent(AgentBase, table=True):
     pending_update_at: datetime | None = Field(default=None)
     last_sync_at: datetime | None = Field(default=None)
     last_update_status: str | None = Field(default=None)  # "synced" | "failed" | None
+    # When the automatic-update sweep last *attempted* an apply on this install.
+    # Stamped and committed BEFORE ``InstallService.apply_update`` runs, so a
+    # crash mid-apply still records the attempt. Paired with
+    # ``last_update_status == "failed"`` it drives the retry backoff in
+    # ``InstallService.sweep_automatic_updates`` (a failing install is not
+    # retried on every 10-minute sweep). Stored naive (TIMESTAMP WITHOUT TIME
+    # ZONE, like its neighbours) but always written from ``datetime.now(UTC)``,
+    # so the stored wall-clock is UTC; the read side normalises it via
+    # ``install_service._as_utc``.
+    last_update_attempt_at: datetime | None = Field(default=None)
 
     # Publisher overrides (Phase 5 of the install-experience-redesign plan).
     # Lives only on the publisher install; ignored on foreign installs. The
@@ -257,11 +277,11 @@ class AgentPublic(SQLModel):
     webapp_enabled: bool = False
     agent_api_enabled: bool = False
     agent_api_identity_enabled: bool = False
+    agent_api_external_access_enabled: bool = False
 
     # Computed capability flags — surface the agent's "purpose" on list cards
     # without per-card queries. Reflect whether each integration is actively
     # enabled (not merely configured). Populated in the public conversion.
-    has_email_integration: bool = False
     has_mcp_connectors: bool = False
     has_webhooks: bool = False
     # Whether an AgentGitSource is attached (git versioning connected). Lets the

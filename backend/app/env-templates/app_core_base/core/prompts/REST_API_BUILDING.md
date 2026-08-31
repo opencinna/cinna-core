@@ -97,6 +97,12 @@ permissions. Anonymous callers should be handled explicitly (allow read-only,
 deny writes, or `raise error(401, ...)`), because a connection without an
 identity token reaches you as anonymous by design.
 
+`caller` behaves **identically for an external caller** — someone hitting your
+API from a laptop script, server, or cron job with an issued API key. Their
+identity is baked into the key itself, so `me.user_id` / `me.has_scope(...)`
+resolve exactly as they would for a peer agent's connection. Write **one**
+authorization path; don't special-case "is this a container or a person."
+
 ## Naming Your API (OpenAPI metadata)
 Label the spec by defining these **module-level constants** in any of your
 `agent_api` modules. The first non-empty value found wins per field; if you set
@@ -286,7 +292,7 @@ python /app/core/scripts/scaffold_agent_api.py
 ```
 
 It skips files that already exist (use `--force` to overwrite). To make this a
-one-touch command in chat, add it to `docs/CLI_COMMANDS.yaml`:
+one-touch command in chat, add it to `docs/CLI_COMMANDS.yaml`: <!-- nocheck -->
 
 ```yaml
 commands:

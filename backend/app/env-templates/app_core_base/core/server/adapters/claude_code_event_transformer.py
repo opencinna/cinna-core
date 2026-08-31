@@ -113,6 +113,11 @@ class ClaudeCodeEventTransformer:
 
         For ToolUseBlock, returns a TOOL_USE event immediately (first tool wins).
         For text/thinking, accumulates and returns as ASSISTANT or THINKING.
+        Returns None (skip) when no visible content resulted — e.g. a message
+        containing only an empty, signature-only ThinkingBlock — so the empty
+        chunk stays confined to the raw agent-env session log (written before
+        translation, unconditionally) and never reaches the backend's
+        event_seq stream / DB persistence.
 
         Synthetic assistant messages (``model == "<synthetic>"``) are emitted by
         the Claude Code CLI itself — not the model — to surface error conditions
@@ -151,8 +156,13 @@ class ClaudeCodeEventTransformer:
                 content_parts.append(block.text)
 
             elif isinstance(block, ThinkingBlock):
-                event_type = SDKEventType.THINKING
-                content_parts.append(f"[Thinking] {block.thinking}")
+                # Some models (e.g. newer Sonnet) can emit a ThinkingBlock with
+                # an empty `thinking` string but a valid `signature` — a
+                # signature-only placeholder rather than visible reasoning.
+                # Skip it so the UI doesn't render an empty lamp-icon block.
+                if block.thinking:
+                    event_type = SDKEventType.THINKING
+                    content_parts.append(f"[Thinking] {block.thinking}")
 
             elif isinstance(block, ToolUseBlock):
                 # Normalize tool name to unified lowercase convention
@@ -174,6 +184,14 @@ class ClaudeCodeEventTransformer:
                 continue
 
         content = "\n".join(content_parts) if content_parts else ""
+
+        if not content:
+            # Nothing visible came out of this message (e.g. only an empty,
+            # signature-only ThinkingBlock). The raw message was already
+            # written to the agent-env session log by the caller before
+            # translate() ran, so returning None here only suppresses the
+            # backend-facing event_seq / DB / WebSocket path, not the log.
+            return None
 
         metadata = {}
         if hasattr(message_obj, "model"):

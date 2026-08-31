@@ -26,6 +26,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import type { AgentApiStatus } from "@/hooks/useAgentApi"
 import { AgentApiAccessScopesCard } from "./AgentApiAccessScopesCard"
+import { AgentApiExternalKeysCard } from "./AgentApiExternalKeysCard"
 import { AgentBadge } from "@/components/Common/AgentBadge"
 import { useAgentApiStatus } from "@/hooks/useAgentApi"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -36,6 +37,8 @@ interface AgentRestApiCardProps {
   agentApiEnabled: boolean
   /** Producer opt-in for per-user identity + scope grants (L2). */
   agentApiIdentityEnabled: boolean
+  /** Producer opt-in for external (outside-the-platform) API keys. */
+  agentApiExternalAccessEnabled: boolean
 }
 
 /** Extracts an HTTP status code (100–599) from a boot/status error string, if present. */
@@ -66,6 +69,7 @@ export function AgentRestApiCard({
   agentId,
   agentApiEnabled,
   agentApiIdentityEnabled,
+  agentApiExternalAccessEnabled,
 }: AgentRestApiCardProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -229,7 +233,7 @@ export function AgentRestApiCard({
             </CardTitle>
             <CardDescription>
               {agentApiEnabled
-                ? "Expose a capability-narrowed REST API other agents can call as code. Other agents connect to it from their own Credentials tab."
+                ? "Expose a capability-narrowed REST API other agents can call as code. Other agents connect from their own Credentials tab; code outside the platform calls in with an external key."
                 : "Enable to expose a validated REST API other agents can call as code — for example, a narrow API in front of credentials with excessive permissions."}
             </CardDescription>
           </div>
@@ -410,6 +414,13 @@ export function AgentRestApiCard({
               </div>
             )}
           </div>
+
+          {/* External Keys — everything OUTSIDE the platform that can reach
+              this API (the Connections list above is everything inside it). */}
+          <AgentApiExternalKeysCard
+            agentId={agentId}
+            externalAccessEnabled={agentApiExternalAccessEnabled}
+          />
 
           {/* Access & Scopes — per-user identity + scope grants (L2). */}
           <AgentApiAccessScopesCard

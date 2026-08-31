@@ -6,6 +6,7 @@ from pydantic import (
     AnyUrl,
     BeforeValidator,
     EmailStr,
+    Field,
     HttpUrl,
     PostgresDsn,
     computed_field,
@@ -23,6 +24,32 @@ def parse_cors(v: Any) -> list[str] | str:
     raise ValueError(v)
 
 
+#: The one value of ``ROUTING_TRACE_RETENTION_DAYS`` that means "never expire
+#: routing traces". Deliberately ``-1`` and not ``0``: an operator typing ``0``
+#: into a retention window means "keep nothing", and a knob whose most natural
+#: "off" value silently meant *unbounded* retention would invert the exposure
+#: argument that permits storing message text at all (plan §4/§7). ``0`` is
+#: therefore rejected outright rather than reinterpreted. Shared with
+#: ``RoutingTraceService.purge`` so both ends agree on the sentinel.
+ROUTING_TRACE_RETENTION_FOREVER = -1
+
+#: The three values of ``ROUTING_TRACE_APP_MCP_MODE``. Shared constants rather
+#: than literals because three modules branch on them — the producer
+#: (``AppMCPRoutingService.route_message``), the write gate
+#: (``RoutingTraceService.persist``) and the startup validator below — and a
+#: typo in any one of them would degrade to "not off, not full", i.e. silently
+#: to ``metadata``, which is the shape of failure this setting was removed over
+#: the first time. See the setting for what each value stores and omits.
+ROUTING_TRACE_APP_MCP_OFF = "off"
+ROUTING_TRACE_APP_MCP_METADATA = "metadata"
+ROUTING_TRACE_APP_MCP_FULL = "full"
+ROUTING_TRACE_APP_MCP_MODES = (
+    ROUTING_TRACE_APP_MCP_OFF,
+    ROUTING_TRACE_APP_MCP_METADATA,
+    ROUTING_TRACE_APP_MCP_FULL,
+)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         # Use top level .env file (one level above ./backend/)
@@ -37,6 +64,23 @@ class Settings(BaseSettings):
     # 60 minutes * 24 hours * 8 days = 8 days
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     FRONTEND_HOST: str = "http://localhost:5173"
+    # Publicly reachable origin of THIS backend. Every absolute URL that points
+    # at the API and is handed to something outside the platform is built from
+    # it: inbound webhook URLs (server channels, task triggers, agent hooks),
+    # the consumer-facing Agent REST API base, and signed A2A attachment
+    # download links. It is deliberately separate from FRONTEND_HOST — in a
+    # real deployment the SPA is on dashboard.example.com while the API answers
+    # on api.example.com, and a URL pointing at the SPA origin 404s. For local
+    # testing against an external provider, point it at the HTTPS tunnel in
+    # front of the backend (see `make webhook-tunnel`).
+    # Empty = fall back to FRONTEND_HOST, preserving the single-origin
+    # behaviour deployments had before this setting existed.
+    BACKEND_BASE_URL: str = ""
+    # Former name, still honoured. It was introduced for the webhook URLs only,
+    # then the same bug turned up on the agent-api and A2A file URLs, so the
+    # setting outgrew its name. Deployments that already set it keep working;
+    # BACKEND_BASE_URL wins when both are present.
+    WEBHOOK_BASE_URL: str = ""
     MCP_SERVER_BASE_URL: str = ""
     # Internal/container-reachable MCP origin. The public MCP_SERVER_BASE_URL is
     # not always routable from inside the agent network, so for agent2agent
@@ -119,6 +163,30 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def backend_base_url(self) -> str:
+        """Public origin for API URLs handed outside the platform, no trailing slash.
+
+        Single resolution point, so an operator has one knob to turn and the
+        URLs cannot drift apart from each other. Covers inbound webhooks
+        (task triggers, agent hooks, server channels), the consumer-facing
+        Agent REST API base, and signed A2A attachment links.
+        """
+        base = (
+            self.BACKEND_BASE_URL
+            or self.WEBHOOK_BASE_URL
+            or self.FRONTEND_HOST
+            or "https://localhost"
+        )
+        return base.rstrip("/")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def webhook_base_url(self) -> str:
+        """Alias of :attr:`backend_base_url`, kept for the webhook call sites."""
+        return self.backend_base_url
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -370,6 +438,267 @@ class Settings(BaseSettings):
     ACCOUNT_API_PROXY_MAX_RESPONSE_BYTES: int = 8_388_608  # 8 MiB response cap → 502
     ACCOUNT_API_PROXY_RATE_LIMIT_PER_MIN: int = 120  # per-account-token backstop
 
+    # ── Server channels (inbound webhook) ───────────────────────────────
+    # The channel webhook is unauthenticated at the platform layer — the
+    # unguessable token in the path plus the adapter's signature check are the
+    # gate. These two limits bound what an unverified caller can cost us
+    # BEFORE verification runs: the body cap applies to the read itself, and
+    # the rate limit is keyed on the webhook token so one channel being probed
+    # cannot starve the others.
+    SERVER_CHANNEL_WEBHOOK_MAX_BODY_BYTES: int = 262_144  # 256 KiB → 413
+    SERVER_CHANNEL_WEBHOOK_RATE_LIMIT_PER_MIN: int = 120
+
+    # Admin debug panel: recent inbound/outbound events held per channel, in
+    # process memory only (see channel_debug_buffer.py). Bounded twice — a ring
+    # buffer per channel, and a clamp on captured message text — so a busy or
+    # hostile channel cannot grow it without limit. Never persisted.
+    SERVER_CHANNEL_DEBUG_BUFFER_SIZE: int = 50
+    SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS: int = 2_000
+
+    # App MCP is a channel too, but an ``authenticated`` one: its policy is
+    # consulted in ``app.mcp.app_token_verifier`` on *every* verified token,
+    # which is once per HTTP request to /mcp/app/mcp — every tools/call,
+    # tools/list, prompts/list and SSE reconnect. Two DB reads per request is
+    # not affordable, so the resolved availability is cached per user id, in
+    # process memory, for this many seconds.
+    #
+    # The TTL is the admin's revocation delay and nothing else: disabling the
+    # channel, withdrawing a grant, or a user switching it off takes effect
+    # within this window (per backend process — the cache is process-local).
+    # Keep it short. The kill switch is the reason the channel exists, and an
+    # admin who flips it expects it to bite, not to be advisory for a minute.
+    # A value <= 0 disables the cache entirely and is what tests set in order
+    # to observe a revocation without sleeping; it is a legitimate, if costly,
+    # production setting too.
+    APP_MCP_AVAILABILITY_CACHE_TTL_SECONDS: int = 45
+    # Bound on the cache's size, so a deployment with many App MCP users (or a
+    # burst of expired entries) cannot grow it without limit. Reaching it drops
+    # expired entries first and clears the rest only if that was not enough —
+    # a cleared cache costs one extra lookup per user, never a wrong answer.
+    APP_MCP_AVAILABILITY_CACHE_MAX_ENTRIES: int = 10_000
+
+    # ── Routing traces (auto-routing tuning) ────────────────────────────
+    # Durable, superuser-only record of each routing decision — candidates
+    # (including rejected ones), rendered prompt, provider attempts, verdict.
+    # See ``docs/plans/auto_routing_tuning_plan.md`` §4/§7.
+    #
+    # RULE FOR EVERY SETTING BELOW — **the dangerous state must not be able to
+    # look routine.** These knobs govern how much external users' message text
+    # this platform keeps and for how long, so a value that means "retain more"
+    # must not be reachable by typing something innocuous, and must not render
+    # as an unremarkable number. Two instances to copy: this feature's most
+    # dangerous configuration is unbounded retention, so
+    # ``ROUTING_TRACE_RETENTION_DAYS`` REJECTS ``0`` at startup instead of
+    # reading it as keep-forever (``-1`` is the only spelling, and you have to
+    # mean it), and ``routing_trace_scheduler`` logs that ``-1`` as "retention
+    # DISABLED" rather than "retention -1 days". Adding a setting here: name its
+    # most dangerous value, then make reaching it loud.
+    # Gates PERSISTENCE AND ADMIN READS, not in-process capture. Deliberately
+    # narrower than "master switch" sounds: the recorder cannot read settings (it
+    # must stay free of ``app.*`` imports so ``app/agents/`` can import it), and
+    # the live channel debug feed's one-line no-match diagnosis is built from a
+    # capture, so short-circuiting capture here would silently degrade a feature
+    # that has nothing to do with storage. Off means no rows are written; the
+    # per-request recording still runs and still feeds the debug panel.
+    #
+    # A READ gate as well. It was once consulted in exactly one place — the
+    # persist path — so turning it off left the admin API happily serving up to
+    # ``ROUTING_TRACE_RETENTION_DAYS`` of stored rows, message text included,
+    # with no notice: the same asymmetry deliberately rejected for the text flag
+    # below. Now the trace list comes back empty and a detail fetch 404s, each
+    # carrying ``TRACING_DISABLED_NOTICE``.
+    #
+    # **It hides; it does not erase**, and ``DELETE /api/v1/admin/routing/traces``
+    # deliberately KEEPS WORKING while this is off — otherwise the obvious first
+    # move under privacy pressure would also remove the only way to delete the
+    # rows already written.
+    ROUTING_TRACE_ENABLED: bool = True
+    # The one genuinely policy-bearing switch here. Server Channels otherwise
+    # keeps inbound message text out of the database; a routing trace without
+    # the message is close to useless for tuning, so it is stored — clamped,
+    # TTL'd, superuser-only, and behind this flag. With it off, the trace still
+    # carries ``message_sha256`` plus the candidate set and the verdict, which
+    # is the diagnosis that matters most.
+    #
+    # **It reaches further than ``message_text``, and it is enforced by an
+    # allowlist rather than an inventory.** With the flag off, the ``stages``
+    # payload is projected through a list of explicitly-named safe fields
+    # (``routing_trace.SAFE_STAGE_FIELDS``) on the write path *and* the read
+    # path, from one definition so the two cannot drift. Anything not named
+    # there is withheld by default — including fields added after this gate was
+    # written, and including fields nobody realised had started carrying the
+    # sender's words.
+    #
+    # That polarity is the whole design. This gate was enforced three times by
+    # enumerating the tainted fields, and three times the enumeration turned out
+    # to be one field short; sender text is a taint that *propagates* into new
+    # fields through ordinary, reviewable-looking changes. An allowlist inverts
+    # the question from "did we remember every field" — unanswerable — to "is
+    # this field safe", which whoever adds a field can answer as they add it.
+    # It also removed a privacy property that rested on the byte length of a
+    # markdown template: gating on write means template length cannot create a
+    # leak in either direction.
+    #
+    # Do not re-describe this gate by listing the fields it covers, here or
+    # anywhere else. A list is a promise with an expiry date — that is precisely
+    # what this comment used to be. Describe the mechanism; read
+    # ``SAFE_STAGE_FIELDS`` for the current contents.
+    #
+    # A READ gate as well as a write gate: with it off the admin API stops
+    # serving the gated fields on rows already written, because an operator
+    # turning this off means "stop showing me this text", not "stop appending to
+    # the pile".
+    #
+    # **It hides; it does not erase.** Text captured before the flag went off
+    # stays in the database. Exactly two things remove it: waiting out
+    # ``ROUTING_TRACE_RETENTION_DAYS``, or calling
+    # ``DELETE /api/v1/admin/routing/traces``. Flipping this flag does NOT purge,
+    # and that is deliberate — an accidental toggle would irreversibly destroy
+    # diagnostic data, and a privacy control whose misfire is unrecoverable is
+    # its own hazard. Hide on flip, erase on explicit request.
+    ROUTING_TRACE_STORE_MESSAGE_TEXT: bool = True
+    # Retention window enforced by ``routing_trace_scheduler`` (hourly purge).
+    #
+    # Must be ``>= 1``. ``-1`` — and only ``-1`` — means "keep forever", the
+    # escape hatch for a debugging session that must outlive the window. ``0``
+    # and every other negative value are **rejected at startup** by
+    # ``_validate_routing_trace_retention`` below, which names ``-1`` in the
+    # error so an operator who wanted unbounded retention is told how to ask
+    # for it, and an operator who typed ``0`` meaning "don't keep this" is told
+    # they were about to get the opposite.
+    ROUTING_TRACE_RETENTION_DAYS: int = 14
+    # Clamp applied at persist time to the free-text *columns* on
+    # ``routing_decision`` (``message_text``, ``error``). Free text *inside*
+    # ``stages`` never passes through here: the recorder clamps every free-text
+    # field it captures as it captures it, using its own ``TRACE_TEXT_MAX_CHARS``
+    # constant, which cannot read settings because ``routing_trace.py`` must stay
+    # free of ``app.*`` imports. Keep the two in step. Which stage fields those
+    # are is the recorder's business and changes as it grows — see ``clamp()``'s
+    # call sites rather than trusting a list written here. The default matches
+    # ``SERVER_CHANNEL_DEBUG_TEXT_MAX_CHARS`` deliberately: the two surfaces
+    # show the same text to the same audience and should truncate alike.
+    ROUTING_TRACE_TEXT_MAX_CHARS: int = 2_000
+    # How much of an App MCP routing decision is written to ``routing_decision``.
+    # Applies to ``origin="app_mcp"`` rows and to nothing else — every other
+    # origin is governed by ``ROUTING_TRACE_ENABLED`` and
+    # ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` alone.
+    #
+    # Read this table rather than the code. Naming the fields here is the whole
+    # point of the comment: this setting was **removed once** because a reader
+    # could not tell from it what a value did (it was unreachable at every
+    # value, including ``off``, so an operator who set it believed they had
+    # disabled a capture that was never running). Shipping it again with a
+    # description that has to be decoded by tracing ``persist`` would repeat
+    # that defect in a new shape.
+    #
+    #   ``off``       No row at all. ``AppMCPRoutingService.route_message``
+    #                 opens no capture, and ``RoutingTraceService.persist``
+    #                 refuses any ``app_mcp`` trace that reaches it anyway.
+    #                 ``GET /admin/routing/traces?origin=app_mcp`` stays empty.
+    #                 Absence, not a swallowed failure: nothing is attempted,
+    #                 so nothing can half-succeed.
+    #
+    #   ``metadata``  (default) The row is written **without the sender's
+    #                 words**. Omitted: ``message_text``, and every ``stages``
+    #                 field outside ``routing_trace.SAFE_STAGE_FIELDS`` — i.e.
+    #                 ``stages[].prompt``, ``stages[].raw_response``,
+    #                 ``stages[].reason``, ``stages[].llm_attempts[].error``,
+    #                 and any ``candidates[]`` field outside
+    #                 ``SAFE_CANDIDATE_FIELDS``. Stored: ``message_sha256``
+    #                 (so the row stays replayable and "withheld" stays
+    #                 distinguishable from "no message"), ``origin``,
+    #                 ``outcome``, ``match_method``, ``channel_id``,
+    #                 ``user_id``, ``selected_*``, ``confidence``,
+    #                 ``latency_ms``, the row-level ``error``, and
+    #                 ``stages[].stage`` / ``.match_method`` /
+    #                 ``.matched_pattern`` / ``.confidence`` / ``.runner_up_id``
+    #                 / ``.not_run_code`` / ``.candidates`` / ``.llm_attempts``.
+    #                 Exactly the set ``ROUTING_TRACE_STORE_MESSAGE_TEXT=False``
+    #                 omits, applied to this one origin — one rule, not two.
+    #
+    #   ``full``      No per-origin narrowing. ``app_mcp`` rows are written
+    #                 exactly like a channel's, and
+    #                 ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` alone decides whether
+    #                 the text is stored.
+    #
+    # The two settings **AND**; ``metadata`` narrows and never widens, so
+    # ``full`` cannot re-open a text gate that ``ROUTING_TRACE_STORE_MESSAGE_TEXT``
+    # has closed.
+    #
+    # Why the default is the narrow one: App MCP routes *every* message, not
+    # just thread openings, and it does not sit behind the webhook rate limit
+    # that bounds the channel path — so it is the only origin whose write
+    # volume is unbounded, and ``message_text`` / ``prompt`` / ``raw_response``
+    # are the dominant per-row cost. (For the record, the removal note this
+    # replaces claimed the two capture sites in ``channel_routing_service.py``
+    # were "both ``origin=server_channel``". They were not, even then: simulate
+    # and replay reuse those same two sites with ``origin="simulate"``.)
+    ROUTING_TRACE_APP_MCP_MODE: str = ROUTING_TRACE_APP_MCP_METADATA
+
+    # Per-admin cap on the routing-tuning calls that spend real LLM budget:
+    # POST /admin/routing/simulate, .../traces/{id}/replay and
+    # .../traces/{id}/recommendation share ONE bucket per admin, so rotating
+    # between the three routes cannot spend three times this. Process-local like
+    # every other consumer of the shared limiter — with N workers the effective
+    # ceiling is N x this — because it is a backstop against a stuck UI, not a
+    # billing control. The accountability half of the §12 exposure ruling is the
+    # ROUTING_SIMULATE_RUN audit row; this is the non-bulk half.
+    ROUTING_SIMULATE_RATE_LIMIT_PER_MIN: int = 10
+
+    @model_validator(mode="after")
+    def _validate_routing_trace_retention(self) -> Self:
+        """Reject a retention window that would silently keep traces forever.
+
+        Rejecting rather than clamping to the default is the point. A startup
+        failure costs an operator seconds and tells them exactly what to fix;
+        substituting ``14`` for someone who typed ``0`` meaning "don't retain
+        this" leaves them believing something false about their own deployment,
+        and the thing they are wrong about is how long external users' message
+        text sits in their database. It fails toward keeping *more* text than
+        intended, which is the one direction this knob must not fail in.
+        """
+        days = self.ROUTING_TRACE_RETENTION_DAYS
+        if days == ROUTING_TRACE_RETENTION_FOREVER or days >= 1:
+            return self
+        raise ValueError(
+            f"ROUTING_TRACE_RETENTION_DAYS must be at least 1, or exactly "
+            f"{ROUTING_TRACE_RETENTION_FOREVER} to keep routing traces forever "
+            f"(got {days}). Routing traces can hold external senders' message "
+            f"text, so a retention window is not optional: "
+            f"{ROUTING_TRACE_RETENTION_FOREVER} is the only way to disable "
+            f"expiry, and it is deliberately not spelled 0. If you meant "
+            f"'store nothing', set ROUTING_TRACE_STORE_MESSAGE_TEXT=False to "
+            f"keep traces without the message text, or "
+            f"ROUTING_TRACE_ENABLED=False to stop writing traces entirely."
+        )
+
+    @model_validator(mode="after")
+    def _validate_routing_trace_app_mcp_mode(self) -> Self:
+        """Reject an unknown ``ROUTING_TRACE_APP_MCP_MODE`` at startup.
+
+        Rejecting rather than falling back, for the same reason the retention
+        validator above rejects: an unrecognised value would degrade to the
+        ``metadata`` branch (it is neither ``off`` nor ``full``), so an operator
+        who typed ``none`` or ``disabled`` meaning "stop recording App MCP
+        decisions" would get rows they believe do not exist. That is precisely
+        the failure this setting was withdrawn over the first time — a control
+        that appears to do more, or less, than it does — and it is cheaper to
+        fail a boot than to discover it from a table.
+        """
+        mode = self.ROUTING_TRACE_APP_MCP_MODE
+        if mode in ROUTING_TRACE_APP_MCP_MODES:
+            return self
+        raise ValueError(
+            f"ROUTING_TRACE_APP_MCP_MODE must be one of "
+            f"{', '.join(ROUTING_TRACE_APP_MCP_MODES)} (got {mode!r}). "
+            f"{ROUTING_TRACE_APP_MCP_OFF!r} writes no app_mcp routing traces at "
+            f"all, {ROUTING_TRACE_APP_MCP_METADATA!r} writes them without the "
+            f"sender's message text or any model prompt/response, and "
+            f"{ROUTING_TRACE_APP_MCP_FULL!r} writes them like any other origin. "
+            f"To stop writing traces for every origin, set "
+            f"ROUTING_TRACE_ENABLED=False instead."
+        )
+
     # ── Two-Factor Authentication (MFA) ────────────────────────────────
     # Settings that govern the WebAuthn passkey + TOTP authenticator-app
     # 2FA flows.  See ``docs/drafts/user-2fa-passkeys-totp_plan.md``.
@@ -452,6 +781,20 @@ class Settings(BaseSettings):
     MODEL_DISCOVERY_ENABLED: bool = True
     MODEL_DISCOVERY_INTERVAL_HOURS: int = 24
 
+    # Bundle auto-update convergence sweep.
+    # Installs with ``update_mode="automatic"`` whose environment is idle
+    # (no env at all, suspended, or stopped) are converged onto the bundle's
+    # latest revision by a dedicated background sweep — the suspension-time
+    # hook only covers the running → suspended transition, so an environment
+    # that was already suspended when a revision was published would otherwise
+    # never update. The same sweep also runs bundle-scoped right after a
+    # publish (fast path). ``RETRY_BACKOFF_HOURS`` keeps a persistently failing
+    # install from being retried on every sweep.
+    BUNDLE_AUTO_UPDATE_ENABLED: bool = True
+    BUNDLE_AUTO_UPDATE_INTERVAL_MINUTES: int = 10
+    BUNDLE_AUTO_UPDATE_BATCH_LIMIT: int = 50
+    BUNDLE_AUTO_UPDATE_RETRY_BACKOFF_HOURS: int = 6
+
     # Bundle / App Data Storage (Phase 1 — agent bundles & installs)
     # ``BUNDLE_STORAGE_DIR`` holds bundle revision snapshots:
     #   <BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>/
@@ -486,6 +829,16 @@ class Settings(BaseSettings):
         "application/zip,application/x-tar,application/gzip,"
         # Structured data
         "application/json,application/xml,"
+        # Whole email messages. A forwarded mail's own attachments arrive
+        # loose, but a forward that carries none is materialised as a ``.eml``
+        # instead of being lost (the fallback in
+        # ``EmailPollingService._extract_attachments``); without this entry
+        # that fallback would be skipped as ``type_not_allowed``. Note this
+        # allowlist is deployment-wide — it also permits ``.eml`` on the web
+        # upload, agent ``<cinna_attach>`` and A2A paths. Deliberate: the
+        # platform never parses an upload, it only stores it and hands it to
+        # the agent, so a mail file is no more privileged than a PDF.
+        "message/rfc822,"
         # Microsoft Office (legacy + OOXML)
         "application/msword,"
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
@@ -519,6 +872,76 @@ class Settings(BaseSettings):
     def upload_max_user_storage_bytes(self) -> int:
         """Convert GB to bytes"""
         return self.UPLOAD_MAX_USER_STORAGE_GB * 1024 * 1024 * 1024
+
+    # --- Server-channel inbound attachments ------------------------------
+    #
+    # Files arriving from *outside* the platform (Google Chat, polled email)
+    # are bounded more tightly than a web upload: they arrive unattended, on
+    # the platform's only unauthenticated ingress, and nobody is watching a
+    # progress bar. These caps are the whole of the feature's bound — there
+    # is deliberately no per-channel `allow_attachments` switch.
+    #
+    # Per-file cap, deliberately BELOW the 100MB web-upload cap: 25MB is also
+    # where most mail servers stop.
+    CHANNEL_ATTACHMENT_MAX_FILE_MB: int = Field(default=25, ge=1)
+    # How many attachments one inbound message may carry. Refs beyond this are
+    # skipped WITHOUT being fetched — and, on email, without being *retained*
+    # either: the parser measures the excess parts so the manifest stays honest
+    # and then drops their bytes, because on that transport the cost the
+    # promise is about is the decoded copy, not a download.
+    CHANNEL_ATTACHMENT_MAX_PER_MESSAGE: int = Field(default=10, ge=1)
+    # Aggregate byte cap across one inbound message, so ten files that each
+    # fit cannot jointly blow past what one message is allowed to bring.
+    #
+    # It is also the lever on peak memory, though not one-for-one: the fetch
+    # concurrency is derived from it (aggregate ÷ per-file), so a message's
+    # true peak is roughly `aggregate + concurrency × per-file` — 100MB with
+    # these defaults. Nothing caps that across *simultaneous* messages, so a
+    # deployment expecting many concurrent attachment-bearing webhooks should
+    # size this against its worker memory rather than against one message.
+    CHANNEL_ATTACHMENT_MAX_AGGREGATE_MB: int = Field(default=50, ge=1)
+    # Fetch deadline for a transport that hands out handles rather than bytes
+    # (Google Chat media). **Spent in two places, and the second is the one
+    # that decides the outcome:** the adapter uses it as the per-request HTTP
+    # timeout, and ``ChannelAttachmentService`` uses the same number as the
+    # deadline for the *whole message's* fetch phase. So this is a
+    # whole-message budget, not a per-file allowance — ten attachments share
+    # these thirty seconds, they do not get thirty each.
+    #
+    # That is stricter than a naive reading and deliberately so: step 6.5 runs
+    # inside a webhook Google expects acked in about thirty seconds, and a
+    # budget that scaled with the attachment count would miss the ack window
+    # rather than drop a file. The cost is the tail of a large legitimate
+    # message, which is skipped as ``fetch_budget_exhausted`` — a reason code
+    # kept distinct from ``timeout`` precisely so this constant is where the
+    # operator looks.
+    CHANNEL_ATTACHMENT_FETCH_TIMEOUT_SECONDS: int = Field(default=30, ge=1)
+    # Multiple of the per-message aggregate that one poll tick may hold in
+    # memory across all fetched messages. Beyond it, later messages'
+    # attachments are dropped to refs rather than buffered — a mailbox with a
+    # backlog of large mail must not become an OOM.
+    CHANNEL_ATTACHMENT_POLL_BUDGET_MULTIPLIER: int = Field(default=4, ge=1)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def channel_attachment_max_file_bytes(self) -> int:
+        """Convert MB to bytes"""
+        return self.CHANNEL_ATTACHMENT_MAX_FILE_MB * 1024 * 1024
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def channel_attachment_max_aggregate_bytes(self) -> int:
+        """Convert MB to bytes"""
+        return self.CHANNEL_ATTACHMENT_MAX_AGGREGATE_MB * 1024 * 1024
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def channel_attachment_poll_budget_bytes(self) -> int:
+        """Per-poll-tick in-memory attachment budget, in bytes."""
+        return (
+            self.channel_attachment_max_aggregate_bytes
+            * self.CHANNEL_ATTACHMENT_POLL_BUDGET_MULTIPLIER
+        )
 
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":

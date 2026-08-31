@@ -179,15 +179,14 @@ class AgentService:
     ) -> dict[UUID, dict[str, bool]]:
         """Batched lookup of active integration flags for a set of agents.
 
-        Returns a mapping ``agent_id -> {has_email_integration, has_mcp_connectors,
-        has_webhooks, git_versioning_enabled}``. Only *enabled/active* integrations
-        count. Agents with no matching rows are absent from the per-capability sets
+        Returns a mapping ``agent_id -> {has_mcp_connectors, has_webhooks,
+        git_versioning_enabled}``. Only *enabled/active* integrations count.
+        Agents with no matching rows are absent from the per-capability sets
         and default to False.
 
         Single grouped query per capability keeps the agents-list endpoint off the
         N+1 path.
         """
-        from app.models.email.agent_email_integration import AgentEmailIntegration
         from app.models.mcp.mcp_connector import MCPConnector
         from app.models.agents.agent_webhook import AgentWebhook
         from app.models.bundles.agent_git_source import AgentGitSource
@@ -195,14 +194,6 @@ class AgentService:
         if not agent_ids:
             return {}
 
-        email_ids = set(
-            session.exec(
-                select(AgentEmailIntegration.agent_id).where(
-                    AgentEmailIntegration.agent_id.in_(agent_ids),
-                    AgentEmailIntegration.enabled == True,  # noqa: E712
-                )
-            ).all()
-        )
         mcp_ids = set(
             session.exec(
                 select(MCPConnector.agent_id).where(
@@ -231,7 +222,6 @@ class AgentService:
 
         return {
             aid: {
-                "has_email_integration": aid in email_ids,
                 "has_mcp_connectors": aid in mcp_ids,
                 "has_webhooks": aid in webhook_ids,
                 "git_versioning_enabled": aid in git_ids,
@@ -291,7 +281,7 @@ class AgentService:
             webapp_enabled=agent.webapp_enabled,
             agent_api_enabled=agent.agent_api_enabled,
             agent_api_identity_enabled=agent.agent_api_identity_enabled,
-            has_email_integration=capabilities.get("has_email_integration", False),
+            agent_api_external_access_enabled=agent.agent_api_external_access_enabled,
             has_mcp_connectors=capabilities.get("has_mcp_connectors", False),
             has_webhooks=capabilities.get("has_webhooks", False),
             git_versioning_enabled=capabilities.get("git_versioning_enabled", False),
@@ -596,29 +586,6 @@ class AgentService:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to sync prompts to environment after agent update: {e}")
-
-        # Propagate ``router_trigger_prompt`` changes to the install's
-        # auto-managed App MCP route. The focused
-        # ``PATCH /agents/{id}/router-trigger-prompt`` endpoint already
-        # does this; mirror the behaviour here so the generic
-        # ``PUT /agents/{id}`` path stays consistent — otherwise a
-        # publisher edit via the standard Edit form silently fails to
-        # reach the router until the next apply-update.
-        if "router_trigger_prompt" in update_dict:
-            try:
-                from app.services.app_mcp.app_agent_route_service import (
-                    AppAgentRouteService,
-                )
-
-                AppAgentRouteService.sync_router_trigger_prompt_from_agent(
-                    db_session=session, agent=agent,
-                )
-            except Exception as exc:  # noqa: BLE001 — defensive
-                logger.warning(
-                    "Failed to sync router_trigger_prompt to auto-managed route "
-                    "for agent %s after PUT: %s",
-                    agent.id, exc,
-                )
 
         return agent
 

@@ -45,6 +45,13 @@ def list_admin_environments(
     status: Optional[str] = Query(None, description="Filter by environment status"),
     is_stale: Optional[bool] = Query(None, description="Filter by staleness (current_image_tag != expected)"),
     in_use: Optional[bool] = Query(None, description="Filter by in-use flag"),
+    update_available: Optional[bool] = Query(
+        None,
+        description=(
+            "Filter by bundle update availability (consumer install running "
+            "an older revision than the bundle's latest)"
+        ),
+    ),
     owner_id: Optional[uuid.UUID] = Query(None, description="Filter by agent owner user ID"),
     search: Optional[str] = Query(None, description="Search agent name, instance name, owner email/username"),
     skip: int = Query(0, ge=0),
@@ -53,8 +60,9 @@ def list_admin_environments(
     """
     List all agent environments across the platform (admin view).
 
-    Returns enriched rows with owner info, template staleness, and in-use flags.
-    Filters for is_stale and in_use are applied after enrichment.
+    Returns enriched rows with owner info, template staleness, in-use flags,
+    and bundle install state. Filters for is_stale, in_use, and
+    update_available are applied after enrichment.
     """
     return AdminEnvironmentService.list_environments(
         session=session,
@@ -62,6 +70,7 @@ def list_admin_environments(
         status=status,
         is_stale=is_stale,
         in_use=in_use,
+        update_available=update_available,
         owner_id=owner_id,
         search=search,
         skip=skip,

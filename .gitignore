@@ -1,5 +1,6 @@
 .vscode
 node_modules/
+.DS_Store
 /test-results/
 /playwright-report/
 /blob-report/
@@ -11,4 +12,5 @@ src_example/
 a2a-samples-main/
 backend/data/uploads/
 backend/data/agents/
+backend/data/bundles/
 notes.txt

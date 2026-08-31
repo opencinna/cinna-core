@@ -1,6 +1,35 @@
 # Agent Tests
 
-Agent tests exercise flows that depend on Docker environments, external mail servers, LLM streaming, and background services. The `conftest.py` in this directory provides autouse fixtures that stub all of these out.
+Agent tests exercise flows that depend on Docker environments, LLM streaming, and background services. The `conftest.py` in this directory provides autouse fixtures that stub all of these out.
+
+## Topic Groups
+
+This is the largest test domain in the suite (80 files / 592 tests), so tests are split into **topic group** subpackages. Every group inherits the autouse fixtures from this directory's `conftest.py` automatically — there is no per-group `conftest.py` and none should be added unless a group genuinely needs extra stubbing.
+
+| Group | Covers |
+|---|---|
+| `bundles/` | Publishing: bundle + revision creation, workspace/metadata snapshots, publish settings, credential specs, template sharing, `service_uri`, per-user scope, permissions overview |
+| `bundles_install/` | Installing and updating: install context, credential resolution/matching, readiness gate, auto-update convergence, scheduler propagation, admin env enrichment |
+| `agent_api/` | Agent REST API: owner preview, connect helper, proxy + policy, caller identity & scopes, external keys, automatic-credential drift |
+| `git/` | Git-backed agent versioning: checkout / pull / push, conflict resolution, baseline recovery, subdir-scoped update detection |
+| `improvement_requests/` | Agent Improvement Requests: targeting, lifecycle, prompt/memory capture, signals, archive + scrubbing, rate limits, CLI surfaces |
+| `schedules/` | Agent schedules: multi-schedule CRUD, schedule types + logs, manual "Run now" |
+| `webapp/` | Agent webapp: share CRUD + public auth, serving, webapp chat (basic / actions / context), interface config, session instructions, `/webapp` command |
+| `sessions/` | Session lifecycle and streaming: context, page context, recovery, reset, delete-interrupt, env detach, stream concurrency, message attachments |
+| `commands/` | Slash / CLI command surface: `/run`, CLI command sync, autocomplete, `/files` + env wakeup, non-LLM → LLM bridging, agent status + status refresh |
+| `guest_shares/` | Guest share links: CRUD, auth flow, security code, guest session access |
+| `integrations/` | Inbound/outbound integrations: webhooks, capability flags, router trigger prompt |
+| `core/` | Everything without a better home: create-flow, creation limits, prompt sync, resilient plugins, AI-credential slot matching, credential categorization, team task delegation, env token scoping, A2A access tokens |
+
+**Placement rule.** New test files go into the group that matches their topic — never loose at the root of `tests/api/agents/`. Create a new group only for a genuinely new topic you expect to reach ~3 files; give it an `__init__.py` and add a row above. If `core/` grows past ~12 files, split it instead of letting it sprawl.
+
+**Run scope.** Run the topic group, not the whole domain:
+
+```bash
+docker compose exec backend python -m pytest tests/api/agents/bundles_install/ -v
+```
+
+Run the full `tests/api/agents/` directory only when the change is cross-cutting — this directory's `conftest.py`, `tests/utils/fixtures.py`, or a shared service (session / message / environment lifecycle) that every group exercises.
 
 ## Autouse Fixtures (conftest.py)
 
@@ -12,8 +41,8 @@ Services create their own DB sessions via `create_session()`. This fixture repla
 
 ```python
 patch("app.core.db.create_session", factory),
-patch("app.services.email.processing_service.create_session", factory),
-patch("app.services.session_service.create_session", factory),
+patch("app.services.sessions.session_service.create_session", factory),
+patch("app.services.tasks.input_task_service.create_session", factory),
 ```
 
 When a new service imports `create_session`, add its patch target here.
@@ -30,7 +59,7 @@ Replaces `EnvironmentService.create_environment` with `stub_create_environment` 
 
 Replaces `create_task_with_error_logging` at every import site (`session_service`, `event_service`) with a `_BackgroundTaskCollector`. Fire-and-forget coroutines (e.g. `process_pending_messages`, event handlers) are captured instead of scheduled on the event loop.
 
-The collector is registered with `tests/utils/background_tasks.py` so that test utilities (e.g. `process_emails_with_stub`) can drain collected tasks automatically via `drain_tasks()`. Tests do **not** need to interact with the collector directly.
+The collector is registered with `tests/utils/background_tasks.py` so that test utilities can drain collected tasks automatically via `drain_tasks()`. Tests do **not** need to interact with the collector directly.
 
 Background tasks can't run inside the ASGI event loop (no nested `asyncio.run()`), so they are collected during API calls and drained from the test thread after the response returns. The drain loop handles cascading tasks (tasks spawned during execution of other tasks).
 
@@ -46,7 +75,7 @@ Located in `tests/stubs/`:
 
 | Stub | Replaces | Usage |
 |------|----------|-------|
-| `StubIMAPConnector` | `imap_connector` | Patch `app.services.email.polling_service.imap_connector`; pass raw email bytes to constructor |
+| `StubIMAPConnector` | `imap_connector` | **No patch target right now.** `polling_service` no longer imports `imap_connector` (the per-agent email integration that drove it is deleted), so patching `app.services.email.polling_service.imap_connector` raises `AttributeError`. Patch it on whichever module imports it once the email channel transport lands under `app/services/server_channels/adapters/`; pass raw email bytes to the constructor |
 | `StubSMTPConnector` | `smtp_connector` | Patch `app.services.email.sending_service.smtp_connector`; assert on `.sent_emails` |
 | `StubAgentEnvConnector` | `agent_env_connector` | Patch `app.services.message_service.agent_env_connector`; yields predefined SSE events for agent streaming. Use for simple response-only flows |
 | `ScriptedAgentEnvConnector` | `agent_env_connector` | Patch same target; executes scripted MCP tool calls (real HTTP requests to TestClient) during the stream, then yields "done". Use when agent needs to call tools (create_subtask, add_comment, etc.) mid-stream. Only first `stream_chat` call runs scripted steps; subsequent calls use fallback. Track results via `.tool_results` and fallback count via `.fallback_call_count` |
@@ -62,11 +91,6 @@ Located in `tests/utils/`:
 | Helper | Description |
 |--------|-------------|
 | `create_agent_via_api(client, headers, name)` | Creates agent via POST API |
-| `configure_email_integration(client, headers, agent_id, ...)` | Configures email integration for an agent |
-| `enable_email_integration(client, headers, agent_id)` | Enables email integration |
-| `create_imap_server(client, headers)` | Creates IMAP mail server config |
-| `create_smtp_server(client, headers)` | Creates SMTP mail server config |
-| `process_emails_with_stub(client, headers, agent_id, raw_emails, agent_env_stub)` | Polls IMAP, processes emails, and drains all background tasks (full pipeline) |
 | `get_agent_session(client, headers, agent_id)` | Finds the single session for an agent via API |
 | `get_messages_by_role(client, headers, session_id, role)` | Lists session messages filtered by role via API |
 | `list_sessions(client, headers)` | Lists all sessions via API |
@@ -80,25 +104,6 @@ Located in `tests/utils/`:
 | `agent_update_status(client, headers, task_id, status)` | Agent updates task status (for `blocked`/`cancelled` only — completion should be session-driven) |
 | `agent_get_task_details(client, headers, task_id)` | Agent reads task details via `/agent/tasks/{id}/details` |
 | `agent_get_task_details_current(client, headers, source_session_id)` | Agent reads current task via `/agent/tasks/current/details` |
-
-### `process_emails_with_stub`
-
-This is the main helper for email integration tests. It:
-1. Patches the IMAP connector with a stub containing the provided raw emails
-2. Optionally patches `agent_env_connector` with the provided `agent_env_stub`
-3. Calls the process-emails API endpoint
-4. Drains all background tasks (process_pending_messages, event handlers, etc.)
-5. Returns `(result_json, stub_imap)` for assertion
-
-```python
-stub_agent_env = StubAgentEnvConnector(response_text="Hello from agent")
-result, stub_imap = process_emails_with_stub(
-    client, superuser_token_headers, agent_id,
-    raw_emails=[raw_email],
-    agent_env_stub=stub_agent_env,
-)
-# Everything has completed — verify results via API
-```
 
 ## Testing Task Delegation and MCP Tool Flows
 
@@ -180,14 +185,14 @@ with patch("...", worker_stub):
 
 ## Adding a New Agent Test
 
-1. Create `tests/api/agents/agents_<feature>_test.py`
+1. Create `tests/api/agents/<group>/agents_<feature>_test.py` — pick the group from the
+   "Topic Groups" table above; do not place the file at the root of `tests/api/agents/`
 2. Use `client`, `superuser_token_headers`, and `db` fixtures
 3. Set up data via API using helpers from `tests/utils/`
-4. For email flows, use `process_emails_with_stub` with an `agent_env_stub`
-5. For task/streaming flows, use `ScriptedAgentEnvConnector` to simulate MCP tool calls mid-stream
-6. Verify results via API using `get_agent_session`, `get_messages_by_role`, etc.
-7. Verify session-driven status transitions — don't force status manually unless testing the status API itself
-8. Use `db` for internal state not exposed via API (e.g. `OutgoingEmailQueue`)
-9. If your service imports `create_session`, add its patch target to `CREATE_SESSION_TARGETS_AGENT` in `tests/utils/fixtures.py`
-10. If your service uses `create_task_with_error_logging`, add its patch target to `BACKGROUND_TASK_TARGETS_FULL`
-11. If a test needs a workaround (manual status override, relaxed assertions), investigate whether the source code has a pattern violation (see "Source Code Invariants" in `backend/tests/README.md`)
+4. For task/streaming flows, use `ScriptedAgentEnvConnector` to simulate MCP tool calls mid-stream
+5. Verify results via API using `get_agent_session`, `get_messages_by_role`, etc.
+6. Verify session-driven status transitions — don't force status manually unless testing the status API itself
+7. Use `db` for internal state not exposed via API
+8. If your service imports `create_session`, add its patch target to `CREATE_SESSION_TARGETS_AGENT` in `tests/utils/fixtures.py`
+9. If your service uses `create_task_with_error_logging`, add its patch target to `BACKGROUND_TASK_TARGETS_FULL`
+10. If a test needs a workaround (manual status override, relaxed assertions), investigate whether the source code has a pattern violation (see "Source Code Invariants" in `backend/tests/README.md`)

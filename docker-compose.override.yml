@@ -33,6 +33,9 @@ services:
       # Host path for per-(user, bundle) App Data — substituted into the agent
       # docker-compose as ${APP_DATA_HOST_PATH} for the bind-mount source
       HOST_APP_DATA_DIR: "${PWD}/backend/data/agents/app-data"
+      # Host path for bundle revision snapshots (BUNDLE_STORAGE_DIR) so
+      # git-versioning baselines survive backend container recreation
+      HOST_BUNDLE_STORAGE_DIR: "${PWD}/backend/data/bundles"
       # Test database connection (separate DB for pytest)
       TEST_DB_SERVER: "db"
       TEST_DB_PORT: "5432"

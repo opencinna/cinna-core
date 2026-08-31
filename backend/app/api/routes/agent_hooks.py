@@ -23,6 +23,7 @@ from app.services.agents.agent_webhook_errors import (
     WebhookTokenInvalidError,
 )
 from app.services.agents.agent_webhook_service import AgentWebhookService
+from app.utils import client_ip
 
 router = APIRouter(tags=["agent-hooks"])
 
@@ -30,24 +31,6 @@ logger = logging.getLogger(__name__)
 
 # Max webhook payload size: 64KB
 _MAX_PAYLOAD_SIZE = 64 * 1024
-
-
-def _extract_remote_ip(request: Request) -> str | None:
-    """
-    Resolve the caller IP.
-
-    Prefer the first hop in ``X-Forwarded-For`` (common when behind nginx /
-    load balancer); fall back to ``request.client.host``. Truncate to 64 chars
-    to match the log column cap.
-    """
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first[:64]
-    if request.client and request.client.host:
-        return request.client.host[:64]
-    return None
 
 
 @router.post("/{webhook_id}")
@@ -108,7 +91,7 @@ async def execute_agent_webhook(
         payload_text = body.decode("utf-8", errors="replace")
 
     payload_content_type = request.headers.get("content-type")
-    remote_ip = _extract_remote_ip(request)
+    remote_ip = client_ip(request)
     # Snapshot headers as a plain dict — the FastAPI/Starlette Headers object
     # isn't directly serializable.
     headers_snapshot: dict[str, str] = dict(request.headers)

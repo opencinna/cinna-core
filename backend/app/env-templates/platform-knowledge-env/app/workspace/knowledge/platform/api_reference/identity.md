@@ -13,7 +13,6 @@ Auto-generated from OpenAPI spec. Tag: `identity`
 **Request body** (`IdentityAgentBindingCreate`):
   - `agent_id`: uuid (required)
   - `trigger_prompt`: string (required)
-  - `message_patterns`: string | null
   - `prompt_examples`: string | null
   - `session_mode`: string
   - `assigned_user_ids`: uuid[]
@@ -31,7 +30,6 @@ Auto-generated from OpenAPI spec. Tag: `identity`
 
 **Request body** (`IdentityAgentBindingUpdate`):
   - `trigger_prompt`: string | null
-  - `message_patterns`: string | null
   - `prompt_examples`: string | null
   - `session_mode`: string | null
   - `is_active`: boolean | null

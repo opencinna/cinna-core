@@ -19,8 +19,22 @@ Error mapping (the service never raises ``HTTPException``):
 * ``EgressBlockedError`` → 400        ``GitNonFastForwardError`` → 409
 * ``GitSourceConflictError`` → 409    ``GitSourceValidationError`` → 400
 * ``GitSourceNotFoundError`` → 404    ``RevisionFormatError`` → 422
-* ``GitAuthenticationError`` → 401    ``GitConnectionError`` → 400
+* ``GitAuthenticationError`` → 400    ``GitConnectionError`` → 400
+* ``GitBaselineUnavailableError`` → 503 (lost baseline snapshot, rebuild failed)
 * other ``GitOperationError`` → 400
+
+Two conflict subclasses carry a structured ``detail`` object instead of a bare
+string and MUST be caught before the generic ``GitSourceConflictError`` they
+subclass: ``GitSourceExistingAgentError`` (``code="existing_agent_folder"``, on
+connect) and ``GitSourceLocalChangesError`` (``code="local_changes"``, on pull).
+
+⚠️ ``GitAuthenticationError`` must NOT map to 401/403. It reports that *the
+backend's git client* was rejected by the *remote host* (wrong / missing deploy
+key), which says nothing about the caller's own session. The frontend's global
+API error handler treats 401/403 as "this session is dead" — mapping a remote
+git rejection there logged the user out mid-connect instead of showing the
+error. It is a user-fixable input problem, so it rides the same 400 bucket as
+``GitConnectionError``.
 """
 import logging
 import uuid
@@ -28,7 +42,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import SQLModel
+from sqlmodel import Field, SQLModel
 
 from app.api.deps import CurrentUser, SessionDep, require_developer
 from app.models import Message
@@ -39,8 +53,11 @@ from app.models.bundles.agent_git_source import (
 )
 from app.services.agents.agent_service import AgentService
 from app.services.bundles.git_source_service import (
+    GIT_PULL_RESOLUTIONS,
+    GitBaselineUnavailableError,
     GitSourceConflictError,
     GitSourceExistingAgentError,
+    GitSourceLocalChangesError,
     GitSourceNotFoundError,
     GitSourceService,
     GitSourceValidationError,
@@ -48,8 +65,6 @@ from app.services.bundles.git_source_service import (
 from app.services.bundles.revision_format import RevisionFormatError
 from app.services.common.egress_guard import EgressBlockedError
 from app.services.knowledge.git_operations import (
-    GitAuthenticationError,
-    GitConnectionError,
     GitNonFastForwardError,
     GitOperationError,
     build_web_history_url,
@@ -140,6 +155,10 @@ class GitDirtyStatus(SQLModel):
 
     dirty: bool
     prompts_dirty: bool
+    # Any non-prompt ``cinna.agent.json`` field (agent settings: description,
+    # example prompts, feature flags, SDK selections, schedules, plugin specs)
+    # diverging from the last synced revision.
+    settings_dirty: bool = False
     workspace_dirty: bool
     has_env: bool
     last_synced_commit: str | None = None
@@ -148,12 +167,43 @@ class GitDirtyStatus(SQLModel):
 class GitPromptChange(SQLModel):
     """One changed prompt field in the commit preview."""
 
+    # Human label ("Workflow prompt"), not the raw column name.
     field: str
+    # Raw column name ("workflow_prompt") + section, the stable pair
+    # ``GET /git/diff`` addresses. A label is UI copy and can be reworded, so it
+    # is deliberately not the identifier.
+    key: str = ""
+    section: str = "prompt"
     change_type: str  # "added" | "modified" | "deleted"
+    # Whether a pull would overwrite this change (→ it blocks a plain pull).
+    # Always True for prompts — a pull rewrites all four columns wholesale.
+    blocks_pull: bool = False
+
+
+class GitSettingChange(SQLModel):
+    """One changed agent-settings field (``cinna.agent.json``) in the preview."""
+
+    # Human label ("Example prompts"), not the raw column name — unchanged
+    # contract; the service maps its internal raw key back to this.
+    field: str
+    # Raw attribute name + owning registry ("metadata" / "sdk" / "specs"), the
+    # stable pair ``GET /git/diff`` addresses.
+    key: str = ""
+    section: str = ""
+    change_type: str  # "added" | "modified" | "deleted"
+    # Only the manifest sections a pull actually rewrites block it; schedules,
+    # plugins and env SDK selections survive a pull, so they report False.
+    blocks_pull: bool = False
 
 
 class GitFileChange(SQLModel):
-    """One changed workspace file in the commit preview."""
+    """One changed workspace file in the commit preview.
+
+    Deliberately has NO ``blocks_pull``: workspace files never block a pull,
+    they are *replaced* by it wholesale whenever an env exists. That is a
+    property of the operation, not of a file, so the UI states it once as a
+    section header rather than repeating a flag per row.
+    """
 
     path: str
     change_type: str  # "added" | "modified" | "deleted"
@@ -165,8 +215,51 @@ class GitStatus(SQLModel):
     dirty: bool
     has_env: bool
     last_synced_commit: str | None = None
+    # Whether a plain (bodiless) pull would 409 right now — i.e. any change
+    # below carries ``blocks_pull``. Same computation as the guard itself.
+    pull_blocked: bool = False
     prompt_changes: list[GitPromptChange] = []
+    setting_changes: list[GitSettingChange] = []
     file_changes: list[GitFileChange] = []
+
+
+class GitDiff(SQLModel):
+    """Response of ``GET /agents/{agent_id}/git/diff`` — one item's diff."""
+
+    section: str
+    key: str
+    # Human label for the dialog title ("Workflow prompt"); the path itself for
+    # a workspace file.
+    label: str
+    change_type: str  # "added" | "modified" | "deleted" | "unchanged"
+    # Unified-diff text, rendered verbatim by the UI. Empty when the two sides
+    # are equal or the content is binary.
+    diff: str = ""
+    # Content that is not valid UTF-8 — there is no useful text diff to show.
+    binary: bool = False
+    # Either side exceeded the size cap, or the diff exceeded the line cap.
+    truncated: bool = False
+
+
+class GitPullRequest(SQLModel):
+    """Optional body of ``POST /agents/{agent_id}/git/pull``.
+
+    ``conflict_resolution`` is one of :data:`GIT_PULL_RESOLUTIONS`
+    (``keep_local`` / ``take_remote``); omitting it — or the whole body — keeps
+    the fail-loud 409 behavior the GitOps webhook path depends on. Shaped as a
+    single scalar so a future per-field resolution (``keep_fields: [...]``) can
+    be added without a breaking change. Validated in the service, not here, so
+    the service stays the sole enforcement point.
+    """
+
+    conflict_resolution: str | None = Field(
+        default=None,
+        description=(
+            "How to resolve local changes a pull would overwrite. One of: "
+            f"{', '.join(GIT_PULL_RESOLUTIONS)}. Omit to fail loud with a "
+            "recoverable 409 instead."
+        ),
+    )
 
 
 # ── Error mapping ────────────────────────────────────────────────────────
@@ -176,14 +269,20 @@ def _map_git_error(exc: Exception) -> HTTPException:
     """Translate a service / git exception into the right HTTP status."""
     if isinstance(exc, GitSourceNotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, GitBaselineUnavailableError):
+        # Server-side storage-integrity failure: the last-synced baseline
+        # snapshot was lost and could not be rebuilt from git. A 5xx (not a
+        # false 200 "no changes") lets the UI show an explicit "baseline check
+        # failed" state and keep the commit action blocked.
+        return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, (GitSourceConflictError, GitNonFastForwardError)):
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, RevisionFormatError):
         return HTTPException(status_code=422, detail=str(exc))
-    if isinstance(exc, GitAuthenticationError):
-        return HTTPException(status_code=401, detail=str(exc))
-    # EgressBlockedError, GitConnectionError, generic GitOperationError and
-    # GitSourceValidationError all surface as a user-fixable 400.
+    # GitAuthenticationError, EgressBlockedError, GitConnectionError, generic
+    # GitOperationError and GitSourceValidationError all surface as a
+    # user-fixable 400. See the module docstring for why an auth failure against
+    # the *remote* must never become a 401/403 on *this* API.
     return HTTPException(status_code=400, detail=str(exc))
 
 
@@ -418,7 +517,7 @@ def get_git_dirty(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> GitDirtyStatus:
-    """Whether the live workspace / prompts diverge from the last synced revision.
+    """Whether the live workspace / prompts / settings diverge from the baseline.
 
     Read-only (never pushes); best-effort on the env side. Owner-resolved
     (404 for a missing source / non-owner). Gates the "Commit Agent" action in
@@ -427,7 +526,11 @@ def get_git_dirty(
     """
     try:
         result = GitSourceService.compute_dirty(session, agent_id, current_user)
-    except GitSourceNotFoundError as exc:
+    except (
+        GitSourceNotFoundError,
+        GitSourceValidationError,
+        GitBaselineUnavailableError,
+    ) as exc:
         raise _map_git_error(exc)
     return GitDirtyStatus(**result)
 
@@ -438,19 +541,56 @@ def get_git_status(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> GitStatus:
-    """File/prompt-level preview of what the next commit would capture.
+    """File/prompt/settings-level preview of what the next commit would capture.
 
-    The detailed sibling of ``GET /git/dirty`` — returns the actual per-prompt
-    and per-file changes (``added`` / ``modified`` / ``deleted``) so the commit
+    The detailed sibling of ``GET /git/dirty`` — returns the actual per-prompt,
+    per-setting (``cinna.agent.json`` metadata / SDK / schedules / plugins) and
+    per-file changes (``added`` / ``modified`` / ``deleted``) so the commit
     dialog can render a ``git status`` style preview. Mirrors the post-denylist
     capture a push produces, so the preview matches the commit exactly.
     Read-only; owner-resolved (404 for a missing source / non-owner).
     """
     try:
         result = GitSourceService.compute_status(session, agent_id, current_user)
-    except GitSourceNotFoundError as exc:
+    except (
+        GitSourceNotFoundError,
+        GitSourceValidationError,
+        GitBaselineUnavailableError,
+    ) as exc:
         raise _map_git_error(exc)
     return GitStatus(**result)
+
+
+@router.get("/{agent_id}/git/diff", response_model=GitDiff)
+def get_git_diff(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+    section: str,
+    key: str,
+) -> GitDiff:
+    """Unified diff of ONE changed prompt, setting, or workspace file.
+
+    The drill-down behind every row of ``GET /git/status``: pass that row's
+    ``section`` + ``key`` (the RAW identifier the status endpoint emits
+    alongside the human label) and get ``git diff`` style text — last synced
+    revision on the ``a/`` side, live agent on the ``b/`` side.
+
+    ``key`` is caller-supplied and reaches both ``getattr`` and the filesystem,
+    so it is allowlisted in the service against the field registries / the
+    workspace denylist rather than sanitized. Read-only; owner-resolved.
+    """
+    try:
+        result = GitSourceService.compute_diff(
+            session, agent_id, current_user, section=section, key=key
+        )
+    except (
+        GitSourceNotFoundError,
+        GitSourceValidationError,
+        GitBaselineUnavailableError,
+    ) as exc:
+        raise _map_git_error(exc)
+    return GitDiff(**result)
 
 
 # ── Pull ───────────────────────────────────────────────────────────────
@@ -465,11 +605,54 @@ async def pull_git_source(
     agent_id: uuid.UUID,
     session: SessionDep,
     current_user: CurrentUser,
+    request: GitPullRequest | None = None,
 ) -> AgentPublic:
-    """Pull the latest remote revision onto the install (reuses apply-update)."""
+    """Pull the latest remote revision onto the install (reuses apply-update).
+
+    The body is optional: a bodiless pull (the GitOps webhook path) keeps the
+    fail-loud semantics — local changes a pull would overwrite return a
+    recoverable 409 with ``detail.code == "local_changes"`` and the blocking
+    field list. Send ``conflict_resolution`` (``keep_local`` / ``take_remote``)
+    to resolve instead of failing; see :class:`GitPullRequest`.
+    """
     try:
         install = await GitSourceService.pull_update(
-            session=session, agent_id=agent_id, owner=current_user
+            session=session,
+            agent_id=agent_id,
+            owner=current_user,
+            conflict_resolution=(
+                request.conflict_resolution if request else None
+            ),
+        )
+    except GitSourceLocalChangesError as exc:
+        # Recoverable 409, mirroring the "existing_agent_folder" precedent: a
+        # machine-readable code plus the blocking field list, so the UI can open
+        # the pull-conflict dialog and offer a resolution instead of showing a
+        # dead-end toast. MUST be branched on before the generic
+        # GitSourceConflictError below — it is a subclass of it.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "local_changes",
+                # A complete sentence: the fallback for any client that does not
+                # understand the code.
+                "message": str(exc),
+                "blocking": [
+                    {
+                        "section": change["section"],
+                        # The human label, matching GitSettingChange.field /
+                        # GitPromptChange.field on the status endpoint so the
+                        # dialog renders the two sources identically.
+                        "field": change["label"],
+                        # Raw attribute name, matching the `key` those same
+                        # models carry — so a row seeded from this 409 opens the
+                        # per-field diff exactly like a status-derived one.
+                        "key": change["field"],
+                        "change_type": change["change_type"],
+                    }
+                    for change in exc.blocking
+                ],
+            },
         )
     except (
         GitSourceNotFoundError,

@@ -3,7 +3,7 @@
 ## File Locations
 
 ### Backend — Models
-- `backend/app/models/sessions/session_sender.py` — `SessionSender` (frozen dataclass), `SessionSenderKind` (Literal), `ChannelAccessPolicy`, `IngestionResult`, `get_session_sender(session)` reader. Re-exported from `app.models.sessions.__init__` and `app.models.__init__`.
+- `backend/app/models/sessions/session_sender.py` — `SessionSender` (frozen dataclass), `SessionSenderKind` (Literal), `ChannelAccessPolicy`, `IdentityGrant` (frozen dataclass: `owner_id`, `binding_id`, `assignment_id`), `IngestionResult`, `get_session_sender(session)` reader. Re-exported from `app.models.sessions.__init__` and `app.models.__init__`.
 
 ### Backend — Services
 - `backend/app/services/sessions/channel_ingestion_service.py` — `ChannelIngestionService` (stateless), `NoActiveEnvironmentError`. Composes `SessionService` primitives; never re-implements message creation, stream initiation, or DB inserts.
@@ -11,8 +11,8 @@
 ### Backend — Channel callers (consumers of the service)
 - `backend/app/services/a2a/a2a_request_handler.py` — core A2A surface; uses `ingest_inbound_message` for `message/send` and `resolve_or_create_session` for `message/stream` (streaming kicks via `SessionStreamProcessor`, not the service).
 - `backend/app/services/external/external_a2a_context_handler.py` — External A2A surface (`A2ARequestHandler` subclass); overrides `_extra_session_kwargs` to thread `session_owner_id` through for non-owner target types.
-- `backend/app/services/external/external_a2a_request_handler.py` — builds `TargetContext` per target type (`agent` → `session_owner_id=user.id`; `app_mcp_route` → `agent.owner_id` + separate `caller_id`; `identity` → `owner_id` + `identity_caller_id`).
-- `backend/app/services/app_mcp/app_mcp_request_handler.py` — App MCP handlers (plain + identity routing); uses `assert_access` + `resolve_or_create_session`. Keeps legacy `MessageService.create_message` + `stream_and_collect_response` for message injection due to session-lock conflict.
+- `backend/app/services/external/external_a2a_request_handler.py` — builds `TargetContext` per target type — two arms only: `agent` → `session_owner_id=user.id`; `identity` → `owner_id` + `identity_caller_id`. Any other value falls through to `InvalidExternalParamsError("Unsupported target_type: ...")`.
+- `backend/app/services/app_mcp/app_mcp_request_handler.py` — App MCP handlers; the plain path uses `assert_access` + `resolve_or_create_session`, the identity path delegates to `create_identity_session`. Keeps legacy `MessageService.create_message` + `stream_and_collect_response` for message injection due to session-lock conflict.
 - `backend/app/api/routes/sessions.py` — `POST /sessions`; uses `resolve_or_create_session` directly (no message body, first message lands via `/messages/stream` later).
 - `backend/app/services/agents/agent_schedule_scheduler.py` — cron-fired and handover paths; uses `ingest_inbound_message` with `system_trigger` sender.
 - `backend/app/services/tasks/input_task_service.py` — human-initiated task execution; uses `ingest_inbound_message` with `task_executor` sender.
@@ -23,7 +23,7 @@
 ### Tests
 - `backend/tests/unit/models/test_session_sender.py` — Unit tests for the value type (kinds, constructors, properties, round-trip `from_a2a` ↔ `get_session_sender`).
 - `backend/tests/architecture/channel_ingestion_callers_test.py` — Contract test (above).
-- `backend/tests/api/external/external_a2a_route_test.py::test_route_streaming_creates_app_mcp_session_with_correct_ownership` — End-to-end check that `app_mcp` target type stamps `session.user_id == agent.owner_id` and `session.caller_id == caller`.
+- `backend/tests/api/app_mcp/app_mcp_session_test.py` — End-to-end check that App MCP sessions stamp `session.user_id == agent.owner_id` and `session.caller_id == caller`. (Formerly `backend/tests/api/external/external_a2a_route_test.py`, deleted in Phase 5 of the channels & identity unification along with the `app_mcp_route` external target type it tested.) <!-- nocheck -->
 
 ## `SessionSender` Constructors
 
@@ -38,12 +38,23 @@
 
 - `ChannelIngestionService.ingest_inbound_message(*, db, agent, sender, thread_key, content, integration_type, access_policy, get_fresh_db_session, file_ids=None, backend_base_url=None, answers_to_message_id=None, extra_session_kwargs=None) -> IngestionResult` — full flow: `assert_access` → `resolve_or_create_session` → `SessionService.send_session_message` → map dict return to `IngestionResult`.
 - `ChannelIngestionService.resolve_or_create_session(*, db, agent, sender, thread_key, integration_type, extra_session_kwargs=None) -> tuple[Session, bool]` — on resume verifies the sender matches via `_verify_resume_sender`; on create picks owner via `_select_session_owner_id` and runs `_stamp_new_session` for post-create extras. Raises `ValueError` when `thread_key` doesn't exist or `NoActiveEnvironmentError` when `SessionService.create_session` returns `None`.
-- `ChannelIngestionService.assert_access(*, agent, sender, policy) -> None` — per-kind access dispatch. Raises `PermissionError` on denial.
+- `ChannelIngestionService.assert_access(*, db, agent, sender, policy) -> None` — per-kind access dispatch. Raises `PermissionError` on denial. Takes a `db` because the `channel_caller` arm reads: the honest signature for a check that re-verifies, and the same snapshot the session will be created in. Every caller already holds one; none is opened here.
+- `ChannelIngestionService.create_identity_session(*, db, agent, sender, grant, integration_type, mode="conversation", session_metadata_extra=None) -> Session` — the one place identity sessions are built. Calls `assert_access` with the grant on the policy, then `resolve_or_create_session` with `identity_owner_id` (session owner) and the three identity stamps. `sender` and `integration_type` are parameters because they are the only things that genuinely differ per surface: App MCP passes `SessionSender.from_app_mcp(caller, identity_caller_user_id=caller)` and `"identity_mcp"`.
+
+### The `identity_grant` arm of `channel_caller`
+
+`channel_caller` asserts a three-way invariant — `agent.owner_id == policy.expected_owner_id == sender.platform_user_id` — that an identity session cannot satisfy, because an identity session runs in the *owner's* space on behalf of a foreign caller. `ChannelAccessPolicy.identity_grant` is the one deliberate alternative, and it does not weaken the invariant:
+
+- `IdentityGrant` carries **ids only** — a claim from the routing layer, not a conclusion.
+- `assert_access` re-reads every one of them via `IdentityService.verify_identity_access`, which checks six conditions: binding live; assignment live and enabled; `assignment.binding_id == binding.id`; `assignment.target_user_id == sender.platform_user_id`; `binding.agent_id == agent.id`; `binding.owner_id == agent.owner_id == grant.owner_id`.
+- Re-reading (rather than trusting) is the whole point: the routing decision and the session creation are separated by a worker-thread hop and possibly an auto-install wait, and the owner may have revoked in between.
+- With no grant present, the invariant is exactly as strict as it has always been.
+- The `mcp_caller` arm carries a grant but does not consult it — App MCP re-verifies per message on resume instead.
 
 ### Internal helpers
 - `_select_session_owner_id(*, agent, sender, extra_session_kwargs)` — kind-specific `Session.user_id` selection. Pops `session_owner_id` / `identity_owner_id` overrides off `extra_session_kwargs`.
 - `_verify_resume_sender(existing, sender)` — kind-specific resume check. Raises `PermissionError` on mismatch or on disallowed kinds (e.g. `system_trigger`, `mcp_caller`).
-- `_stamp_new_session(*, db, session, post_create_stamps)` — applies `_STAMPABLE_COLUMNS` (`caller_id`, `identity_caller_id`, `identity_binding_id`, `identity_binding_assignment_id`) plus `session_metadata_extra` merge. Raises `ValueError` on unknown keys.
+- `_stamp_new_session(*, db, session, post_create_stamps)` — applies `_STAMPABLE_COLUMNS` (`caller_id`, `identity_caller_id`, `identity_binding_id`, `identity_binding_assignment_id`) plus `session_metadata_extra` merge. Raises `ValueError` on unknown keys. The three identity columns were already whitelisted before `create_identity_session` existed; it uses them rather than adding anything.
 
 ### `_STAMPABLE_COLUMNS`
 Tuple in `channel_ingestion_service.py`. Adding a new whitelisted post-create column requires updating this tuple + the corresponding caller(s).

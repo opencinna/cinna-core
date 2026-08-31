@@ -30,6 +30,9 @@ Phase 2 — GET /account/context-package:
 - Auth matrix: no auth → 401; regular user JWT → 401; per-agent child CLI
   token → 401; revoked account token → 401
 - Two consecutive requests return identical bytes (exercises the in-process cache)
+- Content version: ``context/VERSION`` member, ``X-Context-Package-Version``
+  response header, and GET /account/context-package/version all agree; the probe
+  is behind the same account-token gate
 
 Phase 3 — Convenience verbs + generic API escape hatch:
 - POST /account/agents — thin client create; developer-gated (403 for agent-user);
@@ -1481,6 +1484,82 @@ def test_context_package_content(
     )
 
 
+# ── Scenario 14b: Context-package staleness signal ───────────────────────────
+
+
+def test_context_package_carries_a_content_version(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    GET /account/context-package/version and the package agree on one value.
+
+    A workspace set up before a guide (or a whole verb) existed has no way to
+    notice it is behind — the package is extracted once by ``cinna account
+    setup`` and never checked again. So the package stamps its own content
+    version into ``context/VERSION``, the download echoes it in a header, and a
+    cheap endpoint serves it, which is what lets the CLI compare the two.
+
+    The version is a hash of the packaged content, deliberately not of file
+    mtimes: a redeploy that ships identical knowledge must not tell every
+    workspace it is stale.
+    """
+    import io
+    import tarfile
+
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Version Probe Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    r = client.get(f"{_BASE}/account/context-package/version", headers=acc_headers)
+    assert r.status_code == 200, (
+        f"context-package version endpoint must return 200, got {r.status_code}: {r.text}"
+    )
+    version = r.json()["version"]
+    assert version, "version must be a non-empty string"
+
+    pkg = client.get(f"{_BASE}/account/context-package", headers=acc_headers)
+    assert pkg.status_code == 200, pkg.text
+    assert pkg.headers.get("X-Context-Package-Version") == version, (
+        "The download header must carry the same version the probe reports, or "
+        "a caller comparing them would refresh forever"
+    )
+
+    tf = tarfile.open(fileobj=io.BytesIO(pkg.content), mode="r:gz")
+    try:
+        assert "context/VERSION" in tf.getnames(), (
+            "The package must stamp its own version — without it an extracted "
+            "workspace has nothing to compare against"
+        )
+        stamped = tf.extractfile("context/VERSION").read().decode().strip()
+    finally:
+        tf.close()
+    assert stamped == version
+
+    # Same content, same version: the signal only fires on a real change.
+    again = client.get(f"{_BASE}/account/context-package/version", headers=acc_headers)
+    assert again.json()["version"] == version
+
+
+def test_context_package_version_requires_an_account_token(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """The probe sits behind the same account-token gate as the download."""
+    r = client.get(f"{_BASE}/account/context-package/version")
+    assert r.status_code == 401, (
+        f"Missing auth must return 401 on the version probe, got {r.status_code}"
+    )
+
+    r = client.get(
+        f"{_BASE}/account/context-package/version", headers=superuser_token_headers
+    )
+    assert r.status_code == 401, (
+        f"A user JWT must be rejected by the version probe, got {r.status_code}"
+    )
+
+
 # ── Scenario 15: Context-package auth matrix ─────────────────────────────────
 
 
@@ -1981,7 +2060,7 @@ def test_account_connect_agent_api_error_paths(
     requires the AgentApiTokenService to succeed, which in turn requires the
     producer environment to be in a state the test adapter recognizes. The
     minimal response-shape check in Phase 6 covers the path; the detailed
-    behavioral tests live in tests/api/agents/agents_agent_api_test.py.
+    behavioral tests live in tests/api/agents/agent_api/agents_agent_api_test.py.
     """
     # ── Phase 1: Bootstrap account token for superuser ────────────────────
     account_jwt, _ = bootstrap_account_token(

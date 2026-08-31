@@ -49,7 +49,7 @@ async def _list_cli_commands(context: CommandContext) -> CommandResult:
         desc = cmd.description or ""
         lines.append(f"| `{cmd.name}` | `{cmd.command[:80]}` | {desc} |")
 
-    return CommandResult(content="\n".join(lines))
+    return CommandResult(content="\n".join(lines), display="document")
 
 
 def _find_command(commands, name: str):

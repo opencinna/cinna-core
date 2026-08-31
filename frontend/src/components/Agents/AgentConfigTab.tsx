@@ -1,5 +1,6 @@
-import { useState, useCallback } from "react"
 import { useQueryClient } from "@tanstack/react-query"
+import { Info, ScrollText } from "lucide-react"
+import { useCallback, useState } from "react"
 
 import type { AgentPublic } from "@/client"
 import { Button } from "@/components/ui/button"
@@ -10,15 +11,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { AgentSchedulesCard } from "./AgentSchedulesCard"
 import { AgentHandovers } from "./AgentHandovers"
+import { AgentSchedulesCard } from "./AgentSchedulesCard"
 import { AgentStatusCard } from "./AgentStatusCard"
+import { BundleInstallationCard } from "./BundleInstallationCard"
 import { EditDescriptionModal } from "./EditDescriptionModal"
 import { EditEntrypointPromptModal } from "./EditEntrypointPromptModal"
-import { EditWorkflowPromptModal } from "./EditWorkflowPromptModal"
+import { EditExamplePromptsModal } from "./EditExamplePromptsModal"
 import { EditRefinerPromptModal } from "./EditRefinerPromptModal"
 import { EditRouterTriggerPromptModal } from "./EditRouterTriggerPromptModal"
-import { EditExamplePromptsModal } from "./EditExamplePromptsModal"
+import { EditWorkflowPromptModal } from "./EditWorkflowPromptModal"
+import { ImprovementRequestsCard } from "./ImprovementRequestsCard"
 
 interface AgentConfigTabProps {
   agent: AgentPublic
@@ -56,12 +59,20 @@ export function AgentConfigTab({
 
   return (
     <div className="space-y-6">
-      {/* Top Row: Information and Agent Prompts (side by side) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* One shared responsive grid for every card on the tab — two columns
+          from ``lg`` up, one below. Cards are direct grid items and flow into
+          the next free cell, so a conditionally hidden card (a null child
+          occupies no cell) closes the gap instead of stranding its neighbour
+          on a row of its own. Anything added here must therefore stay a bare
+          Card, not a card wrapped in its own grid. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {/* Information Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Information</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Info className="h-5 w-5" />
+              Information
+            </CardTitle>
             <CardDescription>
               Basic information about this agent
             </CardDescription>
@@ -87,7 +98,10 @@ export function AgentConfigTab({
         {/* Agent Prompts Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Agent Prompts</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <ScrollText className="h-5 w-5" />
+              Agent Prompts
+            </CardTitle>
             <CardDescription>
               Configure the prompts that define how this agent behaves
             </CardDescription>
@@ -121,31 +135,43 @@ export function AgentConfigTab({
             </div>
           </CardContent>
         </Card>
-      </div>
 
-      {/* Third Row: Scheduler and Handovers (side by side) */}
-      {/* Schedules render for the agent owner (editable) and for foreign
-          installs (read-only): bundle publishers can ship schedules, and the
-          consumer may enable/disable, run, and view logs but not edit them.
-          Handovers stay owner-only — they're not bundle-propagated. */}
-      {(showOperationalSettings || readOnly) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Schedules Card — read-only on foreign installs */}
+        {/* Bundle installation — foreign installs only (the card self-hides via
+            the same ``bundle_uuid && !is_publisher_install`` rule that makes
+            this tab read-only). Intentionally NOT passed ``readOnly``: the
+            update mode is the consumer's own preference, not publisher-authored
+            content. */}
+        <BundleInstallationCard agent={agent} />
+
+        {/* Schedules render for the agent owner (editable) and for foreign
+            installs (read-only): bundle publishers can ship schedules, and the
+            consumer may enable/disable, run, and view logs but not edit them.
+            Handovers stay owner-only — they're not bundle-propagated. */}
+        {(showOperationalSettings || readOnly) && (
           <AgentSchedulesCard agentId={agent.id} readOnly={readOnly} />
+        )}
 
-          {/* Handover to Agents — owner-only, not shown on foreign installs */}
-          {showOperationalSettings && <AgentHandovers agent={agent} />}
-        </div>
-      )}
+        {/* Handover to Agents — owner-only, not shown on foreign installs */}
+        {showOperationalSettings && <AgentHandovers agent={agent} />}
 
-      {/* Agent status — self-reported health + the refresh command.
-          Owner-facing configuration (editable command), so it follows the
-          same developer-tier gate as Handovers. */}
-      {showOperationalSettings && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <AgentStatusCard agent={agent} />
-        </div>
-      )}
+        {/* Agent status — self-reported health + the refresh command.
+            Owner-facing configuration (editable command), so it follows the
+            same developer-tier gate as Handovers. */}
+        {showOperationalSettings && <AgentStatusCard agent={agent} />}
+
+        {/* Improvement requests. Deliberately NOT gated on
+            ``showOperationalSettings`` or the developer role: reading feedback
+            people sent about an agent you own is an owner capability, and a
+            plain agent-user owning a standalone agent must still see it.
+
+            Rendered on foreign installs too, but only once something has
+            arrived. Requests raised against a bundle install normally route to
+            the publisher — except when the publisher install is gone, where
+            ``resolve_target`` falls back to self and the row lands on the
+            consumer's own install. Gating that away on ``readOnly`` made those
+            requests invisible to the only person who could act on them. */}
+        <ImprovementRequestsCard agentId={agent.id} hideWhenEmpty={readOnly} />
+      </div>
 
       {/* Modals */}
       <EditDescriptionModal

@@ -9,6 +9,7 @@ import {
   AlertTriangle,
 } from "lucide-react"
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal"
+import { downloadAuthenticatedFile } from "@/utils"
 
 interface AttachmentBlockProps {
   /** Event variant: a successful attachment card, or a delivery-failure notice. */
@@ -45,25 +46,8 @@ function formatFileSize(bytes?: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
-
 async function downloadFile(fileId: string, filename: string): Promise<void> {
-  const token = localStorage.getItem("access_token")
-  const response = await fetch(`${API_URL}/api/v1/files/${fileId}/download`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
-  if (!response.ok) {
-    throw new Error(`Download failed (${response.status})`)
-  }
-  const blob = await response.blob()
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  window.URL.revokeObjectURL(url)
+  await downloadAuthenticatedFile(`/api/v1/files/${fileId}/download`, filename)
 }
 
 export function AttachmentBlock({

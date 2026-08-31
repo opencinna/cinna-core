@@ -125,7 +125,7 @@ Shared helpers on `EnvironmentLifecycleManager` (in `environment_lifecycle.py`):
 - `OPENAI_API_KEY` / `GOOGLE_API_KEY` are written to `.env` but the docker-compose templates do NOT forward them into the container — only `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` are passed through (see each template's `environment:` block). OpenCode reads its key from `opencode.json` (`provider.<id>.options.apiKey`), not an env var, so "no OpenAI env var in the container" is expected.
 - `ai_credentials_service.py:_sync_default_to_user_profile()` mirrors only anthropic / minimax / openai_compatible defaults into the legacy `ai_credentials_encrypted` profile; openai / google live solely as named credentials.
 
-Regression tests: `backend/tests/api/agents/agents_ai_credential_slot_mismatch_test.py` — mismatch self-heal plus mixed-SDK per-mode fallback on both rebuild and reconfigure paths.
+Regression tests: `backend/tests/api/agents/core/agents_ai_credential_slot_mismatch_test.py` — mismatch self-heal plus mixed-SDK per-mode fallback on both rebuild and reconfigure paths.
 
 ## Frontend Components
 

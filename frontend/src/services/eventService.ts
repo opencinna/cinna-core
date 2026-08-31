@@ -92,6 +92,11 @@ export const EventTypes = {
   // Role events (Phase 3 — Roles & agent-user UX)
   USER_ROLE_CHANGED: "user_role_changed",                  // Current user's role changed
 
+  // Agent improvement requests — emitted to the recipient (agent owner) room.
+  // Drive live invalidation of the Configuration-tab card.
+  IMPROVEMENT_REQUEST_CREATED: "improvement_request_created",
+  IMPROVEMENT_REQUEST_UPDATED: "improvement_request_updated",
+
   // Generic notification
   NOTIFICATION: "notification",
 } as const

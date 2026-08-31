@@ -40,9 +40,22 @@ class SessionService:
             data: Session creation data
             access_token_id: Optional access token ID (for A2A token-created sessions)
             source_task_id: Optional task ID that spawned this session (for task management)
-            email_thread_id: Optional email Message-ID for threading
-            integration_type: Optional integration source ("email", "a2a", "external", "app_mcp", "identity_mcp", etc.)
-            sender_email: Optional sender email address (owner mode: track original sender)
+            email_thread_id: Retention-era plumbing, and **dead**: no caller
+                passes it. It survives the deleted per-agent email integration
+                because historical `session` rows still carry the column (the
+                email *channel* keeps its thread state on
+                `ChannelThreadBinding.thread_key` instead). Kept so the write
+                path can still set a column readers still forward.
+            integration_type: How this session was opened. Written today as one
+                of "channel_<type>" (server channels — "channel_email",
+                "channel_google_chat", ...), "a2a", "app_mcp", "identity_mcp",
+                "mcp", "task", "webhook", "schedule", "external", or None for
+                web-UI sessions. Historical rows may also carry "email" from
+                the deleted per-agent email integration — readers must still
+                tolerate it, but no producer emits it any more.
+            sender_email: The original sender's address. Dead for the same
+                reason as `email_thread_id` and on the same terms: no caller
+                passes it, historical rows still carry values.
             guest_share_id: Optional guest share ID (for guest share sessions)
             webapp_share_id: Optional webapp share ID (for webapp chat sessions)
             dashboard_block_id: Optional dashboard block ID (for prompt action session reuse)
@@ -642,27 +655,47 @@ class SessionService:
         if not environment:
             return
 
+        session_id = session.id
+
         try:
             from app.services.sessions.message_service import MessageService
 
             base_url = MessageService.get_environment_url(environment)
             auth_headers = MessageService.get_auth_headers(environment)
+        except Exception as exc:  # noqa: BLE001 — best-effort, never block delete
+            logger.warning(
+                "Best-effort interrupt for deleted session %s failed: %s",
+                session_id, exc,
+            )
+            return
 
-            # Route is sync (runs in a threadpool worker), so there is no running
-            # loop here — asyncio.run is safe. forward_interrupt_to_environment
-            # has its own 5s timeout; we still guard the whole thing.
-            asyncio.run(
-                MessageService.forward_interrupt_to_environment(
+        async def _interrupt() -> None:
+            # Swallows everything: this is fire-and-forget, and it may run
+            # detached from the caller (see the scheduling branch below), where
+            # a raise would surface as an unhandled task error.
+            try:
+                await MessageService.forward_interrupt_to_environment(
                     base_url=base_url,
                     auth_headers=auth_headers,
                     external_session_id=external_session_id,
                 )
-            )
-        except Exception as exc:  # noqa: BLE001 — best-effort, never block delete
-            logger.warning(
-                "Best-effort interrupt for deleted session %s failed: %s",
-                session.id, exc,
-            )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Best-effort interrupt for deleted session %s failed: %s",
+                    session_id, exc,
+                )
+
+        # The delete route is sync, so normally this runs on a threadpool worker
+        # with no loop of its own and asyncio.run is safe (forward_interrupt_to_
+        # environment has its own 5s timeout). A caller that is already inside a
+        # running loop is the exception: asyncio.run would raise there and leave
+        # the coroutine un-awaited, so hand it to that loop instead.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(_interrupt())
+        else:
+            create_task_with_error_logging(_interrupt(), "session_delete_interrupt")
 
     @staticmethod
     def delete_session(db_session: DBSession, session_id: UUID) -> UUID | None:
@@ -1336,6 +1369,9 @@ class SessionService:
         backend_base_url: str | None = None,
         page_context: str | None = None,
         integration_type: str | None = None,
+        *,
+        uploader_user_id: UUID | None = None,
+        redelivered_file_ids: set[UUID] | None = None,
     ) -> dict[str, Any]:
         """
         Send a message to a session and optionally initiate streaming.
@@ -1372,6 +1408,24 @@ class SessionService:
             integration_type: Optional integration source stamped on newly created sessions
                                ("email", "a2a", "external", "app_mcp", "identity_mcp", etc.).
                                Ignored when resuming an existing session (session_id provided).
+            uploader_user_id: Who actually uploaded the files in ``file_ids``,
+                when that is not the session owner. **Never request data and
+                never a value a caller computes from a payload.** There is
+                exactly one non-``None`` caller — the server-channel inbound
+                pipeline — and it passes an already-*enforced*
+                ``binding.user_id``; the authorisation that this uploader may
+                write into this session was established upstream by
+                ``assert_access``, which re-reads the whole grant on every
+                message. This parameter answers *who uploaded these bytes*,
+                not *may they*. ``None`` collapses to the session-owner
+                behaviour every other caller has always had.
+            redelivered_file_ids: Passthrough to
+                ``MessageService.prepare_user_message_with_files`` — the ids
+                that are a redelivery of a message that already owns them, and
+                so may be re-attached although they are no longer
+                ``"temporary"``. Same single caller and the same bound: it
+                exempts the **named ids** and nothing else. See that method for
+                the full contract before adding a second caller.
 
         Returns:
             dict with status information:
@@ -1577,17 +1631,29 @@ class SessionService:
                     session_id=session_id,
                     role="system",
                     content=result.content,
-                    message_metadata={"command": True, "command_name": command_name},
+                    message_metadata={
+                        "command": True,
+                        "command_name": command_name,
+                        # Presentation hint for the chat UI — "notice" renders in
+                        # the shared system block, "document" in the wide
+                        # markdown panel. See ``CommandResult.display``.
+                        "command_display": result.display,
+                    },
                     answers_to_message_id=user_msg.id,
                     sent_to_agent_status="sent",
                     status="error" if result.is_error else "",
                 )
 
-            # Emit WS events for real-time UI update
-            await event_service.emit_stream_event(session_id, "assistant", {
-                "type": "assistant",
+            # Emit WS events for real-time UI update. The event mirrors the row
+            # we just persisted, so it announces itself as ``system`` — a slash
+            # command is deterministic local output, never agent speech, and a
+            # live "assistant" event would contradict what the same message
+            # renders as after a reload.
+            await event_service.emit_stream_event(session_id, "system", {
+                "type": "system",
                 "content": result.content,
                 "event_seq": 1,
+                "metadata": {"command": True, "command_name": command_name},
             })
             await event_service.emit_stream_event(session_id, "stream_completed", {
                 "status": "completed",
@@ -1667,6 +1733,8 @@ class SessionService:
                         user_id=user_id,
                         answers_to_message_id=answers_to_message_id,
                         message_metadata=base_message_metadata,
+                        uploader_user_id=uploader_user_id,
+                        redelivered_file_ids=redelivered_file_ids,
                     )
                     logger.info(f"Prepared message with {len(file_ids)} files for session {session_id}")
                 except Exception as e:

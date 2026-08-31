@@ -30,6 +30,8 @@ export interface AdminEnvFilters {
   status: string | null
   isStale: boolean | null
   inUse: boolean | null
+  /** Consumer installs running an older revision than their bundle's latest. */
+  updateAvailable: boolean | null
   search: string
 }
 
@@ -142,6 +144,28 @@ export function AdminEnvFiltersBar({
         aria-pressed={filters.inUse === true}
       >
         Only in use
+      </Button>
+
+      {/* Only bundle-update-available toggle — amber, matching the Bundle
+          column's update badge and deliberately distinct from the orange
+          image-staleness language above. */}
+      <Button
+        size="sm"
+        variant={filters.updateAvailable === true ? "default" : "outline"}
+        onClick={() =>
+          onFiltersChange({
+            ...filters,
+            updateAvailable: filters.updateAvailable === true ? null : true,
+          })
+        }
+        className={
+          filters.updateAvailable === true
+            ? "h-8 px-3 text-xs bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200 dark:bg-amber-900 dark:text-amber-200 dark:border-amber-700"
+            : "h-8 px-3 text-xs"
+        }
+        aria-pressed={filters.updateAvailable === true}
+      >
+        Bundle update available
       </Button>
 
       {/* Text search */}

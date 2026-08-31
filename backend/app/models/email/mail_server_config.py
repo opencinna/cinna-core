@@ -44,12 +44,17 @@ class MailServerConfigUpdate(SQLModel):
 
 # Database model
 class MailServerConfig(MailServerConfigBase, table=True):
+    """A server-owned IMAP/SMTP endpoint, referenced by email channels.
+
+    Server-scoped, not user-scoped: a mail server is infrastructure an admin
+    configures once, the way a Google Chat channel's service account is. Email
+    ``ServerChannel`` rows point at one of these by id in their ``config``;
+    nothing else may reference them, and only superusers may see or edit them.
+    """
+
     __tablename__ = "mail_server_config"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
-    )
     encrypted_password: str = Field(sa_column=Column(Text, nullable=False))
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -58,7 +63,6 @@ class MailServerConfig(MailServerConfigBase, table=True):
 # Properties to return via API (password redacted)
 class MailServerConfigPublic(MailServerConfigBase):
     id: uuid.UUID
-    user_id: uuid.UUID
     has_password: bool = True
     created_at: datetime
     updated_at: datetime
@@ -67,3 +71,30 @@ class MailServerConfigPublic(MailServerConfigBase):
 class MailServerConfigsPublic(SQLModel):
     data: list[MailServerConfigPublic]
     count: int
+
+
+class MailServerChannelUsage(SQLModel):
+    """One channel that references a mail server, and in which role."""
+
+    channel_id: uuid.UUID
+    channel_name: str
+    #: ``"incoming"`` (IMAP) or ``"outgoing"`` (SMTP).
+    role: str
+
+
+class MailServerDeletionImpact(SQLModel):
+    """Blast radius of deleting a mail server.
+
+    A channel references a mail server as a plain id inside
+    ``ServerChannel.config`` — a JSON column, with no foreign key behind it.
+    Nothing at the database level notices the delete: the row goes away and the
+    channel is left holding an id that resolves to nothing. Nothing is nulled,
+    nothing errors, and the symptom surfaces later as mail that stops arriving.
+    Deletion is therefore **blocked** (HTTP 409) whenever ``channel_usages`` is
+    non-empty.
+    There is no ``force``: unlike a credential, nothing legitimate is served by
+    breaking a live channel, and detaching the server from the channel first is
+    a one-click action.
+    """
+
+    channel_usages: list[MailServerChannelUsage] = []

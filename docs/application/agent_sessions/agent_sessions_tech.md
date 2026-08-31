@@ -108,7 +108,7 @@
 | `result_state` | VARCHAR, nullable | Agent-declared: `"completed"` \| `"needs_input"` \| `"error"` |
 | `result_summary` | VARCHAR, nullable | Agent's description accompanying result_state |
 | `email_thread_id` | VARCHAR, nullable | Email Message-ID for threading |
-| `integration_type` | VARCHAR, nullable | `"email"` \| `"a2a"` |
+| `integration_type` | VARCHAR, nullable | What opened the session. Values actually written: `channel_<type>` (e.g. `channel_email`, `channel_google_chat`), `a2a`, `app_mcp`, `identity_mcp`, `mcp`, `task`, `webhook`, `schedule`, `external`; `NULL` for web-UI sessions, which are deliberately untagged. **`"email"` is written by nothing** since Phase 4 of the channels & identity unification, though rows created before it may still carry the value |
 | `sender_email` | VARCHAR, nullable | Original email sender (owner mode only) |
 | `streaming_started_at` | DATETIME, nullable | Set when `interaction_status="running"`, cleared on end |
 | `created_at` | DATETIME | |
@@ -239,10 +239,11 @@ After streaming completes, assistant events containing `<webapp_action>` tags ar
 
 **Pending messages:**
 - `collect_pending_messages(db, session_id)` — All messages with `sent_to_agent_status="pending"`, reconstructs content with file paths
+- `collect_pending_batches(db, session_id)` — Same pending-message set, partitioned into contiguous same-`routing` batches (`routing=None` batches get concatenated `content`; `routing="command_stream"` batches carry a single command message). Used by `SessionStreamProcessor`'s Step 1 collect; two plain-chat messages that are both pending when this runs are merged into **one** batch and stream as a single combined LLM turn
 - `mark_messages_as_sent(db, message_ids)` — Set `sent_to_agent_status="sent"`
 
 **Streaming:**
-- `process_pending_messages(session_id, get_fresh_db_session)` — Entry point for UI streaming; delegates to `SessionStreamProcessor` with `WebSocketEventHandler` for Socket.IO event emission and session state updates
+- `process_pending_messages(session_id, get_fresh_db_session)` — Entry point for UI streaming; delegates to `SessionStreamProcessor` with `WebSocketEventHandler` for Socket.IO event emission and session state updates. **Serializes same-session sends:** wraps its entire body — the pending quick-check, `processor.process()`, and the `finally` teardown `clear_interaction_status` — in `async with get_session_lock(str(session_id))` (**wait** mode, blocking, not MCP's reject-if-busy). This is the same shared per-session lock singleton used by the MCP path (`get_session_lock` in `stream_processor.py`), so UI and MCP sends to one session mutually exclude. The teardown must be *inside* the lock (not just `process()`): if the lock released before teardown, task A's clear could race task B's freshly-set `running`. The processor is constructed `use_session_lock=False` precisely because the lock is held one level up here — avoiding a double-acquire. A second near-simultaneous UI send spawns its task from `initiate_stream` (unchanged) but blocks on the lock until the first fully finishes, then its own collect step drains the still-`pending` second message as a separate turn — unless that second message was already `pending` before the first run reached its collect step, in which case `collect_pending_batches` (see "Pending messages" above) merges the two into one contiguous batch and they stream as a single combined turn instead. Populates `_session_locks` (`stream_processor.py`) for UI sessions too, not just MCP ones — slightly more entries, bounded by the same eviction, harmless
 - `stream_message_with_events(session_id, environment_id, ...)` — Connects to agent-env via SSE, assigns `event_seq`, buffers in `ActiveStreamingManager`, flushes to DB every ~2s; handles `session_created`, `assistant`, `tool`, `thinking`, `done`, `error`, `interrupted` events. Called by `SessionStreamProcessor` for all paths (UI, MCP, A2A)
 - `send_message_to_environment_stream(env_url, auth_headers, payload)` — HTTP POST to agent-env `/chat/stream`, yields raw SSE events
 - `_get_session_context_and_reset_state(session_id)` — Reads session, resets `result_state`/`result_summary` if set, triggers task status sync if `source_task_id` exists; returns previous state for passthrough to agent-env

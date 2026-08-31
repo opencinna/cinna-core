@@ -55,7 +55,7 @@ One-click chat shortcuts embedded inside dashboard blocks. Clicking a prompt act
 ### User Messages
 - Right-aligned green-tinted bubble
 - Plain text with whitespace preservation
-- Email integration badge when `integration_type="email"`
+- Integration badge — the `integration_type==="email"` branch is **dead code**: nothing writes the literal `"email"` any more. Since Phase 4 of the channels & identity unification a channel session is stamped `channel_<type>` (`channel_email`, `channel_google_chat`), so an email-originated message renders no integration badge at all. See [Agent Sessions](../agent_sessions/agent_sessions.md) and [Server Channels](../server_channels/server_channels.md)
 - File attachment badges with download links
 - **Pending indicator** — amber-colored "Pending" badge with pulsing clock icon when `sent_to_agent_status = "pending"` (message sent but agent has not yet picked it up). Clears automatically once the backend marks the message as `"sent"`
 

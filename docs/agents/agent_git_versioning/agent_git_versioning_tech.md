@@ -6,7 +6,7 @@
 - `backend/app/models/bundles/agent_git_source.py` — `AgentGitSourceBase`, `AgentGitSource` (table), `AgentGitSourcePublic`, `AgentGitSourceCreate`, `AgentGitSourceUpdate`, `GitSyncDirection`, `GitSourceStatus`
 
 ### Services
-- `backend/app/services/bundles/git_source_service.py` — `GitSourceService` (checkout / connect / disconnect / pull / push / check-updates / get-source / compute_dirty / compute_status / list_commits / `_connect_adopt_existing` / `_file_hashes`); module constant `_PROMPT_FIELDS`; typed errors `GitSourceError`, `GitSourceNotFoundError`, `GitSourceValidationError`, `GitSourceConflictError`, `GitSourceExistingAgentError` (new, subclass of conflict)
+- `backend/app/services/bundles/git_source_service.py` — `GitSourceService` (checkout / connect / disconnect / pull / push / check-updates / get-source / compute_dirty / compute_status / list_commits / `_connect_adopt_existing` / `_file_hashes` / `_settings_changes` / `_pull_blocking_changes` (new — shared blocking-set helper) / `_capture_backup_revision` (new — pre-pull backup) / `_build_live_manifest` (new — shared by push capture and the backup) / `_discard_backup_revision` (new — rolls back an orphaned backup)); module constants `_PROMPT_FIELDS`, `_METADATA_FIELDS`, `_SDK_FIELDS`, `_SPEC_FIELDS`, `_SETTING_SECTIONS`, `_PULL_OVERWRITTEN_SECTIONS`, `GIT_PULL_TAKE_REMOTE` / `GIT_PULL_KEEP_LOCAL` / `GIT_PULL_RESOLUTIONS` (new — the two `conflict_resolution` values, validated service-side), `_PULL_LOCAL_CHANGES_MESSAGE` (new — the 409 fallback message); normalizers `_canonical_json_value` / `_sorted_json` / `_normalize_setting_value` / `_classify_change`; typed errors `GitSourceError`, `GitSourceNotFoundError`, `GitSourceValidationError`, `GitSourceConflictError`, `GitSourceExistingAgentError` (subclass of conflict), `GitSourceLocalChangesError` (new — subclass of conflict, carries the `blocking` list for the structured pull 409), `GitBaselineUnavailableError`
 - `backend/app/services/bundles/revision_format.py` — `RevisionFormat` (de)serializer; `RevisionFormatError`; `generate_gitignore` (now also emits the recursive cache denylist); constants `BUNDLE_MANIFEST_FILENAME`, `GIT_MANIFEST_FILENAME`, `REVISION_SCHEMA_VERSION`, `SUPPORTED_SCHEMA_VERSIONS`
 - `backend/app/services/bundles/publish_service.py` — `PublishService._snapshot_workspace_tree`, `PublishService.hash_workspace_tree` (workspace-only stable digest for dirty check)
 - `backend/app/services/environments/workspace_classification.py` — denylist single source of truth: `NESTED_EXCLUDED_DIRS` / `NESTED_EXCLUDED_FILE_GLOBS` / `is_nested_excluded` (new — recursive cache exclusion), `safe_copytree` + `_copytree_ignore` (renamed from `_ignore_symlinks`; now drops symlinks AND nested cache artifacts), `is_bundle_owned_toplevel` (also rejects nested-excluded names)
@@ -16,16 +16,20 @@
 - `backend/app/services/agents/agent_service.py` — `compute_capability_flags` (now also computes `git_versioning_enabled` from `AgentGitSource` presence) + `to_public_with_clone_info` (sets it on `AgentPublic`)
 
 ### API Routes
-- `backend/app/api/routes/agent_git.py` — all git-versioning routes (see table below); request/response models `AgentCheckoutRequest`, `AgentCheckoutResponse`, `AgentGitConnectRequest` (now with `adopt_existing`), `GitPushRequest`, `GitUpdateStatus`, `GitCommit` (now with `commit_url`), `GitCommitList`, `GitDirtyStatus`, `GitStatus` / `GitPromptChange` / `GitFileChange` (new — commit preview); helper `_git_source_to_public` (sets `web_history_url` + `web_tree_url`); error mapping `_map_git_error` (plus a dedicated structured-409 branch for `GitSourceExistingAgentError`)
+- `backend/app/api/routes/agent_git.py` — all git-versioning routes (see table below); request/response models `AgentCheckoutRequest`, `AgentCheckoutResponse`, `AgentGitConnectRequest` (with `adopt_existing`), `GitPushRequest`, `GitPullRequest` (new — optional pull body carrying `conflict_resolution`), `GitUpdateStatus`, `GitCommit` (with `commit_url`), `GitCommitList`, `GitDirtyStatus`, `GitStatus` / `GitPromptChange` / `GitSettingChange` (both now carry `blocks_pull`) / `GitFileChange` — commit preview and pull-conflict preview; helper `_git_source_to_public` (sets `web_history_url` + `web_tree_url`); error mapping `_map_git_error` (plus dedicated structured-409 branches for `GitSourceExistingAgentError` and, inline in the pull handler, `GitSourceLocalChangesError`)
 - `backend/app/api/routes/agent_webhooks.py` — `POST /agents/{id}/webhooks/git-source` (developer-gated)
 - `backend/app/api/routes/cli.py` — `GET /cli/git-coordinates` → `CliGitCoordinates`; auth via `CLIContextDep`
 
 ### Frontend
-- `frontend/src/components/Agents/GitVersioningCard.tsx` — the "GIT Versioning" card in the Integrations tab; manages disabled/connect-form/connected states; react-query hooks for source, dirty, status (commit preview), commits, push, pull, connect, disconnect. Takes a `gitVersioningEnabled` prop for the instant toggle state. Footer actions (Commit Agent + Refresh + icon Disconnect), Latest-commits (3) + View-history/clickable-SHA links, clickable repo name, icon-bearing code-chip coordinates (folder/branch) + sync-direction icon, green-check `connected` status icon, `CommitPreview` (git-status dialog), and the adopt-existing-folder confirm dialog. Helpers: `isExistingFolderError`, `CodeChip` (optional leading icon), `SyncDirectionIcon`, `CommitPreview`, `toGitSshUrl` (HTTP→SSH repo-URL normalizer)
+- `frontend/src/components/Agents/GitVersioningCard.tsx` — the "GIT Versioning" card in the Integrations tab; manages disabled/connect-form/connected states; react-query hooks for source, dirty, status (commit preview + pull-conflict preview), commits, push, pull, connect, disconnect. Takes a `gitVersioningEnabled` prop for the instant toggle state. Footer actions (Commit Agent + Refresh + icon Disconnect), Latest-commits (3) + View-history/clickable-SHA links, clickable repo name, icon-bearing code-chip coordinates (folder/branch) + sync-direction icon, green-check `connected` status icon, `CommitPreview` (git-status dialog, three sections: Prompts / Agent settings / Workspace, now importing `CHANGE_META`/`ChangeRow` from `GitChangeList.tsx`), the adopt-existing-folder confirm dialog, and the **update banner** (switches to "Review & pull" copy + opens `GitPullConflictDialog` when `update_available && dirty`, plain "Pull" otherwise — `pullNeedsReview` derived state). `pullMutation` sends `requestBody: resolution ? { conflict_resolution: resolution } : undefined` (a bodiless call on the plain-Pull path, preserving fail-loud semantics) and its `onSuccess` toast copy branches on `resolution` (`keep_local` / `take_remote` / plain). Helpers: `isExistingFolderError`, `isLocalChangesError` (new — both built on a shared `isRecoverableConflict(error, code)`), `CodeChip` (optional leading icon), `SyncDirectionIcon`, `CommitPreview`, `toGitSshUrl` (HTTP→SSH repo-URL normalizer)
+- `frontend/src/components/Agents/GitPullConflictDialog.tsx` (new) — the pull-conflict dialog: "Incoming" / "Blocks the pull" (Prompts + Agent settings, from `blocks_pull`) / "Will be replaced by this pull" (workspace files) / "Not touched" sections, plus a footer of **Discard my changes and take remote** (left) / **Keep my changes** (right), each behind its OWN `AlertDialog` confirmation with per-action copy. There is deliberately no Cancel button: both actions replace the workspace and restart the environment, so a dismissal sitting beside them implied a symmetry that does not exist; Esc / the close affordance / the confirmation's own Cancel are the exits. Every change row is clickable, opening `GitDiffDialog` for that item (rows whose payload carries no raw `key` — an older 409 — stay plain text, since the diff endpoint could not be addressed). Reached pre-emptively (opened by the card's update banner, seeded empty) or reactively (opened from the pull mutation's `onError`, seeded from a 409's `detail.blocking`). Fetches its own `["git-status", agentId]` query while open (`staleTime: 0`, `retry: false` — a destructive choice must be made against a fresh read, not a value cached from before whatever just changed); a seeded 409 blocking list always wins over a fresher-but-still-stale-relative-to-it status read. Exports `localChangesBlocking(error)` (reads `detail.blocking` off a `local_changes` 409, used by the card) and the `GitBlockingChange` / `GitPullResolution` types.
+- `frontend/src/components/Agents/GitChangeList.tsx` (new) — `CHANGE_META` (change_type → single-letter tag + color, `git status --short` style) and the `ChangeRow` / `ChangeGroup` presentational components, extracted so `CommitPreview` (in `GitVersioningCard.tsx`) and `GitPullConflictDialog.tsx` render the same change-list visuals from opposite directions (what a commit would capture vs. what a pull would overwrite) without drifting apart. `ChangeRow` takes an optional `onOpenDiff`; when given, the label renders as a real `<button>` (not a clickable `<span>` — these rows live inside dialogs, where keyboard reachability is the only mouse-free path to reviewing a change).
+- `frontend/src/components/Agents/GitDiffDialog.tsx` (new) — the per-item diff modal behind every clickable change row. Fetches `["git-diff", agentId, section, key]` (`staleTime: 0`, `retry: false`) and renders the unified diff as a `<pre>` of per-line-colored rows. Guards against React Query serving the *previous* key's body during a target switch (`isCurrent` compares the response's `section`/`key` against the open target) — otherwise the last file's diff flashes under this file's title. Header-line coloring is ordered so `---`/`+++` match before the `-`/`+` add/remove cases, or the file headers render as a deletion and an insertion. Exports the `GitDiffTarget` type. Mounted twice, independently: inside `GitPullConflictDialog` and inside the card's commit dialog (the two can be open at different times and must not share open-state).
 - `frontend/src/components/Agents/DeployKeySelect.tsx` — deploy-key picker reusing `SshKeysService.listSshKeys`; generate/import open the shared `GenerateKeyModal` / `ImportKeyModal` dialogs (auto-selecting the new key via their `onGenerated`/`onImported` callbacks)
 - `frontend/src/components/UserSettings/GenerateKeyModal.tsx`, `ImportKeyModal.tsx` — the shared SSH-key dialogs; each accepts an optional `onGenerated`/`onImported` callback so callers (the deploy-key picker) can auto-select the created key
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` — mounts `<GitVersioningCard>` in the card grid (now positioned **before** the Webhooks / Local Dev / Email Integration cards); owner-gated; passes `gitVersioningEnabled={agent.git_versioning_enabled}`
 - `frontend/src/components/Agents/AgentCard.tsx` — agents-list card; renders a **GIT** capability badge (`GitBranch` icon) when `agent.git_versioning_enabled`
+- `frontend/src/utils.ts` — `getErrorMessage(error, fallback)` (shared, pre-existing helper used well beyond this card) gained an object-`detail` guard: a structured 409 (`existing_agent_folder`, `local_changes`) carries `body.detail` as an object rather than a string, and the un-guarded version rendered it as `[object Object]` in a toast; it now falls through to `detail.message` when `detail` is an object
 
 ### Migrations
 - `backend/app/alembic/versions/391a6285d8ff_add_agent_git_source.py` — creates `agent_git_source` table; `down_revision = b2d1f4c6a8e3`
@@ -144,24 +148,48 @@ Optional variants of Base fields. No `agent_id` or `owner_id` (not caller-settab
 **`GitDirtyStatus`**
 - `dirty: bool`
 - `prompts_dirty: bool`
+- `settings_dirty: bool = False` — any **non-prompt** `cinna.agent.json` field (metadata, SDK, schedules, plugins) diverging from the baseline
 - `workspace_dirty: bool`
 - `has_env: bool`
 - `last_synced_commit: str | None = None`
 
-**`GitStatus`** (new — commit preview, response of `GET /git/status`)
+**`GitStatus`** (commit preview AND pull-conflict preview, response of `GET /git/status`)
 - `dirty: bool`
 - `has_env: bool`
 - `last_synced_commit: str | None = None`
+- `pull_blocked: bool = False` — whether a bodiless `POST /git/pull` would 409 right now (any change below carries `blocks_pull`). Computed by `_pull_blocking_changes`, the same helper `_assert_not_dirty` raises from, so this preview and the 409 it explains can never disagree
 - `prompt_changes: list[GitPromptChange] = []`
+- `setting_changes: list[GitSettingChange] = []`
 - `file_changes: list[GitFileChange] = []`
 
-**`GitPromptChange`** (new)
+**`GitPromptChange`**
 - `field: str` (human label, e.g. "Workflow prompt")
+- `key: str = ""` — raw column name (`workflow_prompt`); the diff endpoint's key
+- `section: str = "prompt"`
 - `change_type: str` — `added` | `modified` | `deleted`
+- `blocks_pull: bool = False` — always `true` for a reported prompt change; a pull rewrites all four prompt columns wholesale
 
-**`GitFileChange`** (new)
+**`GitSettingChange`**
+- `field: str` (human label, e.g. "Example prompts", "Schedules")
+- `key: str = ""` — raw attribute name (`example_prompts`, `agent_sdk_conversation`, …)
+- `section: str = ""` — owning registry: `metadata` / `sdk` / `specs`. Required alongside `key` to address a diff: the registries are what resolve the *live* side (an `Agent` column, an `AgentEnvironment` column, or a collector call), so the key alone is not enough
+- `change_type: str` — `added` | `modified` | `deleted`
+- `blocks_pull: bool = False` — `true` only for the `metadata`-section fields the pull guard actually narrows on (`_PULL_OVERWRITTEN_SECTIONS` + the non-NULL-baseline guard); schedules, plugins, and env SDK selections are always `false`
+
+**`GitDiff`** (response of `GET /agents/{agent_id}/git/diff`)
+- `section: str`, `key: str` — echoed back, so a client switching targets can tell whose body it is holding
+- `label: str` — human label (the path itself, for a file)
+- `change_type: str` — `added` | `modified` | `deleted` | `unchanged`
+- `diff: str = ""` — unified-diff text; `""` when the sides are equal or `binary`
+- `binary: bool = False`, `truncated: bool = False`
+
+**`GitFileChange`**
 - `path: str` (workspace-relative POSIX path)
 - `change_type: str` — `added` | `modified` | `deleted`
+- No `blocks_pull` field — workspace files never block a pull, they are *replaced* by it wholesale whenever an env exists (a property of the operation, not of any one file)
+
+**`GitPullRequest`** (optional body of `POST /agents/{agent_id}/git/pull`)
+- `conflict_resolution: str | None = None` — one of `GIT_PULL_RESOLUTIONS` (`keep_local` / `take_remote`). Omitting the field, or the whole body, keeps the historical fail-loud 409 the GitOps webhook path relies on. Shaped as a single scalar so a future per-field resolution (`keep_fields: [...]`) can be added without a breaking change. Validated in the service, not the route — the service is the sole enforcement point for every caller
 
 ## Request / Response Model (in `cli.py`)
 
@@ -188,7 +216,8 @@ All agent-git routes are registered on `APIRouter(prefix="/agents", tags=["agent
 | `GET` | `/agents/{agent_id}/git/commits` | `CurrentUser` (owner-resolved) | `limit: int = 50` (query) | `GitCommitList` | Bounded shallow clone; `limit` clamped 1..200; subdir-scoped |
 | `GET` | `/agents/{agent_id}/git/dirty` | `CurrentUser` (owner-resolved) | — | `GitDirtyStatus` | Full workspace tree copy to temp; best-effort on env/revision sides |
 | `GET` | `/agents/{agent_id}/git/status` | `CurrentUser` (owner-resolved) | — | `GitStatus` | Per-file/per-prompt commit preview; same post-denylist capture a push produces |
-| `POST` | `/agents/{agent_id}/git/pull` | `require_developer` | — | `AgentPublic` | Developer-gated; per-agent locked |
+| `GET` | `/agents/{agent_id}/git/diff` | `CurrentUser` (owner-resolved) | `section`, `key` (query) | `GitDiff` | Unified diff of ONE prompt / setting / workspace file; `key` is allowlisted against the field registries + workspace denylist |
+| `POST` | `/agents/{agent_id}/git/pull` | `require_developer` | `GitPullRequest \| None` (optional) | `AgentPublic` | Developer-gated; per-agent locked; blocking local drift with no `conflict_resolution` → recoverable 409 (`local_changes`); see Error Mapping |
 | `POST` | `/agents/{agent_id}/git/push` | `require_developer` | `GitPushRequest` | `AgentGitSourcePublic` | Developer-gated; per-agent locked; persists `AgentBundleRevision` |
 | `POST` | `/agents/{agent_id}/webhooks/git-source` | `require_developer` | `AgentWebhookCreateGitSource` | `AgentWebhookPublicWithToken` | Registers GitOps trigger; token shown once |
 | `GET` | `/cli/git-coordinates` | `CLIContextDep` (agent-scoped CLI token) | — | `CliGitCoordinates` | No deploy key in response; no developer-role gate |
@@ -199,14 +228,26 @@ All agent-git routes are registered on `APIRouter(prefix="/agents", tags=["agent
 |-----------|-------------|
 | `GitSourceNotFoundError` | 404 |
 | `GitSourceExistingAgentError` | 409 with structured `detail={"code": "existing_agent_folder", "message": ...}` (caught explicitly in the connect route **before** the generic conflict branch, since it subclasses `GitSourceConflictError`) |
+| `GitSourceLocalChangesError` | 409 with structured `detail={"code": "local_changes", "message": ..., "blocking": [{"section", "field", "change_type"}, ...]}` (caught explicitly in the pull route handler, inline rather than via `_map_git_error`, **before** the generic conflict branch — same ordering rule as `GitSourceExistingAgentError`, since it also subclasses `GitSourceConflictError`) |
 | `GitSourceConflictError` | 409 |
 | `GitNonFastForwardError` | 409 |
 | `RevisionFormatError` | 422 |
-| `GitAuthenticationError` | 401 |
+| `GitAuthenticationError` | 400 |
 | `EgressBlockedError` | 400 |
 | `GitConnectionError` | 400 |
 | `GitSourceValidationError` | 400 |
 | other `GitOperationError` | 400 |
+
+> ⚠️ **`GitAuthenticationError` must never map to 401 or 403.** It reports that
+> *the backend's git client* was rejected by *the remote host* (wrong or
+> unselected deploy key) — it says nothing about the caller's own session. The
+> frontend's global API error handler (`main.tsx handleApiError`) treats 401/403
+> as "this session is dead", so the original 401 mapping logged the user out and
+> bounced them to `/login` the moment they clicked **Connect** with the wrong SSH
+> key — and did the same on the passive `check-updates` read, so merely opening
+> the Integrations tab with a since-revoked key ended the session. It is a
+> user-fixable input error and rides the same 400 bucket as `GitConnectionError`.
+> Guarded by `test_git_remote_auth_failure_is_not_unauthorized`.
 
 ## Service Layer
 
@@ -236,6 +277,10 @@ Returns `(source, update_available)` where `update_available` is always `False`.
 
 Strict update check via `_compute_update_available_remote` — raises on network/auth failure. Releases the DB connection before the remote call (see Pool-Safety Contract below). Returns `{update_available, remote_commit, last_synced_commit}`.
 
+**`_remote_change_is_relevant(*, repo_url, ref, subdir, last_synced_commit, remote_sha, ssh_key_path) -> bool`** (new — shared helper)
+
+Whether a remote HEAD advance actually concerns this agent's `subdir`, given the caller has already established `remote_sha != last_synced_commit`. No `subdir` or no `last_synced_commit` baseline → always relevant (unchanged root-repo behavior). `subdir` + baseline → relevant only when `subdir_changed_between` reports the subdir tree changed between `last_synced_commit` and `remote_sha`. Single source of truth shared by `_compute_update_available_remote` (drives the "update available" banner) and `_push_locked`'s fast-forward precheck (drives the 409 "pull first" guard) — fixes a prior disagreement where the banner reported no update while push still 409'd on an advance confined to another folder of a shared repo.
+
 **`_compute_update_available_remote(repo_url, ref, subdir, last_synced_commit, key_material) -> tuple[bool, str]`** (private helper, used only by `check_updates`)
 
 Takes captured primitives and in-memory SSH key material rather than a live `(session, source)` pair — so the DB connection is already released before this function is entered. Returns `(update_available, remote_head_sha)`.
@@ -248,11 +293,37 @@ Logic (cheap-first):
 
 **`compute_dirty(session, agent_id, owner) -> dict`** (new)
 
-Read-only comparison of live workspace + DB prompts against the last synced revision. Never pushes. Returns `{dirty, prompts_dirty, workspace_dirty, has_env, last_synced_commit}`. If no env exists: `has_env=False`, `workspace_dirty=False`. Workspace dirty: snapshots live env to temp via `PublishService._snapshot_workspace_tree`, runs `PublishService.hash_workspace_tree(temp/workspace)`, compares against `hash_workspace_tree(revision.snapshot_path/workspace)` resolved via `_resolve_synced_revision`. Prompts dirty: calls `_prompts_dirty(session, install)`. Temp dir removed in `finally`. Best-effort on both axes.
+Read-only comparison of the live install against the last synced revision across the **three axes of a git tree**. Never pushes. Returns `{dirty, prompts_dirty, settings_dirty, workspace_dirty, has_env, last_synced_commit}`; `dirty` is the OR of the three. If no env exists: `has_env=False`, `workspace_dirty=False`.
 
-**`compute_status(session, agent_id, owner) -> dict`** (new)
+Resolves the sync baseline once via `_resolve_synced_revision` and passes it to all three axis checks:
 
-Detailed sibling of `compute_dirty` — the per-file/per-prompt commit preview. Returns `{dirty, has_env, last_synced_commit, prompt_changes, file_changes}` where each change is `{... , change_type}` (`added`/`modified`/`deleted`). Prompts: iterates `_PROMPT_FIELDS` comparing the install vs `_resolve_synced_revision`. Workspace: snapshots the live env via `PublishService._snapshot_workspace_tree` (same post-denylist capture a push produces, so the preview matches the commit — e.g. `__pycache__` never appears), hashes each file via `_file_hashes`, and set-diffs against the synced revision's `workspace/`. Read-only; best-effort (empty lists with no env / no baseline).
+- *Prompts* (`manifest["prompts"]`): `_prompts_changed(install, synced_rev)` — the pure, already-resolved-baseline variant, so the one `_resolve_synced_revision` call above is reused rather than re-resolved.
+- *Settings* (the rest of `cinna.agent.json`): `bool(_settings_changes(session, install, synced_rev, env, stop_early=True))` — stops at the first detected change since only a boolean is needed here.
+- *Workspace* (`workspace/`): snapshots live env to temp via `PublishService._snapshot_workspace_tree`, runs `PublishService.hash_workspace_tree(temp/workspace)`, compares against `hash_workspace_tree(revision.snapshot_path/workspace)` resolved from the same `synced_rev`. Temp dir removed in `finally`.
+
+Best-effort on every axis.
+
+**`compute_status(session, agent_id, owner) -> dict`**
+
+Detailed sibling of `compute_dirty` — the per-file/per-prompt/per-setting commit preview, doubling as the pull-conflict preview. Returns `{dirty, has_env, last_synced_commit, pull_blocked, prompt_changes, setting_changes, file_changes}` where each prompt/setting change is `{field, change_type, blocks_pull}` and each file change is `{path, change_type}`. Calls `_pull_blocking_changes` once (the same helper `_assert_not_dirty` raises from) to get the blocking `{(section, field)}` set; every prompt change is trivially blocking (a pull rewrites all four columns) so `prompt_changes` is projected directly from the blocking list rather than recomputed; `setting_changes` comes from the full (unnarrowed) `_settings_changes` call and joins each entry's raw `(section, name)` against the blocking-key set to set `blocks_pull`. This means `_settings_changes` runs twice per request (once narrowed inside `_pull_blocking_changes`, once in full) — accepted, since the narrowed pass only touches the cheap `metadata` columns and re-deriving the blocking set from the full diff would re-implement the per-field `skip_null_baseline_metadata` narrowing here. Prompts: the blocking-list projection described above (backed by `_PROMPT_FIELDS` comparing the install vs `_resolve_synced_revision`). Workspace: snapshots the live env via `PublishService._snapshot_workspace_tree` (same post-denylist capture a push produces, so the preview matches the commit — e.g. `__pycache__` never appears), hashes each file via `_file_hashes`, and set-diffs against the synced revision's `workspace/` (no `blocks_pull` — files never block a pull). Read-only; best-effort (empty lists with no env / no baseline).
+
+Each prompt/setting change also carries the raw `key` (+ `section`) alongside the human `field` label — the stable pair `compute_diff` addresses. The label is UI copy; making it the identifier would break every diff link the moment someone rewords it.
+
+**`compute_diff(session, agent_id, owner, *, section, key) -> dict`** (new)
+
+The per-item drill-down behind every status row. Returns `{section, key, label, change_type, diff, binary, truncated}`; `a/` is the last synced revision, `b/` the live agent (git's baseline→working-copy convention). No synced baseline → `GitSourceValidationError` (400), not an empty diff — "nothing to compare against" is a different answer from "no differences".
+
+- **Prompts / settings** (`_diff_sides_for_field`): resolves `(label, live, baseline)` through the SAME registries and collectors `_settings_changes` uses, so a diff can never disagree with the row that opened it. `metadata` reads the `Agent` row, `sdk` the active `AgentEnvironment`, `specs` re-runs the publish collector. Both sides pass through `_normalize_setting_value` before rendering, so a row reported as changed always yields a non-empty diff and an "unset" shape never diffs against its twin. A collector that raises is surfaced as a 400 (after `_clear_poisoned_transaction`) rather than 500-ing a read-only endpoint.
+- **Files**: live env workspace vs. the baseline snapshot's `workspace/`, with the same lost-baseline re-materialization `compute_dirty` / `compute_status` use — a wiped snapshot dir is re-cloned rather than diffed against nothing, which would render every file as newly added.
+- Rendering (`_render_setting_text`): strings verbatim (JSON-quoting a multi-line prompt makes every line unreadable), everything else as `indent=2, sort_keys=True` JSON so re-serialization order never churns the diff.
+- Caps: `_DIFF_MAX_BYTES` (512 KB) per side, `_DIFF_MAX_LINES` (2,000) on output, both reported via `truncated`.
+- Pool-safe: all DB reads (source, install, baseline, env, collectors, SSH key material) complete before `session.commit()` releases the connection; the filesystem reads and any re-clone happen after.
+
+**`_resolve_diff_file_key(key) -> str`** / **`_read_diff_side(root, rel) -> tuple[str | None, bool]`** (new)
+
+The security boundary for the file variant, which takes caller-supplied input straight to the filesystem. `_resolve_diff_file_key` allowlists rather than sanitizes: relative-only, no `.`/`..` segments, first segment must satisfy `is_bundle_owned_toplevel`, no segment may be `is_nested_excluded` — calling `workspace_classification`'s own helpers, so the endpoint cannot drift from what a commit captures. `credentials/`, `app-data/`, `logs/`, `databases/` are therefore unreachable.
+
+**`_read_diff_side` re-checks containment on the fully resolved path, and that is the check that actually holds.** String-level validation cannot see a symlinked intermediate *directory* (`scripts/x -> /etc`): it contains no `..`, every segment passes the denylist, and the final component is an ordinary file. Resolving both root and target and requiring `is_relative_to` catches it; the per-segment denylist above is defense in depth, not the boundary. Symlinks are refused outright (the capture walk drops them, so one here would never be committed), a missing file returns `(None, False)` — deliberately distinct from an empty file `("", False)`, since that distinction is what makes a change classify as added/deleted rather than modified — and undecodable bytes report as binary instead of raising.
 
 **`_file_hashes(workspace_root) -> dict[str, str]`** (new)
 
@@ -262,13 +333,18 @@ Maps each file under a `workspace/` subtree to its SHA-256 (relative POSIX path 
 
 Delegates to `git_log_subdir(repo_url, ref, subdir, ssh_key_path, max_count=limit)` after resolving the owned source, then attaches a per-commit `commit_url` via `build_web_commit_url(source.repo_url, sha)` (`None` for unsupported hosts). Returns newest-first list of `{sha, short_sha, author_name, author_email, date, message, commit_url}` dicts. `limit` is clamped to 1..200 at the route layer.
 
-**`pull_update(*, session, agent_id, owner) -> Agent`**
+**`pull_update(*, session, agent_id, owner, conflict_resolution=None) -> Agent`**
 
-Acquires per-agent lock, delegates to `_pull_locked`. On `GitSourceConflictError`, `GitSourceValidationError`, or `GitSourceNotFoundError` — re-raises without stamping `ERROR` (user-actionable, pre-mutation). On any other exception — calls `_mark_source_error` then re-raises.
+Acquires per-agent lock, delegates to `_pull_locked`. `conflict_resolution` is one of `GIT_PULL_RESOLUTIONS` (`"keep_local"` / `"take_remote"`); `None` (the default — never given an implicit default anywhere in this call chain) keeps the historical fail-loud behavior the GitOps webhook dispatch (`AgentWebhookService.fire_webhook`) relies on, since it always calls this with no resolution. On `GitSourceConflictError` (including its `GitSourceLocalChangesError` subclass), `GitSourceValidationError`, or `GitSourceNotFoundError` — re-raises without stamping `ERROR` (user-actionable, pre-mutation). On any other exception — calls `_mark_source_error` then re-raises.
 
-**`_pull_locked(session, agent_id, owner) -> Agent`**
+**`_pull_locked(session, agent_id, owner, *, conflict_resolution=None) -> Agent`**
 
-Direction guard → env existence check → `ls_remote_head` (no-op return if already up to date) → `_assert_not_dirty` (calls `_prompts_dirty` internally) → clone → `_persist_revision` → `_apply_revision_to_install` → advance `last_synced_commit`.
+Unknown `conflict_resolution` (not `None` and not in `GIT_PULL_RESOLUTIONS`) → `GitSourceValidationError` (400) — validated FIRST, before the direction guard, so every caller (route, webhook, CLI) gets the same validation regardless of entry point. Then: direction guard → env **existence** check (`env is None` → 400; this does NOT check readability — see below) → `ls_remote_head` (no-op return if already up to date — this also means the dirty guard below never even runs on an unadvanced remote, so an idempotent webhook fire against a locally-dirty install stays quiet). Once the remote HAS advanced:
+
+- `conflict_resolution is None` → `_assert_not_dirty` (raises `GitSourceLocalChangesError` → 409 on blocking drift).
+- otherwise → `_pull_blocking_changes` computes the same blocking set **without raising** (needed for `keep_local`'s `preserve_fields` and for the audit log line).
+
+Clone + validate the tree + oversize check run next (so a request that would fail those checks never gets a backup taken for nothing). If `conflict_resolution is not None`, `_capture_backup_revision` runs at this point — deliberately as late as possible, after everything that can still abort the pull, but before any mutation. **This is where the workspace-readability guard actually lives** (`PublishService._assert_workspace_readable`, called from inside `_capture_backup_revision` — see its entry below): it is not an upfront precheck alongside the existence check above, it fires only on a resolved pull, after the clone, right before the backup snapshot. **New user-visible failure mode:** a resolved pull now 400s here if the env's `app/workspace/` is missing/unreadable on disk — a case where a bodiless pull previously proceeded unguarded (a bodiless pull never calls `_capture_backup_revision`, so it never hits this check). Both resolutions are affected identically, since the backup is unconditional on either one. `_persist_revision` persists the incoming revision next; if that raises, `_discard_backup_revision` rolls back the just-taken backup (so a backup is never left as the newest revision on a pull that did not complete) before re-raising. `preserve_fields` is then derived (`{c["field"] for c in blocking}` when `conflict_resolution == "keep_local"`, else `None`) and passed into `_apply_revision_to_install`. Finally: advance `last_synced_commit`, and (only when a resolution was supplied) log an INFO audit line naming the agent, resolution, preserved/discarded field labels, and the backup's revision number — not a `SecurityEvent`, since this is an owner acting on their own agent and no other git operation emits one either.
 
 **`push(*, session, agent_id, owner, commit_message, version=None, also_publish_bundle=False) -> AgentGitSource`**
 
@@ -276,21 +352,68 @@ Acquires per-agent lock, delegates to `_push_locked`. Same error-class split as 
 
 **`_push_locked(...) -> AgentGitSource`**
 
-Direction guard → env + workspace readable → `also_publish_bundle` precondition check → `ls_remote_head` precheck (409 if remote advanced) → full-history clone (`depth=None`) → delete stale `workspace/` subtree → `_capture_and_push` helper → advance `last_synced_commit`. If `also_publish_bundle`: `PublishService.publish` best-effort.
+Direction guard → env + workspace readable → `also_publish_bundle` precondition check → `ls_remote_head` precheck → full-history clone (`depth=None`) → delete stale `workspace/` subtree → `_capture_and_push` helper → advance `last_synced_commit`. If `also_publish_bundle`: `PublishService.publish` best-effort.
 
-**`_capture_and_push(session, *, install, env, source_like, owner, key, repo, repo_path, commit_message, version, revision_number_hint) -> str`** (new shared helper)
+The precheck is subdir-aware: a remote HEAD advance only raises `GitSourceConflictError` (409 "pull first") when `_remote_change_is_relevant` (below) says the advance concerns this agent — a repo-root install (no `subdir`) always blocks; a `subdir` install blocks only when the subdir tree changed since `last_synced_commit`. When the advance is subdir-irrelevant, the precheck does not raise and control falls through to the full-history clone + `_capture_and_push` + `fast_forward_push` exactly as if the remote had not advanced; `fast_forward_push`'s own merge-base ancestor check is unaffected and still raises `GitNonFastForwardError` (409) on a genuine non-fast-forward, so a real conflict the subdir check couldn't see is still caught. This is the same helper `_compute_update_available_remote` uses for the update-check banner, so the two can no longer disagree.
 
-Extracted from the `_push_locked` capture body; also used by `connect`. Builds manifest (`RevisionFormat.build_manifest` with cred/schedule/plugin specs from `PublishService._collect_*`), calls `RevisionFormat.write_tree` (manifest + workspace capture), writes `.gitignore`, asserts no oversized files, `commit_all` (no-op safe), `fast_forward_push`. Persists an `AgentBundleRevision` on every changed push/connect via `_persist_revision` — this gives `compute_dirty` a stable baseline. `source_like` carries `repo_url/subdir/ref/bundle_uuid`; for connect it is the in-memory unsaved source; for push it is the persisted row.
+**`_capture_and_push(session, *, install, env, source_like, owner, key, repo, repo_path, commit_message, version) -> str`** (shared helper)
+
+Extracted from the `_push_locked` capture body; also used by `connect`. Builds the manifest via `_build_live_manifest` (shared with `_capture_backup_revision` so a pull backup and a real push describe the live agent identically), calls `RevisionFormat.write_tree` (manifest + workspace capture), writes `.gitignore`, asserts no oversized files, `commit_all` (no-op safe), `fast_forward_push`. Persists an `AgentBundleRevision` on every changed push/connect via `_persist_revision` — this gives `compute_dirty` a stable baseline. `source_like` carries `repo_url/subdir/ref/bundle_uuid`; for connect it is the in-memory unsaved source; for push it is the persisted row.
 
 **`_PROMPT_FIELDS: tuple[tuple[str, str], ...]`** (module-level constant)
 
-Maps the four DB prompt field names to their UI labels: `("workflow_prompt", "Workflow prompt")`, `("entrypoint_prompt", "Entrypoint prompt")`, `("refiner_prompt", "Refiner prompt")`, `("router_trigger_prompt", "Router trigger prompt")`. Shared by `_prompts_dirty` (pull guard + dirty endpoint) and `compute_status` (commit preview) so neither can diverge.
+Maps the four DB prompt field names to their UI labels: `("workflow_prompt", "Workflow prompt")`, `("entrypoint_prompt", "Entrypoint prompt")`, `("refiner_prompt", "Refiner prompt")`, `("router_trigger_prompt", "Router trigger prompt")`. Shared by `_prompts_changed` (`compute_dirty`), `_pull_blocking_changes` (pull guard's blocking set + `compute_status`'s `blocks_pull`), and `_apply_revision_to_install`'s `keep_local` field-preservation narrowing, so none of the three can diverge.
 
-**`_prompts_dirty(session, source, install) -> bool`**
+**`_prompts_changed(install, rev) -> bool`**
 
-Compares the four prompt fields enumerated by `_PROMPT_FIELDS` (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) between the `Agent` row and the revision resolved by `_resolve_synced_revision(session, source, install)`. Returns `True` if any field differs, `False` when there is no synced revision baseline. Shared by `_assert_not_dirty` (pull guard) and `compute_dirty` (dirty endpoint) so they cannot disagree.
+Compares the four prompt fields enumerated by `_PROMPT_FIELDS` (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) between the `Agent` row and an **already-resolved** baseline revision. Returns `True` if any field differs, `False` when `rev is None`. Pure — takes the resolved revision rather than re-resolving it, so `compute_dirty` (which also needs the baseline for the settings and workspace diffs) resolves it **once per request** instead of once per check; each resolve is a full-row `SELECT` carrying the revision's `manifest` blob, on a polled endpoint. Used only by `compute_dirty` — the pull guard instead goes through `_pull_blocking_changes` below, which needs the per-field labels and change types, not just a boolean.
 
-**Known limitation — metadata-only edits do not light up dirty.** The 8 definitional metadata fields (`description`, `example_prompts`, `status_refresh_command`, etc.) are NOT compared here, and the workspace dirty check compares file content only. A git-versioned agent where the user edits only `description` or `example_prompts` (without changing any prompt file or workspace file) will show `dirty=false` and `prompts_dirty=false`. The values ARE captured correctly the next time the user pushes (via `build_manifest`), so the data is never lost — the indicator simply does not fire proactively for metadata-only changes. Future work could widen `_PROMPT_FIELDS` or add a dedicated metadata drift check.
+**`_METADATA_FIELDS` / `_SDK_FIELDS` / `_SPEC_FIELDS`** (module-level constants)
+
+The registries for the **non-prompt** half of `cinna.agent.json` — the settings drift check. Every attribute name is deliberately identical on the live row and on `AgentBundleRevision`, so one `getattr` pair covers both sides:
+
+| Registry | Manifest block | Live source | Entries |
+|---|---|---|---|
+| `_METADATA_FIELDS` | `metadata` | `Agent` row | `description`, `example_prompts`, `status_refresh_command`, `agent_api_enabled`, `agent_api_identity_enabled`, `a2a_config`, `agent_sdk_config`, `webapp_enabled` |
+| `_SDK_FIELDS` | `sdk` | active `AgentEnvironment` | `agent_sdk_building`, `agent_sdk_conversation`, `model_override_building`, `model_override_conversation` |
+| `_SPEC_FIELDS` | top-level lists | `PublishService._collect_schedule_specs` / `_collect_plugin_specs` | `schedules`, `plugin_specs` |
+
+`_SPEC_FIELDS` carries the collector callable itself, so the live side is re-collected with the **same helpers `_capture_and_push` uses to build the manifest** — the diff can never disagree with what a commit would write.
+
+`required_credential_specs` is deliberately **not** in `_SPEC_FIELDS` — do not re-add it. Its live collector (`PublishService._collect_credential_specs`) reads the install-local `Credential` rows, and on any install that did not author the baseline (a `checkout`, or a `pull` from a repo another install pushed) those rows are placeholders (`name="<spec> (placeholder)"`, locally re-resolved `provided_by="user"`) that can never reproduce the publisher's spec values — the comparison would report drift permanently with no user edit behind it, not a trustworthy signal. Credential-spec staleness already has a purpose-built detector: `PublishService.compute_credential_spec_drift` behind `GET /bundle-credential-drift`, surfaced as the republish nudge on the Bundle tab (see [Agent Bundles tech](../agent_bundles/agent_bundles_tech.md)). The manifest itself still carries `required_credential_specs` unchanged — only this diff stopped reading it.
+
+**That detector does not cover git-connected installs, so the gap left by dropping `required_credential_specs` from `_SPEC_FIELDS` has no other surface for them.** `PublishService.compute_credential_spec_drift` early-returns `BundleCredentialDrift(stale=False, drift=[])` in two cases (`publish_service.py:780-781`, `:787-788`): when `not install.is_publisher_install`, and when the bundle has no `latest_revision`. A `checkout` always creates a consumer install (`is_publisher_install=False` — `install_service.py:257`), so the detector is a permanent no-op for every checked-out agent. `bundle.latest_revision_id` is only ever written by `PublishService.push` (`publish_service.py:346`) — git `connect`/`push` deliberately never call it — so a `connect`-based install that is never separately published to the catalog is equally uncovered. Net effect: for both git install shapes that never publish to the catalog, a rename of a linked credential or an `allow_sharing` flip is invisible to both `settings_dirty` and `compute_credential_spec_drift`, even though the next push *will* rewrite `required_credential_specs` in `cinna.agent.json`. Accepted trade-off, not a bug — see the Conflict Model table in the business doc — the push still captures the change whenever the user commits for any other reason.
+
+Supporting constants: `_SETTING_SECTIONS` (`"metadata"`, `"sdk"`, `"specs"`), `_PULL_OVERWRITTEN_SECTIONS` (`("metadata",)` — see `_pull_blocking_changes`), `_UNORDERED_LIST_FIELDS` (the two spec lists, compared as multisets), `_SET_LIKE_DICT_FIELDS` (`agent_sdk_config`, whose `sdk_tools` / `allowed_tools` are written via `list(set(...))` by tool discovery and therefore have non-deterministic order).
+
+**`_settings_changes(session, install, rev, env=None, *, sections=_SETTING_SECTIONS, skip_null_baseline_metadata=False, stop_early=False) -> list[dict]`**
+
+Per-field diff of the non-prompt `cinna.agent.json` fields against `rev` — the **already-resolved** baseline from `_resolve_synced_revision` (passed in, not re-resolved, so a caller resolves once). Returns `[{field, change_type}]` (the same shape as the prompt preview); `[]` when `rev is None`. Iterates the three registries above, normalizing both sides through `_normalize_setting_value` before `_classify_change`.
+
+**Absent manifest sections are never compared.** The baseline's raw `revision.manifest` is consulted: a missing `metadata` / `sdk` block, or a missing top-level spec key, skips that group entirely — the same missing-key-tolerant rule `InstallService._apply_revision_metadata` applies on the restore side, so a pre-metadata snapshot cannot fabricate drift. The `sdk` group is additionally skipped when the install has no env row.
+
+Flags (all narrow the default full comparison the indicator endpoints use):
+
+| Flag | Used by | Effect |
+|---|---|---|
+| `sections` | `_pull_blocking_changes` (via `_assert_not_dirty` / `compute_status`) | Restricts which registries are compared (`_PULL_OVERWRITTEN_SECTIONS`). |
+| `skip_null_baseline_metadata` | `_pull_blocking_changes` (via `_assert_not_dirty` / `compute_status`) | Skips a metadata field whose **raw** baseline column is `None`, mirroring `_apply_revision_metadata`'s per-field `is not None` guard. Matched on the raw column, **not** on `change_type == "added"`: a baseline of `[]` / `""` normalizes to `None` (so it classifies as `added`) yet still passes `is not None`, meaning the pull does overwrite it and the guard must still block. |
+| `stop_early` | `compute_dirty` | Returns as soon as the first change is found, skipping the remaining (query-heavy) spec collectors. The list is then partial by design — only valid for callers reducing it to a bool. |
+
+A collector that raises is reported as `modified` rather than propagating (conservative-on-indeterminate). Because a SQLAlchemy-level failure leaves the transaction poisoned — which would otherwise resurface as `PendingRollbackError` at the caller's `session.commit()` and 500 the polled endpoint — the handler first calls `_clear_poisoned_transaction`.
+
+Touches the DB (the three collectors), so the pool-safe read paths call it **before** releasing their connection.
+
+**`_clear_poisoned_transaction(session, *, context) -> None`**
+
+Shared, never-throwing rollback used by any handler that swallows a DB error (`_settings_changes`' collector guard, `_mark_source_error`). Nested-transaction-aware: `get_nested_transaction().rollback()` when inside a savepoint (`ROLLBACK TO SAVEPOINT`, preserving the outer transaction's committed rows under the test suite's savepoint isolation), plain `session.rollback()` in production where no savepoint is active.
+
+**Normalization helpers** (module-level)
+
+- `_canonical_json_value(value)` — collapses `None` / `""` / `[]` / `{}` to `None` (all mean "unset") and drops empty dict entries, recursing into containers. `False` / `0` are values, not emptiness. Stops an omitted manifest key from reading as a change against a live empty default.
+- `_sorted_json(items)` — deterministic list ordering by canonical JSON encoding.
+- `_normalize_setting_value(field, value)` — `_canonical_json_value`, then multiset ordering for `_UNORDERED_LIST_FIELDS` and per-key list ordering for `_SET_LIKE_DICT_FIELDS`.
+- `_classify_change(live, baseline)` — `added` / `modified` / `deleted`, or `None` when unchanged.
 
 **`_resolve_synced_revision(session, source, install) -> AgentBundleRevision | None`**
 
@@ -311,13 +434,37 @@ Raises `GitSourceConflictError` (→ 409) if a consumer install (`is_publisher_i
 
 Copies `src/workspace/` into `<BUNDLE_STORAGE_DIR>/<bundle_id>/<revision_number>/workspace/` via `iter_bundle_toplevel` + `safe_copytree` (same denylist + symlink guards as publish). Writes `manifest.json`. Computes `content_hash` via `PublishService._hash_tree_with_manifest`. Creates and commits the `AgentBundleRevision` row with `origin="git"` (module constant `REVISION_ORIGIN_GIT` from `backend/app/models/bundles/agent_bundle_revision.py`). The `revision_number` comes from the same global monotonic counter as catalog publishes (`uq_revision_bundle_number` unique constraint and the `<bundle_id>/<rev>/` snapshot path both depend on it). The bundle Revisions UI (`list_revisions_with_install_counts`) filters to `origin="publish"` only, so git baselines are invisible there and do not affect the publish dialog's next-version suggestion. As a consequence, revision numbers in the Revisions UI may show gaps when git operations interleave with catalog publishes — this is expected. `bundle.latest_revision_id` is never updated by `_persist_revision`; it remains publish-set.
 
-**`_assert_not_dirty(session, source, install) -> None`**
+**`_pull_blocking_changes(session, install, rev, env=None) -> list[dict]`**
 
-Thin raising wrapper over `_prompts_dirty(session, source, install)`; raises `GitSourceConflictError` (→ 409) if it returns `True`.
+The changes a pull would OVERWRITE — the single source of truth for both the pull guard (`_assert_not_dirty`) and the `blocks_pull` flags `compute_status` stamps onto its response, so the 409 and the preview that explains it can never disagree (the same discipline `_remote_change_is_relevant` enforces for the update banner vs. the push guard). Returns `[]` when `rev is None`. Each entry is `{section, field, label, change_type}` where `section` is `"prompt"` or one of `_SETTING_SECTIONS`, `field` is the raw attribute name (the stable key — also what `keep_local` passes as `preserve_fields` to `_apply_revision_to_install`), and `label` is the UI string.
 
-**`_apply_revision_to_install(session, install, revision) -> None`**
+Two halves: (1) the prompt half — always blocking, since a pull rewrites all four `_PROMPT_FIELDS` columns wholesale; (2) the settings half — `_settings_changes(..., sections=_PULL_OVERWRITTEN_SECTIONS, skip_null_baseline_metadata=True)`, i.e. the exact narrowed call `_assert_not_dirty` made before this extraction. **Deliberately narrower than the `settings_dirty` indicator**, on both axes: only the sections a pull actually rewrites — the prompt columns and the definitional metadata (via `InstallService._apply_revision_metadata`) — and within `metadata` only the fields `_apply_revision_metadata` actually assigns (non-NULL baseline column). Schedules, plugin links, credential links and env SDK selections survive a pull untouched, so blocking on them would protect nothing while deadlocking the user — push answers a remote advance with "pull first" while pull answers with 409, and a pull is exactly what an advanced remote demands first. A publisher who never set `status_refresh_command` must not permanently lock out every installer who does. The drift still shows in `GET /git/dirty` and `GET /git/status` (with `blocks_pull: false`). No `stop_early` passthrough — a partial list is unusable here: the guard needs the full set for its 409 payload, and the preview needs it for the `blocks_pull` join key set.
 
-Stop env (if running) → `replace_bundle_content(revision.snapshot_path, env.id)` → reset prompt-sync baselines (`*_synced_hash = None`) → write DB prompt fields from manifest → call `InstallService._apply_revision_metadata(install, revision)` to overwrite the 8 definitional metadata fields (publisher-authoritative, missing-key-tolerant — `NULL` revision column skips that field) → update `installed_revision_id`, `last_sync_at`, `last_update_status = "synced"` → restart env (if it was running).
+**Caveat on the `skip_null_baseline_metadata` mirroring:** it tests the BASELINE revision's column while the overwrite is driven by the INCOMING one. They are the same revision on the common (already-synced) path, but when the baseline is `NULL` and the incoming revision carries a value, the field is (correctly) absent from this blocking set — so `keep_local` does not preserve it — yet `_apply_revision_metadata` still assigns it from the incoming revision. The alternative (blocking on a `NULL` baseline) is the documented deadlock this narrowing exists to prevent, so the gap is accepted, not fixed.
+
+Touches the DB via `_settings_changes`, so pool-safe read paths (`compute_status`) must call it before releasing their connection.
+
+**`_assert_not_dirty(session, source, install, env=None) -> None`**
+
+The pull guard. Thin wrapper: resolves the synced baseline, calls `_pull_blocking_changes`, and raises `GitSourceLocalChangesError(_PULL_LOCAL_CHANGES_MESSAGE, blocking)` (→ a structured, recoverable 409) when the blocking list is non-empty. `_PULL_LOCAL_CHANGES_MESSAGE` is a module-level constant — *"This agent has local changes that a pull would overwrite. Review them to choose whether to keep or discard them."* — deliberately not telling the user to push or discard by hand: pushing is impossible in exactly this state (the push precheck itself demands a pull first), and there was no discard action before this feature shipped the `conflict_resolution` modes below.
+
+**`_build_live_manifest(session, *, install, env, bundle, version, release_notes) -> dict`**
+
+Builds the `cinna.agent.json` manifest describing the LIVE agent: allocates the next `revision_number` and runs the three `PublishService._collect_*` spec collectors, then hands them to `RevisionFormat.build_manifest`. Shared by `_capture_and_push` (which writes it into a clone and commits) and `_capture_backup_revision` (which persists it straight to bundle storage), so a pre-pull backup can never describe the live agent differently from the way a real push would — a backup built off a divergent manifest shape would be a broken restore point. The git half of `_capture_and_push` (writing the tree into the clone directory so the commit picks it up) is deliberately NOT folded into this helper — reusing it for a backup would mean either a second full workspace snapshot on the push path or a callback-shaped seam, more disruption than the duplication it removes.
+
+**`_capture_backup_revision(session, *, install, env, bundle, owner, release_notes) -> AgentBundleRevision`**
+
+The safety net behind BOTH pull resolutions, called from `_pull_locked` when `conflict_resolution is not None`. `_capture_and_push` minus the git half: `PublishService._assert_workspace_readable(env, env_workspace_root)` (must run before the snapshot — without it a missing/unreadable workspace root silently captures an EMPTY `workspace/` rather than raising; a `ValueError` from it is caught and re-raised as `GitSourceValidationError` → 400), `_build_live_manifest`, `PublishService._snapshot_workspace_tree` into a temp dir, then `_persist_revision` through the same denylist + symlink guards every sync uses. Taken **unconditionally on any resolution, even when no field blocks the pull** — `replace_bundle_content` replaces the whole workspace either way, so this snapshot is also the only record of locally edited workspace files (this is the plan §3.4 deviation — see the module/route docstrings and `_pull_locked`'s inline comment for the full rationale). Costs one `revision_number` from the shared counter, widening the numbering gaps the Revisions tab already tolerates. **Never swallows** — any failure propagates to the caller, and the caller must invoke this BEFORE mutating anything (silently discarding the user's work after promising a backup is the one outcome this feature must never produce). The caller also owns the ordering contract: the backup must land BELOW the incoming revision (`_persist_revision`'s monotonic `revision_number` counter enforces this as long as the backup is persisted first) and must be rolled back via `_discard_backup_revision` if the incoming persist then fails.
+
+**Behavior change worth flagging separately:** `_assert_workspace_readable` is the same guard `connect` and `push` already required (env-readable guard, business doc) — pull is simply the third caller now. Its `ValueError` message is literally shared with the publish path and says "Cannot publish…", which reads oddly on a pull; that is a known, accepted quirk of reusing the guard verbatim rather than a bug. Before this feature, pull only ever checked env *existence* (`env is None`), never workspace *readability* — so a missing/unreadable `app/workspace/` dir used to let a bodiless pull through untouched (the workspace-file side has no guard at all on that path — see the Conflict Model / known-gap notes in the business doc). A **resolved** pull (`keep_local` or `take_remote`) now 400s in that same situation, because it always attempts a backup first.
+
+**`_discard_backup_revision(session, revision) -> None`**
+
+Rolls back a pre-pull backup whose subsequent incoming-revision persist failed. A no-op when `revision is None`. Best-effort **only because it runs while an exception is already in flight** and must never mask it — not because a leftover backup is harmless: left in place, it becomes the newest revision on the bundle (`_resolve_synced_revision` takes the max `revision_number`), so the install would report clean while still holding unpushed work, and the next pull (including an unguarded bodiless one) would discard that work silently. Clears any poisoned transaction first (`_clear_poisoned_transaction`) since `revision` is an expired ORM instance by this point. On its own failure, logs at WARNING with the operational consequence spelled out, since that log line is the only remaining signal that the baseline may now be wrong.
+
+**`_apply_revision_to_install(session, install, revision, *, preserve_fields=None) -> None`**
+
+Stop env (if running) → `replace_bundle_content(revision.snapshot_path, env.id)` (workspace files replaced wholesale — `preserve_fields` never applies here, one tree has one baseline) → reset prompt-sync baselines (`*_synced_hash = None`, which is what makes a preserved DB value actually win over the file the snapshot just wrote) → write DB prompt fields from manifest, skipping any field named in `preserve_fields` → call `InstallService._apply_revision_metadata(install, revision, skip_fields=preserve_fields or None)` to overwrite the 8 definitional metadata fields (publisher-authoritative, missing-key-tolerant — `NULL` revision column skips that field; `skip_fields` additionally skips whatever the caller named regardless of the revision's value) → update `installed_revision_id`, `last_sync_at`, `last_update_status = "synced"` → restart env (if it was running). `preserve_fields` is the `keep_local` resolution's narrowing set — raw prompt/metadata attribute names from `_pull_blocking_changes`, passed by `_pull_locked`.
 
 **`_mark_source_error(session, source_id, exc) -> None`**
 
@@ -487,6 +634,8 @@ Implementation:
 4. Equal hashes → return `False` (subdir unchanged). Unequal → return `True`.
 5. Any exception (server disallows fetch-by-reachable-SHA, base commit GC'd or rewritten, subdir missing at one revision, auth failure) → return `True` conservatively. On git hosts that disallow fetch-by-SHA (some self-hosted Gitea/GitLab without `uploadpack.allowReachableSHA1InWant`), this degrades gracefully to the legacy always-`True` behavior.
 
+Call sites: `_remote_change_is_relevant`, invoked from both `_compute_update_available_remote` (the update-check path) and `_push_locked`'s fast-forward precheck (previously only the update check used it — the push precheck now shares the same subdir-relevance decision).
+
 ### Existing primitives (unchanged, now egress-guarded)
 
 - `verify_repository_access` — `ls-remote` check without cloning; also egress-guarded.
@@ -498,7 +647,7 @@ Implementation:
 ### Typed errors
 
 - `GitOperationError` — base; maps to 400.
-- `GitAuthenticationError(GitOperationError)` — maps to 401.
+- `GitAuthenticationError(GitOperationError)` — maps to 400 (never 401/403 — see the error-mapping note above).
 - `GitConnectionError(GitOperationError)` — maps to 400.
 - `GitNonFastForwardError(GitOperationError)` — maps to 409.
 

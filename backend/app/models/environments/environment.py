@@ -265,6 +265,26 @@ class AdminAgentEnvironmentPublic(AgentEnvironmentPublic):
     # → reconfigure/restart.
     model_health_warning: bool = False
 
+    # ── Bundle install enrichment (from Agent + AgentBundle) ──────────
+    # Reverse-DNS bundle identifier of the agent behind this environment.
+    # Populated only when the agent is actually linked to a bundle
+    # (``Agent.bundle_uuid IS NOT NULL``) — standalone agents carry an
+    # internal ``bundle_id`` too, but it names nothing the admin can act on,
+    # so it renders as "no bundle" here.
+    bundle_id: str | None = None
+    is_publisher_install: bool = False
+    update_mode: str | None = None
+    installed_revision_number: int | None = None
+    installed_revision_version: str | None = None
+    latest_revision_number: int | None = None
+    latest_revision_version: str | None = None
+    # True when this environment's agent is a *consumer* install running an
+    # older revision than the bundle's latest. Always False for publisher
+    # installs and non-bundle agents. A different axis from ``is_stale``
+    # (Docker image-tag staleness → rebuild); this is bundle content →
+    # apply-update.
+    update_available: bool = False
+
 
 class AdminTemplateInfoPublic(SQLModel):
     """Per-template summary for the admin console."""

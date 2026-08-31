@@ -16,18 +16,16 @@
   - `A2AService.build_agent_card(...)` — `urn:cinna:mcp` extension appended via `AgentCapabilities(extensions=[...])`; accepts `mcp_tool_name`, `mcp_display_name`, `mcp_description` kwargs
 
 ### Backend — External A2A Service (card builder)
-- `backend/app/services/external/external_a2a_service.py` — `ExternalA2AService._build_route_card(...)` passes `mcp_tool_name`, `mcp_display_name`, `mcp_description` to `A2AService.get_agent_card_dict()` so the descriptor reflects the route identity, not the raw underlying agent. Identity cards (`_build_identity_card`) emit no `urn:cinna:mcp` extension (person-level, not single-tool)
+- `backend/app/services/external/external_a2a_service.py` — `ExternalA2AService._build_agent_card()` calls `A2AService.get_agent_card_dict()` for `target_type="agent"`. Identity cards (`_build_identity_card`) emit no `urn:cinna:mcp` extension (person-level, not single-tool). **Deleted in Phase 5 of the channels & identity unification:** `_build_route_card(...)` and the `mcp_tool_name`/`mcp_display_name`/`mcp_description` override plumbing it used — there is no route target left to reflect
 
 ### Backend — Discovery Catalog Service
 - `backend/app/services/external/external_agent_catalog_service.py`:
-  - `_DescriptorContext` dataclass — holds `(agent, environment, slug_source, display_name, description)` collected during per-section passes
-  - `ExternalAgentCatalogService._attach_mcp_descriptors(targets, contexts)` — two-pass deconfliction; first pass counts base-slug occurrences; second pass suffixes collisions and calls `build_cinna_mcp_descriptor`
+  - `_DescriptorContext` dataclass — holds `(agent, environment)` collected during the personal-agents section pass
+  - `ExternalAgentCatalogService._attach_mcp_descriptors(targets, contexts)` — two-pass deconfliction; first pass counts base-slug occurrences (from `agent.name`); second pass suffixes collisions and calls `build_cinna_mcp_descriptor`
   - `ExternalAgentCatalogService._list_personal_agents(...)` — records a `_DescriptorContext` per agent (slug source = `agent.name`)
-  - `ExternalAgentCatalogService._list_mcp_shared_agents(...)` — records a `_DescriptorContext` per route (slug source = `route.name or route.agent_name`; `display_name` = route name; `description` = `route.trigger_prompt`)
   - `ExternalAgentCatalogService._list_identity_contacts(...)` — no `_DescriptorContext` recorded; `mcp` field stays `null`
 
-### Backend — App MCP Route Service
-- `backend/app/services/app_mcp/app_agent_route_service.py` — `EffectiveRoute` dataclass now includes `name: str = ""` (the route's own display name distinct from `agent_name`). Used by the catalog service as the slug source and display name for route descriptors
+**Deleted in Phase 5 of the channels & identity unification:** `_list_mcp_shared_agents(...)` (the middle discovery section, built from `AppAgentRouteService.get_effective_routes_for_user`) and the `AppAgentRouteService`/`EffectiveRoute` module it read from — there is no route-shaped descriptor context left to build.
 
 ### Backend — Models
 - `backend/app/models/external/external_agents.py` — `ExternalTargetPublic.mcp: dict[str, Any] | None = None` — plain `pydantic.BaseModel` field (not SQLModel), safe from the `metadata` shadow issue
@@ -75,7 +73,7 @@ deconflict_tool_name("reports", UUID("3f2a1b4c-...")) → "reports_3f2a1b4c"
 | `agent` | `Agent` | Source of `name`, `router_trigger_prompt`, `description`, `example_prompts` |
 | `environment` | `AgentEnvironment \| None` | Source of `cli_commands_parsed` for `run_commands` and `capabilities.run_commands` |
 | `tool_name` | `str` | Pre-computed, deconflicted slug. Caller is responsible for deconfliction |
-| `display_name` | `str \| None` | Overrides `agent.name`. Route builder passes the route name |
+| `display_name` | `str \| None` | Overrides `agent.name`. Unused by either remaining call site as of Phase 5 (the route builder that used it is deleted) — kept as a general override, not dead code |
 | `description` | `str \| None` | Full description override. When `None`, `SEND_MESSAGE_DESKTOP_DESCRIPTION` + `router_trigger_prompt` (or `agent.description`) is constructed. When set, used verbatim |
 
 ### `build_agent_card(...)` kwargs for descriptor override
@@ -113,11 +111,6 @@ ExternalAgentCatalogService.list_targets()
         ├── _list_personal_agents()    → ExternalTargetPublic list
         │       └── records _DescriptorContext(agent, environment, slug_source=agent.name)
         │
-        ├── _list_mcp_shared_agents()  → ExternalTargetPublic list
-        │       └── records _DescriptorContext(agent, environment,
-        │               slug_source=route.name or agent_name,
-        │               display_name=route.name, description=route.trigger_prompt)
-        │
         ├── _list_identity_contacts()  → ExternalTargetPublic list
         │       └── no _DescriptorContext (mcp stays null)
         │
@@ -140,13 +133,6 @@ ExternalA2AService.build_card()
         │       └── A2AService.get_agent_card_dict(agent, environment, ...)
         │               └── build_agent_card() appends urn:cinna:mcp extension
         │                       (slug from slugify(agent.name) — single-card path)
-        │
-        ├── target_type="app_mcp_route"
-        │       └── A2AService.get_agent_card_dict(agent, environment, ...,
-        │               mcp_tool_name=slugify(route.name),
-        │               mcp_display_name=route.name,
-        │               mcp_description=route.trigger_prompt)
-        │               └── build_agent_card() appends urn:cinna:mcp extension
         │
         └── target_type="identity"
                 └── synthesized AgentCard — no urn:cinna:mcp extension
@@ -183,21 +169,20 @@ This is the only schema change touching the discovery response. No database migr
 
 ---
 
-## `EffectiveRoute.name` Addition
+## `EffectiveRoute.name` — Removed
 
-File: `backend/app/services/app_mcp/app_agent_route_service.py`
-
-`EffectiveRoute` dataclass gained a `name: str = ""` field. This field carries `AppAgentRoute.name` (the route's own display label). Before this change the catalog service had to fall back to `agent_name` for all route descriptors; now it can use the route's actual name when set, matching the identity the route card presents to the caller.
+`EffectiveRoute` (and the `AppAgentRouteService` module it lived on) no longer exist as of Phase 5 of the channels & identity unification. There is no route-name field to carry any more — every remaining discovery target's descriptor reads straight off the underlying `Agent`.
 
 ---
 
 ## Tests
 
-- `backend/tests/api/external/external_agents_test.py` — discovery endpoint tests; `mcp` field assertions for all three target types (personal agent, shared route, identity), plus slug uniqueness and determinism across the response
+- `backend/tests/api/external/external_agents_test.py` — discovery endpoint tests; `mcp` field assertions for both target types (personal agent, identity), plus slug uniqueness and determinism across the response
 - `backend/tests/api/external/external_a2a_agent_test.py` — agent card carries the `urn:cinna:mcp` extension with a well-formed descriptor across both v0.3 and v1.0
-- `backend/tests/api/external/external_a2a_route_test.py` — route card descriptor reflects the route identity (name + trigger prompt), not the underlying agent
 - `backend/tests/unit/test_cinna_mcp_descriptor.py` — pure-Python unit tests for `build_cinna_mcp_descriptor`, `slugify_tool_name`, `deconflict_tool_name`, and card extension attachment
+
+**Deleted in Phase 5:** `backend/tests/api/external/external_a2a_route_test.py` — asserted the route card descriptor reflected the route identity (name + trigger prompt) rather than the underlying agent; there is no route card left to test <!-- nocheck -->
 
 ---
 
-*Last updated: 2026-05-28*
+*Last updated: 2026-08-25 — Phase 5 of the channels & identity unification refactor removed the `app_mcp_route` target type, `_build_route_card`, `_list_mcp_shared_agents`, and `EffectiveRoute`*

@@ -94,9 +94,10 @@ class AgentBundleRevision(SQLModel, table=True):
     entrypoint_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     refiner_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     # Snapshot of the publisher's ``Agent.router_trigger_prompt`` at publish
-    # time. Read by ``InstallService`` to seed the auto-managed
-    # ``AppAgentRoute`` for installers; propagated back to
-    # ``Agent.router_trigger_prompt`` + auto-managed routes on apply-update.
+    # time. Copied onto the installer's ``Agent.router_trigger_prompt`` on
+    # install and on apply-update, which is the whole of it — the field is
+    # read straight off the agent row by every router, so there is nothing
+    # further to propagate.
     router_trigger_prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
     # SDK selections at publish time.

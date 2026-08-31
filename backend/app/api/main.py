@@ -5,13 +5,12 @@ from app.api.routes import (
     access_tokens,
     admin_environments,
     admin_llm_providers,
+    admin_routing,
     agent_api,
     agent_api_public,
-    agent_app_mcp_routes,
     agent_git,
     agent_status,
     agent_webhooks,
-    app_agent_routes,
     app_data,
     app_sync,
     bundles,
@@ -25,13 +24,13 @@ from app.api.routes import (
     credentials,
     credential_shares,
     desktop_auth,
-    email_integration,
     environments,
     external_a2a,
     external_account_config,
     external_agents,
     identity,
     identity_contacts,
+    improvement_requests,
     installs,
     mcp_connectors,
     mcp_consent,
@@ -53,12 +52,13 @@ from app.api.routes import (
     private,
     security_events,
     server_config,
+    server_channels,
     sessions,
     shared_workspace,
     ssh_keys,
     task_agent_api,
     task_triggers,
-    user_app_agent_routes,
+    user_channels,
     users,
     user_dashboards,
     user_workspaces,
@@ -105,6 +105,10 @@ api_router.include_router(ssh_keys.router)
 api_router.include_router(environments.router)
 api_router.include_router(environments.console_ws_router)
 api_router.include_router(sessions.router)
+# Improvement requests span /sessions/*, /agents/*, and /improvement-requests/*,
+# so the router carries no prefix. Registered after sessions/agents; neither of
+# those declares a colliding path, so nothing here is shadowed.
+api_router.include_router(improvement_requests.router)
 api_router.include_router(messages.router)
 api_router.include_router(workspace.router)
 api_router.include_router(user_dashboards.router)
@@ -117,7 +121,13 @@ api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)
 api_router.include_router(admin_environments.router)
 api_router.include_router(admin_llm_providers.router)
+api_router.include_router(admin_routing.router)
 api_router.include_router(server_config.router)
+api_router.include_router(server_channels.router)
+# Per-user channel settings on /users/me/channels/*. Separate router from
+# server_channels: that one is superuser-only and its projections carry the
+# webhook token, so the two must not share a response model by accident.
+api_router.include_router(user_channels.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)
@@ -125,7 +135,6 @@ api_router.include_router(task_agent_api.router)
 api_router.include_router(task_triggers.router, prefix="/tasks", tags=["task-triggers"])
 api_router.include_router(webhooks.router, prefix="/hooks", tags=["webhooks"])
 api_router.include_router(mail_servers.router)
-api_router.include_router(email_integration.router)
 api_router.include_router(webapp.router)
 api_router.include_router(webapp_interface_config.router)
 api_router.include_router(webapp_share.router)
@@ -139,9 +148,6 @@ api_router.include_router(a2a.v03_router)    # /a2a/v0.3/{agent_id}/
 api_router.include_router(mcp_connectors.router)
 api_router.include_router(mcp_consent.router)
 api_router.include_router(mcp_providers.router)  # /mcp-providers/* (consumer connect helper)
-api_router.include_router(agent_app_mcp_routes.router)
-api_router.include_router(app_agent_routes.router)
-api_router.include_router(user_app_agent_routes.router)
 api_router.include_router(identity.router)
 api_router.include_router(identity_contacts.router)
 api_router.include_router(cli.router)

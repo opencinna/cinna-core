@@ -2,6 +2,10 @@
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
 
+/* Visual skins (see src/config/themes.ts). Each is a pure CSS-variable
+   overlay keyed off `data-skin` on <html>; the default skin is this file. */
+@import "./styles/skins/hacker-1980.css";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -43,6 +47,21 @@
 }
 
 :root {
+  /* Tier C — decorative skin tokens. The default skin defines them as no-ops
+     so components can reference them unconditionally; a skin gives them teeth.
+     See src/styles/skins/ for the overlays that do. */
+  --skin-line: transparent;
+  --skin-glow: transparent;
+  --skin-glow-soft: transparent;
+  --skin-grid: transparent;
+  --skin-grid-size: 0;
+  --skin-scanline: transparent;
+  --skin-surface-tint: var(--card);
+  --skin-label-color: inherit;
+  --skin-sweep: transparent;
+  --skin-active-fg: inherit;
+  --skin-active-text-glow: transparent;
+
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);

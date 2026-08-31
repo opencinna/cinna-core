@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Download, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { WorkspaceService, EnvironmentsService, OpenAPI } from "@/client"
+import { saveBlobAs } from "@/utils"
 import { CSVViewer } from "./CSVViewer"
 import { MarkdownViewer } from "./MarkdownViewer"
 import { JSONViewer } from "./JSONViewer"
@@ -107,14 +108,7 @@ export function FileViewer({ envId, filePath }: FileViewerProps) {
         path: filePath,
       })) as unknown as Blob
 
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement("a")
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
+      saveBlobAs(blob, filename)
     } catch (error) {
       console.error("Download error:", error)
     }

@@ -28,7 +28,7 @@ import yaml
 from sqlmodel import Session
 
 from app.core.db import create_session
-from app.models import Agent, AgentEnvironment
+from app.models import Agent, AgentEnvironment, AgentApiTokenKind
 
 if TYPE_CHECKING:
     from app.models import AgentApiToken
@@ -69,9 +69,17 @@ WAKEABLE_ENV_STATUSES = ("suspended", "stopped")
 
 # In-process sliding-window rate-limit state: token_id -> list[monotonic ts].
 # A backstop, not the primary defence (the deadline + hop-depth limit are). This
-# is per-process; a multi-worker deployment gets per-worker windows, which is an
-# acceptable approximation for the backstop role.
+# is per-process; a multi-worker deployment gets per-worker windows, so the
+# effective limit is N_workers × the policy's rate_limit. Acceptable for a
+# backstop; a shared store is out of scope.
 _rate_limit_hits: dict[uuid.UUID, list[float]] = {}
+# The dict is keyed by token id and would otherwise grow forever — every token
+# that ever called leaves an entry behind, and external keys widen that
+# key-space (plan D11). Sweep entries whose newest hit is older than the widest
+# window we could still be counting, at most once per interval.
+_RATE_LIMIT_PRUNE_INTERVAL = 300.0   # seconds between sweeps
+_RATE_LIMIT_ENTRY_TTL = 3600.0       # drop buckets idle for longer than this
+_rate_limit_last_prune: float = 0.0
 
 # Path of the declarative guardrails file inside the producer workspace.
 POLICY_FILE_PATH = "agent_api/policy.yaml"
@@ -415,9 +423,9 @@ class AgentApiService:
         never wakes a suspended env.
 
         ``caller_scopes`` is the per-user grant resolved by the proxy (Phase 2);
-        combined with the producer's ``agent_api_identity_enabled`` opt-in it
-        drives the OPTIONAL edge scope enforcement (D8). It is resolved by the
-        caller (the proxy) so identity resolution stays at the proxy chokepoint.
+        combined with ``resolve_identity_enabled`` it drives the OPTIONAL edge
+        scope enforcement (D8). It is resolved by the caller (the proxy) so
+        identity resolution stays at the proxy chokepoint.
 
         Returns ``(environment, hop_headers)`` where ``hop_headers`` must be
         injected into the downstream proxy request.
@@ -435,12 +443,33 @@ class AgentApiService:
             token=token,
             hop_depth=AgentApiService.incoming_hop_depth(incoming_headers),
             caller_scopes=caller_scopes,
-            identity_enabled=bool(agent.agent_api_identity_enabled),
+            identity_enabled=AgentApiService.resolve_identity_enabled(agent, token),
         )
 
         hop_headers = AgentApiService.next_hop_headers(incoming_headers)
         environment = await AgentApiService.resolve_running_producer_env(session, agent)
         return environment, hop_headers
+
+    @staticmethod
+    def resolve_identity_enabled(agent: Agent, token: "AgentApiToken | None") -> bool:
+        """Whether per-user scopes apply to this call (plan D3).
+
+        ``agent_api_identity_enabled`` means "attribute and scope my *anonymous
+        connection* callers" — an opt-in, because a connection's identity is
+        inferred from a token the platform injects.
+
+        An **external key** carries its identity deliberately: the issuer picked
+        the subject user at mint time. Gating it behind the same flag would let
+        an owner assign scopes to a key and have them silently not injected — a
+        dead-scope state that looks configured but does nothing. So an external
+        key enables identity on its own.
+
+        Both scope INJECTION (at the proxy) and the optional edge ENFORCEMENT
+        (``enforce_policy``) read this one expression.
+        """
+        if bool(agent.agent_api_identity_enabled):
+            return True
+        return token is not None and token.kind == AgentApiTokenKind.EXTERNAL.value
 
     @staticmethod
     def get_effective_policy(session: Session, agent: Agent) -> dict:
@@ -1133,8 +1162,45 @@ class AgentApiService:
                     break
 
     @staticmethod
+    def _prune_rate_limit_state(now: float) -> None:
+        """Drop rate-limit buckets that have gone idle (plan D11).
+
+        ``_rate_limit_hits`` is keyed by token id and is only ever written to on
+        the request path, so without this it grows for the lifetime of the
+        process — one entry per token that has ever called, including revoked
+        connections and expired external keys. Runs at most once per
+        ``_RATE_LIMIT_PRUNE_INTERVAL`` so the sweep cost is amortised to nothing.
+        """
+        global _rate_limit_last_prune
+        if now - _rate_limit_last_prune < _RATE_LIMIT_PRUNE_INTERVAL:
+            return
+        _rate_limit_last_prune = now
+        cutoff = now - _RATE_LIMIT_ENTRY_TTL
+        stale = [
+            token_id
+            for token_id, hits in _rate_limit_hits.items()
+            if not hits or hits[-1] <= cutoff
+        ]
+        for token_id in stale:
+            _rate_limit_hits.pop(token_id, None)
+        if stale:
+            logger.debug(
+                "Pruned %d idle agent_api rate-limit buckets (%d remaining)",
+                len(stale),
+                len(_rate_limit_hits),
+            )
+
+    @staticmethod
     def _enforce_rate_limit(policy: dict, token: "AgentApiToken | None") -> None:
         """Sliding-window per-token rate limit. Raises 429 with retry_after."""
+        import time as _time
+
+        # Prune FIRST, before any early return: a producer that drops
+        # `rate_limit` from policy.yaml would otherwise leave its accumulated
+        # buckets in the dict for the life of the process.
+        now = _time.monotonic()
+        AgentApiService._prune_rate_limit_state(now)
+
         if token is None:
             return  # anonymous (only if policy.auth != required) — no per-token bucket
 
@@ -1146,9 +1212,6 @@ class AgentApiService:
             # Fail-closed policy (rate_limit "0/min") → always deny.
             raise AgentApiPolicyError("Rate limit is zero (deny-all)", status_code=429, retry_after=window)
 
-        import time as _time
-
-        now = _time.monotonic()
         cutoff = now - window
         hits = _rate_limit_hits.setdefault(token.id, [])
         # Drop timestamps outside the window.

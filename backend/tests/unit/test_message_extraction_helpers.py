@@ -8,8 +8,8 @@ Pure regex/logic — no HTTP, no DB:
 
 The API-observable side (attachments materialised on a real message, webapp_action
 events emitted on the stream) is covered end-to-end in
-``tests/api/agents/agents_message_attachments_test.py`` and
-``tests/api/agents/agents_webapp_chat_actions_test.py``.
+``tests/api/agents/sessions/agents_message_attachments_test.py`` and
+``tests/api/agents/webapp/agents_webapp_chat_actions_test.py``.
 """
 from app.services.sessions.message_service import (
     _extract_attachments,

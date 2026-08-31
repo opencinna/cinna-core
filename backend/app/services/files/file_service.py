@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from app.core.config import settings
 from app.models.files.file_upload import FileUpload, FileUploadPublic, MessageFile
@@ -96,15 +96,29 @@ class FileService:
 
     @staticmethod
     def get_user_storage_usage(*, session: Session, user_id: uuid.UUID) -> int:
-        """Calculate total storage used by user (in bytes)"""
-        statement = select(FileUpload).where(
-            FileUpload.user_id == user_id,
-            FileUpload.status.in_(
-                ["temporary", "attached"]
-            ),  # Don't count marked for deletion
-        )
-        files = session.exec(statement).all()
-        return sum(f.file_size for f in files)
+        """Total storage used by a user, in bytes.
+
+        Summed **in the database**, not by hydrating the rows. The previous
+        implementation selected every ``FileUpload`` a user owns and added
+        ``file_size`` up in Python — fine when the only caller was an
+        interactive upload, and no longer fine now that the channel attachment
+        materialiser calls it on the synchronous webhook path, where a heavy
+        user's file table would be built into ORM objects and thrown away once
+        per inbound message. A single ``SUM`` is the same answer at a constant
+        cost, and every other caller gets it for free.
+
+        ``marked_for_deletion`` is excluded, exactly as before: those bytes are
+        already promised back to the user.
+        """
+        total = session.exec(
+            select(func.coalesce(func.sum(FileUpload.file_size), 0)).where(
+                FileUpload.user_id == user_id,
+                FileUpload.status.in_(["temporary", "attached"]),
+            )
+        ).one()
+        # ``coalesce`` already turns "no rows" into 0; the cast is for the
+        # ``Decimal``/``None`` shapes a driver may hand back for an aggregate.
+        return int(total or 0)
 
     @staticmethod
     def mark_files_as_attached(

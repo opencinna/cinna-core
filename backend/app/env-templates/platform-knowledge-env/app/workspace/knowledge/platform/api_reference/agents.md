@@ -88,6 +88,7 @@ Auto-generated from OpenAPI spec. Tag: `agents`
   - `webapp_enabled`: boolean | null
   - `agent_api_enabled`: boolean | null
   - `agent_api_identity_enabled`: boolean | null
+  - `agent_api_external_access_enabled`: boolean | null
   - `update_mode`: string | null
   - `publish_settings`: object | null
 

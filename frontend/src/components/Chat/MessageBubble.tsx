@@ -121,10 +121,24 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
     )
   }
 
-  // Command response messages (role=system, metadata.command=true) are rendered
-  // by the command-specific branches further down (isCommandStream / isCommand)
-  // via MarkdownRenderer or the terminal-style block — don't short-circuit here.
-  const isCommandSystemMessage = isSystem && message.message_metadata?.command === true
+  // Command response messages (role=system, metadata.command=true) split by the
+  // presentation the backend asked for (see `CommandResult.display`):
+  //  - "notice"   — short deterministic confirmations and command errors; these
+  //                 belong in the shared system block just below, like every
+  //                 other system message.
+  //  - "document" — file listings, status reports, /run tables and the
+  //                 /run:<name> terminal view; these need the wide markdown
+  //                 panel further down (isCommandStream / isCommand).
+  // Messages persisted before `command_display` existed carry no hint, so they
+  // fall back to "document" and keep rendering exactly as they always have.
+  const isCommandMessage = message.message_metadata?.command === true
+  const isCommandNotice =
+    isSystem && isCommandMessage && message.message_metadata?.command_display === "notice"
+  const isCommandDocument = isSystem && isCommandMessage && !isCommandNotice
+  // Session recovery is offered for failed agent turns, not for a command that
+  // merely reported a problem ('Environment not found.') — command errors never
+  // offered it before notices started rendering in the system block.
+  const canRecoverSession = isSystemError && !isCommandNotice
 
   if (isInstallSetupRequired) {
     const isPublisherBroken = installSetupGateStatus === "publisher_broken"
@@ -172,7 +186,7 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
     )
   }
 
-  if (isSystem && !isCommandSystemMessage) {
+  if (isSystem && !isCommandDocument) {
     return (
       <>
         <div className="flex justify-center my-4">
@@ -187,7 +201,20 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
               }`}
             >
               <div className="flex items-center gap-2">
-                <span>{message.content}</span>
+                {isCommandNotice ? (
+                  // Command confirmations carry inline markdown (the
+                  // /session-improve disclosure names the recipient in bold),
+                  // so render them rather than leaking the raw syntax.
+                  // No `prose` here on purpose: prose repaints the text with its
+                  // own body colour, and the block's muted/destructive colour
+                  // has to carry through.
+                  <MarkdownRenderer
+                    content={message.content || ""}
+                    className="min-w-0 break-words [&>p]:m-0 [&>p+p]:mt-2"
+                  />
+                ) : (
+                  <span>{message.content}</span>
+                )}
                 {isTaskCreatedMessage && isInboxTask && taskId && (
                   <Link
                     to="/task/$taskId"
@@ -211,7 +238,7 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
                 )}
               </div>
             </div>
-            {isSystemError && sessionId && (
+            {canRecoverSession && sessionId && (
               <div className="mt-2 flex gap-2 justify-end flex-wrap">
                 <Button
                   variant="outline"
@@ -226,7 +253,7 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
             )}
           </div>
         </div>
-        {isSystemError && sessionId && (
+        {canRecoverSession && sessionId && (
           <RecoverSessionModal
             open={showRecoverModal}
             onOpenChange={setShowRecoverModal}
@@ -241,7 +268,7 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
   const isPendingMessage = isUser && message.sent_to_agent_status === "pending"
 
   // Check if this is a command response (e.g. /files) - rendered directly, not via streaming events
-  const isCommand = message.message_metadata?.command === true
+  const isCommand = isCommandMessage
   // Check if this is a streaming command output message (/run:name)
   const isCommandStream = isCommand && message.message_metadata?.routing === "command_stream"
   const commandName = message.message_metadata?.command_name as string | undefined

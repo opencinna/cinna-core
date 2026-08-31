@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.api.deps import SessionDep
-from app.models import Agent, AgentApiToken
+from app.models import Agent, AgentApiToken, AgentApiTokenKind
 from app.services.agent_api.agent_api_service import (
     AgentApiAuthError,
     AgentApiError,
@@ -76,7 +76,17 @@ def _validate_token_or_401(
         raise HTTPException(status_code=404, detail="Not found")
 
     token_value = creds.credentials if creds else None
-    token = AgentApiTokenService.validate_token(session, agent_id, token_value)
+    # The producer's external-access opt-in is the proxy's KILL SWITCH: it does
+    # not merely gate minting. Turning it off must immediately stop every issued
+    # key, without touching agent-to-agent connections and without revoking keys
+    # one at a time. Threaded into validate_token so a rejected key never bumps
+    # last_used_at (which would read as "this key still works").
+    token = AgentApiTokenService.validate_token(
+        session,
+        agent_id,
+        token_value,
+        external_access_enabled=agent.agent_api_external_access_enabled,
+    )
     if token is None:
         raise AgentApiAuthError("Invalid or expired token")
     return agent, token
@@ -134,23 +144,45 @@ async def consumer_proxy(
         # lookup for an unauthenticated request).
         agent, token = _validate_token_or_401(session, agent_id, creds)
 
-        # Resolve caller identity (L2) → trusted attribution headers + per-user
-        # grant scopes. Computed BEFORE policy enforcement because edge scope
-        # enforcement (Phase 3 / D8) gates inside enforce_policy. Missing /
-        # invalid / expired identity token ⇒ empty dict ⇒ anonymous (never an
-        # error). Never log the identity token. Caller resolution makes no authz
-        # decision on its own — the token validation above is the gate.
-        caller_headers = AgentApiIdentityService.resolve_caller_headers(
-            session, request.headers.get(IDENTITY_HEADER)
-        )
-        # When the caller was attributed AND the producer opted in
-        # (agent_api_identity_enabled), resolve the live grant. The owner user_id
-        # is read back from the just-set attribution header (single source of
-        # truth — no second token verify). Identity ATTRIBUTION is unchanged from
-        # Phase 1 and is honored regardless of the flag (backward compatible);
-        # only SCOPES (and the optional edge enforcement) are gated by the flag.
+        # Resolve caller identity → trusted attribution headers + per-user grant
+        # scopes. Computed BEFORE policy enforcement because edge scope
+        # enforcement (D8) gates inside enforce_policy. Caller resolution makes
+        # no authz decision on its own — the token validation above is the gate.
+        #
+        # TWO identity sources, and the ORDER IS THE SECURITY PROPERTY:
+        #  * An EXTERNAL key carries its identity IN THE TOKEN (subject_user_id,
+        #    bound at mint, immutable). It is used verbatim and the request's
+        #    X-Cinna-Caller-Identity header is NEVER consulted — otherwise the
+        #    holder of a key bound to user A could assert user B by supplying
+        #    their own identity header (plan D2 precedence rule).
+        #  * A CONNECTION token is anonymous by construction, so identity comes
+        #    from the L2 identity header the platform injects into the consumer
+        #    container. Missing / invalid / expired ⇒ empty dict ⇒ anonymous
+        #    (never an error). Never log the identity token.
+        # The branch is on `kind` ALONE: a key with no subject falls back to
+        # anonymous, never to the header, so "an external key cannot assert an
+        # identity from the request" holds structurally rather than by luck.
+        if token.kind == AgentApiTokenKind.EXTERNAL.value:
+            caller_headers = (
+                AgentApiIdentityService.resolve_caller_headers_for_user(
+                    session, token.subject_user_id
+                )
+                if token.subject_user_id is not None
+                else {}
+            )
+        else:
+            caller_headers = AgentApiIdentityService.resolve_caller_headers(
+                session, request.headers.get(IDENTITY_HEADER)
+            )
+        # When the caller was attributed AND identity applies to this call,
+        # resolve the live grant. The user id is read back from the just-set
+        # attribution header (single source of truth — no second resolution).
+        # Identity ATTRIBUTION is honored regardless of the flag (backward
+        # compatible); only SCOPES (and the optional edge enforcement) follow
+        # `resolve_identity_enabled` — the producer's opt-in OR an external key,
+        # which is self-evidently intentional (plan D3).
         resolved_user_id = caller_headers.get(CALLER_USER_ID_HEADER)
-        identity_enabled = bool(agent.agent_api_identity_enabled)
+        identity_enabled = AgentApiService.resolve_identity_enabled(agent, token)
         caller_scopes: list[str] = []
         if resolved_user_id and identity_enabled:
             caller_scopes = AgentApiGrantService.resolve_scopes_for_caller(
@@ -184,8 +216,9 @@ async def consumer_proxy(
     #     (otherwise it could harvest + replay it to impersonate callers).
     #  3. Strip ALL inbound X-Cinna-Caller-* headers — the identity token is the
     #     ONLY accepted identity input; client-supplied caller headers are forged.
-    #  4. Set X-Cinna-Caller-* authoritatively from the resolved owner (none when
-    #     anonymous). Then inject the request-loop guard headers.
+    #  4. Set X-Cinna-Caller-* authoritatively from the resolved caller — the
+    #     external key's bound subject, or the verified identity token's owner
+    #     (none when anonymous). Then inject the request-loop guard headers.
     # Header keys are lowercased before comparison (request.headers yields raw
     # wire casing). The identity header is stripped explicitly AND is also
     # covered by the X-Cinna-Caller-* prefix strip — the redundant explicit

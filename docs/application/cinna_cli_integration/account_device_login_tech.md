@@ -192,7 +192,7 @@ Creates a `CLIToken(token_type="cli-account", agent_id=None, owner_id=owner_id, 
 | `CLIAuthService.hash_token` | Reused for `device_code_hash` (mirrors `CLIToken.token_hash`) |
 | `SecurityEventService` | `CLI_ACCOUNT_TOKEN_CREATED` + `CLI_DEVICE_LOGIN_APPROVED` / `CLI_DEVICE_LOGIN_REJECTED` |
 | `RateLimiter` | Shared with `AccountApiProxyService`; imported from `services/cli/rate_limiter.py` |
-| `_client_ip` | Imported from `account_cli_service.py` |
+| `client_ip` | Imported from `app/utils.py` (shared audit-IP helper) |
 | `_get_platform_url`, `_ensure_utc` | Imported from `cli_service.py` |
 
 ## Tests

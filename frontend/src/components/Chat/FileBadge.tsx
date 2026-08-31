@@ -1,6 +1,7 @@
 import { X, File, FileText, Image, Archive } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import type { FileUploadPublic } from "@/client"
+import { downloadAuthenticatedFile } from "@/utils"
 
 interface FileBadgeProps {
   file: FileUploadPublic
@@ -44,31 +45,11 @@ export function FileBadge({ file, onRemove, downloadable = false, onPreview }: F
       return
     }
     if (downloadable) {
-      // Download file with authentication
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-      const token = localStorage.getItem('access_token')
-
       try {
-        const response = await fetch(`${apiUrl}/api/v1/files/${file.id}/download`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        })
-
-        if (!response.ok) {
-          throw new Error('Download failed')
-        }
-
-        // Create blob and download
-        const blob = await response.blob()
-        const url = window.URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = file.filename
-        document.body.appendChild(a)
-        a.click()
-        window.URL.revokeObjectURL(url)
-        document.body.removeChild(a)
+        await downloadAuthenticatedFile(
+          `/api/v1/files/${file.id}/download`,
+          file.filename,
+        )
       } catch (error) {
         console.error('Failed to download file:', error)
       }

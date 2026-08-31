@@ -242,6 +242,12 @@ class CredentialShareService:
         result = []
         for share, credential in resolved:
             owner = session.get(User, credential.owner_id)
+            # `agent_api_kind` is deliberately omitted: this projection is for
+            # credentials shared WITH the caller, and a shared row is never
+            # "automatic" regardless of type (the is_owned=False branch decides
+            # bundle-vs-mine on share_source alone). An external key can never
+            # reach here anyway — sharing one is refused at the write boundary
+            # (`assert_sharing_allowed`).
             category = CredentialsService.classify_credential_category(
                 is_owned=False,
                 credential_type=credential.type,
@@ -303,6 +309,10 @@ class CredentialShareService:
             raise ValueError("Credential not found")
         if credential.owner_id != owner_id:
             raise ValueError("Not enough permissions to update this credential")
+        if allow_sharing:
+            # Some credentials must never become shareable (agent_api external
+            # keys — identity-bound). Same guard the generic update path applies.
+            CredentialsService.assert_sharing_allowed(session, credential)
 
         # If disabling sharing, delete all existing shares
         if not allow_sharing and credential.allow_sharing:

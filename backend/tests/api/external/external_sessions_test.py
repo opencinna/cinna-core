@@ -4,7 +4,7 @@ Integration tests for the external sessions metadata surface (GET/DELETE /extern
 Scenarios covered:
   1. Unauthenticated request is rejected (401)
   2. GET /sessions returns sessions where user is owner (user_id match)
-  3. GET /sessions returns sessions where user is caller (caller_id match, app_mcp)
+  3. GET /sessions returns app_mcp sessions the owner opened on their own agent
   4. GET /sessions returns sessions where user is identity_caller (identity_mcp)
   5. GET /sessions excludes sessions the user has no role in
   6. GET /sessions/{id} returns metadata for a visible session (owner)
@@ -13,7 +13,7 @@ Scenarios covered:
   9. GET /sessions/{id}/messages returns 404 for a non-participant
  10. Pagination: limit and offset parameters work; ordering is last_message_at DESC
  11. target_type/target_id derivation — "external" integration_type
- 12. target_type/target_id derivation — "app_mcp" with route_id in metadata
+ 12. target_type/target_id derivation — "app_mcp" resolves to the agent itself
  13. target_type/target_id derivation — "identity_mcp" (target_id = session.user_id)
  14. agent_name falls back to session_metadata["identity_owner_name"] for identity_mcp
  15. Desktop JWT with client_kind/external_client_id claims stamped into session_metadata
@@ -22,7 +22,23 @@ Scenarios covered:
  18. Non-participant DELETE returns 404
  19. Unauthenticated DELETE returns 401
  20. Non-existent session id returns 404 on DELETE
+
+Scenario 3/12 note: pre-phase-5, a caller distinct from the agent owner could
+open an ``app_mcp`` session on that owner's agent through an ``AppAgentRoute``
+assignment, and ``target_type`` derived to ``"app_mcp_route"`` with
+``target_id`` read from ``session_metadata["app_mcp_route_id"]``. Both the
+route family and that metadata key are deleted in phase 5 of
+``docs/plans/channels_identity_unification/`` —
+``ChannelIngestionService.assert_access``'s ``mcp_caller`` arm now allows a
+foreign agent only via an identity grant, so a real ``app_mcp`` session
+(``integration_type == "app_mcp"``, not ``"identity_mcp"``) can only ever be
+opened by the agent's own owner, and ``ExternalSessionService._derive_target``
+now folds it into the same ``"agent"`` / ``session.agent_id`` case as a plain
+external session (see that method's docstring). The caller-distinct-from-owner
+story now lives entirely on the ``identity_mcp`` scenarios (4, 13).
 """
+import asyncio
+import json
 import uuid
 from unittest.mock import patch
 
@@ -38,7 +54,6 @@ from tests.utils.a2a import (
     parse_sse_events,
 )
 from tests.utils.agent import create_agent_via_api, get_agent
-from tests.utils.app_agent_route import create_admin_route
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.desktop_auth import obtain_desktop_tokens
 from tests.utils.identity import create_identity_binding
@@ -136,30 +151,62 @@ def _create_external_session_via_a2a(
     return task_id
 
 
-def _create_app_mcp_session_via_route(
+def _create_app_mcp_session_as_owner(
     client: TestClient,
-    caller_headers: dict,
-    route_id: str,
-    message_text: str = "Hello via route",
-    response_text: str = "Hi from shared agent",
+    owner_headers: dict,
+    owner_id: str,
+    agent_id: str,
+    agent_name: str,
+    message_text: str = "Hello via app mcp",
+    response_text: str = "Hi from my own agent",
 ) -> str:
-    """Send a streaming message via the external route A2A endpoint.
+    """Open an ``app_mcp`` session as the agent's own owner.
+
+    Post-phase-5, a plain ``app_mcp`` session (as opposed to ``identity_mcp``)
+    can only ever be opened by the agent's owner — ``ChannelIngestionService
+    .assert_access``'s ``mcp_caller`` arm allows a foreign agent only via an
+    identity grant. There is no HTTP route for App MCP (it is an MCP
+    tool-call surface), so — following ``app_mcp_session_test.py``'s
+    established pattern — this calls ``AppMCPRequestHandler.handle_send_
+    message`` directly with ``AppMCPRoutingService.route_message`` mocked to
+    return the owner's own agent (``source="owned"``).
 
     Returns the task_id (session.id).
     """
-    stub = StubAgentEnvConnector(response_text=response_text)
-    request = build_streaming_request(message_text)
-    with patch("app.services.sessions.message_service.agent_env_connector", stub):
-        resp = client.post(
-            f"{_EXT_A2A_BASE}/route/{route_id}/",
-            headers=caller_headers,
-            json=request,
+    from app.services.app_mcp.app_mcp_request_handler import AppMCPRequestHandler
+    from app.services.app_mcp.app_mcp_routing_service import RoutingResult
+
+    fixed_routing_result = RoutingResult(
+        agent_id=uuid.UUID(agent_id),
+        agent_name=agent_name,
+        session_mode="conversation",
+        source="owned",
+        match_method="only_one",
+    )
+
+    async def _run():
+        return await AppMCPRequestHandler.handle_send_message(
+            user_id=uuid.UUID(owner_id),
+            message=message_text,
+            context_id=None,
+            mcp_ctx=None,
         )
+
+    stub = StubAgentEnvConnector(response_text=response_text)
+    with patch(
+        "app.services.app_mcp.app_mcp_request_handler.AppMCPRoutingService.route_message",
+        return_value=fixed_routing_result,
+    ):
+        with patch(
+            "app.services.sessions.message_service.agent_env_connector",
+            stub,
+        ):
+            raw = asyncio.run(_run())
     drain_tasks()
-    assert resp.status_code == 200, f"Route A2A POST failed: {resp.text}"
-    events = parse_sse_events(resp.text)
-    task_id = _extract_task_id(events)
-    assert task_id, f"Could not extract task_id from events: {events}"
+    result = json.loads(raw)
+    assert "error" not in result, f"handle_send_message failed: {result}"
+    task_id = result["context_id"]
+    assert task_id, f"Could not extract context_id from result: {result}"
     return task_id
 
 
@@ -199,34 +246,6 @@ def _setup_owner_agent(
     agent = create_agent_via_api(client, owner_headers, name=name)
     drain_tasks()
     return get_agent(client, owner_headers, agent["id"])
-
-
-def _setup_route(
-    client: TestClient,
-    superuser_token_headers: dict,
-    caller_id: str,
-    agent_name: str = "Route Agent",
-) -> tuple[dict, dict, str]:
-    """Create an agent (as superuser), a route, assign the caller.
-
-    Returns (owner_agent, route, assignment_id).
-    """
-    owner_agent = _setup_owner_agent(
-        client, superuser_token_headers, name=agent_name
-    )
-    route = create_admin_route(
-        client,
-        superuser_token_headers,
-        agent_id=owner_agent["id"],
-        name="Test Route",
-        trigger_prompt="Handle route requests",
-        assigned_user_ids=[caller_id],
-        auto_enable_for_users=True,
-    )
-    assignment_id = next(
-        a["id"] for a in route["assignments"] if a["user_id"] == caller_id
-    )
-    return owner_agent, route, assignment_id
 
 
 def _setup_identity(
@@ -356,7 +375,7 @@ def test_list_sessions_includes_owned_sessions(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3: Sessions where user is caller (app_mcp)
+# Scenario 3: Sessions on an app_mcp session the owner opened themselves
 # ---------------------------------------------------------------------------
 
 
@@ -364,28 +383,33 @@ def test_list_sessions_includes_caller_sessions(
     client: TestClient,
     superuser_token_headers: dict,
 ) -> None:
-    """GET /sessions returns app_mcp sessions where caller_id=user.id."""
-    caller, caller_headers = create_random_user_with_headers(client)
-    caller_id = caller["id"]
+    """GET /sessions returns app_mcp sessions where caller_id=user.id.
 
-    _, route, _ = _setup_route(
-        client, superuser_token_headers, caller_id=caller_id
+    Post-phase-5 that is always the agent's own owner — a plain app_mcp
+    session opened by someone else is no longer reachable (see this file's
+    module docstring, "Scenario 3/12 note"); the caller-distinct-from-owner
+    story now lives entirely on the identity_mcp scenarios.
+    """
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = r.json()["id"]
+
+    owner_agent = _setup_owner_agent(
+        client, superuser_token_headers, name="App MCP Caller Sessions Agent"
     )
-    task_id = _create_app_mcp_session_via_route(
-        client, caller_headers, route["id"]
+    task_id = _create_app_mcp_session_as_owner(
+        client, superuser_token_headers, owner_id, owner_agent["id"], owner_agent["name"]
     )
 
-    # Caller can see this session via GET /external/sessions even though
-    # session.user_id == owner_id (not caller.id)
-    caller_sessions = _list_external_sessions(client, caller_headers)
-    caller_session_ids = [s["id"] for s in caller_sessions]
-    assert task_id in caller_session_ids, (
-        f"Expected app_mcp session {task_id} visible to caller, got: {caller_session_ids}"
+    owner_sessions = _list_external_sessions(client, superuser_token_headers)
+    owner_session_ids = [s["id"] for s in owner_sessions]
+    assert task_id in owner_session_ids, (
+        f"Expected app_mcp session {task_id} visible to its owner, got: {owner_session_ids}"
     )
 
-    session_entry = next(s for s in caller_sessions if s["id"] == task_id)
+    session_entry = next(s for s in owner_sessions if s["id"] == task_id)
     assert session_entry["integration_type"] == "app_mcp"
-    assert session_entry["caller_id"] == caller_id
+    assert session_entry["caller_id"] == owner_id
 
 
 # ---------------------------------------------------------------------------
@@ -654,7 +678,7 @@ def test_target_derivation_external_integration_type(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 12: target_type/target_id — "app_mcp" with route_id in metadata
+# Scenario 12: target_type/target_id — "app_mcp" resolves to the agent itself
 # ---------------------------------------------------------------------------
 
 
@@ -662,34 +686,36 @@ def test_target_derivation_app_mcp_integration_type(
     client: TestClient,
     superuser_token_headers: dict,
 ) -> None:
-    """Sessions with integration_type='app_mcp' get target_type='app_mcp_route'
-    and target_id=session_metadata['app_mcp_route_id']."""
-    caller, caller_headers = create_random_user_with_headers(client)
-    caller_id = caller["id"]
+    """Sessions with integration_type='app_mcp' get target_type='agent' and
+    target_id=session.agent_id — the same derivation a plain 'external'
+    session gets (``ExternalSessionService._derive_target`` folds both cases
+    together now that there is no route target kind to distinguish them by;
+    see this file's module docstring, "Scenario 3/12 note")."""
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=superuser_token_headers)
+    assert r.status_code == 200
+    owner_id = r.json()["id"]
 
-    _, route, _ = _setup_route(
-        client, superuser_token_headers, caller_id=caller_id,
-        agent_name="App MCP Target Derivation Agent",
-    )
-    route_id = route["id"]
-
-    task_id = _create_app_mcp_session_via_route(
-        client, caller_headers, route_id
+    owner_agent = _setup_owner_agent(
+        client, superuser_token_headers, name="App MCP Target Derivation Agent"
     )
 
-    # Verify via caller's session list
-    caller_sessions = _list_external_sessions(client, caller_headers)
+    task_id = _create_app_mcp_session_as_owner(
+        client, superuser_token_headers, owner_id, owner_agent["id"], owner_agent["name"]
+    )
+
+    # Verify via owner's session list
+    owner_sessions = _list_external_sessions(client, superuser_token_headers)
     session_entry = next(
-        (s for s in caller_sessions if s["id"] == task_id), None
+        (s for s in owner_sessions if s["id"] == task_id), None
     )
     assert session_entry is not None, (
-        f"Caller should see app_mcp session {task_id}"
+        f"Owner should see app_mcp session {task_id}"
     )
-    assert session_entry["target_type"] == "app_mcp_route", (
-        f"Expected target_type='app_mcp_route', got {session_entry['target_type']!r}"
+    assert session_entry["target_type"] == "agent", (
+        f"Expected target_type='agent', got {session_entry['target_type']!r}"
     )
-    assert session_entry["target_id"] == route_id, (
-        f"Expected target_id={route_id}, got {session_entry['target_id']!r}"
+    assert session_entry["target_id"] == owner_agent["id"], (
+        f"Expected target_id={owner_agent['id']}, got {session_entry['target_id']!r}"
     )
 
 

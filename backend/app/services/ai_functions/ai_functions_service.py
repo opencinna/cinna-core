@@ -24,7 +24,6 @@ from app.agents import (
     generate_sql_query,
     refine_prompt,
     refine_task as refine_task_from_agents,
-    generate_email_reply as generate_email_reply_from_agents,
     route_to_agent as route_to_agent_from_agents,
     RouteToAgentResult,
 )
@@ -593,57 +592,6 @@ class AIFunctionsService:
             return {
                 "success": False,
                 "error": f"Failed to refine task: {str(e)}"
-            }
-
-    @staticmethod
-    def generate_email_reply(
-        original_subject: str,
-        original_body: str,
-        original_sender: str,
-        session_result: str,
-        task_description: str,
-        user: "User | None" = None,
-        db: Session | None = None,
-    ) -> dict:
-        """
-        Generate a professional email reply from agent session results.
-
-        Args:
-            original_subject: Subject of the original email
-            original_body: Body of the original email
-            original_sender: Email address of the original sender
-            session_result: The agent's session result/output
-            task_description: The task description that was executed
-            user: Optional current user (for per-user provider routing)
-            db: Optional database session (required when user is provided)
-
-        Returns:
-            dict with keys:
-                - success: bool
-                - reply_body: The generated reply body (if success)
-                - reply_subject: The generated reply subject (if success)
-                - error: Error message (if not success)
-        """
-        try:
-            provider_kwargs = AIFunctionsService._resolve_provider_kwargs(user, db)
-            result = generate_email_reply_from_agents(
-                original_subject=original_subject,
-                original_body=original_body,
-                original_sender=original_sender,
-                session_result=session_result,
-                task_description=task_description,
-                provider_kwargs=provider_kwargs,
-            )
-            logger.info(
-                f"Generated email reply: {result.get('success')} - "
-                f"{result.get('reply_subject', '')[:50] if result.get('success') else result.get('error')}"
-            )
-            return result
-        except Exception as e:
-            logger.error(f"Failed to generate email reply: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": f"Failed to generate email reply: {str(e)}"
             }
 
     @staticmethod

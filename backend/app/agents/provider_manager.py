@@ -17,12 +17,15 @@ Usage:
     response = manager.generate_content("Your prompt here")
 """
 import logging
+import time
 from typing import Optional
 
 from app.core.config import settings
+from app.services.routing import routing_trace
 
 from .providers import (
     BaseAIProvider,
+    ProviderAttempt,
     ProviderResponse,
     ProviderError,
     GeminiProvider,
@@ -33,6 +36,62 @@ from .providers import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _note_attempt(
+    attempts: list[ProviderAttempt],
+    *,
+    provider: str,
+    model: Optional[str],
+    ok: bool,
+    error: Optional[str] = None,
+    exc: Optional[BaseException] = None,
+    latency_ms: int = 0,
+) -> None:
+    """Record one cascade attempt, both on the response and on any routing trace.
+
+    The trace side no-ops when there is no active capture, which is the common
+    case: most AI functions never open one.
+
+    ``exc`` is the failure itself, and it is what the **routing trace** records —
+    de-tainted to an exception type, this provider's name, and an integer HTTP
+    status when one is available. ``str(exc)`` must not reach the trace: provider
+    SDK exceptions routinely echo the request payload back in their message, and
+    at the router's call site that payload is the rendered classifier prompt,
+    which contains the sender's message. That put external senders' words into
+    ``stages[].llm_attempts[].error`` — outside the
+    ``ROUTING_TRACE_STORE_MESSAGE_TEXT`` gate entirely.
+
+    De-tainted here rather than gated downstream on purpose: gating would hide
+    outage diagnostics behind a *text* flag and blunt ``?outcome=error``, which
+    is the filter an operator under privacy pressure needs most. A field made
+    safe beats a field made invisible.
+
+    ``error`` is unchanged and still carries ``str(exc)`` onto the
+    ``ProviderAttempt``, which stays in memory: it is what
+    ``generate_content`` builds its "All providers failed" message from, and
+    every other consumer of that message is out of scope here.
+    """
+    attempts.append(
+        ProviderAttempt(
+            provider=provider,
+            model=model,
+            ok=ok,
+            error=error,
+            latency_ms=latency_ms,
+        )
+    )
+    routing_trace.record_llm_attempt(
+        provider=provider,
+        model=model,
+        ok=ok,
+        # Total by contract (like ``clamp``), so this argument expression cannot
+        # raise into the cascade — §11a Rule 2.
+        error=routing_trace.describe_exception(exc, provider=provider)
+        if exc is not None
+        else error,
+        latency_ms=latency_ms,
+    )
 
 
 # Registry of available providers
@@ -144,10 +203,36 @@ class ProviderManager:
             if provider == "openai":
                 logger.info("Using personal OpenAI API key for AI function call")
                 provider_instance = OpenAIProvider(api_key=api_key)
+                personal_name = "openai (personal key)"
             else:
                 logger.info("Using personal Anthropic API key for AI function call")
                 provider_instance = AnthropicProvider(api_key=api_key)
-            return provider_instance.generate_content(prompt, model)
+                personal_name = "anthropic (personal key)"
+
+            personal_attempts: list[ProviderAttempt] = []
+            started = time.monotonic()
+            try:
+                response = provider_instance.generate_content(prompt, model)
+            except Exception as e:
+                _note_attempt(
+                    personal_attempts,
+                    provider=personal_name,
+                    model=model,
+                    ok=False,
+                    error=str(e),
+                    exc=e,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+                raise
+            _note_attempt(
+                personal_attempts,
+                provider=personal_name,
+                model=response.model or model,
+                ok=True,
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
+            response.attempts = personal_attempts
+            return response
 
         # Build provider order with preferred provider first
         providers_to_try = []
@@ -165,29 +250,54 @@ class ProviderManager:
                 recoverable=False,
             )
 
-        # Track errors for detailed error message
-        errors: list[tuple[str, str]] = []
+        # Every provider tried, in order — the successful one included. This
+        # used to be an error-only list discarded on success; it now rides back
+        # on the response so callers can see which models were reached.
+        attempts: list[ProviderAttempt] = []
 
         for provider_name in providers_to_try:
             provider = self._providers[provider_name]
 
             if not provider.is_available():
                 logger.debug(f"Skipping unavailable provider: {provider_name}")
-                errors.append((provider_name, "Not configured/available"))
+                _note_attempt(
+                    attempts,
+                    provider=provider_name,
+                    model=model,
+                    ok=False,
+                    error="Not configured/available",
+                )
                 continue
 
+            started = time.monotonic()
             try:
                 logger.info(f"Trying provider: {provider_name}")
                 response = provider.generate_content(prompt, model)
+                _note_attempt(
+                    attempts,
+                    provider=provider_name,
+                    model=response.model or model,
+                    ok=True,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
                 logger.info(
                     f"Successfully generated content using {provider_name} "
                     f"({len(response.text)} chars)"
                 )
+                response.attempts = attempts
                 return response
 
             except ProviderError as e:
                 logger.warning(f"Provider {provider_name} failed: {e}")
-                errors.append((provider_name, str(e)))
+                _note_attempt(
+                    attempts,
+                    provider=provider_name,
+                    model=model,
+                    ok=False,
+                    error=str(e),
+                    exc=e,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
 
                 if not e.recoverable:
                     logger.error(f"Non-recoverable error from {provider_name}, stopping cascade")
@@ -198,12 +308,22 @@ class ProviderManager:
 
             except Exception as e:
                 logger.warning(f"Unexpected error from {provider_name}: {e}")
-                errors.append((provider_name, str(e)))
+                _note_attempt(
+                    attempts,
+                    provider=provider_name,
+                    model=model,
+                    ok=False,
+                    error=str(e),
+                    exc=e,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
                 # Continue to next provider
                 continue
 
         # All providers failed
-        error_details = "; ".join([f"{name}: {err}" for name, err in errors])
+        error_details = "; ".join(
+            f"{a.provider}: {a.error}" for a in attempts if not a.ok
+        )
         raise ProviderError(
             f"All providers failed. Errors: {error_details}",
             "cascade",

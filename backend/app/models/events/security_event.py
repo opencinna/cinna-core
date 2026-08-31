@@ -112,6 +112,103 @@ AGENT_API_GRANT_CREATED = "AGENT_API_GRANT_CREATED"
 AGENT_API_GRANT_UPDATED = "AGENT_API_GRANT_UPDATED"
 AGENT_API_GRANT_DELETED = "AGENT_API_GRANT_DELETED"
 
+# ── Agent-API external keys ───────────────────────────────────────────
+# Emitted by ``AgentApiKeyService``. An external key is a copy-pasteable,
+# identity-bound bearer credential for code running OUTSIDE the platform, so its
+# whole lifecycle is audited: minting (who issued it, for whom), revoking, and
+# every reveal of the value on the credential detail page. The token value and
+# its hash are NEVER logged — only the 8-char display prefix.
+AGENT_API_EXTERNAL_KEY_CREATED = "AGENT_API_EXTERNAL_KEY_CREATED"
+AGENT_API_EXTERNAL_KEY_REVOKED = "AGENT_API_EXTERNAL_KEY_REVOKED"
+AGENT_API_EXTERNAL_KEY_REVEALED = "AGENT_API_EXTERNAL_KEY_REVEALED"
+
+# ── Agent improvement requests ────────────────────────────────────────
+# Written by the web and CLI archive-download routes when, and only when,
+# ``owner_user_id != requester_user_id`` — i.e. the one cross-user data path in
+# the platform, where user A's conversation content is read by user B. A
+# same-user download (an owner reading a request on their own agent) is not
+# audited. Payload carries the request id, target agent id, bundle id, requester
+# user id, acting user id, and source IP — never any snapshot content.
+IMPROVEMENT_ARCHIVE_DOWNLOADED = "IMPROVEMENT_ARCHIVE_DOWNLOADED"
+
+# ── Server channels ───────────────────────────────────────────────────
+# The channel webhook is the platform's only unauthenticated ingress that can
+# create sessions, so both its admin lifecycle and its rejections are audited.
+#
+# The two rejection events are attacker-triggerable and therefore THROTTLED at
+# the emit site (one row per source per window) — an unthrottled audit row on a
+# public endpoint is itself a denial-of-service vector. Neither payload carries
+# message text or the bearer JWT.
+#
+# Admin-action rows are attributed to the acting superuser; rejection rows are
+# attributed to the channel's creator (there is no authenticated user to blame
+# for an anonymous request), and the auto-register row to the account created.
+SERVER_CHANNEL_CREATED = "SERVER_CHANNEL_CREATED"
+# Also carries auto-install *list* mutations, distinguished by an ``action``
+# key in the payload (``auto_install_list_add`` / ``auto_install_list_remove``)
+# rather than by their own event types — they are edits to channel routing
+# configuration, and a reader filtering on this type wants to see them.
+SERVER_CHANNEL_UPDATED = "SERVER_CHANNEL_UPDATED"
+SERVER_CHANNEL_DELETED = "SERVER_CHANNEL_DELETED"
+SERVER_CHANNEL_TOKEN_REGENERATED = "SERVER_CHANNEL_TOKEN_REGENERATED"
+# Inbound request failed adapter signature verification.
+SERVER_CHANNEL_VERIFICATION_FAILED = "SERVER_CHANNEL_VERIFICATION_FAILED"
+# Verified sender was not on the channel's email whitelist (or is inactive).
+SERVER_CHANNEL_SENDER_DENIED = "SERVER_CHANNEL_SENDER_DENIED"
+# A passwordless, transport-confirmed account was created for a whitelisted
+# sender. Provenance (which channel) is in the payload.
+SERVER_CHANNEL_USER_AUTO_REGISTERED = "SERVER_CHANNEL_USER_AUTO_REGISTERED"
+# Pass-2 routing installed a catalog bundle for an external sender.
+SERVER_CHANNEL_AUTO_INSTALL = "SERVER_CHANNEL_AUTO_INSTALL"
+# A user turned identity routing on or off for themselves on one channel
+# (``channel_user_setting.allow_identity_routing``). Attributed to that user —
+# this is the one channel row written by an ordinary person about their own
+# settings rather than by an admin or the webhook.
+#
+# Audited because of what the "on" state permits, which no other per-user
+# channel setting does: a message of theirs can open a session inside ANOTHER
+# person's workspace, owned by that person and readable by them. It is opt-in,
+# per person, and it never inherits from a channel default (master plan §3.4) —
+# so it is only ever true because somebody deliberately made it true, and that
+# is exactly the fact worth being able to establish afterwards. The payload
+# carries the channel and the new value; it never carries message text, in
+# keeping with every other row in this section.
+SERVER_CHANNEL_IDENTITY_ROUTING_CHANGED = "SERVER_CHANNEL_IDENTITY_ROUTING_CHANGED"
+# A superuser sent an admin test message out through a channel. Audited
+# because the target may be a *named person's* real conversation: the
+# email-targeted form resolves to a thread belonging to an identified user, so
+# this writes arbitrary text into somewhere they read. The debug buffer records
+# it too, but that is in-memory and clearable — this is the durable record.
+SERVER_CHANNEL_TEST_SEND = "SERVER_CHANNEL_TEST_SEND"
+# A superuser cleared stored routing traces (one channel's, or all of them).
+# Audited because this is not merely destructive: it is one of the two paths
+# that actually ERASE external senders' stored message text, and the one the
+# admin UI names to an operator who has just turned the text gate off (the other
+# being retention expiry). A privacy control that leaves no record of having
+# been used cannot be shown to have been used. Payload carries the scope and the
+# row count — never a message body, as with SERVER_CHANNEL_TEST_SEND above.
+ROUTING_TRACES_CLEARED = "ROUTING_TRACES_CLEARED"
+# A superuser ran routing simulate or replay against ANOTHER account's routing
+# state (`details.mode` says which). Audited because of what the response
+# contains: which agents and bundles that user has installed, their names, and
+# their owners' trigger prompts. Nearly all of that is already visible in a
+# stored routing_decision row the moment the user sends one message — what
+# simulate adds is that it does not have to wait for them to send one, so an
+# admin can enumerate a user who has never touched the channel. That reach is
+# deliberate (the tool's main use is diagnosing a first message that failed to
+# route, which by definition has no trace), so this row plus the per-admin rate
+# limit are what keep it accountable and non-bulk rather than narrowing it.
+#
+# Payload names BOTH ends — the acting admin (SecurityEvent.user_id) and the
+# target (details.target_user_id / target_user_email). An audit row saying only
+# "an admin ran a simulate" does not answer the question anybody would later
+# ask, which is "against whom". Never the message body, following
+# SERVER_CHANNEL_TEST_SEND: these rows are broadly readable, and the message
+# lives on the routing_decision row behind the superuser-only trace API and the
+# ROUTING_TRACE_STORE_MESSAGE_TEXT gate. Written BEFORE the run, not after, so
+# a simulate that spends LLM budget and then fails still leaves a record.
+ROUTING_SIMULATE_RUN = "ROUTING_SIMULATE_RUN"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

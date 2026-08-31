@@ -14,11 +14,33 @@ from app.models.email.mail_server_config import (
     MailServerConfigUpdate,
     MailServerConfigPublic,
     MailServerConfigsPublic,
+    MailServerChannelUsage,
+    MailServerDeletionImpact,
     MailServerType,
     EncryptionType,
 )
+from app.models.server_channels.server_channel import ServerChannel
 
 logger = logging.getLogger(__name__)
+
+#: Channel ``config`` keys that hold a mail-server id, and the role each plays.
+_MAIL_SERVER_CONFIG_KEYS: tuple[tuple[str, str], ...] = (
+    ("incoming_server_id", "incoming"),
+    ("outgoing_server_id", "outgoing"),
+)
+
+
+class MailServerInUseError(Exception):
+    """A mail server still referenced by a channel cannot be deleted.
+
+    Carries the :class:`MailServerDeletionImpact` so the route can answer 409
+    with the list of channels that must be detached first — the same shape the
+    credential-deletion guard uses.
+    """
+
+    def __init__(self, impact: MailServerDeletionImpact):
+        self.impact = impact
+        super().__init__("Mail server is referenced by one or more channels")
 
 
 class MailServerService:
@@ -26,11 +48,9 @@ class MailServerService:
     @staticmethod
     def create_mail_server(
         session: Session,
-        user_id: uuid.UUID,
         data: MailServerConfigCreate,
     ) -> MailServerConfig:
         server = MailServerConfig(
-            user_id=user_id,
             name=data.name,
             server_type=data.server_type,
             host=data.host,
@@ -45,25 +65,25 @@ class MailServerService:
         return server
 
     @staticmethod
-    def get_user_mail_servers(
+    def list_mail_servers(
         session: Session,
-        user_id: uuid.UUID,
         server_type: MailServerType | None = None,
         skip: int = 0,
         limit: int = 100,
     ) -> MailServerConfigsPublic:
-        base_where = MailServerConfig.user_id == user_id
+        """List every configured mail server (server-scoped, superuser-only)."""
+        query = select(MailServerConfig)
+        count_query = select(func.count()).select_from(MailServerConfig)
         if server_type:
-            base_where = base_where & (MailServerConfig.server_type == server_type)
+            query = query.where(MailServerConfig.server_type == server_type)
+            count_query = count_query.where(
+                MailServerConfig.server_type == server_type
+            )
 
-        count = session.exec(
-            select(func.count()).select_from(MailServerConfig).where(base_where)
-        ).one()
+        count = session.exec(count_query).one()
 
         servers = session.exec(
-            select(MailServerConfig)
-            .where(base_where)
-            .order_by(MailServerConfig.created_at.desc())
+            query.order_by(MailServerConfig.created_at.desc())
             .offset(skip)
             .limit(limit)
         ).all()
@@ -113,10 +133,65 @@ class MailServerService:
         return server
 
     @staticmethod
+    def get_deletion_impact(
+        session: Session,
+        server_id: uuid.UUID,
+    ) -> MailServerDeletionImpact:
+        """Find every channel that references this mail server.
+
+        Written as an explicit scan over channel rows rather than a JSON
+        operator query: ``ServerChannel.config`` is a plain JSON column, the
+        set of channels is admin-sized, and a readable Python loop survives a
+        config-key rename in a way a hand-written JSON path does not.
+
+        The stored id is compared by **parsing it into a UUID**, not by string
+        equality. ``config`` is free-form JSON that no adapter validates for
+        these keys, so the value can legitimately arrive in any spelling a UUID
+        has — uppercase hex, ``{braces}``, ``urn:uuid:``, hyphenless. Every one
+        of those compares unequal as a string, which would report an empty
+        impact and let the delete through, leaving the channel pointing at a
+        dead id: precisely the failure this guard exists to prevent. A value
+        that is not a UUID at all is simply not a reference, and is skipped.
+        """
+        usages: list[MailServerChannelUsage] = []
+
+        for channel in session.exec(select(ServerChannel)).all():
+            config = channel.config or {}
+            for key, role in _MAIL_SERVER_CONFIG_KEYS:
+                raw = config.get(key)
+                if raw is None:
+                    continue
+                try:
+                    if uuid.UUID(str(raw)) != server_id:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                usages.append(
+                    MailServerChannelUsage(
+                        channel_id=channel.id,
+                        channel_name=channel.name,
+                        role=role,
+                    )
+                )
+
+        return MailServerDeletionImpact(channel_usages=usages)
+
+    @staticmethod
     def delete_mail_server(
         session: Session,
         server: MailServerConfig,
     ) -> None:
+        """Delete a mail server, unless a channel still references it.
+
+        The referencing keys live in ``ServerChannel.config`` with no FK behind
+        them, so an unguarded delete succeeds and leaves the channel pointing
+        at nothing — inbound mail simply stops. Raises
+        :class:`MailServerInUseError` (route → 409) instead.
+        """
+        impact = MailServerService.get_deletion_impact(session, server.id)
+        if impact.channel_usages:
+            raise MailServerInUseError(impact)
+
         session.delete(server)
         session.commit()
 
@@ -197,7 +272,6 @@ class MailServerService:
     def _to_public(server: MailServerConfig) -> MailServerConfigPublic:
         return MailServerConfigPublic(
             id=server.id,
-            user_id=server.user_id,
             name=server.name,
             server_type=server.server_type,
             host=server.host,

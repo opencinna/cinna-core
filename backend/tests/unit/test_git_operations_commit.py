@@ -11,7 +11,7 @@ Unit tests for the ``git_log_subdir`` parsing primitive live in
 ``tests/unit/test_git_log_subdir.py``.
 
 The API-observable connect / init-path behavior is covered in
-``tests/api/agents/agents_git_source_test.py`` (Scenario 6).
+``tests/api/agents/git/agents_git_source_test.py`` (Scenario 6).
 """
 from pathlib import Path
 

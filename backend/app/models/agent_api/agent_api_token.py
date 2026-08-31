@@ -7,21 +7,45 @@ webapp share token: the value is returned once at creation; only a SHA256 hash
 is stored; the first 8 chars are kept as a display prefix.
 
 Unlike A2A tokens, these are NOT JWTs — they are plain ``secrets.token_urlsafe``
-opaque tokens validated by hash lookup. They are internal machine credentials
-and never expire. A token may only ever *narrow* the producer's policy
-(``read_only_override``), never widen it.
+opaque tokens validated by hash lookup. A token may only ever *narrow* the
+producer's policy (``read_only_override``), never widen it.
 
-Tokens are never created manually. Each token is the secret behind one
-``agent_api`` *connection* credential: it is minted by the "Connect Agent API"
-helper and tied to the resulting credential via ``credential_id`` (ON DELETE
-CASCADE). Deleting the credential — i.e. disconnecting the agents — removes the
-token, which is the only way to revoke access.
+``kind`` is the single source of truth for the two modes this table serves
+(plan §2):
+
+- ``connection`` — the machine credential behind an ``agent_api`` *connection*
+  credential. Minted by the "Connect Agent API" helper, never shown to a human,
+  never expires, anonymous by default (the caller identity rides the separate
+  ``owner_identity_token`` header).
+- ``external`` — an **external key** a human copies into a laptop script, server,
+  or cron job. Revealable, identity-bound (``subject_user_id``), optionally
+  expiring (``expires_at``). Minted only from the producer's key routes and only
+  while ``Agent.agent_api_external_access_enabled`` is on.
+
+Both modes bind to their ``agent_api`` credential via ``credential_id``
+(ON DELETE CASCADE), so deleting the credential is the single revocation path
+for either. ``owner_id`` is always the producer owner who minted the row; for an
+external key the issuer (``owner_id``) and the identity (``subject_user_id``) are
+frequently different people.
 """
 import uuid
 from datetime import datetime, UTC
+from enum import Enum
 
 import sqlalchemy as sa
 from sqlmodel import Field, SQLModel
+
+
+class AgentApiTokenKind(str, Enum):
+    """Which of the two products (plan §2) a token row belongs to.
+
+    Stored as a plain ``VARCHAR(20)`` — deliberately NOT a Postgres native enum:
+    ``ALTER TYPE`` is non-transactional and adding a value later is a migration
+    hazard this repo has been bitten by.
+    """
+
+    CONNECTION = "connection"
+    EXTERNAL = "external"
 
 
 # Shared properties
@@ -61,6 +85,21 @@ class AgentApiToken(AgentApiTokenBase, table=True):
     token_hash: str = Field(max_length=64, unique=True, index=True)
     # First 8 chars of the token value, for display.
     token_prefix: str = Field(max_length=12)
+    # "connection" | "external" — see AgentApiTokenKind. Plain varchar.
+    kind: str = Field(
+        default=AgentApiTokenKind.CONNECTION.value, max_length=20, nullable=False
+    )
+    # The platform user an EXTERNAL key acts as. NULL for connection tokens
+    # (they are anonymous by construction). Immutable once issued (plan D6):
+    # changing who a key represents means revoke + re-issue.
+    subject_user_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", ondelete="CASCADE", index=True
+    )
+    # Optional expiry for external keys. NULL = never expires (always NULL for
+    # connection tokens). Enforced in AgentApiTokenService.validate_token.
+    expires_at: datetime | None = Field(
+        default=None, sa_type=sa.DateTime(timezone=True), nullable=True
+    )
     is_active: bool = Field(default=True)
     last_used_at: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -174,3 +213,80 @@ class AgentApiProducerConnection(SQLModel):
 class AgentApiProducerConnections(SQLModel):
     data: list[AgentApiProducerConnection]
     count: int
+
+
+# ── External keys (producer → outside world) ─────────────────────────────────
+
+
+class AgentApiKeyCreate(SQLModel):
+    """Request to mint an external API key on a producer agent (plan D9).
+
+    ``scopes`` is a convenience: it **upserts** the ``agent_api_access_grant``
+    for ``(producer, subject_user_id)``. Scopes live on the grant, never on the
+    key (plan D5) — the same row the producer's Access & Scopes card edits.
+    """
+
+    label: str | None = Field(default=None, max_length=255)
+    # The platform user this key acts as. Immutable once issued (plan D6).
+    subject_user_id: uuid.UUID
+    # Optional scope set to write onto the (producer, subject) grant. ``None``
+    # leaves an existing grant untouched; ``[]`` clears it to "known user, no
+    # scopes".
+    scopes: list[str] | None = None
+    read_only_override: bool = Field(default=False)
+    # Optional expiry, in days from now. ``None`` = never expires.
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class AgentApiKeySubject(SQLModel):
+    """The platform user an external key is bound to."""
+
+    id: uuid.UUID
+    email: str | None = None
+    full_name: str | None = None
+
+
+class AgentApiKeyPublic(SQLModel):
+    """One external key as listed on the producer card. Never the value."""
+
+    id: uuid.UUID
+    credential_id: uuid.UUID | None
+    agent_id: uuid.UUID
+    label: str | None
+    token_prefix: str
+    subject: AgentApiKeySubject | None
+    read_only: bool
+    is_active: bool
+    # Convenience for the UI: is_active AND not past expires_at AND the
+    # producer's agent_api_external_access_enabled. That third term is the one
+    # worth remembering — it is why a key can be active and unexpired yet still
+    # unusable, and it is what the detail page's "Blocked" badge keys off. The
+    # proxy re-derives all of it on every call (validate_token) — this is
+    # display only.
+    is_usable: bool
+    expires_at: datetime | None
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class AgentApiKeyCreated(AgentApiKeyPublic):
+    """Returned on mint — carries the token value plus where to call it."""
+
+    token: str
+    base_url: str
+    spec_url: str
+
+
+class AgentApiKeysPublic(SQLModel):
+    data: list[AgentApiKeyPublic]
+    count: int
+
+
+class AgentApiKeyRevealResponse(SQLModel):
+    """The value of an external key, returned by the dedicated reveal endpoint.
+
+    The **only** way to read a key back after mint (plan D4): ``with-data``
+    deliberately strips it, so every reveal goes through one audited call.
+    """
+
+    token: str

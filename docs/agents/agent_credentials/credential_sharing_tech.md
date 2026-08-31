@@ -52,8 +52,8 @@
 - `backend/app/api/main.py` - Added `credential_shares.router` import and registration
 
 ### Tests
-- `backend/tests/api/agents/agents_bundles_template_sharing_test.py` - Eight scenario tests: CRUD persistence, publish spec shape, override validation, install materialisation, completion → ready, partial fill stays needs_setup, `use_existing` opt-out, re-publish guard when consent flag is revoked
-- `backend/tests/api/agents/agents_credentials_categorization_test.py` - Categorization correctness tests: owned `agent_api`/`mcp_provider` → `"automatic"`; owned other type → `"mine"`; direct-shared → recipient `"mine"`; PBP-install-shared → recipient `"bundle"`; install idempotency + first-writer-wins; NULL source legacy → `"mine"`; agent-usage count recipient-scoped; `used_in_bundle` flag accuracy; `mcp_provider` folds into Automatic tab.
+- `backend/tests/api/agents/bundles/agents_bundles_template_sharing_test.py` - Eight scenario tests: CRUD persistence, publish spec shape, override validation, install materialisation, completion → ready, partial fill stays needs_setup, `use_existing` opt-out, re-publish guard when consent flag is revoked
+- `backend/tests/api/agents/core/agents_credentials_categorization_test.py` - Categorization correctness tests: owned `agent_api`/`mcp_provider` → `"automatic"`; owned other type → `"mine"`; direct-shared → recipient `"mine"`; PBP-install-shared → recipient `"bundle"`; install idempotency + first-writer-wins; NULL source legacy → `"mine"`; agent-usage count recipient-scoped; `used_in_bundle` flag accuracy; `mcp_provider` folds into Automatic tab.
 
 ## Database Schema
 
@@ -161,7 +161,7 @@ Each entry the publish flow emits:
 ## Frontend Components
 
 ### CredentialSharing (`frontend/src/components/Credentials/CredentialSharing.tsx`)
-- Direct-sharing toggle in the CardHeader corner (matches `EmailIntegrationCard` / `WebappShareCard` pattern); body collapses when disabled
+- Direct-sharing toggle in the CardHeader corner (matches the `WebappShareCard` pattern; the `EmailIntegrationCard` component this originally also matched was deleted along with per-agent Email Integration — see [Email Integration](../../application/email_integration/email_integration.md#capabilities-removed-in-this-refactor)); body collapses when disabled
 - Sharing UI is the shared **`UserAllowlistPicker`** (pill UX, same as MCP route / identity / bundle-grant sharing) rendered inline when sharing is enabled — no separate "Share" dialog or row-style shares list. `selected` is the existing `CredentialShare` rows mapped to `{ id: share.id, userId: share.shared_with_user_id, fallbackLabel: share.shared_with_email }`; `onAdd(u)` shares via `shareMutation` (by `u.email`), `onRemove(item)` revokes by `item.id`. The picker searches server-side via `GET /users/search` (key `["user-search", q]`) and excludes already-selected users by `userId`. See [User Selector Pattern](../../development/frontend/user_selector_pattern.md).
 - **Counter freshness:** the share / revoke / disable mutations all invalidate `["credential-with-data", id]` in addition to `["credential", id]` and `["credentials"]` (via the shared `invalidateShareCaches()` helper). The detail page's "Shared with N users" header reads `share_count` from the `credential-with-data` query, so without this invalidation the counter went stale until a full reload (the root cause of the "counter doesn't update right away" bug — fixed with invalidation, not a websocket event, since the share originates from the same client viewing the counter).
 - Confirmation dialog when disabling sharing with active shares. The dialog also fetches `GET /credentials/{id}/deletion-impact` (shared query key `["credential-deletion-impact", id]`) when open; when the credential is PBP in published bundles, the dialog shows a destructive alert listing the affected bundles and install count so the publisher can see the blast radius before confirming.

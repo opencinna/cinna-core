@@ -1,23 +1,30 @@
 """
-Email Sending Service - Queues and sends agent responses as emails via SMTP.
+Email Sending Service — the durable drain of ``outgoing_email_queue``.
 
-After an agent responds in an email-initiated session, the response is queued
-in the outgoing_email_queue table. This service processes the queue and sends
-emails via the parent agent's SMTP configuration.
+This is the send half only. Enqueueing used to happen here, keyed on the
+per-agent ``AgentEmailIntegration``; that integration is deleted and
+``ChannelOutboundService`` becomes the producer, so **nothing enqueues for one
+commit** and this drain is a no-op until the email channel transport lands.
+
+SMTP configuration is resolved per queue entry through the channel the
+conversation arrived on: ``entry.session_id`` → ``ChannelThreadBinding`` →
+``ServerChannel.config["outgoing_server_id"] / ["from_address"]``. A queue row
+whose session has no binding, or whose channel is not configured for outbound
+mail, is recorded as a permanent failure rather than retried or crashed on.
 """
 import logging
 import uuid
 from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any
 
 from sqlmodel import Session, select
 
 from app.models.agents.agent import Agent
-from app.models.email.agent_email_integration import AgentEmailIntegration
 from app.models.email.outgoing_email_queue import OutgoingEmailQueue, OutgoingEmailStatus
-from app.models.sessions.session import Session as ChatSession, SessionMessage
+from app.models.server_channels.channel_thread_binding import ChannelThreadBinding
+from app.models.server_channels.server_channel import ServerChannel
+from app.models.sessions.session import Session as ChatSession
 from app.models.users.user import User
 from app.services.email.mail_server_service import MailServerService
 from app.services.email.smtp_connector import smtp_connector
@@ -36,12 +43,19 @@ class EmailSendingService:
         """Resolve the platform user responsible for an outgoing queue entry.
 
         This is the account whose confirmation status gates the send — the
-        owner of the mailbox/agent, NOT the external recipient.
+        human the platform holds responsible for the mail, NOT the external
+        recipient.
 
-        - Task-mode entries (``input_task_id`` set): the task's owner.
-        - Otherwise: the owner of ``agent_id`` (the publisher install for
-          install-mode entries, the agent itself for owner-mode entries —
-          both resolve through ``Agent.owner_id``).
+        Resolution is ``entry.agent_id`` → ``Agent.owner_id`` → ``User``: with
+        the per-agent email integration gone, every outgoing entry belongs to
+        exactly one agent, and that agent has exactly one owner.
+
+        ``input_task_id`` is consulted first purely for legacy rows. The
+        column still exists on the queue and older rows may carry a task id;
+        nothing enqueues with one any more. Its FK is ``ON DELETE SET NULL``,
+        so a task that has since been deleted leaves the id NULL and the agent
+        owner answers — and a still-present task whose owner is gone falls
+        through to the agent owner too.
         """
         if entry.input_task_id is not None:
             from app.models.tasks.input_task import InputTask
@@ -56,149 +70,28 @@ class EmailSendingService:
         return None
 
     @staticmethod
-    def queue_outgoing_email(
-        db_session: Session,
-        session_id: uuid.UUID,
-        message_id: uuid.UUID,
-    ) -> OutgoingEmailQueue | None:
+    def _resolve_channel(
+        db_session: Session, entry: OutgoingEmailQueue
+    ) -> ServerChannel | None:
+        """Resolve the ``ServerChannel`` an outgoing queue entry replies into.
+
+        The path is ``entry.session_id`` → ``ChannelThreadBinding`` →
+        ``ServerChannel``: the binding is the (channel, thread) → session map,
+        so the session the reply belongs to names its own channel. Returns
+        ``None`` when the entry has no session, no binding (deleted thread), or
+        a channel that has since been removed — all of which the caller records
+        as a permanent failure on the row.
         """
-        Queue an agent response for email sending.
-
-        Looks up session -> clone -> parent agent -> SMTP config,
-        determines recipient from clone owner's email, and creates
-        an outgoing queue entry.
-
-        Returns the queue entry, or None if not applicable.
-        """
-        # Get session
-        chat_session = db_session.get(ChatSession, session_id)
-        if not chat_session:
-            logger.warning(f"Session {session_id} not found for email queueing")
+        if entry.session_id is None:
             return None
-
-        # Only process email-integration sessions
-        if chat_session.integration_type != "email":
-            return None
-
-        # Get the agent message
-        message = db_session.get(SessionMessage, message_id)
-        if not message or message.role != "agent":
-            return None
-
-        # Get agent from session
-        from app.models.email.agent_email_integration import AgentSessionMode
-        if not chat_session.agent_id:
-            logger.warning(f"Session {chat_session.id} has no agent_id")
-            return None
-
-        session_agent = db_session.get(Agent, chat_session.agent_id)
-        if not session_agent:
-            logger.warning(f"Session agent {chat_session.agent_id} not found")
-            return None
-
-        # Determine if this is owner mode or install mode.
-        # In the bundle world the "parent" of a foreign install is the
-        # publisher install, located by ``bundle_uuid`` + ``is_publisher_install``.
-        is_owner_mode = (
-            session_agent.is_publisher_install or session_agent.bundle_uuid is None
-        ) and chat_session.sender_email is not None
-
-        if is_owner_mode:
-            # Owner mode: session is on the publisher install itself
-            parent_agent_id = session_agent.id
-            parent_agent = session_agent
-            clone_agent_id_for_queue = None
-
-            # Recipient is the original email sender (stored on session)
-            recipient = chat_session.sender_email
-            if not recipient:
-                logger.warning(f"Owner-mode session {session_id} has no sender_email")
-                return None
-        else:
-            # Install mode: session is on a foreign install. Find the
-            # publisher install of the same bundle to source the email
-            # integration config from.
-            if not session_agent.bundle_uuid:
-                logger.warning(f"Agent {session_agent.id} has no bundle_uuid")
-                return None
-            parent_stmt = select(Agent).where(
-                Agent.bundle_uuid == session_agent.bundle_uuid,
-                Agent.is_publisher_install == True,  # noqa: E712
+        binding = db_session.exec(
+            select(ChannelThreadBinding).where(
+                ChannelThreadBinding.session_id == entry.session_id
             )
-            publisher_install = db_session.exec(parent_stmt).first()
-            if not publisher_install:
-                logger.warning(
-                    f"No publisher install found for bundle {session_agent.bundle_uuid}"
-                )
-                return None
-            parent_agent_id = publisher_install.id
-            parent_agent = publisher_install
-            clone_agent_id_for_queue = session_agent.id
-
-            # Recipient is the install owner (= email sender's user account)
-            recipient_user = db_session.get(User, session_agent.owner_id)
-            if not recipient_user:
-                logger.warning(f"Install owner {session_agent.owner_id} not found")
-                return None
-            recipient = recipient_user.email
-
-        # Outbound-email gate (anti-abuse): the platform account that owns
-        # the mailbox/agent must be email-confirmed. Reject at enqueue time
-        # so an unconfirmed owner never creates a silently-failing queue
-        # entry. The send-time gate in _send_single_email is defense-in-depth.
-        from app.services.users.email_confirmation_service import (
-            EmailConfirmationService,
-        )
-        owner = (
-            db_session.get(User, parent_agent.owner_id)
-            if parent_agent.owner_id
-            else None
-        )
-        if not EmailConfirmationService.is_outbound_email_allowed(owner):
-            logger.warning(
-                f"Outgoing email for agent {parent_agent_id} blocked: "
-                "responsible user email not confirmed"
-            )
+        ).first()
+        if binding is None:
             return None
-
-        # Get email integration config from parent
-        stmt = select(AgentEmailIntegration).where(
-            AgentEmailIntegration.agent_id == parent_agent_id,
-        )
-        integration = db_session.exec(stmt).first()
-        if not integration or not integration.outgoing_server_id:
-            logger.warning(
-                f"Parent agent {parent_agent_id} has no outgoing email config"
-            )
-            return None
-
-        # Build email subject and threading headers
-        subject = EmailSendingService._build_reply_subject(chat_session)
-        references = chat_session.email_thread_id or ""
-        in_reply_to = chat_session.email_thread_id
-
-        # Create queue entry
-        queue_entry = OutgoingEmailQueue(
-            agent_id=parent_agent_id,
-            clone_agent_id=clone_agent_id_for_queue,
-            session_id=session_id,
-            message_id=message_id,
-            recipient=recipient,
-            subject=subject,
-            body=message.content,
-            references=references if references else None,
-            in_reply_to=in_reply_to,
-            status=OutgoingEmailStatus.PENDING,
-        )
-        db_session.add(queue_entry)
-        db_session.commit()
-        db_session.refresh(queue_entry)
-
-        logger.info(
-            f"Queued outgoing email: session={session_id}, "
-            f"recipient={recipient}, subject={subject}"
-        )
-        return queue_entry
+        return db_session.get(ServerChannel, binding.server_channel_id)
 
     @staticmethod
     def send_pending_emails(db_session: Session) -> int:
@@ -219,16 +112,31 @@ class EmailSendingService:
         logger.info(f"Processing {len(pending)} pending outgoing emails")
 
         sent_count = 0
+        not_sent_count = 0
         for entry in pending:
             try:
-                EmailSendingService._send_single_email(db_session, entry)
-                sent_count += 1
+                # ``_send_single_email`` returns normally after recording a
+                # terminal failure on the row, so its return value — not the
+                # absence of an exception — is what says an email left the
+                # building. Counting calls instead would report a full batch
+                # of permanent failures as a batch of successful sends.
+                if EmailSendingService._send_single_email(db_session, entry):
+                    sent_count += 1
+                else:
+                    not_sent_count += 1
             except Exception as e:
+                not_sent_count += 1
                 logger.error(
                     f"Failed to send email {entry.id}: {e}", exc_info=True
                 )
                 # Error already recorded in _send_single_email
                 continue
+
+        if not_sent_count:
+            logger.warning(
+                f"Outgoing email batch: {sent_count} sent, "
+                f"{not_sent_count} not sent (blocked, failed, or retrying)"
+            )
 
         return sent_count
 
@@ -236,8 +144,14 @@ class EmailSendingService:
     def _send_single_email(
         db_session: Session,
         entry: OutgoingEmailQueue,
-    ) -> None:
-        """Send a single email from the queue."""
+    ) -> bool:
+        """Send a single email from the queue.
+
+        Returns ``True`` only when the message was actually handed to SMTP.
+        Every early return below has already recorded its outcome on the row
+        (blocked, permanently failed, or awaiting a retry) and reports
+        ``False`` so the caller does not count it as a send.
+        """
         # Outbound-email gate (defense-in-depth): block the send if the
         # responsible platform user is not email-confirmed. Marks the entry
         # BLOCKED_UNCONFIRMED (terminal — never retried) so it cannot spam.
@@ -256,31 +170,50 @@ class EmailSendingService:
             logger.warning(
                 f"Email {entry.id}: blocked — responsible user email not confirmed"
             )
-            return
+            return False
 
-        # Get parent agent's email integration for SMTP config
-        stmt = select(AgentEmailIntegration).where(
-            AgentEmailIntegration.agent_id == entry.agent_id,
-        )
-        integration = db_session.exec(stmt).first()
-        if not integration or not integration.outgoing_server_id:
+        # Resolve the SMTP configuration through the channel this conversation
+        # arrived on. Every failure below is terminal and recorded on the row:
+        # a misconfigured channel does not get better by retrying, and a queue
+        # entry that cannot name a sender must never be silently dropped.
+        channel = EmailSendingService._resolve_channel(db_session, entry)
+        if channel is None:
             EmailSendingService._mark_failed(
-                db_session, entry, "No outgoing server configured"
+                db_session, entry, "No channel bound to this session"
             )
-            return
+            return False
+
+        outgoing_server_id = channel.config.get("outgoing_server_id")
+        from_address = channel.config.get("from_address")
+        if not outgoing_server_id or not from_address:
+            EmailSendingService._mark_failed(
+                db_session,
+                entry,
+                f"Channel '{channel.name}' has no outgoing mail configuration",
+            )
+            return False
+
+        try:
+            server_uuid = uuid.UUID(str(outgoing_server_id))
+        except (TypeError, ValueError):
+            EmailSendingService._mark_failed(
+                db_session,
+                entry,
+                f"Channel '{channel.name}' has a malformed outgoing_server_id",
+            )
+            return False
 
         # Get SMTP credentials
         result = MailServerService.get_mail_server_with_credentials(
-            db_session, integration.outgoing_server_id
+            db_session, server_uuid
         )
         if not result:
             EmailSendingService._mark_failed(
                 db_session, entry, "SMTP server not found"
             )
-            return
+            return False
 
         server, password = result
-        from_address = integration.outgoing_from_address
 
         # Build email message
         msg = EmailSendingService._build_email_message(
@@ -306,7 +239,7 @@ class EmailSendingService:
                 )
             db_session.add(entry)
             db_session.commit()
-            return
+            return False
 
         # Mark as sent
         entry.status = OutgoingEmailStatus.SENT
@@ -316,6 +249,7 @@ class EmailSendingService:
         db_session.commit()
 
         logger.info(f"Email {entry.id}: sent to {entry.recipient}")
+        return True
 
     @staticmethod
     def _build_email_message(
@@ -364,58 +298,3 @@ class EmailSendingService:
         db_session.commit()
         logger.error(f"Email {entry.id}: permanently failed: {error}")
 
-    @staticmethod
-    async def handle_stream_completed(event_data: dict[str, Any]) -> None:
-        """
-        Event handler for STREAM_COMPLETED - queue email reply if session is email-initiated.
-
-        Registered in main.py to listen for STREAM_COMPLETED events.
-        When the agent finishes responding in an email-integration session,
-        queues the agent's response for sending via SMTP.
-        """
-        try:
-            from app.core.db import create_session
-
-            meta = event_data.get("meta", {})
-            session_id = meta.get("session_id")
-            was_interrupted = meta.get("was_interrupted", False)
-
-            if not session_id or was_interrupted:
-                return
-
-            with create_session() as db_session:
-                # Check if this is an email session
-                chat_session = db_session.get(ChatSession, uuid.UUID(session_id))
-                if not chat_session or chat_session.integration_type != "email":
-                    return
-
-                # Find the last agent message in this session
-                stmt = (
-                    select(SessionMessage)
-                    .where(
-                        SessionMessage.session_id == uuid.UUID(session_id),
-                        SessionMessage.role == "agent",
-                    )
-                    .order_by(SessionMessage.sequence_number.desc())
-                    .limit(1)
-                )
-                last_agent_msg = db_session.exec(stmt).first()
-                if not last_agent_msg:
-                    logger.debug(
-                        f"No agent message found for session {session_id}, "
-                        "skipping email queue"
-                    )
-                    return
-
-                # Queue it for sending
-                EmailSendingService.queue_outgoing_email(
-                    db_session=db_session,
-                    session_id=uuid.UUID(session_id),
-                    message_id=last_agent_msg.id,
-                )
-
-        except Exception as e:
-            logger.error(
-                f"Failed to queue email for stream_completed event: {e}",
-                exc_info=True,
-            )

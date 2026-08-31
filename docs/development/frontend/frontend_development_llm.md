@@ -55,6 +55,24 @@ export const Route = createFileRoute("/_layout/path")({
 - Access token stored in localStorage: `access_token`
 - Check login: `isLoggedIn()` utility function
 
+### Global 401/403 handling (`main.tsx handleApiError`)
+Wired into the QueryClient's `QueryCache` **and** `MutationCache` `onError`, so it
+sees every failed `useQuery` / `useMutation` in the app.
+
+On a 401/403 it does **not** log the user out immediately — it first confirms the
+session is actually dead by probing `LoginService.testToken()` (the same probe
+`useAuth.ensureSessionValid` uses), and only then clears `access_token` and
+redirects to `/login?redirect=<here>`. Concurrent failures share one in-flight
+probe; a network/5xx probe result is treated as inconclusive and keeps the user
+signed in.
+
+**Why:** 401/403 is overloaded. Besides "your token is invalid" it also covers
+"you may not do this" (role gates such as `require_developer`, which returns 403)
+and routes reporting a *third-party* auth failure. Backend routes must not use
+401/403 for anything other than the caller's own credentials — see
+`agent_git_versioning_tech.md` for the git-versioning bug this caused, where a
+rejected deploy key logged the user out mid-connect.
+
 ## Component Libraries
 - UI: shadcn/ui components from `@/components/ui/`
 - Forms: `react-hook-form` + `zod` validation
@@ -150,6 +168,7 @@ For simpler items (e.g., prompt actions in `EditPromptActionsDialog.tsx`):
 const colorPreset = getColorPreset(agent.ui_color_preset)
 <div className={`rounded-lg p-3 ${colorPreset.iconBg}`}>
 ```
+- Visual **skins** (a second, orthogonal theming axis layered on top of light/dark mode) are pure CSS-variable overlays keyed off `data-skin` on `<html>` — see [Theming — tech](../../application/theming/theming_tech.md#adding-a-new-skin) for the token tiers and the step-by-step "adding a skin" recipe. Never hardcode a status/accent color that should re-tint under a skin (e.g. `bg-emerald-500`) — use the semantic token (`bg-primary`) instead.
 
 ## Dialog/Modal Pattern
 ```tsx

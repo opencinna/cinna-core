@@ -41,11 +41,12 @@ from app.models.events.security_event import (
     CLI_DEVICE_LOGIN_REJECTED,
     SecurityEventCreate,
 )
-from app.services.cli.account_cli_service import AccountCLIService, _client_ip
+from app.services.cli.account_cli_service import AccountCLIService
 from app.services.cli.cli_auth import CLIAuthService
 from app.services.cli.cli_service import _ensure_utc, _get_platform_url
-from app.services.cli.rate_limiter import RateLimiter
+from app.services.common.rate_limiter import RateLimiter
 from app.services.events.security_event_service import SecurityEventService
+from app.utils import client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ class DeviceLoginService:
         from fastapi import HTTPException
         from fastapi import status as http_status
 
-        ip = _client_ip(request) or "unknown"
+        ip = client_ip(request) or "unknown"
         if DeviceLoginService._rate_limiter.check(ip, START_LIMIT_PER_MIN) is not None:
             raise HTTPException(
                 status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
@@ -136,7 +137,7 @@ class DeviceLoginService:
             status="pending",
             machine_name=machine_name,
             machine_info=machine_info,
-            client_ip=_client_ip(request),
+            client_ip=client_ip(request),
             expires_at=now + timedelta(seconds=DEVICE_LOGIN_EXPIRY_SECONDS),
         )
         db.add(row)
@@ -182,7 +183,7 @@ class DeviceLoginService:
         request: Request,
     ) -> DeviceLoginPollResponse:
         """Poll for the device-login result. ALWAYS returns flow state in 200."""
-        ip = _client_ip(request) or "unknown"
+        ip = client_ip(request) or "unknown"
         if (
             DeviceLoginService._rate_limiter.check(ip, POLL_IP_LIMIT_PER_MIN)
             is not None
@@ -295,7 +296,7 @@ class DeviceLoginService:
                     "machine_name": row.machine_name,
                     "machine_info": row.machine_info,
                     "minted_token_id": str(cli_token.id),
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )
@@ -324,7 +325,7 @@ class DeviceLoginService:
                 details={
                     "user_code": row.user_code,
                     "machine_name": row.machine_name,
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )

@@ -2,9 +2,6 @@
 ExternalA2AService — AgentCard builder for the External A2A surface.
 
 Phase 2: builds cards for target_type="agent".
-Phase 3: adds target_type="app_mcp_route" — cards are built from the underlying
-agent but the route's name/description are used and URLs are rewritten to the
-route-scoped external namespace.
 Phase 4: adds target_type="identity" — person-level card synthesized from the
 identity owner + their caller-accessible bindings.  Each binding contributes
 one AgentSkill whose id is the binding id (opaque to the caller).
@@ -23,7 +20,6 @@ from a2a.types import (
 from sqlmodel import Session as DBSession
 
 from app.models import Agent, User
-from app.models.app_mcp.app_agent_route import AppAgentRoute
 from app.models.environments.environment import AgentEnvironment
 from app.models.identity.identity_models import IdentityAgentBinding
 from app.services.a2a.a2a_service import A2AService
@@ -48,15 +44,14 @@ class ExternalA2AService:
         """Build an AgentCard for the given target.
 
         Supported target types:
-          - "agent"          (Phase 2)
-          - "app_mcp_route"  (Phase 3)
-          - "identity"       (Phase 4) — target_id is the identity owner's user id
+          - "agent"     (Phase 2)
+          - "identity"  (Phase 4) — target_id is the identity owner's user id
 
         Args:
             db: Database session.
             user: Authenticated caller.
-            target_type: "agent", "app_mcp_route", or "identity".
-            target_id: UUID of the target (agent.id, route.id, or owner_id).
+            target_type: "agent" or "identity".
+            target_id: UUID of the target (agent.id or owner_id).
             request_base_url: Base URL of the request (no trailing slash).
             protocol: "v1.0" (default) or "v0.3".
 
@@ -71,10 +66,6 @@ class ExternalA2AService:
         """
         if target_type == "agent":
             return ExternalA2AService._build_agent_card(
-                db, user, target_id, request_base_url, protocol
-            )
-        if target_type == "app_mcp_route":
-            return ExternalA2AService._build_route_card(
                 db, user, target_id, request_base_url, protocol
             )
         if target_type == "identity":
@@ -116,53 +107,6 @@ class ExternalA2AService:
             agent, environment, request_base_url,
             url_override=external_url, protocol=protocol,
         )
-        return ExternalA2AService._finalize_card(card_dict, external_url, protocol)
-
-    @staticmethod
-    def _build_route_card(
-        db: DBSession,
-        user: User,
-        route_id: UUID,
-        request_base_url: str,
-        protocol: Literal["v1.0", "v0.3"],
-    ) -> dict:
-        """Build card for target_type="app_mcp_route".
-
-        - Re-verifies the route is effective for the caller
-        - Builds card from the underlying agent (route.agent_id)
-        - Overrides name with route.name and description with route.trigger_prompt
-        - Rewrites URL to the route-scoped external path
-        """
-        route, _effective = ExternalAccessPolicy.resolve_route(db, user, route_id)
-
-        agent = db.get(Agent, route.agent_id)
-        if not agent:
-            from app.services.external.errors import TargetNotAccessibleError
-            raise TargetNotAccessibleError("Route agent not found")
-
-        environment = (
-            db.get(AgentEnvironment, agent.active_environment_id)
-            if agent.active_environment_id
-            else None
-        )
-
-        external_url = f"{request_base_url}/api/v1/external/a2a/route/{route_id}/"
-        card_dict = A2AService.get_agent_card_dict(
-            agent, environment, request_base_url,
-            url_override=external_url, protocol=protocol,
-            # The cinna.mcp descriptor must reflect the shared-route identity, not
-            # the raw underlying agent, so the desktop tool is named/described from
-            # the route the caller actually sees.
-            mcp_tool_name=A2AService.slugify_tool_name(route.name),
-            mcp_display_name=route.name,
-            mcp_description=route.trigger_prompt,
-        )
-
-        # Override name / description with route-specific values so the caller
-        # sees the shared-route identity rather than the raw underlying agent.
-        card_dict["name"] = route.name
-        card_dict["description"] = route.trigger_prompt
-
         return ExternalA2AService._finalize_card(card_dict, external_url, protocol)
 
     @staticmethod
@@ -254,8 +198,8 @@ class ExternalA2AService:
     ) -> dict:
         """Overwrite v1.0 ``supportedInterfaces`` with external URL variants.
 
-        The v1.0 protocol adapter is applied by ``A2AService`` (agent / route
-        paths) or explicitly by the caller (identity path). This helper only
+        The v1.0 protocol adapter is applied by ``A2AService`` (agent path) or
+        explicitly by the caller (identity path). This helper only
         replaces the adapter's default ``/api/v1/a2a/...`` interfaces with the
         external-namespace URLs. For v0.3 it returns the card as-is.
         """

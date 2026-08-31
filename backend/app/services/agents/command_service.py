@@ -7,7 +7,7 @@ require an LLM call. They are executed locally and return markdown responses.
 import logging
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -31,6 +31,9 @@ class CommandContext:
     backend_base_url: str = ""
 
 
+CommandDisplay = Literal["notice", "document"]
+
+
 @dataclass
 class CommandResult:
     """Result from a command execution."""
@@ -39,6 +42,13 @@ class CommandResult:
     routing: str | None = None                      # "command_stream" when handler requests async dispatch
     resolved_command: str | None = None             # Shell command for routing=command_stream
     exec_command_short_name: str | None = None      # Short name for the command
+    # How the chat UI should present the output. Command output is not agent
+    # speech, so the default is ``notice`` — the centered system block every
+    # other ``role="system"`` message renders in. Handlers whose output is a
+    # document rather than a confirmation (file listings, status reports,
+    # command tables) opt into ``document``, which keeps the wide
+    # markdown-rendered panel those outputs need.
+    display: CommandDisplay = "notice"
 
 
 class CommandHandler(ABC):
@@ -176,6 +186,9 @@ class CommandService:
         - ``/run-list`` is shown only when the agent has CLI commands configured.
         - ``/rebuild-env`` is marked unavailable while any co-tenant session on
           the same environment is streaming.
+        - ``/session-improve`` is marked unavailable on guest-share and
+          webapp-share sessions — there is no identifiable consenting account
+          behind them, so submission would be rejected anyway.
         - Dynamic ``/run:<name>`` entries are appended from the env's CLI
           commands cache (with ``resolved_command`` populated for the tooltip).
         """
@@ -221,15 +234,25 @@ class CommandService:
                 )
                 is_rebuild_env_available = True
 
+        # Determine /session-improve availability — a guest or webapp-share
+        # session has no identifiable consenting account behind it, so the
+        # eligibility gate would reject the submission (plan §4.4 rule 2).
+        is_session_improve_available = (
+            chat_session.guest_share_id is None
+            and chat_session.webapp_share_id is None
+        )
+
         commands: list[SessionCommandPublic] = []
         for handler in cls.list_handlers():
             if handler.name == "/run":
                 continue
             if handler.name == "/run-list" and not cli_commands:
                 continue
-            is_available = (
-                is_rebuild_env_available if handler.name == "/rebuild-env" else True
-            )
+            is_available = True
+            if handler.name == "/rebuild-env":
+                is_available = is_rebuild_env_available
+            elif handler.name == "/session-improve":
+                is_available = is_session_improve_available
             commands.append(
                 SessionCommandPublic(
                     name=handler.name,

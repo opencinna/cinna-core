@@ -1,160 +1,266 @@
 # Email Integration
 
-## Purpose
+## Email is a server channel
 
-Enable agents to receive emails at configured IMAP mailboxes, process them as agent sessions or reviewable tasks, and send replies back via SMTP. Provides a complete email-to-agent automation pipeline with security isolation, flexible access control, and two distinct processing modes.
+Since Phase 4 of the channels & identity unification refactor, **email is one
+of the transports behind [Server Channels](../server_channels/server_channels.md)**,
+alongside Google Chat. There is no more per-agent email integration: an agent
+can no longer own an inbound mailbox from its own Integrations tab. An admin
+configures one email channel server-wide (Admin → Server Configuration →
+Channels), pointing it at a shared mailbox, and inbound mail is routed to
+senders' own agents exactly the way an inbound Google Chat message is —
+sender-first against the sender's own installed agents, then against the
+server's auto-install catalog.
+
+This document covers what is **specific to the email transport**: the polled
+(rather than pushed) inbound model, the `From:`-header trust tier, recipient
+validation on a shared mailbox, and outbound delivery through a durable queue.
+Everything else — whitelisting, auto-registration, two-pass routing, thread
+bindings, identity routing, admin availability policy — is the shared Server
+Channels model and is documented there; read
+[Server Channels](../server_channels/server_channels.md) first if you have
+not already.
 
 ## Core Concepts
 
-- **Mail Server** — User-configured IMAP or SMTP server with encrypted credentials. See [Mail Servers](mail_servers.md)
-- **Agent Email Integration** — Per-agent configuration linking mail servers, access rules, and processing behavior
-- **Email Session** — Agent session initiated by an incoming email, with threading support. See [Email Sessions](email_sessions.md)
-- **Email Message** — Parsed incoming email stored for processing and audit
-- **Outgoing Email Queue** — Queued agent reply emails awaiting SMTP delivery
-- **Clone-Based Isolation** — Each email sender gets their own cloned agent with independent environment (clone mode)
-- **Owner Mode** — All emails processed on the original agent in the owner's environment
-- **Process as New Task** — Incoming emails create reviewable InputTasks instead of auto-responding sessions
+- **Email channel** — a `ServerChannel` row with `channel_type="email"`. Its
+  `config` names an incoming IMAP mail server, an outgoing SMTP mail server, a
+  mailbox address to poll, and a from-address for replies. It has no webhook
+  URL and no webhook token — see [Polled, not pushed](#polled-not-pushed).
+- **Mail Server** — an admin-owned IMAP or SMTP connection (superuser-only,
+  server-scoped). See [Mail Servers](mail_servers.md).
+- **Polled inbound** — a scheduler fetches unread mail from the configured
+  mailbox once a minute; there is nothing pushing to the platform. See
+  [Polled, not pushed](#polled-not-pushed).
+- **Email Message** — every arrival is stored durably as soon as it is
+  fetched, before whitelist, policy, or routing sees it. See
+  [Every arrival is recorded, before anything decides](#every-arrival-is-recorded-before-anything-decides).
+- **Outgoing Email Queue** — the durable, retried queue email replies go
+  through. See [Email Sessions](email_sessions.md).
+- **Channel Thread Binding** — same shared concept as every other channel:
+  one binding pins one email thread to one platform `(user, agent, session)`.
+  The email transport's addition is what the binding's `thread_key` actually
+  *is* — see [Threading](#threading-the-thread-key-is-the-root-message-id).
 
 ## User Stories / Flows
 
-### 1. Setup Flow
+### 1. Admin sets up an email channel
 
-1. User adds IMAP and SMTP server configurations in **Settings > Mail Servers**
-2. User navigates to agent's **Integrations** tab and opens Email Integration
-3. User configures **Connection** (selects IMAP/SMTP servers, sets mailbox and from-address)
-4. User configures **Access** rules (open/restricted mode, domain allowlist, auto-approve patterns)
-5. User configures **Sessions** (clone/owner mode, new session/new task processing, max clones)
-6. User enables the integration — validation ensures required fields are set
+1. Superuser adds an IMAP server and an SMTP server under **Admin → Server
+   Configuration → Mail Servers**, and tests both connections there.
+2. Superuser opens **Admin → Server Configuration → Channels**, adds a new
+   channel, picks **Email**, and selects the two mail servers plus the
+   mailbox address to poll and the from-address replies should use.
+3. Sets the email whitelist and decides whether unknown senders should be
+   auto-registered — the same fields, the same fail-closed semantics, as a
+   Google Chat channel.
+4. There is no webhook URL to paste anywhere: the setup panel says so
+   explicitly, and explains that the first reply can take up to one poll
+   interval.
+5. The panel also states, unconditionally, that the sender address on this
+   channel comes from the `From:` header and can be forged by anyone who can
+   deliver mail to the mailbox — see
+   [Trust chain: `From:` is spoofable](#trust-chain-from-is-spoofable).
 
-### 2. Incoming Email (New Session Mode)
+### 2. Team member's first email
 
-1. Polling scheduler (every 5 min) fetches unread emails from IMAP
-2. System identifies the sender and routes the email to a target agent:
-   - **Clone mode**: finds or creates a sender-specific clone
-   - **Owner mode**: routes to the parent agent directly
-3. System matches email to an existing session via threading headers, or creates a new session
-4. Email body is injected as a user message; agent streaming begins
-5. Agent response is queued in the outgoing email queue
-6. Sending scheduler (every 2 min) delivers the reply via SMTP with threading headers
+1. An employee emails the shared mailbox (e.g. `support@corp.com`).
+2. The next poll tick fetches it, checks it is actually addressed to this
+   channel's mailbox, and records it durably.
+3. The sender is whitelist-checked and resolved to (or auto-registered as) a
+   platform user — the same rule Google Chat uses.
+4. Since this is a new thread, routing runs: first against the sender's own
+   installed agents, then against the server's auto-install catalog if
+   nothing matches.
+5. If an auto-install bundle matches, it is installed behind the scenes and
+   the reply — once the environment is ready — lands in the same thread as a
+   normal email reply, correctly threaded.
+6. If nothing matches at all, **nothing is sent back.** Unlike Google Chat,
+   this transport has no way to answer synchronously, and a decline is never
+   mailed to the sender — see
+   [Declines are silent](#declines-are-silent-and-that-is-deliberate).
 
-### 3. Incoming Email (New Task Mode)
+### 3. Continuing a thread
 
-1. Polling and parsing happen identically to new session mode
-2. Instead of creating a session, an **InputTask** is created for the agent owner
-3. Owner reviews the task in the Tasks UI, optionally refines description or reassigns to a different agent
-4. Owner executes the task — agent processes it and produces results
-5. Owner clicks **"Send Answer"** — system generates an AI-crafted email reply from session results
-6. Reply is queued and sent via the original email agent's SMTP configuration
+1. The employee replies to the agent's email.
+2. The reply's `In-Reply-To` / `References` headers resolve to the same
+   thread root as the original message, so the existing binding is found and
+   the message is fed straight into the same session.
+3. The agent's reply is queued and delivered with proper `In-Reply-To` /
+   `References` headers so it threads correctly in the recipient's mail
+   client.
 
-### 4. First-Time Sender (Clone Mode)
+### 4. A denied or unroutable message
 
-1. Email arrives from an unknown sender (no user account)
-2. System auto-creates a user account with a random password
-3. System creates an auto-share + clone for the sender
-4. Clone environment build starts (Docker image build + workspace copy)
-5. Email is queued with `pending_clone_creation=True`
-6. Retry scheduler picks up the email once the clone environment is active
-7. Sender can later claim their account via password reset or OAuth login
+1. A message arrives from an address the whitelist does not cover, or from a
+   sender the channel policy has turned away, or that fails to route to any
+   agent.
+2. The message is still recorded in `email_message` (see below) — this is
+   the row's whole reason for existing on this transport — but nothing is
+   sent back to the sender.
+3. A superuser can see the denial in the channel's debug feed; the sender
+   sees nothing at all.
 
 ## Business Rules
 
-### Access Control
+### Trust chain: `From:` is spoofable
 
-- **Open mode**: Any email sender gets access (subject to `max_clones` and `allowed_domains`)
-- **Restricted mode**: Only senders matching one of these criteria:
-  1. Agent pre-shared with them via Share Management UI
-  2. Sender email matches `auto_approve_email_pattern` (glob-style, e.g., `*@example.com,tech-*@another.com`)
-- `allowed_domains` applies in both modes as an additional filter (comma-separated, case-insensitive)
-- Emails from non-matching senders are silently ignored
-- `process_as` only affects future emails; already-processed emails retain their state
+Google Chat's sender identity comes out of a Google-signed JWT. Email's comes
+out of the `From:` header, and **the `From:` header is spoofable** — anyone
+who can get a message into the polled mailbox can claim any address in it.
+Nothing downstream re-checks it: the whitelist, user resolution,
+auto-registration, and identity routing all treat that address as the
+sender's real identity, exactly as they do for a verified Google Chat sender.
+An email channel's whitelist is therefore only as strong as the receiving
+mail server's own SPF/DKIM/DMARC enforcement — this is stated in the admin
+setup panel, not just in this doc, and it is the reason email channels suit
+internal team mailboxes rather than an open public inbox (see
+[Capabilities removed](#capabilities-removed-in-this-refactor)).
 
-### Auto-User Creation
+### Polled, not pushed
 
-- Created with random password (not sent to the user)
-- Uses per-integration `allowed_domains`, independent of global `AUTH_WHITELIST_DOMAINS`
-- User can claim account via password reset or OAuth login
-- Once logged in, users see their email conversations in the UI
+Unlike Google Chat, an email channel has no webhook: `ServerChannel.webhook_token`
+is `NULL` for it, and the setup panel never shows a URL. A scheduler polls the
+mailbox once a minute (`POLL_INTERVAL_SECONDS = 60`) for every enabled
+channel whose transport is polled, and each fetched message enters the
+pipeline at the same post-verification step a webhook request would reach
+after `verify_inbound` succeeds. Authentication for this transport therefore
+happens inside the poll itself, not in a request handler — there is nothing
+else to check the mail against.
 
-### Auto-Share & Auto-Clone (Clone Mode)
+### Recipient validation
 
-- If sender has a **pending** share for this agent → auto-accept it
-- If sender has no share → create share (`status: accepted`, `source: email_integration`) and create clone
-- Share appears in Share Management UI with an "Email" badge
-- Clone count tracked against `max_clones` limit (configurable, default 50, max 1000)
+Because one IMAP mailbox can receive mail addressed to several different
+aliases or groups, each channel only accepts mail actually addressed (To/CC)
+to its own configured mailbox. Mail for a different recipient in the same
+inbox is left alone (not even marked read) so another channel's poll — or a
+future one — can still find it.
 
-### Email Threading
+### Every arrival is recorded, before anything decides
 
-- `Message-ID` header maps to `email_thread_id` on the session
-- `In-Reply-To` and `References` headers match follow-up emails to existing sessions
-- Agent replies include proper `In-Reply-To` and `References` for client threading
+Every fetched message is stored as an `EmailMessage` row **before** the
+whitelist, the channel policy, or routing ever sees it — including messages
+that are ultimately denied. This is different from the pre-channel behaviour,
+where a row only existed for mail that was already routed to an agent.
 
-### Task Mode Rules
+The reason is that a polled transport has no way to reply to a decline (see
+next section), so the operator's only view into "who got turned away and
+why" would otherwise be the admin debug feed, which is in-memory and
+disappears on restart. On a transport whose senders are external by
+definition, that is not an adequate audit trail. So the row exists for every
+arrival, and `EmailMessage.agent_id` is `NULL` until (and unless) routing
+actually assigns an agent to it — readers must treat `NULL` as "arrived, not
+routed," not as missing data. A redelivery of mail that already reached an
+agent is dropped rather than re-stored; a redelivery of mail that was never
+routed is left for the next attempt to retry.
 
-- `source_agent_id` on InputTask always points to the original email agent (for SMTP config), even if the user reassigns the task to a different agent for execution
-- `source_email_message_id` being non-null identifies email-originated tasks (no separate `source` field needed)
-- Each email creates a separate task — no threading/grouping at the task level
-- AI reply generation uses session results; optional `custom_message` skips AI generation
+### Threading: the thread key is the root Message-ID
 
-## Architecture Overview
+A thread's binding key is the **root** `Message-ID` of the conversation —
+`References[0]` if the sender's client sent a reference chain, else
+`In-Reply-To`, else the message's own `Message-ID` (which makes a first
+message the root of its own thread) — never the *latest* message. Keying on
+the latest instead would open a new binding on every reply, and the visible
+symptom would not look like a threading bug: it would look like "the agent
+forgot the conversation."
 
-```
-External Sender → Email → IMAP Server → Backend Polling (parent agent)
-                                              |
-                                      Sender Identification
-                                              |
-                                     process_as setting?
-                                       /            \
-                                   new_task       new_session
-                                      |               |
-                                Create InputTask   EmailRoutingService
-                                for agent owner     (clone/owner mode)
-                                      |               |
-                              Owner reviews,     Route to target agent
-                              refines, executes       |
-                                      |          Message → Session
-                              "Send Answer"           |
-                                      |          Agent Response
-                              AI generates reply      |
-                                      |          Email Queue → SMTP → Sender
-                              Email Queue → SMTP → Sender
-```
+### Outbound goes through a durable queue
+
+Google Chat's outbound delivery is best-effort (a few in-adapter retries,
+then a logged failure). Email is the one channel transport with a durable,
+retried outbound path: a reply is enqueued into the existing
+`OutgoingEmailQueue` and delivered by the pre-existing sending scheduler,
+which retries up to three times before giving up. See
+[Email Sessions](email_sessions.md) for the mechanics.
+
+### Declines are silent, and that is deliberate
+
+A polled transport has no synchronous reply surface the way a webhook does.
+So a sender denied by the whitelist, by channel policy, or by failed user
+resolution gets **no reply of any kind** — mailing a decline back would
+confirm to a prober which addresses exist on the platform and would turn the
+mailbox into a spam amplifier. Every denial is still recorded — in the
+channel's admin debug feed, and (uniquely to this transport) durably in
+`email_message` as an unrouted row — so an admin can see what happened even
+though the sender never will.
+
+## Capabilities removed in this refactor
+
+Per-agent Email Integration is deleted outright, with no compatibility shim.
+Four capabilities it offered do not exist any more:
+
+1. **Per-agent email integration.** An agent can no longer own an inbound
+   mailbox address from its own Integrations tab. Email is now a single,
+   admin-configured server channel, the same as Google Chat.
+2. **Clone-per-sender isolation** (`max_clones`, `clone_share_mode`,
+   `agent_session_mode`). Every sender used to get their own cloned agent
+   with an isolated environment; that is replaced by the shared
+   auto-registration + auto-install mechanism every channel now uses — a
+   sender gets their *own account*, not a clone of somebody else's agent.
+3. **Task mode** (`process_as = new_task`) and the "Send Answer" AI-generated
+   email reply. Incoming email can no longer create an `InputTask` for
+   manual review before responding — see
+   [Input Tasks](../input_tasks/input_tasks.md).
+4. **The external-customer inbox pattern.** A stranger with no platform
+   account writing to `support@` and having one specific agent answer them no
+   longer exists. Under sender-routing, an unknown sender is auto-registered
+   (if the channel allows it) as an ordinary platform account and routed over
+   **their own** (initially empty) agent set, then the server's auto-install
+   catalog — exactly like a first-time Google Chat sender. This is a
+   deliberate trade: email channels, like Google Chat channels, are internal
+   team surfaces now, not a public support-inbox mechanism.
 
 ## Security Model
 
-### 1. Clone-Based Isolation (Primary)
-- Each email sender gets their own Docker environment (clone mode)
-- Workspace files completely isolated per clone
-- Sessions belong to the sender's user account
-- No cross-sender data leakage at the environment level
+### Credential separation (unchanged)
 
-### 2. Credential Separation
-- Mail server credentials stored encrypted, **backend-only** — never shared with agents
-- Decryption only happens when connecting to IMAP/SMTP
-- API responses expose `has_password: bool` instead of actual password
-- See [Mail Servers](mail_servers.md) for details
+Mail server credentials are stored encrypted, backend-only, and are never
+shared with an agent. Decryption happens only when the platform connects to
+IMAP or SMTP. See [Mail Servers](mail_servers.md).
 
-### 3. Rate Limiting & Resource Protection
-- `max_clones` limit per agent (configurable, default 50, max 1000)
-- Per-integration `allowed_domains` filter
-- Polling frequency: every 5 minutes per enabled agent
-- Sending queue: max 3 retry attempts per email
+### Sender identity is the weakest tier the platform trusts
 
-### 4. Email Sender Identity
-- Email "From" addresses can be spoofed — accepted as known limitation
-- For higher security, use restricted mode with specific email patterns
-- Future: SPF/DKIM/DMARC verification
+See [Trust chain: `From:` is spoofable](#trust-chain-from-is-spoofable) above.
+This was always true of the feature and remains true — it is now surfaced
+next to Google Chat's much stronger, signed-JWT trust tier, in the same admin
+UI, so an admin configuring a whitelist is not left to guess which tier they
+are working with.
 
-### 5. Recipient Validation
-- Polling service validates that emails are actually addressed to the agent's `incoming_mailbox`
-- Prevents processing emails addressed to others sharing the same IMAP inbox
+### Recipient validation (unchanged)
+
+See [Recipient validation](#recipient-validation) above — this defends a
+shared IMAP mailbox against one channel processing another channel's mail.
+
+### Single-process poller (known limitation)
+
+The channel poll scheduler assumes a single backend process: there is no
+leader election, the same limitation `channel_pending_scheduler` already
+carries. Two backend processes would both poll the same mailbox; the IMAP
+`\Seen` flag plus the pipeline's redelivery dedup on `Message-ID` is what
+keeps that from double-answering in practice, but it is a race, not a
+guarantee. This is a documented limitation, not a bug — see
+[Server Channels — Known Limitations](../server_channels/server_channels.md#known-limitations)
+for the sibling case, and do not "fix" it by copying the advisory-lock leader
+pattern from the model-discovery scheduler: that pattern leaks connections on
+pooled connections.
 
 ## Integration Points
 
-- Agent Sessions — Session creation, streaming, message injection <!-- TODO: link when agents/agent_sessions docs are created -->
-- [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) — Auto-install for email senders; `InstallService.install_bundle_for_email` replaces the legacy auto-share flow
-- [Agent Environments](../../agents/agent_environments/agent_environments.md) — Docker environment build for installs
-- [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md) — Session context injection for email awareness
-- [Mail Servers](mail_servers.md) — IMAP/SMTP server configuration and credential management
-- [Email Sessions](email_sessions.md) — Session modes, processing, threading, and sending
-- [Input Tasks](../input_tasks/input_tasks.md) — Task creation from emails, "Send Answer" flow
-- [AI Functions](../../development/backend/ai_functions_development.md) — Email reply generation via LLM cascade
+- [Server Channels](../server_channels/server_channels.md) — the parent
+  feature. Whitelisting, auto-registration, two-pass sender routing, thread
+  bindings, identity routing, and admin availability policy are all the
+  shared channel model; this document only covers what the email transport
+  does differently.
+- [Mail Servers](mail_servers.md) — the admin-owned IMAP/SMTP connections an
+  email channel references by id.
+- [Email Sessions](email_sessions.md) — threading mechanics, the outgoing
+  queue, and session context for agent scripts.
+- [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) —
+  Pass-2 auto-install for a sender who matches no agent of their own uses the
+  same `InstallService.install_bundle` entry point every other channel uses.
+- [Agent Sessions / Channel Ingestion](../agent_sessions/channel_ingestion.md) —
+  email sessions are `channel_caller`-sourced sessions like any other channel;
+  `integration_type` is stamped `channel_email`.
+- ~~[Input Tasks](../input_tasks/input_tasks.md)~~ — no longer integrated.
+  Incoming email cannot create an `InputTask`; see
+  [Capabilities removed](#capabilities-removed-in-this-refactor).

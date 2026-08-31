@@ -51,6 +51,31 @@ def update_agent(
     return r.json()
 
 
+def set_router_trigger_prompt(
+    client: TestClient,
+    token_headers: dict[str, str],
+    agent_id: str,
+    trigger_prompt: str = "Handle anything",
+) -> dict:
+    """PATCH /agents/{id}/router-trigger-prompt — the owner-only field.
+
+    This is what makes an agent a **routing candidate on every surface**.
+    ``ChannelCandidateProvider`` builds the ballot from the sender's own
+    agents and admits one that has a non-blank ``router_trigger_prompt`` or a
+    non-empty ``example_prompts``. Since phase 5 of
+    ``docs/plans/channels_identity_unification/``, App MCP composes the same
+    provider, so setting it here is what makes the agent reachable over App
+    MCP too — with no route, no assignment and no toggle to also set.
+    """
+    r = client.patch(
+        f"{settings.API_V1_STR}/agents/{agent_id}/router-trigger-prompt",
+        headers=token_headers,
+        json={"router_trigger_prompt": trigger_prompt},
+    )
+    assert r.status_code == 200, f"Set router trigger prompt failed: {r.text}"
+    return r.json()
+
+
 def sync_agent_prompts(
     client: TestClient,
     token_headers: dict[str, str],
@@ -78,51 +103,6 @@ def enable_a2a(
     )
     assert r.status_code == 200, f"Enable A2A failed: {r.text}"
     return r.json()
-
-
-def configure_email_integration(
-    client: TestClient,
-    token_headers: dict[str, str],
-    agent_id: str,
-    incoming_server_id: str,
-    outgoing_server_id: str,
-    agent_session_mode: str = "owner",
-    access_mode: str = "open",
-    incoming_mailbox: str = "agent@test.com",
-    outgoing_from_address: str = "agent@test.com",
-) -> dict:
-    """Configure email integration via POST /api/v1/agents/{id}/email-integration."""
-    data = {
-        "agent_session_mode": agent_session_mode,
-        "access_mode": access_mode,
-        "incoming_server_id": incoming_server_id,
-        "outgoing_server_id": outgoing_server_id,
-        "incoming_mailbox": incoming_mailbox,
-        "outgoing_from_address": outgoing_from_address,
-    }
-    r = client.post(
-        f"{settings.API_V1_STR}/agents/{agent_id}/email-integration",
-        headers=token_headers,
-        json=data,
-    )
-    assert r.status_code == 200, f"Email integration config failed: {r.text}"
-    return r.json()
-
-
-def enable_email_integration(
-    client: TestClient,
-    token_headers: dict[str, str],
-    agent_id: str,
-) -> dict:
-    """Enable email integration via PUT /api/v1/agents/{id}/email-integration/enable."""
-    r = client.put(
-        f"{settings.API_V1_STR}/agents/{agent_id}/email-integration/enable",
-        headers=token_headers,
-    )
-    assert r.status_code == 200, f"Email integration enable failed: {r.text}"
-    body = r.json()
-    assert body["enabled"] is True
-    return body
 
 
 # ---------------------------------------------------------------------------

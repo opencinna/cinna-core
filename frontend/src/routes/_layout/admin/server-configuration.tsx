@@ -2,6 +2,10 @@ import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useEffect } from "react"
 
 import { DisclaimerCard } from "@/components/Admin/DisclaimerCard"
+import { MailServersCard } from "@/components/Admin/MailServersCard"
+import { AutoInstallAgentsCard } from "@/components/Admin/ServerChannels/AutoInstallAgentsCard"
+import { ServerChannelsCard } from "@/components/Admin/ServerChannels/ServerChannelsCard"
+import { ServerDebugToolsCard } from "@/components/Admin/ServerChannels/ServerDebugToolsCard"
 import { HashTabs, type TabConfig } from "@/components/Common/HashTabs"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import { usePageHeader } from "@/routes/_layout"
@@ -60,6 +64,29 @@ function AdminServerConfiguration() {
       content: (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <DisclaimerCard />
+        </div>
+      ),
+    },
+    {
+      value: "channels",
+      title: "Channels",
+      content: (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <ServerChannelsCard />
+          <AutoInstallAgentsCard />
+          <ServerDebugToolsCard />
+        </div>
+      ),
+    },
+    {
+      // A peer of Channels, not part of it: an email channel references a mail
+      // server by id the way a Google Chat channel references its service
+      // account, and the servers outlive any one channel.
+      value: "mail-servers",
+      title: "Mail Servers",
+      content: (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <MailServersCard />
         </div>
       ),
     },

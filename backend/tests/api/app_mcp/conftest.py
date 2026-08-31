@@ -22,6 +22,12 @@ from tests.utils.fixtures import (
 # create_session import so it uses the test transaction.
 CREATE_SESSION_TARGETS_APP_MCP = CREATE_SESSION_TARGETS_AGENT + [
     "app.services.app_mcp.app_mcp_request_handler.create_session",
+    # The token verifier opens its own sessions — one for the token lookup and
+    # one, through ServerChannelService, for the App MCP channel's availability
+    # policy. Both must land on the test transaction, or a token minted by the
+    # OAuth flow in a test reads as "not found" and the lazily-materialized
+    # channel row is written to the real database.
+    "app.mcp.app_token_verifier.create_session",
 ]
 
 

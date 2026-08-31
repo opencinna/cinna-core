@@ -17,6 +17,7 @@ from fastapi import (
     APIRouter,
     File,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -66,6 +67,7 @@ from app.models.cli.account_convenience import (
     AccountCredentialUpdateBody,
     AccountRestartEnvResult,
     AccountStatusRefreshCommandBody,
+    ContextPackageVersionPublic,
 )
 from app.models.cli.cli_device_login import (
     DeviceLoginPollRequest,
@@ -86,6 +88,11 @@ from app.models.credentials.credential import (
     CredentialsPublic,
 )
 from app.models.files.file_upload import FileUploadPublic
+from app.models.improvement.agent_improvement_request import (
+    ImprovementRequestDetailPublic,
+    ImprovementRequestUpdate,
+    ImprovementRequestsPublic,
+)
 from app.models.mcp.mcp_provider import (
     DiscoverableAgents,
     MCPProviderConnectionResponse,
@@ -104,6 +111,13 @@ from app.services.cli.device_login_service import (
     DeviceLoginService,
 )
 from app.services.files.file_service import FileService
+from app.services.improvement.improvement_download_service import (
+    archive_response as improvement_archive_response,
+)
+from app.services.improvement.improvement_request_service import (
+    ImprovementRequestDenied,
+    ImprovementRequestService,
+)
 
 if TYPE_CHECKING:
     from app.services.agents.agent_service import CanBuildError
@@ -676,6 +690,26 @@ def get_account_context_package(
     workspace's ``context/`` tree.
     """
     return ContextPackageService.get_context_package()
+
+
+@router.get(
+    "/account/context-package/version", response_model=ContextPackageVersionPublic
+)
+def get_account_context_package_version(
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Content version of the current context package.
+
+    The staleness signal for an account workspace: an existing ``context/`` tree
+    carries the version it was extracted at in ``context/VERSION``, and a
+    workspace set up before a guide (or a whole verb) existed has no other way
+    to know it is missing it. Cheap enough to call on every command — the
+    package is built once per process and cached.
+    """
+    return ContextPackageVersionPublic(
+        version=ContextPackageService.get_content_version()
+    )
 
 
 @router.post("/account/knowledge/search")
@@ -1558,6 +1592,142 @@ async def account_share_credential_with_agent(
         return Message(message="Credential attached to agent successfully")
     except ValueError as e:
         _raise_credential_value_error(e)
+
+
+# ── Account CLI: Improvement Requests ────────────────────────────────────────
+# Backing surface for ``cinna improve list|show|download|status``. Every route
+# delegates to the same ``ImprovementRequestService`` the web routes use, so the
+# ownership rules (recipient-or-requester read, recipient-only mutate, 404 for
+# anyone else) cannot drift between the two transports.
+#
+# The ``improvement-requests`` prefix is deliberately NOT on the api-proxy
+# denylist — ``cinna api`` can reach the JSON endpoints too. These exist for
+# ergonomics and, in the archive's case, out of necessity: the proxy is
+# JSON-only and cannot carry a binary body (the same reason
+# ``/account/files/upload`` is a dedicated route).
+
+
+def _raise_improvement_denied(e: ImprovementRequestDenied) -> None:
+    """Map the service's typed refusal onto HTTP, preserving its status code.
+
+    Mirrors ``improvement_requests._denied`` so the CLI transport reports the
+    same status for the same refusal — 404 for an id the account user is not
+    party to, 403 for a requester trying to mutate, 400 for a bad status value.
+    """
+    raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.get("/account/improvement-requests", response_model=ImprovementRequestsPublic)
+def list_account_improvement_requests(
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    status_filter: str | None = Query(default=None, alias="status"),
+    agent_id: uuid.UUID | None = None,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, le=200),
+) -> Any:
+    """
+    Cross-agent list of the improvement requests the account user *receives*.
+
+    Spans every agent they own, unhandled first then newest — the CLI's entry point
+    (``cinna improve list --status new``). Requests the account user submitted
+    on somebody else's agent are not listed here; those are the web
+    ``/improvement-requests/mine`` surface.
+    """
+    data, count = ImprovementRequestService.list_for_owner(
+        db,
+        account_ctx.user,
+        status=status_filter,
+        agent_id=agent_id,
+        skip=skip,
+        limit=limit,
+    )
+    return ImprovementRequestsPublic(data=data, count=count)
+
+
+@router.get(
+    "/account/improvement-requests/{request_id}",
+    response_model=ImprovementRequestDetailPublic,
+)
+def get_account_improvement_request(
+    request_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    One improvement request with its frozen runtime-context block
+    (``cinna improve show <id>``). 404 for any id the account user is not party
+    to — existence-leak-safe, like ``assert_can_build``.
+    """
+    try:
+        improvement_request, _role = ImprovementRequestService.get_authorized(
+            db, request_id, account_ctx.user
+        )
+    except ImprovementRequestDenied as e:
+        _raise_improvement_denied(e)
+    return ImprovementRequestService.to_detail_public(db, improvement_request)
+
+
+@router.get("/account/improvement-requests/{request_id}/archive")
+async def download_account_improvement_archive(
+    request_id: uuid.UUID,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Response:
+    """
+    Download the improvement archive as a ZIP (``cinna improve download <id>``),
+    which the CLI extracts into ``improvements/<short-id>/`` for a local coding
+    agent to read.
+
+    A dedicated route rather than an ``/account/api-proxy`` call: the proxy is
+    JSON-only and cannot carry a binary body. Writes the same
+    ``IMPROVEMENT_ARCHIVE_DOWNLOADED`` security event as the web route whenever
+    the request crosses a user boundary.
+    """
+    try:
+        improvement_request, _role = ImprovementRequestService.get_authorized(
+            db, request_id, account_ctx.user
+        )
+    except ImprovementRequestDenied as e:
+        _raise_improvement_denied(e)
+
+    return await improvement_archive_response(
+        db, improvement_request, account_ctx.user, http_request=request
+    )
+
+
+@router.patch(
+    "/account/improvement-requests/{request_id}",
+    response_model=ImprovementRequestDetailPublic,
+)
+async def update_account_improvement_request(
+    request_id: uuid.UUID,
+    body: ImprovementRequestUpdate,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Close the loop: set status and/or resolution note
+    (``cinna improve status <id> completed --note "…"``).
+
+    Recipient only — a requester who is party to the row gets 403, a stranger
+    404. The note is shown to the person who submitted the request.
+    """
+    try:
+        improvement_request, _role = ImprovementRequestService.get_authorized(
+            db, request_id, account_ctx.user
+        )
+        improvement_request = await ImprovementRequestService.update_status(
+            db,
+            improvement_request,
+            account_ctx.user,
+            status=body.status,
+            note=body.resolution_note,
+        )
+    except ImprovementRequestDenied as e:
+        _raise_improvement_denied(e)
+    return ImprovementRequestService.to_detail_public(db, improvement_request)
 
 
 @router.post("/account/api-proxy")

@@ -30,6 +30,9 @@ def patch_create_session(db):
         # rebuild_env_command imports create_session under the `create_db_session`
         # alias; the /rebuild slash command is exercised by the agent CLI tests.
         "app.services.agents.commands.rebuild_env_command.create_db_session",
+        # session_improve_command opens its own session to capture the frozen
+        # snapshot and write the improvement request (same alias).
+        "app.services.agents.commands.session_improve_command.create_db_session",
     ]):
         yield
 

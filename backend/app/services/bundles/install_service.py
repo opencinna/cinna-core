@@ -23,22 +23,22 @@ Key flows:
   volume); deletes the Agent row.
 
 - ``check_for_updates`` / ``set_update_mode``: small read/write helpers.
-
-- ``install_bundle_for_email``: thin wrapper used by the email routing
-  service. Auto-promotes the publisher install into a bundle on first
-  email-driven install (mirrors today's ``create_auto_share`` semantics).
 """
+import asyncio
 import copy
 import json
 import logging
 import uuid
-from datetime import datetime, UTC
+from contextlib import contextmanager
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlmodel import Session, select
 from fastapi import HTTPException
 
 from app.core.config import settings
+from app.core.db import create_session, engine
 from app.core.security import encrypt_field
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle, BundleInstallMode
@@ -49,7 +49,7 @@ from app.models.bundles.catalog import (
     InstallRequest,
 )
 from app.models.bundles.catalog import SetupCredentialSummary
-from app.models.credentials.ai_credential import AICredential
+from app.models.credentials.ai_credential import AICredential, AICredentialType
 from app.models.credentials.credential import Credential
 from app.models.credentials.link_models import AgentCredentialLink
 from app.models.environments.environment import (
@@ -62,8 +62,84 @@ from app.services.bundles.credential_spec import (
     ParsedCredentialSpec,
     parse_credential_spec,
 )
+from app.services.environments.sdk_constants import DEFAULT_SDK
 
 logger = logging.getLogger(__name__)
+
+
+# Environment statuses on which the automatic-update sweep is allowed to act.
+# Deliberately an allowlist: everything not listed here — "running", "error",
+# and every transitional status ("creating", "building", "initializing",
+# "starting", "rebuilding", "activating") — is skipped. Applying to a running
+# env would disrupt a live stream; applying to a transitional one would race the
+# lifecycle operation that currently owns the workspace directory.
+AUTO_UPDATE_ALLOWED_ENV_STATUSES = frozenset({"suspended", "stopped"})
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Interpret a possibly-naive DB timestamp as UTC.
+
+    The install bookkeeping columns (``last_update_attempt_at`` and friends)
+    are ``TIMESTAMP WITHOUT TIME ZONE`` but always written from
+    ``datetime.now(UTC)``, so a naive value read back is UTC wall-clock.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+# Stable, arbitrary 64-bit key for the Postgres advisory lock that makes the
+# auto-update sweep single-leader. Shared by BOTH entry points (the periodic
+# scheduler and the publish-time fast path) so they can never apply the same
+# install concurrently — ``apply_update`` copies a bundle snapshot into the
+# environment's instance directory, and two of those racing on one directory
+# is not something the row lock below can prevent (it is released by the
+# attempt-stamp commit that must happen before the apply).
+BUNDLE_AUTO_UPDATE_LOCK_KEY = 0x42554E444C4155  # "BUNDLAU"
+
+
+@contextmanager
+def sweep_leader_session():
+    """Yield a session that holds the sweep's leader lock, or ``None``.
+
+    ``None`` means another process already holds the lock and this run should
+    skip.
+
+    The lock has to live on the *same physical connection* for its whole life:
+    ``pg_try_advisory_lock`` is connection-scoped, while a ``Session`` bound to
+    an **engine** hands its connection back to the pool at every ``commit()``.
+    Since the sweep commits once per install, an engine-bound session would
+    strand the lock on a pooled connection — the ``pg_advisory_unlock`` then
+    returns false, the lock is never released, and every subsequent run is
+    locked out forever (i.e. the feature would silently disable itself after
+    its first productive run). Binding the ``Session`` to an explicit
+    ``engine.connect()`` pins it.
+    """
+    if settings.TESTING:
+        # Under test there is no cross-process concurrency to guard against,
+        # and the harness patches ``create_session`` to hand back the
+        # rolled-back test transaction. Checking out a real pooled connection
+        # here would escape that isolation and write to the live database.
+        with create_session() as session:
+            yield session
+        return
+
+    with engine.connect() as connection:
+        acquired = connection.execute(
+            text("SELECT pg_try_advisory_lock(:k)"),
+            {"k": BUNDLE_AUTO_UPDATE_LOCK_KEY},
+        ).scalar_one()
+        connection.commit()
+        if not acquired:
+            yield None
+            return
+        try:
+            with Session(bind=connection) as session:
+                yield session
+        finally:
+            connection.execute(
+                text("SELECT pg_advisory_unlock(:k)"),
+                {"k": BUNDLE_AUTO_UPDATE_LOCK_KEY},
+            )
+            connection.commit()
 
 
 class InstallError(Exception):
@@ -126,51 +202,6 @@ class InstallService:
         )
 
     @staticmethod
-    async def install_bundle_for_email(
-        session: Session,
-        publisher_agent_id: uuid.UUID,
-        recipient_user_id: uuid.UUID,
-    ) -> Agent:
-        """Auto-install for an email sender.
-
-        If the publisher hasn't published yet, lazily create an empty bundle
-        + first revision so installs can attach. This preserves today's
-        email-integration behaviour where the first sender effectively
-        forks a clone of the unpublished agent.
-        """
-        from app.services.bundles.bundle_service import BundleService
-        from app.services.bundles.publish_service import PublishService
-
-        publisher = session.get(Agent, publisher_agent_id)
-        if not publisher:
-            raise InstallError("Publisher agent not found")
-        recipient = session.get(User, recipient_user_id)
-        if not recipient:
-            raise InstallError("Recipient user not found")
-
-        bundle = BundleService.get_bundle_by_id(session, publisher.bundle_id)
-        if bundle is None or bundle.latest_revision_id is None:
-            # Promote the publisher install into a bundle by publishing
-            # an initial revision. This is the email-driven equivalent of
-            # the publish-from-UI flow.
-            await PublishService.publish(
-                session=session,
-                install=publisher,
-                publisher_user_id=publisher.owner_id,
-                release_notes="Initial revision (auto-published via email integration)",
-            )
-            session.refresh(publisher)
-            bundle = BundleService.get_bundle_by_id(session, publisher.bundle_id)
-            if bundle is None or bundle.latest_revision_id is None:
-                raise InstallError("Auto-publish for email integration failed")
-
-        return await InstallService.install_bundle(
-            session=session,
-            user=recipient,
-            bundle=bundle,
-        )
-
-    @staticmethod
     async def admin_install(
         session: Session,
         target_user: User,
@@ -187,7 +218,10 @@ class InstallService:
 
     @staticmethod
     def _apply_revision_metadata(
-        install: Agent, revision: AgentBundleRevision
+        install: Agent,
+        revision: AgentBundleRevision,
+        *,
+        skip_fields: set[str] | None = None,
     ) -> None:
         """Copy agent-row definitional metadata from a revision onto an install.
 
@@ -199,26 +233,109 @@ class InstallService:
         install / checkout, apply-update, and git pull so all three restore paths
         stay identical. Tokens / grants / per-install UI prefs are deliberately
         NOT part of this set (see plan exclusions).
+
+        ``skip_fields`` names raw attributes to leave alone regardless of what
+        the revision carries — the git pull ``keep_local`` resolution, where the
+        user chose to keep their drifted values. It is symmetric with (and
+        applied on top of) the per-field ``is not None`` guard; ``None``
+        (the default) preserves the behavior every other caller relies on.
         """
-        if revision.description is not None:
-            install.description = revision.description
-        if revision.example_prompts is not None:
+        skip = skip_fields or frozenset()
+
+        def _restore(field: str, *, deep: bool = False) -> None:
+            # Reads through ``getattr`` on the REVISION so a misspelled name
+            # fails loud here (AttributeError) instead of silently no-op'ing —
+            # ``setattr`` on a SQLModel instance would happily create a junk
+            # attribute. Every name below must also appear in
+            # ``git_source_service._METADATA_FIELDS``, or git pull's
+            # ``keep_local`` would preserve a field this restores (or vice versa).
+            value = getattr(revision, field)
+            if value is None or field in skip:
+                return
             # Deep-copy the mutable JSON payloads so the install never aliases the
             # (immutable) revision row's object — a later in-place edit of the
             # install's config must not reach back into the snapshot it came from.
-            install.example_prompts = copy.deepcopy(revision.example_prompts)
-        if revision.status_refresh_command is not None:
-            install.status_refresh_command = revision.status_refresh_command
-        if revision.agent_api_enabled is not None:
-            install.agent_api_enabled = revision.agent_api_enabled
-        if revision.agent_api_identity_enabled is not None:
-            install.agent_api_identity_enabled = revision.agent_api_identity_enabled
-        if revision.a2a_config is not None:
-            install.a2a_config = copy.deepcopy(revision.a2a_config)
-        if revision.agent_sdk_config is not None:
-            install.agent_sdk_config = copy.deepcopy(revision.agent_sdk_config)
-        if revision.webapp_enabled is not None:
-            install.webapp_enabled = revision.webapp_enabled
+            setattr(install, field, copy.deepcopy(value) if deep else value)
+
+        _restore("description")
+        _restore("example_prompts", deep=True)
+        _restore("status_refresh_command")
+        _restore("agent_api_enabled")
+        _restore("agent_api_identity_enabled")
+        _restore("a2a_config", deep=True)
+        _restore("agent_sdk_config", deep=True)
+        _restore("webapp_enabled")
+
+    @staticmethod
+    def _importable_model_override(
+        override: str | None,
+        effective_sdk: str | None,
+        context: str = "",
+    ) -> str | None:
+        """Filter a publisher-authored per-mode model override before import.
+
+        An ``openai_compatible`` model id names a model inside the *endpoint
+        owner's* namespace — it is only meaningful against the ``base_url`` of
+        the credential serving that mode. The consumer runs against their OWN
+        ``openai_compatible`` credential: a different endpoint, a different
+        model catalogue. So a model id the publisher pinned is very likely not
+        served there, and it would win anyway — ``resolve_model`` honours any
+        truthy override verbatim and returns BEFORE its ``openai_compatible``
+        branch, so an imported id outranks the consumer's own
+        ``openai_compatible_model``. The result is a hard provider error on the
+        first message, behind a green badge (``model_health_service`` reports
+        ``openai_compatible`` as always OK, on the assumption that whoever set
+        the model also owns the endpoint — exactly what importing breaks).
+
+        Therefore: for a mode that resolves to ``openai_compatible`` we drop the
+        imported override and let the installer's own fallback chain decide (see
+        below). Every other provider names models in a shared, portable
+        namespace, so the publisher's pin is kept.
+
+        This is deliberately scoped to IMPORTED (publisher-authored) overrides
+        and MUST NOT be folded into ``resolve_model``: that code path cannot
+        tell who authored an override, so the same rule there would also break
+        the legitimate case of a user deliberately pinning a model on their own
+        ``openai_compatible`` environment.
+
+        What takes the pin's place is ``EnvironmentService.create_environment``'s
+        pre-existing chain, which passing ``None`` here hands control to:
+        the installer's own ``User.default_model_override_*`` when they have one
+        set (the new-environment form pre-fills from it), and only when that is
+        NULL does the serving credential's configured ``model`` stand. So even
+        when the bundle ships the publisher's own AI credential
+        (publisher-provided credentials), the outcome is the publisher's default
+        on that endpoint only for an installer with no personal global default —
+        otherwise it is that personal default. Either way it is a model the
+        installer's own account chose, which is the point; the per-user
+        substitution itself is how every environment this user creates already
+        behaves and is not something this filter introduces.
+
+        Note this also fires on self-checkout: ``checkout`` of a Git repo you
+        authored yourself installs through the same path, so an
+        ``openai_compatible`` override you set is dropped even though publisher
+        and consumer are the same person on the same endpoint. That is accepted
+        — the override lands in a durable environment row while the credential
+        binding behind it stays mutable, so a later swap to a different
+        ``openai_compatible`` credential would carry the pin onto a foreign
+        endpoint. Keeping the suppression unconditional avoids that.
+        """
+        if not override:
+            return None
+        # Same split resolve_model / the lifecycle use: a missing SDK or a bare
+        # engine means the default ``anthropic`` provider.
+        _engine, _, provider = (effective_sdk or "").partition("/")
+        if (provider or "anthropic") != AICredentialType.OPENAI_COMPATIBLE.value:
+            return override
+        logger.info(
+            "Dropping imported model override '%s' — mode resolves to SDK '%s' "
+            "(openai_compatible model ids are endpoint-local and not portable "
+            "from publisher to consumer) [%s]",
+            override,
+            effective_sdk,
+            context,
+        )
+        return None
 
     @staticmethod
     async def _install_from_revision(
@@ -309,7 +426,53 @@ class InstallService:
             else request_build_id
         )
 
-        # 2b. Build environment (uses revision SDK selection).
+        # 2b. Decide which of the revision's per-mode model overrides may be
+        # imported. A mode's provider comes from its SDK id ("engine/provider"),
+        # so resolve the EFFECTIVE per-mode SDK first, mirroring
+        # ``EnvironmentService.create_environment``'s normalisation: a NULL
+        # conversation SDK falls back to the installer's own default, while a
+        # NULL building SDK means "building mode not needed" and stays NULL (the
+        # lifecycle then reads it as claude-code/anthropic). Each mode is judged
+        # independently — building and conversation can resolve to different
+        # providers, so one may be suppressed while the other is kept.
+        effective_sdk_conversation = (
+            revision.agent_sdk_conversation
+            or user.default_sdk_conversation
+            or DEFAULT_SDK
+        )
+        effective_sdk_building = (
+            None
+            if revision.agent_sdk_building is None
+            else (
+                revision.agent_sdk_building
+                or user.default_sdk_building
+                or DEFAULT_SDK
+            )
+        )
+        override_log_context = (
+            f"install={install.id} bundle={bundle.bundle_id} "
+            f"revision={revision.id} user={user.id}"
+        )
+        model_override_conversation = InstallService._importable_model_override(
+            revision.model_override_conversation,
+            effective_sdk_conversation,
+            context=f"mode=conversation {override_log_context}",
+        )
+        model_override_building = InstallService._importable_model_override(
+            revision.model_override_building,
+            effective_sdk_building,
+            context=f"mode=building {override_log_context}",
+        )
+
+        # 2c. Build environment (uses the revision's full SDK block).
+        # The per-mode model overrides travel with the engine selection: they are
+        # written into the manifest's ``sdk`` block by
+        # ``RevisionFormat.build_manifest`` and stored on the revision, so
+        # dropping them wholesale here would silently discard half of what the
+        # publisher pinned (only the non-portable ``openai_compatible`` case is
+        # filtered above). ``create_environment`` still falls back to the
+        # installer's own ``User.default_model_override_*`` when the revision
+        # leaves them NULL — or when the filter suppressed them.
         env_data = AgentEnvironmentCreate(
             env_name=settings.DEFAULT_AGENT_ENV_NAME,
             env_version=settings.DEFAULT_AGENT_ENV_VERSION,
@@ -318,6 +481,8 @@ class InstallService:
             config={},
             agent_sdk_conversation=revision.agent_sdk_conversation,
             agent_sdk_building=revision.agent_sdk_building,
+            model_override_conversation=model_override_conversation,
+            model_override_building=model_override_building,
             use_default_ai_credentials=False,
             conversation_ai_credential_id=conversation_ai_credential_id,
             building_ai_credential_id=building_ai_credential_id,
@@ -415,28 +580,11 @@ class InstallService:
                 install.id, e,
             )
 
-        # 6. Auto-create the App MCP route so the installer can reach the
-        # agent through the App MCP Server immediately. Best-effort: a
-        # failure here logs a warning and marks the install degraded but
-        # does NOT abort the install.
-        try:
-            InstallService._auto_create_app_mcp_route(
-                session=session,
-                install=install,
-                revision=revision,
-                user=user,
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to auto-create App MCP route for install %s: %s",
-                install.id, e,
-            )
-
-        # 7. Materialise the publisher's schedules onto the install.
-        # Best-effort, mirroring the MCP-route step: a failure here logs a
-        # warning and marks the install degraded but does NOT abort the
-        # install. The created rows are ordinary ``AgentSchedule`` rows and
-        # are polled / executed by the background scheduler unchanged.
+        # 6. Materialise the publisher's schedules onto the install.
+        # Best-effort: a failure here logs a warning and marks the install
+        # degraded but does NOT abort the install. The created rows are
+        # ordinary ``AgentSchedule`` rows and are polled / executed by the
+        # background scheduler unchanged.
         try:
             InstallService._materialise_schedules(
                 session=session,
@@ -456,7 +604,7 @@ class InstallService:
             except Exception:
                 session.rollback()
 
-        # 8. Materialise the publisher's plugins as source=bundle links. The
+        # 7. Materialise the publisher's plugins as source=bundle links. The
         # plugin files were already seeded into the env workspace in step 3;
         # these links drive the manifest (git=null) so the container install
         # routine marks them installed without a marketplace fetch. Best-effort:
@@ -524,165 +672,6 @@ class InstallService:
         created = plugin_sync.materialise(session, install, revision)
         if created:
             session.commit()
-
-    @staticmethod
-    def _auto_create_app_mcp_route(
-        *,
-        session: Session,
-        install: Agent,
-        revision: AgentBundleRevision,
-        user: User,
-    ) -> None:
-        """Create the installer's auto-managed ``AppAgentRoute`` for this install.
-
-        Idempotent: if a route already exists for this agent (e.g. the
-        admin install path re-running), this is a no-op. When the
-        revision has no ``router_trigger_prompt``, the route is skipped
-        and the install is marked degraded so the UI can prompt the
-        owner to set one before the agent is reachable via App MCP.
-
-        Exceptions are caught at the call site so install never aborts on
-        a router failure.
-        """
-        from app.models.app_mcp.app_agent_route import (
-            AppAgentRoute,
-            AppAgentRouteCreate,
-        )
-        from app.services.app_mcp.app_agent_route_service import (
-            AppAgentRouteService,
-        )
-
-        trigger_prompt = (revision.router_trigger_prompt or "").strip()
-        if not trigger_prompt:
-            logger.info(
-                "Install %s of bundle %s has no router_trigger_prompt — "
-                "skipping auto-route creation. Owner can set one via the "
-                "Prompts tab and the route will be created on next "
-                "apply-update.",
-                install.id, install.bundle_id,
-            )
-            # Mark degraded so the UI can surface a hint. Preserve any
-            # existing "degraded" state set by credentials setup.
-            if install.last_update_status not in ("degraded",):
-                install.last_update_status = "degraded"
-                session.add(install)
-                session.commit()
-                session.refresh(install)
-            return
-
-        # Idempotency: skip when an auto-managed route already exists for
-        # this agent owned by the installer. Reinstall after uninstall
-        # always creates a new Agent row anyway, so this branch only
-        # triggers on internal retries. We intentionally scope the
-        # filter to ``is_auto_managed=True`` so a user-created route on
-        # the same agent (e.g. a developer who manually added an extra
-        # route in the UI) doesn't suppress the auto-route creation.
-        existing_stmt = select(AppAgentRoute).where(
-            AppAgentRoute.agent_id == install.id,
-            AppAgentRoute.created_by == user.id,
-            AppAgentRoute.is_auto_managed == True,  # noqa: E712
-        )
-        existing = session.exec(existing_stmt).first()
-        if existing is not None:
-            logger.debug(
-                "Auto-route skipped — install %s already has route %s",
-                install.id, existing.id,
-            )
-            return
-
-        payload = AppAgentRouteCreate(
-            name=install.name,
-            agent_id=install.id,
-            session_mode="conversation",
-            trigger_prompt=trigger_prompt,
-            channel_app_mcp=True,
-            is_active=True,
-            auto_enable_for_users=False,
-            activate_for_myself=True,
-        )
-        AppAgentRouteService.create_route(
-            db_session=session,
-            data=payload,
-            current_user=user,
-            auto_managed=True,
-        )
-
-    @staticmethod
-    def _refresh_or_create_auto_route_on_update(
-        *,
-        session: Session,
-        install: Agent,
-        revision: AgentBundleRevision,
-    ) -> None:
-        """Apply-update: refresh the auto-managed route off the new revision.
-
-        - If an auto-managed route already exists, refresh its
-          ``trigger_prompt`` and ``name`` from the new revision (but only
-          if it's still flagged auto-managed; manual edits flip that to
-          ``False`` and we leave them alone).
-        - If no route exists yet AND the revision has a trigger prompt,
-          create one — covers installs from before this feature shipped
-          (Phase 8 backfill handles existing installs more thoroughly,
-          but apply-update is a natural per-install retry point).
-        - If the user already edited the route (``is_auto_managed=False``),
-          do nothing — their override wins.
-        """
-        from app.models.app_mcp.app_agent_route import AppAgentRoute
-
-        new_prompt = (revision.router_trigger_prompt or "").strip()
-
-        # Look up the install's auto-managed route directly. Filtering
-        # on ``is_auto_managed=True`` keeps a user-created sibling route
-        # on the same agent (a developer who manually added an extra
-        # route in the UI) from shadowing the lookup.
-        existing_stmt = select(AppAgentRoute).where(
-            AppAgentRoute.agent_id == install.id,
-            AppAgentRoute.created_by == install.owner_id,
-            AppAgentRoute.is_auto_managed == True,  # noqa: E712
-        )
-        existing = session.exec(existing_stmt).first()
-
-        if existing is not None:
-            if not new_prompt:
-                # The revision dropped its trigger prompt; keep the old
-                # route value rather than blanking a NOT NULL column.
-                return
-            changed = False
-            if existing.trigger_prompt != new_prompt:
-                existing.trigger_prompt = new_prompt
-                changed = True
-            if existing.name != install.name:
-                existing.name = install.name
-                changed = True
-            if changed:
-                existing.updated_at = datetime.now(UTC)
-                session.add(existing)
-                session.commit()
-                session.refresh(existing)
-            return
-
-        # No auto-managed route yet. Before creating one, check whether
-        # the installer already has a manual (``is_auto_managed=False``)
-        # route on this agent — that's the "user flipped auto-managed
-        # off via PUT" path, and the plan says their override wins.
-        # Without this check we'd silently mint a second route alongside
-        # the user's customised one on every apply-update.
-        manual_stmt = select(AppAgentRoute).where(
-            AppAgentRoute.agent_id == install.id,
-            AppAgentRoute.created_by == install.owner_id,
-            AppAgentRoute.is_auto_managed == False,  # noqa: E712
-        )
-        if session.exec(manual_stmt).first() is not None:
-            return
-
-        if not new_prompt:
-            return
-        InstallService._auto_create_app_mcp_route(
-            session=session,
-            install=install,
-            revision=revision,
-            user=session.get(User, install.owner_id),
-        )
 
     @staticmethod
     async def _ensure_unique_name(
@@ -1240,7 +1229,16 @@ class InstallService:
                     )
 
             if env is not None:
-                replace_bundle_content(Path(revision.snapshot_path), env.id)
+                # Full workspace tree copy — off the event loop. The publish
+                # fast path runs this sweep as a background task on the request
+                # loop, up to BUNDLE_AUTO_UPDATE_BATCH_LIMIT times in a row,
+                # and the owner-triggered POST /apply-update route runs it
+                # inline; either way an inline copy blocks every other request
+                # on the worker. Mirrors the ``asyncio.to_thread`` treatment
+                # ``PublishService._write_snapshot_to_disk`` already gets.
+                await asyncio.to_thread(
+                    replace_bundle_content, Path(revision.snapshot_path), env.id
+                )
                 # The snapshot just overwrote the env prompt files with the new
                 # revision content. Reset the prompt-sync baselines to None so
                 # the reconcile that runs on the next env start treats the DB as
@@ -1275,24 +1273,6 @@ class InstallService:
             session.add(install)
             session.commit()
             session.refresh(install)
-
-            # Refresh the auto-managed App MCP route off the new revision.
-            # User-edited routes (is_auto_managed=False) are left alone.
-            # If no route exists yet (install pre-dates auto-routing, or
-            # the previous revision shipped without a trigger prompt), we
-            # create one now.
-            try:
-                InstallService._refresh_or_create_auto_route_on_update(
-                    session=session,
-                    install=install,
-                    revision=revision,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to refresh auto-managed App MCP route for "
-                    "install %s on apply-update: %s",
-                    install.id, e,
-                )
 
             # Merge the install's schedules against the new revision.
             # Behaviorally-unchanged schedules keep the user's enable/disable
@@ -1371,6 +1351,309 @@ class InstallService:
                 pass
             raise
 
+    # ── Automatic update convergence ──────────────────────────────
+
+    @staticmethod
+    async def sweep_automatic_updates(
+        session: Session,
+        *,
+        bundle: AgentBundle | None = None,
+        limit: int = 50,
+    ) -> dict:
+        """Apply pending revisions to automatic-mode installs whose env is not live.
+
+        The suspension-time hook in ``environment_suspension_scheduler`` only
+        fires on the running → suspended transition, so an install whose
+        environment was *already* suspended when a revision was published never
+        converges. This sweep closes that gap and is the single implementation
+        shared by the periodic scheduler and the publish-time fast path.
+
+        Selection is on **revision mismatch**, not ``pending_update`` — the
+        sweep is self-healing if the publish-time notification was lost.
+
+        Args:
+            session: Database session (owned by the caller; the sweep commits).
+            bundle: Restrict the sweep to a single bundle (publish fast path).
+                ``None`` sweeps the whole fleet.
+            limit: Maximum number of installs to *attempt* in this batch. Rows
+                beyond the limit are logged and picked up by the next run.
+
+        Returns:
+            ``{"applied": int, "skipped": int, "failed": int, "deferred": int}``
+        """
+        backoff_cutoff = datetime.now(UTC) - timedelta(
+            hours=settings.BUNDLE_AUTO_UPDATE_RETRY_BACKOFF_HOURS
+        )
+
+        # Single joined query — no per-row bundle/env lookup. The LEFT JOIN on
+        # ``active_environment_id`` gives us the gating status inline; installs
+        # with no environment at all come back with ``env_id is None``.
+        #
+        # Scalar columns, not ORM entities, on purpose: the loop below commits
+        # per install, and ``expire_on_commit`` would expire every still-unvisited
+        # entity, turning the batch back into the per-row SELECT this query
+        # exists to avoid (and risking ObjectDeletedError if an install is
+        # uninstalled mid-sweep). Plain tuples are immune; the ``Agent`` row is
+        # loaded once, only for installs we are actually about to mutate.
+        query = (
+            select(
+                Agent.id,  # type: ignore[arg-type]
+                Agent.last_update_status,  # type: ignore[arg-type]
+                Agent.last_update_attempt_at,  # type: ignore[arg-type]
+                Agent.active_environment_id,  # type: ignore[arg-type]
+                AgentEnvironment.id,  # type: ignore[arg-type]
+                AgentEnvironment.status,  # type: ignore[arg-type]
+            )
+            .join(AgentBundle, AgentBundle.id == Agent.bundle_uuid)
+            .outerjoin(
+                AgentEnvironment,
+                AgentEnvironment.id == Agent.active_environment_id,
+            )
+            .where(
+                Agent.is_publisher_install == False,  # noqa: E712
+                Agent.update_mode == BundleInstallMode.AUTOMATIC,
+                AgentBundle.latest_revision_id.is_not(None),  # type: ignore[union-attr]
+                Agent.installed_revision_id.is_distinct_from(  # type: ignore[union-attr]
+                    AgentBundle.latest_revision_id
+                ),
+            )
+            .order_by(Agent.created_at)  # type: ignore[arg-type]
+        )
+        if bundle is not None:
+            query = query.where(AgentBundle.id == bundle.id)
+
+        candidates = list(session.exec(query).all())
+        if not candidates:
+            return {"applied": 0, "skipped": 0, "failed": 0, "deferred": 0}
+
+        applied = 0
+        skipped = 0
+        failed = 0
+        deferred = 0
+
+        for index, row in enumerate(candidates):
+            (
+                install_id,
+                last_update_status,
+                last_update_attempt_at,
+                active_environment_id,
+                env_id,
+                env_status,
+            ) = row
+
+            if applied + failed >= limit:
+                logger.info(
+                    "Bundle auto-update sweep hit the batch limit of %s; "
+                    "%s matching install(s) were not examined and are left "
+                    "for the next run",
+                    limit,
+                    len(candidates) - index,
+                )
+                break
+
+            try:
+                # Failure backoff — don't retry a persistently failing install
+                # on every sweep.
+                if (
+                    last_update_status == "failed"
+                    and last_update_attempt_at is not None
+                    and _as_utc(last_update_attempt_at) > backoff_cutoff
+                ):
+                    deferred += 1
+                    logger.debug(
+                        "Deferring automatic update for install %s: last "
+                        "attempt at %s failed and is inside the %sh backoff",
+                        install_id,
+                        last_update_attempt_at,
+                        settings.BUNDLE_AUTO_UPDATE_RETRY_BACKOFF_HOURS,
+                    )
+                    continue
+
+                if env_id is None:
+                    if active_environment_id is not None:
+                        # Dangling reference — apply_update degrades to the
+                        # DB-only path, which is exactly what we want here.
+                        logger.warning(
+                            "Install %s references missing environment %s; "
+                            "applying update on the DB-only path",
+                            install_id,
+                            active_environment_id,
+                        )
+                elif env_status not in AUTO_UPDATE_ALLOWED_ENV_STATUSES:
+                    skipped += 1
+                    logger.debug(
+                        "Skipping automatic update for install %s: env %s "
+                        "status '%s' is not in the allowlist %s",
+                        install_id,
+                        env_id,
+                        env_status,
+                        sorted(AUTO_UPDATE_ALLOWED_ENV_STATUSES),
+                    )
+                    continue
+
+                if env_id is not None:
+                    # Re-read the env status under a row lock. The batch query
+                    # and this apply are seconds apart and the env may have been
+                    # activated in between; this shrinks the activation race to
+                    # the workspace copy itself without introducing a new env
+                    # status value. ``skip_locked`` keeps a concurrent lifecycle
+                    # transaction from blocking the whole batch (and, in the
+                    # scheduler, from blocking it while holding the leader lock)
+                    # — a row someone else has locked is one we should not touch
+                    # anyway.
+                    locked_status = session.exec(
+                        select(AgentEnvironment.status)  # type: ignore[arg-type]
+                        .where(AgentEnvironment.id == env_id)
+                        .with_for_update(skip_locked=True)
+                    ).first()
+                    if locked_status not in AUTO_UPDATE_ALLOWED_ENV_STATUSES:
+                        session.rollback()  # release the row lock
+                        skipped += 1
+                        logger.debug(
+                            "Skipping automatic update for install %s: env %s "
+                            "is %s",
+                            install_id,
+                            env_id,
+                            (
+                                f"now in status '{locked_status}'"
+                                if locked_status is not None
+                                else "locked by another transaction or deleted"
+                            ),
+                        )
+                        continue
+
+                install = session.get(Agent, install_id)
+                if install is None:
+                    # Uninstalled between the batch query and now.
+                    session.rollback()
+                    skipped += 1
+                    logger.debug(
+                        "Skipping automatic update for install %s: row is gone",
+                        install_id,
+                    )
+                    continue
+
+                # Record the attempt BEFORE applying, so a crash mid-apply still
+                # lands in the backoff window. This commit also releases the
+                # row lock taken above.
+                install.last_update_attempt_at = datetime.now(UTC)
+                session.add(install)
+                session.commit()
+
+                await InstallService.apply_update(session, install)
+                applied += 1
+                logger.info(
+                    "Bundle auto-update applied for install %s (bundle %s)",
+                    install.id,
+                    install.bundle_id,
+                )
+            except Exception as e:  # noqa: BLE001 — one failure must not abort
+                failed += 1
+                session.rollback()
+                # apply_update stamps last_update_status="failed" itself, but
+                # only for errors raised inside its own try block — its early
+                # guard clauses (e.g. a dangling latest_revision_id) raise
+                # before that. Without a "failed" marker the backoff never
+                # engages and the install is retried on every sweep forever, so
+                # make the sweep authoritative about its own bookkeeping.
+                InstallService._mark_update_failed(session, install_id)
+                logger.error(
+                    "Bundle auto-update failed for install %s: %s",
+                    install_id,
+                    e,
+                    exc_info=True,
+                )
+
+        result = {
+            "applied": applied,
+            "skipped": skipped,
+            "failed": failed,
+            "deferred": deferred,
+        }
+        if applied or failed:
+            logger.info("Bundle auto-update sweep complete: %s", result)
+        else:
+            logger.debug("Bundle auto-update sweep complete: %s", result)
+        return result
+
+    @staticmethod
+    def _mark_update_failed(session: Session, install_id: uuid.UUID) -> None:
+        """Best-effort failure bookkeeping after a sweep error.
+
+        Stamps **both** halves the backoff gate reads — ``last_update_status``
+        and ``last_update_attempt_at`` — unconditionally, so that *every* failed
+        attempt restarts the backoff window no matter which stage it failed at.
+
+        Both writes are needed, and both must be unconditional:
+
+        - A failure raised *before* the attempt-stamp commit (from the row-lock
+          re-read, or ``session.get``) never stamped ``last_update_attempt_at``
+          at all, so without this the gate — which requires both halves — never
+          engages and the install is retried on every sweep forever.
+        - Refreshing an already-``failed`` row matters just as much. If the
+          timestamp were left at the value written by the *first* failure, the
+          row would be deferred for one backoff window and then, once that
+          window expired, be retried every sweep forever — the same hot loop,
+          merely postponed.
+
+        The redundant write on the normal path (where the sweep already stamped
+        the attempt seconds earlier) costs one UPDATE on a row that is failing
+        anyway; correctness of the gate is worth more than avoiding it.
+
+        Swallows its own errors: this runs on the failure path and must never
+        mask the original exception or abort the batch.
+        """
+        try:
+            install = session.get(Agent, install_id)
+            if install is None:
+                return
+            install.last_update_status = "failed"
+            install.last_update_attempt_at = datetime.now(UTC)
+            session.add(install)
+            session.commit()
+        except Exception as e:  # noqa: BLE001 — failure path, stay quiet
+            logger.warning(
+                "Could not mark install %s as failed after a sweep error: %s",
+                install_id, e,
+            )
+            session.rollback()
+
+    @staticmethod
+    async def sweep_bundle_updates_background(bundle_uuid: uuid.UUID) -> None:
+        """Bundle-scoped sweep for detached background use (publish fast path).
+
+        Used by ``PublishService.notify_installs`` so a publish returns
+        immediately and never fails because of a sweep. Must not reuse the
+        request session — the task outlives the request — so it takes the same
+        leader-locked session the periodic scheduler uses, which also keeps the
+        two entry points from applying the same install concurrently. If the
+        periodic sweep happens to be running, this one skips and the install
+        converges on the next scheduled run instead.
+        """
+        if not settings.BUNDLE_AUTO_UPDATE_ENABLED:
+            return
+
+        with sweep_leader_session() as session:
+            if session is None:
+                logger.info(
+                    "Publish-time auto-update sweep for bundle %s skipped: a "
+                    "sweep is already running; the periodic run will converge it",
+                    bundle_uuid,
+                )
+                return
+            bundle = session.get(AgentBundle, bundle_uuid)
+            if bundle is None:
+                logger.warning(
+                    "Publish-time auto-update sweep skipped: bundle %s not found",
+                    bundle_uuid,
+                )
+                return
+            await InstallService.sweep_automatic_updates(
+                session,
+                bundle=bundle,
+                limit=settings.BUNDLE_AUTO_UPDATE_BATCH_LIMIT,
+            )
+
     # ── Uninstall ─────────────────────────────────────────────────
 
     @staticmethod
@@ -1417,6 +1700,8 @@ class InstallService:
         latest_number: int | None = None
         installed_version: str | None = None
         latest_version: str | None = None
+        latest_release_notes: str | None = None
+        latest_published_at: datetime | None = None
         if install.installed_revision_id:
             rev = session.get(AgentBundleRevision, install.installed_revision_id)
             if rev:
@@ -1429,6 +1714,8 @@ class InstallService:
                 if latest_rev:
                     latest_number = latest_rev.revision_number
                     latest_version = latest_rev.version
+                    latest_release_notes = latest_rev.release_notes
+                    latest_published_at = latest_rev.published_at
 
         if (
             latest_number is not None
@@ -1452,6 +1739,8 @@ class InstallService:
             "latest_revision_number": latest_number,
             "installed_version": installed_version,
             "latest_version": latest_version,
+            "latest_release_notes": latest_release_notes,
+            "latest_published_at": latest_published_at,
             "last_update_status": install.last_update_status,
             "last_sync_at": install.last_sync_at,
             "update_mode": install.update_mode,

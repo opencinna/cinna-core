@@ -7,8 +7,8 @@ Activities are a persistent notification/logging system that tracks important sy
 ## Core Concepts
 
 - **Activity**: A single logged event with type, text, read status, archived status, and optional action-required indicator
-- **Activity Type**: Category of event (e.g., `session_completed`, `questions_asked`, `error_occurred`, `email_task_incoming`)
-- **Action Required**: Flag indicating the activity needs user intervention (e.g., answering agent questions, reviewing an email task)
+- **Activity Type**: Category of event (e.g., `session_completed`, `questions_asked`, `error_occurred`)
+- **Action Required**: Flag indicating the activity needs user intervention (e.g., answering agent questions)
 - **Read/Unread**: Tracking whether the user has seen the activity, with automatic marking after 2 seconds of visibility
 - **Archived**: Flag that hides log activities from the main feed without deleting them. Archived activities are visible in the All Logs page.
 - **Activity Stats**: Aggregated counts (unread, action-required) used by the sidebar bell indicator — excludes archived activities
@@ -29,19 +29,13 @@ Activities are a persistent notification/logging system that tracks important sy
 3. Sidebar bell turns red (destructive color)
 4. User clicks activity card, navigates to the session to answer questions
 
-**3. Email Task Activity Lifecycle**
-1. Email arrives, system creates input task and `email_task_incoming` activity
-2. User reviews and executes the task, `email_task_incoming` is dismissed
-3. Task completes, `email_task_reply_pending` activity created
-4. User sends email reply, `email_task_reply_pending` dismissed
-
-**4. Session State Declaration**
+**3. Session State Declaration**
 1. Agent uses `update_session_state` tool to declare outcome (completed/needs_input/error) with a summary
 2. System creates activity with the agent's summary text
 3. If `needs_input`, activity has `action_required="answers_required"`
 4. Generic `session_completed` activity is skipped when agent already declared a result state
 
-**5. Archive Logs**
+**4. Archive Logs**
 1. User wants to clean up the Logs section without deleting history
 2. User clicks "Archive Logs" — all log activities except live `session_running` ones (including action-required ones such as "Answers required") are marked `is_archived=true` and `is_read=true`
 3. Main Activities page no longer shows archived entries
@@ -77,8 +71,8 @@ Activities are a persistent notification/logging system that tracks important sy
 | `task_failed` | "Task failed" | (none) | Task status → error |
 | `task_blocked` | "Task is blocked and requires attention" | `task_action_required` | Task status → blocked |
 | `task_cancelled` | "Task was cancelled" | (none) | Task status → cancelled |
-| `email_task_incoming` | "New email task received" | `task_review_required` | Email-originated task created |
-| `email_task_reply_pending` | "Task completed. Email reply pending." | `reply_pending` | Email task status changes to completed |
+
+`email_task_incoming` and `email_task_reply_pending` (and the `TASK_CREATED` event / `handle_task_created` handler that used to produce the former) were removed along with the email-originated task flow when email became a [Server Channel](../server_channels/server_channels.md) (Phase 4 of the channels & identity unification refactor) — email can no longer create an `InputTask` at all. See [Email Integration — Capabilities removed](../email_integration/email_integration.md#capabilities-removed-in-this-refactor).
 
 ### Sidebar Bell Indicator
 
@@ -100,7 +94,7 @@ The tooltip shows both the label "Activities" and the current connection status 
 
 ```
 Streaming Events (MessageService) ──→ EventBus ──→ Activity Event Handlers ──→ ActivityService ──→ DB
-Email/Task Events ──→ EventBus ──→ Activity Event Handlers ──→ ActivityService ──→ DB
+Task Events ──→ EventBus ──→ Activity Event Handlers ──→ ActivityService ──→ DB
                                                                       │
                                                           WebSocket (ACTIVITY_CREATED/UPDATED/DELETED)
                                                                       │
@@ -120,8 +114,7 @@ Activities are created/managed by event handlers registered at app startup:
 | `STREAM_ERROR` | `handle_stream_error` | Deletes running, always creates `error_occurred` with `input_task_id` |
 | `STREAM_INTERRUPTED` | `handle_stream_interrupted` | Deletes running, no completion (session resumable) |
 | `SESSION_STATE_UPDATED` | `handle_session_state_updated` | Deletes running, creates state-specific activity with agent summary and `input_task_id` |
-| `TASK_CREATED` | `handle_task_created` | Creates `email_task_incoming` (only for email-sourced tasks) |
-| `TASK_STATUS_UPDATED` | `handle_task_status_changed` | Creates task lifecycle activities (completed/failed/blocked/cancelled) for ALL tasks; also manages email task activity lifecycle |
+| `TASK_STATUS_UPDATED` | `handle_task_status_changed` | Creates task lifecycle activities (completed/failed/blocked/cancelled) for ALL tasks |
 
 **Connected vs Disconnected Detection**: Uses `event_service.is_user_connected(user_id)` to determine `is_read` flag for completion activities. Both connected and disconnected users get completion activities — the difference is only in the read state.
 
@@ -132,7 +125,6 @@ Activities are created/managed by event handlers registered at app startup:
 - [Event Bus](../realtime_events/event_bus_system.md) - All activity creation is event-driven via `EventService.register_handler()`
 - [Agent Sessions](../agent_sessions/agent_sessions.md) - Activities track session lifecycle (running, completed, error, interrupted)
 - [Input Tasks](../input_tasks/input_tasks.md) - Task lifecycle activities link to tasks via `input_task_id`; session activities also carry `input_task_id` when the session was started from a task
-- [Email Sessions](../email_integration/email_sessions.md) - Email task incoming/reply pending activities
 - [Streaming](../realtime_events/frontend_backend_agentenv_streaming.md) - `MessageService` emits streaming events that trigger activity creation
 - [Agent Environments](../../agents/agent_environments/agent_environments.md) - Activities resolve agent_id through environment lookup
 - [Agent Handover](../../agents/agent_handover/agent_handover.md) - Direct handovers create target-agent sessions that generate the full session activity lifecycle (running → completed/error), notifying target agent owners of delegated work
@@ -150,7 +142,7 @@ The Activities page is a **cross-workspace** dashboard showing the state of the 
 
 Shows only activities where `action_required !== ""`. These are the critical items needing human attention. The section is hidden entirely when there are no pending actions, keeping the page clean.
 
-Items include `session_feedback_required`, `questions_asked`, `email_task_incoming`, and `email_task_reply_pending`. Each row shows the agent badge, session/task title, activity text, and an action-type chip in destructive styling. Clicking navigates to the relevant session or task.
+Items include `session_feedback_required`, `questions_asked`, and `task_blocked`. Each row shows the agent badge, session/task title, activity text, and an action-type chip in destructive styling. Clicking navigates to the relevant session or task.
 
 ### Section 2: Happening Now
 

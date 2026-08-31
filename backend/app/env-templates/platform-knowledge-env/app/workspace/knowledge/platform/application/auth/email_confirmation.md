@@ -67,10 +67,9 @@ An unauthenticated user who lost the link can visit the login/recovery flow. The
 
 ### Blocked Outbound Email
 
-1. An unconfirmed user owns an agent with email integration configured
-2. When the agent generates a reply to an incoming email, the outbound-email gate fires at enqueue time — the reply is not queued
-3. If a queue entry exists from before confirmation status changed, a secondary send-time gate marks it `BLOCKED_UNCONFIRMED` (a terminal status; the entry is never retried)
-4. For the manual "Send Answer" button on Input Tasks, the gate fires immediately and returns an error message visible to the user
+1. An unconfirmed user is reachable on an **email Server Channel** and one of their agents answers a message that arrived on it (per-agent Email Integration was deleted in Phase 4 of the channels & identity unification — migration `ca0192122e0c` dropped the table; email is a channel transport now)
+2. The agent's reply is written to the durable `OutgoingEmailQueue` by `EmailChannelAdapter`, and the outbound-email gate fires at send time in `EmailSendingService._send_single_email` — the entry is marked `BLOCKED_UNCONFIRMED` (a terminal status; it is never retried) and nothing leaves the server
+3. Confirming the address does not resurrect an already-blocked entry; only mail queued afterwards is sent
 
 ### Publisher Email Indicator on Catalog and Install Cards
 
@@ -88,8 +87,7 @@ Catalog cards and the install detail header show the publisher's email address. 
   - Welcome/new-account email sent at admin-created user creation (carries a temporary password and is admin-initiated)
 - **Gated surfaces (exhaustive list):**
   1. System notifications — single choke point in `SystemNotificationService.notify()` covers all current and future notification types
-  2. Agent email replies (auto-session) — blocked at enqueue time (`queue_outgoing_email`) and again at send time (`_send_single_email`)
-  3. Manual "Send Answer" on Input Tasks — blocked in `InputTaskService.send_email_answer()`
+  2. Agent email replies on an email Server Channel — blocked at send time in `EmailSendingService._send_single_email()`, which marks the queue entry `BLOCKED_UNCONFIRMED`
 
 ### Cooldowns
 

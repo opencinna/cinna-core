@@ -6,7 +6,7 @@ the generate_content method.
 """
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -31,6 +31,25 @@ class ProviderError(Exception):
 
 
 @dataclass
+class ProviderAttempt:
+    """One provider the cascade tried, whether it succeeded or not.
+
+    ``ProviderManager`` cascades through providers and, until now, threw away
+    everything but the winner: the per-provider error list existed only to build
+    the "all providers failed" message and was discarded on success. That list
+    is the answer to "which models did we actually try, and what did the ones
+    that failed say" — the first question asked when a routing or AI-function
+    result looks wrong.
+    """
+
+    provider: str
+    model: Optional[str] = None
+    ok: bool = False
+    error: Optional[str] = None
+    latency_ms: int = 0
+
+
+@dataclass
 class ProviderResponse:
     """Response from an AI provider."""
 
@@ -38,6 +57,10 @@ class ProviderResponse:
     provider_name: str
     model: Optional[str] = None
     usage: Optional[dict] = None
+    #: Every provider tried before (and including) the one that answered.
+    #: Populated by ``ProviderManager``; a provider calling itself directly
+    #: leaves it empty, so consumers must tolerate an empty list.
+    attempts: list[ProviderAttempt] = field(default_factory=list)
 
 
 class BaseAIProvider(ABC):

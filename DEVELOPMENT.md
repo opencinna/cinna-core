@@ -108,7 +108,8 @@ Tests run inside Docker. See `backend/tests/README.md` for conventions.
 
 ```bash
 make test-backend                              # Run all backend tests
-docker compose exec backend python -m pytest tests/api/agents/ -v   # Run a specific directory
+docker compose exec backend python -m pytest tests/api/agents/webapp/ -v   # Run a topic group
+docker compose exec backend python -m pytest tests/api/agents/ -v   # Run a whole domain (610 tests)
 ```
 
 ## Project Structure

@@ -1,279 +1,348 @@
 # Email Integration — Technical Details
 
+Email is a **Server Channels transport** (`channel_type="email"`). Most of the
+pipeline (routing, thread bindings, admin CRUD, availability policy) lives in
+[Server Channels — Technical Reference](../server_channels/server_channels_tech.md);
+this file covers only what is specific to the email transport. Per-agent
+Email Integration (models, services, routes, frontend, tests) is **deleted
+outright** — see [Deletions](#deletions-phase-4) below.
+
 ## File Locations
 
-### Backend — Models
-- `backend/app/models/email/mail_server_config.py` — `MailServerConfig`, `MailServerConfigPublic`, `MailServerConfigCreate`, `MailServerConfigUpdate`, `MailServerType`, `EncryptionType`
-- `backend/app/models/email/agent_email_integration.py` — `AgentEmailIntegration`, `AgentEmailIntegrationPublic`, `EmailAccessMode`, `AgentSessionMode`, `EmailProcessAs`, `EmailCloneShareMode`, `ProcessEmailsResult`
-- `backend/app/models/email/email_message.py` — `EmailMessage`, `EmailMessagePublic`
-- `backend/app/models/email/outgoing_email_queue.py` — `OutgoingEmailQueue`, `OutgoingEmailQueuePublic`, `OutgoingEmailStatus`
-- `backend/app/models/sessions/session.py` — Added: `email_thread_id`, `integration_type`, `sender_email` fields
-- `backend/app/models/sharing/agent_share.py` — Added: `source` field (`manual` | `email_integration`)
-- `backend/app/models/tasks/input_task.py` — Added: `source_email_message_id`, `source_agent_id`, `SendAnswerRequest`, `SendAnswerResponse`
+### Backend — Models (retained)
+- `backend/app/models/email/email_message.py` — `EmailMessage`, `EmailMessagePublic`.
+  `agent_id` is now **nullable** (migration `907124e812c5`) — see
+  [Database Schema](#database-schema).
+- `backend/app/models/email/outgoing_email_queue.py` — `OutgoingEmailQueue`,
+  `OutgoingEmailQueuePublic`, `OutgoingEmailStatus`. Unchanged.
+- `backend/app/models/email/mail_server_config.py` — `MailServerConfig`,
+  now server-scoped (`user_id` dropped). See [Mail Servers — Technical Details](mail_servers_tech.md).
 
-### Backend — Services
-- `backend/app/services/email/` — All email-related services (see below)
-- `backend/app/services/email/__init__.py` — Re-exports main service classes
-- `backend/app/services/email/mail_server_service.py` — `MailServerService` (CRUD + connection testing)
-- `backend/app/services/email/integration_service.py` — `EmailIntegrationService` (CRUD + orchestration)
-- `backend/app/services/email/routing_service.py` — `EmailRoutingService` (sender → target mapping)
-- `backend/app/services/email/polling_service.py` — `EmailPollingService` (IMAP fetch + parse)
-- `backend/app/services/email/processing_service.py` — `EmailProcessingService` (route + inject messages / create tasks)
-- `backend/app/services/email/sending_service.py` — `EmailSendingService` (queue + SMTP send)
-- `backend/app/services/email/imap_connector.py` — `IMAPConnector` (testable IMAP wrapper)
-- `backend/app/services/email/smtp_connector.py` — `SMTPConnector` (testable SMTP wrapper)
-- `backend/app/services/email/polling_scheduler.py` — APScheduler job (5 min interval)
-- `backend/app/services/email/sending_scheduler.py` — APScheduler job (2 min interval)
+### Backend — Services (retained, adapted)
+- `backend/app/services/server_channels/adapters/email.py` —
+  `EmailChannelAdapter(PolledChannelTransport)`: the transport itself. Config
+  validation, `poll()`, `send_message()`, thread-key composite
+  build/parse, `record_routing_outcome()`. See
+  [The `EmailChannelAdapter`](#the-emailchanneladapter-adaptersemailpy) below.
+- `backend/app/services/server_channels/channel_poll_service.py` —
+  `ChannelPollService.poll_enabled_channels(db)`: drives every enabled polled
+  channel through one fetch-and-process pass. Transport-agnostic — it
+  enumerates polled channel types from the adapter registry, not a hardcoded
+  email-specific list.
+- `backend/app/services/server_channels/channel_poll_scheduler.py` — the
+  APScheduler wrapper (60s interval), `TESTING`-gated. Submits the poll
+  coroutine to the main event loop, the same pattern every other scheduler in
+  this codebase follows.
+- `backend/app/services/email/polling_service.py` — `EmailPollingService`:
+  now a bag of **IMAP/MIME mechanics only**, with no driver of its own.
+  `_fetch_unread_emails`, `_parse_email`, `_extract_body`,
+  `_extract_attachment_metadata`, `_decode_header_value`, `_mark_email_read`,
+  `_is_addressed_to_channel` (renamed from `_is_addressed_to_agent`), and
+  `format_email_as_message` are called by `EmailChannelAdapter`, which is
+  their only caller.
+- `backend/app/services/email/sending_service.py` — `EmailSendingService`:
+  now **the send half only**. Enqueueing is `ChannelOutboundService`'s job via
+  `EmailChannelAdapter.send_message`; `send_pending_emails` drains
+  `outgoing_email_queue` unchanged, resolving SMTP configuration per entry
+  through `entry.session_id` → `ChannelThreadBinding` → `ServerChannel.config`
+  rather than through a per-agent integration.
+- `backend/app/services/email/imap_connector.py` / `smtp_connector.py` —
+  unchanged, testable connector wrappers.
+- `backend/app/services/email/mail_server_service.py` — `MailServerService`.
+  See [Mail Servers — Technical Details](mail_servers_tech.md) for its
+  channel-deletion-guard changes.
 
-### Backend — Updated Services
-- `backend/app/services/sharing/agent_share_service.py` — `create_auto_share()` for email sender clones
-- `backend/app/services/users/user_service.py` — `create_email_user()` for auto user provisioning
-- `backend/app/services/sessions/session_service.py` — `get_session_by_email_thread()`, email params on `create_session()`
-- `backend/app/services/sessions/message_service.py` — HMAC-signed `session_context` emission (includes `email_subject` from linked `EmailMessage`)
-- `backend/app/services/sessions/session_context_signer.py` — HMAC-SHA256 signing/verification for session context
-- `backend/app/services/tasks/input_task_service.py` — `send_email_answer()` for task-originated replies
-- `backend/app/services/ai_functions/ai_functions_service.py` — `generate_email_reply()` wrapper
+### Backend — Routes (retained)
+- `backend/app/api/routes/mail_servers.py` — superuser-only CRUD. See
+  [Mail Servers — Technical Details](mail_servers_tech.md).
+- Channel CRUD, webhook (n/a for email), and admin routes are all
+  `backend/app/api/routes/server_channels.py` — see
+  [Server Channels — Technical Reference](../server_channels/server_channels_tech.md#api-endpoints).
+  There is no email-specific route file any more.
 
-### Backend — AI Functions
-- `backend/app/agents/email_reply_generator.py` — `generate_email_reply()` AI function
-- `backend/app/agents/prompts/email_reply_generator_prompt.md` — Prompt template for reply generation
+### Migrations (Phase 4)
+- `ca0192122e0c` — `email becomes a server channel`: drops
+  `agent_email_integration`; drops `mail_server_config.user_id`; drops
+  `input_task.source_email_message_id` and `input_task.source_agent_id`;
+  makes `server_channel.webhook_token` nullable.
+- `907124e812c5` — `email messages are stored before routing`: makes
+  `email_message.agent_id` nullable.
 
-### Backend — Routes
-- `backend/app/api/routes/mail_servers.py` — Mail server CRUD + test endpoints
-- `backend/app/api/routes/email_integration.py` — Agent email integration config endpoints
-- `backend/app/api/routes/input_tasks.py` — `POST /{id}/send-answer` endpoint
+## Deletions (Phase 4)
 
-### Backend — Agent Environment
-- `backend/app/env-templates/app_core_base/core/server/active_session_manager.py` — Per-session HMAC-verified context store
-- `backend/app/env-templates/app_core_base/core/server/routes.py` — `GET /session/context?session_id=X`, `_store_session_context()` helper
-- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `build_session_context_section()` for system prompt injection
-- `backend/app/env-templates/app_core_base/core/scripts/get_session_context.py` — Stdlib-only CLI/import helper for agent scripts
+Deleted outright, no compatibility shim:
 
-### Frontend — Components
-- `frontend/src/components/UserSettings/MailServerSettings.tsx` — Mail server CRUD settings panel
-- `frontend/src/components/Agents/EmailIntegrationCard.tsx` — Main integration card (toggle, actions)
-- `frontend/src/components/Agents/EmailAccessModal.tsx` — Access mode, patterns, domain allowlist
-- `frontend/src/components/Agents/EmailConnectionModal.tsx` — IMAP/SMTP server selection
-- `frontend/src/components/Agents/EmailSessionsModal.tsx` — Session mode, max clones, share mode, processing mode
-- `frontend/src/components/Agents/ShareManagement/ShareList.tsx` — Email share badges
-- `frontend/src/components/Agents/ShareManagement/ClonesList.tsx` — Email clone badges
+**Models / tables**
+- `app/models/email/agent_email_integration.py` and the
+  `agent_email_integration` table — with it, `EmailAccessMode`,
+  `AgentSessionMode`, `EmailProcessAs`, `EmailCloneShareMode`,
+  `ProcessEmailsResult`, and every field on the deleted table (`access_mode`,
+  `process_as`, `auto_approve_email_pattern`, `allowed_domains`,
+  `max_clones`, `clone_share_mode`, `agent_session_mode`,
+  `incoming_server_id`/`outgoing_server_id`/`incoming_mailbox`/`outgoing_from_address`).
+- `input_task.source_email_message_id`, `input_task.source_agent_id`, and the
+  `SendAnswerRequest`/`SendAnswerResponse` models around them.
 
-### Frontend — Routes
-- `frontend/src/routes/_layout/settings.tsx` — "Mail Servers" tab
-- `frontend/src/routes/_layout/tasks/index.tsx` — "Send Answer" button for email-originated tasks
-- `frontend/src/routes/_layout/task/$taskId.tsx` — "Send Answer" button in task detail
-- `frontend/src/routes/_layout/session/$sessionId.tsx` — Email/A2A integration type badges
+**Services**
+- `app/services/email/integration_service.py` (`EmailIntegrationService`)
+- `app/services/email/routing_service.py` (`EmailRoutingService` — clone/owner
+  routing, `_find_existing_clone`, `_check_access_allowed`,
+  `_ensure_user_exists`, `_auto_create_share_and_clone`,
+  `_auto_accept_pending_share`, `_is_clone_ready`, `_match_email_pattern`) —
+  every one of these has a Server Channels equivalent (`ChannelPolicyService`,
+  `ChannelRoutingService`, `UserService.create_external_user`,
+  `app.services.common.email_patterns.match_email_pattern`)
+- `app/services/email/processing_service.py` (`EmailProcessingService`) — the
+  routing/session/task orchestration it did is now split between
+  `EmailChannelAdapter` (inbound mapping) and the shared
+  `ChannelInboundService`/`ChannelRoutingService` (routing, ingestion)
+- `app/services/tasks/input_task_service.py:send_email_answer()` — the "Send
+  Answer" AI reply generation
+- `app/agents/email_reply_generator.py:generate_email_reply()` and
+  `app/agents/prompts/email_reply_generator_prompt.md`
+- `app/services/ai_functions/ai_functions_service.py:generate_email_reply()`
+  wrapper
 
-### Tests
-- `backend/tests/api/agents/agents_email_integration_test.py` — End-to-end: email → session → response → outgoing email
-- `backend/tests/api/agents/agents_email_task_integration_test.py` — Task mode: email → task → execute → send answer
-- `backend/tests/stubs/email_stubs.py` — `StubIMAPConnector`, `StubSMTPConnector`
+**Routes**
+- `app/api/routes/email_integration.py` and its registration in `api/main.py`
+- `POST /api/v1/tasks/{id}/send-answer`
 
-### Migrations
-- `029b03776737` — `mail_server_config` table
-- `cc1e27a71798` — `agent_email_integration` table
-- `485e7e243dd5` — `email_message` table
-- `8a95916ab539` — `outgoing_email_queue` table
-- `7aeed6ea3abf` — `agent_share.source` + `session.email_thread_id` + `session.integration_type`
-- `f3a1b2c4d5e6` — `agent_email_integration.agent_session_mode` + `session.sender_email`
-- `h5c3d4e6f7g8` — `agent_email_integration.process_as` + `input_task` email source fields + `email_message.input_task_id` + `outgoing_email_queue.input_task_id`
+**Frontend**
+- `components/Agents/EmailIntegrationCard.tsx`
+- `components/Agents/EmailAccessModal.tsx`
+- `components/Agents/EmailConnectionModal.tsx`
+- `components/Agents/EmailSessionsModal.tsx`
+- the Email Integration card's slot in `components/Agents/AgentIntegrationsTab.tsx`
+- the "Send Answer" buttons in `routes/_layout/tasks/index.tsx` and
+  `routes/_layout/task/$taskId.tsx`
+
+**Tests**
+- `backend/tests/api/agents/integrations/agents_email_integration_test.py` (deleted) <!-- nocheck -->
+- `backend/tests/api/agents/integrations/agents_email_task_integration_test.py` (deleted) <!-- nocheck -->
+
+**Kept**: `EmailMessage`, `OutgoingEmailQueue`, `MailServerConfig`
+(re-scoped), `imap_connector`, `smtp_connector`, `sending_service`,
+`sending_scheduler`, and the pure IMAP/MIME mechanics on `EmailPollingService`.
 
 ## Database Schema
 
-### New Tables
+### `email_message` (retained, one column relaxed)
 
-**`mail_server_config`** — User's IMAP/SMTP server configurations
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | UUID, PK | |
-| `user_id` | UUID, FK → `user.id` CASCADE | Owner |
-| `name` | string | User-friendly name |
-| `server_type` | enum: `imap`, `smtp` | |
-| `host` | string | Server hostname |
-| `port` | integer | Server port |
-| `encryption_type` | enum: `ssl`, `tls`, `starttls`, `none` | |
-| `username` | string | Login username |
-| `encrypted_password` | text | Encrypted via `encrypt_field()` |
-| `created_at`, `updated_at` | datetime | |
-
-**`agent_email_integration`** — Per-agent email integration settings (one-to-one with agent)
+Unchanged fields except:
 
 | Field | Type | Description |
-|-------|------|-------------|
-| `id` | UUID, PK | |
-| `agent_id` | UUID, FK → `agent.id` CASCADE, unique | Parent agent only |
-| `enabled` | boolean, default False | Integration active |
-| `access_mode` | enum: `open`, `restricted` | Who can send emails |
-| `auto_approve_email_pattern` | string, nullable | Glob patterns for restricted mode |
-| `allowed_domains` | string, nullable | Comma-separated domain allowlist |
-| `max_clones` | integer, default 50, range 1-1000 | Max email-initiated clones |
-| `clone_share_mode` | enum: `user`, `builder`, default `user` | Share mode for auto-created clones |
-| `agent_session_mode` | enum: `clone`, `owner`, default `clone` | Where sessions are created |
-| `process_as` | enum: `new_session`, `new_task`, default `new_session` | How incoming emails are processed |
-| `incoming_server_id` | UUID, FK → `mail_server_config.id` SET NULL | IMAP server |
-| `incoming_mailbox` | string | Email address to monitor |
-| `outgoing_server_id` | UUID, FK → `mail_server_config.id` SET NULL | SMTP server |
-| `outgoing_from_address` | string | Sender address for replies |
-| `created_at`, `updated_at` | datetime | |
+|-------|------|--------------|
+| `agent_id` | UUID, FK → `agent.id` **ON DELETE CASCADE, nullable** | **`NULL` until routing stamps it, and `NULL` forever for mail that was never routed.** Every arrival is stored on arrival, before whitelist/policy/routing has run — see [Every arrival is recorded, before anything decides](email_integration.md#every-arrival-is-recorded-before-anything-decides) in the business-logic doc. `EmailChannelAdapter.record_routing_outcome` stamps this (and `session_id`) after the fact, thread-wide, once routing succeeds. |
+| `input_task_id` | UUID, FK → `input_task.id` ON DELETE SET NULL | Column retained for legacy rows written before this phase; nothing writes it any more. |
 
-**`email_message`** — Parsed incoming emails
+### `outgoing_email_queue` (unchanged)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | UUID, PK | |
-| `agent_id` | UUID, FK → `agent.id` CASCADE | Parent agent |
-| `clone_agent_id` | UUID, FK → `agent.id` SET NULL | Routed target clone |
-| `session_id` | UUID, FK → `session.id` SET NULL | Created session |
-| `input_task_id` | UUID, FK → `input_task.id` SET NULL | Created task (task mode) |
-| `email_message_id` | string | RFC Message-ID header |
-| `sender` | string | Sender email address |
-| `subject` | string | |
-| `body` | text | Email body content |
-| `references` | text, nullable | References header (threading) |
-| `in_reply_to` | string, nullable | In-Reply-To header |
-| `received_at` | datetime | |
-| `processed` | boolean, default False | |
-| `processing_error` | text, nullable | Error message if failed |
-| `pending_clone_creation` | boolean, default False | Waiting for clone readiness |
-| `attachments_metadata` | JSON, nullable | `[{filename, content_type, size}]` |
-| `created_at`, `updated_at` | datetime | |
+Same shape as before this phase. `agent_id` on a new row is always the agent
+the channel bound the thread to (`binding.agent_id` — the identity owner's
+agent on an identity-routed thread); `input_task_id` is `NULL` on every row
+this phase's code writes and is consulted only as a legacy fallback in
+`EmailSendingService._resolve_responsible_user`.
 
-**`outgoing_email_queue`** — Queued agent reply emails
+### `mail_server_config` — see [Mail Servers — Technical Details](mail_servers_tech.md#database-schema)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | UUID, PK | |
-| `agent_id` | UUID, FK → `agent.id` CASCADE | Parent agent (owns SMTP) |
-| `clone_agent_id` | UUID, FK → `agent.id` CASCADE, nullable | Clone that generated response |
-| `session_id` | UUID, FK → `session.id` CASCADE, nullable | Session (null for task-originated replies) |
-| `message_id` | UUID, FK → `message.id` CASCADE, nullable | Agent's reply message (null for task-originated) |
-| `input_task_id` | UUID, FK → `input_task.id` SET NULL, nullable | Source task (for task-originated replies) |
-| `recipient` | string | Recipient email address |
-| `subject` | string | |
-| `body` | text | Formatted email body |
-| `references` | text, nullable | References header |
-| `in_reply_to` | string, nullable | In-Reply-To header |
-| `status` | enum: `pending`, `sent`, `failed` | |
-| `retry_count` | integer, default 0 | Max 3 retries |
-| `last_error` | text, nullable | |
-| `created_at`, `updated_at`, `sent_at` | datetime | |
+### `agent_email_integration` — **dropped**
 
-### Updated Tables
+## The `EmailChannelAdapter` (`adapters/email.py`)
 
-**`agent_share`** — Added: `source` (string, default `"manual"`): `"manual"` | `"email_integration"`
+`EmailChannelAdapter(PolledChannelTransport)` — `channel_type = "email"`.
 
-**`session`** — Added: `email_thread_id` (string, nullable), `integration_type` (string, nullable: `"email"` | `"a2a"`), `sender_email` (string, nullable)
+### Capabilities
 
-**`input_task`** — Added: `source_email_message_id` (UUID, FK → `email_message.id` SET NULL), `source_agent_id` (UUID, FK → `agent.id` SET NULL)
+```python
+ChannelCapabilities(
+    supports_progress_updates=False,   # would mail 3 separate notices otherwise
+    supports_message_edit=False,
+    supports_markdown=False,           # replies go out as text/plain
+    max_message_chars=None,            # SMTP caps size, not chars
+    supports_sync_reply=False,         # THE important one — see below
+    inbound_mode="polled",
+    needs_webhook_token=False,
+    needs_outbound_credentials=False,  # credential is the referenced SMTP server
+)
+```
 
-## API Endpoints
+`supports_sync_reply=False` is why every denial in the inbound pipeline
+reaches the sender as nothing at all (decided behaviour, not a gap — mailing
+a decline is a probing oracle and a spam amplifier).
 
-### Mail Server Configuration
+### Config
 
-**Router**: `backend/app/api/routes/mail_servers.py` — prefix: `/api/v1/mail-servers`, tags: `mail-servers`
+Non-secret, on `ServerChannel.config`:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | List user's mail servers (filterable by `server_type`) |
-| `POST` | `/` | Create new mail server config |
-| `GET` | `/{server_id}` | Get server details (password redacted) |
-| `PUT` | `/{server_id}` | Update server config |
-| `DELETE` | `/{server_id}` | Delete server (validates not in use) |
-| `POST` | `/{server_id}/test-connection` | Test IMAP/SMTP connectivity |
+```json
+{
+  "incoming_server_id": "<mail_server_config uuid, type=imap>",
+  "outgoing_server_id": "<mail_server_config uuid, type=smtp>",
+  "incoming_mailbox": "support@corp.com",
+  "from_address": "support@corp.com"
+}
+```
 
-### Agent Email Integration
+`validate_config` is a pure shape check (both server ids parse as UUIDs, both
+addresses contain `@`). `validate_config_references(db, config)` additionally
+checks both referenced `MailServerConfig` rows exist and are the right
+`server_type` (`IMAP` / `SMTP`) — this needs a database session, which is why
+it is a separate method from `validate_config` (see `adapters/base.py`'s
+docstring on the split).
 
-**Router**: `backend/app/api/routes/email_integration.py` — prefix: `/api/v1/agents`, tags: `email-integration`
+`has_outbound_credentials(channel)` is **overridden**: it reports whether
+`outgoing_server_id` is set in `config`, not whether
+`ServerChannel.encrypted_secrets` is populated (which is always empty for
+this transport — the credential lives in `mail_server_config`,
+backend-only). The adapter registry refuses to import if a transport declares
+`needs_outbound_credentials=False` without overriding this method.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/{agent_id}/email-integration` | Get integration config (null if none) |
-| `POST` | `/{agent_id}/email-integration` | Create or update integration (upsert) |
-| `PUT` | `/{agent_id}/email-integration/enable` | Enable integration (validates required fields) |
-| `PUT` | `/{agent_id}/email-integration/disable` | Disable integration |
-| `DELETE` | `/{agent_id}/email-integration` | Remove integration |
-| `POST` | `/{agent_id}/email-integration/process-emails` | Manual trigger: poll IMAP + process + retry pending |
+### Inbound: `poll(channel)`
 
-### Input Tasks (Email-Originated)
+1. Resolves the incoming `MailServerConfig` and its decrypted password.
+2. Runs the blocking IMAP fetch (`_fetch_mailbox`) on a worker thread via
+   `anyio.to_thread.run_sync` — `imaplib` is blocking and this coroutine runs
+   on the main event loop.
+3. `_fetch_mailbox` reuses `EmailPollingService._fetch_unread_emails` /
+   `_parse_email` / `_is_addressed_to_channel` / `_mark_email_read`
+   unmodified — it is a driver over the retained mechanics, not a second IMAP
+   implementation.
+4. `_store_arrivals` persists every accepted arrival as an `EmailMessage` row
+   **before** classification — see
+   [Database Schema](#database-schema) above — and drops only a redelivery of
+   mail whose stored row already has `agent_id` set (an unrouted redelivery is
+   still returned, so the pipeline's own recovery paths can retry it).
+5. `_to_inbound_message` maps each parsed mail onto `ChannelInboundMessage`:
+   `sender_email`/`external_user_id` from `From:` (spoofable — documented in
+   the adapter's own docstring), `thread_key` = the **root** Message-ID
+   (`References[0]` → `In-Reply-To` → own `Message-ID`), `external_message_id`
+   = the message's own `Message-ID`, `text` = `EmailPollingService.format_email_as_message`.
 
-**Router**: `backend/app/api/routes/input_tasks.py` — prefix: `/api/v1/tasks`, tags: `tasks`
+A transient fetch failure (mail server down, credentials rejected) is logged
+and answered with an empty list — never returned as an inbound event, so the
+next poll tick retries cleanly.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/{id}/send-answer` | Generate AI reply and queue email for an email-originated task |
+### `record_routing_outcome(db, channel, *, thread_key, agent_id, session_id)`
 
-## Service Architecture
+Stamps `agent_id`/`session_id` onto every still-unstamped `EmailMessage` row
+whose stored thread root matches `thread_key` (via `_stored_root_expr`, a SQL
+expression mirroring the Python root-derivation rule). Thread-wide rather than
+message-wide: this heals an arrival that was stored before its thread had an
+agent at all (always true of the first message of a thread; may be true of
+several parked messages). This is also what makes
+`message_service._build_session_context`'s by-`session_id` `EmailMessage`
+lookup findable — see
+[A real, non-obvious gap: `email_subject` context](#a-real-non-obvious-gap-email_subject-context)
+below for why that lookup still never fires on a channel session.
 
-All email-related services live in `backend/app/services/email/`:
+### Outbound: `send_message(channel, thread_key, text)`
 
-- `mail_server_service.py:MailServerService` — CRUD with password encryption, connection testing (IMAP/SMTP)
-- `integration_service.py:EmailIntegrationService` — CRUD for agent integrations, enable/disable validation, `process_emails()` manual trigger, clone count tracking
-- `routing_service.py:EmailRoutingService` — `route_email()` → (target_agent_id, is_ready, session_mode), access control, auto-user creation, auto-share + auto-clone
-- `polling_service.py:EmailPollingService` — IMAP connection, fetch unread, parse (subject, body, headers, attachments metadata), deduplication by Message-ID, recipient validation
-- `processing_service.py:EmailProcessingService` — Branches on `integration.process_as`: new_session (route + session + message injection) or new_task (create InputTask), handles pending clone retries
-- `sending_service.py:EmailSendingService` — `queue_outgoing_email()`, `send_pending_emails()`, `handle_stream_completed()` (event handler on STREAM_COMPLETED), MIME building with threading headers, retry logic (max 3)
-- `imap_connector.py:IMAPConnector` — Testable IMAP wrapper with injectable instance
-- `smtp_connector.py:SMTPConnector` — Testable SMTP wrapper with injectable instance
-- `polling_scheduler.py` — APScheduler job: every 5 min polls all enabled agents
-- `sending_scheduler.py` — APScheduler job: every 2 min flushes SMTP queue
+Does **not** send. `thread_key` arrives as the composite
+`"<root>|<last>"` built by `build_reply_thread_key` (see
+[Server Channels tech — `_binding_thread_key`](../server_channels/server_channels_tech.md)
+for where that composite is constructed). `parse_reply_thread_key` splits it
+back into `(root_id, last_id)`; the split is on the literal substring
+`">|<"`, not on the bare `|`, because `|` is legal RFC 5322 `atext` and can
+legitimately appear inside a Message-ID — both halves are always
+angle-bracket-normalized first, so `">|<"` is unambiguous.
 
-### Scheduler Registration
+The method looks up the `ChannelThreadBinding` by `(channel.id, root_id)`,
+resolves the recipient as **the bound platform account's email**
+(`binding.user_id` → `User.email`) — deliberately *not* the `From:` address
+the original mail arrived with, since that header is spoofable and replying
+to it would let a forged sender redirect an agent's answer — and enqueues an
+`OutgoingEmailQueue` row with `in_reply_to = last_id or root_id` and
+`references` built by `_references_chain(root_id, last_id)`. Raises
+`ChannelSendError` for every case where the reply cannot be addressed
+(missing config, no binding, no session, no resolvable recipient) — the
+caller (`ChannelOutboundService._deliver`) records that on the binding and in
+the debug feed.
 
-Both schedulers registered in `backend/app/main.py` during app lifespan:
-- `start_email_polling_scheduler()` — every 5 min: poll IMAP
-- `start_email_sending_scheduler()` — every 2 min: flush SMTP queue
-- `STREAM_COMPLETED` event → `EmailSendingService.handle_stream_completed()`
+Returns `None` always: unlike a chat message id, an email's `Message-ID` is
+assigned by the SMTP server at delivery time, minutes after this call
+returns, and nothing on the channel path consumes the return value anyway.
 
-### Integration with Existing Services
+### Thread-key helpers (module-level functions, not adapter methods)
 
-| Existing Service | New Integration |
-|------------------|-----------------|
-| `AgentShareService` | `create_auto_share()` — creates pre-accepted share + clone in one step |
-| `UserService` | `create_email_user()` — creates user from email, bypasses domain whitelist |
-| `SessionService` | `create_session()` accepts `email_thread_id`, `integration_type`, `sender_email` |
-| `SessionService` | `get_session_by_email_thread()` — finds session by thread ID |
-| `MessageService` | Emits HMAC-signed `session_context` (including `email_subject` from linked `EmailMessage`) |
-| `InputTaskService` | `send_email_answer()` — generates AI reply and queues outgoing email |
-| `AIFunctionsService` | `generate_email_reply()` — AI-powered email reply from session results |
-| Event Bus | `STREAM_COMPLETED` event triggers `EmailSendingService.handle_stream_completed()` |
+- `build_reply_thread_key(root_message_id, last_message_id) -> str` — joins
+  root and last into the composite, or returns the bare root if there is no
+  last id yet or it equals the root.
+- `parse_reply_thread_key(thread_key) -> tuple[str, str | None]` — the
+  inverse. A key the parser cannot recognize is returned as `(thread_key,
+  None)` rather than raising — the worst outcome is a reply sent without
+  threading headers (renders as a new conversation in one mail client),
+  which is strictly better than refusing to send at all.
 
-## Frontend Components
+### `get_setup_instructions`
 
-### Settings: Mail Server Management
-- `frontend/src/components/UserSettings/MailServerSettings.tsx` — Full CRUD table, add/edit dialog, test connection button, delete confirmation
-- Tab: "Mail Servers" in User Settings (between AI Credentials and SSH Keys)
-- React Query key: `["mail-servers"]`
+Returns `webhook_url=None`-aware admin copy: "Polled IMAP (no inbound URL)",
+and a `"Sender verification"` detail line stating the `From:`-header trust
+tier explicitly, plus setup steps that state the same thing and note that
+mail for a different recipient in the same inbox is ignored (so one IMAP
+account may serve several channels).
 
-### Agent: Email Integration Card
-- `frontend/src/components/Agents/EmailIntegrationCard.tsx` — Enable/disable toggle, clone count, config completeness indicators, action buttons for sub-modals
-- `frontend/src/components/Agents/EmailAccessModal.tsx` — Access mode, auto-approve patterns, domain allowlist
-- `frontend/src/components/Agents/EmailConnectionModal.tsx` — IMAP/SMTP server dropdown selection, mailbox/from addresses
-- `frontend/src/components/Agents/EmailSessionsModal.tsx` — Session mode, clone share mode, processing mode, max clones
-- Only shown for non-clone agents on the Integrations tab
+## `ChannelPollService` / `channel_poll_scheduler`
 
-### Task Actions
-- `frontend/src/routes/_layout/tasks/index.tsx` — "Send Answer" button (Mail icon) for email-originated tasks when status is `completed` or `error`
-- `frontend/src/routes/_layout/task/$taskId.tsx` — "Send Answer" button in task detail footer
+`ChannelPollService.poll_enabled_channels(db)` (`channel_poll_service.py`):
+- Enumerates channel types via `channel_types_with_inbound_mode("polled")`
+  from the adapter registry — not a hardcoded email-specific list, so a
+  second polled transport needs no change here.
+- Queries enabled `ServerChannel` rows of those types only — a disabled
+  channel is never polled, mirroring the webhook route's enabled-only lookup.
+- Per channel: calls `adapter.poll(channel)`, then feeds every returned
+  message into `ChannelInboundService.process_inbound` (the shared,
+  post-verification pipeline entry point — the same one a webhook reaches
+  after `verify_inbound` succeeds).
+- Failure isolation is per-channel and then per-message: one channel's IMAP
+  outage, or one message the pipeline chokes on, does not stop the batch.
 
-### Share & Session Badges
-- `frontend/src/components/Agents/ShareManagement/ShareList.tsx` — Indigo "Email" badge for email-originated shares
-- `frontend/src/components/Agents/ShareManagement/ClonesList.tsx` — Indigo "Email" badge for email-initiated clones
-- `frontend/src/routes/_layout/session/$sessionId.tsx` — Integration type badge (Email/A2A) in session header
+`channel_poll_scheduler.py` is the timer wrapper: `POLL_INTERVAL_SECONDS = 60`,
+`TESTING`-gated (load-bearing — a poller running under test opens real IMAP
+connections from a worker thread and would make unrelated suites flaky),
+APScheduler on a worker thread submitting the async poll to the main event
+loop via `asyncio.run_coroutine_threadsafe` (the same pattern every other
+scheduler in this codebase uses, since the pipeline's fire-and-forget tasks
+must outlive the scheduler job that started them). **No leader election** —
+documented limitation, same as `channel_pending_scheduler`; do **not** copy
+the advisory-lock leader pattern from `model_discovery_scheduler` (known
+connection leak on pooled connections).
 
-## Configuration
+## `EmailSendingService` — send half only (`sending_service.py`)
 
-- `AGENT_AUTH_TOKEN` — Used for HMAC-signing session context sent to agent environments
-- Mail server encryption key: reuses existing `encrypt_field()` / `decrypt_field()` from `backend/app/core/security.py`
-- Polling interval: 5 minutes (configured in `polling_scheduler.py`)
-- Sending interval: 2 minutes (configured in `sending_scheduler.py`)
-- Max retries for outgoing emails: 3
-- Default max clones per agent: 50 (range 1-1000)
+- `_resolve_channel(db, entry)` — `entry.session_id` → `ChannelThreadBinding`
+  → `ServerChannel`. `None` (permanent failure) for an entry with no session,
+  no binding, or a deleted channel.
+- `_resolve_responsible_user(db, entry)` — `entry.agent_id` → `Agent.owner_id`
+  → `User`; the account whose `email_confirmed` state gates the send
+  (outbound-email confirmation gate, unrelated to and pre-dating this
+  refactor). `entry.input_task_id` is consulted first only for legacy rows —
+  nothing enqueues one any more.
+- `_send_single_email` resolves SMTP config as
+  `channel.config["outgoing_server_id"]` / `["from_address"]` rather than
+  through a per-agent integration; every resolution failure (no channel bound,
+  missing outgoing config, malformed server id, missing SMTP server) is
+  recorded as a **permanent** failure on the row via `_mark_failed`, never
+  retried — a misconfigured channel does not improve with a retry.
+- `send_pending_emails`, MIME building, and the retry loop (`MAX_RETRIES = 3`)
+  are otherwise unchanged from before this phase.
 
-## Security
+## A real, non-obvious gap: `email_subject` context
 
-- Mail server passwords encrypted at rest via `encrypt_field()`, decrypted only at connection time
-- `MailServerConfigPublic` schema exposes `has_password: bool` instead of actual password
-- Agent ownership validated on all integration API operations
-- Clone agents cannot have email integrations (parent-only)
-- Session context uses three-layer security: system prompt injection, HMAC-verified per-session store, and stdlib-only helper script. See [Email Sessions](email_sessions.md) for details
+`message_service._build_session_context` enriches the agent-facing
+`session_context` (system-prompt injection + `GET /session/context`) with
+`email_subject`, fetched from the linked `EmailMessage`, but only when
+`session_db.integration_type == "email"` **literally**. A channel-originated
+email session is always stamped `integration_type = "channel_email"` (the
+`channel_<type>` convention every Server Channels session uses), so **this
+branch never fires for a single channel-routed email session** — the subject
+never reaches the system-prompt injection or the `GET /session/context`
+endpoint for email arriving through the channel. The subject still reaches
+the agent through the message text itself, since
+`EmailPollingService.format_email_as_message` includes a `Subject:` line —
+it is just not available through the server-verified session-context
+channel any more. This is a genuine behavioural gap introduced by this
+phase (the equality check was never updated for the new `integration_type`
+value) rather than a documented design choice; it is called out here rather
+than silently carried forward. See also the corrected docstring on
+`EmailPollingService.format_email_as_message`, which used to claim the
+opposite.

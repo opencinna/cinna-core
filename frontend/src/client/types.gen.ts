@@ -475,6 +475,14 @@ export type AdminAgentEnvironmentPublic = {
     last_build_at: (string | null);
     sync_active: boolean;
     model_health_warning?: boolean;
+    bundle_id?: (string | null);
+    is_publisher_install?: boolean;
+    update_mode?: (string | null);
+    installed_revision_number?: (number | null);
+    installed_revision_version?: (string | null);
+    latest_revision_number?: (number | null);
+    latest_revision_version?: (string | null);
+    update_available?: boolean;
 };
 
 /**
@@ -664,6 +672,84 @@ export type AgentApiGrantUser = {
 };
 
 /**
+ * Request to mint an external API key on a producer agent (plan D9).
+ *
+ * ``scopes`` is a convenience: it **upserts** the ``agent_api_access_grant``
+ * for ``(producer, subject_user_id)``. Scopes live on the grant, never on the
+ * key (plan D5) — the same row the producer's Access & Scopes card edits.
+ */
+export type AgentApiKeyCreate = {
+    label?: (string | null);
+    subject_user_id: string;
+    scopes?: (Array<(string)> | null);
+    read_only_override?: boolean;
+    expires_in_days?: (number | null);
+};
+
+/**
+ * Returned on mint — carries the token value plus where to call it.
+ */
+export type AgentApiKeyCreated = {
+    id: string;
+    credential_id: (string | null);
+    agent_id: string;
+    label: (string | null);
+    token_prefix: string;
+    subject: (AgentApiKeySubject | null);
+    read_only: boolean;
+    is_active: boolean;
+    is_usable: boolean;
+    expires_at: (string | null);
+    last_used_at: (string | null);
+    created_at: string;
+    token: string;
+    base_url: string;
+    spec_url: string;
+};
+
+/**
+ * One external key as listed on the producer card. Never the value.
+ */
+export type AgentApiKeyPublic = {
+    id: string;
+    credential_id: (string | null);
+    agent_id: string;
+    label: (string | null);
+    token_prefix: string;
+    subject: (AgentApiKeySubject | null);
+    read_only: boolean;
+    is_active: boolean;
+    is_usable: boolean;
+    expires_at: (string | null);
+    last_used_at: (string | null);
+    created_at: string;
+};
+
+/**
+ * The value of an external key, returned by the dedicated reveal endpoint.
+ *
+ * The **only** way to read a key back after mint (plan D4): ``with-data``
+ * deliberately strips it, so every reveal goes through one audited call.
+ */
+export type AgentApiKeyRevealResponse = {
+    token: string;
+};
+
+export type AgentApiKeysPublic = {
+    data: Array<AgentApiKeyPublic>;
+    count: number;
+};
+
+/**
+ * The platform user an external key is bound to.
+ */
+export type AgentApiKeySubject = {
+    id: string;
+    email?: (string | null);
+    full_name?: (string | null);
+};
+
+/**
  * One connection to a producer agent's API — surfaced on the producer's
  * "Agent REST API" card (where the token list used to be). Each connection is
  * one token (``token_id``) and, normally, the ``agent_api`` credential it
@@ -839,41 +925,6 @@ export type AgentCreateFlowResponse = {
 
 export type AgentCredentialLinkRequest = {
     credential_id: string;
-};
-
-export type AgentEmailIntegrationCreate = {
-    enabled?: boolean;
-    access_mode?: EmailAccessMode;
-    process_as?: EmailProcessAs;
-    auto_approve_email_pattern?: (string | null);
-    allowed_domains?: (string | null);
-    max_clones?: number;
-    clone_share_mode?: EmailCloneShareMode;
-    agent_session_mode?: AgentSessionMode;
-    incoming_server_id?: (string | null);
-    incoming_mailbox?: (string | null);
-    outgoing_server_id?: (string | null);
-    outgoing_from_address?: (string | null);
-};
-
-export type AgentEmailIntegrationPublic = {
-    enabled?: boolean;
-    access_mode?: EmailAccessMode;
-    process_as?: EmailProcessAs;
-    auto_approve_email_pattern?: (string | null);
-    allowed_domains?: (string | null);
-    max_clones?: number;
-    clone_share_mode?: EmailCloneShareMode;
-    agent_session_mode?: AgentSessionMode;
-    incoming_server_id?: (string | null);
-    incoming_mailbox?: (string | null);
-    outgoing_server_id?: (string | null);
-    outgoing_from_address?: (string | null);
-    id: string;
-    agent_id: string;
-    email_clone_count?: number;
-    created_at: string;
-    updated_at: string;
 };
 
 /**
@@ -1276,7 +1327,7 @@ export type AgentPublic = {
     webapp_enabled?: boolean;
     agent_api_enabled?: boolean;
     agent_api_identity_enabled?: boolean;
-    has_email_integration?: boolean;
+    agent_api_external_access_enabled?: boolean;
     has_mcp_connectors?: boolean;
     has_webhooks?: boolean;
     git_versioning_enabled?: boolean;
@@ -1360,8 +1411,6 @@ export type AgentSdkConfig = {
     sdk_tools?: Array<(string)>;
     allowed_tools?: Array<(string)>;
 };
-
-export type AgentSessionMode = 'clone' | 'owner';
 
 export type AgentsPublic = {
     data: Array<AgentPublic>;
@@ -1466,6 +1515,7 @@ export type AgentUpdate = {
     webapp_enabled?: (boolean | null);
     agent_api_enabled?: (boolean | null);
     agent_api_identity_enabled?: (boolean | null);
+    agent_api_external_access_enabled?: (boolean | null);
     update_mode?: (string | null);
     publish_settings?: ({
     [key: string]: unknown;
@@ -1912,62 +1962,6 @@ export type AllowedToolsUpdate = {
     tools: Array<(string)>;
 };
 
-export type AppAgentRouteAssignmentPublic = {
-    id: string;
-    route_id: string;
-    user_id: string;
-    user_email?: (string | null);
-    user_full_name?: (string | null);
-    is_enabled: boolean;
-    created_at: string;
-};
-
-export type AppAgentRouteCreate = {
-    name: string;
-    agent_id: string;
-    session_mode?: string;
-    trigger_prompt: string;
-    message_patterns?: (string | null);
-    prompt_examples?: (string | null);
-    channel_app_mcp?: boolean;
-    is_active?: boolean;
-    auto_enable_for_users?: boolean;
-    activate_for_myself?: boolean;
-    assigned_user_ids?: Array<(string)>;
-};
-
-export type AppAgentRoutePublic = {
-    id: string;
-    name: string;
-    agent_id: string;
-    agent_name?: string;
-    session_mode: string;
-    trigger_prompt: string;
-    message_patterns: (string | null);
-    prompt_examples?: (string | null);
-    channel_app_mcp: boolean;
-    is_active: boolean;
-    auto_enable_for_users?: boolean;
-    is_auto_managed?: boolean;
-    agent_owner_name?: string;
-    agent_owner_email?: string;
-    created_by: string;
-    created_at: string;
-    updated_at: string;
-    assignments?: Array<AppAgentRouteAssignmentPublic>;
-};
-
-export type AppAgentRouteUpdate = {
-    name?: (string | null);
-    session_mode?: (string | null);
-    trigger_prompt?: (string | null);
-    message_patterns?: (string | null);
-    prompt_examples?: (string | null);
-    channel_app_mcp?: (boolean | null);
-    is_active?: (boolean | null);
-    auto_enable_for_users?: (boolean | null);
-};
-
 /**
  * Response schema for ``GET /users/me/app-data``.
  */
@@ -2038,6 +2032,31 @@ export type ArticleListItem = {
     features: Array<(string)>;
     source_name: string;
     git_repo_id: string;
+};
+
+/**
+ * Admin request body for adding a bundle to the auto-install list.
+ */
+export type AutoInstallBundleAdd = {
+    bundle_uuid: string;
+};
+
+/**
+ * Joined projection for the admin list.
+ *
+ * ``has_trigger_prompt`` is False when the bundle's latest revision carries
+ * no ``router_trigger_prompt`` — such a bundle can never win Pass 2, so the
+ * admin UI flags it.
+ */
+export type AutoInstallBundlePublic = {
+    bundle_uuid: string;
+    bundle_id: string;
+    display_name: string;
+    visibility: string;
+    has_trigger_prompt?: boolean;
+    router_trigger_prompt?: (string | null);
+    added_by?: (string | null);
+    created_at: string;
 };
 
 /**
@@ -2232,8 +2251,8 @@ export type BundlePermissionUser = {
  * and offer an in-client update. Populated only for consumer installs
  * (``target_type="agent"`` with a ``bundle_uuid`` and
  * ``is_publisher_install=False``); ``None`` for the publisher's own
- * working copy, shared routes, and identity contacts (none of which the
- * caller updates).
+ * working copy and identity contacts (neither of which the caller
+ * updates).
  *
  * Computed read-only — building this never mutates ``Agent.pending_update``
  * (the discovery endpoint is write-free). ``update_available`` is derived
@@ -2306,6 +2325,153 @@ export type CatalogPublic = {
 };
 
 /**
+ * One captured event in the admin debug feed.
+ *
+ * Read-only projection of the in-memory ring buffer — see
+ * ``services/server_channels/channel_debug_buffer.py`` for why this is not
+ * persisted.
+ */
+export type ChannelDebugEventPublic = {
+    id: string;
+    at: string;
+    direction: string;
+    kind: string;
+    summary: string;
+    sender_email?: (string | null);
+    sender_display_name?: (string | null);
+    thread_key?: (string | null);
+    text?: (string | null);
+    detail?: {
+        [key: string]: (string);
+    };
+    repeat?: number;
+};
+
+/**
+ * The debug feed plus the bound it is subject to.
+ */
+export type ChannelDebugEventsPublic = {
+    events?: Array<ChannelDebugEventPublic>;
+    buffer_size: number;
+    capturing_since: string;
+};
+
+/**
+ * One grant, joined with enough of the user to render a row.
+ *
+ * The picker needs a name, not a UUID. This is the same minimal projection
+ * ``UserSearchResult`` uses — id, email, full name — and nothing more: a
+ * grant list is an admin-only view of *who may use a channel*, not a user
+ * directory.
+ */
+export type ChannelGrantPublic = {
+    user_id: string;
+    email: string;
+    full_name?: (string | null);
+    granted_by?: (string | null);
+    created_at: string;
+};
+
+/**
+ * Admin PUT body — the complete grant set, not a delta.
+ *
+ * Replace-the-set rather than add/remove verbs: the admin UI edits a picker
+ * whose state *is* the whole list, and a delta API against a multi-admin form
+ * silently loses a concurrent revocation.
+ */
+export type ChannelGrantsUpdate = {
+    user_ids?: Array<(string)>;
+};
+
+/**
+ * A person this channel has seen, and the thread to reach them on.
+ *
+ * Sourced from thread bindings (durable) merged with the debug buffer (live),
+ * so someone who has only just messaged is selectable before their binding
+ * exists.
+ */
+export type ChannelRecentSender = {
+    email: string;
+    display_name?: (string | null);
+    thread_key: string;
+    last_seen?: (string | null);
+    bound?: boolean;
+};
+
+/**
+ * Adapter-shaped setup guidance shown after create / on demand.
+ */
+export type ChannelSetupInstructions = {
+    channel_type: string;
+    webhook_url: (string | null);
+    details?: {
+        [key: string]: (string);
+    };
+    steps?: Array<(string)>;
+};
+
+/**
+ * Admin "does the credential work?" probe.
+ *
+ * Exactly one target must be supplied:
+ *
+ * - ``email`` — a person the platform has already seen on this channel. It is
+ * resolved *locally*, to a thread we recorded from one of their inbound
+ * events, never handed to the provider. Google Chat's ``users/{email}``
+ * alias exists but is documented as user-authentication only, and this
+ * adapter authenticates as an app — so an email the platform has never
+ * observed cannot be turned into a destination at all. That is a real
+ * limit, surfaced as an actionable error rather than a silent failure.
+ * - ``thread_key`` — the channel-native identity (Google Chat: ``spaces/AAA``
+ * or ``spaces/AAA/threads/BBB``). The escape hatch, and what the debug
+ * panel's "reply here" action sends.
+ */
+export type ChannelTestOutboundRequest = {
+    email?: (string | null);
+    thread_key?: (string | null);
+    text?: (string | null);
+};
+
+/**
+ * Outcome of a test send. ``error`` is admin-facing, never the raw secret.
+ */
+export type ChannelTestOutboundResult = {
+    success: boolean;
+    external_message_id?: (string | null);
+    error?: (string | null);
+};
+
+/**
+ * One registered adapter, for the admin type picker *and its form*.
+ *
+ * Carries the transport shape as well as the label, because the admin form
+ * has to decide which controls exist at all — a transport with no webhook,
+ * no channel secret and no external senders must not be offered a secrets
+ * box, a sender whitelist or an auto-registration switch. Every one of those
+ * would be a value nothing reads, and the whitelist is worse than useless:
+ * it is fail-closed, so an empty one renders as "this channel denies
+ * everyone" on a channel where it denies nobody.
+ *
+ * Declared facts, projected — never re-derived. The frontend must branch on
+ * these fields and never on ``channel_type``, for the same reason nothing in
+ * the backend does: a type check is a rule that has to be found and edited
+ * again for the next transport, and the one that gets missed is the one that
+ * silently shows the wrong form.
+ *
+ * All four are required (no defaults), like the derived fields on
+ * ``ServerChannelPublic``: a projection that forgets one fails loudly rather
+ * than reporting a plausible-looking ``False``.
+ */
+export type ChannelTypePublic = {
+    channel_type: string;
+    display_name: string;
+    inbound_mode: string;
+    needs_webhook_token: boolean;
+    needs_outbound_credentials: boolean;
+    is_singleton: boolean;
+};
+
+/**
  * Response for check access endpoint.
  */
 export type CheckAccessResponse = {
@@ -2322,6 +2488,8 @@ export type CheckUpdatesResponse = {
     latest_revision_number: (number | null);
     installed_version?: (string | null);
     latest_version?: (string | null);
+    latest_release_notes?: (string | null);
+    latest_published_at?: (string | null);
     last_update_status: (string | null);
     last_sync_at: (string | null);
     update_mode: string;
@@ -2491,6 +2659,18 @@ export type ConsentRequest = {
 
 export type ConsentResponse = {
     redirect_to: string;
+};
+
+/**
+ * Staleness probe for an already-extracted context package.
+ *
+ * The CLI reads ``context/VERSION`` out of the workspace and compares it with
+ * ``version`` here. Equal means the workspace is current; different means a
+ * ``cinna account refresh-context`` is due. A workspace that predates the
+ * stamp has no ``VERSION`` file at all, which is itself the answer.
+ */
+export type ContextPackageVersionPublic = {
+    version: string;
 };
 
 /**
@@ -2897,12 +3077,6 @@ export type EditBundleIdRequest = {
     bundle_id: string;
 };
 
-export type EmailAccessMode = 'open' | 'restricted';
-
-export type EmailCloneShareMode = 'user' | 'builder';
-
-export type EmailProcessAs = 'new_session' | 'new_task';
-
 export type EncryptionInitRequest = {
     device: DeviceInput;
     envelopes?: Array<KeyEnvelopeInput>;
@@ -3016,8 +3190,8 @@ export type ExecuteTaskResponse = {
 /**
  * Response schema for GET /api/v1/external/agents.
  *
- * Targets are ordered: personal agents first, then MCP shared agents,
- * then identity contacts — each section sorted by name ascending.
+ * Targets are ordered: personal agents first, then identity contacts —
+ * each section sorted by name ascending.
  */
 export type ExternalAgentListResponse = {
     targets?: Array<ExternalTargetPublic>;
@@ -3057,13 +3231,12 @@ export type ExternalSessionPublic = {
 /**
  * A single addressable target returned by the external agent discovery endpoint.
  *
- * Covers three source types:
- * - "agent"         — personal agent owned by (or cloned to) the user
- * - "app_mcp_route" — agent shared with the user via an AppAgentRoute assignment
- * - "identity"      — another user who has exposed agents via the Identity MCP server
+ * Covers two source types:
+ * - "agent"    — personal agent owned by (or cloned to) the user
+ * - "identity" — another user who has exposed agents via the Identity MCP server
  */
 export type ExternalTargetPublic = {
-    target_type: 'agent' | 'app_mcp_route' | 'identity';
+    target_type: 'agent' | 'identity';
     target_id: string;
     name: string;
     description?: (string | null);
@@ -3082,7 +3255,7 @@ export type ExternalTargetPublic = {
     bundle_version?: (BundleVersionInfo | null);
 };
 
-export type target_type = 'agent' | 'app_mcp_route' | 'identity';
+export type target_type = 'agent' | 'identity';
 
 /**
  * Response schema for file upload
@@ -3161,11 +3334,25 @@ export type GitCommitList = {
 };
 
 /**
+ * Response of ``GET /agents/{agent_id}/git/diff`` — one item's diff.
+ */
+export type GitDiff = {
+    section: string;
+    key: string;
+    label: string;
+    change_type: string;
+    diff?: string;
+    binary?: boolean;
+    truncated?: boolean;
+};
+
+/**
  * Response of ``GET /agents/{agent_id}/git/dirty``.
  */
 export type GitDirtyStatus = {
     dirty: boolean;
     prompts_dirty: boolean;
+    settings_dirty?: boolean;
     workspace_dirty: boolean;
     has_env: boolean;
     last_synced_commit?: (string | null);
@@ -3173,6 +3360,11 @@ export type GitDirtyStatus = {
 
 /**
  * One changed workspace file in the commit preview.
+ *
+ * Deliberately has NO ``blocks_pull``: workspace files never block a pull,
+ * they are *replaced* by it wholesale whenever an env exists. That is a
+ * property of the operation, not of a file, so the UI states it once as a
+ * section header rather than repeating a flag per row.
  */
 export type GitFileChange = {
     path: string;
@@ -3184,7 +3376,27 @@ export type GitFileChange = {
  */
 export type GitPromptChange = {
     field: string;
+    key?: string;
+    section?: string;
     change_type: string;
+    blocks_pull?: boolean;
+};
+
+/**
+ * Optional body of ``POST /agents/{agent_id}/git/pull``.
+ *
+ * ``conflict_resolution`` is one of :data:`GIT_PULL_RESOLUTIONS`
+ * (``keep_local`` / ``take_remote``); omitting it — or the whole body — keeps
+ * the fail-loud 409 behavior the GitOps webhook path depends on. Shaped as a
+ * single scalar so a future per-field resolution (``keep_fields: [...]``) can
+ * be added without a breaking change. Validated in the service, not here, so
+ * the service stays the sole enforcement point.
+ */
+export type GitPullRequest = {
+    /**
+     * How to resolve local changes a pull would overwrite. One of: take_remote, keep_local. Omit to fail loud with a recoverable 409 instead.
+     */
+    conflict_resolution?: (string | null);
 };
 
 /**
@@ -3197,13 +3409,26 @@ export type GitPushRequest = {
 };
 
 /**
+ * One changed agent-settings field (``cinna.agent.json``) in the preview.
+ */
+export type GitSettingChange = {
+    field: string;
+    key?: string;
+    section?: string;
+    change_type: string;
+    blocks_pull?: boolean;
+};
+
+/**
  * Response of ``GET /agents/{agent_id}/git/status`` — commit preview.
  */
 export type GitStatus = {
     dirty: boolean;
     has_env: boolean;
     last_synced_commit?: (string | null);
+    pull_blocked?: boolean;
     prompt_changes?: Array<GitPromptChange>;
+    setting_changes?: Array<GitSettingChange>;
     file_changes?: Array<GitFileChange>;
 };
 
@@ -3274,7 +3499,6 @@ export type HTTPValidationError = {
 export type IdentityAgentBindingCreate = {
     agent_id: string;
     trigger_prompt: string;
-    message_patterns?: (string | null);
     prompt_examples?: (string | null);
     session_mode?: string;
     assigned_user_ids?: Array<(string)>;
@@ -3286,7 +3510,6 @@ export type IdentityAgentBindingPublic = {
     agent_id: string;
     agent_name?: string;
     trigger_prompt: string;
-    message_patterns: (string | null);
     prompt_examples?: (string | null);
     session_mode: string;
     is_active: boolean;
@@ -3297,7 +3520,6 @@ export type IdentityAgentBindingPublic = {
 
 export type IdentityAgentBindingUpdate = {
     trigger_prompt?: (string | null);
-    message_patterns?: (string | null);
     prompt_examples?: (string | null);
     session_mode?: (string | null);
     is_active?: (boolean | null);
@@ -3324,6 +3546,106 @@ export type IdentityContactPublic = {
     is_enabled: boolean;
     agent_count: number;
     assignment_ids: Array<(string)>;
+};
+
+/**
+ * The consent modal's pre-flight payload.
+ *
+ * Produced by the same gate + target resolution the submission runs, so the
+ * modal's copy can never disagree with what submitting will actually do.
+ */
+export type ImprovementContextPublic = {
+    eligible: boolean;
+    reason?: (string | null);
+    is_shared_externally?: boolean;
+    recipient_display?: (string | null);
+    target_agent_name?: (string | null);
+    bundle_id?: (string | null);
+    installed_version?: (string | null);
+    message_count?: number;
+    existing_request_count?: number;
+};
+
+/**
+ * Submission payload — the consent action.
+ */
+export type ImprovementRequestCreate = {
+    session_id: string;
+    comment?: (string | null);
+    include_memory?: boolean;
+};
+
+/**
+ * Detail projection — adds the whole frozen context block.
+ */
+export type ImprovementRequestDetailPublic = {
+    id: string;
+    session_id?: (string | null);
+    target_agent_id: string;
+    target_agent_name?: (string | null);
+    source_agent_id?: (string | null);
+    source_agent_name?: (string | null);
+    bundle_id?: (string | null);
+    is_bundle_install?: boolean;
+    installed_version?: (string | null);
+    installed_revision_number?: (number | null);
+    requester_display?: (string | null);
+    requester_email?: (string | null);
+    comment?: (string | null);
+    status: string;
+    resolution_note?: (string | null);
+    source: string;
+    snapshot_message_count: number;
+    snapshot_truncated: boolean;
+    created_at: string;
+    status_changed_at?: (string | null);
+    context?: {
+        [key: string]: unknown;
+    };
+    session_title?: (string | null);
+};
+
+/**
+ * List/row projection.
+ *
+ * ``requester_display`` / ``requester_email`` identify the person who shared
+ * the session. They are meaningful to the recipient; the requester's own
+ * projection of their submitted requests carries them too (it is their data).
+ */
+export type ImprovementRequestPublic = {
+    id: string;
+    session_id?: (string | null);
+    target_agent_id: string;
+    target_agent_name?: (string | null);
+    source_agent_id?: (string | null);
+    source_agent_name?: (string | null);
+    bundle_id?: (string | null);
+    is_bundle_install?: boolean;
+    installed_version?: (string | null);
+    installed_revision_number?: (number | null);
+    requester_display?: (string | null);
+    requester_email?: (string | null);
+    comment?: (string | null);
+    status: string;
+    resolution_note?: (string | null);
+    source: string;
+    snapshot_message_count: number;
+    snapshot_truncated: boolean;
+    created_at: string;
+    status_changed_at?: (string | null);
+};
+
+export type ImprovementRequestsPublic = {
+    data: Array<ImprovementRequestPublic>;
+    count: number;
+};
+
+/**
+ * Recipient-only status / resolution-note edit.
+ */
+export type ImprovementRequestUpdate = {
+    status?: (string | null);
+    resolution_note?: (string | null);
 };
 
 export type InputTaskCreate = {
@@ -3356,8 +3678,6 @@ export type InputTaskDetailPublic = {
     agent_initiated: boolean;
     auto_execute: boolean;
     source_session_id: (string | null);
-    source_email_message_id?: (string | null);
-    source_agent_id?: (string | null);
     auto_feedback: boolean;
     error_message: (string | null);
     created_at: string;
@@ -3403,8 +3723,6 @@ export type InputTaskPublic = {
     agent_initiated: boolean;
     auto_execute: boolean;
     source_session_id: (string | null);
-    source_email_message_id?: (string | null);
-    source_agent_id?: (string | null);
     auto_feedback: boolean;
     error_message: (string | null);
     created_at: string;
@@ -3439,8 +3757,6 @@ export type InputTaskPublicExtended = {
     agent_initiated: boolean;
     auto_execute: boolean;
     source_session_id: (string | null);
-    source_email_message_id?: (string | null);
-    source_agent_id?: (string | null);
     auto_feedback: boolean;
     error_message: (string | null);
     created_at: string;
@@ -3777,7 +4093,6 @@ export type MailServerConfigPublic = {
     encryption_type?: EncryptionType;
     username: string;
     id: string;
-    user_id: string;
     has_password?: boolean;
     created_at: string;
     updated_at: string;
@@ -4423,14 +4738,6 @@ export type PrivateUserCreate = {
     is_verified?: boolean;
 };
 
-export type ProcessEmailsResult = {
-    polled?: number;
-    processed?: number;
-    pending?: number;
-    errors?: number;
-    message?: string;
-};
-
 /**
  * Body of ``POST /agents/{agent_id}/publish``.
  *
@@ -4588,38 +4895,221 @@ export type RevokeRequest = {
 };
 
 /**
- * A single conflicting effective route the installer already has.
- *
- * Surfaced as a non-blocking toast on the install completion page when an
- * agent's auto-created route looks similar (by lowercased token overlap)
- * to another route already active for the installer. Helps the user
- * spot near-duplicate intents (e.g. "Calendar Planner" vs "Vacation
- * Planner") that could confuse the App MCP router.
- */
-export type RouteConflictMatch = {
-    route_id: string;
-    agent_id: string;
-    agent_name: string;
-    trigger_prompt: string;
-    similarity: number;
-};
-
-/**
- * Response payload for the install-time conflict check.
- *
- * ``matches`` is sorted by descending similarity. Empty when no
- * effective route crosses the similarity threshold (or when the agent
- * has no auto-managed route to compare against).
- */
-export type RouteConflictResponse = {
-    matches?: Array<RouteConflictMatch>;
-};
-
-/**
  * Owner-only update payload for ``Agent.router_trigger_prompt``.
  */
 export type RouterTriggerPromptUpdate = {
     router_trigger_prompt?: (string | null);
+};
+
+/**
+ * Full detail — the summary plus the stage trace.
+ */
+export type RoutingDecisionPublic = {
+    id: string;
+    created_at: string;
+    origin: string;
+    channel_id?: (string | null);
+    channel_name?: (string | null);
+    user_id?: (string | null);
+    user_email?: (string | null);
+    actor_user_id?: (string | null);
+    thread_key?: (string | null);
+    message_text?: (string | null);
+    message_sha256?: (string | null);
+    message_text_hidden?: boolean;
+    message_text_notice?: (string | null);
+    outcome: string;
+    match_method?: (string | null);
+    selected_agent_id?: (string | null);
+    selected_agent_name?: (string | null);
+    selected_bundle_uuid?: (string | null);
+    selected_bundle_name?: (string | null);
+    confidence?: (number | null);
+    latency_ms?: number;
+    error?: (string | null);
+    candidate_count?: number;
+    skipped_count?: number;
+    provider?: (string | null);
+    model?: (string | null);
+    stages?: Array<unknown>;
+    diagnosis?: (RoutingDiagnosisPublic | null);
+};
+
+/**
+ * Paginated list envelope.
+ */
+export type RoutingDecisionsPublic = {
+    data: Array<RoutingDecisionSummary>;
+    count: number;
+    notice?: (string | null);
+};
+
+/**
+ * List-row projection — everything the table needs, without ``stages``.
+ *
+ * ``stages`` is the large field and the only one a list view never reads;
+ * keeping it out means a page of 50 rows does not haul 50 rendered prompts
+ * and raw LLM responses across the wire.
+ */
+export type RoutingDecisionSummary = {
+    id: string;
+    created_at: string;
+    origin: string;
+    channel_id?: (string | null);
+    channel_name?: (string | null);
+    user_id?: (string | null);
+    user_email?: (string | null);
+    actor_user_id?: (string | null);
+    thread_key?: (string | null);
+    message_text?: (string | null);
+    message_sha256?: (string | null);
+    message_text_hidden?: boolean;
+    message_text_notice?: (string | null);
+    outcome: string;
+    match_method?: (string | null);
+    selected_agent_id?: (string | null);
+    selected_agent_name?: (string | null);
+    selected_bundle_uuid?: (string | null);
+    selected_bundle_name?: (string | null);
+    confidence?: (number | null);
+    latency_ms?: number;
+    error?: (string | null);
+    candidate_count?: number;
+    skipped_count?: number;
+    provider?: (string | null);
+    model?: (string | null);
+};
+
+/**
+ * Why this decision went the way it did, in a sentence, plus near-misses.
+ *
+ * **Computed on the backend on purpose** (plan §10, Phase 4): the wording is
+ * the feature for the motivating case, so it has to be testable and it has to
+ * live next to the rules it describes. In a component it could be neither —
+ * nothing would fail when the rule it paraphrases changed.
+ *
+ * ``verdict`` is the sentence; ``code`` is the branch that produced it, so a
+ * client can style or group without parsing prose and a test can pin both
+ * independently. Every branch names a remedy: a diagnosis that says only what
+ * is wrong leaves the reader exactly where they started.
+ *
+ * **What this exposes about the expected agent is an allowlist of two fields**
+ * — ``expected_agent_name`` and ``expected_agent_owner_email`` — chosen by the
+ * same standard §7 applies to ``candidates[].trigger_prompt``: they are the
+ * agent owner's own configuration, not sender-derived, and already visible to
+ * a superuser. Nothing else about the agent is read into the response, and a
+ * field wanted here later has to clear that bar when it is added.
+ */
+export type RoutingDiagnosisPublic = {
+    code: string;
+    verdict: string;
+    action: string;
+    eligible_candidate_count?: number;
+    skipped_by_reason?: {
+        [key: string]: (number);
+    };
+    expected_agent_id?: (string | null);
+    expected_agent_name?: (string | null);
+    expected_agent_owner_email?: (string | null);
+    near_misses?: Array<RoutingNearMiss>;
+    near_miss_notice?: (string | null);
+};
+
+/**
+ * One candidate ranked by token overlap against the routed message.
+ *
+ * A *hint*, explicitly not a rule: the classifier is an LLM and there is no
+ * similarity cut-off anywhere in routing. This is the same Jaccard overlap
+ * ``app/services/routing/text_similarity.py`` already uses for install-time
+ * route-conflict detection, borrowed to answer the question an admin
+ * actually asks about a ``no_match`` — "how close did it come?". Saying
+ * "0.31, below the threshold" would be a claim the router does not
+ * implement; the wording says "closest", not "just missed".
+ */
+export type RoutingNearMiss = {
+    ref_id: string;
+    kind: string;
+    name: string;
+    similarity: number;
+    eligible?: boolean;
+    skip_reason?: (string | null);
+};
+
+/**
+ * A copyable trigger-prompt draft for one candidate. Writes nothing.
+ */
+export type RoutingRecommendationPublic = {
+    trace_id: string;
+    ref_id: string;
+    kind: string;
+    name: string;
+    owner_email?: (string | null);
+    current_trigger_prompt?: (string | null);
+    suggested_trigger_prompt?: (string | null);
+    success?: boolean;
+    error?: (string | null);
+    notice?: string;
+};
+
+/**
+ * Ask for a drafted trigger prompt for one candidate from a trace.
+ */
+export type RoutingRecommendationRequest = {
+    ref_id?: (string | null);
+};
+
+/**
+ * What changed between a stored decision and its re-run.
+ *
+ * Field-by-field rather than a text blob: the card renders the changed rows,
+ * and a test can assert on one property without parsing prose. ``summary`` is
+ * server-authored so the wording lives with the rules it describes (same call
+ * as the reachability verdict in plan §9).
+ */
+export type RoutingReplayDiff = {
+    changed?: boolean;
+    outcome_changed?: boolean;
+    original_outcome?: (string | null);
+    replay_outcome?: (string | null);
+    selection_changed?: boolean;
+    original_selection?: (string | null);
+    replay_selection?: (string | null);
+    match_method_changed?: boolean;
+    original_match_method?: (string | null);
+    replay_match_method?: (string | null);
+    original_confidence?: (number | null);
+    replay_confidence?: (number | null);
+    original_candidate_count?: number;
+    replay_candidate_count?: number;
+    candidates_added?: Array<(string)>;
+    candidates_removed?: Array<(string)>;
+    summary?: string;
+};
+
+/**
+ * Re-run a stored trace's message against current state.
+ */
+export type RoutingReplayRequest = {
+    include_catalog?: boolean;
+};
+
+/**
+ * The original decision, the re-run, and the diff between them.
+ */
+export type RoutingReplayResult = {
+    original: RoutingDecisionPublic;
+    replay: RoutingDecisionPublic;
+    diff: RoutingReplayDiff;
+};
+
+/**
+ * Run one message through routing for another user, with no effects.
+ */
+export type RoutingSimulateRequest = {
+    message: string;
+    as_user_id: string;
+    channel_id?: (string | null);
+    include_catalog?: boolean;
 };
 
 /**
@@ -4702,20 +5192,71 @@ export type SecurityEventsPublic = {
 };
 
 /**
- * Request to send an email reply for an email-originated task
+ * Admin create payload.
  */
-export type SendAnswerRequest = {
-    custom_message?: (string | null);
+export type ServerChannelCreate = {
+    channel_type: string;
+    name: string;
+    enabled?: boolean;
+    auto_register_users?: boolean;
+    visibility?: string;
+    default_enabled_for_users?: boolean;
+    default_agent_scope?: string;
+    allow_auto_install?: boolean;
+    config?: {
+        [key: string]: unknown;
+    };
+    email_whitelist?: (string | null);
+    secrets?: (string | null);
 };
 
 /**
- * Response from sending an email reply
+ * Admin read projection. Carries no secret material.
  */
-export type SendAnswerResponse = {
-    success: boolean;
-    queue_entry_id?: (string | null);
-    generated_reply?: (string | null);
-    error?: (string | null);
+export type ServerChannelPublic = {
+    channel_type: string;
+    name: string;
+    enabled?: boolean;
+    auto_register_users?: boolean;
+    visibility?: string;
+    default_enabled_for_users?: boolean;
+    default_agent_scope?: string;
+    allow_auto_install?: boolean;
+    id: string;
+    config?: {
+        [key: string]: unknown;
+    };
+    email_whitelist?: (string | null);
+    webhook_token: (string | null);
+    webhook_url: (string | null);
+    has_outbound_credentials: boolean;
+    created_by?: (string | null);
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * Admin patch payload — every field optional.
+ *
+ * ``secrets`` is only written when a non-empty value is supplied, so a form
+ * round-trip that leaves the write-only field untouched keeps the stored
+ * credential.
+ */
+export type ServerChannelUpdate = {
+    channel_type?: (string | null);
+    name?: (string | null);
+    enabled?: (boolean | null);
+    auto_register_users?: (boolean | null);
+    visibility?: (string | null);
+    default_enabled_for_users?: (boolean | null);
+    default_agent_scope?: (string | null);
+    allow_auto_install?: (boolean | null);
+    config?: ({
+    [key: string]: unknown;
+} | null);
+    email_whitelist?: (string | null);
+    secrets?: (string | null);
+    regenerate_webhook_token?: boolean;
 };
 
 /**
@@ -4947,25 +5488,6 @@ export type SharedCredentialPublic = {
 export type SharedCredentialsPublic = {
     data: Array<SharedCredentialPublic>;
     count: number;
-};
-
-/**
- * Route shared with a user (via assignment), as seen by the assignee.
- */
-export type SharedRoutePublic = {
-    route_id: string;
-    name: string;
-    agent_name: string;
-    agent_owner_name?: string;
-    agent_owner_email?: string;
-    shared_by_name?: string;
-    session_mode: string;
-    trigger_prompt: string;
-    message_patterns?: (string | null);
-    prompt_examples?: (string | null);
-    is_active: boolean;
-    assignment_id: string;
-    is_enabled: boolean;
 };
 
 /**
@@ -5308,43 +5830,54 @@ export type UsageIntentResponse = {
     environment_id: string;
 };
 
-export type UserAppAgentRouteCreate = {
-    agent_id: string;
-    session_mode?: string;
-    trigger_prompt: string;
-    message_patterns?: (string | null);
-    channel_app_mcp?: boolean;
-    is_active?: boolean;
-};
-
-export type UserAppAgentRoutePublic = {
+/**
+ * One channel as its user sees it: resolved policy plus provenance.
+ *
+ * Every value here is already resolved — the client never re-applies the
+ * inherit rules, because a second implementation of them is exactly how the
+ * UI and the router come to disagree about whether a channel is on.
+ *
+ * The ``*_inherited`` flags exist so the UI can be honest about *why* a value
+ * is what it is. A setting the user has never touched must render as
+ * "following the admin default (on)", not as a plain switch that looks
+ * user-owned; the corresponding ``channel_default_*`` field carries the value
+ * being followed, so the label can name it without a second request.
+ */
+export type UserChannelPublic = {
     id: string;
-    user_id: string;
-    agent_id: string;
-    agent_name?: string;
-    session_mode: string;
-    trigger_prompt: string;
-    message_patterns: (string | null);
-    channel_app_mcp: boolean;
-    is_active: boolean;
-    created_at: string;
-    updated_at: string;
+    channel_type: string;
+    name: string;
+    is_available: boolean;
+    is_enabled: boolean;
+    is_enabled_inherited: boolean;
+    channel_default_enabled: boolean;
+    agent_scope: string;
+    agent_scope_inherited: boolean;
+    channel_default_agent_scope: string;
+    agent_ids?: Array<(string)>;
+    pinned_agent_id?: (string | null);
+    allow_identity_routing?: boolean;
+    has_settings?: boolean;
 };
 
 /**
- * Combined response for user's personal + shared routes.
+ * User PUT body. Omitted field = unchanged; explicit ``null`` = inherit.
+ *
+ * The distinction is read with ``model_dump(exclude_unset=True)``, and it is
+ * the only way a nullable-meaning-inherit column can be *cleared* through an
+ * API whose "unset" marker is also ``None``. A body of ``{}`` changes
+ * nothing; ``{"is_enabled": null}`` reverts that one field to the channel
+ * default while keeping the rest of the row.
+ *
+ * ``allow_identity_routing`` has no inherited state (master plan §3.4), so an
+ * explicit ``null`` for it is rejected rather than quietly ignored.
  */
-export type UserAppAgentRoutesResponse = {
-    personal_routes: Array<UserAppAgentRoutePublic>;
-    shared_routes: Array<SharedRoutePublic>;
-};
-
-export type UserAppAgentRouteUpdate = {
-    session_mode?: (string | null);
-    trigger_prompt?: (string | null);
-    message_patterns?: (string | null);
-    channel_app_mcp?: (boolean | null);
-    is_active?: (boolean | null);
+export type UserChannelUpdate = {
+    is_enabled?: (boolean | null);
+    agent_scope?: (string | null);
+    agent_ids?: (Array<(string)> | null);
+    pinned_agent_id?: (string | null);
+    allow_identity_routing?: (boolean | null);
 };
 
 export type UserCreate = {
@@ -5889,6 +6422,10 @@ export type AdminEnvironmentsListAdminEnvironmentsData = {
      * Filter by template name (env_name)
      */
     template?: (string | null);
+    /**
+     * Filter by bundle update availability (consumer install running an older revision than the bundle's latest)
+     */
+    updateAvailable?: (boolean | null);
 };
 
 export type AdminEnvironmentsListAdminEnvironmentsResponse = (AdminAgentEnvironmentsPublic);
@@ -5960,6 +6497,57 @@ export type AdminLlmProvidersTestManagedAiCredentialConnectionData = {
 };
 
 export type AdminLlmProvidersTestManagedAiCredentialConnectionResponse = (AICredentialTestResult);
+
+export type AdminRoutingListRoutingTracesData = {
+    channelId?: (string | null);
+    limit?: number;
+    origin?: (string | null);
+    outcome?: (string | null);
+    skip?: number;
+    userId?: (string | null);
+};
+
+export type AdminRoutingListRoutingTracesResponse = (RoutingDecisionsPublic);
+
+export type AdminRoutingClearRoutingTracesData = {
+    /**
+     * Required to clear every channel's traces. Without it, and without channel_id, the request is rejected rather than run unscoped.
+     */
+    all?: boolean;
+    channelId?: (string | null);
+};
+
+export type AdminRoutingClearRoutingTracesResponse = (Message);
+
+export type AdminRoutingGetRoutingTraceData = {
+    /**
+     * Narrow the reachability verdict to one candidate: 'why was THIS one not a candidate'. A candidate ref, not only an agent id — an agent's bare UUID, or 'identity:{owner_id}' to ask why a *person* was not reachable. Optional — without it the verdict describes the decision as a whole.
+     */
+    expectedAgentId?: (string | null);
+    traceId: string;
+};
+
+export type AdminRoutingGetRoutingTraceResponse = (RoutingDecisionPublic);
+
+export type AdminRoutingSimulateRoutingData = {
+    requestBody: RoutingSimulateRequest;
+};
+
+export type AdminRoutingSimulateRoutingResponse = (RoutingDecisionPublic);
+
+export type AdminRoutingReplayRoutingTraceData = {
+    requestBody?: (RoutingReplayRequest | null);
+    traceId: string;
+};
+
+export type AdminRoutingReplayRoutingTraceResponse = (RoutingReplayResult);
+
+export type AdminRoutingDraftRoutingRecommendationData = {
+    requestBody?: (RoutingRecommendationRequest | null);
+    traceId: string;
+};
+
+export type AdminRoutingDraftRoutingRecommendationResponse = (RoutingRecommendationPublic);
 
 export type AgentApiGetAgentApiStatusData = {
     agentId: string;
@@ -6033,61 +6621,31 @@ export type AgentApiDeleteAgentApiGrantData = {
 
 export type AgentApiDeleteAgentApiGrantResponse = (Message);
 
+export type AgentApiCreateAgentApiKeyData = {
+    agentId: string;
+    requestBody: AgentApiKeyCreate;
+};
+
+export type AgentApiCreateAgentApiKeyResponse = (AgentApiKeyCreated);
+
+export type AgentApiListAgentApiKeysData = {
+    agentId: string;
+};
+
+export type AgentApiListAgentApiKeysResponse = (AgentApiKeysPublic);
+
+export type AgentApiDeleteAgentApiKeyData = {
+    agentId: string;
+    keyId: string;
+};
+
+export type AgentApiDeleteAgentApiKeyResponse = (Message);
+
 export type AgentApiPublicConsumerSpecData = {
     agentId: string;
 };
 
 export type AgentApiPublicConsumerSpecResponse = (unknown);
-
-export type AgentAppMcpRoutesListAgentAppMcpRoutesData = {
-    agentId: string;
-};
-
-export type AgentAppMcpRoutesListAgentAppMcpRoutesResponse = (Array<AppAgentRoutePublic>);
-
-export type AgentAppMcpRoutesCreateAgentAppMcpRouteData = {
-    agentId: string;
-    requestBody: AppAgentRouteCreate;
-};
-
-export type AgentAppMcpRoutesCreateAgentAppMcpRouteResponse = (AppAgentRoutePublic);
-
-export type AgentAppMcpRoutesUpdateAgentAppMcpRouteData = {
-    agentId: string;
-    requestBody: AppAgentRouteUpdate;
-    routeId: string;
-};
-
-export type AgentAppMcpRoutesUpdateAgentAppMcpRouteResponse = (AppAgentRoutePublic);
-
-export type AgentAppMcpRoutesDeleteAgentAppMcpRouteData = {
-    agentId: string;
-    routeId: string;
-};
-
-export type AgentAppMcpRoutesDeleteAgentAppMcpRouteResponse = (Message);
-
-export type AgentAppMcpRoutesCheckRouteConflictsData = {
-    agentId: string;
-};
-
-export type AgentAppMcpRoutesCheckRouteConflictsResponse = (RouteConflictResponse);
-
-export type AgentAppMcpRoutesAssignUsersToAgentRouteData = {
-    agentId: string;
-    requestBody: Array<(string)>;
-    routeId: string;
-};
-
-export type AgentAppMcpRoutesAssignUsersToAgentRouteResponse = (Array<AppAgentRouteAssignmentPublic>);
-
-export type AgentAppMcpRoutesRemoveUserAssignmentFromAgentRouteData = {
-    agentId: string;
-    routeId: string;
-    userId: string;
-};
-
-export type AgentAppMcpRoutesRemoveUserAssignmentFromAgentRouteResponse = (Message);
 
 export type AgentGitCheckoutAgentData = {
     requestBody: AgentCheckoutRequest;
@@ -6139,8 +6697,17 @@ export type AgentGitGetGitStatusData = {
 
 export type AgentGitGetGitStatusResponse = (GitStatus);
 
+export type AgentGitGetGitDiffData = {
+    agentId: string;
+    key: string;
+    section: string;
+};
+
+export type AgentGitGetGitDiffResponse = (GitDiff);
+
 export type AgentGitPullGitSourceData = {
     agentId: string;
+    requestBody?: (GitPullRequest | null);
 };
 
 export type AgentGitPullGitSourceResponse = (AgentPublic);
@@ -6728,47 +7295,6 @@ export type AiCredentialsGetAffectedEnvironmentsData = {
 
 export type AiCredentialsGetAffectedEnvironmentsResponse = (AffectedEnvironmentsPublic);
 
-export type AppAgentRoutesListAppAgentRoutesResponse = (Array<AppAgentRoutePublic>);
-
-export type AppAgentRoutesCreateAppAgentRouteData = {
-    requestBody: AppAgentRouteCreate;
-};
-
-export type AppAgentRoutesCreateAppAgentRouteResponse = (AppAgentRoutePublic);
-
-export type AppAgentRoutesGetAppAgentRouteData = {
-    routeId: string;
-};
-
-export type AppAgentRoutesGetAppAgentRouteResponse = (AppAgentRoutePublic);
-
-export type AppAgentRoutesUpdateAppAgentRouteData = {
-    requestBody: AppAgentRouteUpdate;
-    routeId: string;
-};
-
-export type AppAgentRoutesUpdateAppAgentRouteResponse = (AppAgentRoutePublic);
-
-export type AppAgentRoutesDeleteAppAgentRouteData = {
-    routeId: string;
-};
-
-export type AppAgentRoutesDeleteAppAgentRouteResponse = (Message);
-
-export type AppAgentRoutesAssignUsersToRouteData = {
-    requestBody: Array<(string)>;
-    routeId: string;
-};
-
-export type AppAgentRoutesAssignUsersToRouteResponse = (Array<AppAgentRouteAssignmentPublic>);
-
-export type AppAgentRoutesRemoveUserAssignmentData = {
-    routeId: string;
-    userId: string;
-};
-
-export type AppAgentRoutesRemoveUserAssignmentResponse = (Message);
-
 export type AppAuthListAppClientsResponse = (Array<DesktopOAuthClientPublic>);
 
 export type AppAuthRevokeAppClientData = {
@@ -7103,6 +7629,8 @@ export type CliListAccountUserWorkspacesResponse = (UserWorkspacesPublic);
 
 export type CliGetAccountContextPackageResponse = (unknown);
 
+export type CliGetAccountContextPackageVersionResponse = (ContextPackageVersionPublic);
+
 export type CliAccountSearchKnowledgeData = {
     requestBody: KnowledgeSearchBody;
 };
@@ -7280,6 +7808,34 @@ export type CliAccountShareCredentialWithAgentData = {
 
 export type CliAccountShareCredentialWithAgentResponse = (Message);
 
+export type CliListAccountImprovementRequestsData = {
+    agentId?: (string | null);
+    limit?: number;
+    skip?: number;
+    status?: (string | null);
+};
+
+export type CliListAccountImprovementRequestsResponse = (ImprovementRequestsPublic);
+
+export type CliGetAccountImprovementRequestData = {
+    requestId: string;
+};
+
+export type CliGetAccountImprovementRequestResponse = (ImprovementRequestDetailPublic);
+
+export type CliUpdateAccountImprovementRequestData = {
+    requestBody: ImprovementRequestUpdate;
+    requestId: string;
+};
+
+export type CliUpdateAccountImprovementRequestResponse = (ImprovementRequestDetailPublic);
+
+export type CliDownloadAccountImprovementArchiveData = {
+    requestId: string;
+};
+
+export type CliDownloadAccountImprovementArchiveResponse = (unknown);
+
 export type CliAccountApiProxyData = {
     requestBody: AccountApiProxyRequest;
 };
@@ -7410,6 +7966,12 @@ export type CredentialsReadCredentialWithDataData = {
 };
 
 export type CredentialsReadCredentialWithDataResponse = (CredentialWithData);
+
+export type CredentialsRevealAgentApiKeyData = {
+    id: string;
+};
+
+export type CredentialsRevealAgentApiKeyResponse = (AgentApiKeyRevealResponse);
 
 export type CredentialsReadAgentApiConnectionData = {
     id: string;
@@ -7638,43 +8200,6 @@ export type DesktopAuthCinnaDesktopDiscoveryResponse = ({
     [key: string]: unknown;
 });
 
-export type EmailIntegrationGetEmailIntegrationData = {
-    agentId: string;
-};
-
-export type EmailIntegrationGetEmailIntegrationResponse = ((AgentEmailIntegrationPublic | null));
-
-export type EmailIntegrationCreateOrUpdateEmailIntegrationData = {
-    agentId: string;
-    requestBody: AgentEmailIntegrationCreate;
-};
-
-export type EmailIntegrationCreateOrUpdateEmailIntegrationResponse = (AgentEmailIntegrationPublic);
-
-export type EmailIntegrationDeleteEmailIntegrationData = {
-    agentId: string;
-};
-
-export type EmailIntegrationDeleteEmailIntegrationResponse = (Message);
-
-export type EmailIntegrationEnableEmailIntegrationData = {
-    agentId: string;
-};
-
-export type EmailIntegrationEnableEmailIntegrationResponse = (AgentEmailIntegrationPublic);
-
-export type EmailIntegrationDisableEmailIntegrationData = {
-    agentId: string;
-};
-
-export type EmailIntegrationDisableEmailIntegrationResponse = (AgentEmailIntegrationPublic);
-
-export type EmailIntegrationProcessEmailsData = {
-    agentId: string;
-};
-
-export type EmailIntegrationProcessEmailsResponse = (ProcessEmailsResult);
-
 export type EnvironmentsGetEnvironmentData = {
     id: string;
 };
@@ -7803,7 +8328,7 @@ export type EventsTestEventResponse = (unknown);
 
 export type ExternalListExternalAgentsData = {
     /**
-     * Optional workspace filter. When provided, limits the personal agents section to agents in this workspace. MCP shared agents and identity contacts are not filtered.
+     * Optional workspace filter. When provided, limits the personal agents section to agents in this workspace. Identity contacts are not filtered.
      */
     workspaceId?: (string | null);
 };
@@ -7878,36 +8403,6 @@ export type ExternalA2aGetExternalAgentCardWellKnownData = {
 };
 
 export type ExternalA2aGetExternalAgentCardWellKnownResponse = (unknown);
-
-export type ExternalA2aGetExternalRouteCardData = {
-    /**
-     * Protocol version: 'v1.0' (default) or 'v0.3'
-     */
-    protocol?: (string | null);
-    routeId: string;
-};
-
-export type ExternalA2aGetExternalRouteCardResponse = (unknown);
-
-export type ExternalA2aHandleExternalRouteJsonrpcData = {
-    /**
-     * Protocol version: 'v1.0' (default) or 'v0.3'
-     */
-    protocol?: (string | null);
-    routeId: string;
-};
-
-export type ExternalA2aHandleExternalRouteJsonrpcResponse = (unknown);
-
-export type ExternalA2aGetExternalRouteCardWellKnownData = {
-    /**
-     * Protocol version: 'v1.0' (default) or 'v0.3'
-     */
-    protocol?: (string | null);
-    routeId: string;
-};
-
-export type ExternalA2aGetExternalRouteCardWellKnownResponse = (unknown);
 
 export type ExternalA2aGetExternalIdentityCardData = {
     ownerId: string;
@@ -8065,6 +8560,60 @@ export type IdentityContactsToggleIdentityContactData = {
 };
 
 export type IdentityContactsToggleIdentityContactResponse = (Message);
+
+export type ImprovementRequestsGetImprovementContextData = {
+    sessionId: string;
+};
+
+export type ImprovementRequestsGetImprovementContextResponse = (ImprovementContextPublic);
+
+export type ImprovementRequestsCreateImprovementRequestData = {
+    requestBody: ImprovementRequestCreate;
+};
+
+export type ImprovementRequestsCreateImprovementRequestResponse = (ImprovementRequestPublic);
+
+export type ImprovementRequestsListMyImprovementRequestsData = {
+    limit?: number;
+    skip?: number;
+    status?: (string | null);
+};
+
+export type ImprovementRequestsListMyImprovementRequestsResponse = (ImprovementRequestsPublic);
+
+export type ImprovementRequestsListAgentImprovementRequestsData = {
+    agentId: string;
+    limit?: number;
+    skip?: number;
+    status?: (string | null);
+};
+
+export type ImprovementRequestsListAgentImprovementRequestsResponse = (ImprovementRequestsPublic);
+
+export type ImprovementRequestsGetImprovementRequestData = {
+    requestId: string;
+};
+
+export type ImprovementRequestsGetImprovementRequestResponse = (ImprovementRequestDetailPublic);
+
+export type ImprovementRequestsUpdateImprovementRequestData = {
+    requestBody: ImprovementRequestUpdate;
+    requestId: string;
+};
+
+export type ImprovementRequestsUpdateImprovementRequestResponse = (ImprovementRequestDetailPublic);
+
+export type ImprovementRequestsDeleteImprovementRequestData = {
+    requestId: string;
+};
+
+export type ImprovementRequestsDeleteImprovementRequestResponse = (Message);
+
+export type ImprovementRequestsDownloadImprovementArchiveData = {
+    requestId: string;
+};
+
+export type ImprovementRequestsDownloadImprovementArchiveResponse = (unknown);
 
 export type InstallsPublishAgentData = {
     agentId: string;
@@ -8753,6 +9302,93 @@ export type SecurityEventsListSecurityEventsData = {
 
 export type SecurityEventsListSecurityEventsResponse = (SecurityEventsPublic);
 
+export type ServerChannelsChannelInboundData = {
+    webhookToken: string;
+};
+
+export type ServerChannelsChannelInboundResponse = (unknown);
+
+export type ServerChannelsListChannelTypesResponse = (Array<ChannelTypePublic>);
+
+export type ServerChannelsListAutoInstallBundlesResponse = (Array<AutoInstallBundlePublic>);
+
+export type ServerChannelsAddAutoInstallBundleData = {
+    requestBody: AutoInstallBundleAdd;
+};
+
+export type ServerChannelsAddAutoInstallBundleResponse = (Array<AutoInstallBundlePublic>);
+
+export type ServerChannelsRemoveAutoInstallBundleData = {
+    bundleUuid: string;
+};
+
+export type ServerChannelsRemoveAutoInstallBundleResponse = (void);
+
+export type ServerChannelsListChannelsResponse = (Array<ServerChannelPublic>);
+
+export type ServerChannelsCreateChannelData = {
+    requestBody: ServerChannelCreate;
+};
+
+export type ServerChannelsCreateChannelResponse = (ServerChannelPublic);
+
+export type ServerChannelsUpdateChannelData = {
+    channelId: string;
+    requestBody: ServerChannelUpdate;
+};
+
+export type ServerChannelsUpdateChannelResponse = (ServerChannelPublic);
+
+export type ServerChannelsDeleteChannelData = {
+    channelId: string;
+};
+
+export type ServerChannelsDeleteChannelResponse = (void);
+
+export type ServerChannelsGetSetupInstructionsData = {
+    channelId: string;
+};
+
+export type ServerChannelsGetSetupInstructionsResponse = (ChannelSetupInstructions);
+
+export type ServerChannelsTestOutboundData = {
+    channelId: string;
+    requestBody: ChannelTestOutboundRequest;
+};
+
+export type ServerChannelsTestOutboundResponse = (ChannelTestOutboundResult);
+
+export type ServerChannelsListRecentSendersData = {
+    channelId: string;
+};
+
+export type ServerChannelsListRecentSendersResponse = (Array<ChannelRecentSender>);
+
+export type ServerChannelsListDebugEventsData = {
+    channelId: string;
+};
+
+export type ServerChannelsListDebugEventsResponse = (ChannelDebugEventsPublic);
+
+export type ServerChannelsClearDebugEventsData = {
+    channelId: string;
+};
+
+export type ServerChannelsClearDebugEventsResponse = (Message);
+
+export type ServerChannelsListChannelGrantsData = {
+    channelId: string;
+};
+
+export type ServerChannelsListChannelGrantsResponse = (Array<ChannelGrantPublic>);
+
+export type ServerChannelsReplaceChannelGrantsData = {
+    channelId: string;
+    requestBody: ChannelGrantsUpdate;
+};
+
+export type ServerChannelsReplaceChannelGrantsResponse = (Array<ChannelGrantPublic>);
+
 export type ServerConfigGetDisclaimerResponse = (DisclaimerPublic);
 
 export type ServerConfigGetServerConfigResponse = (ServerConfig);
@@ -8927,13 +9563,6 @@ export type TasksExecuteTaskData = {
 
 export type TasksExecuteTaskResponse = (ExecuteTaskResponse);
 
-export type TasksSendTaskEmailAnswerData = {
-    id: string;
-    requestBody: SendAnswerRequest;
-};
-
-export type TasksSendTaskEmailAnswerResponse = (SendAnswerResponse);
-
 export type TasksArchiveTaskData = {
     id: string;
 };
@@ -9106,33 +9735,20 @@ export type TaskTriggersRegenerateTokenData = {
 
 export type TaskTriggersRegenerateTokenResponse = (TaskTriggerPublicWithToken);
 
-export type UserAppAgentRoutesListUserAppAgentRoutesResponse = (UserAppAgentRoutesResponse);
+export type UserChannelsListMyChannelsResponse = (Array<UserChannelPublic>);
 
-export type UserAppAgentRoutesCreateUserAppAgentRouteData = {
-    requestBody: UserAppAgentRouteCreate;
+export type UserChannelsUpdateMyChannelData = {
+    channelId: string;
+    requestBody: UserChannelUpdate;
 };
 
-export type UserAppAgentRoutesCreateUserAppAgentRouteResponse = (UserAppAgentRoutePublic);
+export type UserChannelsUpdateMyChannelResponse = (UserChannelPublic);
 
-export type UserAppAgentRoutesUpdateUserAppAgentRouteData = {
-    requestBody: UserAppAgentRouteUpdate;
-    routeId: string;
+export type UserChannelsResetMyChannelData = {
+    channelId: string;
 };
 
-export type UserAppAgentRoutesUpdateUserAppAgentRouteResponse = (UserAppAgentRoutePublic);
-
-export type UserAppAgentRoutesDeleteUserAppAgentRouteData = {
-    routeId: string;
-};
-
-export type UserAppAgentRoutesDeleteUserAppAgentRouteResponse = (Message);
-
-export type UserAppAgentRoutesToggleAdminAssignmentData = {
-    assignmentId: string;
-    isEnabled: boolean;
-};
-
-export type UserAppAgentRoutesToggleAdminAssignmentResponse = (AppAgentRouteAssignmentPublic);
+export type UserChannelsResetMyChannelResponse = (UserChannelPublic);
 
 export type UsersReadUsersData = {
     limit?: number;

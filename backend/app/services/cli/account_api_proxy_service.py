@@ -43,8 +43,9 @@ from app.services.cli.account_api_proxy_policy import (
     ApiProxyDenied,
     assert_api_proxy_allowed,
 )
-from app.services.cli.rate_limiter import RateLimiter
+from app.services.common.rate_limiter import RateLimiter
 from app.services.events.security_event_service import SecurityEventService
+from app.utils import client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +70,6 @@ _PROXIED_MARKER_HEADER = "X-Cinna-Proxied"
 
 # Internal ASGI base URL — never resolved over the network (ASGITransport).
 _INTERNAL_BASE_URL = "http://internal"
-
-
-def _client_ip(request: Request | None) -> str | None:
-    """Best-effort source IP for audit. Prefers the first X-Forwarded-For hop."""
-    if request is None:
-        return None
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first[:64]
-    if request.client and request.client.host:
-        return request.client.host[:64]
-    return None
 
 
 class AccountApiProxyService:
@@ -303,7 +290,7 @@ class AccountApiProxyService:
                     "path": req.path,
                     "reason": denied.reason,
                     "account_token_id": str(account_token.id),
-                    "ip": _client_ip(request),
+                    "ip": client_ip(request),
                 },
             ),
         )

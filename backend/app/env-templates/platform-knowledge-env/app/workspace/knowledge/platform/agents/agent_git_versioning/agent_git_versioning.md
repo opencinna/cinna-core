@@ -13,7 +13,9 @@ Version-control the durable source of an agent — scripts, internal docs, promp
 | **Canonical git tree** | `cinna.agent.json` + `workspace/` subtree + `.gitignore` — byte-for-byte the schema_version-2 bundle snapshot layout, so git is a transport/interchange layer, not a separate format |
 | **Last synced commit** | SHA of the last remote commit that was imported or pushed; the idempotency pin, analogous to `Agent.installed_revision_id` |
 | **Update available** | Whether the remote has commits that advance the agent's subdir beyond `last_synced_commit`. For repo-root installs: `ls-remote HEAD != last_synced_commit`. For subdir installs: HEAD must have advanced AND commits that actually touch `<subdir>/` must exist beyond `last_synced_commit` (verified via a tree-object hash comparison). Cheap-first: if `ls-remote HEAD == last_synced_commit` the result is always `false` with no clone. Any indeterminate outcome returns `true` conservatively. Surfaced exclusively by `GET /agents/{id}/git/check-updates` (strict) and the dirty check. `GET /agents/{id}/git` no longer computes this — it always returns `false` |
-| **Dirty** | The live workspace or DB prompt fields have diverged from the last synced revision. `GET /agents/{id}/git/dirty` reports both axes separately: `workspace_dirty` (file content) and `prompts_dirty` (DB prompt fields) |
+| **Dirty** | The live agent has diverged from the last synced revision along any of the three axes a git tree carries. `GET /agents/{id}/git/dirty` reports each separately: `workspace_dirty` (file content under `workspace/`), `prompts_dirty` (the manifest's `prompts` block) and `settings_dirty` (the rest of `cinna.agent.json` — see Agent Settings below) |
+| **Pull conflict resolution** | The `conflict_resolution` a caller may pass to `POST /git/pull` when local prompts or `metadata` settings would be overwritten: `keep_local` (pull everything else, preserve the drifted fields — the install is then intentionally dirty on exactly those fields until committed) or `take_remote` (discard the local drift). Omitting it keeps the historical fail-loud 409, which the GitOps webhook path relies on. `GET /git/status` exposes `blocks_pull` per change and `pull_blocked` overall so the UI can pre-empt the 409 before the user clicks Pull |
+| **Pre-pull backup revision** | An internal (`origin="git"`, Revisions-tab-invisible) `AgentBundleRevision` snapshot of the live agent, captured before either pull resolution mutates anything. Exists because the workspace is replaced wholesale by a pull under *both* resolutions — `keep_local` only preserves prompt/metadata fields, never workspace files — so this snapshot is the sole record of a locally edited workspace file after either choice |
 | **GitOps webhook** | A `git_source` type `AgentWebhook` whose token a git host (GitHub, GitLab, etc.) posts to; the platform responds with a pull |
 | **Ownerless bundle** | An `AgentBundle` row with `publisher_user_id = NULL` created or reused during checkout or connect; private, unlisted, and never a catalog publish |
 | **Status** | `pending` → `connected` (after successful sync) → `error` (genuine operational failure) → `disconnected` |
@@ -120,20 +122,40 @@ A `bundle_id` mismatch between the remote folder and the agent is **permitted** 
 
 ### Pull (Update from Remote)
 
-`POST /agents/{id}/git/pull` (developer-gated). Pulls the latest remote revision onto the install:
+`POST /agents/{id}/git/pull` (developer-gated). Pulls the latest remote revision onto the install. The request body is **optional**:
 
 1. Per-agent lock acquired (serializes concurrent pull/push on one agent).
-2. Direction guard: `sync_direction` must be `pull` or `bidirectional`; otherwise **400**.
-3. Environment must exist (pull requires an active workspace); otherwise **400**.
-4. `ls-remote HEAD` compared to `last_synced_commit`. If already up to date: touch `last_sync_at`, return without cloning — idempotent for webhook fires.
-5. **Dirty guard** (DB side): if the install's prompt fields differ from the last synced revision, **409** "push or discard local changes first". The file side is protected by the `replace_bundle_content` denylist (App Data, credentials, logs, databases, uploads are never touched); only the DB prompt fields are checked here.
-6. Clone the repo (shallow) into a temp directory, validate the tree, parse `cinna.agent.json`.
-7. Persist as a new `AgentBundleRevision` (same bundle, next `revision_number`).
-8. Stop the environment (if running), apply `replace_bundle_content` from the new snapshot (bundle-owned dirs replaced/pruned; App Data, credentials, plugins preserved), reset prompt-sync baselines, write DB prompt/SDK fields from the manifest.
-9. Restart the environment.
-10. Advance `last_synced_commit` and set `status = connected`.
+2. An unrecognized `conflict_resolution` value (present but not `keep_local` / `take_remote`) → **400**, validated first — before the direction guard — in the service (not the route), so the service is the sole enforcement point for every caller (UI, webhook, CLI).
+3. Direction guard: `sync_direction` must be `pull` or `bidirectional`; otherwise **400**.
+4. Environment must exist (pull requires an active workspace); otherwise **400**. This is an *existence* check only — a **resolved** pull (`conflict_resolution` set) additionally requires the workspace to be *readable on disk* once it reaches the backup step below (step 7); a bodiless pull never checks readability, since it never attempts a backup.
+5. `ls-remote HEAD` compared to `last_synced_commit`. If already up to date: touch `last_sync_at`, return without cloning — idempotent for webhook fires, and quiet even on a dirty install (the guard below only runs once there is actually something to pull).
+6. **Dirty guard** (DB side, only for prompts and the manifest `metadata` section — see the narrowing rule in Agent Settings below): if local state a pull would overwrite has drifted, the outcome depends on `conflict_resolution` in the request body:
+   - **Omitted** (default) — fail loud with a structured, recoverable **409**: `detail = {code: "local_changes", message, blocking: [{section, field, change_type}, ...]}` naming every drifted prompt/setting. This is the historical behavior and what the GitOps push-webhook dispatcher relies on — it never sends a body, so an automated pull never silently resolves a conflict on the user's behalf.
+   - **`keep_local`** — the pull proceeds; the drifted prompt/metadata fields keep their local value instead of being overwritten. **Post-condition, by construction: the install is then dirty on exactly those fields** — a documented, intentional outcome (pull, then commit on top), not a failure.
+   - **`take_remote`** — the pull proceeds and discards the local drift, restoring the remote's values.
+7. When a resolution was supplied, a **pre-pull backup** is captured first: the live agent (workspace + manifest) is persisted as an internal `AgentBundleRevision` (`origin="git"`, invisible in the Revisions tab) before anything is mutated. Taken on **both** resolutions, not only `take_remote` — the workspace is replaced identically by `replace_bundle_content` regardless of which resolution was chosen, so the backup is the only record of a locally edited workspace file after either one; `keep_local` only ever preserves prompt/metadata *fields*, never files. Capturing the backup requires the env's workspace to actually be readable on disk (same guard connect and push use) — **new user-visible behavior: a resolved pull now returns 400 here if the workspace is missing/unreadable, where a bodiless pull previously proceeded regardless.** The message is shared with the publish guard and reads "Cannot publish: the publisher environment's workspace is not available on disk (\<path\>). Start the environment (id=\<env\>) so its workspace is materialised, then publish again." — the "publish" wording is a known quirk, not a mistake: the guard is reused verbatim from the publish path. The backup is ordered below the incoming revision (so it can never become the dirty-check baseline itself) and is rolled back if the incoming revision then fails to persist. A backup failure aborts the pull before any mutation; nothing is silently discarded.
+8. Clone the repo (shallow) into a temp directory, validate the tree, parse `cinna.agent.json`.
+9. Persist as a new `AgentBundleRevision` (same bundle, next `revision_number` — always above the backup's, so the backup can never become the dirty-check baseline). If this persist fails after a backup was taken, the backup is rolled back so the pre-pull baseline is restored exactly.
+10. Stop the environment (if running), apply `replace_bundle_content` from the new snapshot (bundle-owned dirs replaced/pruned; App Data, credentials, plugins preserved) — **workspace files are replaced wholesale on both resolutions; `keep_local` never preserves a locally edited file, only the prompt/metadata fields** — reset prompt-sync baselines, write DB prompt/SDK fields from the manifest (skipping any field the caller chose to keep local).
+11. Restart the environment.
+12. Advance `last_synced_commit` and set `status = connected`.
 
-**Error handling:** only genuine operational failures (egress-blocked, clone/network errors, filesystem errors) stamp `status = ERROR` on the source. Expected, user-actionable outcomes (dirty guard → 409, wrong direction → 400, missing env → 400) leave the source status unchanged.
+**Error handling:** only genuine operational failures (egress-blocked, clone/network errors, filesystem errors) stamp `status = ERROR` on the source. Expected, user-actionable outcomes (dirty guard → 409, unknown resolution / wrong direction → 400, missing env → 400, unreadable workspace on a resolved pull → 400) leave the source status unchanged.
+
+#### Pull Conflict Resolution (UI)
+
+The GIT Versioning card pre-empts the 409 instead of letting the user hit it: when the update banner shows `update_available && dirty`, its button reads **"Review & pull"** and opens the **`GitPullConflictDialog`** instead of firing a plain pull. The dialog is also reachable reactively — a race between the status read and the pull can still produce the 409, in which case the dialog opens seeded from the error's `blocking` list. Sections shown:
+
+- **Incoming** — the remote commit the pull would bring in.
+- **Blocks the pull** — the prompt/setting changes with `blocks_pull: true` (from `GET /git/status`), grouped as Prompts / Agent settings.
+- **Will be replaced by this pull** — the workspace file changes. These never block the pull; they are shown so the user understands they are replaced regardless of which resolution is chosen. Previously invisible — a pull with no local prompt/setting drift silently overwrote workspace files with no warning.
+- **Not touched** — App Data, credentials, plugins, and schedules.
+
+**Every row in those first three sections is clickable**, opening the `GitDiffDialog` with that item's unified diff (`GET /git/diff`). This is the difference between "Workflow prompt: modified" and a decision the user can actually make. Rows render as plain text only when the payload carries no raw `key` (an older `local_changes` 409), since without one the endpoint cannot be addressed. The same clickthrough is wired into the commit dialog's preview, which shares the row component.
+
+Footer actions: **Discard my changes and take remote** (`take_remote`) on the left, **Keep my changes** (`keep_local`) on the right. If the status read confirms nothing actually blocks the pull (the card's broader `dirty` signal can over-trigger, e.g. on a workspace-only change), the right-hand button becomes a plain **Pull** and the discard action is hidden.
+
+**Both actions are confirmed, not just the destructive one** — and there is deliberately **no Cancel button**. Every pull here replaces the workspace wholesale and restarts the environment, so `keep_local` is no more a casual click than `take_remote`; a Cancel button sitting beside them implied a symmetry that does not exist (two commits and one dismissal). Dismissing the dialog (Esc, the close affordance, or the confirmation's own Cancel) remains the way out without pulling. The confirmation copy is per-action: the discard names the backup snapshot and its support-only recovery path; `keep_local` states the post-condition that the agent stays dirty and needs a commit.
 
 ### Push (Commit Agent to Remote)
 
@@ -143,7 +165,7 @@ A `bundle_id` mismatch between the remote folder and the agent is **permitted** 
 2. Direction guard: `sync_direction` must be `push` or `bidirectional`; otherwise **400**.
 3. Requires a started environment with a readable workspace; otherwise **400**.
 4. `also_publish_bundle` (optional, default `false`) requires a publisher install; validated before the push so a failed precondition never wastes the push.
-5. **Fast-forward precheck:** `ls-remote HEAD` vs `last_synced_commit`. If the remote advanced — **409** "pull first". No clone or commit is attempted.
+5. **Fast-forward precheck (subdir-aware):** `ls-remote HEAD` vs `last_synced_commit`. If the remote advanced, the precheck blocks with **409** "pull first" only when the advance is relevant to this agent — a repo-root install (no `subdir`) always blocks; a `subdir` install blocks only when the subdir tree actually changed between `last_synced_commit` and the new remote HEAD (the same `subdir_changed_between` check the Update Check section uses). An advance confined to other folders of a shared repo falls through with no block — no clone or commit is attempted for the precheck itself either way.
 6. Full-history clone (not shallow — fast-forward push needs merge-base ancestry).
 7. Delete the stale `workspace/` subtree in the clone (so deletions propagate). Capture the live `app/workspace/` tree via `RevisionFormat.write_tree` — the same denylist + symlink guards publish uses, so credentials, app-data, logs, databases, and uploads can never reach the git tree even via a symlink. Write `cinna.agent.json` and refresh `.gitignore`.
 8. Size guard: reject any individual workspace file exceeding `GIT_SOURCE_MAX_FILE_BYTES` before committing.
@@ -181,25 +203,61 @@ Both SSH (`git@host:owner/repo.git`) and HTTPS repo URLs resolve to the same web
 
 ### Change Detection (Dirty Check)
 
-`GET /agents/{id}/git/dirty` (owner-resolved, no developer gate). Read-only comparison of the live workspace against the last synced revision. Returns:
+`GET /agents/{id}/git/dirty` (owner-resolved, no developer gate). Read-only comparison of the live agent against the last synced revision, along the three axes a git tree carries. Returns:
 
-- `dirty`: `true` if either axis is dirty.
-- `prompts_dirty`: DB prompt fields (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) differ from the last synced revision.
+- `dirty`: `true` if any axis is dirty.
+- `prompts_dirty`: the manifest's `prompts` block (`workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`) differs from the last synced revision.
+- `settings_dirty`: any **other** `cinna.agent.json` field differs — see Agent Settings below.
 - `workspace_dirty`: live workspace file content (hash) differs from the last synced revision.
 - `has_env`: `false` if no environment exists (workspace dirty check is skipped; `workspace_dirty` will be `false`).
 - `last_synced_commit`: the SHA the comparison was made against.
 
-This endpoint is kept separate from `GET /agents/{id}/git` deliberately — the dirty check copies the entire workspace tree to a temp dir and must not slow or fail the cheap status read. The UI gates the "Commit Agent" button on `dirty=true`; the pull guard uses the same `_prompts_dirty` logic internally.
+This endpoint is kept separate from `GET /agents/{id}/git` deliberately — the dirty check copies the entire workspace tree to a temp dir and must not slow or fail the cheap status read. The UI gates the "Commit Agent" button on `dirty=true`.
+
+#### Agent Settings (`settings_dirty`)
+
+A git tree is `cinna.agent.json` **plus** `workspace/`. The workspace hash and the prompt diff between them cover only part of the manifest, so agent settings that live nowhere else — the example prompts, the description, a schedule — used to report "no local changes" even though the next commit would rewrite the manifest. `settings_dirty` closes that gap by comparing every remaining manifest field against the baseline revision:
+
+| Manifest block | Compared fields |
+|---|---|
+| `metadata` | `description`, `example_prompts`, `status_refresh_command`, `agent_api_enabled`, `agent_api_identity_enabled`, `a2a_config`, `agent_sdk_config`, `webapp_enabled` |
+| `sdk` | per-mode SDK engine + model overrides (read off the active environment; skipped when there is no env) |
+| top-level lists | `schedules`, `plugin_specs` |
+
+**Known behaviour: a one-time "SDK engine (conversation mode): added" entry on a fresh checkout.** A committer without an active environment writes `sdk.conversation = null` into the manifest (`build_manifest` reads it off `env.agent_sdk_conversation` when an env exists, `null` otherwise). Every install always has a resolved, non-null conversation SDK on its environment (`EnvironmentService.create_environment` falls back through the installer's own default to `DEFAULT_SDK` — conversation mode is never left unset), so comparing that live value against a `null` baseline classifies as `added`. This is accepted, not a bug — it is not the sign of a stray edit, and it self-heals: the checked-out install's first commit records the engine it actually runs (a non-null value), which becomes the new baseline, and the entry disappears on the next diff. Nothing is cleared or corrupted in between.
+
+`required_credential_specs` is deliberately **not** compared here. Its live collector re-reads the install-local `Credential` rows, and on any install that did not author the baseline (a `checkout`, or a `pull` from a repo another install pushed) those rows are placeholders that can never reproduce the publisher's spec values — so the comparison would report drift permanently with no user edit behind it.
+
+**Known gap: no detector covers credential-spec drift on a git-connected or checked-out install.** `PublishService.compute_credential_spec_drift` (the Bundle tab's republish nudge — see [Agent Bundles — Credential sharing drift detection and republish nudge](../agent_bundles/agent_bundles.md)) sounds like it would fill the gap `settings_dirty` leaves above, but it does not reach these installs: it returns an empty, non-stale result whenever the install is not a publisher install, and again whenever the bundle has no `latest_revision_id`. A `checkout` always creates a consumer install (`is_publisher_install=False`), so the detector is a permanent no-op for every checked-out agent. `bundle.latest_revision_id` is written only by a catalog publish — `connect` and `push` never call it — so a `connect`-based install that is never separately published to the catalog is equally uncovered. Concretely: rename a linked credential (or flip its `allow_sharing`) on a git-connected agent, and the next push *will* rewrite `required_credential_specs` in `cinna.agent.json`, but `GET /git/dirty` reports clean the whole time. This is an accepted trade-off, not an oversight — the alternative (permanently-stuck-dirty on every checkout/connect install, since their credential rows can never match the publisher's spec values) was strictly worse. The next push still captures the real change whenever the user commits for any other reason.
+
+The live side is re-collected with the **same helpers a push uses to build the manifest**, so the indicator can never disagree with what a commit actually writes. Two normalization rules avoid false positives: "unset" shapes (`null` / `""` / `[]` / `{}`) are treated as equivalent, and lists that are semantically unordered — the two spec lists, plus the tool arrays inside `agent_sdk_config` — are compared as sets. A manifest block absent from the baseline (an older snapshot) is not compared at all, so an old revision can never fabricate drift.
+
+**The pull guard is deliberately narrower than the indicator.** `POST /git/pull` blocks (409) on prompt or `metadata` drift only — exactly what a pull overwrites — and within `metadata` only on fields the publisher actually set (a non-null baseline): a field the publisher never configured is left alone by a pull, so it can't trigger the guard either. Schedules, plugin links, credential links and env SDK selections survive a pull untouched, so blocking on them would protect nothing while deadlocking the user (pull refuses, and a pull is what an advanced remote demands first). They still surface in the dirty check and the commit preview — with `blocks_pull: false`, so the UI can tell "this shows up as a change" apart from "this is what a pull would overwrite". Workspace files carry no `blocks_pull` flag at all: they are replaced wholesale by a pull under every resolution, which is a property of the operation, not of any one file. The one known one-time exception that does **not** trip the guard: a fresh checkout's "SDK engine (conversation mode): added" entry lives in the `sdk` section, which is outside the pull-overwritten sections, so it always reports `blocks_pull: false` and self-heals on the first commit (see above).
 
 ### Commit Status Preview (git-status Style)
 
-`GET /agents/{id}/git/status` (owner-resolved, no developer gate). The detailed sibling of the dirty check: instead of booleans it returns the actual per-prompt and per-file changes the next commit would capture, so the commit dialog can render a `git status`-style preview before the user commits. Returns:
+`GET /agents/{id}/git/status` (owner-resolved, no developer gate). The detailed sibling of the dirty check: instead of booleans it returns the actual per-prompt, per-setting and per-file changes the next commit would capture, so the commit dialog can render a `git status`-style preview before the user commits. It doubles as the **pull-conflict preview**: every prompt/setting change also carries `blocks_pull`, and the response carries `pull_blocked` (true if a bodiless pull would 409 right now) — computed by the exact same helper the pull guard raises from, so the preview and the 409 it explains can never disagree. Returns:
 
 - `dirty`, `has_env`, `last_synced_commit` (as in the dirty check).
-- `prompt_changes`: list of `{field, change_type}` for the changed prompt fields.
+- `pull_blocked`: whether a plain (bodiless) pull would 409 right now.
+- `prompt_changes`: list of `{field, key, section, change_type, blocks_pull}` for the changed prompt fields — every prompt change blocks a pull, so this is always `true` here.
+- `setting_changes`: list of `{field, key, section, change_type, blocks_pull}` for the changed agent settings (human labels — "Example prompts", "Schedules", "SDK engine (building mode)"…) — only `metadata`-section changes the publisher actually configured can be `true`; schedules, plugins, and SDK selections are always `false`.
 - `file_changes`: list of `{path, change_type}` for the changed workspace files.
 
 `change_type` is `added` / `modified` / `deleted`. The workspace side compares the **same post-denylist capture a push produces** against the last synced revision's `workspace/` snapshot, so the preview matches the eventual commit exactly (e.g. `__pycache__` never appears). It is fetched lazily — only while the commit dialog is open — because it does a full workspace snapshot + per-file diff.
+
+`field` is the human label; **`key` + `section` are the raw, stable identifier pair** the per-item diff endpoint below addresses. A label is UI copy and can be reworded, so it is deliberately not the key — the UI echoes back the pair it was handed rather than constructing one.
+
+### Per-Item Diff (Drill-Down)
+
+`GET /agents/{id}/git/diff?section=<section>&key=<key>` (owner-resolved, no developer gate). The drill-down behind every row of the status preview: instead of "modified", the actual unified diff — **`a/` is the last synced revision, `b/` is the live agent**, matching git's own baseline→working-copy convention.
+
+- `section` is `prompt`, `metadata`, `sdk`, `specs`, or `file`; `key` is the raw attribute name or, for `file`, the workspace-relative path. Both come verbatim from a status row (or from a `local_changes` 409's `blocking` entries, which carry the same `key`).
+- Returns `{section, key, label, change_type, diff, binary, truncated}`. `diff` is `""` when the two sides are equal (a row can go clean between the status read and the click — that is a 200 with an empty diff, not a 404) or when `binary` is set.
+- Prompts and plain-string settings render verbatim; structured settings (schedules, `a2a_config`, …) render as sorted, indented JSON so the diff is stable across re-serializations. Both sides pass through the **same normalization the change classifier uses**, so a row reported as changed always produces a non-empty diff.
+- Caps: 512 KB per side and 2,000 diff lines, reported via `truncated`.
+
+**`key` is untrusted input that reaches both `getattr` and the filesystem, so it is allowlisted, not sanitized.** Prompt/setting keys must appear in the field registries. File paths must be relative, traversal-free, rooted at a bundle-owned top-level dir, and free of nested cache artifacts — reusing `workspace_classification`'s own helpers, so this endpoint cannot drift from what a commit captures. Containment is then re-checked on the **fully resolved** path at read time, which is what actually stops a symlinked intermediate directory (`scripts/x -> /etc`) — that escapes with no `..` anywhere and an ordinary file as its final component, so the string-level checks alone would pass it. `credentials/`, `app-data/`, `logs/` and `databases/` are unreachable by construction.
 
 ### GitOps Webhook (Auto-Pull on Push)
 
@@ -212,7 +270,7 @@ This endpoint is kept separate from `GET /agents/{id}/git` deliberately — the 
 
 ## GIT Versioning Card (UI)
 
-The "GIT Versioning" card lives in the agent's **Integrations** tab alongside the Local Dev, Agent REST API, and MCP Connectors cards. It is positioned **before** the Webhooks, Local Dev, and Email Integration cards in the card grid. It is visible to the install owner (and hidden from `agent-user` role visitors).
+The "GIT Versioning" card lives in the agent's **Integrations** tab alongside the Local Dev, Agent REST API, and MCP Connectors cards. It is positioned **before** the Webhooks and Local Dev cards in the card grid. (There is no Email Integration card any more — per-agent Email Integration was removed when email became a [Server Channel](../../application/server_channels/server_channels.md), Phase 4 of the channels & identity unification refactor.) It is visible to the install owner (and hidden from `agent-user` role visitors).
 
 The card's toggle reflects the **real connected state from first paint**: the enabled flag (`git_versioning_enabled`) rides the already-loaded agent payload (a computed capability flag — see Integration Points), so the switch never flashes "off" then flips on. The card's own git-source query fills the internals afterward, behind a "Loading git versioning…" spinner.
 
@@ -231,9 +289,9 @@ The card has two states:
 **Connected view:**
 - The repo URL is a **clickable link** (opens `web_tree_url` — the repo tree at the branch + subdir) when the host is supported; plain text otherwise.
 - Coordinates line: **subdir and branch as inline code chips** — each with a distinguishing leading icon (folder for subdir, branch for ref) — and the **sync direction as an icon** with a hover tooltip (bidirectional / pull only / push only) rather than a text label. Status is shown as a **green check icon** when `connected` (tooltip "Connected"); the `error` state still renders a red badge with `last_error` detail.
-- **Update banner** when `update_available` (driven by the `check-updates` query, not the source read) → **Pull** button.
+- **Update banner** when `update_available` (driven by the `check-updates` query, not the source read). If the install is also `dirty`, the copy switches to *"The remote has new commits, but this agent has local changes"* and the button reads **Review & pull**, opening the `GitPullConflictDialog` (see Pull Conflict Resolution above) instead of firing a pull that is guaranteed to 409. Otherwise the button is a plain **Pull**.
 - **Latest commits** — the 3 most recent from `GET /agents/{id}/git/commits`: message, clickable short SHA (`commit_url`), author, relative date. A **"View history"** link (→ `web_history_url`) sits beside the section title. Both the SHA link and View history appear only when the host is supported.
-- **Card footer** holds the actions: on the left, **Commit Agent** (enabled only when `dirty=true`; clicking opens the commit dialog with the git-status preview, then `POST /agents/{id}/git/push`) with its status reason ("No local changes" / "Start the environment to commit") and a **Refresh** icon button that re-checks dirty/status/commits. On the right, an icon-only **Disconnect** button → confirm dialog → `DELETE /agents/{id}/git`. Disconnect resets the card to disabled (the cached git queries are removed, not just invalidated, so the 404 refetch can't leave stale connected state).
+- **Card footer** holds the actions: on the left, **Commit Agent** (enabled only when `dirty=true`; clicking opens the commit dialog with the git-status preview — **Prompts**, **Agent settings** and **Workspace** sections, each row tagged `A` / `M` / `D` — then `POST /agents/{id}/git/push`) with its status reason ("No local changes" / "Start the environment to commit") and a **Refresh** icon button that re-checks dirty/status/commits. On the right, an icon-only **Disconnect** button → confirm dialog → `DELETE /agents/{id}/git`. Disconnect resets the card to disabled (the cached git queries are removed, not just invalidated, so the 404 refetch can't leave stale connected state).
 
 ## Two-Writer Model
 
@@ -286,18 +344,23 @@ A `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` setting (default 30 s) is applied to all 
 | Connect when a git source already exists | **409** "disconnect first" |
 | Connect with sync_direction="pull" | **400** (can't export with pull-only direction) |
 | Connect when subdir already contains a `cinna.agent.json` | **Recoverable 409** (`existing_agent_folder`) — UI offers to adopt; re-send with `adopt_existing=true` to link to the existing folder (no overwrite, records it as the baseline) |
-| Pull when prompts differ from last synced revision (DB dirty) | **409** "push or discard changes first" — source status unchanged |
-| Push when remote advanced since last_synced_commit | **409** "pull first" — no clone or commit attempted — source status unchanged |
+| Pull when prompts or `metadata` settings differ from last synced revision (DB dirty), no `conflict_resolution` sent | **Recoverable 409** (`local_changes`) naming every blocking field — source status unchanged. This is what the GitOps webhook (which never sends a body) always hits on a dirty install |
+| Pull with `conflict_resolution="keep_local"` | Proceeds; drifted prompt/metadata fields keep their local value, everything else (including the workspace) is pulled. Install is dirty on exactly those fields afterward, by design. A pre-pull backup revision is captured first |
+| Pull with `conflict_resolution="take_remote"` | Proceeds; local drift is discarded, remote values win. A pre-pull backup revision is captured first — same backup as `keep_local`, since the workspace is replaced wholesale either way |
+| Pull with an unrecognized `conflict_resolution` | **400**, validated in the service |
+| Pull when only schedules / plugins / env SDK differ | Pull proceeds — it never rewrites those, so blocking would deadlock. They stay reported as dirty until committed |
+| Push when remote advanced since last_synced_commit | Repo-root install, or a subdir install where the advance touched the subdir → **409** "pull first" (no clone or commit attempted, source status unchanged). Subdir install where the advance touched only other folders of a shared repo → push proceeds and falls through to fast-forward-push over the unrelated commit |
 | Push rejected by remote side as non-ff | **409** via `GitNonFastForwardError` — source status unchanged |
 | Genuine clone/network/filesystem error | Source stamped `status = ERROR` + `last_error`; original exception re-raised |
+| Credential spec changes (rename, `allow_sharing` flip) on a `checkout` or a `connect`-based install that is never separately published to the catalog | **Not detected by either signal.** `settings_dirty` excludes `required_credential_specs` (see above); `compute_credential_spec_drift` only evaluates publisher installs with a published revision, so it's a no-op for a `checkout` install (`is_publisher_install=False`) and for a `connect` install that never publishes. Accepted trade-off — the alternative (permanently-stuck-dirty on every checkout/connect install) was strictly worse. The next push still captures the change in `cinna.agent.json` whenever the user commits for any other reason |
 
-Planned but not yet implemented: 3-way reconcile for manifest/prompt fields on dirty pull (analogous to the prompt-sync `decide()` pattern). The current behavior is fail-loud only.
+Planned but not yet implemented: per-field value diffs (local vs. baseline text for one prompt / one file), per-field resolution (`keep_fields: [...]` rather than the two global modes), a restore-from-backup-revision UI affordance, and 3-way reconcile for manifest/prompt fields on dirty pull (analogous to the prompt-sync `decide()` pattern). Today's two resolutions are global and binary — keep everything blocking, or discard everything blocking — never merged automatically.
 
 ## Integration Points
 
 | Feature | Relationship |
 |---------|-------------|
-| [Agent Bundles](../agent_bundles/agent_bundles.md) | Git is an external layer over `AgentBundleRevision`. Every git operation persists/reads a revision; checkout and pull reuse `InstallService._install_from_revision` and `replace_bundle_content`; push and connect reuse `RevisionFormat.write_tree` (which calls `PublishService._snapshot_workspace_tree`). `publisher_user_id = NULL` on git-imported `AgentBundle` rows is enabled by migration `c8a4f1e09b27_agent_bundle_publisher_nullable`. Push and connect now also persist an `AgentBundleRevision` as the dirty-check baseline |
+| [Agent Bundles](../agent_bundles/agent_bundles.md) | Git is an external layer over `AgentBundleRevision`. Every git operation persists/reads a revision; checkout and pull reuse `InstallService._install_from_revision` and `replace_bundle_content`; push and connect reuse `RevisionFormat.write_tree` (which calls `PublishService._snapshot_workspace_tree`). `publisher_user_id = NULL` on git-imported `AgentBundle` rows is enabled by migration `c8a4f1e09b27_agent_bundle_publisher_nullable`. Push and connect now also persist an `AgentBundleRevision` as the dirty-check baseline. A resolved pull (either `conflict_resolution`) additionally persists a pre-mutation backup revision of the live agent, ordered below the incoming revision so it never becomes the new dirty-check baseline; `InstallService._apply_revision_metadata` gained a `skip_fields` parameter so pull's `keep_local` can narrow which metadata columns it restores from the incoming revision |
 | [Agent Environment Data Management](../agent_environment_data_management/agent_environment_data_management.md) | Pull uses `replace_bundle_content` verbatim; App Data, credentials, plugins, and runtime dirs are preserved; stale bundle-owned dirs are pruned. Push and connect use `_snapshot_workspace_tree` + symlink guards; the `.gitignore` is derived from the same denylist constants |
 | [SSH Keys](../../application/ssh_keys/ssh_keys.md) | Private-repo authentication and deploy-key management. `AgentGitSource.ssh_key_id` FK references `user_ssh_keys.id`. `SSHKeyService.get_decrypted_private_key` (ownership-checked) provides the key; `create_ssh_key_file` writes a chmod-600 temp file; deleted in `finally`. The `DeployKeySelect` UI component reuses `SshKeysService.listSshKeys` and `generateSshKey` from the same feature |
 | [Agent Webhooks](../agent_webhooks/agent_webhooks.md) | The `GIT_SOURCE` webhook type rides the existing webhook infrastructure (Fernet token, immutable invocation log, public `agent-hooks/` dispatch). `POST /agents/{id}/webhooks/git-source` creates the webhook; `AgentWebhookService.fire_webhook` dispatches `git_source` type to `GitSourceService.pull_update` |
@@ -305,4 +368,4 @@ Planned but not yet implemented: 3-way reconcile for manifest/prompt fields on d
 | [Agent Credentials](../agent_credentials/agent_credentials.md) | Checkout materializes credential specs from `cinna.agent.json` via `InstallService` (PBP/PBU/PBT rules apply normally). Credential values are never stored in or read from git trees — `required_credential_specs` carries metadata only |
 | [User Roles](../../application/user_roles/user_roles.md) | Checkout, connect, disconnect, pull, push, and creating a git-source webhook require the `agent-developer` role (`require_developer` dependency). Reading git source status, checking updates, listing commits, and checking dirty state are owner-gated with no developer requirement |
 | [cinna CLI Integration](../../application/cinna_cli_integration/cinna_cli_integration.md) | `GET /api/v1/cli/git-coordinates` (CLI-token / agent-scoped) exposes VCS coordinates to the local cinna CLI, enabling sparse-checkout git-linked local development. The deploy key is never included; the developer authenticates with their own credentials |
-| [Agent Management](../../application/agent_management/agent_management.md) | `git_versioning_enabled` is a computed capability flag on `AgentPublic` (presence of an `AgentGitSource` row), batched in `compute_capability_flags` alongside `has_email_integration` / `has_mcp_connectors` / `has_webhooks` to stay off the N+1 path. It lets the card's toggle render the real state from the already-loaded agent before its own git-source query resolves |
+| [Agent Management](../../application/agent_management/agent_management.md) | `git_versioning_enabled` is a computed capability flag on `AgentPublic` (presence of an `AgentGitSource` row), batched in `compute_capability_flags` alongside `has_mcp_connectors` / `has_webhooks` to stay off the N+1 path. It lets the card's toggle render the real state from the already-loaded agent before its own git-source query resolves |

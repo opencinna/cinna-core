@@ -10,20 +10,10 @@ import type { AgentPublic } from "@/client"
 import { InstallsService } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
 import { Button } from "@/components/ui/button"
+import { revisionLabel } from "@/utils/bundleRevision"
 
 interface UpdateAvailableBannerProps {
   agent: AgentPublic
-}
-
-/** Render a revision as ``v<version>`` when a version label exists, else
- *  ``rev <number>``. Returns null when neither is known. */
-function revisionLabel(
-  version: string | null | undefined,
-  number: number | null | undefined,
-): string | null {
-  if (version) return `v${version}`
-  if (number != null) return `rev ${number}`
-  return null
 }
 
 export function UpdateAvailableBanner({ agent }: UpdateAvailableBannerProps) {

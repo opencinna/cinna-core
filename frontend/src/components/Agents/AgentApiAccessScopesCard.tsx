@@ -1,8 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Pencil, Plus, ShieldCheck, Trash2, UserPlus, X } from "lucide-react"
+import { Pencil, ShieldCheck, Trash2, UserPlus } from "lucide-react"
 import { useMemo, useState } from "react"
 import type { AgentApiAccessGrantPublic } from "@/client"
 import { AgentApiService, AgentsService } from "@/client"
+import {
+  AgentApiScopeEditor,
+  type ScopeCatalogEntry,
+} from "@/components/Common/AgentApiScopeEditor"
 import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
@@ -17,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -27,8 +30,6 @@ interface AgentApiAccessScopesCardProps {
   /** Current value of the producer's per-user-scopes opt-in flag. */
   identityEnabled: boolean
 }
-
-type ScopeCatalogEntry = { name: string; description?: string | null }
 
 /**
  * "Access & Scopes" — the producer owner assigns per-user capability scopes on
@@ -326,7 +327,6 @@ function GrantDialog({
   const [selectedUser, setSelectedUser] =
     useState<UserAllowlistSelectedItem | null>(null)
   const [scopes, setScopes] = useState<string[]>([])
-  const [customScope, setCustomScope] = useState("")
 
   // Reset local state whenever the dialog (re)opens, so add starts empty and
   // edit starts from the grant's current scopes. The key tracks `open` too —
@@ -340,24 +340,8 @@ function GrantDialog({
     if (open) {
       setSelectedUser(null)
       setScopes(editingGrant?.scopes ?? [])
-      setCustomScope("")
     }
   }
-
-  const toggleScope = (scope: string) =>
-    setScopes((prev) =>
-      prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope],
-    )
-
-  const addCustomScope = () => {
-    const value = customScope.trim()
-    if (value && !scopes.includes(value)) {
-      setScopes((prev) => [...prev, value])
-    }
-    setCustomScope("")
-  }
-
-  const unassignedCatalog = catalogScopes.filter((s) => !scopes.includes(s.name))
 
   const canSave = isEdit || !!selectedUser
   const handleSave = () => {
@@ -420,77 +404,11 @@ function GrantDialog({
 
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">Scopes</Label>
-
-            {/* Assigned scopes (removable chips) */}
-            <div className="flex flex-wrap gap-1.5">
-              {scopes.length === 0 ? (
-                <span className="text-xs text-muted-foreground italic">
-                  No scopes — the user is identified but carries no capabilities.
-                </span>
-              ) : (
-                scopes.map((scope) => (
-                  <Badge
-                    key={scope}
-                    variant="secondary"
-                    className="gap-1 text-xs"
-                  >
-                    {scope}
-                    <button
-                      type="button"
-                      onClick={() => toggleScope(scope)}
-                      className="hover:text-destructive transition-colors"
-                      aria-label={`Remove scope ${scope}`}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </Badge>
-                ))
-              )}
-            </div>
-
-            {/* Quick-add from the policy.yaml catalog */}
-            {unassignedCatalog.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {unassignedCatalog.map((s) => (
-                  <button
-                    key={s.name}
-                    type="button"
-                    onClick={() => toggleScope(s.name)}
-                    title={s.description ?? undefined}
-                    className="inline-flex items-center gap-1 rounded-full border border-dashed px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent transition-colors"
-                  >
-                    <Plus className="h-3 w-3" />
-                    {s.name}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Free-text scope add (catalog may be empty until the producer
-                declares scopes in policy.yaml). */}
-            <div className="flex items-center gap-1.5">
-              <Input
-                value={customScope}
-                onChange={(e) => setCustomScope(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    addCustomScope()
-                  }
-                }}
-                placeholder="Add a scope name..."
-                className="h-8 text-xs"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 shrink-0"
-                onClick={addCustomScope}
-                disabled={!customScope.trim()}
-              >
-                Add
-              </Button>
-            </div>
+            <AgentApiScopeEditor
+              scopes={scopes}
+              onChange={setScopes}
+              catalogScopes={catalogScopes}
+            />
           </div>
         </div>
 

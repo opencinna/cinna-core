@@ -658,8 +658,12 @@ function Dashboard() {
                 const colorPreset = getColorPreset(agent.ui_color_preset)
                 const isSelected = selectedAgentId === agent.id
                 return (
+                  // `data-color-preset` exposes the agent's colour identity to
+                  // CSS, so a skin can restyle a preset without the preset table
+                  // needing to know the skin exists.
                   <button
                     key={agent.id}
+                    data-color-preset={colorPreset.value}
                     className={`
                       cursor-pointer px-4 py-2 text-sm rounded-md transition-all inline-flex items-center gap-1.5
                       ${colorPreset.badgeBg}
@@ -676,6 +680,7 @@ function Dashboard() {
               {/* New Agent Badge */}
               {!isAgentUser && (
                 <button
+                  data-ui="new-agent"
                   className={`
                     cursor-pointer px-4 py-2 text-sm rounded-md transition-all
                     bg-gradient-to-r from-blue-500 to-purple-600

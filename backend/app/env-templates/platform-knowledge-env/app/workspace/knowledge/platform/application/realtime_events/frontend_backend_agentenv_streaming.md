@@ -124,6 +124,7 @@ Orchestrates pending message processing and environment activation:
 This event-driven approach ensures sessions are processed regardless of how the environment became active.
 
 4. `process_pending_messages()` delegates to `SessionStreamProcessor` (from `stream_processor.py`) with a `WebSocketEventHandler`:
+   - **Same-session serialization:** the UI/web path acquires the shared per-session lock (`get_session_lock`, the same singleton dict MCP uses) in **wait mode** (`async with lock:`) around its **entire** body — the quick-check, `processor.process()`, **and** the `finally` teardown clear. Two near-simultaneous UI sends to one session (double-send, two tabs, CLI-proxy + UI) are therefore **queued behind** each other, not run concurrently and not rejected. The second task still spawns from `initiate_stream` but immediately blocks on the lock; when the first fully finishes (stream + `on_complete` + teardown), the second acquires the lock and its own collect step picks up the still-`pending` second message as a separate turn. If instead the second message is already inserted before the first run's collect step (e.g. both POSTs land before either background task executes), `collect_pending_batches` merges the two same-routing pending messages into **one** contiguous batch and they stream together as a single combined LLM turn — still one message never left `pending`, just riding the first turn instead of a second one. Either way the second message is never stranded or falsely reported done; which of the two shapes occurs depends on collection timing, not on the lock. This prevents the pre-fix bug where two independent finalizers reset `interaction_status=""` while the other stream was still working. The processor itself stays `use_session_lock=False` (the lock is held one level up, so the teardown clear is inside it too — no double-lock). MCP shares this same lock in reject-if-busy mode, so a UI stream in flight makes a concurrent MCP call on that session get the "please wait" response (desirable cross-path serialization).
    - The processor runs the unified pipeline: collect pending → inject context → mark sent → stream → finalize
    - `WebSocketEventHandler.on_stream_starting()` emits `stream_started` to the WebSocket room
    - `MessageService.stream_message_with_events()` streams from agent-env via SSE; each event gets `event_seq` and is appended to `ActiveStreamingManager` buffer
@@ -358,7 +359,7 @@ This ensures the frontend reacts within milliseconds of streaming state changes,
 - Endpoint returns immediately (no long-running HTTP request)
 - Background task can't be interrupted by HTTP client disconnect
 - WebSocket room delivery is decoupled from task execution
-- Multiple clients can subscribe to same room (multi-tab support ready)
+- Multiple clients can subscribe to same room (multi-tab support ready); multi-tab **sends** to the same session are serialized on the per-session lock in `process_pending_messages` — the second send's message is never dropped and never streamed concurrently with the first. Depending on collection timing it either stays `pending` and is processed in its own turn once the first send fully completes, or (if both are already pending when the first turn collects) rides along in that same combined turn
 - Automatic environment activation before streaming
 
 ### WebSocket Event Format

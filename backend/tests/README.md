@@ -58,21 +58,70 @@ Before any test runs, the session-scoped `setup_db` fixture in `conftest.py`:
 
 This ensures the test database schema is always up to date with the latest migrations. Alembic's `env.py` respects a `sqlalchemy.url` set on the config object, which the fixture sets to the test DB URI before calling `command.upgrade`.
 
+**`caplog` assertions are vacuous for the rest of the session.** `app/alembic/env.py` calls
+`logging.config.fileConfig(config.config_file_name)` on every `command.upgrade` run, and that
+call's default is `disable_existing_loggers=True`. Every application logger that already existed
+at that point comes back with `disabled = True` — for the remaining life of the test session, not
+just for the migration. Since `setup_db` runs this before anything else, an assertion like
+`assert "some message" in caplog.text` is comparing against `""` and passes whether or not the
+message was ever logged. This was caught when a draft assertion failed to fail — same detection
+mode as a mutation check. Exposure drifts as files are added, so don't trust a number recorded
+here — re-measure it yourself: `grep -rl caplog backend/tests/` for which files touch `caplog` at
+all, then `grep -rn "in caplog\.\(text\|records\)" backend/tests/` for which of those actually
+assert on it (an `at_level(...)` block with no following `caplog.text`/`caplog.records` check is
+inert, not exposed). A clean grep is a statement about the past tense only — it says no one has
+hit the trap *yet*, not that no one can; treat it as a reason to re-check before adding the next
+`caplog` assertion, not as a guarantee. If you need to assert on a log, don't use `caplog`: attach a
+handler directly to the logger under test and set `logger.disabled = False` first — see
+`_swallowed_failures` in the file above for a working pattern. Better still, avoid log-text
+assertions altogether and assert on observable behavior instead (a returned value, a persisted
+row, the *type* of an exception a guard swallowed) — log assertions are brittle even when they
+technically work.
+
+**Under this trap, positive caplog assertions fail honestly; negative ones lie.**
+`assert x in caplog.text` against `""` fails, loudly and immediately — annoying, but
+self-announcing, and that is exactly how three assertions of this shape in
+`tests/unit/test_channel_reply_instrumentation.py` were caught (they passed alone, then failed the
+moment a file exercising `setup_db`, such as anything under `tests/architecture/`, ran first in the
+same session). `assert x not in caplog.text` against `""` **passes vacuously, in every scope,
+forever** — there is no run in which it can fail, whether or not the code it claims to guard is
+even present. It reads in review as a careful test proving something is absent, and it is proving
+nothing. The three failures above were only caught because the author happened to write the
+positive form; a negative form of the same mistake would still be green today. Treat this as a
+rule, not a coincidence: never write `not in caplog.text` (or `not in caplog.records`) as a
+regression guard, and be suspicious of any existing one — it cannot have failed a mutation check,
+so its presence proves nothing about whether it was ever checked.
+
 ### Transaction Isolation (Savepoint Pattern)
 
 Every test runs inside a database transaction that is **rolled back** after the test completes. This is implemented using the SQLAlchemy savepoint pattern:
 
 1. `db` fixture opens a connection and begins an outer transaction
-2. A nested savepoint is created inside that transaction
-3. When app code calls `session.commit()`, it commits the savepoint (not the outer transaction)
-4. An `after_transaction_end` event listener re-creates the savepoint after each commit
-5. After the test, the outer transaction is rolled back, undoing **all** changes
+2. The `Session` is constructed with `join_transaction_mode="create_savepoint"` — SQLAlchemy 2.0's documented mode for a `Session` joining an externally-managed connection/transaction via SAVEPOINTs (see the comment on the `Session(...)` construction in `conftest.py` for the bug this fixes and why the default mode doesn't pick it automatically here)
+3. A nested savepoint is created inside that transaction
+4. When app code calls `session.commit()`, it commits the savepoint (not the outer transaction)
+5. An `after_transaction_end` event listener re-creates the savepoint after each commit
+6. After the test, the outer transaction is rolled back, undoing **all** changes
 
 This means:
 - Every test starts with a clean slate (only the seeded superuser exists)
 - Tests never affect each other, regardless of execution order
 - No manual cleanup is needed
 - The `client` fixture overrides FastAPI's `get_db` dependency to inject the test session
+
+**What `session.rollback()` means inside a test.** Several services catch a unique-constraint
+`IntegrityError` and call `session.rollback()` to recover and re-read the winning row (e.g.
+`ServerConfigService.get_or_create`, `ChannelInboundService._upsert_binding`,
+`GitSourceService._clear_poisoned_transaction` / `_cleanup_orphan_bundle`). Under this fixture,
+that rollback unwinds to the current SAVEPOINT — established by step 2 — not to the outer
+transaction, so data committed earlier in the same test survives. This only holds because of
+`join_transaction_mode="create_savepoint"` in step 2: without it, that same `session.rollback()`
+unwinds past the SAVEPOINT and expires/detaches objects committed earlier in the test, and the
+next `session.get()` on them raises `ObjectDeletedError` even though their rows are still present
+in the real transaction. A test that exercises an `IntegrityError`-recovery race
+(`tests/api/server_channels/server_channels_security_invariants_test.py::
+test_lost_race_ingest_branch_declines_the_loser` is the one that found this) is exactly the case
+that depends on this mode being set correctly.
 
 ## Directory Structure
 
@@ -83,11 +132,25 @@ tests/
     a2a_integration/       #   See "Rules" — these tests hit HTTP only, never app internals.
     agent_environments/
     agentic_teams/
-    agents/                # conftest.py: env stubs, background task collector, create_session patches
+    agents/                # conftest.py: env stubs, background task collector, create_session patches.
+                           #   Largest domain (82 files / 606 tests) — split into topic groups.
+                           #   Subdirs inherit agents/conftest.py; see agents/README.md for the map.
+      bundles/             #   publish: revisions, snapshots, credential specs, template sharing
+      bundles_install/     #   install/update: credential resolution, readiness gate, propagation
+      agent_api/           #   Agent REST API: proxy, policy, caller scopes, external keys
+      git/                 #   git-backed versioning: checkout/pull/push, conflicts, recovery
+      improvement_requests/#   improvement requests: targeting, lifecycle, archive, rate limits
+      schedules/           #   schedule CRUD, types + logs, manual run
+      webapp/              #   webapp shares, serving, webapp chat, interface config
+      sessions/            #   session lifecycle + streaming, message attachments
+      commands/            #   slash/CLI commands, /files, /run, agent status
+      guest_shares/        #   guest share links: CRUD, auth, security code, sessions
+      integrations/        #   webhooks, capability flags, router trigger
+      core/                #   create-flow, limits, prompt sync, plugins, tokens, delegation
     ai_credentials/        # conftest.py: env stubs for credential propagation tests
     app_auth/
     app_data/
-    app_mcp/
+    app_mcp/               # README.md: service-layer entry convention, singleton channel, LLM guard
     app_sync/
     auth/                  # test_login.py, test_users.py — login, signup, password mgmt
     cli/
@@ -98,6 +161,7 @@ tests/
     identity/
     input_tasks/
     knowledge_sources/
+    mail_servers/          # MailServerConfig CRUD (server-scoped, superuser-only) + deletion guard
     mcp_integration/       # conftest.py: MCP OAuth + tool-handler create_session patches
     notifications/
     security_events/
@@ -117,7 +181,7 @@ tests/
   utils/
     utils.py               # random_lower_string(), random_email(), get_superuser_token_headers()
     user.py                # create_random_user(), user_authentication_headers()
-    agent.py               # create_agent_via_api(), get_agent(), enable_a2a(), configure/enable_email_integration()
+    agent.py               # create_agent_via_api(), get_agent(), enable_a2a()
     ai_credential.py       # create_random_ai_credential(), set/update/delete/get helpers
     a2a.py                 # setup_a2a_agent(), a2a_headers(), extract_parts_from_sse_event(), extract_task_id(), etc.
     background_tasks.py    # drain_tasks() for deferred background task execution
@@ -126,7 +190,7 @@ tests/
     desktop_auth.py        # obtain_desktop_tokens() — full authorize/consent/exchange dance
     environment.py         # set_environment_status(), link_ai_credential_to_environment() (documented DB-seam helpers)
     fixtures.py            # shared stub fixtures, CREATE_SESSION_TARGETS_*, BACKGROUND_TASK_TARGETS_* patch lists
-    mail_server.py         # create_imap_server(), create_smtp_server(), process_emails_with_stub()
+    mail_server.py         # create_imap_server(), create_smtp_server() — superuser-only route
     platform_token.py      # mint_platform_token() — raw/expired/scoped JWTs (documented app.core.security exemption)
     session.py             # get_agent_session(), get_session(), list_sessions()
     message.py             # get_messages_by_role(), list_messages()
@@ -163,7 +227,7 @@ discoverable:
 - In the unit test file: a docstring note that the end-to-end / API-observable path is covered in the
   corresponding `tests/api/<domain>/..._test.py`.
 
-See `tests/api/agents/agents_cli_commands_test.py` (module docstring "Notes") for the established
+See `tests/api/agents/commands/agents_cli_commands_test.py` (module docstring "Notes") for the established
 pattern.
 
 ```bash
@@ -189,6 +253,8 @@ These tests import and inspect `app` modules directly; the API-only rule does no
 ### File Placement
 
 Place test files under `tests/api/<domain>/test_<domain>.py`, mirroring the route structure in `app/api/routes/`. Create an `__init__.py` in each new directory.
+
+A domain that grows past ~20 files is split into **topic group** subpackages one level deeper (`tests/api/<domain>/<group>/`). Group subdirs inherit the domain's `conftest.py` automatically, so they need only an `__init__.py`. `tests/api/agents/` is the one domain split this way today — its `README.md` carries the group map and the placement rule. When writing into a split domain, put the file in the matching group, never at the domain root.
 
 Some domains have their own `README.md` with domain-specific testing patterns (e.g., stubs, extra fixtures, relaxed rules). **Always check for a `README.md` in the target directory before writing tests** — for example, `tests/api/agents/README.md` documents the session mocking and environment stubs required for agent tests.
 
@@ -364,6 +430,11 @@ def test_password_recovery(client: TestClient) -> None:
 5. **Use random data.** Use `random_email()` and `random_lower_string()` for test data to avoid collisions.
 6. **Mock external calls.** Patch SMTP, OAuth, and any external HTTP calls.
 7. **Extract repeated API calls into `tests/utils/` helpers.** If the same endpoint call appears in multiple tests as setup (not as the thing being tested), wrap it in a utility function. Compose common multi-step sequences via parameters (e.g., `set_default=True`).
+8. **Snapshot with `cp` before a mutation check; restore from the snapshot and verify with `diff`. Never revert a mutation check with `git`.** Concretely: `cp app/services/foo.py app/services/foo.py.bak` before mutating, `cp app/services/foo.py.bak app/services/foo.py` to restore, then `diff app/services/foo.py app/services/foo.py.bak` to confirm the restore is byte-identical before deleting the backup. `git checkout -- <file>` fails two different ways in this tree, and both report success:
+   - On a tracked file, the working tree here has been dirty since before the current feature, so it reverts *past* your mutation to the last commit — discarding other people's uncommitted work. The reverted state is a coherent older version, so the suite goes green on it. You are told everything is fine while work is gone.
+   - On a path that includes untracked files — a directory or glob, which most in-flight feature directories mix — it exits 0 and silently skips them: no error, no mention. Naming a bare untracked file errors loudly instead (exit 1), so the dangerous form is the *scoped* one that partially succeeds. You are told the restore succeeded while your mutation is still in place, and the next run measures the mutated tree.
+
+   Partial success is worse than either total failure or total success: the tree ends in a state nobody intended, and the exit code describes neither half. So the rule is not "avoid a `git checkout --` footgun" — it is `cp` first, restore from the copy, `diff` to confirm byte-identity. Verify the effect, never the exit code. If a mutation-check revert ever looks off (an unexpectedly empty `git diff HEAD`, a file shorter than you left it), say so immediately rather than quietly restoring and moving on — a near-miss that gets silently corrected teaches nobody.
 
 ## Testing Session-Driven Flows (Tasks, Agents, Streaming)
 

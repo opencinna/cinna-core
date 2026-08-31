@@ -47,10 +47,10 @@
 
 ### Tests
 
-- `backend/tests/api/agents/agents_webapp_test.py` - 19 scenario-based tests covering CRUD, auth, owner preview, public serving
-- `backend/tests/api/agents/agents_webapp_interface_config_test.py` - Interface config lifecycle and share info integration tests
-- `backend/tests/api/agents/agents_webapp_chat_test.py` - Chat session lifecycle, mode enforcement, access control
-- `backend/tests/api/agents/agents_webapp_command_test.py` - `/webapp` command integration test
+- `backend/tests/api/agents/webapp/agents_webapp_test.py` - 19 scenario-based tests covering CRUD, auth, owner preview, public serving
+- `backend/tests/api/agents/webapp/agents_webapp_interface_config_test.py` - Interface config lifecycle and share info integration tests
+- `backend/tests/api/agents/webapp/agents_webapp_chat_test.py` - Chat session lifecycle, mode enforcement, access control
+- `backend/tests/api/agents/webapp/agents_webapp_command_test.py` - `/webapp` command integration test
 - `backend/tests/utils/webapp_share.py` - Test utility helpers
 - `backend/tests/utils/webapp_interface_config.py` - Interface config test utility helpers
 - `backend/tests/stubs/environment_adapter_stub.py` - `get_webapp_status()`, `get_webapp_file()`, `call_webapp_api()` stubs

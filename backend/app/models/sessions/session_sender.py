@@ -54,6 +54,16 @@ if TYPE_CHECKING:
 # - "anonymous": guest-share anonymous caller (no User row). `platform_user_id`
 #   is always None; the route supplies `session_owner_id=agent.owner_id` so the
 #   session is still created in the owner's space.
+# - "channel_caller": external person reaching the platform through an
+#   admin-configured server channel (Google Chat, …). The transport verified
+#   their identity, and a platform `User` row was resolved (or auto-created)
+#   from the verified email — so `platform_user_id` is always that user,
+#   exactly like `task_executor`. The session is normally owned by them too;
+#   the exception is identity routing, where the sender addressed another
+#   person and the session is owned by that person instead, with the sender
+#   recorded as `Session.identity_caller_id`. The kind names the *transport*,
+#   which is still a channel either way — see
+#   `ChannelIngestionService._select_session_owner_id`.
 SessionSenderKind = Literal[
     "platform_user",
     "a2a_caller",
@@ -62,6 +72,7 @@ SessionSenderKind = Literal[
     "task_executor",
     "system_trigger",
     "anonymous",
+    "channel_caller",
 ]
 
 
@@ -234,6 +245,39 @@ class SessionSender:
         )
 
     @classmethod
+    def from_channel(
+        cls,
+        *,
+        channel_type: str,
+        external_user_id: str,
+        platform_user_id: UUID,
+        display_name: str | None = None,
+    ) -> SessionSender:
+        """
+        Build a SessionSender for an inbound server-channel message.
+
+        `platform_user_id` is the *sender's own* platform user (resolved
+        from the transport-verified email, auto-registered when the channel
+        allows it) — never the agent publisher. It says who is talking, not
+        whose space answers: the session is created in the sender's own space
+        unless routing selected another person's identity, in which case it is
+        created in that person's space and the sender is stamped as
+        `identity_caller_id`. Only a verified identity grant can produce that
+        second shape; without one the sender still reaches only their own
+        installs.
+
+        `external_id` is namespaced by channel type
+        (`"google_chat:users/1234"`) so the same person on two transports
+        never collides.
+        """
+        return cls(
+            kind="channel_caller",
+            external_id=f"{channel_type}:{external_user_id}",
+            display_name=display_name,
+            platform_user_id=platform_user_id,
+        )
+
+    @classmethod
     def from_system_trigger(
         cls,
         *,
@@ -256,6 +300,24 @@ class SessionSender:
             display_name=display_name,
             platform_user_id=owner_user_id,
         )
+
+
+@dataclass(frozen=True)
+class IdentityGrant:
+    """Authorization for a session inside another user's workspace.
+
+    Carries ids only. `ChannelIngestionService.assert_access` re-reads and
+    re-verifies every one of them against the database — this is a *claim from
+    the routing layer*, not a conclusion. The routing decision and the session
+    creation are separated by a worker-thread hop and possibly by an
+    auto-install wait, and the identity owner may have revoked in between; a
+    grant that is trusted rather than re-read is a stale answer with a
+    stranger's workspace behind it.
+    """
+
+    owner_id: UUID
+    binding_id: UUID
+    assignment_id: UUID
 
 
 @dataclass
@@ -289,10 +351,14 @@ class ChannelAccessPolicy:
     # existing `AccessTokenService.can_access_session`).
     require_access_token_scope: A2ATokenPayload | None = None
 
-    # When True, the App MCP routing layer must have verified the caller
-    # has a route to the resolved agent. The service does not re-check
-    # routing — it delegates to existing `AppMCPRoutingService` logic.
-    require_caller_in_route: bool = False
+    # An identity binding the routing layer selected, permitting a session on
+    # an agent the sender does not own. The *only* thing that can satisfy the
+    # `channel_caller` three-way owner invariant, or the `mcp_caller` ownership
+    # check, other than owning the agent — and it does not weaken either,
+    # because `assert_access` re-verifies all six facts behind the grant
+    # against the database before honoring it. `None` (the default) leaves both
+    # arms exactly as strict as they have been.
+    identity_grant: IdentityGrant | None = None
 
 
 @dataclass(frozen=True)
@@ -349,7 +415,16 @@ def get_session_sender(session: "Session") -> SessionSender:
     `integration_type` -> `kind` mapping (plan §3.2) lives. Used for
     surfacing the sender on API responses, structured logging, and
     debugging — never for access control (the channels build their own
-    `SessionSender` via the constructors above).
+    `SessionSender` via the constructors above). Still true after the
+    identity work, and verifiable: no module outside `app/models/` calls this
+    function at all today.
+
+    That is exactly why the identity branches below matter anyway. A reader
+    whose only job is to answer "who sent this?" has no second gate behind it
+    to catch a wrong answer, so on the two integration types where the session
+    owner and the sender are different people (`identity_mcp`, and a
+    `channel_*` session that was identity-routed) it reports the caller, not
+    the owner.
 
     Forward-compatible: unknown `integration_type` values fall back to
     a best-effort `"platform_user"` mapping rather than raising. Channels
@@ -417,6 +492,35 @@ def get_session_sender(session: "Session") -> SessionSender:
             platform_user_id=session.user_id,
         )
 
+    # Server channels — `integration_type` is `channel_<channel_type>`
+    # (e.g. "channel_google_chat").
+    #
+    # `identity_caller_id` first, and `session.user_id` only as the fallback.
+    # An ordinary channel session leaves that column NULL and the two are the
+    # same value; an identity-routed one is owned by the *identity owner*,
+    # while the person who actually sent the message is the identity caller.
+    # Reading `user_id` there would name the wrong human — reporting HR as the
+    # sender of a message HR never wrote — which is the shape of mistake this
+    # reader exists to prevent, whatever it is being read for.
+    #
+    # `external_id` is best-effort from the metadata stamped at create time
+    # by the channel inbound pipeline; it already records the real sender, so
+    # it needs no identity branch of its own.
+    if integration_type is not None and integration_type.startswith("channel_"):
+        metadata = session.session_metadata or {}
+        sender_external_id = metadata.get("sender_external_id")
+        caller = session.identity_caller_id or session.user_id
+        return SessionSender(
+            kind="channel_caller",
+            external_id=(
+                str(sender_external_id)
+                if sender_external_id
+                else str(caller)
+            ),
+            display_name=None,
+            platform_user_id=caller,
+        )
+
     # Default (None / unknown integration_type — web-UI created today, or
     # any channel not migrated in this plan). Best-effort: surface as a
     # platform user with the session owner as the bound identity. Web-UI
@@ -443,6 +547,7 @@ __all__ = [
     "SessionSender",
     "SessionSenderKind",
     "ChannelAccessPolicy",
+    "IdentityGrant",
     "IngestionResult",
     "get_session_sender",
 ]

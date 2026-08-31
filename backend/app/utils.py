@@ -240,6 +240,30 @@ def get_base_url(request) -> str:
     return url
 
 
+def client_ip(request) -> str | None:
+    """Best-effort source IP for audit records.
+
+    Prefers the first ``X-Forwarded-For`` hop (the real client when the app sits
+    behind nginx / a load balancer) and falls back to the socket peer. Truncated
+    to 64 chars to match the audit columns' cap. ``None`` in, ``None`` out — an
+    audit written from a non-HTTP context still has an IP field, just an empty one.
+
+    Canonical implementation: ``account_cli_service``, ``account_api_proxy_service``,
+    ``device_login_service`` and ``agent_hooks`` all call this one — do not add
+    another private copy, or audit IPs drift apart between transports.
+    """
+    if request is None:
+        return None
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first[:64]
+    if request.client and request.client.host:
+        return request.client.host[:64]
+    return None
+
+
 def detect_anthropic_credential_type(api_key: str) -> tuple[str, str]:
     """
     Detect the type of Anthropic credential based on its prefix.

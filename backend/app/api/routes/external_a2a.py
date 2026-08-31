@@ -1,10 +1,9 @@
 """
 External A2A API routes.
 
-Exposes three target types under ``/api/v1/external/a2a/``:
+Exposes two target types under ``/api/v1/external/a2a/``:
 
   ``/a2a/agent/{agent_id}/``        — personal agents (owner-only)
-  ``/a2a/route/{route_id}/``        — MCP Shared Agent routes
   ``/a2a/identity/{owner_id}/``     — identity contacts (per-caller)
 
 Each target exposes:
@@ -175,60 +174,6 @@ async def handle_external_agent_jsonrpc(
     """Handle JSON-RPC requests for the authenticated user's own agent."""
     return await _jsonrpc_response(
         target_type="agent", target_id=agent_id,
-        request=request, session=session, current_user=current_user,
-        client_claims=client_claims, protocol=protocol,
-    )
-
-
-# ---------------------------------------------------------------------------
-# App MCP route target (shared agents)
-# ---------------------------------------------------------------------------
-
-
-@router.get("/route/{route_id}/")
-async def get_external_route_card(
-    route_id: uuid.UUID,
-    session: SessionDep,
-    request: Request,
-    current_user: CurrentUser,
-    protocol: Optional[str] = _PROTOCOL_QUERY,
-) -> JSONResponse:
-    """Return the AgentCard for a MCP Shared Agent route."""
-    return _card_response(
-        db=session, user=current_user,
-        target_type="app_mcp_route", target_id=route_id,
-        protocol=protocol, request=request,
-    )
-
-
-@router.get("/route/{route_id}/.well-known/agent-card.json")
-async def get_external_route_card_well_known(
-    route_id: uuid.UUID,
-    session: SessionDep,
-    request: Request,
-    current_user: CurrentUser,
-    protocol: Optional[str] = _PROTOCOL_QUERY,
-) -> JSONResponse:
-    """Well-known mirror of the route AgentCard endpoint."""
-    return _card_response(
-        db=session, user=current_user,
-        target_type="app_mcp_route", target_id=route_id,
-        protocol=protocol, request=request,
-    )
-
-
-@router.post("/route/{route_id}/")
-async def handle_external_route_jsonrpc(
-    route_id: uuid.UUID,
-    request: Request,
-    session: SessionDep,
-    current_user: CurrentUser,
-    client_claims: CurrentClientClaims,
-    protocol: Optional[str] = _PROTOCOL_QUERY,
-) -> Any:
-    """Handle JSON-RPC requests for a MCP Shared Agent route."""
-    return await _jsonrpc_response(
-        target_type="app_mcp_route", target_id=route_id,
         request=request, session=session, current_user=current_user,
         client_claims=client_claims, protocol=protocol,
     )

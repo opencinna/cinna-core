@@ -9,7 +9,7 @@ Covers:
   4. TestRefreshAfterAction — post-action backend pull (mocked fetch_status)
 
 These tests call AgentStatusService methods directly and are intentionally
-separated from the API-level tests in tests/api/agents/agents_status_test.py.
+separated from the API-level tests in tests/api/agents/commands/agents_status_test.py.
 They live here alongside other pure-unit tests (test_a2a_stream_event_handler.py,
 test_opencode_event_transformer.py) which follow the same pattern.
 """

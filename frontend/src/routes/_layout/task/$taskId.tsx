@@ -16,7 +16,6 @@ import {
   TextSelect,
   Sparkles,
   Zap,
-  Mail,
   User,
   Paperclip,
   ChevronDown,
@@ -76,6 +75,7 @@ import {
 import useWorkspace from "@/hooks/useWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
+import { downloadAuthenticatedFile } from "@/utils"
 import { getColorPreset } from "@/utils/colorPresets"
 import { getWorkspaceIcon } from "@/config/workspaceIcons"
 import {
@@ -242,18 +242,14 @@ function CommentItem({ comment }: { comment: TaskCommentPublic }) {
 function AttachmentChip({ attachment }: { attachment: TaskAttachmentPublic }) {
   const handleDownload = async () => {
     if (!attachment.download_url) return
-    const token = localStorage.getItem("access_token") || ""
-    const response = await fetch(`${import.meta.env.VITE_API_URL}${attachment.download_url}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (!response.ok) return
-    const blob = await response.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = attachment.file_name || "download"
-    a.click()
-    URL.revokeObjectURL(url)
+    try {
+      await downloadAuthenticatedFile(
+        attachment.download_url,
+        attachment.file_name || "download",
+      )
+    } catch (error) {
+      console.error("Failed to download attachment:", error)
+    }
   }
 
   return (
@@ -335,14 +331,13 @@ interface TaskPageHeaderProps {
   onMenuOpenChange: (open: boolean) => void
   onEditDescription: () => void
   onOpenTriggers: () => void
-  onSendEmailReply: () => void
   onArchive: () => void
   onDelete: () => void
 }
 
 function TaskPageHeader({
   task, displayTitle, triggersCount, headerMenuOpen,
-  onBack, onMenuOpenChange, onEditDescription, onOpenTriggers, onSendEmailReply, onArchive, onDelete,
+  onBack, onMenuOpenChange, onEditDescription, onOpenTriggers, onArchive, onDelete,
 }: TaskPageHeaderProps) {
   return (
     <>
@@ -377,11 +372,6 @@ function TaskPageHeader({
                 <span className="ml-auto bg-primary/10 text-primary rounded-full px-1.5 py-0.5 text-xs font-medium">{triggersCount}</span>
               )}
             </DropdownMenuItem>
-            {task.source_email_message_id && ["completed", "error"].includes(task.status) && (
-              <DropdownMenuItem onClick={onSendEmailReply}>
-                <Mail className="h-4 w-4 mr-2" />Send Email Reply
-              </DropdownMenuItem>
-            )}
             {task.status !== "archived" && (
               <DropdownMenuItem onClick={onArchive}>
                 <Archive className="h-4 w-4 mr-2" />Archive Task
@@ -528,12 +518,6 @@ function TaskDetailPage() {
     onError: () => showErrorToast("Failed to add comment"),
   })
 
-  const sendAnswerMutation = useMutation({
-    mutationFn: () => TasksService.sendTaskEmailAnswer({ id: task!.id, requestBody: {} }),
-    onSuccess: (data) => { data.success ? showSuccessToast("Email reply queued") : showErrorToast(data.error || "Failed") },
-    onError: (err) => showErrorToast((err as Error).message || "Failed to send email reply"),
-  })
-
   const uploadAttachmentMutation = useMutation({
     mutationFn: (file: File) => TasksService.uploadTaskAttachment({ id: task!.id, formData: { file } }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["task-detail", taskId] }); showSuccessToast("File attached") },
@@ -611,9 +595,6 @@ function TaskDetailPage() {
   // Header
   // ---------------------------------------------------------------------------
 
-  const sendAnswerMutateRef = useRef(sendAnswerMutation.mutate)
-  sendAnswerMutateRef.current = sendAnswerMutation.mutate
-
   useEffect(() => {
     if (!task) return
     const displayTitle = task.title || task.current_description?.slice(0, 80) || "Task"
@@ -627,7 +608,6 @@ function TaskDetailPage() {
         onMenuOpenChange={setHeaderMenuOpen}
         onEditDescription={() => { setHeaderMenuOpen(false); setIsEditing((v) => !v) }}
         onOpenTriggers={() => { setHeaderMenuOpen(false); setTriggerModalOpen(true) }}
-        onSendEmailReply={() => { setHeaderMenuOpen(false); sendAnswerMutateRef.current() }}
         onArchive={() => { setHeaderMenuOpen(false); archiveMutation.mutate() }}
         onDelete={() => { setHeaderMenuOpen(false); setDeleteDialogOpen(true) }}
       />
@@ -1116,12 +1096,6 @@ function TaskDetailPage() {
               {executeMutation.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Play className="h-4 w-4 mr-1.5" />}
               {sessions.length > 0 ? "Run Again" : "Execute Task"}
             </Button>
-            {task.source_email_message_id && ["completed", "error"].includes(task.status) && (
-              <Button variant="outline" className="w-full" onClick={() => sendAnswerMutation.mutate()} disabled={sendAnswerMutation.isPending}>
-                {sendAnswerMutation.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Mail className="h-4 w-4 mr-1.5" />}
-                Send Email Reply
-              </Button>
-            )}
           </div>
         </div>
       </div>

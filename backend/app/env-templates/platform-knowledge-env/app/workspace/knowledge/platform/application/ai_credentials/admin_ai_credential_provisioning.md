@@ -82,9 +82,11 @@ Admins can attach two non-secret model metadata fields to a parent record. These
 
 **Precedence rules (SDK / agent environments):**
 
-1. User's per-mode environment override (`model_override_building` / `model_override_conversation`) — always wins.
+1. Per-mode environment override (`model_override_building` / `model_override_conversation`) — always wins, whether the installer set it directly (env reconfigure) or it arrived pre-pinned from a bundle publisher at install time (see [Agent Bundles](../../agents/agent_bundles/agent_bundles.md)). A publisher-pinned override is never imported for a mode whose SDK resolves to `openai_compatible` — that mode falls straight through to the admin-curated `default_model` (if any) or the catalog default, same as if no override existed.
 2. Admin-curated `default_model` on the linked credential — when set and no env override exists.
 3. Model-catalog tier default (`haiku` / `sonnet` / concrete ID per provider).
+
+A publisher-pinned override therefore outranks an admin-curated `default_model` on the installer's own credential, the same as a manually-set one.
 
 **Precedence rules (native account-config, `GET /external/account-config`):**
 
@@ -115,7 +117,7 @@ Admins can attach two non-secret model metadata fields to a parent record. These
 
 **Model health (amber badge):**
 
-The model-health service mirrors the same precedence. A valid admin-curated `default_model` is never falsely flagged as `unknown_model` or `stale_default`. Note that `has_override` in the health signal is keyed only on a **user-set env override** (not the credential default), so the badge CTA stays accurate: it never tells the user to "clear an override" they didn't set.
+The model-health service mirrors the same precedence. A valid admin-curated `default_model` is never falsely flagged as `unknown_model` or `stale_default`. Note that `has_override` in the health signal is keyed only on the env's `model_override_*` column (not the credential default) — regardless of whether it was set by the installer or arrived pre-pinned from a bundle publisher — so the badge CTA stays accurate: it never tells the user to "clear an override" the env doesn't actually have.
 
 ### Admin CRUD
 

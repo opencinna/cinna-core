@@ -2,11 +2,14 @@
 User Service - Business logic for user management operations.
 """
 import json
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone, UTC
 from typing import Any
 
+from pydantic import EmailStr, TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import or_
 from sqlmodel import Session, col, delete, func, select
 
@@ -33,6 +36,12 @@ from app.utils import (
     send_email,
     verify_password_reset_token,
 )
+
+logger = logging.getLogger(__name__)
+
+# Single validator for externally-supplied addresses (see
+# ``UserService.create_external_user``). Mirrors ``UserBase.email``.
+_EMAIL_ADAPTER: TypeAdapter[EmailStr] = TypeAdapter(EmailStr)
 
 
 class UserService:
@@ -188,35 +197,111 @@ class UserService:
         return user
 
     @staticmethod
-    def create_email_user(*, session: Session, email: str) -> User:
+    def create_external_user(
+        *,
+        session: Session,
+        email: str,
+        confirmed: bool,
+        provenance: str,
+        passwordless: bool = False,
+    ) -> User:
         """
-        Create or return a user from email only (for email integration).
+        Get-or-create the platform account for an externally-arriving sender.
 
-        - Generates a random password (user doesn't receive it)
-        - Sets is_active=True
-        - Does NOT enforce AUTH_WHITELIST_DOMAINS
-        - Returns existing user if email already exists
+        Shared by every inbound integration that meets a person before that
+        person has ever visited the platform: the email integration (sender of
+        an inbound mail) and server channels (sender of a chat message). All
+        such accounts are ordinary users — they pick up ``DEFAULT_USER_ROLE``
+        and every downstream gate (agent limits, credential isolation, catalog
+        visibility) applies unchanged.
+
+        Deliberately does **not** enforce ``AUTH_WHITELIST_USER_DOMAINS``: the
+        integration's own allowlist is the registration gate, and re-checking
+        the signup whitelist here would silently break configurations where
+        the two differ.
+
+        Idempotent, and never mutates an account that already exists — an
+        external contact must not be able to flip flags on someone's real
+        account (e.g. confirm an address they don't control).
+
+        The address is normalised (stripped + lowercased) and validated here
+        rather than at each call site, so both integrations agree on what
+        counts as "the same person" — otherwise ``Alice@x.com`` and
+        ``alice@x.com`` would become two accounts for the same human.
+
+        Args:
+            session: Database session.
+            email: The sender's address, as verified by the integration.
+            confirmed: True only when the transport itself verified the
+                address (Google-signed identity). Confirmed users skip the
+                confirmation email; unconfirmed ones are sent one so they can
+                confirm later if they become an operator.
+            provenance: Short origin tag for the audit log, e.g.
+                ``"email_integration"`` or ``"server_channel:<id>"``.
+            passwordless: True to create the account with no password at all
+                (``hashed_password=None``, as Google OAuth signup does).
+                False generates an unguessable random password the user never
+                receives — kept as the email integration's existing behaviour.
+
+        Returns:
+            The existing or newly created ``User``.
+
+        Raises:
+            ValueError: If ``email`` is not a valid address.
         """
+        # Validate before the lookup. The `passwordless` branch below builds a
+        # `User` (table=True) directly, and SQLModel skips validation on table
+        # models — without this, the two branches would disagree on what a
+        # valid address is.
+        try:
+            email = _EMAIL_ADAPTER.validate_python(email.strip().lower())
+        except PydanticValidationError as exc:
+            raise ValueError(f"Invalid email address: {email!r}") from exc
+
         existing = UserService.get_user_by_email(session=session, email=email)
         if existing:
             return existing
 
-        random_password = secrets.token_urlsafe(32)
-        user_create = UserCreate(
-            email=email,
-            password=random_password,
-            is_active=True,
-        )
-        user = UserService.create_user(session=session, user_create=user_create)
-        # Email-integration auto-created users start unconfirmed (D4). Send a
-        # confirmation email so they can later confirm if they become an
-        # operator; their agent-reply path remains gated on the agent/install
-        # OWNER, not this external sender, so legitimate replies are unaffected.
+        if passwordless:
+            user = User(
+                email=email,
+                hashed_password=None,
+                is_active=True,
+                is_superuser=False,
+                role=RoleService.derive_default_role(is_superuser=False),
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+        else:
+            random_password = secrets.token_urlsafe(32)
+            user_create = UserCreate(
+                email=email,
+                password=random_password,
+                is_active=True,
+            )
+            user = UserService.create_user(session=session, user_create=user_create)
+
         from app.services.users.email_confirmation_service import (
             EmailConfirmationService,
         )
-        EmailConfirmationService.send_confirmation_email(
-            session=session, user=user, force=True
+
+        if confirmed:
+            EmailConfirmationService.mark_confirmed(session=session, user=user)
+        else:
+            # Unconfirmed external users can still be reached: their
+            # agent-reply path is gated on the agent/install OWNER, not on
+            # this sender, so legitimate replies are unaffected.
+            EmailConfirmationService.send_confirmation_email(
+                session=session, user=user, force=True
+            )
+
+        logger.info(
+            "Created external user %s (provenance=%s, confirmed=%s, passwordless=%s)",
+            user.id,
+            provenance,
+            confirmed,
+            passwordless,
         )
         return user
 

@@ -37,8 +37,8 @@
 
 ### Tests
 
-- `backend/tests/api/agents/agents_webapp_chat_test.py` — Chat session lifecycle, mode enforcement, access control, context storage, and context diff tests
-- `backend/tests/api/agents/agents_webapp_interface_config_test.py` — Interface config lifecycle including `chat_mode` updates
+- `backend/tests/api/agents/webapp/agents_webapp_chat_test.py` — Chat session lifecycle, mode enforcement, access control, context storage, and context diff tests
+- `backend/tests/api/agents/webapp/agents_webapp_interface_config_test.py` — Interface config lifecycle including `chat_mode` updates
 - `backend/tests/utils/webapp_interface_config.py` — Test utility helpers for interface config
 
 ## Database Schema

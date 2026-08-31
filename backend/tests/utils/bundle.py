@@ -24,9 +24,11 @@ FS seam note (schema_version 2 workspace check):
   ``Path(settings.ENV_INSTANCES_DIR) / env_id / "app" / "workspace"`` directly.
 """
 import uuid
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
 from tests.utils.ai_credential import create_random_ai_credential
@@ -236,3 +238,96 @@ def get_install_context(
     )
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def set_update_mode(
+    client: TestClient,
+    headers: dict[str, str],
+    agent_id: str,
+    mode: str,
+) -> dict:
+    """Flip an install's update mode via PATCH /agents/{id}/update-mode."""
+    r = client.patch(
+        f"{API}/agents/{agent_id}/update-mode",
+        headers=headers,
+        json={"update_mode": mode},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+# ── Bundle-auto-update sweep bookkeeping — documented DB seams ────────────
+#
+# InstallService.sweep_automatic_updates (bundle_auto_update_and_install_ux
+# plan, section 3.2) drives its selection off two internal bookkeeping
+# columns — Agent.installed_revision_id and the failure-backoff pair
+# (Agent.last_update_status / Agent.last_update_attempt_at) — that have no
+# public API seam to set directly:
+#
+#   - installed_revision_id only ever moves *forward*, and only via
+#     apply_update / PublishService.publish (the publisher's own install is
+#     kept in permanent lockstep with the bundle's latest revision by
+#     ``publish`` itself, before the sweep ever runs). There is no route
+#     that can put an install "behind" other than the natural
+#     publish-creates-a-gap flow the sweep itself closes.
+#   - last_update_attempt_at is intentionally NOT exposed on AgentPublic
+#     (plan §3.1) and is only ever written by the sweep / apply_update
+#     internals — there is no endpoint that sets it.
+#
+# These two helpers poke those columns directly on the test session, mirroring
+# the documented DB-seam pattern in tests/utils/environment.py
+# (set_environment_status / link_ai_credential_to_environment) for state that
+# is otherwise unreachable through the API.
+
+
+def force_install_revision(
+    db: Session,
+    install_id: str | uuid.UUID,
+    revision_id: str | uuid.UUID,
+) -> None:
+    """Force ``Agent.installed_revision_id`` directly on the test DB.
+
+    Used to construct an install that is artificially "behind" the bundle's
+    latest revision in ways the public API cannot produce — in particular,
+    proving that ``sweep_automatic_updates`` excludes
+    ``is_publisher_install=True`` rows even when they would otherwise match
+    its selection query.
+    """
+    from app.models.agents.agent import Agent
+
+    if isinstance(install_id, str):
+        install_id = uuid.UUID(install_id)
+    if isinstance(revision_id, str):
+        revision_id = uuid.UUID(revision_id)
+
+    install = db.get(Agent, install_id)
+    assert install is not None, f"Install {install_id} not found"
+    install.installed_revision_id = revision_id
+    db.add(install)
+    db.commit()
+
+
+def stamp_install_update_failure(
+    db: Session,
+    install_id: str | uuid.UUID,
+    *,
+    hours_ago: float,
+) -> None:
+    """Stamp ``last_update_status='failed'`` + a recent ``last_update_attempt_at``.
+
+    Simulates a previously-failed automatic-update attempt so the sweep's
+    retry-backoff filter (``AUTO_UPDATE_RETRY_BACKOFF_HOURS``) can be
+    exercised. Neither column is settable via any route — see the module
+    docstring above.
+    """
+    from app.models.agents.agent import Agent
+
+    if isinstance(install_id, str):
+        install_id = uuid.UUID(install_id)
+
+    install = db.get(Agent, install_id)
+    assert install is not None, f"Install {install_id} not found"
+    install.last_update_status = "failed"
+    install.last_update_attempt_at = datetime.now(UTC) - timedelta(hours=hours_ago)
+    db.add(install)
+    db.commit()

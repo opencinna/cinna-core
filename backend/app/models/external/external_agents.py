@@ -23,8 +23,8 @@ class BundleVersionInfo(BaseModel):
     and offer an in-client update. Populated only for consumer installs
     (``target_type="agent"`` with a ``bundle_uuid`` and
     ``is_publisher_install=False``); ``None`` for the publisher's own
-    working copy, shared routes, and identity contacts (none of which the
-    caller updates).
+    working copy and identity contacts (neither of which the caller
+    updates).
 
     Computed read-only — building this never mutates ``Agent.pending_update``
     (the discovery endpoint is write-free). ``update_available`` is derived
@@ -45,13 +45,12 @@ class BundleVersionInfo(BaseModel):
 class ExternalTargetPublic(BaseModel):
     """A single addressable target returned by the external agent discovery endpoint.
 
-    Covers three source types:
-    - "agent"         — personal agent owned by (or cloned to) the user
-    - "app_mcp_route" — agent shared with the user via an AppAgentRoute assignment
-    - "identity"      — another user who has exposed agents via the Identity MCP server
+    Covers two source types:
+    - "agent"    — personal agent owned by (or cloned to) the user
+    - "identity" — another user who has exposed agents via the Identity MCP server
     """
 
-    target_type: Literal["agent", "app_mcp_route", "identity"]
+    target_type: Literal["agent", "identity"]
     target_id: uuid.UUID
     name: str
     description: str | None = None
@@ -70,15 +69,15 @@ class ExternalTargetPublic(BaseModel):
     mcp: dict[str, Any] | None = None
     # Installed-vs-latest bundle version state. Populated only for consumer
     # installs (target_type="agent" with a bundle, is_publisher_install=False);
-    # None for publisher working copies, shared routes, and identity contacts.
+    # None for publisher working copies and identity contacts.
     bundle_version: BundleVersionInfo | None = None
 
 
 class ExternalAgentListResponse(BaseModel):
     """Response schema for GET /api/v1/external/agents.
 
-    Targets are ordered: personal agents first, then MCP shared agents,
-    then identity contacts — each section sorted by name ascending.
+    Targets are ordered: personal agents first, then identity contacts —
+    each section sorted by name ascending.
     """
 
     targets: list[ExternalTargetPublic] = []
@@ -118,5 +117,5 @@ class ExternalSessionPublic(BaseModel):
     external_client_id: str | None = None
     # Derived fields — let the native client re-fetch the right A2A card without
     # storing or parsing integration_type themselves.
-    target_type: str | None = None   # "agent" | "app_mcp_route" | "identity"
+    target_type: str | None = None   # "agent" | "identity"
     target_id: uuid.UUID | None = None

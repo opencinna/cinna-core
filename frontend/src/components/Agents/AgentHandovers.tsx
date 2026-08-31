@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { Sparkles, Trash2, Plus, Bot } from "lucide-react"
+import { Sparkles, Trash2, Plus, Bot, Workflow } from "lucide-react"
 import type { AgentPublic, HandoverConfigPublic } from "@/client"
 import { AgentsService } from "@/client"
 import { AgentSelectorDialog } from "@/components/Common/AgentSelectorDialog"
@@ -197,7 +197,10 @@ export function AgentHandovers({ agent, readOnly = false }: AgentHandoversProps)
       <CardHeader>
         <div className="flex items-start justify-between">
           <div>
-            <CardTitle>Handover to Agents</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Workflow className="h-5 w-5" />
+              Handover to Agents
+            </CardTitle>
             <CardDescription>
               Configure when and how this agent should trigger other agents with
               specific context

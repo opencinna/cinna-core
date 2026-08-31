@@ -10,6 +10,7 @@ Auto-generated from OpenAPI spec. Tag: `admin-environments`
 - `status`: string | null
 - `is_stale`: boolean | null
 - `in_use`: boolean | null
+- `update_available`: boolean | null
 - `owner_id`: string | null
 - `search`: string | null
 - `skip`: integer, default: `0`

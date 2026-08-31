@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Allow users to optionally route AI utility function calls (title generation, schedule generation, agent config generation, prompt refinement, SQL generation, email reply generation, handover prompt generation) through their personal Anthropic or OpenAI API key instead of the system-level AI provider cascade.
+Allow users to optionally route AI utility function calls (title generation, schedule generation, agent config generation, prompt refinement, SQL generation, handover prompt generation) through their personal Anthropic or OpenAI API key instead of the system-level AI provider cascade.
 
 ## Core Concepts
 
@@ -27,8 +27,9 @@ The `default_ai_functions_sdk` preference applies to all AI utility calls routed
 | `refine_task` | Improves an input task description based on user feedback |
 | `generate_schedule` | Generates a CRON expression from a natural language schedule description |
 | `generate_handover_prompt` | Generates an AI handover prompt between two agents |
-| `generate_email_reply` | Generates a professional email reply from agent session results |
 | `generate_router_trigger_prompt` | Generates an App MCP router trigger prompt from an agent's name and description (see below) |
+
+`generate_email_reply` (AI-generated email reply from a completed task's results, backing the "Send Answer" button) was removed along with per-agent Email Integration's task mode — see [Email Integration — Capabilities removed](../email_integration/email_integration.md#capabilities-removed-in-this-refactor).
 
 ### `generate_router_trigger_prompt`
 

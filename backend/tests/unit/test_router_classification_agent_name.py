@@ -1,132 +1,185 @@
 """
-Phase 5 — Agent name in router classification context.
+What the classifier is actually *told* about each candidate.
 
-Light unit-level tests that verify:
-  1. AppMCPRoutingService._ai_classify passes an ``agent_name`` key in
-     every element of the ``available_agents`` list it sends to
-     AIFunctionsService.route_to_agent.
+These tests used to assert that ``AppMCPRoutingService._ai_classify`` put a
+``name`` and a ``prompt_examples`` key into the list of dicts it handed to
+``AIFunctionsService.route_to_agent``. That contract passed for the entire life
+of Bug 1: ``prompt_examples`` **was** in the payload dict, and the renderer one
+layer below built its agent block from ``id`` / ``name`` / ``trigger_prompt``
+and dropped it on the floor. A test that stops at the payload cannot see that,
+and this file is the test that should have.
 
-  2. The ``prompt_examples`` field is included (empty string when None
-     on the route).
+So they now assert against the **rendered prompt** — the last artefact before
+the model, and the only place where "the classifier was told" is a fact rather
+than an intention. The candidate objects are checked too, because a field
+missing from the ballot can never reach the prompt; but the prompt assertion is
+the one that would have failed.
 
-No DB, no Docker, no LLM calls — mocks only.
+Phase 5 of ``docs/plans/channels_identity_unification/`` deleted
+``AppMCPRoutingService._ai_classify`` along with the rest of the
+``AppAgentRoute`` family — App MCP no longer has a renderer of its own.
+``AgentClassifier.classify`` / ``agent_classifier.render_prompt`` are now the
+one renderer every routing surface (Channel Pass 1/2, App MCP Stage 1, Identity
+Stage 2) shares, so the App-MCP-labelled tests below are rewritten against that
+shared entry point, building plain ``Candidate`` objects instead of the deleted
+``EffectiveRoute``. The property they guard — a candidate's name and
+``prompt_examples`` reach the model — is unchanged; only the door it is tested
+through moved, because there is only one door left.
+
+No DB, no Docker, no LLM calls — the provider is mocked at classifier depth.
 """
 import uuid
 from unittest.mock import MagicMock, patch
-from dataclasses import dataclass
+
+_PROVIDER_TARGET = "app.services.routing.agent_classifier.get_provider_manager"
 
 
-# ---------------------------------------------------------------------------
-# Test 1 + 2: _ai_classify sends agent_name + prompt_examples in payload
-# ---------------------------------------------------------------------------
+def _capture_prompt(fn) -> tuple[object, str]:
+    """Run ``fn()`` with the provider mocked; return (result, rendered prompt)."""
+    with patch(_PROVIDER_TARGET) as mock_pm:
+        mock_pm.return_value.generate_content.return_value = MagicMock(
+            text='{"agent_id": "NONE"}'
+        )
+        result = fn()
+        assert mock_pm.return_value.generate_content.called, (
+            "the classifier never reached the provider — this test proves "
+            "nothing about the prompt unless it was actually rendered"
+        )
+        prompt = mock_pm.return_value.generate_content.call_args.args[0]
+    return result, prompt
 
 
-def test_ai_classify_passes_agent_name_in_payload() -> None:
+def _candidate_block(prompt: str) -> str:
+    """Just the rendered candidate list.
+
+    ``rsplit``, not ``split``: the static template has its own
+    "## Available Agents" heading (it is where the input format is explained to
+    the model, and it now mentions **Example messages** by name), so splitting
+    on the first occurrence returns the template's prose and every "no examples
+    were rendered" assertion below becomes a test of the template instead of a
+    test of the renderer. Bounded at "## User Message" for the same reason.
     """
-    AppMCPRoutingService._ai_classify must include ``name`` in every
-    element of the ``available_agents`` list forwarded to
-    AIFunctionsService.route_to_agent.
+    tail = prompt.rsplit("## Available Agents", 1)[1]
+    return tail.split("## User Message", 1)[0]
 
-    This is the Phase 5 regression guard: adding ``agent_name`` to the
-    classification context so the LLM can disambiguate e.g. "Calendar
-    Planner" vs "Vacation Planner" with identical trigger words.
-    """
-    from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
-    from app.services.app_mcp.app_agent_route_service import EffectiveRoute
 
-    agent_uuid = uuid.uuid4()
-    route = EffectiveRoute(
-        route_id=uuid.uuid4(),
-        agent_id=agent_uuid,
-        agent_name="Calendar Planner",
-        session_mode="conversation",
+def _candidate(**overrides):
+    from app.services.routing.agent_classifier import Candidate
+
+    base = dict(
+        ref_id=str(uuid.uuid4()),
+        name="Calendar Planner",
         trigger_prompt="Schedule meetings and manage calendar events",
-        message_patterns=None,
-        prompt_examples="book a meeting\nschedule event",
-        source="user",
-        identity_owner_id=None,
-        identity_owner_name=None,
+        prompt_examples=None,
     )
-
-    captured_agents: list[dict] = []
-
-    def _mock_route_to_agent(message: str, available_agents: list[dict]):
-        captured_agents.extend(available_agents)
-        return None  # no routing result — caller handles None
-
-    with patch(
-        "app.services.ai_functions.ai_functions_service.AIFunctionsService.route_to_agent",
-        side_effect=_mock_route_to_agent,
-    ):
-        AppMCPRoutingService._ai_classify(
-            message="Can you schedule a meeting for tomorrow?",
-            routes=[route],
-        )
-
-    assert len(captured_agents) == 1, (
-        f"Expected 1 agent dict, got {len(captured_agents)}"
-    )
-    agent_dict = captured_agents[0]
-
-    # Phase 5: agent_name must be present
-    assert "name" in agent_dict, (
-        f"Phase 5 regression: 'name' key missing from available_agents payload. "
-        f"Got keys: {list(agent_dict.keys())}"
-    )
-    assert agent_dict["name"] == "Calendar Planner"
-
-    # trigger_prompt must be present
-    assert "trigger_prompt" in agent_dict
-    assert agent_dict["trigger_prompt"] == "Schedule meetings and manage calendar events"
-
-    # agent id must be present
-    assert agent_dict["id"] == str(agent_uuid)
-
-    # prompt_examples carried through
-    assert "prompt_examples" in agent_dict
-    assert "book a meeting" in agent_dict["prompt_examples"]
+    base.update(overrides)
+    return Candidate(**base)
 
 
-def test_ai_classify_passes_empty_string_for_none_prompt_examples() -> None:
+# ---------------------------------------------------------------------------
+# The candidate's name reaches the prompt
+# ---------------------------------------------------------------------------
+
+
+def test_agent_name_reaches_the_rendered_prompt() -> None:
+    """The agent's *name* is classification context, not decoration.
+
+    It is what lets the model separate "Calendar Planner" from "Vacation
+    Planner" when their trigger words overlap.
     """
-    When a route has no prompt_examples (None), the ``available_agents``
-    payload should carry an empty string rather than None, so the LLM
-    prompt template doesn't break on None concatenation.
-    """
-    from app.services.app_mcp.app_mcp_routing_service import AppMCPRoutingService
-    from app.services.app_mcp.app_agent_route_service import EffectiveRoute
+    from app.services.routing.agent_classifier import AgentClassifier
 
-    route = EffectiveRoute(
-        route_id=uuid.uuid4(),
-        agent_id=uuid.uuid4(),
-        agent_name="Invoice Bot",
-        session_mode="conversation",
-        trigger_prompt="Process invoices",
-        message_patterns=None,
-        prompt_examples=None,  # deliberately None
-        source="user",
-        identity_owner_id=None,
-        identity_owner_name=None,
+    candidate = _candidate(name="Calendar Planner")
+    _, prompt = _capture_prompt(
+        lambda: AgentClassifier.classify(
+            [candidate], "Can you schedule a meeting for tomorrow?"
+        )
     )
 
-    captured_agents: list[dict] = []
+    assert "Calendar Planner" in prompt
+    assert candidate.ref_id in prompt
+    assert "Schedule meetings and manage calendar events" in prompt
 
-    def _capture(message, available_agents):
-        captured_agents.extend(available_agents)
-        return None
 
-    with patch(
-        "app.services.ai_functions.ai_functions_service.AIFunctionsService.route_to_agent",
-        side_effect=_capture,
-    ):
-        AppMCPRoutingService._ai_classify(
-            message="process this invoice",
-            routes=[route],
+# ---------------------------------------------------------------------------
+# Bug 1 — prompt_examples reaches the prompt
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_examples_reach_the_rendered_prompt() -> None:
+    """Bug 1's regression guard, asserted where the bug actually lived.
+
+    ``prompt_examples`` is validated, stored, and documented to the agent's
+    owner as a routing aid. Before Phase 5 it travelled all the way to the
+    renderer and was discarded there, so the owner's examples changed nothing
+    at all.
+    """
+    from app.services.routing.agent_classifier import AgentClassifier
+
+    candidate = _candidate(prompt_examples="book a meeting\nschedule event")
+    _, prompt = _capture_prompt(
+        lambda: AgentClassifier.classify(
+            [candidate], "Can you schedule a meeting for tomorrow?"
         )
+    )
 
-    assert len(captured_agents) == 1
-    agent_dict = captured_agents[0]
-    # prompt_examples should be an empty string (or at least not None)
-    prompt_ex = agent_dict.get("prompt_examples")
-    assert prompt_ex is not None, "prompt_examples must not be None in the payload"
-    assert isinstance(prompt_ex, str)
+    assert "book a meeting" in prompt
+    assert "schedule event" in prompt
+
+
+def test_identity_bindings_send_their_prompt_examples_too() -> None:
+    """The identity path never even *collected* the field before Phase 5.
+
+    ``IdentityAgentBinding.prompt_examples`` is edited on the same screen as
+    the App MCP one and was validated identically — it simply was not read when
+    Stage 2 built its candidate dicts. Sharing one builder is what fixes that
+    for good; this pins it.
+    """
+    from app.services.identity.identity_routing_service import IdentityRoutingService
+
+    agent_id = uuid.uuid4()
+    binding = MagicMock()
+    binding.agent_id = agent_id
+    binding.trigger_prompt = "Handles John's calendar"
+    binding.prompt_examples = "when is john free\nbook time with john"
+
+    db = MagicMock()
+    agent = MagicMock()
+    agent.name = "John's Calendar"
+    db.get.return_value = agent
+
+    _, prompt = _capture_prompt(
+        lambda: IdentityRoutingService._ai_classify(
+            "when is john free on friday", [binding, binding], db
+        )
+    )
+
+    assert "when is john free" in prompt
+    assert "book time with john" in prompt
+    assert "John's Calendar" in prompt
+
+
+def test_absent_prompt_examples_render_no_examples_block() -> None:
+    """No examples must not render an empty, model-confusing heading."""
+    from app.services.routing.agent_classifier import AgentClassifier
+
+    candidate = _candidate(prompt_examples=None)
+    _, prompt = _capture_prompt(
+        lambda: AgentClassifier.classify([candidate], "process this invoice")
+    )
+
+    candidate_block = _candidate_block(prompt)
+    assert "**Example messages**" not in candidate_block
+
+
+def test_blank_prompt_examples_render_no_examples_block() -> None:
+    """Whitespace-only examples are "no examples", not one blank bullet."""
+    from app.services.routing.agent_classifier import AgentClassifier
+
+    candidate = _candidate(prompt_examples="   \n\n  \n")
+    _, prompt = _capture_prompt(
+        lambda: AgentClassifier.classify([candidate], "process this invoice")
+    )
+
+    candidate_block = _candidate_block(prompt)
+    assert "**Example messages**" not in candidate_block

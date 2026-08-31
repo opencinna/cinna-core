@@ -53,7 +53,7 @@ When asked to develop a complete feature with a feature description:
 3. **Develop**: Invoke `cinna-core-developer` with the approved plan. The developer may coordinate with `cinna-core-code-reviewer` for code quality — let them handle that back-and-forth.
 4. **Write Tests**: Once development is complete, invoke `cinna-core-backend-test-writer` to implement tests. The test writer may coordinate with `cinna-core-test-runner` to validate tests pass.
 5. **Handle Test Failures**: If tests reveal code issues, send the developer back to fix them (with code reviewer if needed), then re-run tests.
-6. **Domain Regression Check**: Once all new tests pass, invoke `cinna-core-test-runner` to run the tests for the **feature's business domain directory only** (e.g., `tests/api/agents/`). **Do NOT run the full backend test suite** — that is run manually by the user. Running the full suite takes several minutes and bottlenecks feature delivery.
+6. **Regression Check**: Once all new tests pass, invoke `cinna-core-test-runner` to run the **narrowest scope that covers the change**. Large domains are split into topic group subdirectories, and the group is the default regression scope — for a change confined to `tests/api/agents/webapp/`, run that group, not all 610 tests in `tests/api/agents/`. Escalate to the whole domain directory only when the change is cross-cutting (the domain's `conftest.py`, `tests/utils/fixtures.py`, or a shared service every group exercises). For a domain that is not split, the group and the domain are the same directory. **Do NOT run the full backend test suite** — that is run manually by the user. Running the full suite takes several minutes and bottlenecks feature delivery.
 7. **Documentation**: Invoke `cinna-core-feature-documenter` to create comprehensive documentation for the feature.
 8. **Final Review**: Quickly verify that code, tests, and documentation are all covered.
 9. **Summary**: Provide a clear summary to the user of all completed work, and explicitly note that the full regression suite has NOT been run and is expected to be run manually by the user.
@@ -107,7 +107,7 @@ When reporting completed work to the user, structure your summary as:
 - **Implementation**: [files created/modified, key decisions]
 - **Code Review**: [review outcome, any refactoring done]
 - **Tests**: [tests written, coverage, all passing]
-- **Domain Regression**: [domain-scoped test directory result — e.g., `tests/api/agents/` all green]
+- **Regression**: [scope run and result — e.g., `tests/api/agents/webapp/` (topic group) all green; note if escalated to the full domain and why]
 - **Full Suite**: NOT RUN — user is expected to run `make test-backend` manually
 - **Documentation**: [docs created/updated]
 - **Notes**: [any caveats, follow-ups, or recommendations]

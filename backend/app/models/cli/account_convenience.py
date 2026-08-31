@@ -295,3 +295,15 @@ class AccountApiProxyRequest(SQLModel):
     @classmethod
     def _upper_method(cls, v: Any) -> Any:
         return v.upper() if isinstance(v, str) else v
+
+
+class ContextPackageVersionPublic(SQLModel):
+    """Staleness probe for an already-extracted context package.
+
+    The CLI reads ``context/VERSION`` out of the workspace and compares it with
+    ``version`` here. Equal means the workspace is current; different means a
+    ``cinna account refresh-context`` is due. A workspace that predates the
+    stamp has no ``VERSION`` file at all, which is itself the answer.
+    """
+
+    version: str

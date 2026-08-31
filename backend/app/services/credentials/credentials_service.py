@@ -19,7 +19,7 @@ from app.core.ssh_key_utils import (
     is_private_key_encrypted,
     validate_key_pair,
 )
-from app.models import Credential, Agent, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType, User
+from app.models import Credential, Agent, AgentApiTokenKind, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType, User
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +227,69 @@ class CredentialsService:
             })
 
         return result
+
+    @staticmethod
+    def _drop_external_agent_api_keys(
+        session: Session, credentials: list[dict]
+    ) -> list[dict]:
+        """Remove non-connection ``agent_api`` credentials from an env-bound list.
+
+        Keys are never written into a container (plan D4) — see the call site in
+        ``prepare_credentials_for_environment`` for why. One batched lookup.
+
+        FAILS CLOSED twice over. ``token`` is a whitelisted ``agent_api`` field
+        (connections genuinely need it in the container), so the downstream
+        whitelist is NOT a second line of defence here:
+
+        - Only rows positively identified as ``kind="connection"`` are kept. An
+          orphan (no bound token) is dropped too — its stored token
+          authenticates nothing, so there is no upside to shipping it.
+        - If the lookup itself fails we cannot tell a key from a connection, so
+          every ``agent_api`` credential is dropped. A consumer temporarily
+          losing a connection is recoverable; an external key reaching a
+          container is not.
+        """
+        agent_api_ids = [
+            uuid.UUID(cred["id"])
+            for cred in credentials
+            if cred.get("type") == "agent_api" and cred.get("id")
+        ]
+        if not agent_api_ids:
+            return credentials
+
+        from app.services.agent_api.agent_api_token_service import (
+            AgentApiTokenService,
+        )
+
+        try:
+            kinds = AgentApiTokenService.get_kinds_by_credential(
+                session, agent_api_ids
+            )
+        except Exception:
+            logger.exception(
+                "Failed to resolve agent_api token kinds; dropping ALL agent_api "
+                "credentials from this sync (fail closed — `token` is whitelisted, "
+                "so keeping them risks writing an external key into the container)"
+            )
+            return [cred for cred in credentials if cred.get("type") != "agent_api"]
+
+        connection_ids = {
+            str(cred_id)
+            for cred_id, kind in kinds.items()
+            if kind == AgentApiTokenKind.CONNECTION.value
+        }
+        kept = [
+            cred
+            for cred in credentials
+            if cred.get("type") != "agent_api" or cred.get("id") in connection_ids
+        ]
+        if len(kept) != len(credentials):
+            logger.info(
+                "Excluding %d non-connection agent_api credential(s) from env "
+                "credential sync",
+                len(credentials) - len(kept),
+            )
+        return kept
 
     @staticmethod
     def _process_api_token_credential(credential_data: dict) -> dict:
@@ -1274,6 +1337,18 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Get credentials with decrypted data
         credentials = CredentialsService.get_agent_credentials_with_data(session, agent_id)
 
+        # Drop agent_api EXTERNAL KEYS before anything else looks at the list.
+        # A key is for code running OUTSIDE the platform; syncing an
+        # identity-bound key into a container would quietly bypass the anonymous
+        # connection model (the container would call the producer AS the key's
+        # subject user, not as its own install owner). Removing them here — not
+        # just from the whitelist — also keeps them out of the README render and
+        # out of the `has_agent_api_cred` test that decides whether to inject the
+        # owner_identity_token block (plan D4).
+        credentials = CredentialsService._drop_external_agent_api_keys(
+            session, credentials
+        )
+
         # Collect service account files before filtering
         service_account_files = []
         for cred in credentials:
@@ -1669,6 +1744,10 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
 
         # Update credential
         update_dict = credential_in.model_dump(exclude_unset=True)
+        if update_dict.get("allow_sharing") or update_dict.get(
+            "allow_template_sharing"
+        ):
+            CredentialsService.assert_sharing_allowed(session, credential)
         if "template_private_fields" in update_dict:
             raw_fields = update_dict.pop("template_private_fields") or []
             if not isinstance(raw_fields, list) or not all(
@@ -1678,6 +1757,29 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             credential.template_private_fields = list(raw_fields)
         if "credential_data" in update_dict:
             data_payload = update_dict["credential_data"] or {}
+            # An ``agent_api`` **external key**'s value is stripped from
+            # ``GET /credentials/{id}/with-data`` (plan D4), so the generic edit
+            # form necessarily round-trips a payload with no ``token``. This
+            # write replaces the encrypted blob wholesale, which would silently
+            # destroy the only stored copy of a key that keeps authenticating at
+            # the proxy — renaming a key would quietly make it unrevealable
+            # forever. Carry the stored value forward: a key is rotated by
+            # revoke + re-issue, never by editing its data.
+            if isinstance(data_payload, dict) and "token" not in data_payload:
+                from app.services.agent_api.agent_api_key_service import (
+                    AgentApiKeyService,
+                )
+
+                if AgentApiKeyService.is_external_key_credential(
+                    session=session,
+                    credential_id=credential_id,
+                    credential_type=credential.type,
+                ):
+                    stored_token = CredentialsService.decrypt_credential_data(
+                        session=session, credential=credential
+                    ).get("token")
+                    if stored_token:
+                        data_payload = {**data_payload, "token": stored_token}
             encrypted_data = encrypt_field(json.dumps(data_payload))
             update_dict.pop("credential_data")
             credential.encrypted_data = encrypted_data
@@ -1707,6 +1809,37 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         )
 
         return credential
+
+    @staticmethod
+    def assert_sharing_allowed(session: Session, credential: Credential) -> None:
+        """Reject making a credential shareable when it must never be shared.
+
+        Covers BOTH distribution channels — direct ``allow_sharing`` and
+        ``allow_template_sharing`` (which copies the non-private
+        ``credential_data`` fields into a published bundle revision, i.e. hands
+        the value to every installer).
+
+        Currently one such credential: an ``agent_api`` **external key** (plan
+        D4). A key is bound to one platform user's identity, so sharing it means
+        "here, act as user X" — a footgun with no legitimate use. Cross-user
+        access to a producer's API is what the scope grant is for.
+
+        Raises ``ValueError`` (the update paths' existing failure currency).
+        """
+        if credential.type != CredentialType.AGENT_API:
+            return
+        from app.services.agent_api.agent_api_token_service import (
+            AgentApiTokenService,
+        )
+
+        if AgentApiTokenService.is_restricted_agent_api_credential(
+            session, credential.id
+        ):
+            raise ValueError(
+                "External API keys cannot be shared — they are bound to one "
+                "user's identity. Issue a separate key, or grant that user "
+                "scopes on the producer instead."
+            )
 
     @staticmethod
     def get_deletion_impact(
@@ -2764,6 +2897,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         credential_type: CredentialType,
         share_source: str | None,
         mcp_auth_mode: str | None = None,
+        agent_api_kind: str | None = None,
     ) -> str:
         """Categorize a credential into a UI tab discriminator.
 
@@ -2773,7 +2907,11 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         this; no caller should re-derive provenance or automatic-ness.
 
         Rules:
-          1. Owned + AGENT_API                                  → "automatic".
+          1. Owned + AGENT_API with agent_api_kind != "external" → "automatic".
+             (A connection is auto-created by "Connect Agent API". An EXTERNAL
+             key is hand-authored by a human who then copies the token out, so
+             it belongs in "My Credentials" — same split as `mcp_provider`
+             below. A missing kind means legacy = connection.)
           2. Owned + MCP_PROVIDER with mcp_auth_mode=="agent2agent"
                                                                  → "automatic".
              (An external MCP server — none/fixed_token/oauth_dcr — is manually
@@ -2787,7 +2925,13 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         """
         if is_owned:
             if credential_type == CredentialType.AGENT_API:
-                return "automatic"
+                # Only auto-created connections are "automatic"; an externally
+                # issued key is an ordinary, hand-managed credential.
+                return (
+                    "mine"
+                    if agent_api_kind == AgentApiTokenKind.EXTERNAL.value
+                    else "automatic"
+                )
             if credential_type == CredentialType.MCP_PROVIDER:
                 # Only auto-managed agent-to-agent pairs are "automatic"; a
                 # manually-added external MCP server is an ordinary credential.
@@ -2797,6 +2941,39 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         if share_source == "bundle_install":
             return "bundle"
         return "mine"
+
+    @staticmethod
+    def classify_owned_credentials(
+        session: Session, credentials: list[Credential]
+    ) -> dict[uuid.UUID, str]:
+        """Categorize a page of the caller's OWN credentials in one shot.
+
+        Wraps :meth:`classify_credential_category` with the one discriminator
+        that is not a plain column on ``Credential``: the bound
+        ``AgentApiToken.kind``, which needs a lookup. Batched here (one query
+        for the whole page) so the route never orchestrates a cross-domain read
+        to build a projection.
+
+        Returns ``{credential_id: "mine" | "automatic" | "bundle"}``.
+        """
+        from app.services.agent_api.agent_api_token_service import (
+            AgentApiTokenService,
+        )
+
+        agent_api_kinds = AgentApiTokenService.get_kinds_by_credential(
+            session,
+            [c.id for c in credentials if c.type == CredentialType.AGENT_API],
+        )
+        return {
+            c.id: CredentialsService.classify_credential_category(
+                is_owned=True,
+                credential_type=c.type,
+                share_source=None,
+                mcp_auth_mode=c.mcp_auth_mode,
+                agent_api_kind=agent_api_kinds.get(c.id),
+            )
+            for c in credentials
+        }
 
     @staticmethod
     def get_agent_usage_counts(

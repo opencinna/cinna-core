@@ -7,15 +7,21 @@ import {
   OctagonXIcon,
   TriangleAlertIcon,
 } from "lucide-react"
-import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 
+import { useTheme } from "@/components/theme-provider"
+
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme = "system" } = useTheme()
+  // Deliberately the app's own ThemeProvider, not next-themes: there is no
+  // NextThemesProvider in the tree, so `useTheme()` from that package always
+  // fell back to "system" and toasts followed the OS rather than the in-app
+  // colour mode. `resolvedTheme` is already light/dark, so hand it over
+  // directly instead of asking Sonner to resolve "system" a second time.
+  const { resolvedTheme } = useTheme()
 
   return (
     <Sonner
-      theme={theme as ToasterProps["theme"]}
+      theme={resolvedTheme}
       className="toaster group"
       icons={{
         success: <CircleCheckIcon className="size-4" />,

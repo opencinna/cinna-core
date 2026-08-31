@@ -4,8 +4,8 @@
 
 ### Backend — Models
 
-- `backend/app/models/agent_api/agent_api_token.py` — `AgentApiToken` (table, with `credential_id` FK), `AgentApiTokenBase`, `AgentApiTokenCreate`, `AgentApiTokenPublic`, `AgentApiTokenCreated`, `AgentApiConnectedAgent`, `AgentApiConnectionInfo`, `AgentApiProducerConnection`, `AgentApiProducerConnections`, `ConnectAgentApiRequest`, `ConnectAgentApiResponse` (no manual token-CRUD models — `AgentApiTokenUpdate`/`AgentApiTokensPublic` were removed)
-- `backend/app/models/agents/agent.py` — `agent_api_enabled: bool` and `agent_api_identity_enabled: bool` fields on `Agent` (table), `AgentUpdate`, and `AgentPublic`
+- `backend/app/models/agent_api/agent_api_token.py` — `AgentApiToken` (table, with `credential_id` FK, `kind`, `subject_user_id`, `expires_at`), `AgentApiTokenKind` (`str` enum: `CONNECTION` / `EXTERNAL`), `AgentApiTokenBase`, `AgentApiTokenCreate`, `AgentApiTokenPublic`, `AgentApiTokenCreated`, `AgentApiConnectedAgent`, `AgentApiConnectionInfo`, `AgentApiProducerConnection`, `AgentApiProducerConnections`, `ConnectAgentApiRequest`, `ConnectAgentApiResponse` — plus the **external key** models: `AgentApiKeyCreate`, `AgentApiKeySubject`, `AgentApiKeyPublic`, `AgentApiKeyCreated`, `AgentApiKeysPublic`, `AgentApiKeyRevealResponse` (single `token: str` field, returned by the dedicated reveal endpoint — see [Reveal endpoint](#reveal-endpoint-post-credentialsidagent-api-keyreveal-and-the-with-data-strip)) (no manual token-CRUD models for connections — `AgentApiTokenUpdate`/`AgentApiTokensPublic` were removed)
+- `backend/app/models/agents/agent.py` — `agent_api_enabled: bool`, `agent_api_identity_enabled: bool`, and `agent_api_external_access_enabled: bool` (default `false` — producer opt-in + live kill switch for external keys) fields on `Agent` (table), `AgentUpdate`, and `AgentPublic`
 - `backend/app/models/agent_api/agent_api_access_grant.py` (new) — `AgentApiAccessGrant` (table), `AgentApiAccessGrantBase/Create/Update/Public`, `AgentApiAccessGrantsPublic`, `AgentApiGrantUser`, plus the scope-catalog models `AgentApiScope` / `AgentApiScopeCatalog`
 - `backend/app/models/environments/environment.py` — `agent_api_spec_parsed`, `agent_api_spec_fetched_at`, `agent_api_spec_error`, `agent_api_policy_cache` cache columns on `AgentEnvironment`
 - `backend/app/models/credentials/credential.py` — `AGENT_API` added to `CredentialType` enum
@@ -13,20 +13,21 @@
 
 ### Backend — Routes
 
-- `backend/app/api/routes/agent_api.py` — owner-preview routes + connect helper + producer connections list/delete + the **owner-gated grant routes** (`/grants*`); prefix `/api/v1/agents/{agent_id}/agent-api`
+- `backend/app/api/routes/agent_api.py` — owner-preview routes + connect helper + producer connections list/delete + the **owner-gated grant routes** (`/grants*`) + the **owner-gated external-key routes** (`/keys*`); prefix `/api/v1/agents/{agent_id}/agent-api`
 - `backend/app/api/routes/agent_api_public.py` — consumer serving routes (token auth); prefix `/api/v1/agent-api/{agent_id}`. The `consumer_proxy` handler also does the L2 identity verify / strip / inject (see [Caller Identity](#caller-identity--producer-scopes))
 - `backend/app/api/routes/credentials.py` — `GET /credentials/{id}/agent-api-connection` (connection detail for the credential page)
 - `backend/app/api/main.py` — both agent_api routers registered
 
 ### Backend — Services
 
-- `backend/app/services/agent_api/agent_api_service.py` — `AgentApiService` + exception hierarchy; `policy.yaml` `scopes:` parsing + optional edge scope enforcement
-- `backend/app/services/agent_api/agent_api_token_service.py` — `AgentApiTokenService`
-- `backend/app/services/agent_api/agent_api_identity_service.py` (new) — `AgentApiIdentityService`: mints/verifies the L2 `owner_identity_token` JWT, builds the synthetic credentials.json entry, resolves the trusted `X-Cinna-Caller-*` headers; exports the header-name constants shared with the proxy
-- `backend/app/services/agent_api/agent_api_grant_service.py` (new) — `AgentApiGrantService`: owner-gated grant CRUD, scope sanitization, scope catalog read, live per-call scope resolution, SecurityEvent audit
+- `backend/app/services/agent_api/agent_api_service.py` — `AgentApiService` + exception hierarchy; `policy.yaml` `scopes:` parsing + optional edge scope enforcement; `resolve_identity_enabled()`; rate-limit bucket pruning
+- `backend/app/services/agent_api/agent_api_token_service.py` — `AgentApiTokenService`; `validate_token()` is the single validation path for both token kinds (expiry + external-access kill switch checks live here)
+- `backend/app/services/agent_api/agent_api_identity_service.py` (new) — `AgentApiIdentityService`: mints/verifies the L2 `owner_identity_token` JWT, builds the synthetic credentials.json entry, resolves the trusted `X-Cinna-Caller-*` headers (`resolve_caller_headers` for a connection's L2 token, `resolve_caller_headers_for_user` for an external key's bound subject — both share one header-building implementation); exports the header-name constants shared with the proxy
+- `backend/app/services/agent_api/agent_api_grant_service.py` (new) — `AgentApiGrantService`: owner-gated grant CRUD, `upsert_grant()` (used by key mint), scope sanitization, scope catalog read, live per-call scope resolution, SecurityEvent audit
+- `backend/app/services/agent_api/agent_api_key_service.py` (new) — `AgentApiKeyService`: external-key mint / list / revoke / reveal; see [External Keys](#external-keys-agentapikeyservice) below
 - `backend/app/services/environments/adapters/docker_adapter.py` — `get_agent_api_status()`, `get_agent_api_spec()`, `proxy_agent_api()`
 - `backend/app/services/environments/environment_lifecycle.py` — `agent_api/` added to `dirs_to_copy`
-- `backend/app/services/credentials/credentials_service.py` — `AGENT_ENV_ALLOWED_FIELDS["agent_api"]` + `SENSITIVE_FIELDS["agent_api"]` + `_rewrite_agent_api_urls_for_env()` (swaps the stored public URL host for `AGENT_ENV_BACKEND_URL` on env sync); injects the synthetic `owner_identity_token` block in `prepare_credentials_for_environment()` and documents it in `generate_credentials_readme`
+- `backend/app/services/credentials/credentials_service.py` — `AGENT_ENV_ALLOWED_FIELDS["agent_api"]` + `SENSITIVE_FIELDS["agent_api"]` + `_rewrite_agent_api_urls_for_env()` (swaps the stored public URL host for `AGENT_ENV_BACKEND_URL` on env sync); injects the synthetic `owner_identity_token` block in `prepare_credentials_for_environment()` and documents it in `generate_credentials_readme`; `_drop_external_agent_api_keys()` strips `kind="external"` credentials before env sync; `classify_credential_category()` / `classify_owned_credentials()` fold in `agent_api_kind`; `assert_sharing_allowed()` rejects turning on `allow_sharing`/`allow_template_sharing` for a restricted `agent_api` credential; `update_credential()` carries the stored `token` forward for a bound **external key** when the incoming payload omits it, so the generic Edit dialog (which seeds from `with-data`, no longer carrying `token` for a key) can't blank the credential's only stored copy on a metadata-only save — see [Reveal endpoint](#reveal-endpoint-post-credentialsidagent-api-keyreveal-and-the-with-data-strip)
 - `backend/app/core/config.py` — `AGENT_ENV_BACKEND_URL` (container-reachable backend origin; also the env's `BACKEND_URL`); `AGENT_API_IDENTITY_TOKEN_EXPIRE_DAYS` (default `30` — TTL of the L2 identity token)
 - `backend/app/models/events/security_event.py` — `AGENT_API_GRANT_CREATED` / `AGENT_API_GRANT_UPDATED` / `AGENT_API_GRANT_DELETED` event-type constants
 
@@ -43,7 +44,9 @@
 
 | `25a74abc7f4a` | `25a74abc7f4a_add_agent_api_access_grant_table_and_.py` | Creates the `agent_api_access_grant` table (see schema below) with its unique constraint and the `producer_agent_id` / `user_id` indexes, and adds `agent_api_identity_enabled BOOL NOT NULL DEFAULT false` to `agent` (added with a `server_default` to backfill existing rows, then the default is dropped so the model-level `Field(default=False)` is the source of truth). `down_revision = c70a14722869`. Hand-trims an unrelated autogen drift on `cli_device_login_request` (a pre-existing `TIMESTAMP → DateTime` diff not introduced by this change). |
 
-Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored together and never released; `aa33` was edited in place to carry `credential_id` (no separate migration). `c7e2a9f4b1d8` is a later, independent data-only migration. `25a74abc7f4a` is the caller-identity / scopes migration (descends from `c70a14722869`). A fresh `alembic upgrade head` yields the current schema.
+| `e4c1b7d92f08` | `e4c1b7d92f08_add_agent_api_external_keys.py` | **External Keys.** One migration for all four columns: `agent_api_token.kind VARCHAR(20) NOT NULL DEFAULT 'connection'` (`server_default` then dropped, same backfill-then-drop pattern as `25a74abc7f4a`); `agent_api_token.subject_user_id UUID FK → user, ON DELETE CASCADE`, indexed, nullable (NULL for connection tokens); `agent_api_token.expires_at TIMESTAMPTZ`, nullable; `agent.agent_api_external_access_enabled BOOL NOT NULL DEFAULT false` (same server_default-then-drop treatment). `down_revision = 878bc3f6579f` — a clean single head, no branch merge needed. |
+
+Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored together and never released; `aa33` was edited in place to carry `credential_id` (no separate migration). `c7e2a9f4b1d8` is a later, independent data-only migration. `25a74abc7f4a` is the caller-identity / scopes migration (descends from `c70a14722869`). `e4c1b7d92f08` is the external-keys migration (descends from `878bc3f6579f`). A fresh `alembic upgrade head` yields the current schema.
 
 ### Env-Core (inside container)
 
@@ -64,22 +67,28 @@ Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored togethe
 - `frontend/src/components/Agents/AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, error banner (compact summary + Details toggle + Retry), a View Spec + Refresh button row (View Spec opens the spec viewer tab via `openAgentApiSpec()`; Refresh calls `refreshAgentApiStatus` to re-harvest the spec + re-parse policy on demand), and the Connections list (consumer Bot badges + owner email + Disconnect). Hosted by `AgentIntegrationsTab.tsx`. Module helpers `parseHttpStatus()` / `summarizeBootError()` turn a raw `last_error` into the one-line summary.
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` — renders `AgentRestApiCard`; passes `agentApiIdentityEnabled` into `AgentApiAccessScopesCard`
 - `frontend/src/components/Agents/AgentApiAccessScopesCard.tsx` (new) — the "Access & Scopes" card: opt-in switch (`toggleIdentity` → `agent_api_identity_enabled`), `UserAllowlistPicker` (passes `includeSelf` — owner-grants-self is valid here, unlike share/assignment pickers) for adding granted users, and per-user scope chips (`policy.yaml` catalog quick-add + free-text). Drives `["agentApiGrants", agentId]` and `["agentApiScopeCatalog", agentId]` queries and the grant create/update/delete mutations.
-- `frontend/src/components/Credentials/AgentApiConnectionView.tsx` — `agent_api` credential detail panel, a single card split into two columns: **left** = editable name/notes form (metadata-only `updateCredential`); **right** = a "Producer" header row (producer rendered via the shared `AgentBadge` — the whole pill is clickable/colour-tinted, not just a label — plus an optional `read-only` badge and a **View Spec** button pushed to the right next to the producer, no raw `base_url` shown) above a compact bordered list of connected consumer agents, each row = `AgentBadge` + the owner's `name · email` (mirrors the A2A access-token list style; no table header). Owner name+email disambiguate identical agent names across bundle installs.
+- `frontend/src/components/Credentials/AgentApiCredentialDetail.tsx` (new) — the `agent_api` credential-detail dispatcher. Resolves the bound token's `kind` via `useAgentApiKeyForCredential` and renders `AgentApiKeyView` for an external key or `AgentApiConnectionView` (+ `CredentialSharing`, no `CredentialTemplateSharing`) for a connection; a loading state avoids flashing the wrong view, and an unresolvable kind shows an explicit error instead of silently defaulting to the connection view.
+- `frontend/src/components/Credentials/AgentApiConnectionView.tsx` — **connection**-only detail panel, a single card split into two columns: **left** = editable name/notes form (metadata-only `updateCredential`); **right** = a "Producer" header row (producer rendered via the shared `AgentBadge` — the whole pill is clickable/colour-tinted, not just a label — plus an optional `read-only` badge and a **View Spec** button pushed to the right next to the producer, no raw `base_url` shown) above a compact bordered list of connected consumer agents, each row = `AgentBadge` + the owner's `name · email` (mirrors the A2A access-token list style; no table header). Owner name+email disambiguate identical agent names across bundle installs.
+- `frontend/src/components/Credentials/AgentApiKeyView.tsx` (new) — **external key** detail panel: one full-width "Agent API Key" card (masked value with Reveal/Hide via the audited reveal endpoint + Copy that works while hidden, base URL + View Spec, a runnable curl) over two half-width cards — **Details** (name/notes, metadata-only `updateCredential`) and **Access** (producer `AgentBadge`, read-only "Acts as" identity, the scope editor writing straight to the `(producer, subject)` grant, and expiry). A post-mint `?new=1` visit shows the value handed off from the mint response (`agentApiKeyMintHandoff.ts`) instead of calling the reveal endpoint, so landing here right after minting isn't itself an audited disclosure.
+- `frontend/src/components/Credentials/agentApiKeyCopy.ts` (new) — single shared copy source for the "Agent API Key" label and the curl-snippet builder, so the not-yet-finalized picker label stays a one-line change.
+- `frontend/src/components/Credentials/agentApiKeyMintHandoff.ts` (new) — in-memory one-shot handoff of the just-minted token value, keyed by credential id, from `AgentApiKeyDialog`'s success handler to `AgentApiKeyView`.
 - `frontend/src/routes/agent-api-spec/$agentId.tsx`, `frontend/src/components/Agents/OpenApiSpecViewer.tsx`, `frontend/src/utils/agentApiSpec.ts` — the rendered spec viewer (route + renderer + launch helper). See [spec_viewer_tech.md](spec_viewer_tech.md).
-- `frontend/src/components/Credentials/ConnectAgentApiDialog.tsx` — "Connect Agent API"; thin wrapper over the shared `AgentSelectorDialog`, filtered to API-enabled agents
-- `frontend/src/components/Common/AgentSelectorDialog.tsx` — shared agent picker (Bot badge + colour preset) reused by the connect dialog
-- `frontend/src/components/Credentials/AddCredential.tsx` — "Connect Agent API" entry point in the add-credential picker
-- `frontend/src/components/Agents/AgentCredentialsTab.tsx` — per-agent "Connect Agent API" button (passes the consumer agent id)
-- `frontend/src/components/Credentials/credentialTypes.ts` — `agent_api` display-only type meta (icon/label/badge); not offered in the manual picker
-- `frontend/src/routes/_layout/credential/$credentialId.tsx` — `agent_api` branch renders `AgentApiConnectionView` (the two-column card owns the editable name/notes form — `updateCredential` with `{name, notes}` only, never the proxy token) followed by `CredentialSharing`. `CredentialTemplateSharing` is **not rendered** for `agent_api` credentials — template sharing is meaningless for a connection credential that has no user-fillable private fields.
+- `frontend/src/components/Credentials/ConnectAgentApiDialog.tsx` — "Connect Agent API"; thin wrapper over the shared `AgentSelectorDialog`, filtered to API-enabled agents. Lives only on the agent's own Credentials tab now (see `AddCredential.tsx` below).
+- `frontend/src/components/Credentials/AgentApiKeyDialog.tsx` (new) — the external-key mint form, identical wherever it's opened from (global picker or the producer card's "Issue key" button): producer agent (`AgentSelectorDialog`, fixed when opened from that agent's own card) → subject user (`UserAllowlistPicker`, `includeSelf`, defaults to the issuer) → optional scopes (`AgentApiScopeEditor`, upserts the grant) → expiry select. No per-key read-only control — the backend keeps defaulting `read_only_override` to `false`. On success, stashes the minted value via `agentApiKeyMintHandoff` and navigates to the new credential's detail page with `?new=1`.
+- `frontend/src/components/Common/AgentSelectorDialog.tsx` — shared agent picker (Bot badge + colour preset) reused by the connect dialog and the key mint dialog
+- `frontend/src/components/Credentials/AddCredential.tsx` — global "New credential" picker. Offers **only** "Agent API Key" for `agent_api` (routed through `credentialTypes.ts`'s `action` field into `AgentApiKeyDialog`, not the default create-empty-draft flow) — "Connect Agent API" is not offered here, since the global picker has no consumer agent to link a connection to.
+- `frontend/src/components/Agents/AgentCredentialsTab.tsx` — per-agent "Connect Agent API" button (passes the consumer agent id) — unchanged, this is where Connect still makes sense
+- `frontend/src/components/Agents/AgentApiExternalKeysCard.tsx` (new) — the producer "Agent REST API" card's **External Keys** section, embedded by `AgentRestApiCard.tsx` beneath the Connections list: `agent_api_external_access_enabled` toggle, the key list (prefix, subject, last used, expires, an `is_usable`-derived status), an "Issue key" button opening `AgentApiKeyDialog` with the producer pre-filled, and per-key revoke.
+- `frontend/src/components/Credentials/credentialTypes.ts` — two separate concerns for `agent_api`. **Picker:** an "Agent API Key" entry inside the **API & Access** group (`action: "agent_api_key"`, `KeySquare`) — a key is just an API key for external use, so it is an ordinary pill rather than a standalone row above the groups. `action` opts the entry out of the picker's default "create an empty draft, open its detail page" flow, because a key is bound to a producer and a subject user at mint time and so must go through `AgentApiKeyDialog` first (`defaultName` is unused for it). A *connection* is still never offered here — it has no consumer agent in context. **Display:** `DISPLAY_ONLY_META` is applied after the groups and therefore wins for rendering, so every `agent_api` credential (key or connection) keeps the one neutral "Agent REST API" badge
+- `frontend/src/routes/_layout/credential/$credentialId.tsx` — `agent_api` branch renders `AgentApiCredentialDetail`, which itself picks the key or connection view (see above) and owns whether `CredentialSharing` is shown at all (never for a key — `allow_sharing` is forced off server-side). `CredentialTemplateSharing` is **not rendered** for `agent_api` credentials of either kind — template sharing is meaningless for a credential that has no user-fillable private fields.
 - `frontend/src/routes/_layout/credentials.tsx` — partitions the single `["credentials", workspaceFilter]` query result into two sections: **My Credentials** (`type !== "agent_api"`) and **Automatic Credentials** (`type === "agent_api"`). The Automatic Credentials section is hidden when empty; when visible it shows the same `CredentialGrid` component with a one-line explainer ("Connections created by 'Connect Agent API'. Manage name, notes, and sharing here."). Workspace filter applies automatically because the query is shared and agent_api credentials are now workspace-stamped at connect time.
 - `frontend/src/components/Agents/AgentEnvironmentsTab.tsx` — `agent_api_enabled` toggle
 - `frontend/src/components/Environment/EnvironmentPanel.tsx` — "Agent API" tab in the workspace file tree
 
 ### Tests
 
-- `backend/tests/api/agents/agents_agent_api_test.py` — 31 scenario-based API tests (see test coverage section below)
-- `backend/tests/api/agents/agents_agent_api_grants_test.py` — 15 caller-identity + scopes tests (see test coverage section below)
+- `backend/tests/api/agents/agent_api/agents_agent_api_test.py` — 31 scenario-based API tests (see test coverage section below)
+- `backend/tests/api/agents/agent_api/agents_agent_api_grants_test.py` — 15 caller-identity + scopes tests (see test coverage section below)
 
 ---
 
@@ -91,6 +100,7 @@ Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored togethe
 |--------|------|---------|-------------|
 | `agent_api_enabled` | `BOOL NOT NULL` | `false` | Whether the Agent REST API feature is active for this agent |
 | `agent_api_identity_enabled` | `BOOL NOT NULL` | `false` | Producer opt-in for **per-user scopes** + optional edge enforcement. Identity *attribution* headers are injected regardless; only `X-Cinna-Caller-Scopes` and edge scope enforcement are gated by this flag |
+| `agent_api_external_access_enabled` | `BOOL NOT NULL` | `false` | Producer opt-in for **external keys** (migration `e4c1b7d92f08`). Gates minting (`400` while off) AND is re-checked by the proxy on every call — a live kill switch that stops every issued key at once without deleting any of them or touching connections. **Not** snapshotted into `AgentBundleRevision` (unlike the two flags above) — every bundle install starts with it off. |
 
 ### `agent_environment` table (modified)
 
@@ -107,18 +117,21 @@ Chain: `aa11 → aa22 → aa33 → aa44`. These migrations were authored togethe
 |--------|------|-------|
 | `id` | `UUID PK` | |
 | `agent_id` | `UUID FK → agent` | Producer agent; `CASCADE` delete |
-| `owner_id` | `UUID FK → user` | `CASCADE` delete |
-| `credential_id` | `UUID FK → credential` (nullable) | The connection credential this token backs; `ON DELETE CASCADE` (deleting the credential = disconnect). Nullable only transiently during connect, and for legacy orphan tokens. |
+| `owner_id` | `UUID FK → user` | The producer owner who minted the row. `CASCADE` delete. For an external key, the issuer (`owner_id`) and the identity (`subject_user_id`) are frequently different people. |
+| `credential_id` | `UUID FK → credential` (nullable) | The `agent_api` credential this token backs (connection **or** key) — the row **is** a credential's secret in both modes; `ON DELETE CASCADE` (deleting the credential = disconnect / revoke). Nullable only transiently during mint, and for legacy orphan tokens. |
 | `token_hash` | `VARCHAR(64)` | SHA256 hex digest of the opaque token; unique indexed |
 | `token_prefix` | `VARCHAR(12)` | First 8 chars of the token value, for display |
-| `label` | `VARCHAR(255)` (nullable) | Connection label |
+| `label` | `VARCHAR(255)` (nullable) | Connection or key label |
 | `read_only_override` | `BOOL NOT NULL` | `true` forces GET/HEAD-only; may only narrow the policy, never widen |
+| `kind` | `VARCHAR(20) NOT NULL` | `"connection"` (default) \| `"external"` — `AgentApiTokenKind`, the single source of truth for which of the two products (plan §2 / [External Keys](#external-keys-agentapikeyservice)) this row is. Deliberately plain `VARCHAR`, not a Postgres native enum (`ALTER TYPE` is non-transactional). |
+| `subject_user_id` | `UUID FK → user` (nullable), `ON DELETE CASCADE`, indexed | The platform user an **external key** acts as. `NULL` for connection tokens (anonymous by construction). Set once at mint; immutable afterwards — there is no edit or reassign affordance in the UI at all; pointing a key at a different user means revoking it and issuing a new one. |
+| `expires_at` | `TIMESTAMPTZ` (nullable) | Optional expiry for external keys. `NULL` = never expires (always `NULL` for connection tokens). Checked in `AgentApiTokenService.validate_token` / `is_expired()`; an expired key returns the same `401` as an invalid one. |
 | `is_active` | `BOOL NOT NULL` | Active flag (kept for validation; revocation is by deleting the credential) |
-| `last_used_at` | `DATETIME` (nullable) | Bumped on each successful `validate_token()` call |
+| `last_used_at` | `DATETIME` (nullable) | Bumped on each successful `validate_token()` call — including for a key, but **never** when the call is rejected by the `agent_api_external_access_enabled` kill switch, so a disabled key never reads as "still working" |
 | `created_at` | `DATETIME NOT NULL` | |
 | `updated_at` | `DATETIME NOT NULL` | |
 
-Indexes: unique on `token_hash`; btree on `agent_id`; btree on `credential_id`.
+Indexes: unique on `token_hash`; btree on `agent_id`; btree on `credential_id`; btree on `subject_user_id` (added by `e4c1b7d92f08`).
 
 ### `agent_api_access_grant` table (new)
 
@@ -148,11 +161,29 @@ Constraints: unique `(producer_agent_id, user_id)` (`uq_agent_api_access_grant_p
 
 ### `AGENT_ENV_ALLOWED_FIELDS["agent_api"]`
 
-`["base_url", "spec_url", "token", "label", "producer_agent_id"]` — all five fields are synced into `credentials.json` in the consumer's container. The consumer's code needs `token` to authenticate and `base_url` to call the proxy.
+`["base_url", "spec_url", "token", "label", "producer_agent_id"]` — all five fields are synced into `credentials.json`, but only for a **connection** credential. The consumer's code needs `token` to authenticate and `base_url` to call the proxy.
+
+**External keys are never synced.** `CredentialsService._drop_external_agent_api_keys()` runs before the whitelist filter and strips every `agent_api` credential whose bound token has `kind == "external"` from the list a container will ever see (mirroring the `mcp_provider` external-server exclusion). It fails closed twice over: if resolving token kinds raises, **every** `agent_api` credential in the batch is dropped rather than risk leaking one; and an `agent_api` credential with **no bound token row at all** (`AgentApiTokenService.is_restricted_agent_api_credential` returns `True` for a missing token, same as for `kind == "external"`) is treated as restricted too, since the platform can no longer tell which mode a dead row was in. A key is for a human outside the platform — syncing it into a container would let the container silently impersonate the key's bound subject and bypass the anonymous connection model.
 
 ### `SENSITIVE_FIELDS["agent_api"]`
 
-`["token"]` — the proxy token is redacted (`***REDACTED***`) when the platform writes `README.md` / credential summaries injected into the agent's building prompt. `base_url` and `spec_url` are shown in clear (they are safe to display; the consumer needs to know where to call).
+`["token"]` — the proxy token is redacted (`***REDACTED***`) when the platform writes `README.md` / credential summaries injected into the agent's building prompt. `base_url` and `spec_url` are shown in clear (they are safe to display; the consumer needs to know where to call). Moot for a key, since it never reaches a container in the first place.
+
+### Sharing ban for external keys (`assert_sharing_allowed`)
+
+`CredentialsService.assert_sharing_allowed(session, credential)` is a no-op for every credential type except `agent_api`, where it raises `ValueError` if the credential is **restricted** (`AgentApiTokenService.is_restricted_agent_api_credential` — `kind == "external"` or no bound token at all) and the caller is trying to turn on `allow_sharing` or `allow_template_sharing`. `CredentialShareService.share_credential` calls it before creating a share, so both distribution channels are covered. A key's `allow_sharing` is additionally forced `False` at creation time (`AgentApiKeyService.create_key`) — the check here is the backstop against turning it on afterwards. Sharing an identity-bound key would mean "here, act as user X"; cross-user access to a producer is what the `agent_api_access_grant` scope grant is for.
+
+### Reveal endpoint (`POST /credentials/{id}/agent-api-key/reveal`) and the `with-data` strip
+
+`GET /credentials/{id}/with-data` (`backend/app/api/routes/credentials.py`) is the reveal path for every credential type **except a bound `agent_api` external key**. For a key, the route calls `AgentApiKeyService.is_external_key_credential(session, credential_id, credential_type=...)` (the `credential_type` argument short-circuits to `False` — no query — for every non-`agent_api` credential) and, when true, strips `token` out of the returned `credential_data` before responding. It writes **no** audit event on this path: `with-data` fires on every detail-page open, so auditing there would record "page opened," not "secret revealed."
+
+The **only** path that returns a key's value after mint is `POST /credentials/{id}/agent-api-key/reveal` → `AgentApiKeyService.reveal_external_key(session, credential_id, user_id)`. It decrypts the credential, returns the stored `token`, and writes exactly **one** `severity="high"` `SecurityEvent` (`AGENT_API_EXTERNAL_KEY_REVEALED`, details `{key_id, subject_user_id, token_prefix}` — never the value or its hash) per call. Gating: `404` when the credential does not exist or the caller is not its owner — **hard owner-only, no superuser bypass** — no existence leak; `400` when the credential is real but is not a bound external key (a connection, whose token is machine-only and never reachable this way, or a key whose stored value is empty — e.g. edited before this guard existed — which must be revoked and re-issued instead).
+
+The consistency axis for this gate is `CredentialsService.get_credential_with_data` — also hard owner-only — the endpoint this route replaces; honouring a superuser bypass here would silently widen who can read another user's secret as a side effect of the refactor. This is a deliberate asymmetry with `revoke_key` (which does keep its `is_superuser` bypass — see [External Keys](#external-keys-agentapikeyservice) below): revoke is containment, which a platform admin plausibly needs, while reveal is disclosure, which they do not — an admin who suspects a key is compromised should kill it, not read it. Do not "fix" this into matching revoke; the asymmetry is the point.
+
+The audit write itself is best-effort (never raises), but resolution failures upstream of it (no bound token, empty stored value) *do* raise, since the return value is the point of the call, unlike the old best-effort hook this endpoint replaced.
+
+Connections never reach either branch specially — `with-data` never returned their token in the first place (only `base_url`/`spec_url`/etc. are meaningful there), and they have no reveal route. The frontend keeps a key's value masked behind an explicit "Reveal" click (or a one-time auto-reveal right after minting, read from the `POST /keys` response body, never re-fetched from the reveal endpoint) rather than fetching/showing it eagerly, so the audit trail reflects real look-at-the-value moments, not incidental page loads.
 
 ### URL rewrite on env sync (`_rewrite_agent_api_urls_for_env`)
 
@@ -184,14 +215,18 @@ Prefix: `/api/v1/agents/{agent_id}/agent-api`; requires authenticated owner (or 
 | `POST` | `/grants` | Create a grant for `(producer, body.user_id)`. 404 if the granted user does not exist; 409 if a grant for that user already exists. Returns `AgentApiAccessGrantPublic`. |
 | `PUT` | `/grants/{grant_id}` | Update a grant's `scopes` (identity is immutable). Takes effect on the next call. Returns `AgentApiAccessGrantPublic`. |
 | `DELETE` | `/grants/{grant_id}` | Remove a grant. Takes effect on the next call. Returns `Message`. |
+| `POST` | `/keys` | Mint an **external key**. Body `AgentApiKeyCreate` (`label?`, `subject_user_id`, `scopes?`, `read_only_override`, `expires_in_days?`). `400` unless both `agent_api_enabled` and `agent_api_external_access_enabled` are on. `scopes` (when given) upserts the `(producer, subject)` grant. `read_only_override` is still accepted but the mint form no longer exposes it — the producer's `policy.yaml` is the primary read-only lever and already defaults to read-only, so keys minted from the UI carry the model default (`false`). Returns `AgentApiKeyCreated` — the raw token value **plus** the public `base_url`/`spec_url` (never the `AGENT_ENV_BACKEND_URL` rewrite — an external caller is not on the Docker network). |
+| `GET` | `/keys` | List this producer's external keys: `token_prefix`, subject `{id, email, full_name}`, `label`, `last_used_at`, `expires_at`, `read_only`, `is_active`, `is_usable` (folds in the kill switch). Never the token value. Returns `AgentApiKeysPublic`. |
+| `DELETE` | `/keys/{key_id}` | Revoke a key immediately — deletes the bound credential (cascade-deletes the token), bypassing the credential [deletion blast-radius gate](../agent_credentials/credential_sharing.md#deletion-impact-gate) (`force=True`) so a leaked key is always revocable. The `(producer, subject)` grant is left untouched. Returns `Message`. |
 
-All `/grants*` routes are **owner-gated** via `AgentApiService.resolve_agent_only` (404 — no existence leak — for a non-owner or missing agent; superuser bypasses ownership). There are **no** token-CRUD routes; tokens are created only via `/connect` and removed only via `/connections/{token_id}` (or by deleting the credential).
+All `/grants*` and `/keys*` routes are **owner-gated** via `AgentApiService.resolve_agent_only` (404 — no existence leak — for a non-owner or missing agent; superuser bypasses ownership). There are **no** token-CRUD routes for **connections**; connection tokens are created only via `/connect` and removed only via `/connections/{token_id}` (or by deleting the credential). External keys have their own dedicated mint/list/revoke routes above, since — unlike a connection — a key is meant to be handed to a human.
 
-### Credential Connection Detail (`backend/app/api/routes/credentials.py`)
+### Credential Connection Detail & Key Reveal (`backend/app/api/routes/credentials.py`)
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/credentials/{id}/agent-api-connection` | Connection detail for an `agent_api` credential: producer agent (`producer_agent_name` + `producer_ui_color_preset` for the `AgentBadge`), `base_url`/`spec_url`, `read_only`, and linked consumer agents (with `ui_color_preset`, `owner_name`, and `owner_email`). Returns `AgentApiConnectionInfo`. Owner-only (404 on non-owner). |
+| `POST` | `/credentials/{id}/agent-api-key/reveal` | Reveal an **external key**'s value. `AgentApiKeyService.reveal_external_key()`; **hard owner-only** (404 no-leak — a non-owner superuser gets the same 404 as anyone else, no bypass), `400` for a non-key credential (a connection, or a key with no stored value). Returns `AgentApiKeyRevealResponse {token}`. Writes exactly one `AGENT_API_EXTERNAL_KEY_REVEALED` `SecurityEvent` per call. The **only** path that returns a key's value after mint. |
 
 ### Consumer Serving (`backend/app/api/routes/agent_api_public.py`)
 
@@ -202,7 +237,7 @@ Prefix: `/api/v1/agent-api/{agent_id}`; token auth via `Authorization: Bearer <t
 | `GET` | `/openapi.json` | Spec passthrough; subject to `expose_spec` in policy. `403` when `expose_spec=false`. |
 | `ANY` | `/{path:path}` | Full HTTP passthrough: validate token → enforce policy → compute request-loop headers → keep-alive → auto-activate producer env → adapter proxy. Excluded from OpenAPI schema. |
 
-Agent disabled or not found → `404` (no existence leak). Invalid/revoked token → `401`.
+Agent disabled or not found → `404` (no existence leak). Invalid/revoked/expired token, or an external key while `agent_api_external_access_enabled=false` → `401` (all indistinguishable from the caller's point of view — see `_validate_token_or_401` / `AgentApiTokenService.validate_token`). A rejected external-key call never bumps `last_used_at`.
 
 ---
 
@@ -215,7 +250,7 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 - `resolve_agent_only(session, agent_id, user_id, is_superuser)` — resolves + ownership-checks the agent without requiring a running env. Used by `_status`.
 - `resolve_running_producer_env(session, agent)` — resolves on behalf of the producer owner. **Fast path:** env running → return it. **Cold path:** env suspended/stopped/mid-activation → kick off activation and **block up to `ACTIVATION_WAIT_SECONDS` (10s)** for the container to come up, then return the now-running env so the call is forwarded (the consumer's first call after idle just takes a little longer; subsequent calls hit the fast path). Raises `AgentApiNotRunningError` (503) only when activation errors or the env is still not running after the grace window (consumer retries — by then the env is typically up).
 - `_wait_for_running_env(session, environment_id)` — polls the env status every `ACTIVATION_POLL_INTERVAL` (0.5s) until `running`. Each poll reads through a **short-lived `create_session()`** (fresh session per iteration) — this releases the connection before each `asyncio.sleep` (so concurrent cold starts can't pin/starve the pool) and observes the background activation task's commits (it runs in its own session). Mirrors `SessionService._wait_for_environment_ready`. Status is checked once *before* the first sleep, so an already-ready env returns with no polling delay; on success the env is re-read + `refresh`ed into the request `session` for the caller. Raises `AgentApiNotRunningError` (503) on `error` status or when the 10s budget elapses.
-- `authorize_consumer_request(session, agent, token, method, path, body_size, incoming_headers)` → `(environment, hop_headers)` — orchestrates: load cached policy → enforce it → compute request-loop headers → resolve + auto-activate-and-wait for env. Policy enforcement runs BEFORE env resolution so a 405/413/429 never wakes a suspended env.
+- `authorize_consumer_request(session, agent, token, method, path, body_size, incoming_headers, caller_scopes=None)` → `(environment, hop_headers)` — orchestrates: load cached policy → enforce it (passing `caller_scopes` and `resolve_identity_enabled(agent, token)` through to `enforce_policy` for the optional edge scope check) → compute request-loop headers → resolve + auto-activate-and-wait for env. Policy enforcement runs BEFORE env resolution so a 405/413/429/403 never wakes a suspended env.
 
 **Status and spec:**
 - `get_status(session, agent, environment)` → `dict` — reports `state`, spec availability, last error, policy summary, and `spec_fetched_at` (ISO timestamp of the last successful harvest, from `agent_api_spec_fetched_at`). `state` tracks the *serving child's* current health (see **State semantics** below) while `spec_fetched_at` dates the *cached spec* — the two are reported separately so a stale spec is visible instead of masquerading as current. Never spawns the serving child.
@@ -230,12 +265,18 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 **Policy:**
 - `load_policy(session, environment, force_refresh)` → `dict` — fetches `agent_api/policy.yaml` via the adapter, parses it, caches on `agent_api_policy_cache`. Missing file → `DEFAULT_POLICY`. Parse error → `FAIL_CLOSED_POLICY` (deny-all).
 - `get_effective_policy(session, agent)` → `dict` — returns `agent_api_policy_cache` from the active env row, or `DEFAULT_POLICY` if not yet cached.
-- `enforce_policy(policy, method, path, body_size, token, hop_depth)` — raises `AgentApiPolicyError` (405/413/429/403). Token `read_only_override` may only narrow. Rate limit is per-token, with the limit taken from the producer's `policy.yaml`.
+- `enforce_policy(policy, method, path, body_size, token, hop_depth=0, caller_scopes=None, identity_enabled=False)` — raises `AgentApiPolicyError` (405/413/429/403). Token `read_only_override` may only narrow. Rate limit is per-token, with the limit taken from the producer's `policy.yaml`. `caller_scopes` + `identity_enabled` drive the optional edge scope enforcement (`_enforce_scopes`, see [`policy.yaml` scopes catalog](#policyyaml-scopes-catalog--edge-enforcement)).
 - `parse_policy(raw)` — pure function; merges parsed YAML over `DEFAULT_POLICY`; `FAIL_CLOSED_POLICY` on error.
+- `resolve_identity_enabled(agent, token)` → `bool` — **the one expression (plan D3)** both scope injection and edge enforcement read: `bool(agent.agent_api_identity_enabled) or token.kind == "external"`. The producer's opt-in means "attribute and scope my *anonymous connection* callers"; an external key's identity was deliberately assigned by the owner at mint time, so it is self-evidently intentional and enables scopes on its own, independent of the connection-facing flag.
 
 **Request-loop protection:**
 - `next_hop_headers(incoming_headers)` → `dict` — computes the `x-cinna-agent-api-deadline-ms` (shrinks by `HOP_DEADLINE_SHRINK_MS=1000ms` per hop) and `x-cinna-agent-api-hop-depth` (increments) headers to forward downstream. Raises `AgentApiPolicyError` (403) if budget exhausted or depth exceeds `MAX_HOP_DEPTH=4`.
 - `incoming_hop_depth(incoming_headers)` → `int` — extracts current depth from headers.
+
+**Rate-limit state (plan D11):**
+- `_rate_limit_hits: dict[uuid.UUID, list[float]]` — an in-module dict keyed by `token.id`, one sliding-window bucket per token (connection **and** external key share the same dict — key rows grow the same key-space a connection token did). Written only on the request path in `_enforce_rate_limit`.
+- `_prune_rate_limit_state(now)` — drops buckets whose most recent hit is older than `_RATE_LIMIT_ENTRY_TTL`; runs at most once per `_RATE_LIMIT_PRUNE_INTERVAL` (amortised to near-zero cost), called at the top of `_enforce_rate_limit` before any early return so a producer that removes `rate_limit` from `policy.yaml` doesn't leave its accumulated buckets in memory forever. Fixes the leak that external keys would otherwise make worse (revoked connections and expired/revoked keys used to accumulate dead entries for the life of the process).
+- **Per-worker limit is NOT exact — documented, not fixed (plan D11).** `_rate_limit_hits` is a plain process-local dict, not a shared store. Under N gunicorn workers, each worker enforces the configured `rate_limit` independently against its own slice of traffic, so the **effective** aggregate limit across the fleet is **N × the configured `rate_limit`**, not the configured value itself. This is an accepted trade-off (a shared store — e.g. Redis — is explicitly out of scope for this feature) and must not be assumed to be a hard per-token ceiling when reasoning about abuse scenarios or capacity planning.
 
 **Exception hierarchy:**
 - `AgentApiError(message, status_code)` — base
@@ -261,8 +302,9 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 
 - `build_base_url(agent_id)` → absolute consumer-facing proxy URL (`{FRONTEND_HOST}/api/v1/agent-api/{agent_id}`)
 - `build_spec_url(agent_id)` → `{base_url}/openapi.json`
-- `create_token(session, agent_id, user_id, data, is_superuser)` → `AgentApiTokenCreated` — internal mint: `secrets.token_urlsafe(32)` value, SHA256 hash, 8-char prefix; never expires. Called only by `connect_agent_api` (not exposed via a route).
-- `validate_token(session, agent_id, token_value)` → `AgentApiToken | None` — hash lookup, active check, bumps `last_used_at`.
+- `create_token(session, agent_id, user_id, data, is_superuser)` → `AgentApiTokenCreated` — internal mint for a **connection** token: `secrets.token_urlsafe(32)` value, SHA256 hash, 8-char prefix; `kind` defaults to `"connection"`, never expires. Called only by `connect_agent_api` (not exposed via a route). External-key minting is a separate code path — see `AgentApiKeyService.create_key` below.
+- `validate_token(session, agent_id, token_value, external_access_enabled=True)` → `AgentApiToken | None` — **the single validation path for both token kinds.** Hash lookup + active check, then: expired (`is_expired`) → `None`; `kind == "external"` **and** `external_access_enabled` is `False` → `None` (the producer's kill switch, checked on every call, not just at mint); otherwise bumps `last_used_at` and returns the token. Every rejection reason lives here so none of them can bump `last_used_at` or otherwise look like a working call on the way out. `external_access_enabled` is `agent.agent_api_external_access_enabled`, passed in by the proxy (which already loaded the `Agent`).
+- `is_expired(token, now=None)` → `bool` — `token.expires_at is not None and expires_at <= now`. Always `False` for a connection token (`expires_at` is always `NULL`). Tolerates a naive `datetime` (read as UTC) so a value that round-trips through a driver or test fixture never raises.
 - `connect_agent_api(session, producer_agent_id, user_id, data, is_superuser)` → `ConnectAgentApiResponse` — mints token + creates the `agent_api` credential stamped with `user_workspace_id` (see workspace derivation rule below) + back-fills `token.credential_id` so the token is bound to the credential (cascade) + optionally links the credential to a consumer agent. Raises `AgentApiTokenError(400)` if `agent_api_enabled=false`.
 
   **Workspace derivation rule (consumer-first):** the `user_workspace_id` on the created credential is derived as follows: (1) if `data.consumer_agent_id` is provided, use the consumer agent's `user_workspace_id`; (2) otherwise use the producer agent's `user_workspace_id`; (3) if neither agent has a workspace, the credential's `user_workspace_id` stays `NULL` (default workspace, unchanged from pre-feature behaviour). The credential is created with `allow_sharing=False` — the owner enables sharing explicitly afterwards.
@@ -272,8 +314,34 @@ Agent disabled or not found → `404` (no existence leak). Invalid/revoked token
 - `list_producer_connections(session, agent_id, user_id, is_superuser)` → `list[AgentApiProducerConnection]` — one entry per token on this producer, each with its credential name + linked consumer agents (via `_build_connected_agent`, with `ui_color_preset`, `owner_name`, and `owner_email`). Drives the producer card's Connections list.
 - `list_connected_producers(session, consumer_agent_id, user_id, is_superuser)` → `list[ConnectedProducerRow]` — the inverse direction of `list_producer_connections`: walks the **consumer** install's linked `agent_api` credentials to find the producers it calls. For each credential, decrypts only `producer_agent_id` (the token value is never read), resolves the producer `Agent` row, dedupes by `producer_agent_id`, and annotates `identity_enabled` (`producer.agent_api_identity_enabled`), `can_manage` (`is_superuser or producer.owner_id == user_id`), and `owner_email`. Returns only producers with `identity_enabled=True`; skips dangling or malformed credentials (logs, never raises). Read-only. Powers [Agent Bundles — Permissions management](../agent_bundles/agent_bundles.md#managing-permissions-across-bundle-access-and-producer-scopes-publisher) via `BundlePermissionsService.build_overview` (see `docs/agents/agent_bundles/agent_bundles_tech.md`).
 - `_build_connected_agent(session, agent)` → `AgentApiConnectedAgent` — shared projection helper that resolves the agent owner's name + email (`session.get(User, agent.owner_id)` → `full_name`/`email`) so identical agent names stay distinguishable in the UI. Used by both retrieval methods above.
-- `delete_producer_connection(session, agent_id, token_id, user_id, is_superuser)` — disconnect: deletes the bound credential via `CredentialsService.delete_credential` (cascade-deletes the token + triggers the credential-removed sync), or deletes an orphaned token directly. Owner-only.
+- `delete_producer_connection(session, agent_id, token_id, user_id, is_superuser)` — disconnect: deletes the bound credential via `CredentialsService.delete_credential` (cascade-deletes the token + triggers the credential-removed sync), or deletes an orphaned token directly. Owner-only. **Connections only** (`kind == "connection"`) — a matching key row raises `AgentApiTokenNotFoundError`, keeping the two disconnect/revoke surfaces disjoint.
 - `_verify_agent_ownership(session, agent_id, user_id, is_superuser)` — returns agent or raises `AgentApiTokenNotFoundError` (404, no existence leak).
+- `get_kinds_by_credential(session, credential_ids)` → `dict[UUID, str]` — batched (one query) `credential_id → AgentApiToken.kind` map for a page of credentials; a credential with no bound token is simply absent (callers treat that as legacy `"connection"`).
+- `get_kind_for_credential(session, credential_id)` → `str | None` — single-credential convenience wrapper over the above.
+- `is_restricted_agent_api_credential(session, credential_id)` → `bool` — the single predicate behind both **security** rules for `agent_api` credentials (the tab-split cosmetic rule is separate — see `classify_credential_category`): `True` when `kind == "external"` **or** the credential has no bound token row at all (an orphan is fail-closed too, since the platform can no longer tell which mode it was). Backs `assert_sharing_allowed` and `_drop_external_agent_api_keys`.
+
+### External Keys (`AgentApiKeyService`)
+
+`backend/app/services/agent_api/agent_api_key_service.py`.
+
+Owner-gated external-key lifecycle — the second product behind the proxy (plan §2). Every method below mirrors the shape of the `/grants*` and connection-lifecycle methods above, deliberately, so producers and reviewers already familiar with connections and grants recognize the pattern.
+
+- `create_key(session, producer_agent_id, owner_user_id, data: AgentApiKeyCreate, is_superuser)` → `AgentApiKeyCreated` — mint, in order (so a rejected request leaves no live key behind):
+  1. Owner-gate the producer (`_require_owner` → `AgentApiService.resolve_agent_only`, 404, no leak) and check **both** opt-ins — `agent_api_external_access_enabled` (400 if off: "Enable external access on the producer's Agent REST API card first") and `agent_api_enabled` (400 if off).
+  2. Resolve the subject user (404 if unknown).
+  3. If `data.scopes is not None`, **upsert** the `(producer, subject)` grant via `AgentApiGrantService.upsert_grant` — run *before* minting, so a grant failure aborts with nothing issued.
+  4. Mint the opaque token (`secrets.token_urlsafe(32)`, `kind=AgentApiTokenKind.EXTERNAL`, `subject_user_id`, `expires_at` computed from `expires_in_days`), then create the bound `agent_api` credential (`allow_sharing=False`, `credential_data={base_url, spec_url, token, label, producer_agent_id}`). **Compensated:** if credential creation raises, the token row is deleted so a failed mint never leaves a live, unrevocable key behind.
+  5. **Workspace:** falls back to the producer's `user_workspace_id`, but *only* when the credential's owner (the caller) is also the agent's owner — a superuser minting on someone else's producer does not inherit that producer's workspace onto their own credential.
+  6. Audit (`AGENT_API_EXTERNAL_KEY_CREATED`, `severity="high"`).
+
+  Returns the token value **plus** the **public** `base_url`/`spec_url` (never the `AGENT_ENV_BACKEND_URL` container rewrite).
+- `list_keys(session, producer_agent_id, user_id, is_superuser)` → `list[AgentApiKeyPublic]` — owner-gated; batch-resolves every subject in one query (`_load_subjects`) to avoid an N+1; never the token value; `is_usable` folds in `is_active AND not is_expired AND agent.agent_api_external_access_enabled`.
+- `revoke_key(session, producer_agent_id, key_id, user_id, is_superuser)` — owner-gated; deletes the bound credential (cascade-deletes the token) **as the credential's own owner** (`credential.owner_id`, not the caller) — `delete_credential` compares against its `owner_id` argument and ignores its own `is_superuser` flag, so a superuser revoking a key minted on someone else's agent would otherwise be refused and strand the credential. Passes `force=True` past the credential [deletion blast-radius gate](../agent_credentials/credential_sharing.md#deletion-impact-gate) — a leaked key must always be killable, never `409`. Falls back to deleting an orphaned token directly if the credential is already gone. The `(producer, subject)` grant is deliberately left alone (plan D5). Audits `AGENT_API_EXTERNAL_KEY_REVOKED`. **Keeps its `is_superuser` bypass deliberately, unlike `reveal_external_key` below** — the asymmetry is not an oversight: revoke is containment (a platform admin plausibly needs to kill a compromised key), reveal is disclosure (they do not need to read it).
+- `reveal_external_key(session, credential_id, user_id)` → `str` — the reveal endpoint's service method (`POST /credentials/{id}/agent-api-key/reveal`). **Hard owner-only — no `is_superuser` parameter, no bypass.** A non-owner superuser gets the same `404` as any other non-owner. See [Reveal endpoint](#reveal-endpoint-post-credentialsidagent-api-keyreveal-and-the-with-data-strip) above for the reasoning: the consistency axis is `CredentialsService.get_credential_with_data` (also hard owner-only), not `revoke_key` — honouring superuser here would silently widen who can read another user's secret as a side effect of a refactor, and revoke/reveal are different acts (containment vs. disclosure). Decrypts and returns the stored `token`; raises `400` when the credential is not a bound external key or its stored value is empty. Writes exactly one `AGENT_API_EXTERNAL_KEY_REVEALED` `SecurityEvent` (`severity="high"`) per call — best-effort on the audit write itself, but resolution failures upstream of it are real errors, not silent no-ops.
+- `is_external_key_credential(session, credential_id, credential_type=None)` → `bool` — the single predicate behind both the `with-data` token-strip and the `update_credential` token carry-forward guard (see [Credential Pipeline](#credential-pipeline)). `credential_type`, when passed, short-circuits to `False` for every non-`agent_api` type without a query.
+- `_to_public(session, token, subjects=None, external_access_enabled=True)` → `AgentApiKeyPublic` — projection; never carries the token value.
+- `_require_owner` / `_load_owned_key` / `_load_subjects` — internal helpers (404-shaped, batched subject lookup).
+- `_audit` / `_audit_raw` — writes the `SecurityEvent` for create/revoke/reveal; records only `{key_id, subject_user_id, token_prefix}` — never the token value or its hash. Best-effort (never raises).
 
 ### Docker Adapter (`backend/app/services/environments/adapters/docker_adapter.py`)
 
@@ -364,10 +432,14 @@ Unknown keys are silently ignored. An empty or missing file applies `DEFAULT_POL
 
 ## Frontend Components
 
-- `AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, status badge from `["agentApiStatus", agentId]` (live-updated via `AGENT_API_STATUS_CHANGED`), a View Spec + Refresh button row (View Spec → `openAgentApiSpec(agentId)` opens a new tab; Refresh → polls `POST /_refresh` in a bounded loop applying the **terminal-state contract** below — shows **"Waking up agent…"** while `state === "not_running"`, then resolves terminally based on `envRunning` + `spec_available`/`last_error`; seeds `["agentApiStatus", agentId]` and invalidates `["agentApiSpec", agentId]`), and the **Connections** list from `["agentApiConnections", agentId]`. Each row renders consumer agents as Bot badges (`getColorPreset(ui_color_preset)`), each paired with the owner's email (muted text) to disambiguate same-named agents, plus a Disconnect (`AlertDialog` → `deleteAgentApiConnection`) button. No token management UI. On `state === "error"` or `last_error` it shows the compact `summarizeBootError(last_error)` line with a **Details** toggle and a **Retry** button; Retry shares the same refresh loop so a sticky error clears immediately.
-- `AgentApiConnectionView.tsx` — `agent_api` credential detail panel: fetches `["agentApiConnection", credentialId]` (`readAgentApiConnection`); two-column card (left = editable name/notes, right = producer `AgentBadge` + View Spec `openAgentApiSpec(producerAgentId)` next to the producer + compact connected-agents list with owner name·email).
+- `AgentRestApiCard.tsx` — producer "Agent REST API" card: enable toggle, status badge from `["agentApiStatus", agentId]` (live-updated via `AGENT_API_STATUS_CHANGED`), a View Spec + Refresh button row (View Spec → `openAgentApiSpec(agentId)` opens a new tab; Refresh → polls `POST /_refresh` in a bounded loop applying the **terminal-state contract** below — shows **"Waking up agent…"** while `state === "not_running"`, then resolves terminally based on `envRunning` + `spec_available`/`last_error`; seeds `["agentApiStatus", agentId]` and invalidates `["agentApiSpec", agentId]`), the **Connections** list from `["agentApiConnections", agentId]`, and the `AgentApiExternalKeysCard` section. Each Connections row renders consumer agents as Bot badges (`getColorPreset(ui_color_preset)`), each paired with the owner's email (muted text) to disambiguate same-named agents, plus a Disconnect (`AlertDialog` → `deleteAgentApiConnection`) button. No token management UI for connections. On `state === "error"` or `last_error` it shows the compact `summarizeBootError(last_error)` line with a **Details** toggle and a **Retry** button; Retry shares the same refresh loop so a sticky error clears immediately.
+- `AgentApiExternalKeysCard.tsx` — External Keys sub-section: `agent_api_external_access_enabled` toggle, the key list (`agentApiKeysQueryKey(agentId)` — prefix, subject, last used, expires, `is_usable`-derived status), "Issue key" (opens `AgentApiKeyDialog` with the producer pre-filled), and per-key revoke.
+- `AgentApiCredentialDetail.tsx` — dispatches an `agent_api` credential's detail page to `AgentApiKeyView` (external key) or `AgentApiConnectionView` (connection) based on the bound token's `kind`, resolved via `useAgentApiKeyForCredential`.
+- `AgentApiConnectionView.tsx` — **connection**-only detail panel: fetches `["agentApiConnection", credentialId]` (`readAgentApiConnection`); two-column card (left = editable name/notes, right = producer `AgentBadge` + View Spec `openAgentApiSpec(producerAgentId)` next to the producer + compact connected-agents list with owner name·email).
+- `AgentApiKeyView.tsx` — **external key** detail panel: one full-width "Agent API Key" card (masked value with Reveal/Hide + Copy, both working while hidden via `revealAgentApiKey`; base URL + View Spec; a runnable curl) over two half-width cards, **Details** (name/notes) and **Access** (producer badge → read-only "Acts as" identity → scope editor on the `(producer, subject)` grant → expiry). A `?new=1` post-mint visit shows the value from `agentApiKeyMintHandoff.ts` instead of calling the reveal endpoint.
+- `AgentApiKeyDialog.tsx` — the mint form (global picker's "Agent API Key" entry or the producer card's "Issue key"): producer → subject (`UserAllowlistPicker`, defaults to the issuer) → optional scopes → expiry; no read-only control. On success, stashes the token via `agentApiKeyMintHandoff` and navigates to the credential detail page with `?new=1`.
 - `OpenApiSpecViewer.tsx` / `routes/agent-api-spec/$agentId.tsx` — rendered, read-only spec viewer opened by View Spec; the route fetches the spec directly (interleaved with the wake-poll loop) rather than via `useAgentApiSpec`. See [spec_viewer_tech.md](spec_viewer_tech.md).
-- `ConnectAgentApiDialog.tsx` — wraps `AgentSelectorDialog`; selecting an API-enabled producer (excluding the current agent) calls `connectAgentApi` then invalidates `["credentials"]` + `["agentApiConnections", producerId]`.
+- `ConnectAgentApiDialog.tsx` — wraps `AgentSelectorDialog`; selecting an API-enabled producer (excluding the current agent) calls `connectAgentApi` then invalidates `["credentials"]` + `["agentApiConnections", producerId]`. Reachable only from the agent's own Credentials tab, not the global picker.
 - `AgentEnvironmentsTab.tsx` — `agent_api_enabled` switch alongside `webapp_enabled`.
 - `EnvironmentPanel.tsx` — "Agent API" tab in the workspace file tree for browsing `agent_api/` files.
 
@@ -404,12 +476,15 @@ Only `state === "not_running"` (env container genuinely not up yet) keeps the po
 
 The `AgentApiStatus` TypeScript interface in `frontend/src/hooks/useAgentApi.ts` mirrors these values: `state: "disabled" | "not_running" | "running" | "error" | "stopped" | "empty"`.
 
+`frontend/src/hooks/useAgentApiKeys.ts` — `agentApiKeysQueryKey(agentId)`, `useAgentApiKeys(agentId)` (the producer key list, `AgentApiExternalKeysCard`), and `useAgentApiKeyForCredential(credential)` (resolves whether a given `agent_api` credential is bound to an external key, and which one — the predicate `AgentApiCredentialDetail` branches on).
+
 ### React Query Keys
 
 - `["agentApiStatus", agentId]` — live build/run status (producer card)
 - `["agentApiConnections", agentId]` — producer's connection list
 - `["agentApiConnection", credentialId]` — single connection detail (credential page)
 - `["agentApiSpec", agentId]` — harvested spec (invalidated by Refresh; no longer backed by a `useAgentApiSpec` hook — the spec route fetches directly)
+- `agentApiKeysQueryKey(agentId)` (`["agentApiKeys", agentId]`) — a producer's external-key list, from `useAgentApiKeys.ts` (`AgentApiExternalKeysCard`)
 
 ---
 
@@ -509,7 +584,7 @@ The header params are declared `include_in_schema=False`, so they never leak int
 
 ## Test Coverage
 
-`backend/tests/api/agents/agents_agent_api_test.py` — 31 scenario-based API tests. Tokens are minted via the connect helper (the raw token is read back from the created credential's data, exactly as a consumer obtains it); "revoke" = delete the credential. Covered:
+`backend/tests/api/agents/agent_api/agents_agent_api_test.py` — 31 scenario-based API tests. Tokens are minted via the connect helper (the raw token is read back from the created credential's data, exactly as a consumer obtains it); "revoke" = delete the credential. Covered:
 
 - Toggle gates routes (404 when disabled); `_status` reports `disabled` regardless
 - Connect mints a token + creates an `agent_api` credential (prefix + base_url + spec_url); raw token readable only from the credential's decrypted data
@@ -535,7 +610,7 @@ The header params are declared `include_in_schema=False`, so they never leak int
 - Multiple connections: independent disconnect
 - Owner routes (connect / connections / status / spec) reject unauthenticated
 
-`backend/tests/api/agents/agents_agent_api_grants_test.py` — 15 scenario-based tests for caller identity + producer scopes. Covered:
+`backend/tests/api/agents/agent_api/agents_agent_api_grants_test.py` — 15 scenario-based tests for caller identity + producer scopes. Covered:
 
 - Grant CRUD lifecycle (create → list → update scopes → delete)
 - Create grant to a phantom user → 404
@@ -557,4 +632,4 @@ The header params are declared `include_in_schema=False`, so they never leak int
 
 ---
 
-*Last updated: 2026-06-21*
+*Last updated: 2026-08-07*

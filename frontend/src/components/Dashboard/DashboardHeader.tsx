@@ -64,6 +64,7 @@ export function DashboardHeader() {
                 key={agent.id}
                 to="/agent/$agentId"
                 params={{ agentId: agent.id }}
+                data-color-preset={colorPreset.value}
                 className={`
                   inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer whitespace-nowrap
                   opacity-50 transition-opacity hover:opacity-100
@@ -78,6 +79,7 @@ export function DashboardHeader() {
           {extraAgents > 0 && (
             <Link
               to="/agents"
+              data-color-preset="slate"
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer whitespace-nowrap opacity-50 transition-opacity hover:opacity-100 bg-gradient-to-r from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600 text-slate-500 dark:text-slate-300 hover:from-slate-200 hover:to-slate-300 dark:hover:from-slate-600 dark:hover:to-slate-500"
             >
               <Bot className="h-3 w-3" />
@@ -90,6 +92,7 @@ export function DashboardHeader() {
               key={credential.id}
               to="/credential/$credentialId"
               params={{ credentialId: credential.id }}
+              data-color-preset="slate"
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer whitespace-nowrap opacity-50 transition-opacity hover:opacity-100 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
             >
               <Key className="h-3 w-3" />
@@ -99,6 +102,7 @@ export function DashboardHeader() {
           {extraCredentials > 0 && (
             <Link
               to="/credentials"
+              data-color-preset="slate"
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer whitespace-nowrap opacity-50 transition-opacity hover:opacity-100 bg-gradient-to-r from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600 text-slate-500 dark:text-slate-300 hover:from-slate-200 hover:to-slate-300 dark:hover:from-slate-600 dark:hover:to-slate-500"
             >
               <Key className="h-3 w-3" />
