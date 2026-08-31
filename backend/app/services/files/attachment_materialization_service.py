@@ -32,7 +32,14 @@ from app.core.config import settings
 from app.models.environments.environment import AgentEnvironment
 from app.models.files.file_upload import FileUpload, MessageFile
 from app.models.sessions.session import Session as ChatSession, SessionMessage
-from app.services.files.file_service import FileService, _is_mime_type_allowed
+from app.services.files.attachment_limits import (
+    REASON_AGGREGATE_LIMIT,
+    REASON_QUOTA_EXCEEDED,
+    REASON_TOO_LARGE,
+    REASON_TYPE_NOT_ALLOWED,
+    validate_attachment_bytes,
+)
+from app.services.files.file_service import FileService
 from app.services.files.file_storage_service import FileStorageService
 
 logger = logging.getLogger(__name__)
@@ -169,14 +176,21 @@ class AttachmentMaterializationService:
             content, sniffed_mime = pulled
             size = len(content)
 
-            reject = AttachmentMaterializationService._validate(
+            reject = validate_attachment_bytes(
                 size=size,
-                mime=sniffed_mime,
-                aggregate_bytes=aggregate_bytes,
+                mime_type=sniffed_mime,
+                max_file_bytes=settings.upload_max_file_size_bytes,
+                aggregate_so_far=aggregate_bytes,
+                max_aggregate_bytes=MAX_AGGREGATE_BYTES_PER_MESSAGE,
                 running_usage=running_usage,
+                max_user_storage_bytes=settings.upload_max_user_storage_bytes,
             )
             if reject is not None:
-                result.rejections.append(reject)
+                result.rejections.append(
+                    AttachmentMaterializationService._rejection_text(
+                        reject, sniffed_mime
+                    )
+                )
                 continue
 
             try:
@@ -351,35 +365,29 @@ class AttachmentMaterializationService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _validate(
-        size: int,
-        mime: str,
-        aggregate_bytes: int,
-        running_usage: int,
-    ) -> str | None:
-        """
-        Enforce MIME whitelist, per-file size cap, per-message aggregate-byte cap
-        and owner storage quota. Returns a rejection reason, or None if accepted.
-        """
-        if not _is_mime_type_allowed(mime, settings.allowed_mime_types):
-            return f"attachment rejected: file type not allowed ({mime})"
+    def _rejection_text(reason: str, mime: str) -> str:
+        """Render a shared validator code into this path's rejection sentence.
 
-        if size > settings.upload_max_file_size_bytes:
+        The limits themselves live in ``attachment_limits`` and are shared with
+        the channel-attachment path; only the *wording* is local, because the
+        two paths report to different audiences (this one to the platform user
+        who owns the session, via the ``attachment_error`` notice).
+        """
+        if reason == REASON_TYPE_NOT_ALLOWED:
+            return f"attachment rejected: file type not allowed ({mime})"
+        if reason == REASON_TOO_LARGE:
             return (
                 "attachment rejected: file exceeds "
                 f"{settings.UPLOAD_MAX_FILE_SIZE_MB}MB limit"
             )
-
-        if aggregate_bytes + size > MAX_AGGREGATE_BYTES_PER_MESSAGE:
+        if reason == REASON_AGGREGATE_LIMIT:
             return (
                 "attachment rejected: total attachment size per message exceeds "
                 f"{MAX_AGGREGATE_BYTES_PER_MESSAGE // (1024 * 1024)}MB"
             )
-
-        if running_usage + size > settings.upload_max_user_storage_bytes:
+        if reason == REASON_QUOTA_EXCEEDED:
             return "attachment rejected: storage quota exceeded"
-
-        return None
+        return f"attachment rejected: {reason}"
 
     # ------------------------------------------------------------------
     # Storage + records

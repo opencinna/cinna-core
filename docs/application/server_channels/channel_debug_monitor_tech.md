@@ -6,7 +6,7 @@ Implementation reference for the [Channel Debug Monitor](channel_debug_monitor.m
 
 **Backend**
 - `backend/app/services/server_channels/channel_debug_buffer.py` — the capture buffer, event dataclass, and event-kind constants
-- `backend/app/services/server_channels/channel_inbound_service.py` — inbound capture hooks at the pipeline's decision points
+- `backend/app/services/server_channels/channel_inbound_service.py` — inbound capture hooks at the pipeline's decision points; also `_attachment_detail` / `_attachment_summary`, the attachment-fields producer described below (see [Attachment fields](#attachment-fields))
 - `backend/app/services/server_channels/channel_outbound_service.py` — outbound capture hooks around adapter delivery
 - `backend/app/services/server_channels/server_channel_service.py` — `list_recent_senders`, `resolve_test_thread_key`, and the buffer prune in `delete_channel`
 - `backend/app/api/routes/server_channels.py` — debug routes, recent-senders route, and the reworked test-send
@@ -14,13 +14,14 @@ Implementation reference for the [Channel Debug Monitor](channel_debug_monitor.m
 - `backend/app/models/events/security_event.py` — `SERVER_CHANNEL_TEST_SEND`
 
 **Frontend**
-- `frontend/src/components/Admin/ServerChannels/ChannelDebugDialog.tsx` — the panel
+- `frontend/src/components/Admin/ServerChannels/ChannelDebugDialog.tsx` — the panel; also `readAttachments` / `parseSkips` / `SKIP_REASON_FAMILY`, the attachment-fields consumer described below (see [Attachment fields](#attachment-fields))
 - `frontend/src/components/Admin/ServerChannels/ChannelSetupInstructionsPanel.tsx` — the test-send target picker
 - `frontend/src/components/Admin/ServerChannels/ServerChannelsCard.tsx` — the bug-icon action and query cleanup on delete
 
 **Tests**
 - `backend/tests/api/server_channels/server_channels_debug_test.py` — capture, authorization, targeting, audit
 - `backend/tests/unit/test_channel_debug_buffer.py` — ring-buffer eviction, text clamp, per-channel isolation
+- `backend/tests/unit/test_channel_attachment_debug_detail.py` — **new**: pins `_attachment_detail`'s producer-side wire format (separator, per-entry shape, the 500-char cap, and that the cap is not entry-aware) — see [Attachment fields](#attachment-fields)
 - `backend/tests/utils/server_channel.py` — `list_debug_events`, `clear_debug_events`, `list_recent_senders`, `send_test_outbound`
 - `backend/tests/api/server_channels/conftest.py` — `reset_channel_debug_buffer`
 
@@ -63,6 +64,22 @@ Implementation reference for the [Channel Debug Monitor](channel_debug_monitor.m
 - Outbound (`channel_outbound_service.py` `_deliver`, and `channel_inbound_service.py` `_reply`): delivery success and failure
 - Every hook is a standalone statement, never inside a conditional expression, so none can alter a branch
 
+### Attachment fields
+
+The wire format between the inbound pipeline and the admin panel for a message that carried [inbound channel attachments](server_channels.md#inbound-file-attachments). `ChannelDebugEvent.detail` is typed `dict[str, str]` — already part of the generated OpenAPI client — so this feature deliberately did not widen it; widening it would have rippled into `schemas.gen.ts` and cost the feature its "no client regeneration" property.
+
+**Producer** (`_attachment_detail` in `channel_inbound_service.py`) writes, only on a message that carried at least one attachment:
+
+- `attachments_accepted` — a stringified count.
+- `attachments_skipped` — a stringified count, and the **authoritative** total: unlike the string below, it is never truncated.
+- `attachment_skips` — present **only when at least one attachment was skipped** (a fully-accepted message gets no bare `attachment_skips=` line). One flattened string, entries separated by `"; "`, each `"filename (raw_reason_code)"`, e.g. `"report.mp4 (too_large); logo.svg (type_not_allowed)"`. Capped at 500 characters (`_MAX_SKIP_DETAIL_CHARS`) with a trailing `"…"` when cut. The **codes are raw**, not the sender-facing prose `_reason_phrase` renders elsewhere — the feed's whole value is telling the two failure families apart by exact token.
+
+**Consumer** (`ChannelDebugDialog.tsx`'s `readAttachments` / `parseSkips`) parses that string back apart, entry-by-entry, and is written to be total over a string it does not control the shape of: a segment that doesn't match the expected `"name (code)"` pattern is carried through verbatim rather than dropped (a mangled row is more useful than a silently missing one), and when the string was truncated, an unmatched **trailing** segment is specifically dropped rather than rendered as a fake whole entry — a bare `report.m` fragment left by the character cap would otherwise read as a real, differently-named file. `attachments_skipped` is what the panel trusts for "how many" precisely because `attachment_skips` can under-name that count once truncated.
+
+**The three-family split, and where it actually lives.** The panel groups codes into `refused` (the sender's to fix), `guidance` (also the sender's, but nothing broke — a resend just works), and `failed` (the operator's) via a hardcoded `SKIP_REASON_FAMILY` map in `ChannelDebugDialog.tsx`, plus an `other` bucket for anything not in the map (rendered under a neutral "Skipped" heading with the raw code, never guessed into one of the three). The map's own comment states it covers "all 14 codes any of them can currently emit."
+
+**Discrepancy found while writing this documentation, recorded rather than silently corrected:** the backend's own `_reason_phrase` groups its codes into three matching comment blocks — "Refused by validation," "Failed to fetch or store," and "Guidance, not just a refusal" — and that third block lists exactly two codes, `drive_file` and `poll_budget_exhausted`. `fetch_budget_exhausted` sits in the backend's **second** ("Failed to fetch or store") block. In the frontend's `SKIP_REASON_FAMILY` map, `fetch_budget_exhausted` is **absent** from all three families — it is not in `refused`, `guidance`, or `failed`. At runtime a message skipped for that reason therefore falls to the `other` bucket (`"Skipped" / "unrecognised reason"`), not to `failed` as the backend's own grouping comment implies, and not to `guidance` either. This also means the map's "14 codes" tally is one short of the 15 the two backend modules can currently emit. The sender-facing text (`_reason_phrase` in `channel_inbound_service.py`) is unaffected — it always renders `fetch_budget_exhausted` as its own specific sentence ("there wasn't time to download it — please send fewer files at once") regardless of this gap; only the **admin panel's family grouping** for that one code is affected. This is a frontend code gap, not a docs-vs-plan drift — flagged here rather than silently assigned to a family in this documentation, per instructions to report a code/plan disagreement rather than paper over it.
+
 ## Frontend Components
 
 - `ChannelDebugDialog.tsx` — `useQuery(["serverChannelDebug", channelId])` with `enabled: open` gating **both** the query and its `refetchInterval`, so polling stops with the dialog. Per-row "Reply here" calls the test-send; the in-flight row is tracked by **event id**, not thread key, because several events share one thread and keying on the thread spins every matching row. Any in-flight send disables all rows, since a second mutation supersedes the first observer and makes the resulting toast ambiguous. Unknown event kinds fall back to a neutral badge.
@@ -78,6 +95,7 @@ Implementation reference for the [Channel Debug Monitor](channel_debug_monitor.m
 
 - **Superuser-only on every route**, reading and clearing alike, because the feed carries sender identity and message text. Authorization runs before the channel lookup, so a non-superuser never learns whether a channel id exists. Both the unauthenticated (401) and plain-authenticated (403) cases are asserted — only the second distinguishes a real guard from a missing dependency.
 - **Server channels are instance-global**; `created_by` is provenance, not an ACL, so there is deliberately no ownership check.
+- **Attachment filenames and skip reasons carry no new secret exposure.** They are sender-supplied text (filenames) and a fixed, code-owned vocabulary (reason codes), never attachment bytes, never a Chat media token or URL, and never the file's platform id. See [Attachment fields](#attachment-fields).
 - **No new secret exposure.** No hook passes the encrypted secrets, the webhook token, the inbound bearer JWT or a minted access token. `detail` carries only pipeline stage markers plus the admin-authored whitelist, and — since Auto Routing Tuning — an optional `trace_id` (`channel_inbound_service.py`'s `_decision_detail`), a real key into the durable `routing_decision` table, published only when a row was actually written for that message (never emitted unconditionally, so the panel never links to a trace that 404s). The two send-failure hooks interpolate an exception whose string is method, URL and status — bearer tokens live in headers and signed assertions in request bodies, so neither appears; the identical string is already persisted to `binding.last_error`.
 - **Verification failures capture nothing from the payload**, since it failed the check that would make it trustworthy.
 - **Admin test sends are audited** (`SERVER_CHANNEL_TEST_SEND`) with the resolved thread and how it was targeted, but never the message body: `SecurityEvent` rows are broadly readable, and the durable record is needed precisely because the buffer is clearable.

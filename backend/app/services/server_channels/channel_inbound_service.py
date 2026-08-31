@@ -14,6 +14,10 @@ so the ordering below is load-bearing, not stylistic:
     6. channel policy       admin kill switch AND access grant AND the user's
                             own toggle; resolved once, here, and carried into
                             routing as plain data
+    6.5 attachments         the sender's files become FileUpload rows owned by
+                            THEM. Below every gate above on purpose: nothing
+                            is fetched, stored, or charged to a quota before
+                            the sender is admitted
     7. binding / routing    session work, off the request path
 
 Steps 1–6 are cheap and run inline. Everything from 7 on can be slow (an LLM
@@ -81,6 +85,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session as DBSession, select
 
+from app.core.config import settings
 from app.models import (
     Agent,
     AgentBundle,
@@ -97,7 +102,13 @@ from app.models import (
     User,
 )
 from app.models.events import security_event as security_event_constants
+from app.models.files.file_upload import FileUpload
 from app.services.common.email_patterns import match_email_pattern
+from app.services.server_channels.channel_attachment_service import (
+    ChannelAttachmentResult,
+    ChannelAttachmentService,
+    SkippedAttachment,
+)
 from app.services.server_channels.channel_debug_buffer import (
     DEBUG_INSTALLING,
     DEBUG_NO_MATCH,
@@ -351,6 +362,446 @@ REPLY_THREAD_OWNED = (
     "This conversation belongs to someone else. Please start a new thread and "
     "I'll set you up with your own assistant."
 )
+# The ONE reply in this module that is deliberately specific.
+#
+# Every other decline above is uninformative on purpose — "you are not
+# whitelisted", "your grant was withdrawn" and "this channel is switched off"
+# must be one answer, or the reply becomes an oracle an external sender can
+# enumerate a server's channel configuration with. A rejected attachment is not
+# that kind of decision (plan §4.5): "your 40MB video exceeds the 25MB limit"
+# tells the sender about *their own message* and reveals nothing about who else
+# may use this channel. And it is the one case where saying nothing looks
+# exactly like the platform being broken — the sender's entire message was the
+# file, so silence is indistinguishable from a dropped message.
+#
+# It does NOT go through ``REPLY_DENIED``, and that path is untouched.
+#
+# **Two routes, one per transport shape.** This text is handed to
+# ``adapter.build_sync_response``, which is a real reply on a webhook transport
+# and **inert** on a polled one — ``PolledChannelTransport`` does not override
+# it and the base returns ``{}``. So it is also handed to
+# ``adapter.send_rejection_notice``, which is the mirror image: a no-op on the
+# base (and therefore on Google Chat, whose sync response already carried it)
+# and a real outbound send on email. Exactly one of the two reaches any given
+# sender.
+#
+# The email send is the *only* sender-facing text that leaves that transport
+# outside an agent's answer, and the reason it is not a hole in the
+# no-declines-on-a-pull-channel rule is the paragraph above: this branch is
+# reached only after every security gate has already admitted the sender, and
+# what it says describes their own message and nothing about the server.
+REPLY_ATTACHMENTS_REJECTED = (
+    "Sorry — I couldn't accept {details}. There was no text in your message "
+    "either, so there's nothing for me to work on. Please send it again, or "
+    "tell me in text what you need."
+)
+# The closing advice is deliberately NEUTRAL. It used to say "as a smaller or
+# differently-formatted file", which is sound guidance for ``too_large`` and
+# ``type_not_allowed`` and simply wrong for ``poll_budget_exhausted`` — a
+# transient budget exhaustion that a plain resend fixes, where telling someone
+# to shrink their file sends them to solve a problem they do not have. The
+# reason-specific hint belongs to the reason: every entry in ``_reason_phrase``
+# carries its own, rendered into ``{details}``.
+
+# ======================================================================
+# Step 6.5 — inbound attachments
+# ======================================================================
+#
+# The pipeline's half of the attachment feature. ``ChannelAttachmentService``
+# owns turning refs into ``FileUpload`` rows; everything here is about what the
+# *humans* see afterwards — the sender, the person reading the transcript
+# later, and the admin reading the debug feed.
+
+
+#: How much of the skip list any *sender-visible* surface renders — the
+#: transcript note and the decline reply. Filenames are sender-supplied text
+#: on an unauthenticated ingress and the transport has its own message-length
+#: limit; see ``_describe_skipped``.
+_MAX_SKIP_TEXT_CHARS = 500
+
+
+#: Sender-facing prose for a skip code the mapping below does not know.
+#:
+#: Deliberately vague, and that is the point — see ``_reason_phrase``.
+_UNKNOWN_REASON_PHRASE = "the file could not be accepted"
+
+
+def _reason_phrase(reason: str) -> str:
+    """One skip code rendered as a sentence fragment a sender can act on.
+
+    The codes are a contract (``services/files/attachment_limits.py``,
+    ``channel_attachment_service``, and each adapter's own fetch failures);
+    the prose is not, and lives here because this module is the only place
+    that renders it to a person.
+
+    **An unrecognised code falls back to a generic sentence, never to the code
+    itself.** This surface is a *sender's* transcript on an unauthenticated
+    ingress, and a raw token is an internal identifier leaking outward — it
+    tells an external party nothing they can act on while naming a piece of
+    the platform's vocabulary. The pressure to echo the token is real (a
+    reader who sees ``drive_file`` can at least search for it), and it is
+    answered on the other surface instead: ``_attachment_detail`` puts the
+    **exact code** in the admin debug feed, which is superuser-only and is
+    where an operator diagnoses this. Prose outward, tokens inward — the same
+    split ``_reply`` and ``_log_detail`` already draw in this file.
+
+    The safety property that buys: an adapter can invent a reason without a
+    matching entry here, and the worst outcome is a vague sentence rather than
+    a leaked identifier. That is not hypothetical — Phase 1 added
+    ``storage_error`` and ``upstream_error``, which the plan never named, the
+    adapters added ``invalid_handle`` and ``poll_budget_exhausted``, and the
+    materialiser later split ``fetch_budget_exhausted`` out of ``timeout``.
+    Every code any of them can currently produce is listed below; the fallback
+    exists for the next one, not for these.
+    """
+    # Every value is a **fragment**, never a sentence: both surfaces that
+    # render it already supply the frame ("… could not be accepted: NAME
+    # (<fragment>)"). A value that repeats the frame reads as a stutter in the
+    # sender's transcript, which is how the first draft of
+    # ``poll_budget_exhausted`` was caught.
+    phrases = {
+        # ---- Refused by validation: the sender's to fix ----
+        "too_large": (
+            f"file exceeds the {settings.CHANNEL_ATTACHMENT_MAX_FILE_MB}MB limit"
+        ),
+        "type_not_allowed": "file type isn't supported",
+        "aggregate_limit": (
+            "message exceeds the "
+            f"{settings.CHANNEL_ATTACHMENT_MAX_AGGREGATE_MB}MB total attachment "
+            "limit"
+        ),
+        "quota_exceeded": "your storage is full",
+        "too_many_attachments": (
+            "more than "
+            f"{settings.CHANNEL_ATTACHMENT_MAX_PER_MESSAGE} attachments in one "
+            "message"
+        ),
+        # ---- Failed to fetch or store: mostly the operator's ----
+        "no_content": "the file had no readable content",
+        "timeout": "downloading the file timed out",
+        "upstream_error": "the file couldn't be downloaded",
+        "not_found": "the file was no longer available",
+        "forbidden": "I wasn't allowed to download the file",
+        "storage_error": "the file couldn't be saved",
+        # Says nothing about the handle, the URL it would have been built
+        # into, or which shape rule rejected it. §4.4: the media token never
+        # reaches a log line, let alone a sender's transcript — and the
+        # validation rule is a description of our own guard, which is not the
+        # sender's business and is a hint to anyone probing it.
+        "invalid_handle": "the attachment reference wasn't usable",
+        # ---- Guidance, not just a refusal (§6.5) ----
+        "drive_file": (
+            "I can't open Google Drive attachments — please attach the file "
+            "directly"
+        ),
+        # Nothing broke: the fetch was still queued on the limiter and never
+        # issued a request, so there is no fault for an operator to find —
+        # filing it under a fetch/store failure would send an admin hunting one
+        # that does not exist. Distinct from ``timeout`` on purpose, and this
+        # is why: nothing was ever downloaded. The message brought more files
+        # than one whole-message fetch budget could work through, so the advice
+        # is about the message, which is the only part the sender controls.
+        # The "it needs a DIFFERENT message, so it must be Refused" reading was
+        # considered and rejected. ``drive_file`` just above is the governing
+        # precedent, not an anomaly: it too asks the sender to change what they
+        # send, nothing broke, and it is guidance. Refused is for validation
+        # that rejected the message, not for every case where the fix is the
+        # sender's.
+        # Not to be merged with ``poll_budget_exhausted`` below either, however
+        # alike the two names read — same family, different remedy. Both are
+        # "a budget ran out", but that one clears by re-sending the SAME
+        # message on the next poll tick's fresh budget, while this one needs a
+        # SMALLER message; re-sending it unchanged just exhausts the same
+        # budget again.
+        "fetch_budget_exhausted": (
+            "there wasn't time to download it — please send fewer files at once"
+        ),
+        # The one genuinely TRANSIENT reason in the vocabulary, and the wording
+        # earns its length because of it. Every other code above describes
+        # something re-sending will not change; this one is a mail server that
+        # had too much in flight on a single poll tick, and the very next tick
+        # has a fresh budget. Telling this sender to "try again" is the only
+        # place in this mapping where that advice is true, so it is said
+        # plainly rather than folded into a generic failure.
+        "poll_budget_exhausted": (
+            "the mail server was handling too much at once — please send the "
+            "file again"
+        ),
+    }
+    return phrases.get(reason, _UNKNOWN_REASON_PHRASE)
+
+
+def _describe_skipped(skipped: list[SkippedAttachment]) -> str:
+    """``"report.mp4 (file exceeds the 25MB limit), logo.svg (…)"``.
+
+    ``filename`` is already the sanitised name (``SkippedAttachment``'s own
+    contract), which matters because this string goes into stored message
+    content and into a sender-visible reply.
+
+    **Capped**, for the same reason the debug feed's version is. Sanitisation
+    bounds a filename's *characters*, not its length, and up to
+    ``CHANNEL_ATTACHMENT_MAX_PER_MESSAGE`` of them are concatenated here — into
+    a Chat message that has a length limit of its own. An overrun would turn
+    the one reply this module exists to guarantee into a failed send, which is
+    exactly the silence it is meant to prevent.
+    """
+    rendered = ", ".join(
+        f"{item.filename} ({_reason_phrase(item.reason)})" for item in skipped
+    )
+    if len(rendered) > _MAX_SKIP_TEXT_CHARS:
+        rendered = rendered[: _MAX_SKIP_TEXT_CHARS - 1] + "…"
+    return rendered
+
+
+def _compose_inbound_text(text: str, skipped: list[SkippedAttachment]) -> str:
+    """``text`` plus a note naming what could not be accepted.
+
+    Returns ``text`` unchanged when nothing was skipped — which is the common
+    case and the one that must stay byte-for-byte identical to today.
+
+    **The note lands in the STORED ``message.content``, and that is the
+    decision, not an accident** (plan §5.4). The session owner — or, on an
+    identity-routed thread, a person who did not send the message at all —
+    reads this transcript later and needs to see that the sender's message was
+    incomplete. There is no other durable surface where they would: the debug
+    feed is an in-memory ring buffer that empties on restart, and hiding the
+    note in agent-bound content only would make the omission invisible to every
+    human who reads the conversation afterwards.
+
+    An empty ``text`` yields the note alone, which is exactly the
+    attachment-only case the caller handles specially.
+    """
+    if not skipped:
+        return text
+    noun = "attachment" if len(skipped) == 1 else "attachments"
+    note = (
+        f"⚠️ {len(skipped)} {noun} could not be accepted: "
+        f"{_describe_skipped(skipped)}"
+    )
+    return f"{text}\n\n{note}" if text else note
+
+
+def _attachments_rejected_reply(skipped: list[SkippedAttachment]) -> str:
+    """The sender-facing decline for a message that was *only* attachments.
+
+    ``skipped`` can legitimately be **empty** here: the caller's predicate is
+    keyed on the message having carried attachments, not on the materialiser
+    having produced reasons, so an adapter that hands over refs while declaring
+    it carries none lands in this branch with nothing to name. The sender is
+    still owed an answer — a vaguer one is far better than silence — so the
+    empty case degrades to "your attachments" rather than rendering
+    ``"0 attachments: "``.
+    """
+    if not skipped:
+        return REPLY_ATTACHMENTS_REJECTED.format(details="your attachments")
+    noun = "attachment" if len(skipped) == 1 else "attachments"
+    return REPLY_ATTACHMENTS_REJECTED.format(
+        details=f"{len(skipped)} {noun}: {_describe_skipped(skipped)}"
+    )
+
+
+#: How much of the skip list the debug feed renders. Filenames are
+#: sender-supplied text on an unauthenticated ingress, and the panel shows
+#: ``detail`` as one ``k=v`` line per key.
+#:
+#: Equal to ``_MAX_SKIP_TEXT_CHARS`` today and deliberately a separate knob:
+#: this one answers to an admin panel's layout, that one to a chat transport's
+#: message-length limit. They are free to diverge and neither should be
+#: "simplified" into the other.
+_MAX_SKIP_DETAIL_CHARS = 500
+
+
+def _attachment_detail(
+    *, accepted: int, skipped: list[SkippedAttachment]
+) -> dict[str, str]:
+    """The attachment keys for an inbound ``ChannelDebugBuffer`` record.
+
+    **Every value is a string, deliberately.** ``ChannelDebugEvent.detail`` is
+    typed ``dict[str, str]``, the admin panel renders it generically as ``k=v``
+    pairs, and that shape is already in the generated OpenAPI client. Widening
+    it to ``dict[str, Any]`` to carry the skip list as objects would ripple
+    into ``schemas.gen.ts`` and cost this feature the "no client regeneration"
+    property plan §6.2 states as a guarantee. So the counts are stringified and
+    the skip list is flattened into one readable line instead.
+
+    ``attachment_skips`` is omitted entirely when nothing was skipped, rather
+    than rendered as an empty value: the panel would otherwise show a bare
+    ``attachment_skips=`` on every message that carried a file successfully.
+    """
+    detail = {
+        "attachments_accepted": str(accepted),
+        "attachments_skipped": str(len(skipped)),
+    }
+    if skipped:
+        rendered = "; ".join(f"{item.filename} ({item.reason})" for item in skipped)
+        if len(rendered) > _MAX_SKIP_DETAIL_CHARS:
+            rendered = rendered[: _MAX_SKIP_DETAIL_CHARS - 1] + "…"
+        # Raw reason CODES here, not the prose of ``_reason_phrase``: the feed
+        # groups refused-by-validation apart from failed-to-fetch by exact
+        # token, and an admin's next action differs between the two families
+        # (the first is the sender's to fix, the second is the operator's).
+        detail["attachment_skips"] = rendered
+    return detail
+
+
+def _attachment_summary(*, accepted: int, skipped: int) -> str:
+    """The debug feed's one-line headline for a message that carried files."""
+    files = "file" if accepted == 1 else "files"
+    if skipped:
+        return f"{accepted} {files} accepted, {skipped} skipped"
+    return f"{accepted} {files} accepted"
+
+
+def _parse_parked_file_ids(raw: Any, binding_id: uuid.UUID | None) -> list[uuid.UUID]:
+    """Read ``file_ids`` back out of a parked entry. **Total.**
+
+    The parked queue is a JSON column, so everything about the value is
+    untrusted at read time — including its *absence*. A binding parked before
+    this feature shipped drains after it and simply has no such key, which is
+    why the caller uses ``entry.get("file_ids")`` and this function treats
+    ``None`` as "no files" rather than as an error (§3.2).
+
+    A malformed id is dropped, individually, with a warning — never by failing
+    the drain and never by discarding the entry. The entry is a real message
+    somebody sent and is still waiting on; delivering it without one attachment
+    is a visible partial loss, while dropping it is a silent total one. The
+    same trade the rest of this feature makes everywhere else.
+    """
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        logger.warning(
+            "%s Parked entry for binding %s has a non-list file_ids value — "
+            "delivering the message without its attachments",
+            _LOG_PREFIX,
+            binding_id,
+        )
+        return []
+    parsed: list[uuid.UUID] = []
+    for value in raw:
+        try:
+            parsed.append(uuid.UUID(str(value)))
+        except Exception:  # noqa: BLE001 — one bad id must not lose a message
+            logger.warning(
+                "%s Dropping a malformed parked file id on binding %s",
+                _LOG_PREFIX,
+                binding_id,
+            )
+    return parsed
+
+
+def _surviving_parked_file_ids(
+    db: DBSession, file_ids: list[uuid.UUID], binding_id: uuid.UUID | None
+) -> tuple[list[uuid.UUID], int]:
+    """The parked ids whose ``file_uploads`` rows still exist, and how many went.
+
+    **Why this exists at all.** A parked message's rows are ``temporary`` and
+    ``cleanup_abandoned_temp_files`` reclaims them after 24h. Plan §9 says they
+    "survive well inside the 24h GC window", which is true of the normal case
+    and says nothing about the abnormal one two rows above it in the same
+    table: a binding whose install never finished stays parked past the window,
+    and its files are then gone while its *text* is still sitting there waiting
+    to be delivered.
+
+    Without this filter that text goes too. ``prepare_user_message_with_files``
+    raises ``MessageServiceError("Some files not found")`` when any single id no
+    longer resolves, ``_ingest_or_fail`` turns that into a failed binding and a
+    generic setup-failed reply, and the re-route clears the parked entry — a
+    **silent total loss where a partial one was available**. That is the exact
+    trade this feature refuses everywhere else, ``_parse_parked_file_ids`` ten
+    lines up included.
+
+    **Total, and it degrades toward delivering.** A failed existence query
+    leaves the ids untouched: that is today's behaviour, and guessing that
+    every file is gone on the strength of a broken ``SELECT`` would throw away
+    attachments that are sitting right there.
+    """
+    if not file_ids:
+        return [], 0
+    try:
+        statement = select(FileUpload.id).where(
+            FileUpload.id.in_(file_ids)  # type: ignore[attr-defined]
+        )
+        found = set(db.exec(statement).all())
+    except Exception:  # noqa: BLE001 — see the docstring
+        logger.warning(
+            "%s Could not check which parked files still exist on binding %s — "
+            "delivering the message with its ids as recorded",
+            _LOG_PREFIX,
+            binding_id,
+            exc_info=True,
+        )
+        return list(file_ids), 0
+
+    surviving = [file_id for file_id in file_ids if file_id in found]
+    missing = len(file_ids) - len(surviving)
+    if missing:
+        logger.warning(
+            "%s %d parked attachment(s) on binding %s no longer exist (garbage "
+            "collected while the binding waited); delivering the message with "
+            "the %d that remain",
+            _LOG_PREFIX,
+            missing,
+            binding_id,
+            len(surviving),
+        )
+    return surviving, missing
+
+
+def _compose_drained_text(text: str, missing: int) -> str:
+    """``text`` plus a note that some of its attachments no longer exist.
+
+    Same placement decision as :func:`_compose_inbound_text` and for the same
+    reason: the note lands in the stored ``message.content``, because the
+    transcript is the only durable surface where a later reader can learn that
+    what arrived was incomplete. The filenames are not available — the rows
+    that carried them are what went away — so the note counts rather than
+    names.
+
+    An attachment-only parked message whose files all vanished yields the note
+    alone, which is what keeps it a *delivered* message rather than an entry
+    that is silently dropped for having neither text nor files.
+    """
+    if missing <= 0:
+        return text
+    noun, verb = ("attachment", "is") if missing == 1 else ("attachments", "are")
+    note = (
+        f"⚠️ {missing} {noun} from this message expired before it could be "
+        f"delivered and {verb} no longer available"
+    )
+    return f"{text}\n\n{note}" if text else note
+
+
+def _attachment_classification_text(attachments: ChannelAttachmentResult) -> str:
+    """What to route on when the sender sent files and no words.
+
+    ``"(sent 3 files: a.pdf, b.png, c.csv)"``. Routing an empty string is a
+    coin flip, and the filenames are the only signal the sender gave — so this
+    is the classifier's input and **nothing else**. The stored message content
+    is never rewritten to contain it (plan §5.4): the transcript records what
+    the person actually sent.
+
+    The names come off the result the materialiser already built. An earlier
+    version re-read them from ``file_uploads`` because the result did not carry
+    them; that was a ``SELECT`` on the synchronous webhook path to recover a
+    value that had just been in hand, and — because a failed statement poisons
+    a session the poll driver reuses across a whole tick — it needed a
+    rollback guard of its own. Carrying the names on the result deletes the
+    query, the guard and the failure mode together.
+
+    Degrades to ``"(sent 3 files)"`` when the names are missing or do not line
+    up with the ids. That case should not arise, and the fallback is kept
+    anyway: the count is derived from ``file_ids``, which is the authoritative
+    list, so a names/ids disagreement must not be able to misreport how many
+    files a person sent.
+    """
+    count = len(attachments.file_ids)
+    noun = "file" if count == 1 else "files"
+    names = attachments.accepted_filenames
+    if not names or len(names) != count:
+        return f"(sent {count} {noun})"
+    return f"(sent {count} {noun}: {', '.join(names)})"
+
 
 # Cap on parked messages per binding: a thread that keeps talking while an
 # environment builds should not grow an unbounded JSON blob.
@@ -369,6 +820,40 @@ _recent_security_events: dict[str, float] = {}
 _RECENT_MESSAGE_TTL_SECONDS = 600.0
 _RECENT_MESSAGE_MAX_KEYS = 5_000
 _recent_message_ids: dict[str, float] = {}
+
+
+class ChannelIngestProducedNoMessage(RuntimeError):
+    """An ingest returned without creating a message, and did not raise.
+
+    ``ChannelIngestionService.ingest_inbound_message`` maps
+    ``SessionService.send_session_message``'s dict return onto an
+    ``IngestionResult``, and a whole family of failures come back through it as
+    a **soft** ``action="error"`` rather than as an exception: session vanished,
+    agent has no active environment, environment activation failed, the file
+    preparation step refused the message. The web-UI chat route wants that —
+    it renders the friendly text — but on a channel it is a trap.
+
+    **The trap.** ``_continue_thread`` decides whether to stamp
+    ``binding.last_external_message_id`` on "did an exception escape
+    ``_ingest_or_fail``", and ``_drain_parked`` decides whether to pop a parked
+    entry the same way. Neither asks whether a message was actually created. So
+    a soft error stamped the binding — or dropped the parked entry — exactly as
+    a delivered message would, and the sender's message was gone: no message,
+    no error reply, no debug-feed record, and no second chance either, because
+    the next identical redelivery is now deduped as already-processed.
+
+    This exception is what converts that silent, permanent loss into an
+    ordinary visible failure: the binding is failed (so it self-heals and
+    re-routes on the next message), the sender gets the standard setup-failed
+    notice, and a parked queue stays parked for a later attempt instead of
+    being consumed.
+
+    **Deliberately not a ``ChannelDecline``.** The drain classifies on that
+    type to mean "this will fail identically forever", and its disposition is
+    to *drop* the whole parked queue. Nothing here is known to be permanent —
+    a missing environment comes back, an activation retry succeeds — so it
+    takes the transient arm, which keeps the messages.
+    """
 
 
 class ChannelNotFound(Exception):
@@ -724,8 +1209,246 @@ class ChannelInboundService:
             # channel configuration one probe at a time.
             return adapter.build_sync_response(REPLY_DENIED, inbound.thread_key)
 
+        # ---- 6.5. Attachments — refs become FileUpload rows ----
+        #
+        # **This position is the security story of the feature** (plan §4.1).
+        # It is below the rate limit and the body cap, below verification
+        # (an attachment handle is attacker-influenced data, and fetching one
+        # out of an unsigned payload would be a request the platform makes on
+        # an attacker's behalf), below the redelivery dedup (materialising
+        # first would duplicate every file on every Chat retry, against the
+        # sender's quota), below the fail-closed whitelist (storage is a
+        # resource; an unlisted sender gets none of it), below user resolution
+        # (there is no ``FileUpload.user_id`` to write until a user exists) and
+        # below the policy gate (a revoked sender writes nothing to disk).
+        #
+        # Nothing beneath it re-authenticates, and it never widens what an
+        # earlier step decided. Moving it up is not a refactor.
+        #
+        # **What the dedup above does and does not cover.** On first contact
+        # (``binding is None``) ``_seen_recently`` records the id at webhook
+        # time, so a Chat retry never reaches this line twice. On an ALREADY
+        # BOUND thread the only dedup is ``last_external_message_id``, and that
+        # is stamped after a successful ingest, inside the background task
+        # (see ``_continue_thread``) — deliberately, so a redelivery of a
+        # message we failed to process stays a recovery opportunity. A retry
+        # therefore does reach this line twice, and the duplicate *storage*
+        # that would follow is closed inside ``materialize`` instead of by
+        # narrowing the dedup: it keys on
+        # ``(binding, external_message_id, position)`` and hands back the rows
+        # the earlier delivery already wrote, so the sender's quota is charged
+        # once however many times Google retries. Moving the stamp above this
+        # call would have been the other way to close it, and it is the wrong
+        # one — it marks a half-ingested message as seen and strands it. The
+        # text-level double delivery is pre-existing and unchanged.
+        #
+        # ``owner_id`` is the **sender**, never the session owner — on an
+        # identity-routed thread those differ, and owning the file as the
+        # sender is what keeps provenance honest and charges the right person's
+        # quota (§3.4). ``_ingest`` tells the attach path who that was, via
+        # ``uploader_user_id``.
+        # ---- Everything below step 6.5 needs reading BEFORE it ----
+        #
+        # §11a Rule 2, and this is the call site that makes it bite rather than
+        # a precaution: ``materialize`` **commits** when it accepted anything,
+        # and rolls back when its backstop fired. Both expire every instance in
+        # this session, so ``channel.id`` / ``binding.status`` read afterwards
+        # are lazy reloads — an extra ``SELECT`` on the common path, and an
+        # ``ObjectDeletedError`` if the row went away in between. For the debug
+        # records that is a raise inside an argument list that
+        # ``ChannelDebugBuffer.record``'s own never-raises guard cannot reach;
+        # for the step-7 dispatch it is a 5xx on the webhook, which Google
+        # retries — straight into the duplicate-materialisation window the
+        # comment above just described.
+        #
+        # Read here, while both instances are fresh, and used as plain values
+        # from this line on. ``binding`` itself is still handed to the writers
+        # below, which need the live instance; what must not happen is a
+        # *decision* being made on a reloaded attribute.
+        debug_channel_id = _debug_channel_key(channel)
+        binding_user_id = binding.user_id if binding is not None else None
+        binding_status = binding.status if binding is not None else None
+        binding_id = binding.id if binding is not None else None
+        # ``user`` and ``channel`` are expired by the same commit, and every
+        # read of them below step 6.5 is on the synchronous webhook path. The
+        # binding hoist alone left those two behind — hoisted here for exactly
+        # the reasons above it, not for tidiness.
+        user_id = user.id
+        channel_id = channel.id
+        # The two capability reads at the end of step 8-10 go through
+        # ``channel`` as well. Both helpers are already total, so an expired
+        # instance whose row vanished degrades to False rather than raising —
+        # but False there means "ack in silence became ack with text", a
+        # behaviour change decided by a race, and it still costs a reload
+        # SELECT on the request path. Resolved here, while the instance is
+        # fresh, and read as plain booleans from this line on. Both are
+        # in-memory registry lookups plus attribute reads, so computing them
+        # ahead of the branch that uses them costs nothing measurable.
+        notice_supported = _status_notice_supported(channel)
+        outbound_configured = _outbound_credentials_configured(channel)
+
+        attachments = await ChannelAttachmentService.materialize(
+            db=db, channel=channel, adapter=adapter, inbound=inbound, owner_id=user_id
+        )
+        text = _compose_inbound_text(inbound.text, attachments.skipped)
+        file_ids = attachments.file_ids
+        # The rows ``materialize`` reused from an earlier delivery of this same
+        # external message rather than creating. They are already ``attached``,
+        # and the session pipeline refuses an attached file unless it is named
+        # — so this set travels with ``file_ids`` all the way to
+        # ``prepare_user_message_with_files``. Empty on every first delivery,
+        # which is every message but a retry.
+        redelivered_file_ids = set(attachments.reused_file_ids)
+
+        # The attachment-only total rejection: the sender wrote nothing, sent
+        # files, and not one of them became a file. Named once and used twice,
+        # so the debug branch and the decline branch cannot drift apart.
+        #
+        # Keyed on ``inbound.attachments`` and NOT on ``attachments.skipped``,
+        # which would leave a hole: ``materialize`` returns an empty result
+        # with an empty skip list when an adapter hands it refs while
+        # declaring ``supports_inbound_attachments=False``. Under the narrower
+        # predicate that message would ingest as an empty string — or route a
+        # brand-new thread on one — and the sender would be told nothing at
+        # all. Low probability (it needs an adapter bug, already logged one
+        # layer down) and total is one term away, which is the whole argument
+        # for spending the term.
+        #
+        # ``inbound.has_sender_text`` and NOT ``inbound.text.strip()``, and
+        # that is the whole of the fix that made this branch reachable at all.
+        # ``text`` is the string that will be *stored*; on a transport that
+        # synthesises it, that is not the same question as "did the sender
+        # write anything". Email's ``text`` is
+        # ``format_email_as_message(...)``, which emits its ``--- Forwarded
+        # email content ---`` markers and a ``From:`` line for every mail —
+        # including one whose subject and body are both empty. So the old
+        # predicate was FALSE for every email ever polled, and this branch,
+        # written for the one transport that actually needs an out-of-band
+        # reply, could never fire on it: an attachment-only mail whose every
+        # attachment was refused ingested "successfully" as the wrapper text
+        # plus a ⚠️ note, created a session, woke an agent, and told the
+        # sender nothing. The adapter now declares the emptiness
+        # (``sender_text_empty``) instead of the pipeline trying to recover it
+        # from a formatted string.
+        #
+        # The predicate this reads as, and the one that is actually meant:
+        # *this message produced no usable content for the agent*. Not "the
+        # ingest raised" — an attachment-only rejection ingests perfectly
+        # happily, which is precisely how it stayed invisible.
+        all_attachments_rejected = (
+            not inbound.has_sender_text
+            and not file_ids
+            and bool(inbound.attachments)
+        )
+
+        if (
+            inbound.attachments
+            and not all_attachments_rejected
+            and debug_channel_id is not None
+        ):
+            # What arrived, for the operator. Kept separate from the
+            # "message received" record above rather than folded into it: that
+            # one is written before the whitelist and policy gates precisely so
+            # a *denied* message still shows up in the feed, and moving it down
+            # here to carry these counts would erase every denial from it.
+            #
+            # The total-rejection case below writes its own ``DEBUG_REJECTED``
+            # with the same detail keys, so it is excluded here rather than
+            # narrated twice.
+            ChannelDebugBuffer.record(
+                channel_id=debug_channel_id,
+                direction="inbound",
+                kind=DEBUG_RECEIVED,
+                summary=_attachment_summary(
+                    accepted=len(file_ids), skipped=len(attachments.skipped)
+                ),
+                sender_email=inbound.sender_email,
+                sender_display_name=inbound.sender_display_name,
+                thread_key=inbound.thread_key,
+                detail={
+                    "stage": "attachments",
+                    **_attachment_detail(
+                        accepted=len(file_ids), skipped=attachments.skipped
+                    ),
+                },
+            )
+
+        if all_attachments_rejected:
+            # **Attachment-only, and nothing survived.** The sender's entire
+            # message was files and none of them became one, so there is
+            # literally nothing to route on and nothing to hand an agent.
+            #
+            # Answered specifically rather than through ``REPLY_DENIED``
+            # (§4.5). This is not a security decline and is not subject to the
+            # deliberately-indistinguishable rule: naming "your 40MB video
+            # exceeds the 25MB limit" tells the sender about their own message
+            # and reveals nothing about who else may use this channel. Doing
+            # nothing here is the one case that looks exactly like the platform
+            # being broken.
+            if debug_channel_id is not None:
+                ChannelDebugBuffer.record(
+                    channel_id=debug_channel_id,
+                    direction="inbound",
+                    kind=DEBUG_REJECTED,
+                    summary=(
+                        "Every attachment was refused and the message had no "
+                        "text — declined with the reasons named"
+                    ),
+                    sender_email=inbound.sender_email,
+                    sender_display_name=inbound.sender_display_name,
+                    thread_key=inbound.thread_key,
+                    detail={
+                        "stage": "attachments_rejected",
+                        **_attachment_detail(accepted=0, skipped=attachments.skipped),
+                    },
+                )
+            #
+            # Delivered **twice, by two disjoint routes**: the sync response
+            # below (which a webhook transport renders in-thread and a polled
+            # one silently discards) and the adapter's own outbound notice
+            # (which only a polled transport implements). Exactly one of them
+            # reaches any given sender — a transport that answered on both
+            # would double the message, which is why the base
+            # ``send_rejection_notice`` is a no-op and Google Chat does not
+            # override it.
+            rejection_reply = _attachments_rejected_reply(attachments.skipped)
+            try:
+                await adapter.send_rejection_notice(
+                    db,
+                    channel,
+                    inbound,
+                    # The resolved platform account, never the ``From:``
+                    # header — on email that header is spoofable, and mailing
+                    # it would let a forged sender aim the platform's mail at
+                    # somebody else.
+                    recipient_user_id=user_id,
+                    text=rejection_reply,
+                )
+            except Exception:  # noqa: BLE001 — a notice never costs the message
+                # The adapter contract says this cannot happen; the guard is
+                # here because of *where* it runs. On a polled transport this
+                # is inside a poll tick whose earlier messages are already
+                # marked read on the mail server, and an escape would abandon
+                # the tick and lose them for good.
+                logger.warning(
+                    "%s Could not send the attachment rejection notice on "
+                    "channel %s — the sender is not told, but the message is "
+                    "still declined and recorded",
+                    _LOG_PREFIX,
+                    channel_id,
+                    exc_info=True,
+                )
+            return adapter.build_sync_response(rejection_reply, inbound.thread_key)
+
         # ---- 7. Binding dispatch ----
-        if binding is not None:
+        #
+        # Gated on the hoisted ``binding_id`` as well as on ``binding`` itself.
+        # The two are set together, one line apart, but they are separate names
+        # and the type checker cannot see the link — and spelling it out is not
+        # only a formality: if it somehow did not hold, falling through to a
+        # fresh routing pass is the safe direction, where an unchecked
+        # ``binding_id`` would put ``None`` into a background task.
+        if binding is not None and binding_id is not None:
             # A thread belongs to exactly one person. In a group space another
             # whitelisted member can post into a thread already bound to
             # someone else's session — injecting their text into a stranger's
@@ -733,23 +1456,36 @@ class ChannelInboundService:
             # read it. Multi-user rooms need a participant model and an
             # owner-approval flow (a listed future enhancement); until then the
             # correct behaviour is to decline, not to silently route.
-            if binding.user_id != user.id:
+            #
+            # ``binding_user_id`` / ``binding_status`` / ``binding_id`` rather
+            # than the instance attributes: step 6.5 committed, so every read
+            # off ``binding`` here would be a reload. See the hoist above.
+            # ``inbound.thread_key`` replaces ``binding.thread_key`` for the
+            # same reason and is the same value by construction — the binding
+            # was looked up by it.
+            if binding_user_id != user_id:
                 logger.warning(
                     "%s User %s posted into thread %s bound to user %s — declining",
                     _LOG_PREFIX,
-                    user.id,
-                    binding.thread_key,
-                    binding.user_id,
+                    user_id,
+                    inbound.thread_key,
+                    binding_user_id,
                 )
                 return adapter.build_sync_response(
                     REPLY_THREAD_OWNED, inbound.thread_key
                 )
 
-            if binding.status == CHANNEL_BINDING_ACTIVE:
+            if binding_status == CHANNEL_BINDING_ACTIVE:
                 ChannelInboundService._schedule(
                     ChannelInboundService._continue_thread(
-                        binding_id=binding.id,
-                        text=inbound.text,
+                        binding_id=binding_id,
+                        text=text,
+                        # Plain uuids, like every other value crossing into
+                        # this background task. The rows they name are already
+                        # committed and ``temporary``; nothing ORM-shaped
+                        # makes the hop.
+                        file_ids=file_ids,
+                        redelivered_file_ids=redelivered_file_ids,
                         external_message_id=inbound.external_message_id,
                         # Carried, not re-resolved — the same reasoning as the
                         # new-thread hop below. An existing identity thread is
@@ -765,8 +1501,10 @@ class ChannelInboundService:
                 # path, and a "working on it" here would double every turn.
                 return {}
 
-            if binding.status == CHANNEL_BINDING_PENDING_INSTALL:
-                accepted = ChannelInboundService._park_message(db, binding, inbound)
+            if binding_status == CHANNEL_BINDING_PENDING_INSTALL:
+                accepted = ChannelInboundService._park_message(
+                    db, binding, inbound, text=text, file_ids=file_ids
+                )
                 # Tell the truth when the queue is full: "I'll answer shortly"
                 # would be a promise about a message we just dropped.
                 return adapter.build_sync_response(
@@ -777,16 +1515,53 @@ class ChannelInboundService:
             # `failed` — self-heal: drop the binding and route again from
             # scratch. A transient build failure must not wedge the thread.
             logger.info(
-                "%s Clearing failed binding %s — re-routing", _LOG_PREFIX, binding.id
+                "%s Clearing failed binding %s — re-routing", _LOG_PREFIX, binding_id
             )
             db.delete(binding)
             db.commit()
 
         # ---- 8-10. New thread: route (and possibly install) off-request ----
+        #
+        # **The classifier's input and the ingested text are two values now.**
+        # They are the same string on every ordinary message, and deliberately
+        # not on one: a sender who attached files and wrote nothing gave the
+        # router no words at all, so it routes on the filenames instead of on
+        # an empty string — see ``_attachment_classification_text``. The stored
+        # content is never rewritten to contain that derived string; the
+        # transcript records what the person actually sent.
+        #
+        # Computed here rather than at step 6.5 because it is only ever used
+        # for a brand-new thread: an existing binding already names its agent,
+        # so the read behind it would be wasted on every follow-up message.
+        if inbound.has_sender_text:
+            # ``has_sender_text`` for the same reason the rejection gate above
+            # uses it: on email, ``inbound.text.strip()`` is truthy for a mail
+            # the sender left entirely blank, so this arm used to hand the
+            # router the forwarding wrapper — "--- Forwarded email content ---
+            # From: someone@example.com … Attachments: - report.pdf" — as
+            # though it were the sender's words. It classified on our own
+            # scaffolding and never reached the filename-derived string below,
+            # which is the only signal such a sender gave.
+            #
+            # ``inbound.text``, NOT the composed ``text``. The ⚠️ note is the
+            # platform's prose about its own limits; feeding it to the router
+            # would classify a message partly on what we said about it. The
+            # note still reaches the transcript and the agent — it just is not
+            # evidence of what the sender wanted.
+            classification_text = inbound.text
+        elif file_ids:
+            classification_text = _attachment_classification_text(attachments)
+        else:
+            # No words and no files. Unreachable in practice (an adapter
+            # returns ``ignored`` for an empty text-and-attachment-free event,
+            # and the all-rejected case returned above), so this is the
+            # defensive arm rather than a fourth behaviour.
+            classification_text = text
+
         ChannelInboundService._schedule(
             ChannelInboundService._route_new_thread(
-                channel_id=channel.id,
-                user_id=user.id,
+                channel_id=channel_id,
+                user_id=user_id,
                 # Carried, not re-resolved. The background task opens its own
                 # session and could resolve again, and must not: the decline
                 # gate above and the routing below have to be answering from
@@ -795,7 +1570,10 @@ class ChannelInboundService:
                 # reproduce. Plain frozen data, so it survives the hop.
                 policy=policy,
                 thread_key=inbound.thread_key,
-                text=inbound.text,
+                text=text,
+                classification_text=classification_text,
+                file_ids=file_ids,
+                redelivered_file_ids=redelivered_file_ids,
                 external_message_id=inbound.external_message_id,
                 # Bare platform id — `SessionSender.from_channel` adds the
                 # `channel_type:` prefix, so namespacing here would double it.
@@ -809,9 +1587,7 @@ class ChannelInboundService:
             ),
             "channel_route_new_thread",
         )
-        if _status_notice_supported(channel) and _outbound_credentials_configured(
-            channel
-        ):
+        if notice_supported and outbound_configured:
             # Ack in silence and let the background task own the narration.
             #
             # The sync response is the wrong vehicle for a notice that is going
@@ -822,14 +1598,18 @@ class ChannelInboundService:
             # the same text through the API instead, keeps the id, and mutates
             # that one message the rest of the way.
             #
-            # Read through ``_status_notice_supported`` rather than off
-            # ``adapter.capabilities`` directly, because every other reader in
-            # this file goes through that helper and the two can disagree: the
-            # helper is total and answers False for a channel whose adapter no
-            # longer resolves, so an ungated read here could ack in silence for
-            # a transport the *notice* path had already decided cannot narrate.
-            # Silence plus no notice is the one combination with no observable
-            # difference from the message never arriving.
+            # Both booleans were resolved in the hoist above step 6.5, before
+            # ``materialize``'s commit expired ``channel``; see it for why.
+            #
+            # ``notice_supported`` comes from ``_status_notice_supported``
+            # rather than off ``adapter.capabilities`` directly, because every
+            # other reader in this file goes through it and the two can
+            # disagree: the helper is total and answers False for a channel
+            # whose adapter no longer resolves, so an ungated read here could
+            # ack in silence for a transport the *notice* path had already
+            # decided cannot narrate. Silence plus no notice is the one
+            # combination with no observable difference from the message never
+            # arriving.
             #
             # The credential check guards the same outcome by the other route.
             # This module's own docstring makes a point of the sync reply
@@ -938,8 +1718,15 @@ class ChannelInboundService:
         text: str,
         policy: ResolvedChannelPolicy,
         external_message_id: str | None = None,
+        file_ids: list[uuid.UUID] | None = None,
+        redelivered_file_ids: set[uuid.UUID] | None = None,
     ) -> None:
         """Feed a message into the session an active binding already owns.
+
+        ``file_ids`` are the sender's attachments, already materialised into
+        ``FileUpload`` rows at step 6.5 and travelling beside ``text`` from
+        here down — including through a park, if the drain ahead of this
+        message fails and it has to go to the back of the queue.
 
         ``policy`` is ``process_inbound``'s resolution, carried in rather than
         re-read here. **One reading per message, and on this path the carried
@@ -982,7 +1769,7 @@ class ChannelInboundService:
                 db.refresh(binding)
                 if binding.pending_messages:
                     accepted = ChannelInboundService._append_parked(
-                        db, binding, text, external_message_id, None
+                        db, binding, text, external_message_id, None, file_ids
                     )
                     binding.updated_at = datetime.now(UTC)
                     db.add(binding)
@@ -1014,13 +1801,15 @@ class ChannelInboundService:
                     db=db, channel=channel, binding=binding, text=REPLY_WORKING_ON_IT
                 )
 
-            await ChannelInboundService._ingest_or_fail(
+            delivered = await ChannelInboundService._ingest_or_fail(
                 db=db,
                 channel=channel,
                 binding=binding,
                 agent=agent,
                 user=user,
                 text=text,
+                file_ids=file_ids,
+                redelivered_file_ids=redelivered_file_ids,
                 external_message_id=external_message_id,
                 external_user_id=None,
                 policy=policy,
@@ -1029,8 +1818,23 @@ class ChannelInboundService:
             # Record the delivered id only now. Stamping it at webhook time
             # would dedup a redelivery of a message we then failed to process,
             # losing it silently.
+            #
+            # **``delivered`` is the load-bearing term**, and it is the one
+            # that used to be missing. The other two conditions describe the
+            # binding, not the message: they were satisfied by an ingest that
+            # returned a soft ``action="error"`` and created nothing, and the
+            # stamp that followed made every redelivery of that message dedup
+            # against a delivery that never happened. That is silent,
+            # permanent loss — and it needs no attachment to reproduce, since
+            # the message commit and this stamp are two separate commits and a
+            # crash between them lands in the same place.
+            #
+            # ``binding.status`` is kept beside it rather than replaced: it
+            # catches a binding failed by something other than this call, and
+            # the two are cheap.
             if (
-                external_message_id
+                delivered
+                and external_message_id
                 and binding.status == CHANNEL_BINDING_ACTIVE
                 and binding.last_external_message_id != external_message_id
             ):
@@ -1053,6 +1857,9 @@ class ChannelInboundService:
         external_message_id: str | None,
         external_user_id: str | None,
         origin: str,
+        classification_text: str | None = None,
+        file_ids: list[uuid.UUID] | None = None,
+        redelivered_file_ids: set[uuid.UUID] | None = None,
     ) -> None:
         """``decide()`` → bind → ingest.
 
@@ -1077,7 +1884,28 @@ class ChannelInboundService:
         reason ``policy`` is: it is a plain string resolved from the adapter
         that accepted the message, and re-deriving it from the reloaded channel
         row would make it a fact about the row's current state instead.
+
+        **``classification_text`` and ``text`` are two parameters on purpose.**
+        ``decide()`` gets the first; everything that persists — the ingest, the
+        park — gets the second. Today they hold the same string on every
+        ordinary message, and the temptation to "tidy" them back into one is
+        exactly what this docstring exists to refuse: an attachment-only
+        message has no words for the router, so its classification text is
+        derived from the accepted filenames (plan §5.4) while its stored
+        content stays what the sender actually sent. ``None`` means "they are
+        the same", which keeps every existing caller honest without a second
+        argument.
+
+        ``file_ids`` are the sender's attachments, materialised at step 6.5 and
+        carried down whichever branch this message takes — ingested with it,
+        parked with it behind an auto-install, or handed to the winner of a
+        binding race along with the text.
         """
+        # Resolved once, here, so the ``decide()`` call below reads as the one
+        # thing it is rather than as a conditional buried in an argument list.
+        if classification_text is None:
+            classification_text = text
+
         from app.core.db import create_session
 
         with create_session() as db:
@@ -1244,7 +2072,9 @@ class ChannelInboundService:
                 # a database round trip that could raise — for nothing.
                 decision = await ChannelRoutingService.decide(
                     user_id=user_id,
-                    text=text,
+                    # NOT ``text`` — see the docstring. The router classifies
+                    # what the sender meant; ``text`` is what gets stored.
+                    text=classification_text,
                     policy=policy,
                     channel_id=channel_id,
                     thread_key=thread_key,
@@ -1336,10 +2166,12 @@ class ChannelInboundService:
                             sender_user_id=user.id,
                             thread_key=thread_key,
                             text=text,
+                            file_ids=file_ids,
                             external_message_id=external_message_id,
                             external_user_id=external_user_id,
                             policy=policy,
                             status_message_id=status_message_id,
+                            redelivered_file_ids=redelivered_file_ids,
                         )
                         return
                     # The thread has a binding now, so the notice gets an owner
@@ -1378,6 +2210,7 @@ class ChannelInboundService:
                         agent=agent,
                         user=user,
                         text=text,
+                        file_ids=file_ids,
                         external_message_id=external_message_id,
                         external_user_id=external_user_id,
                         # Set only when Stage 1 chose a *person* and Stage 2
@@ -1389,6 +2222,7 @@ class ChannelInboundService:
                         # channel invariant exactly as strict as it was.
                         identity_grant=decision.identity_grant,
                         policy=policy,
+                        redelivered_file_ids=redelivered_file_ids,
                     )
                     return
 
@@ -1523,10 +2357,16 @@ class ChannelInboundService:
                         bundle=bundle,
                         thread_key=thread_key,
                         text=text,
+                        file_ids=file_ids,
                         external_message_id=external_message_id,
                         external_user_id=external_user_id,
                         policy=policy,
                         status_message_id=status_message_id,
+                        # Only ever consumed on the lost-race branch, which
+                        # ingests through the winner's binding. The park branch
+                        # cannot need it: a ``pending_install`` binding has no
+                        # session, so nothing it parks was ever attached.
+                        redelivered_file_ids=redelivered_file_ids,
                     )
                 except Exception as exc:
                     # The park is what ``parked_install`` asserts, so a failed
@@ -1643,8 +2483,15 @@ class ChannelInboundService:
         external_user_id: str | None,
         policy: ResolvedChannelPolicy,
         status_message_id: str | None = None,
+        file_ids: list[uuid.UUID] | None = None,
+        redelivered_file_ids: set[uuid.UUID] | None = None,
     ) -> None:
         """Deliver this message via the binding that won the creation race.
+
+        ``file_ids`` simply follow ``text`` through all three branches below —
+        the loser's message is delivered through the winner's binding *with its
+        files*, parked with them, or refused along with them. The semantics are
+        unchanged; the attachments are not a separate decision.
 
         ``status_message_id`` is the **loser's** own status notice, which is
         now an orphan: the thread's notice is whichever one the winner's
@@ -1683,7 +2530,7 @@ class ChannelInboundService:
 
         if binding.status == CHANNEL_BINDING_PENDING_INSTALL:
             accepted = ChannelInboundService._append_parked(
-                db, binding, text, external_message_id, external_user_id
+                db, binding, text, external_message_id, external_user_id, file_ids
             )
             db.add(binding)
             db.commit()
@@ -1716,12 +2563,14 @@ class ChannelInboundService:
             agent=agent,
             user=user,
             text=text,
+            file_ids=file_ids,
             external_message_id=external_message_id,
             external_user_id=external_user_id,
             # The loser's own reading, which is the reading for this message —
             # the winner's binding decides which agent answers, never whose
             # consent applies.
             policy=policy,
+            redelivered_file_ids=redelivered_file_ids,
         )
 
     @staticmethod
@@ -1737,8 +2586,22 @@ class ChannelInboundService:
         external_user_id: str | None,
         policy: ResolvedChannelPolicy,
         identity_grant: IdentityGrant | None = None,
-    ) -> None:
+        file_ids: list[uuid.UUID] | None = None,
+        redelivered_file_ids: set[uuid.UUID] | None = None,
+    ) -> bool:
         """Ingest, leaving the binding in a coherent state on every outcome.
+
+        **Returns whether a message was actually created**, and that return
+        value is not decoration. Callers used to read "did an exception escape
+        this call" as "was the message delivered", which is a different
+        question and was wrong in exactly the case that matters: a soft
+        ``action="error"`` from the ingestion service returned normally, the
+        caller stamped ``binding.last_external_message_id`` as though the
+        message had landed, and the sender's message was lost permanently —
+        the stamp dedups every redelivery of it from then on.
+        ``_ingest`` now raises ``ChannelIngestProducedNoMessage`` for that
+        family, and this returns ``False`` for it, so a caller can gate on the
+        answer rather than on the absence of a symptom.
 
         Without this, a Pass 1 ingest failure would leave an ``active`` binding
         with no session and no error — a state the self-heal path (which only
@@ -1754,6 +2617,15 @@ class ChannelInboundService:
         *this* message and there is no safe value to invent for a caller that
         forgot it — a permissive default would silently re-open identity
         routing for a person who has switched it off.
+
+        ``file_ids`` are forwarded verbatim. A failure to copy them into the
+        agent's container surfaces as the ``MessageServiceError`` the broad
+        handler below already turns into a failed binding and the generic
+        setup-failed reply, which self-heals on the next message — the same
+        disposition every other ingest failure gets.
+
+        ``redelivered_file_ids`` is forwarded verbatim too; see
+        :meth:`_ingest`.
         """
         try:
             await ChannelInboundService._ingest(
@@ -1763,10 +2635,13 @@ class ChannelInboundService:
                 agent=agent,
                 user=user,
                 text=text,
+                file_ids=file_ids,
+                redelivered_file_ids=redelivered_file_ids,
                 sender_external_id=external_user_id,
                 identity_grant=identity_grant,
                 policy=policy,
             )
+            return True
         except NoActiveEnvironmentError:
             # Terminal, not transient: `SessionService.create_session` returns
             # None only when the agent has NO `active_environment_id` at all
@@ -1784,6 +2659,12 @@ class ChannelInboundService:
             ChannelInboundService._fail_binding(
                 db, binding, "Agent has no active environment"
             )
+            ChannelInboundService._record_ingest_failure(
+                channel=channel,
+                binding_thread_key=binding.thread_key,
+                external_message_id=external_message_id,
+                reason="no_active_environment",
+            )
             # ``settle``: the failure is the reply, so it takes the notice's
             # place and stays. Releasing the id is what stops the next turn
             # from rewriting a message that is now the last thing this thread
@@ -1795,15 +2676,37 @@ class ChannelInboundService:
                 text=REPLY_SETUP_FAILED,
                 settle=True,
             )
+            return False
         except Exception as exc:  # noqa: BLE001
             logger.exception(
                 "%s Ingest failed for binding %s", _LOG_PREFIX, binding.id
             )
+            # Everything that could raise is resolved before the recording
+            # calls below, and the thread key is read off the binding while the
+            # instance is still usable — the same discipline ``_drain_parked``
+            # applies in its own handlers, and for the same reason: a lazy
+            # reload inside an ``except`` block replaces the exception being
+            # recorded and loses the diagnosis.
+            binding_thread_key = binding.thread_key
+            failure = routing_trace.describe_exception(exc)
             # The failing ingest may have left the transaction poisoned; without
             # this rollback the status write below would itself raise, out of
             # the handler.
             db.rollback()
-            ChannelInboundService._fail_binding(db, binding, str(exc))
+            ChannelInboundService._fail_binding(db, binding, _log_detail(exc))
+            # **The operator surface for a delivery that produced nothing.**
+            # Without this a soft-error ingest was invisible from every angle
+            # at once: no message in the transcript, a generic notice to the
+            # sender that says "setting up" rather than "your message did not
+            # arrive", and nothing at all in the debug feed. The feed is where
+            # an admin looks when a person says "I sent it and nothing
+            # happened", and it was the one surface that could have answered.
+            ChannelInboundService._record_ingest_failure(
+                channel=channel,
+                binding_thread_key=binding_thread_key,
+                external_message_id=external_message_id,
+                reason=failure or "unknown",
+            )
             # ``settle``: the failure is the reply, so it takes the notice's
             # place and stays. Releasing the id is what stops the next turn
             # from rewriting a message that is now the last thing this thread
@@ -1815,6 +2718,48 @@ class ChannelInboundService:
                 text=REPLY_SETUP_FAILED,
                 settle=True,
             )
+            return False
+
+    @staticmethod
+    def _record_ingest_failure(
+        *,
+        channel: ServerChannel,
+        binding_thread_key: str,
+        external_message_id: str | None,
+        reason: str,
+    ) -> None:
+        """Publish "this message reached an agent's session and became nothing".
+
+        Separate from the caller only so the two failure arms cannot drift, and
+        total by construction: ``ChannelDebugBuffer.record`` never raises, and
+        every argument is a plain local resolved before the call (Python
+        evaluates arguments before entering a function, so the buffer's own
+        guard covers none of them).
+
+        ``reason`` is the de-tainted failure class from
+        ``routing_trace.describe_exception``, never ``str(exc)``: the debug
+        feed is a superuser read surface and this module draws that line
+        everywhere else too. The untainted text is in the log line and in
+        ``binding.last_error``, both operator surfaces.
+        """
+        debug_channel_id = _debug_channel_key(channel)
+        if debug_channel_id is None:
+            return
+        ChannelDebugBuffer.record(
+            channel_id=debug_channel_id,
+            direction="inbound",
+            kind=DEBUG_REJECTED,
+            summary=(
+                "The message was accepted but no session message was created "
+                "— the binding was failed so the next message re-routes"
+            ),
+            thread_key=binding_thread_key,
+            detail={
+                "stage": "ingest_failed",
+                "failure": reason,
+                "external_message_id": external_message_id or "unknown",
+            },
+        )
 
     @staticmethod
     async def _install_and_park(
@@ -1829,8 +2774,16 @@ class ChannelInboundService:
         external_user_id: str | None,
         policy: ResolvedChannelPolicy,
         status_message_id: str | None = None,
+        file_ids: list[uuid.UUID] | None = None,
+        redelivered_file_ids: set[uuid.UUID] | None = None,
     ) -> ChannelThreadBinding | None:
         """Install the matched bundle and park the message until the env is up.
+
+        ``file_ids`` are parked with the text (§3.2). Ids only, never bytes:
+        the rows they name already exist, are ``temporary``, and are reclaimed
+        by ``GarbageCollectionService.cleanup_abandoned_temp_files`` after 24h
+        if this binding never drains — comfortably longer than the
+        pending-install age cap the scheduler enforces.
 
         ``policy`` is carried only to hand on to :meth:`_handle_lost_race`,
         which needs the sender's reading for *this* message and has no safe
@@ -1888,10 +2841,12 @@ class ChannelInboundService:
                 sender_user_id=user.id,
                 thread_key=thread_key,
                 text=text,
+                file_ids=file_ids,
                 external_message_id=external_message_id,
                 external_user_id=external_user_id,
                 policy=policy,
                 status_message_id=status_message_id,
+                redelivered_file_ids=redelivered_file_ids,
             )
             # ``_handle_lost_race`` disposed of the notice — settled with a
             # refusal, or deleted when it delivered through the winner. Nothing
@@ -1899,7 +2854,7 @@ class ChannelInboundService:
             return None
 
         ChannelInboundService._append_parked(
-            db, binding, text, external_message_id, external_user_id
+            db, binding, text, external_message_id, external_user_id, file_ids
         )
         db.add(binding)
         db.commit()
@@ -2085,6 +3040,18 @@ class ChannelInboundService:
     ) -> None:
         """Deliver parked messages in arrival order, exactly once each.
 
+        **Entries are read defensively, not by index.** ``file_ids`` is a key
+        this feature added to a JSON column that already had rows in it, so a
+        binding parked before the deploy drains after it with no such key —
+        hence ``entry.get("file_ids") or []`` and never ``entry["file_ids"]``,
+        which would raise a ``KeyError`` and lose a real message. The ids are
+        parsed with the same posture; see ``_parse_parked_file_ids``. They are
+        then filtered against the rows that still exist
+        (``_surviving_parked_file_ids``), because a binding stuck past the 24h
+        temp-file GC would otherwise lose its **text** as well as its files —
+        the attach path refuses the whole message when a single id no longer
+        resolves.
+
         Each entry is removed only AFTER its ingest succeeds, and the removal
         is committed immediately — so a crash mid-drain re-delivers at most the
         one in flight, and a failure leaves the rest parked rather than losing
@@ -2143,8 +3110,27 @@ class ChannelInboundService:
                 return
             entry = parked[0] or {}
             text = entry.get("text") or ""
+            # ``.get`` and never ``entry["file_ids"]``: a binding parked
+            # BEFORE this feature deployed is drained after it, and a KeyError
+            # here would lose a real message the sender is still waiting on.
+            file_ids = _parse_parked_file_ids(entry.get("file_ids"), binding_id)
+            # Filtered against what still exists. A binding stuck past the 24h
+            # temp-file GC drains with ids naming rows that are gone, and
+            # ``prepare_user_message_with_files`` refuses the *whole* message
+            # when any one id does not resolve — turning a partial loss into a
+            # total one, text included. See ``_surviving_parked_file_ids``.
+            file_ids, missing_files = _surviving_parked_file_ids(
+                db, file_ids, binding_id
+            )
+            text = _compose_drained_text(text, missing_files)
 
-            if text:
+            # ``or file_ids``: an attachment-only message parks with EMPTY
+            # text (the composed note is empty when nothing was skipped), so
+            # gating on text alone would drop the entry and silently lose the
+            # files it was the whole point of. When files expired, the note
+            # above is itself the text, which keeps the message deliverable
+            # instead of vanishing.
+            if text or file_ids:
                 try:
                     await ChannelInboundService._ingest(
                         db=db,
@@ -2153,6 +3139,7 @@ class ChannelInboundService:
                         agent=agent,
                         user=user,
                         text=text,
+                        file_ids=file_ids,
                         sender_external_id=entry.get("external_user_id"),
                         policy=policy,
                     )
@@ -2307,6 +3294,8 @@ class ChannelInboundService:
         policy: ResolvedChannelPolicy,
         sender_external_id: str | None = None,
         identity_grant: IdentityGrant | None = None,
+        file_ids: list[uuid.UUID] | None = None,
+        redelivered_file_ids: set[uuid.UUID] | None = None,
     ) -> None:
         """Hand the message to the canonical ingestion service.
 
@@ -2375,6 +3364,24 @@ class ChannelInboundService:
         ``ChannelOutboundService._resolve_channel_session`` gates on that
         prefix, so a session stamped ``identity_mcp`` here would route
         correctly, run correctly, and never deliver a reply.
+
+        **``file_ids`` and the one non-default ``uploader_user_id`` on the
+        platform.** The sender's attachments are owned by the *sender*, while
+        an identity-routed session is owned by someone else — so the ownership
+        check inside ``MessageService.prepare_user_message_with_files``, which
+        compares each file against the *session* owner, would refuse them.
+        ``uploader_user_id`` tells that check who actually uploaded the bytes.
+
+        This is the only call site in the codebase that passes it as anything
+        but ``None``, and this method is where that is safe to do: the guard at
+        the top of the body has already *enforced* ``user.id ==
+        binding.user_id``, so the value is not a caller's claim about identity
+        but an invariant this frame just checked. The authorisation — may this
+        person write into this session at all — was settled upstream by
+        ``assert_access``, which re-reads the whole grant on every message.
+        ``uploader_user_id`` answers *who uploaded these bytes*, never *may
+        they*. A second caller wanting it is a design conversation, not a
+        parameter.
         """
         from app.core.db import create_session
         from app.models import Session as ChatSession
@@ -2484,6 +3491,33 @@ class ChannelInboundService:
             sender=sender,
             thread_key=thread_key,
             content=text,
+            file_ids=file_ids or None,
+            # ``binding.user_id`` and not ``user.id``, though the guard at the
+            # top of this method has just made them equal: the parameter's
+            # contract is about the *binding's* owner, and reading it off the
+            # binding is what keeps that legible after the guard scrolls away.
+            #
+            # ``if file_ids`` and not unconditionally. The value is only ever
+            # *read* in the ``has_files`` branch, so passing it on a text-only
+            # message is inert today — but it is the one deliberate widening of
+            # an ownership check on the platform (§5.5), and a widening that
+            # travels on every channel message is a wider blast radius than its
+            # own docstring claims. It rides with the files or not at all.
+            uploader_user_id=binding.user_id if file_ids else None,
+            # **The narrow half of the redelivery fix.** ``materialize``
+            # deliberately REUSES the rows an earlier delivery of this same
+            # external message already created — that is what stops a retry
+            # re-fetching from Google and charging the sender's quota a second
+            # time — but the first delivery flipped those rows from
+            # ``temporary`` to ``attached``, and
+            # ``prepare_user_message_with_files`` refuses an attached file.
+            # Both rules are right; the collision is resolved by naming the
+            # exact ids that are a redelivery of a message that already owns
+            # them. Everything not named is refused exactly as before, so the
+            # protection against a file drifting into an *unrelated* message
+            # survives intact. Rides with the files or not at all, for the same
+            # reason ``uploader_user_id`` does.
+            redelivered_file_ids=redelivered_file_ids if file_ids else None,
             integration_type=f"channel_{channel.channel_type}",
             access_policy=ChannelAccessPolicy(
                 # The owner the three-way invariant is checked against. On the
@@ -2497,6 +3531,32 @@ class ChannelInboundService:
             get_fresh_db_session=create_session,
             extra_session_kwargs=extra_session_kwargs,
         )
+
+        # **A soft error is a failure, and this is where it becomes one.**
+        # ``ingest_inbound_message`` reports a whole family of failures — no
+        # active environment, activation failed, session vanished, file
+        # preparation refused — as ``action="error"`` with no exception, and
+        # every caller above this frame decides "delivered or not" by asking
+        # whether something raised. Left as a quiet return value it is
+        # indistinguishable from a delivered message: the binding gets stamped,
+        # or the parked entry gets popped, and the sender's message is gone for
+        # good (the next redelivery dedups against the stamp).
+        #
+        # Raised *before* the binding's ``session_id`` is updated below. On the
+        # failure path the session may well have been created — the error came
+        # later — but writing it here would pair a live pointer with a binding
+        # about to be marked failed, and the self-heal deletes that binding on
+        # the next message anyway.
+        #
+        # ``result.message`` is the friendly text ``send_session_message``
+        # returns beside the error; it is for the operator log and
+        # ``binding.last_error`` only. The sender is told the same generic
+        # setup-failed notice every other ingest failure produces — see
+        # ``_ingest_or_fail``.
+        if result.action == "error":
+            raise ChannelIngestProducedNoMessage(
+                f"ingest produced no message: {result.message or 'unknown error'}"
+            )
 
         if binding.session_id != result.session.id:
             binding.session_id = result.session.id
@@ -2674,14 +3734,29 @@ class ChannelInboundService:
         db: DBSession,
         binding: ChannelThreadBinding,
         inbound: ChannelInboundMessage,
+        *,
+        text: str,
+        file_ids: list[uuid.UUID] | None = None,
     ) -> bool:
-        """Park an inbound message. Returns False when the cap refused it."""
+        """Park an inbound message. Returns False when the cap refused it.
+
+        ``text`` is the **composed** text — ``inbound.text`` plus any note
+        about attachments that could not be accepted — and not
+        ``inbound.text``, which is what this used to read off the message
+        itself. A message that waits out an install must arrive with the same
+        content it would have had if it had gone straight through.
+
+        When the cap refuses the message, its already-materialised uploads are
+        simply left ``temporary`` and reclaimed by the file GC; the refusal
+        reply is unchanged.
+        """
         accepted = ChannelInboundService._append_parked(
             db,
             binding,
-            inbound.text,
+            text,
             inbound.external_message_id,
             inbound.external_user_id,
+            file_ids,
         )
         # Only claim delivery for a message we actually kept. Stamping a
         # message the cap refused would mark it deduped, so a redelivery would
@@ -2700,12 +3775,22 @@ class ChannelInboundService:
         text: str,
         external_message_id: str | None,
         external_user_id: str | None = None,
+        file_ids: list[uuid.UUID] | None = None,
     ) -> bool:
         """Append to the parked queue. Returns False when the cap refused it.
 
         Reassigns the list rather than mutating in place, and flags the
         attribute: a plain ``.append()`` on a JSON column is not dirty-tracked
         and the commit would silently drop the message.
+
+        ``file_ids`` are written as **strings**, because the queue is a JSON
+        column and a ``UUID`` is not JSON-serialisable. The key is written even
+        when the list is empty so every entry this deploy writes has the same
+        shape; readers still use ``entry.get("file_ids") or []``, because
+        entries written *before* this deploy do not have it at all (§3.2).
+
+        Ids only, never bytes: the rows already exist and are ``temporary``, so
+        a queue that never drains costs 24h of disk and then nothing.
         """
         parked = list(binding.pending_messages or [])
         if len(parked) >= _MAX_PARKED_MESSAGES:
@@ -2722,6 +3807,7 @@ class ChannelInboundService:
         parked.append(
             {
                 "text": text,
+                "file_ids": [str(file_id) for file_id in file_ids or []],
                 "external_message_id": external_message_id,
                 "external_user_id": external_user_id,
                 "received_at": datetime.now(UTC).isoformat(),

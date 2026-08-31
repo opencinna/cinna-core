@@ -639,6 +639,9 @@ class MessageService:
         user_id: UUID,
         answers_to_message_id: UUID | None = None,
         message_metadata: dict | None = None,
+        *,
+        uploader_user_id: UUID | None = None,
+        redelivered_file_ids: set[UUID] | None = None,
     ) -> tuple[SessionMessage, str]:
         """
         Prepare user message with file attachments.
@@ -649,6 +652,40 @@ class MessageService:
         3. Creates user message with file associations
         4. Updates message_files with agent_env_paths
         5. Marks files as attached
+
+        Args:
+            uploader_user_id: Who actually uploaded the files in ``file_ids``,
+                when that is not the session owner. **Never request data and
+                never a value a caller computes from a payload.** There is
+                exactly one non-``None`` caller — the server-channel inbound
+                pipeline — and it passes an already-*enforced*
+                ``binding.user_id``; the authorisation that this uploader may
+                write into this session was established upstream by
+                ``assert_access``, which re-reads the whole grant on every
+                message. This parameter answers *who uploaded these bytes*,
+                not *may they*. ``None`` collapses to the session-owner
+                behaviour every other caller has always had.
+            redelivered_file_ids: The ids that are a **redelivery of a message
+                that already owns them**, and may therefore be re-attached
+                although their status is no longer ``"temporary"``.
+
+                Also never request data. The one non-``None`` caller is the
+                server-channel inbound pipeline, and the set it passes is
+                ``ChannelAttachmentService``'s own ``reused_file_ids`` — rows
+                that its ``(binding, external_message_id, attachment position)``
+                idempotency lookup matched, i.e. files a previous delivery of
+                *this same external message* materialised and attached before
+                something downstream failed. Re-delivering that message is not
+                a second message; re-attaching its own files is not double
+                attachment.
+
+                **Scoped to the ids, never to the call.** This is not a
+                leniency mode and must never become one: every id outside the
+                set is checked exactly as before, so the guard that stops a
+                file drifting into an *unrelated* message is untouched. The
+                alternative — minting a fresh row over the same stored bytes —
+                was considered and rejected: it charges the sender's storage
+                quota twice for one attachment.
 
         Raises:
             MessageServiceError: If validation fails or upload errors
@@ -664,14 +701,22 @@ class MessageService:
         if len(files) != len(file_ids):
             raise MessageServiceError("Some files not found", status_code=400)
 
-        # Check ownership and status
+        # Check ownership and status. The uploader is the session owner unless
+        # a caller says otherwise — see ``uploader_user_id`` above. On an
+        # identity-routed channel thread the two genuinely differ: the session
+        # belongs to the identity owner while the files belong to the external
+        # sender who attached them.
+        expected_owner_id = uploader_user_id or user_id
+        # Named ids only — never a flag, never the whole call. See the
+        # ``redelivered_file_ids`` entry in this method's docstring.
+        redelivered: frozenset[UUID] | set[UUID] = redelivered_file_ids or frozenset()
         for file in files:
-            if file.user_id != user_id:
+            if file.user_id != expected_owner_id:
                 raise MessageServiceError(
                     f"Not authorized for file: {file.filename}",
                     status_code=403,
                 )
-            if file.status != "temporary":
+            if file.status != "temporary" and file.id not in redelivered:
                 raise MessageServiceError(
                     f"File already attached: {file.filename}",
                     status_code=400,

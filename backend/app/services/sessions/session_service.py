@@ -1369,6 +1369,9 @@ class SessionService:
         backend_base_url: str | None = None,
         page_context: str | None = None,
         integration_type: str | None = None,
+        *,
+        uploader_user_id: UUID | None = None,
+        redelivered_file_ids: set[UUID] | None = None,
     ) -> dict[str, Any]:
         """
         Send a message to a session and optionally initiate streaming.
@@ -1405,6 +1408,24 @@ class SessionService:
             integration_type: Optional integration source stamped on newly created sessions
                                ("email", "a2a", "external", "app_mcp", "identity_mcp", etc.).
                                Ignored when resuming an existing session (session_id provided).
+            uploader_user_id: Who actually uploaded the files in ``file_ids``,
+                when that is not the session owner. **Never request data and
+                never a value a caller computes from a payload.** There is
+                exactly one non-``None`` caller — the server-channel inbound
+                pipeline — and it passes an already-*enforced*
+                ``binding.user_id``; the authorisation that this uploader may
+                write into this session was established upstream by
+                ``assert_access``, which re-reads the whole grant on every
+                message. This parameter answers *who uploaded these bytes*,
+                not *may they*. ``None`` collapses to the session-owner
+                behaviour every other caller has always had.
+            redelivered_file_ids: Passthrough to
+                ``MessageService.prepare_user_message_with_files`` — the ids
+                that are a redelivery of a message that already owns them, and
+                so may be re-attached although they are no longer
+                ``"temporary"``. Same single caller and the same bound: it
+                exempts the **named ids** and nothing else. See that method for
+                the full contract before adding a second caller.
 
         Returns:
             dict with status information:
@@ -1712,6 +1733,8 @@ class SessionService:
                         user_id=user_id,
                         answers_to_message_id=answers_to_message_id,
                         message_metadata=base_message_metadata,
+                        uploader_user_id=uploader_user_id,
+                        redelivered_file_ids=redelivered_file_ids,
                     )
                     logger.info(f"Prepared message with {len(file_ids)} files for session {session_id}")
                 except Exception as e:

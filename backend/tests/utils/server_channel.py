@@ -319,23 +319,70 @@ def build_message_event(
     sender_display_name: str = "Test Sender",
     sender_type: str = "HUMAN",
     message_name: str | None = None,
+    attachments: list[dict] | None = None,
 ) -> dict:
-    """A Google Chat ``MESSAGE`` interaction event."""
-    return {
-        "type": "MESSAGE",
-        "message": {
-            "name": message_name or f"spaces/AAA/messages/{uuid.uuid4()}",
-            "sender": {
-                "name": sender_name or f"users/{uuid.uuid4().hex[:12]}",
-                "displayName": sender_display_name,
-                "email": sender_email,
-                "type": sender_type,
-            },
-            "text": text,
-            "argumentText": text,
-            "thread": {"name": thread_key},
+    """A Google Chat ``MESSAGE`` interaction event.
+
+    ``attachments`` — a list of ``message.attachment[]`` entries, built with
+    ``build_message_attachment`` below — is only included on the payload when
+    given, so every pre-attachments-feature test keeps constructing the exact
+    same event shape it always has.
+    """
+    message: dict[str, Any] = {
+        "name": message_name or f"spaces/AAA/messages/{uuid.uuid4()}",
+        "sender": {
+            "name": sender_name or f"users/{uuid.uuid4().hex[:12]}",
+            "displayName": sender_display_name,
+            "email": sender_email,
+            "type": sender_type,
+        },
+        "text": text,
+        "argumentText": text,
+        "thread": {"name": thread_key},
+    }
+    if attachments is not None:
+        message["attachment"] = attachments
+    return {"type": "MESSAGE", "message": message}
+
+
+def build_message_attachment(
+    *,
+    content_name: str = "report.pdf",
+    content_type: str | None = "application/pdf",
+    resource_name: str | None = None,
+    source: str | None = None,
+    drive_file: bool = False,
+) -> dict:
+    """One entry of Google Chat's ``message.attachment[]``.
+
+    Mirrors the three shapes ``GoogleChatAdapter._parse_attachments`` reads:
+    an uploaded file (``attachmentDataRef.resourceName``, the default here), a
+    Drive file (``drive_file=True`` — ``source: "DRIVE_FILE"`` with a
+    ``driveDataRef`` and no ``attachmentDataRef``, which the adapter never
+    fetches), and — by passing ``resource_name=""`` — an entry with neither,
+    which the adapter reports as ``unavailable_reason="no_content"``.
+    """
+    if drive_file:
+        return {
+            "contentName": content_name,
+            "contentType": content_type,
+            "source": "DRIVE_FILE",
+            "driveDataRef": {"driveFileId": f"drive-{uuid.uuid4().hex[:8]}"},
+        }
+    entry: dict[str, Any] = {
+        "contentName": content_name,
+        "contentType": content_type,
+        "attachmentDataRef": {
+            "resourceName": (
+                resource_name
+                if resource_name is not None
+                else f"attachments/{uuid.uuid4().hex}"
+            )
         },
     }
+    if source:
+        entry["source"] = source
+    return entry
 
 
 def build_added_to_space_event() -> dict:
@@ -698,6 +745,7 @@ __all__ = [
     "add_auto_install_bundle",
     "remove_auto_install_bundle",
     "build_message_event",
+    "build_message_attachment",
     "build_added_to_space_event",
     "build_ignored_event",
     "post_webhook",

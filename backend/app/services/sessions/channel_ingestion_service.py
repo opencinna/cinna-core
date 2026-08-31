@@ -114,6 +114,8 @@ class ChannelIngestionService:
         backend_base_url: str | None = None,
         answers_to_message_id: UUID | None = None,
         extra_session_kwargs: dict[str, Any] | None = None,
+        uploader_user_id: UUID | None = None,
+        redelivered_file_ids: set[UUID] | None = None,
     ) -> IngestionResult:
         """Run the full inbound ingestion flow (plan §4.1).
 
@@ -128,6 +130,26 @@ class ChannelIngestionService:
         (``access_token_id``, ``source_task_id``, ``email_thread_id``,
         ``sender_email``) and post-create columns / metadata listed in
         ``_STAMPABLE_COLUMNS``. Ignored on resume.
+
+        Args:
+            uploader_user_id: Who actually uploaded the files in ``file_ids``,
+                when that is not the session owner. **Never request data and
+                never a value a caller computes from a payload.** There is
+                exactly one non-``None`` caller — the server-channel inbound
+                pipeline — and it passes an already-*enforced*
+                ``binding.user_id``; the authorisation that this uploader may
+                write into this session was established upstream by
+                ``assert_access`` (step 1 below), which re-reads the whole
+                grant on every message. This parameter answers *who uploaded
+                these bytes*, not *may they*. ``None`` collapses to the
+                session-owner behaviour every other caller has always had.
+            redelivered_file_ids: The ids in ``file_ids`` that are a
+                **redelivery of a message that already owns them**, and may
+                therefore be re-attached although their status is no longer
+                ``"temporary"``. Same single caller and the same discipline as
+                ``uploader_user_id``: it names ids, it is not a mode, and every
+                id outside the set is checked exactly as before. See
+                ``MessageService.prepare_user_message_with_files``.
         """
         # Step 1: access gating.
         ChannelIngestionService.assert_access(
@@ -170,6 +192,8 @@ class ChannelIngestionService:
             access_token_id=access_token_id,
             backend_base_url=backend_base_url,
             integration_type=integration_type if is_new_session else None,
+            uploader_user_id=uploader_user_id,
+            redelivered_file_ids=redelivered_file_ids,
         )
 
         # Step 4: map the dict return into `IngestionResult`. `message` is a

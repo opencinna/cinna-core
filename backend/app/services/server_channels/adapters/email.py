@@ -49,6 +49,7 @@ import anyio.to_thread
 from sqlalchemy import func, update
 from sqlmodel import Session as DBSession, select
 
+from app.core.config import settings
 from app.models import ServerChannel
 from app.models.email.email_message import EmailMessage
 from app.models.email.mail_server_config import MailServerConfig, MailServerType
@@ -60,7 +61,9 @@ from app.services.email.imap_connector import imap_connector
 from app.services.email.mail_server_service import MailServerService
 from app.services.email.polling_service import EmailPollingService
 from app.services.email.sending_service import EmailSendingService
+from app.services.email.smtp_connector import smtp_connector
 from app.services.server_channels.adapters.base import (
+    ChannelAttachmentRef,
     ChannelCapabilities,
     ChannelConfigError,
     ChannelInboundMessage,
@@ -190,11 +193,18 @@ class EmailChannelAdapter(PolledChannelTransport):
             # surface, so every denial in ``process_inbound`` reaches the
             # sender as nothing at all — decided behaviour (mailing declines
             # is a probing oracle and a spam amplifier), and never invisible
-            # to the operator, who reads the debug feed instead.
+            # to the operator, who reads the debug feed instead. The single
+            # exception is not a denial: an attachment-only message whose
+            # every attachment was refused goes out through
+            # :meth:`send_rejection_notice`, past every security gate.
             supports_sync_reply=False,
             inbound_mode="polled",
             needs_webhook_token=False,
             needs_outbound_credentials=False,
+            # MIME carries the bytes with the message, so this transport never
+            # fetches anything and needs no ``fetch_attachment`` override — it
+            # only ever fills ``ChannelAttachmentRef.content``.
+            supports_inbound_attachments=True,
         )
 
     # ------------------------------------------------------------------
@@ -521,13 +531,51 @@ class EmailChannelAdapter(PolledChannelTransport):
 
         Returns the parsed dicts for mail this channel accepts, oldest first,
         having marked exactly those ``\\Seen``.
+
+        **Attachment bytes are held in memory for the whole tick**, because
+        every accepted dict stays in this list until ``poll`` returns. So the
+        tick carries a byte budget (``channel_attachment_poll_budget_bytes``)
+        and charges it as mail is accepted: past it, later messages'
+        attachments degrade to metadata-only refs and the messages themselves
+        still arrive.
+
+        **What it does not bound**, so nobody reads more into it than is
+        there: ``EmailPollingService._fetch_unread_emails`` already pulls every
+        unread message's full RFC822 into a list before any of this runs, and
+        that was true before attachments carried bytes at all. The budget
+        bounds the *second*, decoded copy — the one this feature added — not
+        the tick's total footprint.
+
+        The per-message **count** cap rides along on the same call, for the
+        same reason: past it a part is measured and reported but its bytes are
+        released immediately, so one mail with two hundred parts cannot starve
+        every later message in the tick to deliver ten.
+
+        The budget is charged for **accepted** mail only. Mail addressed to
+        another channel is discarded on the spot — its bytes are not held for
+        the tick, so spending this channel's budget on it would shrink the
+        budget for the mail that is actually this channel's to carry.
         """
         conn: imaplib.IMAP4 | None = None
         accepted: list[dict] = []
+        budget_remaining = settings.channel_attachment_poll_budget_bytes
         try:
             conn = imap_connector.connect(server, password)
             for msg_id, raw in EmailPollingService._fetch_unread_emails(conn):
-                parsed = EmailPollingService._parse_email(raw)
+                parsed = EmailPollingService._parse_email(
+                    raw,
+                    attachment_budget_bytes=budget_remaining,
+                    # The pipeline's per-message count cap, applied *at the
+                    # decode* rather than only at materialisation. Plan §4.3/§9
+                    # promise the excess is skipped "without being fetched";
+                    # there is no fetch on this transport, so the cost the
+                    # promise is really about is the decoded copy, and holding
+                    # 190 of them to deliver 10 would spend the whole tick
+                    # budget on attachments nobody will ever receive. The parts
+                    # are still reported — the materialiser names them
+                    # ``too_many_attachments`` — just not carried.
+                    max_attachments=settings.CHANNEL_ATTACHMENT_MAX_PER_MESSAGE,
+                )
                 if parsed is None:
                     continue
                 if not EmailPollingService._is_addressed_to_channel(
@@ -542,6 +590,9 @@ class EmailChannelAdapter(PolledChannelTransport):
                     continue
                 EmailPollingService._mark_email_read(conn, msg_id)
                 accepted.append(parsed)
+                budget_remaining = max(
+                    0, budget_remaining - _attachment_bytes_held(parsed)
+                )
         finally:
             if conn is not None:
                 try:
@@ -570,6 +621,20 @@ class EmailChannelAdapter(PolledChannelTransport):
         own id, which is the pipeline's redelivery dedup key and the value
         that later becomes ``binding.last_external_message_id`` — the
         ``In-Reply-To`` of the eventual answer.
+
+        Attachments ride along as refs with their **bytes already in hand**
+        (``content``), since MIME carried them; the ones the poll tick's byte
+        budget refused carry ``unavailable_reason`` instead. The
+        ``event_kind="ignored"`` guards below are untouched: a message with no
+        thread key or no sender is not routable whatever it carries.
+
+        ``sender_text_empty`` is declared here and is **not** cosmetic. This
+        transport very much does have an attachment-only case — a mail with an
+        empty subject and body and one attachment — and it used to be invisible
+        to the pipeline, because ``format_email_as_message`` emits its markers
+        and ``From:`` line even for such a mail. Every gate downstream that
+        asks "did the sender write anything" therefore has to read that flag
+        and not ``text``. See ``ChannelInboundMessage.has_sender_text``.
         """
         own_id = _normalize_message_id(parsed.get("message_id"))
         root_id = (
@@ -595,6 +660,17 @@ class EmailChannelAdapter(PolledChannelTransport):
                 _email_row(parsed)
             ),
             external_message_id=own_id,
+            attachments=_attachment_refs(parsed),
+            # Declared, because on this transport ``text`` cannot answer it.
+            # ``format_email_as_message`` above wraps every mail in markers and
+            # a ``From:`` line, so ``text`` is never empty and a pipeline gate
+            # reading it would conclude the sender wrote something whatever
+            # they sent. Judged on the two fields the sender actually filled
+            # in — subject and body — before any wrapping happens.
+            sender_text_empty=not (
+                (parsed.get("subject") or "").strip()
+                or (parsed.get("body") or "").strip()
+            ),
         )
 
     @staticmethod
@@ -714,6 +790,183 @@ class EmailChannelAdapter(PolledChannelTransport):
             )
         return None
 
+    async def send_rejection_notice(
+        self,
+        db: DBSession,
+        channel: ServerChannel,
+        inbound: ChannelInboundMessage,
+        *,
+        recipient_user_id: uuid.UUID,
+        text: str,
+    ) -> None:
+        """Mail the one notice a polled sender is owed, out of band.
+
+        Without this the base no-op applies and an email sender whose entire
+        message was attachments — all of them refused — hears nothing at all,
+        while a Google Chat sender gets the reasons named in the webhook's own
+        response. No agent reply is coming either (there is nothing to route
+        on), so silence is indistinguishable from the platform having eaten
+        the mail.
+
+        **Not the reply path.** :meth:`send_message` goes through
+        ``OutgoingEmailQueue``, which is keyed on a binding with a session and
+        an agent — and this message never got one. This sends directly, and
+        that is also why it is the *only* thing allowed down this route: every
+        other sender-facing text on this transport is either an agent's answer
+        (queued) or a security decline (silent, on purpose).
+
+        **Never raises, and that is load-bearing rather than tidy.** This runs
+        inside a poll tick that has already marked earlier messages ``\\Seen``
+        on the IMAP server; an exception escaping here would abandon the tick
+        and those messages are never re-fetched. Same posture as the guard
+        around ``EmailPollingService._extract_attachments``: every step below
+        is inside the guard, and a failure costs the notice, never the mail.
+
+        The recipient is the **resolved platform account's** address, never
+        the ``From:`` header — the header is spoofable, so answering it would
+        let a forged sender aim the platform's mail at a third party.
+        """
+        if not text:
+            return
+
+        try:
+            cfg = channel.config or {}
+            from_address = str(cfg.get(_CFG_FROM_ADDRESS) or "").strip()
+            raw_server_id = str(cfg.get(_CFG_OUTGOING_SERVER) or "").strip()
+            if not from_address or not raw_server_id:
+                logger.warning(
+                    "%s Channel %s has no outgoing mail configuration — the "
+                    "attachment rejection notice cannot be sent",
+                    _LOG_PREFIX,
+                    channel.id,
+                )
+                return
+            server_id = uuid.UUID(raw_server_id)
+
+            # The caller's session, read-only, per the base contract. Nothing
+            # below writes through it, and every read happens *before* the
+            # SMTP call so the slow part is not sitting inside a lookup.
+            recipient = db.get(User, recipient_user_id)
+            if recipient is None or not recipient.email:
+                logger.warning(
+                    "%s No resolvable address for user %s — the attachment "
+                    "rejection notice cannot be sent",
+                    _LOG_PREFIX,
+                    recipient_user_id,
+                )
+                return
+
+            # The same gate every other outbound mail passes through
+            # (``EmailSendingService._send_single_email``). An account that may
+            # not receive an agent's answer must not receive this either, or
+            # the one mail the platform sends an unconfirmed address is a
+            # notice about a message it refused.
+            from app.services.users.email_confirmation_service import (
+                EmailConfirmationService,
+            )
+
+            if not EmailConfirmationService.is_outbound_email_allowed(recipient):
+                logger.info(
+                    "%s Attachment rejection notice suppressed for user %s — "
+                    "outbound email is gated for that account",
+                    _LOG_PREFIX,
+                    recipient_user_id,
+                )
+                return
+
+            resolved = MailServerService.get_mail_server_with_credentials(
+                db, server_id
+            )
+            if resolved is None:
+                logger.warning(
+                    "%s Channel %s references mail server %s, which no longer "
+                    "exists — no rejection notice sent",
+                    _LOG_PREFIX,
+                    channel.id,
+                    server_id,
+                )
+                return
+            server, password = resolved
+
+            to_address = recipient.email
+            subject = self._notice_subject(db, inbound)
+
+            # Threaded onto the message it answers, so it lands in the
+            # sender's own conversation rather than as a stray mail. The
+            # message's own id is both the ``In-Reply-To`` and the tail of
+            # ``References``; ``thread_key`` is the thread root.
+            in_reply_to = _normalize_message_id(inbound.external_message_id)
+            root_id = _normalize_message_id(inbound.thread_key)
+            msg = EmailSendingService._build_email_message(
+                from_address=from_address,
+                to_address=to_address,
+                subject=subject,
+                body=text,
+                in_reply_to=in_reply_to,
+                references=(
+                    _references_chain(root_id, in_reply_to) if root_id else None
+                ),
+            )
+
+            # smtplib blocks, and this coroutine runs on the shared event
+            # loop: a slow or unreachable SMTP server here would stall every
+            # other request the worker is serving, not just this poll tick.
+            await anyio.to_thread.run_sync(
+                functools.partial(
+                    smtp_connector.send,
+                    server,
+                    password,
+                    from_address,
+                    to_address,
+                    msg,
+                )
+            )
+            logger.info(
+                "%s Sent an attachment rejection notice to %s on channel %s",
+                _LOG_PREFIX,
+                to_address,
+                channel.id,
+            )
+        except Exception:  # noqa: BLE001 — see the docstring; never costs the tick
+            logger.warning(
+                "%s Could not send the attachment rejection notice on channel "
+                "%s; the message is still recorded in the debug feed",
+                _LOG_PREFIX,
+                getattr(channel, "id", None),
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _notice_subject(db: DBSession, inbound: ChannelInboundMessage) -> str:
+        """``Re:`` the sender's own subject, when the arrival row still has it.
+
+        Best effort by design: the row is written by :meth:`_store_arrivals`
+        before anything classifies, so it is normally there — but a storage
+        failure is explicitly non-fatal one method up, and a missing subject
+        must not cost the notice. Threading is carried by ``In-Reply-To`` and
+        ``References`` regardless of what the subject says.
+        """
+        default = "Re: your message"
+        message_id = _normalize_message_id(inbound.external_message_id)
+        if not message_id:
+            return default
+        try:
+            row = db.exec(
+                select(EmailMessage).where(
+                    EmailMessage.email_message_id == message_id
+                )
+            ).first()
+        except Exception:  # noqa: BLE001 — a subject is not worth the notice
+            logger.debug("Could not read the arrival row for a notice subject")
+            return default
+
+        subject = (row.subject or "").strip() if row is not None else ""
+        if not subject:
+            return default
+        if subject.lower().startswith("re:"):
+            return subject[:1000]
+        return f"Re: {subject}"[:1000]
+
     # ------------------------------------------------------------------
     # Setup
     # ------------------------------------------------------------------
@@ -790,6 +1043,43 @@ def _normalize_references(raw: str | None) -> str | None:
         if normalized
     ]
     return " ".join(tokens) or None
+
+
+def _attachment_bytes_held(parsed: dict[str, Any]) -> int:
+    """How much attachment content this parsed mail is holding in memory.
+
+    Charged against the poll tick's budget, so it counts the bytes actually
+    **kept** — an attachment the budget already refused holds nothing.
+    """
+    return sum(
+        len(att["content"])
+        for att in (parsed.get("attachments") or [])
+        if att.get("content")
+    )
+
+
+def _attachment_refs(parsed: dict[str, Any]) -> tuple[ChannelAttachmentRef, ...]:
+    """Map the parse's in-memory attachment dicts onto transport-agnostic refs.
+
+    ``filename``, ``content_type`` and ``size`` are sender-supplied and stay
+    exactly as the MIME part declared them — sanitisation, MIME resolution and
+    the size caps all belong downstream, to the materialiser, which is the one
+    place they can be applied consistently across transports.
+
+    Empty content collapses to ``None`` so the ref reads as "no bytes" rather
+    than as a zero-byte file: a part that decoded to nothing has nothing to
+    give the agent, and the materialiser's ``no_content`` skip says so.
+    """
+    return tuple(
+        ChannelAttachmentRef(
+            filename=str(att.get("filename") or "unknown"),
+            mime_type=att.get("content_type") or None,
+            size_hint=att.get("size"),
+            content=att.get("content") or None,
+            unavailable_reason=att.get("unavailable_reason"),
+        )
+        for att in (parsed.get("attachments") or [])
+    )
 
 
 def _email_row(parsed: dict) -> EmailMessage:

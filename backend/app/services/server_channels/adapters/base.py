@@ -77,6 +77,30 @@ class ChannelSendError(ChannelError):
     """Outbound delivery failed after retries."""
 
 
+class ChannelAttachmentUnavailable(ChannelError):
+    """An inbound attachment's bytes cannot be produced.
+
+    Raised by :meth:`ChannelAdapter.fetch_attachment` for every *expected*
+    failure — the media is gone, the app is not allowed to read it, the
+    response exceeded the byte ceiling, the fetch timed out, the transport
+    has no fetch at all.
+
+    ``reason`` is a short, **sender-safe** token (``"not_found"``,
+    ``"forbidden"``, ``"timeout"``, ``"too_large"``, ``"drive_file"``, …). It
+    is rendered into the sender's own transcript, so it must describe *their
+    message* and never the server's configuration — see §4.5 of the plan: a
+    skipped attachment is not a security decline and is deliberately not
+    subject to the "declines are indistinguishable" rule.
+
+    Never carries a URL, a media token, or any attachment bytes.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        #: Short sender-safe reason token. See the class docstring.
+        self.reason = reason
+
+
 class ChannelTransportMisuseError(ChannelVerificationError):
     """A channel was driven through an entry point its transport does not have.
 
@@ -117,6 +141,53 @@ ChannelInboundMode = Literal["webhook", "polled", "authenticated"]
 
 
 @dataclass(frozen=True)
+class ChannelAttachmentRef:
+    """One inbound attachment, as the transport described it.
+
+    A *reference*, not a file: the pipeline turns these into ``FileUpload``
+    rows, and until it does nothing here has been validated. Every field is
+    attacker-influenced — ``filename`` and ``mime_type`` are whatever the
+    sender's client claimed, and ``size_hint`` is advisory only. The real
+    size is ``len(bytes)`` after the bytes are in hand, and the real MIME is
+    what §4.3's resolution step derives.
+
+    Exactly one of ``content`` / ``handle`` / ``unavailable_reason`` is
+    meaningful:
+
+    * ``content`` — the transport already had the bytes (email: they were
+      decoded out of the MIME part at parse time).
+    * ``handle`` — the transport has an opaque fetch token instead (Google
+      Chat: ``attachmentDataRef.resourceName``), and
+      :meth:`ChannelAdapter.fetch_attachment` knows how to turn it into
+      bytes.
+    * ``unavailable_reason`` — the adapter *knows* it cannot produce these
+      bytes (a Drive file it has no credential for). Carried rather than
+      dropped, so the sender can be told instead of left wondering.
+
+    A ref with none of the three is a skip with reason ``"no_content"``.
+
+    The two shapes live in one type rather than two because every consumer
+    treats them identically after one ``if ref.content is None`` — splitting
+    them would push that branch up into the pipeline, which is not where it
+    belongs.
+    """
+
+    #: Transport-declared display name. Sanitised downstream, never here —
+    #: the adapter's job is to report what arrived, not to clean it.
+    filename: str
+    #: Transport-declared content type. May be absent, or a lie.
+    mime_type: str | None = None
+    #: Declared size, advisory only.
+    size_hint: int | None = None
+    #: The bytes, when the transport already has them.
+    content: bytes | None = None
+    #: Adapter-opaque fetch handle, when it does not.
+    handle: str | None = None
+    #: Set when the adapter knows the bytes are unobtainable.
+    unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True)
 class ChannelInboundMessage:
     """One normalized inbound event.
 
@@ -140,7 +211,56 @@ class ChannelInboundMessage:
     text: str = ""
     # Platform message id, used for redelivery dedup.
     external_message_id: str | None = None
+    # Inbound file attachments the transport carried. A **tuple**, not a
+    # list: this dataclass is frozen, and a mutable default on a frozen value
+    # type is the kind of thing that survives review and then bites. Ignored
+    # entirely unless the adapter also declares
+    # ``ChannelCapabilities.supports_inbound_attachments``.
+    attachments: tuple[ChannelAttachmentRef, ...] = ()
+    #: The transport's own verdict on whether the **sender** supplied any
+    #: usable content, for a transport whose ``text`` is not the sender's
+    #: words alone.
+    #:
+    #: ``None`` — the default, and what every webhook transport leaves it at —
+    #: means "not declared", and consumers fall back to reading ``text``. That
+    #: keeps a transport whose ``text`` is verbatim sender input (Google Chat
+    #: passes ``argumentText`` through unchanged) behaving byte-for-byte as it
+    #: always has.
+    #:
+    #: **Why it exists.** Email's ``text`` is
+    #: ``EmailPollingService.format_email_as_message(...)``, which
+    #: unconditionally wraps the mail in ``--- Forwarded email content ---`` /
+    #: ``From: …`` / ``--- End … ---`` markers — and that wrapper is
+    #: load-bearing, because it is the only route by which a subject reaches a
+    #: channel-routed agent (the ``email_subject`` session-context enrichment
+    #: never fires for a ``channel_email`` session). So ``text`` on this
+    #: transport is *never* empty, and any pipeline gate keyed on
+    #: ``not inbound.text.strip()`` is unreachable there by construction. The
+    #: emptiness has to travel beside the text rather than be recovered from
+    #: it: parsing the wrapper back out would relocate the fragility to the
+    #: next person who edits the marker strings.
+    sender_text_empty: bool | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def has_sender_text(self) -> bool:
+        """Did the **sender** actually write anything?
+
+        The question every "was this message only attachments?" decision is
+        really asking. Prefer it over ``bool(inbound.text.strip())`` anywhere
+        the answer is about the sender's intent rather than about the string
+        that will be stored: the two differ on any transport that synthesises
+        ``text``, and silently agreeing on the others is exactly what makes the
+        difference easy to miss.
+
+        Whitespace-only counts as empty on the fallback arm: a message with no
+        words in it gave the pipeline nothing to route on, and treating ``" "``
+        as text would skip both the filename-derived classifier string and the
+        attachment-only decline.
+        """
+        if self.sender_text_empty is not None:
+            return not self.sender_text_empty
+        return bool(self.text.strip())
 
 
 @dataclass(frozen=True)
@@ -237,6 +357,20 @@ class ChannelCapabilities:
     #: belongs to the transport, and a hardcoded type check is a rule that has
     #: to be found and edited again for the next such transport.
     is_singleton: bool = False
+
+    #: Whether this transport carries inbound file attachments.
+    #:
+    #: Default False, so every adapter that says nothing keeps its current
+    #: behaviour byte for byte — the same convention the transport-shape
+    #: fields above use. The pipeline **ignores**
+    #: ``ChannelInboundMessage.attachments`` entirely when this is False,
+    #: logging a warning if a non-empty tuple arrives anyway: a declaration
+    #: and a behaviour that disagree is a bug, and the declaration is the
+    #: safe reading.
+    #:
+    #: This is also what bounds the feature in place of an admin switch —
+    #: a fact about the transport, not a preference about the deployment.
+    supports_inbound_attachments: bool = False
 
     @property
     def supports_status_notice(self) -> bool:
@@ -468,6 +602,33 @@ class ChannelAdapter(ABC):
         """
         return None
 
+    async def fetch_attachment(
+        self, channel: ServerChannel, ref: ChannelAttachmentRef
+    ) -> bytes:
+        """Resolve an attachment ``handle`` into its bytes.
+
+        Called only for refs whose ``content`` is None. Non-abstract on
+        purpose: a transport that always fills ``content`` (email) needs no
+        override, and a transport that hands out handles without implementing
+        the fetch fails **per file and visibly**, rather than at boot.
+
+        Contract:
+
+        * **Raise nothing but** :class:`ChannelAttachmentUnavailable` for
+          expected failures — gone, forbidden, too large, timed out. The
+          materialiser catches broad ``Exception`` as a backstop and records
+          it as a skip, but an adapter that leans on that backstop throws away
+          its own reason text and the sender is told nothing useful.
+        * **Enforce its own byte ceiling while reading.** A
+          ``Content-Length``-lying response must abort the read rather than
+          buffer to exhaustion; the ceiling is
+          ``settings.channel_attachment_max_file_bytes``.
+        * **Must not need a database session.** This runs inside the
+          materialiser's concurrent fetch group; a session crossing that hop
+          is the ordinary way to corrupt one.
+        """
+        raise ChannelAttachmentUnavailable("no_content")
+
     @abstractmethod
     def get_setup_instructions(
         self, channel: ServerChannel, webhook_url: str | None
@@ -508,8 +669,64 @@ class ChannelAdapter(ABC):
         pushing declines back down a pull channel is a probing oracle and a
         spam amplifier — and never invisible to the operator, since every
         denial branch in ``process_inbound`` records to the debug buffer first.
+
+        **One answer is exempt**, and it is not a decline: an
+        attachment-only message whose every attachment was refused. That one
+        goes out through :meth:`send_rejection_notice` as well, so a polled
+        sender hears it. See that method for why it is not an oracle.
         """
         return {}
+
+    async def send_rejection_notice(
+        self,
+        db: DBSession,
+        channel: ServerChannel,
+        inbound: ChannelInboundMessage,
+        *,
+        recipient_user_id: uuid.UUID,
+        text: str,
+    ) -> None:
+        """Push one sender-facing notice out of band. No-op unless overridden.
+
+        Exists for exactly one caller: ``process_inbound``'s
+        all-attachments-rejected branch, where the sender's *entire* message
+        was files and not one of them became a file. On a webhook transport
+        :meth:`build_sync_response` already delivers that text and this stays a
+        no-op; on a **polled** transport the sync response is inert, so without
+        an override the sender gets total silence — which is the one case that
+        is indistinguishable from the platform being broken, since there is no
+        agent reply coming either.
+
+        **This is not a hole in the no-declines-on-a-pull-channel rule.** That
+        rule protects security decisions — whitelist, policy, identity — where
+        a reply would let an unauthenticated prober enumerate a server's
+        configuration one message at a time. This notice is reached only
+        *after* every one of those gates has admitted the sender, and it says
+        nothing about the server: "your 40MB video exceeds the 25MB limit"
+        describes the sender's own message. An implementer must keep it that
+        way — ``text`` comes from the caller and must never be widened to carry
+        a denial.
+
+        Contract for an override:
+
+        * **Never raise.** The caller guards it anyway, but on the polled path
+          that guard sits inside a poll tick whose earlier messages are
+          already marked read on the server; an escape that got past both
+          would cost the whole tick's mail.
+        * **Never block the event loop.** SMTP and the like belong on a worker
+          thread.
+        * ``recipient_user_id`` is the **resolved platform account**, not the
+          address the message claimed to come from. On a transport whose
+          sender header is spoofable that distinction is the whole point:
+          answering the header would let a forged sender aim the platform's
+          mail at somebody else.
+        * ``db`` is the **caller's** session, mid-transaction, on the same
+          contract as :meth:`record_routing_outcome`: read what the notice
+          needs from it and do not commit, roll back or write through it. An
+          override that opened its own would read a different snapshot and
+          spend a second connection on the request path.
+        """
+        return None
 
 
 class PolledChannelTransport(ChannelAdapter):

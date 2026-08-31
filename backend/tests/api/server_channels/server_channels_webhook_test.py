@@ -28,6 +28,7 @@ from tests.utils.server_channel import (
     GoogleChatJWTSigner,
     build_added_to_space_event,
     build_ignored_event,
+    build_message_attachment,
     build_message_event,
     create_server_channel,
     post_webhook,
@@ -115,6 +116,68 @@ def test_added_to_space_gets_static_welcome_reply(
     resp, _ = _post(client, channel, signer, build_added_to_space_event())
     assert resp.status_code == 200
     assert "Hi!" in resp.json().get("text", "")
+
+
+# ---------------------------------------------------------------------------
+# Attachments: the relaxed empty-text branch (channel-message-attachments)
+# ---------------------------------------------------------------------------
+
+
+def test_attachment_only_message_from_a_human_sender_is_no_longer_ignored(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    ``GoogleChatAdapter._parse_event``'s empty-text ignore guard was relaxed
+    from ``if not text:`` to ``if not text and not attachments:`` — a
+    message that is nothing but a file is a real message and must reach the
+    pipeline, not be dropped silently the way a bot echo or a membership
+    event is.
+
+    Proven by observing it reach the WHITELIST gate — a real, specific
+    ``REPLY_DENIED`` reply, because this channel's whitelist is left unset
+    (deny-all) — rather than the "ignored" branch's silent ``{}`` ack. The
+    two are distinguishable exactly because "ignored" never even looks at
+    the whitelist; ``process_inbound`` acks it before step 4 is reached.
+    """
+    signer = GoogleChatJWTSigner()
+    channel = create_server_channel(client, superuser_token_headers)  # no email_whitelist -> deny-all
+    event = build_message_event(
+        thread_key="spaces/AAA/threads/attachment-only",
+        text="",
+        attachments=[build_message_attachment()],
+    )
+    resp, send_mock = _post(client, channel, signer, event)
+    assert resp.status_code == 200
+    assert resp.json() != {}, (
+        "an attachment-only message was acked as if it were an 'ignored' "
+        "event — the empty-text guard regressed back to `if not text:`"
+    )
+    assert "administrator" in resp.json().get("text", "")
+    send_mock.assert_not_awaited()
+
+
+def test_bot_sender_message_with_an_attachment_is_still_ignored(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    The bot-sender guard runs BEFORE the attachment check — a security
+    property, not an implementation detail: the app's own posts (echoed back
+    on some Chat configurations) must never route, whatever they carry. An
+    attachment on a bot-sender event must never be what tips it out of
+    'ignored'.
+    """
+    signer = GoogleChatJWTSigner()
+    channel = create_server_channel(client, superuser_token_headers, email_whitelist="*")
+    event = build_message_event(
+        thread_key="spaces/AAA/threads/bot-with-attachment",
+        text="",
+        sender_type="BOT",
+        attachments=[build_message_attachment()],
+    )
+    resp, send_mock = _post(client, channel, signer, event)
+    assert resp.status_code == 200
+    assert resp.json() == {}
+    send_mock.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

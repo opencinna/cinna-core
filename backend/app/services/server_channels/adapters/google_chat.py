@@ -34,22 +34,28 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, ClassVar
 
+import anyio.to_thread
 import httpx
 import jwt as pyjwt
 from fastapi import Request
 
+from app.core.config import settings
 from app.core.security import (
     GoogleCertsUnavailable,
     decrypt_field,
     verify_google_signed_jwt,
 )
 from app.models import ServerChannel
-from app.services.common.egress_guard import assert_url_allowed
+from app.services.common.egress_guard import EgressBlockedError, assert_url_allowed
+from app.services.files.file_storage_service import FileStorageService
 from app.services.server_channels.adapters.base import (
     ChannelAdapter,
+    ChannelAttachmentRef,
+    ChannelAttachmentUnavailable,
     ChannelCapabilities,
     ChannelConfigError,
     ChannelError,
@@ -74,6 +80,11 @@ _CHAT_JWKS_URL = (
     "chat@system.gserviceaccount.com"
 )
 _CHAT_API_BASE = "https://chat.googleapis.com/v1"
+# Media download base. **Hardcoded**, and the reason it is a constant rather
+# than something built from the event: an ``attachmentDataRef.resourceName`` is
+# attacker-influenced data, so it is only ever a *path segment* appended here,
+# never a URL in its own right. See :meth:`GoogleChatAdapter.fetch_attachment`.
+_CHAT_MEDIA_BASE = "https://chat.googleapis.com/v1/media"
 _CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
 _DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
@@ -84,6 +95,27 @@ _MAX_MESSAGE_CHARS = 4096
 # design — a persistent queue is a listed future enhancement.
 _SEND_ATTEMPTS = 3
 _SEND_BACKOFF_SECONDS = (0.5, 1.5)
+
+# The shape a Chat media ``resourceName`` may have, and nothing else. Chat's
+# tokens are base64url-ish, sometimes with resource-path separators in them, so
+# the alphabet is letters, digits and ``- _ . / = + ~``. Everything a URL could
+# be steered with is absent by construction: no ``:`` (a scheme), no leading
+# ``/`` and no ``//`` (an authority), no ``?`` or ``#`` (query or fragment), no
+# ``%`` (an encoded separator), no whitespace, no backslash. ``..`` is refused
+# separately, since the alphabet alone would allow it.
+_MEDIA_RESOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.=+~]*(?:/[A-Za-z0-9\-_.=+~]+)*$")
+_MEDIA_RESOURCE_MAX_CHARS = 2048
+# How many redirects a media download may follow before it gives up. Chat
+# media does not serve the bytes itself — it hands out a redirect to a signed
+# URL on another Google origin — so the chain is followed, but a cross-origin
+# hop leaves this app's bearer token behind (:meth:`_resolve_redirect`), and no
+# hop of any kind may be plain ``http``. Exhausting the count is an
+# ``upstream_error``, not an exception.
+_MEDIA_MAX_REDIRECTS = 3
+# Upper bound on how many attachment refs one event may produce. Not a policy
+# cap — that is ``CHANNEL_ATTACHMENT_MAX_PER_MESSAGE``, applied downstream —
+# just a ceiling on the work parsing does for a payload claiming thousands.
+_MAX_PARSED_ATTACHMENTS = 1000
 
 # Per-process access-token cache: channel_id -> (token, absolute_expiry).
 # Refreshed early by the skew so a token never expires mid-flight.
@@ -117,6 +149,12 @@ class GoogleChatAdapter(ChannelAdapter):
             supports_markdown=True,
             max_message_chars=_MAX_MESSAGE_CHARS,
             supports_sync_reply=True,
+            # Chat carries attachments as media *handles*, not bytes, so this
+            # declaration comes with :meth:`fetch_attachment` — the one place
+            # this platform makes an outbound request on data an external
+            # sender chose. Everything that bounds it is in §4.2 of the plan
+            # and restated on that method.
+            supports_inbound_attachments=True,
         )
 
     # ------------------------------------------------------------------
@@ -225,7 +263,14 @@ class GoogleChatAdapter(ChannelAdapter):
         # `argumentText` is the text with the bot @-mention already stripped by
         # Chat; `text` is the raw form including the mention.
         text = (message.get("argumentText") or message.get("text") or "").strip()
-        if not text:
+        attachments = self._parse_attachments(message)
+        if not text and not attachments:
+            # Relaxed from `if not text`: a message that is nothing but a file
+            # is a real message, and dropping it silently was the sender
+            # watching their upload disappear. Only the *empty* event is
+            # ignored now. Every other ignore condition is untouched, and in
+            # particular the bot-sender guard above still runs first — the
+            # app's own posts can never route, attachment or not.
             return ChannelInboundMessage(event_kind="ignored", raw=event)
 
         sender_email = (sender.get("email") or "").strip() or None
@@ -250,8 +295,396 @@ class GoogleChatAdapter(ChannelAdapter):
             thread_key=thread_key,
             text=text,
             external_message_id=message.get("name") or None,
+            attachments=attachments,
             raw=event,
         )
+
+    @staticmethod
+    def _parse_attachments(
+        message: dict[str, Any],
+    ) -> tuple[ChannelAttachmentRef, ...]:
+        """Normalize ``message.attachment[]`` into transport-agnostic refs.
+
+        Nothing is fetched here and nothing is validated here — this runs
+        inside webhook verification, long before the pipeline knows whether the
+        sender may send anything at all (plan §4.1). All it does is say what
+        the event claimed, and for each entry which of the three shapes it is:
+
+        * an uploaded file → ``handle`` = ``attachmentDataRef.resourceName``,
+          resolvable later by :meth:`fetch_attachment`;
+        * a **Drive** file → ``unavailable_reason="drive_file"``, and it is
+          *never* fetched: the app has no Drive credential and no user consent
+          to act on one (§4.2). Carried rather than dropped so the sender is
+          told instead of left wondering why their file was ignored;
+        * neither → ``unavailable_reason="no_content"``.
+
+        ``contentName`` and ``contentType`` are sender-supplied and stay
+        verbatim; sanitisation and MIME resolution belong to the materialiser.
+        """
+        refs: list[ChannelAttachmentRef] = []
+        # ``isinstance`` before the slice, not just ``or []``: a truthy
+        # non-list — an object, a string — would make ``[:1000]`` raise a
+        # ``TypeError`` (or, for a string, silently iterate characters). This
+        # runs inside webhook verification, so a raise is a 500 that Google
+        # then *retries*, which is exactly the failure class the rest of this
+        # path works to avoid. The whole field is untrusted shape, verified
+        # signature or not; the entries below already say so one line down.
+        raw_attachments = message.get("attachment")
+        if not isinstance(raw_attachments, list):
+            raw_attachments = []
+
+        # Sliced: a verified event may still carry an absurd ``attachment[]``,
+        # and there is no reason to build 10k refs for a message the
+        # materialiser caps at ``CHANNEL_ATTACHMENT_MAX_PER_MESSAGE`` before it
+        # fetches anything. Far above any real message, so nothing legitimate
+        # is truncated here.
+        for entry in raw_attachments[:_MAX_PARSED_ATTACHMENTS]:
+            if not isinstance(entry, dict):
+                continue
+            filename = str(entry.get("contentName") or "").strip() or "attachment"
+            mime_type = str(entry.get("contentType") or "").strip() or None
+            source = str(entry.get("source") or "").strip().upper()
+
+            data_ref = entry.get("attachmentDataRef")
+            resource = (
+                str((data_ref or {}).get("resourceName") or "").strip()
+                if isinstance(data_ref, dict)
+                else ""
+            )
+
+            if source == "DRIVE_FILE" or (entry.get("driveDataRef") and not resource):
+                refs.append(
+                    ChannelAttachmentRef(
+                        filename=filename,
+                        mime_type=mime_type,
+                        unavailable_reason="drive_file",
+                    )
+                )
+                continue
+
+            refs.append(
+                ChannelAttachmentRef(
+                    filename=filename,
+                    mime_type=mime_type,
+                    handle=resource or None,
+                    unavailable_reason=None if resource else "no_content",
+                )
+            )
+        return tuple(refs)
+
+    # ------------------------------------------------------------------
+    # Attachments
+    # ------------------------------------------------------------------
+
+    async def fetch_attachment(
+        self, channel: ServerChannel, ref: ChannelAttachmentRef
+    ) -> bytes:
+        """Download one Chat attachment's bytes with this app's own bot token.
+
+        **This is the platform making a server-side request on data an
+        external sender chose**, so every gate in plan §4.2 applies and none of
+        them is advisory:
+
+        * the URL is built from the hardcoded :data:`_CHAT_MEDIA_BASE` plus the
+          ``resourceName`` as a **path segment** — the handle is never used as
+          a URL;
+        * the handle is shape-validated *before* a round trip is spent on it
+          (:meth:`_media_url`), the same posture :meth:`_message_url` already
+          takes for message ids;
+        * the built URL goes through ``assert_url_allowed`` — the SSRF guard,
+          which every other outbound call in this adapter also passes;
+        * the read is **streamed against a byte ceiling**
+          (``channel_attachment_max_file_bytes``), so a response that lies in
+          its ``Content-Length`` cannot exhaust memory: the ceiling aborts the
+          read mid-stream;
+        * redirects are followed — Chat media redirects to a signed URL on a
+          different Google origin, so refusing to leave the origin would break
+          every real download — but **a cross-origin hop drops the
+          ``Authorization`` header**, so this app's bearer token never reaches
+          a host that is not the Chat API (:meth:`_resolve_redirect`). Every
+          hop must be ``https`` and must pass ``assert_url_allowed``, and the
+          chain is bounded by :data:`_MEDIA_MAX_REDIRECTS`.
+
+        Raises only :class:`ChannelAttachmentUnavailable`, per the base
+        contract, with a coarse sender-safe reason. **Nothing here logs the URL
+        (it carries the media token) and nothing logs the bytes** (§4.4) — the
+        log line is the reason class and the sanitised filename.
+        """
+        if ref.unavailable_reason:
+            raise ChannelAttachmentUnavailable(ref.unavailable_reason)
+        if not ref.handle:
+            raise ChannelAttachmentUnavailable("no_content")
+
+        # ``_media_url`` ends in ``assert_url_allowed``, whose rebind defence
+        # calls ``socket.getaddrinfo`` — a BLOCKING syscall. This coroutine
+        # runs inside the materialiser's task group under ``move_on_after``,
+        # and a blocking call cannot be cancelled by a deadline: a slow
+        # resolver would stall the whole event loop past it, on the
+        # synchronous webhook path. So it goes to a worker thread.
+        url = await anyio.to_thread.run_sync(self._media_url, ref.handle)
+        ceiling = settings.channel_attachment_max_file_bytes
+        timeout = float(settings.CHANNEL_ATTACHMENT_FETCH_TIMEOUT_SECONDS)
+
+        try:
+            credentials = self._load_credentials(channel)
+        except ChannelSendError as exc:
+            logger.warning(
+                "%s Cannot fetch attachment '%s' on channel %s: %s",
+                _LOG_PREFIX,
+                self._safe_name(ref.filename),
+                channel.id,
+                exc,
+            )
+            raise ChannelAttachmentUnavailable("upstream_error") from exc
+
+        # Two attempts at most, and the second only for 401/403: a token this
+        # process cached may have been revoked or rotated behind its back.
+        # Mirrors what ``_request_with_retries`` does for the Chat API, minus
+        # the backoff — a media download is on the synchronous webhook path.
+        for attempt in range(2):
+            try:
+                access_token = await self._mint_access_token(channel, credentials)
+            except Exception as exc:  # noqa: BLE001 — see below
+                # Deliberately broad. A rotated or corrupt service-account blob
+                # is the likeliest real cause of a fetch failing, and it does
+                # not surface as ``ChannelSendError``: ``pyjwt.encode`` raises
+                # out of ``cryptography`` on a malformed key, and the token
+                # endpoint's ``response.json()`` / ``expires_in`` parsing raise
+                # ``ValueError``. Letting any of those escape would hand the
+                # materialiser's backstop a failure whose reason text this
+                # method is the only place able to write.
+                logger.warning(
+                    "%s Could not mint a token to fetch attachment '%s' on "
+                    "channel %s: %s",
+                    _LOG_PREFIX,
+                    self._safe_name(ref.filename),
+                    channel.id,
+                    exc,
+                )
+                raise ChannelAttachmentUnavailable("upstream_error") from exc
+
+            try:
+                return await self._download_media(
+                    url=url,
+                    access_token=access_token,
+                    ceiling=ceiling,
+                    timeout=timeout,
+                )
+            except ChannelAttachmentUnavailable as exc:
+                retryable = exc.reason == "forbidden" and attempt == 0
+                if not retryable:
+                    logger.warning(
+                        "%s Attachment '%s' on channel %s unavailable: %s",
+                        _LOG_PREFIX,
+                        self._safe_name(ref.filename),
+                        channel.id,
+                        exc.reason,
+                    )
+                    raise
+                # Drop the cached token and try exactly once more.
+                self.invalidate_token_cache(channel.id)
+
+        raise ChannelAttachmentUnavailable("upstream_error")
+
+    async def _download_media(
+        self, *, url: str, access_token: str, ceiling: int, timeout: float
+    ) -> bytes:
+        """Stream one media URL into memory, stopping at ``ceiling`` bytes.
+
+        Split out of :meth:`fetch_attachment` so the retry decision (which
+        needs the *reason*) is not tangled with the transfer. Redirects are
+        followed manually — ``follow_redirects=False`` on the client is what
+        makes that possible — up to :data:`_MEDIA_MAX_REDIRECTS`, each hop
+        vetted by :meth:`_resolve_redirect`, which also says whether the
+        bearer token may still ride along.
+        """
+        current = url
+        # The bot token goes out only while the request is still on the Chat
+        # API's own origin. :meth:`_resolve_redirect` clears this the first
+        # time the chain leaves it, and it never comes back on: a later hop
+        # that happens to land back on a "same origin as the previous hop"
+        # must not resurrect a credential already left behind.
+        send_authorization = True
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=False
+        ) as client:
+            for _ in range(_MEDIA_MAX_REDIRECTS + 1):
+                headers = (
+                    {"Authorization": f"Bearer {access_token}"}
+                    if send_authorization
+                    else {}
+                )
+                try:
+                    # No ``params``: the URL already carries ``alt=media``,
+                    # and passing them again would REPLACE the query of a
+                    # redirect target — which is how a signed download URL
+                    # loses the signature that makes it work.
+                    async with client.stream(
+                        "GET",
+                        current,
+                        headers=headers,
+                    ) as response:
+                        if response.is_redirect:
+                            current, keep_authorization = (
+                                await self._resolve_redirect(response, current)
+                            )
+                            send_authorization = (
+                                send_authorization and keep_authorization
+                            )
+                            continue
+                        if response.status_code >= 400:
+                            raise ChannelAttachmentUnavailable(
+                                self._fetch_reason(response.status_code)
+                            )
+                        buffer = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            buffer.extend(chunk)
+                            if len(buffer) > ceiling:
+                                # Abort mid-stream: the response may be lying
+                                # about its length, and buffering to find out
+                                # is the exhaustion this ceiling prevents.
+                                raise ChannelAttachmentUnavailable("too_large")
+                        return bytes(buffer)
+                except httpx.TimeoutException as exc:
+                    raise ChannelAttachmentUnavailable("timeout") from exc
+                except httpx.HTTPError as exc:
+                    raise ChannelAttachmentUnavailable("upstream_error") from exc
+
+        # The chain outlived :data:`_MEDIA_MAX_REDIRECTS`. A coarse reason, not
+        # a raw exception escaping the ``ChannelAttachmentUnavailable``-only
+        # contract of :meth:`fetch_attachment`.
+        raise ChannelAttachmentUnavailable("upstream_error")
+
+    @staticmethod
+    async def _resolve_redirect(
+        response: httpx.Response, current: str
+    ) -> tuple[str, bool]:
+        """Vet one redirect hop; say whether the bearer token may follow it.
+
+        Returns ``(target_url, keep_authorization)``.
+
+        Chat media does not hand back the bytes itself — it answers with a
+        redirect to a signed URL on a *different* Google origin
+        (``googleusercontent.com``, ``storage.googleapis.com``). Refusing to
+        leave the origin, which an earlier draft of this method did, therefore
+        fails every real download rather than only the hostile ones. So the
+        hop is followed. What does not follow it is the credential:
+
+        **A cross-origin redirect is followed with the ``Authorization``
+        header STRIPPED, and that strip is load-bearing — do not "simplify"
+        this back into an unconditional header pass-through.** The header
+        carries this channel's ``chat.bot`` access token, a credential for the
+        whole Chat API on that channel, and the target host is named by the
+        *response*, not by this code. The signed URL authenticates itself
+        through its own query signature and has no use for the token; sending
+        it anyway would post a live API credential to whatever host the
+        response chose. That is the leak this branch exists to prevent.
+
+        Same **scheme and host and port** — a genuinely same-origin hop, which
+        is what an ordinary Chat-side redirect looks like — keeps the header.
+        Anything else, including a host that merely differs by port, is
+        cross-origin and loses it. Nothing here trusts the target: stripping
+        the credential is not permission, it is only the reduction of what a
+        bad target could take.
+
+        Three rules hold on **both** branches:
+
+        * **``https`` or nothing.** A ``Location`` of ``http://…`` is refused
+          outright, same origin or not. ``egress_guard.ALLOWED_SCHEMES`` is
+          ``("http", "https")``, so ``assert_url_allowed`` will **not** stop a
+          downgrade — this check is the only one that does. Stripping the
+          token does not make cleartext acceptable: the payload is someone's
+          file, and on a same-origin hop the token is still attached.
+        * **``assert_url_allowed`` on every hop.** "Same origin as a URL that
+          passed once" is not the same statement as "allowed" — DNS can answer
+          differently on the second lookup, which is the whole point of the
+          rebind defence — and a cross-origin target has never been checked at
+          all. It is the SSRF guard, and it is what keeps a redirect from
+          steering this request at a private address.
+        * **a bounded chain.** :data:`_MEDIA_MAX_REDIRECTS` in the caller.
+
+        ``httpx.InvalidURL`` is caught explicitly: it does **not** subclass
+        ``httpx.HTTPError``, so the caller's handler would not have caught it
+        and it would have escaped :meth:`fetch_attachment`, whose contract is
+        to raise nothing but :class:`ChannelAttachmentUnavailable`. A
+        ``Location`` header of ``http://[::bad`` is enough to reach it.
+        """
+        location = response.headers.get("location") or ""
+        if not location:
+            raise ChannelAttachmentUnavailable("upstream_error")
+        try:
+            target_url = response.url.join(location)
+            current_url = httpx.URL(current)
+        except (httpx.InvalidURL, UnicodeError, ValueError, TypeError) as exc:
+            raise ChannelAttachmentUnavailable("upstream_error") from exc
+        if target_url.scheme != "https":
+            raise ChannelAttachmentUnavailable("upstream_error")
+        same_origin = (
+            target_url.scheme == current_url.scheme
+            and target_url.host == current_url.host
+            and target_url.port == current_url.port
+        )
+        try:
+            # Blocking DNS again — same reasoning as in ``fetch_attachment``.
+            allowed = await anyio.to_thread.run_sync(
+                assert_url_allowed, str(target_url)
+            )
+        except EgressBlockedError as exc:
+            raise ChannelAttachmentUnavailable("upstream_error") from exc
+        return allowed, same_origin
+
+    @staticmethod
+    def _fetch_reason(status_code: int) -> str:
+        """Map an HTTP status onto a coarse, sender-safe reason token.
+
+        Coarse on purpose: the sender reads this in their own transcript, and
+        the difference between Google's 429 and its 503 is the operator's
+        problem, not theirs.
+        """
+        if status_code == 404:
+            return "not_found"
+        if status_code in (401, 403):
+            return "forbidden"
+        return "upstream_error"
+
+    @staticmethod
+    def _media_url(resource_name: str) -> str:
+        """Shape-validate a media ``resourceName`` and build its download URL.
+
+        The whole point is to refuse malformed input **before** spending a
+        round trip on it — the same reasoning as :meth:`_message_url`, with a
+        sharper edge: this value came from an external sender, so the check is
+        also what keeps it a path segment rather than a URL. ``..``, a scheme,
+        an authority, a query, a fragment and percent-encoding are all rejected
+        (see :data:`_MEDIA_RESOURCE_RE`), and the result still goes through
+        ``assert_url_allowed`` afterwards.
+        """
+        token = (resource_name or "").strip()
+        if (
+            not token
+            or len(token) > _MEDIA_RESOURCE_MAX_CHARS
+            or ".." in token
+            or not _MEDIA_RESOURCE_RE.match(token)
+        ):
+            raise ChannelAttachmentUnavailable("invalid_handle")
+        try:
+            # ``alt=media`` asks for the bytes rather than the media metadata,
+            # and it is baked in here so the download never has to re-apply a
+            # query to a URL it followed a redirect to.
+            return assert_url_allowed(f"{_CHAT_MEDIA_BASE}/{token}?alt=media")
+        except EgressBlockedError as exc:
+            raise ChannelAttachmentUnavailable("upstream_error") from exc
+
+    @staticmethod
+    def _safe_name(filename: str) -> str:
+        """The only form of a sender-supplied filename that reaches a log.
+
+        §4.4: fetch failures log the reason class and the *sanitised* filename,
+        never the URL (it carries the media token) and never the bytes. The
+        same sanitiser the materialiser will use on the way to disk, so what an
+        operator reads in the log is what they will find on disk.
+        """
+        return FileStorageService.sanitize_filename(filename or "attachment")[:120]
 
     # ------------------------------------------------------------------
     # Outbound

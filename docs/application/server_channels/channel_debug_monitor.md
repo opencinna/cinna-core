@@ -15,6 +15,7 @@ The feature is deliberately named for *channels*, not for Google Chat: it reads 
 - **Capture window** — the feed is held in memory by the backend process. It is bounded (a ring buffer per channel), and it is emptied by a backend restart. The panel states the moment capture began for exactly this reason.
 - **Recent sender** — someone the channel has seen, and the thread to reach them on. Drawn from thread bindings (durable) merged with the capture buffer (live).
 - **Test target** — where an admin test message goes: an email picked from the recent senders, or a raw channel-native space/thread id.
+- **Attachment outcome** — when a captured inbound message carried files (see [Inbound file attachments](server_channels.md#inbound-file-attachments)), the event's `detail` gains how many were accepted, how many were skipped, and — capped and flattened into one string — which files and why. The panel groups the "why" into three families by whose next action it is: **Refused** (the sender's to fix — too large, wrong type, over quota, too many, over the message's aggregate cap), **Needs resending** (also the sender's, but nothing actually broke — a Google Drive link, or a mail-poll budget that clears itself next tick), and **Failed** (the operator's to look at — a download that timed out, 404'd, was forbidden, or a disk write that failed). A code the panel doesn't recognize is shown under a neutral heading with the raw token, never guessed into one of the three.
 
 ## User Stories / Flows
 
@@ -54,6 +55,7 @@ The feature is deliberately named for *channels*, not for Google Chat: it reads 
 - **Consecutive identical events collapse into one row with a count**, and the row's timestamp becomes the latest occurrence. This keeps a retry storm readable, and it is also a defence: the ring is bounded and the webhook is reachable by anyone holding the token, so without collapsing, one repeated request could push every real event out of the feed an admin is trying to read. Only *consecutive* identical events merge — an intervening different event keeps them apart, and two rejections at different pipeline stages stay separate rows.
 - A rejected-at-verification event carries **nothing from the payload** — it failed the very check that would let any of it be trusted.
 - Capture can never affect delivery: a failure to record is swallowed, never propagated into the webhook or the outbound path.
+- **Attachment filenames are message text, treated identically.** They come from the sender, are captured in the same in-memory ring, are clamped the same way, and never reach a `SecurityEvent`. Reason *codes* are the exception on the sender-facing side: the sender's own transcript and reply get a vague, generic sentence for a code the platform doesn't recognize, while the debug feed always shows the exact code, since diagnosing which one fired is the whole point of this feed.
 
 ### Reachability and test targets
 
@@ -94,6 +96,7 @@ outbound delivery ──────────────▶  in-memory captu
 - **[Agent Activities & Security Events](../agent_activities/agent_activities.md)** — the durable counterpart. Verification failures, whitelist denials, auto-registration, auto-install and admin test sends are recorded there and survive restarts; the monitor is the live view beside it.
 - **[Auto Routing Tuning](../routing_tuning/routing_tuning.md)** — the other durable counterpart, specifically for routing: each captured event carries `detail.trace_id` linking this live row to its persisted `routing_decision`, which survives a restart and carries the full candidate list and verdict this feed only summarizes. The two surfaces do **not** cover the same set of transports, and the asymmetry is deliberate: this feed covers the channel transports (Google Chat, email) and not App MCP; the durable trace covers all of them, App MCP included.
 - **Adapters** — the monitor reads only adapter-agnostic pipeline values, so a new channel type is covered without touching it.
+- **[Inbound file attachments](server_channels.md#inbound-file-attachments)** — the source of the attachment counts and skip reasons above. This monitor is the only place a superuser sees the exact reason a file was skipped; the sender only ever sees a plain-language sentence.
 
 ## Technical Details
 

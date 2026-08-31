@@ -6,6 +6,7 @@ from pydantic import (
     AnyUrl,
     BeforeValidator,
     EmailStr,
+    Field,
     HttpUrl,
     PostgresDsn,
     computed_field,
@@ -828,6 +829,16 @@ class Settings(BaseSettings):
         "application/zip,application/x-tar,application/gzip,"
         # Structured data
         "application/json,application/xml,"
+        # Whole email messages. A forwarded mail's own attachments arrive
+        # loose, but a forward that carries none is materialised as a ``.eml``
+        # instead of being lost (the fallback in
+        # ``EmailPollingService._extract_attachments``); without this entry
+        # that fallback would be skipped as ``type_not_allowed``. Note this
+        # allowlist is deployment-wide — it also permits ``.eml`` on the web
+        # upload, agent ``<cinna_attach>`` and A2A paths. Deliberate: the
+        # platform never parses an upload, it only stores it and hands it to
+        # the agent, so a mail file is no more privileged than a PDF.
+        "message/rfc822,"
         # Microsoft Office (legacy + OOXML)
         "application/msword,"
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
@@ -861,6 +872,76 @@ class Settings(BaseSettings):
     def upload_max_user_storage_bytes(self) -> int:
         """Convert GB to bytes"""
         return self.UPLOAD_MAX_USER_STORAGE_GB * 1024 * 1024 * 1024
+
+    # --- Server-channel inbound attachments ------------------------------
+    #
+    # Files arriving from *outside* the platform (Google Chat, polled email)
+    # are bounded more tightly than a web upload: they arrive unattended, on
+    # the platform's only unauthenticated ingress, and nobody is watching a
+    # progress bar. These caps are the whole of the feature's bound — there
+    # is deliberately no per-channel `allow_attachments` switch.
+    #
+    # Per-file cap, deliberately BELOW the 100MB web-upload cap: 25MB is also
+    # where most mail servers stop.
+    CHANNEL_ATTACHMENT_MAX_FILE_MB: int = Field(default=25, ge=1)
+    # How many attachments one inbound message may carry. Refs beyond this are
+    # skipped WITHOUT being fetched — and, on email, without being *retained*
+    # either: the parser measures the excess parts so the manifest stays honest
+    # and then drops their bytes, because on that transport the cost the
+    # promise is about is the decoded copy, not a download.
+    CHANNEL_ATTACHMENT_MAX_PER_MESSAGE: int = Field(default=10, ge=1)
+    # Aggregate byte cap across one inbound message, so ten files that each
+    # fit cannot jointly blow past what one message is allowed to bring.
+    #
+    # It is also the lever on peak memory, though not one-for-one: the fetch
+    # concurrency is derived from it (aggregate ÷ per-file), so a message's
+    # true peak is roughly `aggregate + concurrency × per-file` — 100MB with
+    # these defaults. Nothing caps that across *simultaneous* messages, so a
+    # deployment expecting many concurrent attachment-bearing webhooks should
+    # size this against its worker memory rather than against one message.
+    CHANNEL_ATTACHMENT_MAX_AGGREGATE_MB: int = Field(default=50, ge=1)
+    # Fetch deadline for a transport that hands out handles rather than bytes
+    # (Google Chat media). **Spent in two places, and the second is the one
+    # that decides the outcome:** the adapter uses it as the per-request HTTP
+    # timeout, and ``ChannelAttachmentService`` uses the same number as the
+    # deadline for the *whole message's* fetch phase. So this is a
+    # whole-message budget, not a per-file allowance — ten attachments share
+    # these thirty seconds, they do not get thirty each.
+    #
+    # That is stricter than a naive reading and deliberately so: step 6.5 runs
+    # inside a webhook Google expects acked in about thirty seconds, and a
+    # budget that scaled with the attachment count would miss the ack window
+    # rather than drop a file. The cost is the tail of a large legitimate
+    # message, which is skipped as ``fetch_budget_exhausted`` — a reason code
+    # kept distinct from ``timeout`` precisely so this constant is where the
+    # operator looks.
+    CHANNEL_ATTACHMENT_FETCH_TIMEOUT_SECONDS: int = Field(default=30, ge=1)
+    # Multiple of the per-message aggregate that one poll tick may hold in
+    # memory across all fetched messages. Beyond it, later messages'
+    # attachments are dropped to refs rather than buffered — a mailbox with a
+    # backlog of large mail must not become an OOM.
+    CHANNEL_ATTACHMENT_POLL_BUDGET_MULTIPLIER: int = Field(default=4, ge=1)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def channel_attachment_max_file_bytes(self) -> int:
+        """Convert MB to bytes"""
+        return self.CHANNEL_ATTACHMENT_MAX_FILE_MB * 1024 * 1024
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def channel_attachment_max_aggregate_bytes(self) -> int:
+        """Convert MB to bytes"""
+        return self.CHANNEL_ATTACHMENT_MAX_AGGREGATE_MB * 1024 * 1024
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def channel_attachment_poll_budget_bytes(self) -> int:
+        """Per-poll-tick in-memory attachment budget, in bytes."""
+        return (
+            self.channel_attachment_max_aggregate_bytes
+            * self.CHANNEL_ATTACHMENT_POLL_BUDGET_MULTIPLIER
+        )
 
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
