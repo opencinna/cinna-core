@@ -54,12 +54,22 @@ _MASK_OPEN = "\x00"
 _MASK_CLOSE = "\x00"
 _MASK_RE = re.compile(r"\x00(\d+)\x00")
 
-_FENCE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*([^\s`~]*)\s*$")
+#: Public because ``chat_text_chunking`` shares this model of "what is a
+#: fence line" when it scans RAW markdown: a seal boundary must never land
+#: inside a block this module would still consider open. Note the two
+#: groups a consumer needs: group 2 is the marker run, and its first
+#: character is the marker *type* — a closing fence must repeat the
+#: opening one (see ``_take_fenced_block``), so a ``~~~`` line inside a
+#: backtick block is content, not a close.
+FENCE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*([^\s`~]*)\s*$")
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 _RULE_RE = re.compile(r"^\s{0,3}(?:-\s*-\s*-[-\s]*|\*\s*\*\s*\*[*\s]*|_\s*_\s*_[_\s]*)$")
 _BULLET_RE = re.compile(r"^(\s*)[*+-][ \t]+(.*)$")
 _ORDERED_RE = re.compile(r"^(\s*)(\d+)[.)][ \t]+(.*)$")
-_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+#: Public because ``chat_text_chunking`` shares this model of "what is a
+#: table row": the seal boundary it picks has to agree with what this
+#: module will actually render, so a rename here has a consumer.
+TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_DIVIDER_RE = re.compile(r"^\s*\|(?:\s*:?-{2,}:?\s*\|)+\s*$")
 _INLINE_CODE_RE = re.compile(r"(`+)(.+?)\1", re.DOTALL)
 
@@ -121,12 +131,12 @@ def _convert(text: str) -> str:
     while index < len(lines):
         line = lines[index]
 
-        fence = _FENCE_RE.match(line)
+        fence = FENCE_RE.match(line)
         if fence is not None:
             index = _take_fenced_block(lines, index, fence, masked, out)
             continue
 
-        if _TABLE_DIVIDER_RE.match(line) and out and _TABLE_ROW_RE.match(lines[index - 1]):
+        if _TABLE_DIVIDER_RE.match(line) and out and TABLE_ROW_RE.match(lines[index - 1]):
             # The header row was already emitted as an ordinary line; take it
             # back and re-render the whole table as one monospace block.
             out.pop()
@@ -150,7 +160,7 @@ def _take_fenced_block(
     body: list[str] = []
     index += 1
     while index < len(lines):
-        closing = _FENCE_RE.match(lines[index])
+        closing = FENCE_RE.match(lines[index])
         if closing is not None and closing.group(2)[0] == fence.group(2)[0]:
             index += 1
             break
@@ -175,7 +185,7 @@ def _take_table(lines: list[str], index: int, masked: list[str], out: list[str])
     lined up.
     """
     rows: list[list[str]] = []
-    while index < len(lines) and _TABLE_ROW_RE.match(lines[index]):
+    while index < len(lines) and TABLE_ROW_RE.match(lines[index]):
         raw = lines[index].strip().strip("|")
         index += 1
         if _TABLE_DIVIDER_RE.match(f"|{raw}|"):

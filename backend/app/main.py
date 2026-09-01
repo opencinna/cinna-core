@@ -346,8 +346,17 @@ async def lifespan(app: FastAPI):
     )
 
     # Server channels: deliver the agent's reply back out through the channel
-    # the message arrived on. Both handlers gate on
-    # `session.integration_type.startswith("channel_")` before doing any work.
+    # the message arrived on. They fire for every stream on the instance and
+    # gate on `session.integration_type.startswith("channel_")` — after a
+    # dict lookup in the streaming relay's registry, which has to come first
+    # so a channel turn's tail is taken outside the DB session (see
+    # `ChannelOutboundService._take_stream_tail`), and which answers "no
+    # relay" for every non-channel session at the cost of one dict miss.
+    #
+    # STREAM_INTERRUPTED is emitted *instead of* STREAM_COMPLETED when a turn
+    # is stopped, so without the third subscription an interrupted channel turn
+    # leaves its status notice stranded on "working on your message…" until the
+    # next turn patches it.
     from app.services.server_channels.channel_outbound_service import (
         ChannelOutboundService,
     )
@@ -359,6 +368,10 @@ async def lifespan(app: FastAPI):
     event_service.register_handler(
         event_type=EventType.STREAM_ERROR,
         handler=ChannelOutboundService.handle_stream_error
+    )
+    event_service.register_handler(
+        event_type=EventType.STREAM_INTERRUPTED,
+        handler=ChannelOutboundService.handle_stream_interrupted
     )
 
     logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, ChannelOutboundService)")

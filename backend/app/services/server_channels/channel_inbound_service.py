@@ -109,6 +109,10 @@ from app.services.server_channels.channel_attachment_service import (
     ChannelAttachmentService,
     SkippedAttachment,
 )
+from app.services.server_channels.channel_control_commands import (
+    execute_control_command,
+    match_control_command,
+)
 from app.services.server_channels.channel_debug_buffer import (
     DEBUG_INSTALLING,
     DEBUG_NO_MATCH,
@@ -362,6 +366,17 @@ REPLY_THREAD_OWNED = (
     "This conversation belongs to someone else. Please start a new thread and "
     "I'll set you up with your own assistant."
 )
+# The `/stop` decline — see ``channel_control_commands.handle_stop``. It is
+# reached only after the ownership gate, so the person asking is the person who
+# owns the thread, and what it reports is a fact about *their own*
+# conversation: nothing is streaming in it. It reveals nothing about the
+# server, no more than the silence a successful `/stop` answers with does, so
+# it does not belong to the indistinguishable-declines family above.
+#
+# A successful `/stop` deliberately has no text of its own: the stopped marker
+# that ``ChannelOutboundService.handle_stream_interrupted`` settles into the
+# status notice is the acknowledgement.
+REPLY_NOTHING_TO_STOP = "There's nothing running right now."
 # The ONE reply in this module that is deliberately specific.
 #
 # Every other decline above is uninformative on purpose — "you are not
@@ -1475,6 +1490,112 @@ class ChannelInboundService:
                     REPLY_THREAD_OWNED, inbound.thread_key
                 )
 
+            # ---- 7a. Channel control commands ----
+            #
+            # A tiny set of strings is addressed to the pipeline rather than to
+            # the agent; `/stop` is the chat-thread equivalent of the web
+            # client's stop button, which a chat thread has no way to render.
+            # See ``channel_control_commands``.
+            #
+            # **Placement is the security argument.** Below the ownership
+            # decline above, so the person stopping a stream is the person the
+            # thread belongs to; below step 6, so a sender whose access was
+            # revoked cannot reach it; below the whitelist, the verification
+            # and the rate limit, like everything else at step 7.
+            # ``interrupt_stream``'s documented contract is "the caller must
+            # authorize session access first", and this is that authorization:
+            # ``binding_user_id == user_id`` was just established. That holds
+            # on an identity-routed thread too, where the session lives in the
+            # identity owner's workspace — the *conversation* is still the
+            # sender's, which is exactly what ``binding.user_id`` records, and
+            # stopping one's own conversation is not a reach into somebody
+            # else's space.
+            #
+            # Runs for a PENDING_INSTALL binding as well as an ACTIVE one. It
+            # has nothing to stop there, and the handler says so; what matters
+            # is that it does **not** fall through to ``_park_message``, where
+            # a `/stop` would be queued and then replayed at the agent as a
+            # message the moment the install finished. A `failed` binding is
+            # answered the same way rather than falling through to the
+            # re-routing self-heal below, which would send the literal text
+            # "/stop" to a classifier and then to an agent.
+            #
+            # ``inbound.text``, not the composed ``text``: the latter can carry
+            # the platform's own ⚠️ note about refused attachments, which would
+            # stop an otherwise-bare `/stop` from matching.
+            #
+            # **Three terms beyond the match itself, each closing a way for
+            # this branch to swallow something.** A command takes no arguments
+            # and no files, so *any* attachment on the message makes it an
+            # ordinary one — ``file_ids`` for the accepted ones (somebody who
+            # sent files meant them to be read) and ``attachments.skipped`` for
+            # the refused ones, because intercepting there would drop the ⚠️
+            # note that is the only place the sender learns their file was
+            # rejected. ``outbound_configured`` because BOTH of this command's
+            # answers need the outbound credential — a successful `/stop`
+            # speaks through the status notice, a failed one through
+            # ``_reply`` — so on a channel that cannot send, intercepting turns
+            # the message into silence with no observable difference from it
+            # never arriving. That is the same bargain the new-thread ack below
+            # strikes at ``if notice_supported and outbound_configured``;
+            # falling through instead leaves today's behaviour, which is the
+            # documented safe direction for anything this branch declines.
+            command = match_control_command(inbound.text)
+            if (
+                command is not None
+                and not file_ids
+                and not attachments.skipped
+                and outbound_configured
+            ):
+                # Redelivery. The bound-thread paths below tolerate a retry
+                # because ``_continue_thread`` stamps
+                # ``last_external_message_id`` only after a successful ingest
+                # (see the note at step 6.5); this branch stamps nothing and
+                # commits nothing, so without its own dedup a Chat retry runs
+                # the command twice — and the second `/stop` finds the stream
+                # it just stopped already gone and posts "there's nothing
+                # running right now" directly under the stopped marker, which
+                # is the doubled acknowledgement the silent-success design
+                # exists to avoid. Own key namespace, so it cannot collide with
+                # the pre-binding dedup at step 3.
+                if inbound.external_message_id and ChannelInboundService._seen_recently(
+                    f"{channel_id}:control:{inbound.external_message_id}"
+                ):
+                    logger.info(
+                        "%s Duplicate delivery of control command on channel "
+                        "%s — acking without re-running it",
+                        _LOG_PREFIX,
+                        channel_id,
+                    )
+                    return {}
+
+                if debug_channel_id is not None:
+                    ChannelDebugBuffer.record(
+                        channel_id=debug_channel_id,
+                        direction="inbound",
+                        kind=DEBUG_RECEIVED,
+                        # Every value here is a plain local — no ORM attribute
+                        # is read in this argument list (§11a Rule 2).
+                        summary=(
+                            f"Control command '{command}' — handled by the "
+                            f"pipeline, not sent to the assistant"
+                        ),
+                        sender_email=inbound.sender_email,
+                        sender_display_name=inbound.sender_display_name,
+                        thread_key=inbound.thread_key,
+                        text=inbound.text,
+                        detail={"stage": "control_command", "command": command},
+                    )
+                ChannelInboundService._schedule(
+                    execute_control_command(command, binding_id=binding_id),
+                    "channel_control_command",
+                )
+                # Silent ack, for the same reason the active-thread branch
+                # below acks in silence: whatever the command has to say, it
+                # says from its own task — a successful `/stop` through the
+                # status notice, a failed one through ``_reply``.
+                return {}
+
             if binding_status == CHANNEL_BINDING_ACTIVE:
                 ChannelInboundService._schedule(
                     ChannelInboundService._continue_thread(
@@ -2419,10 +2540,13 @@ class ChannelInboundService:
                 if bound is not None:
                     # Settled THROUGH the binding, which is where the id lives
                     # once it has been adopted. ``settle=True`` also releases
-                    # it, and that release is the point: an id left on the row
-                    # is one the pending-flush loop will find minutes later and
-                    # patch "ready — working on your message…" over the failure
-                    # the sender was just shown.
+                    # it — but only if the write landed — and that release is
+                    # the point: an id left on the row is one the pending-flush
+                    # loop will find minutes later and patch "ready — working on
+                    # your message…" over the failure the sender was just shown.
+                    # If the settle write failed there is no such failure on
+                    # screen to protect, so the id is kept on purpose and the
+                    # next write patches the standing notice.
                     await ChannelOutboundService.set_binding_status(
                         db=db,
                         channel=channel,
@@ -2666,9 +2790,11 @@ class ChannelInboundService:
                 reason="no_active_environment",
             )
             # ``settle``: the failure is the reply, so it takes the notice's
-            # place and stays. Releasing the id is what stops the next turn
-            # from rewriting a message that is now the last thing this thread
-            # was told.
+            # place and stays. Releasing the id — which happens only if the
+            # write landed — is what stops the next turn from rewriting a
+            # message that is now the last thing this thread was told. If it did
+            # not land the sender was never told it, so the id is kept on purpose
+            # and the next write patches the standing notice.
             await ChannelOutboundService.set_binding_status(
                 db=db,
                 channel=channel,
@@ -2708,9 +2834,11 @@ class ChannelInboundService:
                 reason=failure or "unknown",
             )
             # ``settle``: the failure is the reply, so it takes the notice's
-            # place and stays. Releasing the id is what stops the next turn
-            # from rewriting a message that is now the last thing this thread
-            # was told.
+            # place and stays. Releasing the id — which happens only if the
+            # write landed — is what stops the next turn from rewriting a
+            # message that is now the last thing this thread was told. If it did
+            # not land the sender was never told it, so the id is kept on purpose
+            # and the next write patches the standing notice.
             await ChannelOutboundService.set_binding_status(
                 db=db,
                 channel=channel,
@@ -2978,9 +3106,11 @@ class ChannelInboundService:
         if failure is not None:
             ChannelInboundService._fail_binding(db, binding, failure)
             # ``settle``: the failure is the reply, so it takes the notice's
-            # place and stays. Releasing the id is what stops the next turn
-            # from rewriting a message that is now the last thing this thread
-            # was told.
+            # place and stays. Releasing the id — which happens only if the
+            # write landed — is what stops the next turn from rewriting a
+            # message that is now the last thing this thread was told. If it did
+            # not land the sender was never told it, so the id is kept on purpose
+            # and the next write patches the standing notice.
             await ChannelOutboundService.set_binding_status(
                 db=db,
                 channel=channel,
@@ -3228,7 +3358,10 @@ class ChannelInboundService:
                     # this sender could tell apart from a transient setup
                     # failure would be an oracle for the channel's
                     # configuration — see the comments around the
-                    # ``ChannelDecline`` raise in ``_ingest``.
+                    # ``ChannelDecline`` raise in ``_ingest``. ``settle``
+                    # releases the notice id only if this write landed; a settle
+                    # that failed keeps it, so the next write patches the
+                    # standing notice rather than posting beneath it.
                     await ChannelOutboundService.set_binding_status(
                         db=db,
                         channel=channel,
@@ -3261,7 +3394,10 @@ class ChannelInboundService:
                     db.commit()
                     # Never strand silently: the remaining messages stay parked
                     # and will be retried on the next inbound message, but the
-                    # person is owed an answer now.
+                    # person is owed an answer now. ``settle`` releases the
+                    # notice id only if this write landed; a settle that failed
+                    # keeps it, so the next write patches the standing notice
+                    # rather than posting beneath it.
                     await ChannelOutboundService.set_binding_status(
                         db=db,
                         channel=channel,

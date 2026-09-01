@@ -352,3 +352,100 @@ class A2AStreamEventHandler:
             )
             return
         self.error_enqueued = True
+
+
+# ---------------------------------------------------------------------------
+# Composite handler
+# ---------------------------------------------------------------------------
+
+class CompositeStreamEventHandler:
+    """Fans every ``StreamEventHandler`` call out to a primary and passengers.
+
+    Exists so a session can be watched by more than one consumer without any
+    of them knowing about the others: the channel streaming relay tees off the
+    UI path's ``WebSocketEventHandler`` this way (see
+    ``server_channels/channel_stream_relay.py``), and the processor keeps
+    talking to one handler.
+
+    **The children are not peers, and the asymmetry is the point.** The
+    ``primary`` is the handler the stream would have had anyway; its contract
+    with ``SessionStreamProcessor`` is unchanged, exceptions and all. The
+    ``passengers`` are the ones that composed themselves in, and *their*
+    failures are isolated — a relay that cannot reach Google Chat must not
+    stop Socket.IO emission, and the web client watching the same session must
+    not freeze mid-answer because a channel went down.
+
+    Isolating the primary too was the obvious first shape and it is wrong:
+    ``WebSocketEventHandler.on_complete`` is what writes
+    ``pending_messages_count`` and ``interaction_status`` back, and swallowing
+    its failure leaves a web client watching a channel session on a stale
+    "streaming" state until a poll re-derives it — a regression visible only on
+    the composed sessions, i.e. exactly the ones this class was added for. So
+    a primary failure propagates, and the processor does what it does for an
+    uncomposed handler: ``on_error``, then re-raise.
+
+    A primary failure does **not** cost the passengers their event. It is
+    remembered, the fan-out finishes, and only then is it re-raised — a
+    passenger that missed an ``assistant`` chunk (or a ``stop``) because
+    somebody else's Socket.IO emit failed would lose text it is the only holder
+    of.
+
+    A child that does not implement one of the protocol's four methods is
+    skipped rather than being an error, so a narrow handler (one that only
+    cares about ``on_event``) can be composed in without stubs.
+
+    Order is preserved: the primary is called first, then the passengers in
+    order, so the caller can rely on the primary's side effects being in place.
+    It is NOT a guarantee of completion order across children — each call is
+    awaited to completion before the next child is entered.
+    """
+
+    def __init__(self, primary: Any, passengers: list[Any] | None = None) -> None:
+        self.primary = primary
+        self.passengers = [p for p in (passengers or []) if p is not None]
+
+    @property
+    def handlers(self) -> list[Any]:
+        """Every child, primary first. For introspection and tests."""
+        return ([self.primary] if self.primary is not None else []) + self.passengers
+
+    async def on_stream_starting(self, pending_count: int) -> None:
+        await self._fan_out("on_stream_starting", pending_count)
+
+    async def on_event(self, event: dict[str, Any]) -> None:
+        await self._fan_out("on_event", event)
+
+    async def on_error(self, error: Exception) -> None:
+        await self._fan_out("on_error", error)
+
+    async def on_complete(self, response_text: str) -> None:
+        await self._fan_out("on_complete", response_text)
+
+    async def _fan_out(self, method_name: str, *args: Any) -> None:
+        primary_error: Exception | None = None
+        for handler in self.handlers:
+            method = getattr(handler, method_name, None)
+            if method is None:
+                continue
+            try:
+                await method(*args)
+            except asyncio.CancelledError:
+                # Cancellation is the caller's, not this child's failure —
+                # swallowing it here would keep a cancelled stream running
+                # through the remaining children.
+                raise
+            except Exception as exc:
+                if handler is self.primary:
+                    # Held, not swallowed: the passengers still get this call,
+                    # and the caller still gets the exception (see the
+                    # docstring).
+                    primary_error = exc
+                    continue
+                logger.warning(
+                    "Composite stream handler: %s.%s failed (isolated)",
+                    type(handler).__name__,
+                    method_name,
+                    exc_info=True,
+                )
+        if primary_error is not None:
+            raise primary_error

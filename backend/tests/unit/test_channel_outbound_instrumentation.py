@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import types
 import uuid
 from contextlib import contextmanager
 
@@ -702,3 +703,91 @@ def test_set_binding_status_is_total_by_extension(monkeypatch) -> None:
     # Nothing to release: the notice was never posted, so the row's id (already
     # ``None``) is left alone rather than written redundantly.
     assert db.commits == 0
+
+
+# ── settle: the id is released only when the write landed ────────────────────
+#
+# ``settle=True`` means "rewrite the notice one last time and let go of the
+# id". The release used to be unconditional, which quietly assumed the rewrite
+# had happened. When both the patch and its fallback post fail, the sender has
+# been shown nothing — the notice still stands with whatever it said before —
+# and dropping the id orphans that message: the next thing to write a notice on
+# this thread finds no id, posts a fresh one, and the thread carries the old
+# text above the new. On the streaming path it is worse, because a seal that
+# fails correctly does NOT advance the relay's sealed offset: the fresh message
+# repeats the whole unsealed draft while the orphan stands with a prefix of the
+# same paragraphs, so the reader sees the same text twice, permanently.
+
+
+class _MuteAdapter:
+    """A notice-capable transport on which nothing actually works."""
+
+    capabilities = types.SimpleNamespace(
+        supports_progress_updates=True,
+        supports_status_notice=True,
+        supports_message_delete=True,
+    )
+
+    def __init__(self) -> None:
+        self.updates = 0
+        self.posts = 0
+
+    async def update_message(self, channel, thread_key, message_id, text) -> None:
+        self.updates += 1
+        raise ChannelError("patch failed")
+
+    async def send_message(self, channel, thread_key, text) -> str:
+        self.posts += 1
+        raise ChannelError("post failed")
+
+
+class _WorkingAdapter(_MuteAdapter):
+    """The same transport, with a patch that lands."""
+
+    async def update_message(self, channel, thread_key, message_id, text) -> None:
+        self.updates += 1
+
+
+def _settle(adapter, binding, monkeypatch) -> bool:
+    monkeypatch.setattr(_MODULE + ".get_adapter", lambda _type: adapter)
+    return asyncio.run(
+        ChannelOutboundService.set_binding_status(
+            db=_FakeDB(),
+            channel=_LiveChannel(),
+            binding=binding,
+            text="Sorry — something went wrong setting that up.",
+            settle=True,
+        )
+    )
+
+
+def test_a_settle_that_never_reached_the_thread_keeps_the_notice_id(
+    monkeypatch,
+) -> None:
+    """Both the patch and the fallback post fail: the id must survive.
+
+    Keeping it is what lets the next turn patch the message that is still
+    standing instead of posting beneath it — the orphan-plus-duplicate above.
+    """
+    binding = _LiveBinding()
+    binding.status_message_id = "spaces/AAA/messages/OLD"
+    adapter = _MuteAdapter()
+
+    assert _settle(adapter, binding, monkeypatch) is False
+    # Both routes were genuinely tried before we concluded "nothing landed".
+    assert (adapter.updates, adapter.posts) == (1, 1)
+    assert binding.status_message_id == "spaces/AAA/messages/OLD"
+
+
+def test_a_settle_that_landed_still_releases_the_notice_id(monkeypatch) -> None:
+    """The other half of the pair: a confirmed write releases, as it always did.
+
+    Without this the fix above could be "never release", which strands the id
+    for the pending-flush loop to patch "ready — working on your message…"
+    over the last word this thread was told.
+    """
+    binding = _LiveBinding()
+    binding.status_message_id = "spaces/AAA/messages/OLD"
+
+    assert _settle(_WorkingAdapter(), binding, monkeypatch) is True
+    assert binding.status_message_id is None

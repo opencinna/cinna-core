@@ -73,25 +73,53 @@ The webhook URL is built from the backend's public origin (`BACKEND_BASE_URL`, f
 
 Everything the pipeline says on a turn is **one message**. It is posted into the thread when the work starts, rewritten in place as the work advances, and rewritten one final time to hold the agent's answer. A finished exchange reads as the question and the answer — the narration was the same message all along, arriving in stages.
 
-Three things can happen to it:
+Four things can happen to it:
 
 | | What it means | What the reader sees |
 |---|---|---|
 | **rewritten** | The work moved on — routing → installing → working → *the reply* | The same message, new text |
 | **settled** | This *is* the answer — "nothing matched", "setup failed" | The message stays, permanently |
+| **sealed** | A streamed answer outgrew one message: this part of it is finished | The message stays; the answer continues in a fresh one below it |
 | **cleared** | Rare: the turn ended with nothing at all to say | The message disappears |
 
 The reply **takes the notice's slot** rather than being posted below it, and the reason is worth stating because the alternative was tried: deleting the notice once the reply was posted leaves Google Chat's "Message deleted by its author" tombstone, which appeared above every single answer. Deletion is now the exception — a stream that produced no message, or a routing race whose loser has no thread left to narrate.
 
 A reply too long for one Chat message still fits: the first part takes the slot and the rest follows underneath it.
 
-All of this depends on the channel being able to edit its own posts. Google Chat can (`spaces.messages.patch`, restricted to messages the app itself posted). A channel that cannot falls back to posting each notice as a separate message — which is what every channel did before this existed — and email, which has no progress surface at all, stays silent throughout and simply answers when it has something to say.
+**The notice streams.** While the agent is answering, the notice is not a fixed sentence waiting to be replaced at the end — it is a **rolling draft**, rewritten in place every few seconds with the answer as far as it has been written. The reader watches the reply arrive instead of watching a spinner, which is what the web client has always done and what a chat thread had no way to show.
+
+Two things bound it. The rewrites are **debounced** — roughly every three seconds by default, deliberately conservative — and when the draft grows to about where one Chat message stops being able to hold it, the draft is **sealed**: rewritten one last time, left standing as a finished message, and the next rewrite opens a fresh draft below it. A long answer therefore reads as a short sequence of messages that arrived in order, rather than one message that keeps rewriting itself past the point where the transport can carry it. The turn's final delivery patches only the part the reader has not seen yet into the current draft — so "one message per turn" is preserved for a short answer, and becomes "the message you have been reading, finished" for a long one.
+
+Only the agent's **answer** is streamed. Its thinking is a different kind of output and never reaches the thread at all; the internal control tags an agent writes (a file-attachment marker, a webapp action) are removed on the way out, exactly as they are from the stored transcript; and narration of the *tools* the agent is running is deliberately not part of this version — a decided omission, not an oversight.
+
+Two consequences worth stating plainly. First, **what the reader saw is what gets kept**: the settled reply is the text the thread has been showing, not the platform's stored copy of the answer — the two differ once attachment materialization and tag stripping have run, and the reader's own screen wins. Second, **live narration is never worth an answer**: all of it is best-effort, and any failure — the feature switched off, a draft that would not post, the narration breaking mid-turn — degrades to exactly what the channel did before it existed, delivering the whole reply in one piece at the end.
+
+All of this depends on the channel being able to edit its own posts. Google Chat can (`spaces.messages.patch`, restricted to messages the app itself posted). A channel that cannot falls back to posting each notice as a separate message — which is what every channel did before this existed — and email, which has no progress surface at all, stays silent throughout and simply answers when it has something to say. The streaming draft rides that same capability: a transport with no message it can rewrite has no draft to roll, so email and App MCP are untouched by any of it.
 
 One consequence worth knowing when reading a channel's debug feed: an accepted message now gets an **empty** webhook acknowledgement — but only on a channel that actually has outbound credentials configured, since that is what lets it post the notice at all. The first thing the sender is told then arrives as a posted message a moment later, not as the webhook's own reply. A channel with no outbound credentials configured keeps the old synchronous "finding the right assistant for you…" acknowledgement instead — the notice provably cannot be posted, so answering inline is still better than answering with nothing. Declines are still answered inline in every case, which is what lets a channel refuse someone before its outbound credentials are even configured.
 
 ### Formatting
 
 Agents write Markdown. Google Chat does not read Markdown — it has its own smaller markup, and there is no way to ask its API for anything else — so the platform translates on the way out: `**bold**` becomes Chat's bold, links become Chat links, and headings and tables, which Chat has no notion of, become bold lines and aligned monospace blocks. Code blocks are passed through untouched and are never split across a message boundary. Email is unaffected: its replies go out as plain text.
+
+The same translation decides where a streamed draft may be **sealed**. A seal is final — the message is left standing and the answer continues below it — so it is only taken somewhere a reader would accept as an ending: a paragraph break by preference, a plain line break otherwise, never inside a code block, and never between the rows of one table. The table rule is not fastidiousness: Chat renders a table as an aligned monospace block, so a split table is two separately aligned blocks, and the half below the cut has lost the header row the renderer needs to recognise a table at all. When no acceptable place exists yet, the seal simply waits — the draft keeps growing and the question is asked again a few seconds later, which costs nothing. Only once the draft has grown to where the reader would start losing the end of it is a cut forced at the last line break available, closing the code block it had to cut through and re-opening it at the top of the next message.
+
+A seal is also never taken at a place that would leave a two-word message standing on its own. "Never one sentence per message" is the same promise the debounce makes, held at the one point in the feature that cannot be taken back.
+
+### Channel control commands
+
+Almost everything a person writes into a bound thread is for the agent. A very small set of strings is not, and `/stop` is the first of them: it is the chat-thread equivalent of the web client's stop button, which a chat thread has no way to render.
+
+- **Exact match, nothing else.** The text has to be `/stop` and nothing more, case-insensitively, once surrounding whitespace is gone. `/stop now`, `/stopx` and a bare `stop` are ordinary messages and reach the agent. That direction is chosen deliberately: a missed command costs someone one retyped word, while a command matched too eagerly silently eats a message the person meant their assistant to read.
+- **Only inside a conversation that is already yours.** The command is recognised after every gate that admits the sender — rate limit, verification, whitelist, channel policy — and specifically *after* the check that the thread belongs to the person writing. So the authority to stop a stream is the same authority the sender already had over that conversation, including on an identity-routed thread, where the session lives in someone else's workspace but the conversation is still the sender's. (On an identity thread the sender's own identity-routing consent is re-read before the interrupt, since that is the one per-message check this shortcut bypasses.)
+- **Success says nothing.** The status notice settles with whatever the agent had said plus a stopped marker, and *that* is the acknowledgement — it is the message the reader is already looking at. A separate "stopped" reply would post the same news a second time, directly under it.
+- **"There's nothing running right now."** is the only reply the command produces, and it covers every shape of nothing: no session on the thread yet, no stream in flight, an environment the platform cannot reach. It is deliberately *not* part of the family of indistinguishable declines the rest of this feature uses, because it describes the sender's own conversation and reveals nothing about the server. An interrupt that fails for some other reason is answered with silence instead — the stop may well have landed anyway, and telling someone nothing is running while the stopped marker appears beside it is worse than saying nothing.
+- **A `/stop` as the first message of a brand-new thread is not a command.** There is no binding and nothing to stop, so it routes like any other text and is answered by whatever agent the routing picks. This is deliberate: the interception exists inside a conversation, not in front of one.
+- **A `/stop` carrying files is an ordinary message**, and so is one whose files were refused — somebody who attached something meant it to be read, and intercepting the second case would swallow the note that is the only place the sender learns their file was rejected.
+- **On a channel with no outbound credentials configured, `/stop` is not intercepted either.** Both of its answers need to send something; intercepting where nothing can be sent turns the message into silence indistinguishable from it never having arrived.
+- **Email can never trigger it**, structurally rather than by a branch someone has to remember: what reaches the pipeline from an email is a forwarded wrapper around the sender's words, never the bare words, so it can never equal `/stop`.
+
+The command set is a registry: a second command is one entry and one handler, with no change to the pipeline that dispatches on it — the same shape adding a channel type has.
 
 ### 4. Environment build fails during auto-install
 
@@ -386,6 +414,9 @@ Google Chat ──webhook──▶ POST /api/v1/channels/{webhook_token}/inbound
                               │    threads too, not only new ones
                               ▼
                     binding lookup (channel, thread)
+                    ── /stop ──────▶ control command: interrupt this thread's stream
+                                     (recognised only on an existing binding, only for
+                                      its owner; never reaches the agent)
                     ── active ─────▶ continue thread (background) ─▶ ChannelIngestionService
                     ── pending ────▶ park message, "still setting up" reply
                     ── failed ─────▶ delete binding, fall through to routing
@@ -404,8 +435,12 @@ channel_pending_scheduler (every 45s, TESTING-gated)
                               │ env critical_state  → NOT a failure — still waiting
                               │ still building, too long → binding → failed (bounded wait)
 
+Assistant text (while streaming) ─▶ ChannelStreamRelay ─▶ status notice rewritten in place
+                                     (debounced; sealed into a standing message near the size cap)
 Agent reply (STREAM_COMPLETED) ──▶ ChannelOutboundService ──▶ binding lookup by session_id ──▶ adapter.send_message
-Agent error (STREAM_ERROR)     ──▶ same path, generic failure notice
+                                     (with a relay: only the tail the reader has not seen)
+Agent error (STREAM_ERROR)     ──▶ same path, generic failure notice (under the partial answer)
+Agent stopped (STREAM_INTERRUPTED) ▶ same path, partial answer + "⏹️ Stopped."
 ```
 
 This diagram is the **webhook** path (Google Chat). A **polled** channel
@@ -429,7 +464,7 @@ for the polled version of this diagram.
 - [Mail Servers](../email_integration/mail_servers.md) — the admin-owned IMAP/SMTP connections an email channel references by id in its `config`, the way a Google Chat channel references its own service account.
 - [Google OAuth](../auth/google_oauth.md) — the Google Chat adapter's JWT verification reuses the same generalized, cached JWKS verifier the Google OAuth login path uses, pointed at a different issuer and key set.
 - [Server Configuration](../server_configuration/disclaimer.md) — Channels is a new tab on the same `/admin/server-configuration` admin page as the Disclaimer feature, following the same superuser-guard and HashTabs conventions.
-- [Realtime Events](../realtime_events/event_bus_system.md) — outbound delivery subscribes to `STREAM_COMPLETED` / `STREAM_ERROR` the same way the email integration's sending service does.
+- [Realtime Events](../realtime_events/event_bus_system.md) — outbound delivery subscribes to `STREAM_COMPLETED` / `STREAM_ERROR` the same way the email integration's sending service does, plus `STREAM_INTERRUPTED`, which is emitted *instead of* completion when a turn is stopped and is what gives `/stop` its visible acknowledgement. The streaming draft itself does not ride the bus at all — it tees off the session's own stream handler, one process and one task lifetime away from the turn it narrates; see [tech](server_channels_tech.md#streaming-status-notice-updates-and-stop).
 - [AI Functions](../../development/backend/ai_functions_development.md) — Pass-2 classification is a second caller of the same `AgentClassifier.classify` (`backend/app/services/routing/agent_classifier.py`) the App MCP router calls — the classifier every routing consumer shares as of [Auto Routing Tuning](../routing_tuning/routing_tuning.md)'s Phase 5. `AIFunctionsService.route_to_agent` is a thin adapter kept for callers outside routing, not the path either pass calls today.
 - [File Sending & UI](../chat_interface/file_sending_and_ui.md) — the terminus for a channel attachment. It becomes an ordinary `MessageFile` with `source="user_upload"`, so it renders with `FileBadge`s and a working download exactly like a web-chat upload, with no frontend change made for this feature.
 - [Agent File Management](../../agents/agent_file_management/agent_file_management.md) — channel attachments reuse `FileStorageService.store_file` and the same on-disk layout, quota accounting and garbage collection every other upload uses; nothing about GC or storage quota changes for this feature.
@@ -445,8 +480,15 @@ for the polled version of this diagram.
 - **~~Identity routing is not reachable from `POST /admin/routing/simulate`.~~ Closed in Phase 6.** `RoutingSimulateRequest` now carries an optional `channel_id`; naming one resolves that channel's real policy for the target user instead of `ResolvedChannelPolicy.for_no_channel()`, whose `allow_identity_routing` is `False` — permissive on everything else, deliberately not on this, because the absence of a channel is not a person's consent. So a hand-typed simulate can now put an identity candidate on the ballot, and a run naming no channel still cannot, by design. A `channel_id` that names no channel is a 404, refused before the run spends an LLM call.
 - **The inbound-attachments debug-feed wire format is a contract with no test on the consumer side.** `_attachment_detail` (backend) produces a flattened `"name (code); name (code)"` string capped at 500 characters, and the admin panel's `parseSkips` (frontend) reads it back apart, including a mid-entry truncation. The producer side is pinned by a backend unit test. The consumer's tolerance of the truncated shape is verified by reading the code only, and stays that way until this repo has a frontend test harness — there is none today: no vitest, no jest, no `.test.ts` file anywhere in `frontend/`.
 - **Manual validation still owed, none of it provable from the automated tests:** a real Google Chat attachment end-to-end (the media download and the cross-host redirect behaviour are the one piece no fixture proves), a real mailbox with a real Outlook/Gmail signature confirming the logo doesn't land in the workspace, and webhook ack latency at the maximum attachment count — with moving the materialization step into the same background task routing already runs in as the documented escalation if the numbers demand it (see [tech](server_channels_tech.md#inbound-file-attachments)).
+- **Google Chat's write quota is per *space*, not per thread**, and a streaming draft spends it. Roughly 60 writes a minute are shared by every thread in a group space, so several busy conversations in one room draw on one budget — which is why the debounce default is a conservative three seconds rather than the fastest thing the reader would enjoy. Lowering it is a real setting, with a real cost paid by the other threads in the room.
+- **A `/stop` behind multiple backend workers can report "nothing running" when something is.** Which streams are live is process-local state, so a `/stop` that lands on a worker other than the one running the stream finds nothing to interrupt and says so, while the turn continues. This rides the same single-process assumption the pending-binding and poll schedulers already document above rather than adding a new one.
+- **A `/stop` can also arrive too early.** A stop sent in the seconds between the previous message being accepted and its stream actually starting is answered with "there's nothing running right now", and the agent then answers the earlier message anyway. There is nothing yet registered to interrupt, and the pipeline deliberately does not park the command to try again later.
+- **A stopped turn can acknowledge itself twice.** The interruption is signalled once per batch of model work, so a turn whose second batch is also interrupted settles the stopped marker twice. Left alone deliberately: the duplicate is one short line, and suppressing it would mean carrying per-turn state in the one handler whose whole virtue is having none.
+- **An agent that writes about the platform's own control tags can freeze its live draft.** If an unclosed tag *opening* — the kind an agent produces when it explains the tag rather than emits one — is left near the top of a draft, no seal below it can be taken safely, so the turn stops sealing: the draft stops growing visibly near the message cap and the rest of the answer arrives at the end, in full, through the ordinary delivery path (which splits properly). Nothing is lost; the live narration stalls. Fixing it would mean deciding a tag is not a tag after all, which is a worse trade than a rare stalled draft on a turn that still answers completely.
+- **On the stopped and failed endings only, a trailing tag mention can be truncated.** Text settled after an interruption or an error is cut at whatever looked like a tag that had not finished arriving, because the alternative is settling a raw fragment of an internal protocol into the thread as the answer. A tag *named once in prose*, with nothing written after it, is indistinguishable from that and is cut the same way. The identical reply delivered through a normal completion keeps it. Narrowed as far as it can be without guessing at intent, not eliminated — see [tech](server_channels_tech.md#streaming-status-notice-updates-and-stop).
+- **A streaming turn holds a pooled database connection across each outbound round trip.** One connection per draft update, once per interval per concurrent streaming channel turn, and Chat's 429 backoff can stretch a round trip well past its usual latency. Concurrent channel turns therefore need to stay comfortably under the connection pool, and lowering the update interval multiplies how often the hold happens rather than how long it lasts.
 - **~~A channel decision can carry `SKIP_IDENTITY_UNAVAILABLE` but a channel user cannot read the explanation.~~ Closed in Phase 6.** `?expected_agent_id=` widened from a `uuid.UUID` to a candidate **ref**, so it accepts the `identity:{owner_id}` an identity candidate carries and the skip-explanation branch can name a person. Producible and explainable are facts about different layers; both are true now. What remains is Phase 7's: no admin UI control sends the parameter yet.
 
 ---
 
-*Last updated: 2026-08-26*
+*Last updated: 2026-09-01*

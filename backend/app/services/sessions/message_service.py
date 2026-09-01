@@ -1399,6 +1399,13 @@ class MessageService:
             get_session_lock,
         )
         from app.services.sessions.stream_event_handlers import WebSocketEventHandler
+        # Function-level, like the two above: the channel services import this
+        # module, so the reverse edge would be circular at import time. Hoisted
+        # out of the locked body below — the module cache makes it free, but
+        # import machinery has no business running inside the session lock.
+        from app.services.server_channels.channel_stream_relay import (
+            maybe_attach_channel_relay,
+        )
 
         # ── Same-session serialization (concurrency fix) ──────────────────────
         # Acquire the shared per-session lock in WAIT mode (plain ``async with``,
@@ -1445,8 +1452,22 @@ class MessageService:
                     db.add(chat_session)
                     db.commit()
                     return
+                # Read here, inside the block that already has the row loaded,
+                # rather than opening a second session for one column.
+                integration_type = chat_session.integration_type
 
             handler = WebSocketEventHandler(session_id, get_fresh_db_session)
+            # Server-channel sessions additionally stream their answer into the
+            # thread's status notice as a rolling draft. The seam decides for
+            # itself whether this session qualifies and is total — anything it
+            # cannot do returns ``handler`` unchanged — so nothing
+            # channel-shaped belongs on this side of the call.
+            handler = maybe_attach_channel_relay(
+                session_id=session_id,
+                integration_type=integration_type,
+                base_handler=handler,
+                get_fresh_db_session=get_fresh_db_session,
+            )
 
             processor = SessionStreamProcessor(
                 session_id=session_id,
@@ -1652,9 +1673,15 @@ class MessageService:
         calling this method.** This method trusts its inputs and does not
         re-check ownership, sharing, or scope. Callers today:
         ``messages.interrupt_message`` (UI/guest via ``_verify_message_access``),
-        ``webapp_chat.interrupt_message`` (webapp-share scope), and
+        ``webapp_chat.interrupt_message`` (webapp-share scope),
         ``A2ARequestHandler.handle_tasks_cancel`` (A2A scope via
-        ``_authorize_existing_session``). Any new caller must follow suit.
+        ``_authorize_existing_session``), and
+        ``channel_control_commands.handle_stop`` (thread ownership: the
+        ``/stop`` interception sits after ``process_inbound``'s
+        ``binding_user_id == user_id`` gate, and ``handle_stop`` additionally
+        re-reads ``allow_identity_routing`` for identity-routed threads — the
+        one per-message consent check that interception point bypasses, because
+        it lives in ``_ingest``). Any new caller must follow suit.
 
         Detached sessions (environment_id is None, e.g. after the environment
         was deleted) have nothing to forward to — treated as "no active stream"

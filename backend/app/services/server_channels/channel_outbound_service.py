@@ -2,11 +2,21 @@
 
 Two entry points:
 
-* Event subscribers (``handle_stream_completed`` / ``handle_stream_error``)
-  registered in ``app/main.py`` next to the email integration's. They fire for
-  every stream on the instance, so the first thing each does is a cheap
-  ``integration_type.startswith("channel_")`` gate — everything else is only
-  reached for sessions this feature owns.
+* Event subscribers (``handle_stream_completed`` / ``handle_stream_error`` /
+  ``handle_stream_interrupted``) registered in ``app/main.py`` next to the
+  email integration's. They fire for every stream on the instance, so the
+  first thing each does is a cheap gate — a dict lookup in the streaming
+  relay's registry, then ``integration_type.startswith("channel_")`` —
+  and everything else is only reached for sessions this feature owns.
+
+  All three are **relay-aware**: when ``channel_stream_relay`` narrated this
+  turn into the status notice, they deliver only the *tail* the reader has
+  not seen yet instead of the whole answer again. When there is no relay
+  (the feature is off, the transport has no notice, the stream came in
+  through App MCP or A2A) every one of them behaves exactly as it did
+  before the relay existed — see :meth:`ChannelOutboundService._take_stream_tail`,
+  which folds every "pretend this feature does not exist" case into one
+  ``None``.
 * The **status notice** helpers (``set_status`` / ``set_binding_status`` /
   ``clear_binding_status``), called by the inbound pipeline to narrate the slow
   parts — routing, installing, ready, failed. On a transport that can edit its
@@ -171,6 +181,23 @@ def _binding_status_message_id(binding: ChannelThreadBinding) -> str | None:
 # Prefix used for the integration_type stamped on channel sessions.
 CHANNEL_INTEGRATION_PREFIX = "channel_"
 
+#: Appended to a partial answer when the sender stopped the turn. Markdown,
+#: like every other text handed to a transport — the adapter translates it.
+STOPPED_SUFFIX = "⏹️ _Stopped._"
+
+#: The whole message when a stopped turn has no partial answer to append to:
+#: either nothing had been streamed yet, or everything already went out as a
+#: sealed message and this is the acknowledgement below it.
+STOPPED_NOTICE = "⏹️ Stopped."
+
+#: What the thread is told when a turn fails. Named rather than inlined
+#: because the failure handler now builds two messages out of it — the bare
+#: text, and the same text under whatever the relay had already streamed —
+#: and a second literal is how the two would drift apart.
+TURN_FAILED_TEXT = (
+    "Something went wrong while I was working on that. Please try again."
+)
+
 
 class ChannelOutboundService:
     """Sends agent output back out through the originating channel."""
@@ -180,14 +207,184 @@ class ChannelOutboundService:
     # ------------------------------------------------------------------
 
     @staticmethod
+    async def _take_stream_tail_ex(
+        session_id: Any, *, partial: bool = False
+    ) -> tuple[str | None, bool]:
+        """:meth:`_take_stream_tail`, plus the one fact it has to drop.
+
+        Answers ``(tail, relay_failed)`` where ``tail`` is exactly what
+        :meth:`_take_stream_tail` returns and ``relay_failed`` says whether the
+        ``None`` came from a relay that **broke** rather than from a session
+        that has no relay at all.
+
+        That second fact is the whole reason this form exists, and its absence
+        has now produced the same defect twice in opposite directions.
+        ``take_tail`` answering ``None`` (the relay broke, and may be holding
+        the only copy of a partial answer in a standing draft) and
+        ``("", False)`` (the relay is fine and the stream simply produced
+        nothing, which is what stopping a turn before the agent speaks looks
+        like) collapse into one ``None`` here — and
+        :meth:`handle_stream_interrupted` needs them apart, because one must be
+        met with silence and the other with the stopped marker. Asking a
+        separate "is there a live relay" question instead cannot tell them
+        apart either: both shapes have one.
+
+        The two siblings do not need it — both recover through a full-text path
+        that overwrites the notice either way — so :meth:`_take_stream_tail`
+        keeps the two-value contract and delegates here.
+
+        **The exception default is split, deliberately.** A failure *before* a
+        relay is in hand (the import — the module is in ``sys.modules`` if a
+        relay was ever attached, so an import failure means there was none —
+        or ``str(session_id)``) is honestly "no relay", and the caller is right
+        to write the notice. A failure *after* one is in hand — the ``spent``
+        read, ``take_tail`` itself — is a relay that demonstrably exists and
+        whose draft may be standing in the notice; reported as "no relay" it
+        would settle a tombstone over an answer. Same reason the ``None`` from
+        ``take_tail`` is flagged rather than flattened.
+        """
+        relay: Any = None
+        try:
+            # Function-level: ``channel_stream_relay`` imports this module at
+            # import time, so the reverse edge would be circular. Same dodge
+            # as ``_deliver``'s.
+            from app.services.server_channels.channel_stream_relay import (
+                ChannelStreamRegistry,
+            )
+
+            relay = ChannelStreamRegistry.get(str(session_id))
+            if relay is None or relay.spent:
+                return None, False
+            taken = await relay.take_tail(partial=partial)
+            if taken is None:
+                # The relay failed to answer. Full-text path for the two
+                # siblings; silence for the interrupt handler, which is what
+                # the flag buys.
+                return None, True
+            tail, delivered_any = taken
+            if tail:
+                return tail, False
+            # Empty tail: a no-op only if the relay put something on screen.
+            return ("" if delivered_any else None), False
+        except Exception:  # noqa: BLE001 — a relay may never cost an answer
+            logger.warning(
+                "%s Could not read the streaming relay for session %s — "
+                "delivering the whole answer instead",
+                _LOG_PREFIX,
+                session_id,
+                exc_info=True,
+            )
+            return None, relay is not None
+
+    @staticmethod
+    async def _take_stream_tail(
+        session_id: Any, *, partial: bool = False
+    ) -> str | None:
+        """What the live relay has not put on screen yet, or ``None``.
+
+        The one place the three event subscribers ask "did
+        ``channel_stream_relay`` narrate this turn, and if so what is left to
+        send?". It answers with two values and no third state to get wrong:
+
+        * ``None`` — **behave exactly as if this feature did not exist.** Take
+          the pre-relay path: the stored ``SessionMessage``, the bare failure
+          text, the notice-only stop acknowledgement.
+        * a ``str`` — the relay owns this turn. Deliver this text (``""`` means
+          it already delivered everything itself).
+
+        Collapsing to that pair is the whole point, because the relay's
+        ``take_tail`` has three answers and the two that look alike are not
+        (its docstring, and the module docstring's "consumer contract", state
+        this normatively — read them before changing anything here):
+
+        * ``None`` from ``take_tail`` is "something in me broke", **not**
+          "there was nothing". The agent's reply is in ``SessionMessage``
+          whatever happened in the relay, so the honest recovery is the
+          full-text path. Routing it to ``clear_binding_status`` instead would
+          delete the notice and send nothing — losing an answer that exists.
+        * ``("", False)`` — the stream genuinely produced nothing — also
+          belongs on the full-text path, which degrades to the delete on its
+          own when there really is no message text. It has to go there for a
+          second reason: the registry is keyed by *session*, and a late
+          handler can read the **next** turn's relay, which truthfully reports
+          "nothing yet, nothing delivered". On the full-text path that handler
+          settles its own turn's stored answer; on the delete path it would
+          erase the notice of a turn still in progress.
+        * only ``("", True)`` — "everything is already on screen" — is a
+          genuine no-op, and that is the ``""`` this returns.
+
+        Two things it deliberately does **not** do:
+
+        * It never calls ``relay.stop()``. ``ChannelRelayEventHandler``'s
+          ``on_complete``/``on_error`` own that and fire once per *turn*;
+          ``STREAM_COMPLETED`` fires once per *LLM batch*, so stopping here
+          would stream batch 1 live and leave every batch after it silent.
+        * It never pops the registry entry, for the same reason:
+          ``maybe_attach_channel_relay`` is the only writer, and the next
+          batch's handler must still find the relay.
+
+        A :attr:`~ChannelStreamRelay.spent` relay is read as absent — it is the
+        registry's own discriminator for "the entry under this session id
+        belongs to a turn that is already finished business" — and is answered
+        *without* taking its tail.
+
+        **Called before the DB session is opened, not inside it.** ``take_tail``
+        waits on the relay's flush lock, which a flush holds across its adapter
+        round trips (429 backoff included) — and that flush needs a pooled
+        connection of its own to make them. A handler that waited there while
+        holding one would put the two on opposite sides of the pool. The cost
+        is that a turn whose binding vanished mid-stream has its tail taken
+        with nowhere to send it, which delivers exactly as much as the
+        pre-relay code did in the same situation: nothing.
+
+        Total, like everything else on this path: any failure is "no relay".
+
+        ``partial=True`` is for a caller whose stream ended **mid-token** —
+        the interrupt and error handlers — and is passed straight through to
+        ``ChannelStreamRelay.take_tail``, which then also hides a tag that was
+        still arriving when the stream stopped. See that method: it is an
+        opt-in because the stricter stripping would cost a completed reply the
+        odd trailing ``"<c"``.
+
+        The implementation is :meth:`_take_stream_tail_ex` with its second
+        answer dropped, which is the only difference between the two and the
+        reason this one still exists: two of the three subscribers genuinely do
+        not care why the relay had nothing, and folding the flag into their
+        branches would invite a reader to think it changes something there.
+        """
+        tail, _relay_failed = await ChannelOutboundService._take_stream_tail_ex(
+            session_id, partial=partial
+        )
+        return tail
+
+    @staticmethod
     async def handle_stream_completed(event_data: dict[str, Any]) -> None:
-        """STREAM_COMPLETED — deliver the agent's final message to the thread."""
+        """STREAM_COMPLETED — deliver the agent's final message to the thread.
+
+        Fires once per **LLM batch**, not once per turn, so with a relay
+        attached each call delivers that batch's increment (``take_tail`` is
+        idempotent and advances past what it hands over) and a duplicate event
+        delivers nothing.
+        """
         try:
             from app.core.db import create_session
 
             meta = event_data.get("meta") or {}
             session_id = meta.get("session_id")
             if not session_id or meta.get("was_interrupted"):
+                return
+
+            tail = await ChannelOutboundService._take_stream_tail(session_id)
+            if tail is not None and not tail:
+                # The relay already put this batch's text on screen. Nothing to
+                # send, and nothing to clean up either way: usually the draft's
+                # id was released by the seal that emptied it, but an id CAN
+                # still be standing here (an earlier batch's ``take_tail``
+                # empties the draft, and ``_deliver`` keeps the id whenever it
+                # fell back to a plain post), and it is left alone on purpose —
+                # a notice standing from an earlier state is patched by the
+                # next turn. Returning before the DB session is opened keeps a
+                # no-op free.
                 return
 
             with create_session() as db:
@@ -197,6 +394,23 @@ class ChannelOutboundService:
                 if resolved is None:
                     return
                 binding, channel = resolved
+
+                if tail is not None:
+                    # The relay has been rewriting the notice all turn; the
+                    # notice's slot holds the draft, and this patches the last
+                    # increment into it. Deliberately the relay's own text and
+                    # not the stored message (plan §1): they differ after
+                    # webapp-action stripping and ``<cinna_attach>``
+                    # materialisation, and the reader has been watching this
+                    # one.
+                    await ChannelOutboundService._deliver(
+                        db=db,
+                        channel=channel,
+                        binding=binding,
+                        text=tail,
+                        into_status_notice=True,
+                    )
+                    return
 
                 text = ChannelOutboundService._last_agent_message(
                     db, uuid.UUID(str(session_id))
@@ -237,6 +451,12 @@ class ChannelOutboundService:
 
         The error text itself is deliberately not forwarded: it can carry
         internal detail, and the external caller can act on neither.
+
+        With a relay attached the apology goes out **under** whatever the agent
+        had already streamed, rather than over it. The draft is the notice, so
+        replacing it with the bare apology would take back the half-answer the
+        reader has been watching for the last minute — and a half-answer plus
+        "something went wrong" is strictly more useful than the apology alone.
         """
         try:
             from app.core.db import create_session
@@ -245,6 +465,12 @@ class ChannelOutboundService:
             session_id = meta.get("session_id")
             if not session_id:
                 return
+
+            # ``partial``: a failed stream can stop in the middle of a control
+            # tag, and this text is settled into the thread as the answer.
+            tail = await ChannelOutboundService._take_stream_tail(
+                session_id, partial=True
+            )
 
             with create_session() as db:
                 resolved = ChannelOutboundService._resolve_channel_session(
@@ -257,18 +483,193 @@ class ChannelOutboundService:
                 # The failure notice takes the status notice's slot too: it is
                 # this turn's answer, and the person should read one message,
                 # not a spinner with an apology under it.
+                #
+                # ``tail`` is falsy for both "no relay" and "the relay already
+                # delivered everything", and both want the same message here:
+                # the bare apology, patched into the notice exactly as before.
                 await ChannelOutboundService._deliver(
                     db=db,
                     channel=channel,
                     binding=binding,
                     text=(
-                        "Something went wrong while I was working on that. "
-                        "Please try again."
+                        f"{tail}\n\n{TURN_FAILED_TEXT}"
+                        if tail
+                        else TURN_FAILED_TEXT
                     ),
                     into_status_notice=True,
                 )
         except Exception:
             logger.exception("%s handle_stream_error failed", _LOG_PREFIX)
+
+    @staticmethod
+    async def handle_stream_interrupted(event_data: dict[str, Any]) -> None:
+        """STREAM_INTERRUPTED — settle the thread on what got said, and stop.
+
+        Emitted **instead of** ``STREAM_COMPLETED`` when a turn is interrupted
+        (``message_service`` guards the completion emission with
+        ``if not was_interrupted``), so without this subscriber an interrupted
+        channel turn leaves the notice stranded on "💬 Working on your
+        message…" until the next turn patches it — telling the person we are
+        still busy with something they cancelled. It is also what a channel
+        ``/stop`` command will lean on for its visible acknowledgement once
+        that command exists, which is why this is designed to say the whole
+        thing itself rather than to be paired with a reply.
+
+        **There is no full-text fallback here, and that is forced.**
+        ``handle_stream_completed`` recovers through ``_last_agent_message``
+        (``handle_stream_error`` reads no row either — it has a fixed apology
+        to fall back on); this one can do neither, because the stored message
+        is not written yet when the event fires.
+        ``STREAM_INTERRUPTED`` is emitted the moment the ``interrupted`` event
+        is seen, inside the streaming loop; ``_finalize_agent_message`` runs
+        several hundred lines later, after the loop breaks — and bus handlers
+        are dispatched with ``create_task``, so this one reaches the DB during
+        that window. What it would read is whatever ``_flush_streaming_to_db``
+        last checkpointed, which it does every two seconds against a relay fed
+        per assistant event: a partial of a partial, or — since the row is
+        created only on the first assistant event — the *previous* turn's
+        completed answer, which is the shape a ``/stop`` before the agent says
+        anything would produce every time. Every branch below therefore works
+        from what is already on the reader's screen, and never from the row.
+        Put the other way round: the standing draft is the best text available
+        here — normally a superset of the row, and bounded-lossy by one flush
+        interval against it.
+
+        Five shapes, none of them clearing — the turn is over, and the
+        tombstone rule in the band comment below applies:
+
+        * **a tail to hand over** → into the notice, with the stopped marker
+          under it, through ``_deliver`` so an over-long partial still chunks
+          (``replace_message`` chunks; ``update_message``, which the notice
+          verb uses, truncates — which is why the bare-marker branches may use
+          that verb and this one may not).
+        * **the relay put everything on screen already** (``""``) → the marker
+          on its own, below the last sealed message.
+        * **the relay broke and could not hand its tail over**
+          (``relay_failed``) → **silence.** A relay that failed its tail read
+          may still have a confirmed draft standing in the notice, and settling
+          the bare marker over it would replace an answer the reader watched
+          arrive with a two-word tombstone — permanently, since nothing else
+          delivers that text. Leaving the draft alone costs the acknowledgement
+          and keeps the answer, which is the right way round; the thread is
+          then exactly where it would have been before this subscriber existed,
+          and the next turn patches the notice.
+        * **the relay is fine and the stream said nothing at all** → the
+          marker, over the spinner. This is what ``/stop`` on a turn the agent
+          has not started answering looks like, i.e. the likeliest interrupt
+          there is, and it is the reason this handler asks
+          :meth:`_take_stream_tail_ex` rather than its two-value sibling: that
+          sibling reports this case and the broken-relay case with the same
+          ``None``, and "is there a live relay at all" cannot separate them
+          either — a turn interrupted before its first token has a registered,
+          non-spent relay just the same. Answered with silence, which is what
+          the collapsed form produced, the notice stays stranded on
+          "💬 Working on your message…" on the very shape this subscriber was
+          added for.
+        * **no relay, and this thread was narrating** → the marker, settled
+          over the spinner. Safe precisely because there was no relay: nothing
+          but the pipeline's own progress text can be in that notice. Shares a
+          branch with the case above: both have nothing to deliver and a notice
+          that is standing, and both want the acknowledgement written into it.
+        * **nothing narrating** → silence. A thread that was not showing a
+          spinner gets no message about a turn it never saw start — which is
+          also what holds the email transport at zero behaviour change, since a
+          transport with no progress surface can never hold a notice id.
+
+        **Why the ``""`` branch may settle over a standing notice id.** Not
+        because the combination is unreachable; it is reachable, at least
+        three ways. A prior batch's ``take_tail`` empties the draft while
+        ``_deliver``'s fall-back-to-post keeps the id; a second interrupted
+        batch reads the same relay again; and a concurrent next turn can write
+        a fresh spinner onto the row before this handler runs. It is safe
+        because of what such an id can *hold*: the relay releases the id on
+        every seal, and ``_deliver`` keeps it only where it has already posted
+        a superset of that text below. A notice standing at this point
+        therefore never holds answer text that exists nowhere else. That is
+        the property to re-check before touching this branch — not the
+        reachability, which does not hold.
+
+        Fires once per interrupted **batch**, like its sibling, so a turn whose
+        second batch is also interrupted acknowledges twice. Left alone
+        deliberately: the duplicate is one short line, and suppressing it means
+        per-turn state in a handler whose whole virtue is having none.
+        """
+        try:
+            from app.core.db import create_session
+
+            meta = event_data.get("meta") or {}
+            session_id = meta.get("session_id")
+            if not session_id:
+                return
+
+            # ``partial``: an interrupted stream can stop in the middle of a
+            # control tag, and this text is settled into the thread as the
+            # answer. ``_ex``: the flag below is the one fact the two-value
+            # form has to drop, and this handler is the one that needs it.
+            (
+                tail,
+                relay_failed,
+            ) = await ChannelOutboundService._take_stream_tail_ex(
+                session_id, partial=True
+            )
+
+            with create_session() as db:
+                resolved = ChannelOutboundService._resolve_channel_session(
+                    db, session_id
+                )
+                if resolved is None:
+                    return
+                binding, channel = resolved
+
+                if tail:
+                    await ChannelOutboundService._deliver(
+                        db=db,
+                        channel=channel,
+                        binding=binding,
+                        text=f"{tail}\n\n{STOPPED_SUFFIX}",
+                        into_status_notice=True,
+                    )
+                    return
+
+                if relay_failed:
+                    # The relay owned this notice and could not tell us what is
+                    # in it. Anything written here risks overwriting the only
+                    # copy of the answer. See the docstring.
+                    logger.warning(
+                        "%s Stream interrupted for session %s while its relay "
+                        "could not hand over a tail — leaving the draft "
+                        "standing rather than settling over it",
+                        _LOG_PREFIX,
+                        session_id,
+                    )
+                    return
+
+                if tail is None and _binding_status_message_id(binding) is None:
+                    # Nothing was narrating this thread — no relay, and no
+                    # notice standing either. ``tail is None`` also covers the
+                    # relay that is perfectly healthy and simply has nothing
+                    # (a turn stopped before the agent spoke), and that is
+                    # exactly right: such a turn *does* have a spinner
+                    # standing, so it falls through to the settle below and
+                    # gets its acknowledgement. Read through the total helper:
+                    # this is a lazy reload on an instance the resolve above
+                    # expired.
+                    return
+
+                # ``settle``: the marker IS this turn's last word, so it is
+                # written once and the id let go. Where there is no id (the
+                # relay's last act was a seal) this posts it as a fresh message
+                # under the sealed text — the same acknowledgement, one message
+                # lower.
+                await ChannelOutboundService.set_binding_status(
+                    db=db,
+                    channel=channel,
+                    binding=binding,
+                    text=STOPPED_NOTICE,
+                    settle=True,
+                )
+        except Exception:
+            logger.exception("%s handle_stream_interrupted failed", _LOG_PREFIX)
 
     # ------------------------------------------------------------------
     # Status notice
@@ -449,26 +850,105 @@ class ChannelOutboundService:
         binding: ChannelThreadBinding,
         text: str,
         settle: bool = False,
-    ) -> None:
+    ) -> bool:
         """``set_status`` for a bound thread, persisting the notice id.
 
         ``settle=True`` writes the final word: the notice is rewritten and then
         *released* — the id is dropped so nothing later deletes it. Use it for
         text that is itself the answer, and never for a state the conversation
         moves on from.
+
+        **The release happens only when the write actually landed.** A settle
+        whose patch AND whose fallback post both failed has shown the sender
+        nothing: the notice still stands with whatever it said before. Dropping
+        the id there orphans that message — the next thing to write a notice on
+        this thread has no id to patch, posts a fresh one, and the thread now
+        carries the old text above the new. For the streaming relay it is worse
+        than cosmetic: a seal that fails correctly does not advance the sealed
+        offset, so the fresh message repeats the whole unsealed draft while the
+        orphan stands with a prefix of the same paragraphs. Keeping the id
+        instead costs nothing anywhere — the next notice patches the message
+        that is already there, which is exactly the self-heal the pipeline
+        already relies on — and it is what the module's stated invariant ("the
+        notice id is released only when the patch really landed") always meant.
+
+        **The same rule, and the same reason, without ``settle``.** A plain
+        ``set`` whose patch and fallback post both failed used to write the
+        ``None`` it got back onto the row, which is the identical orphan
+        arrived at from the other side: the standing notice loses its only
+        pointer. The pipeline's four ``set`` call sites — the two "working on
+        your message…" patches, the "installing…" adopt-then-patch, and the
+        "ready" that the drain's reply is about to take over — all want the
+        stored id kept there, because each of them is followed by something
+        that will patch that same message. Keeping it is also what makes the
+        relay's failed *draft* patch survivable: the next flush retries the
+        patch instead of posting the whole unsealed draft again underneath the
+        orphan. Where there was no id, nothing changes: the write was a no-op
+        either way.
+
+        Returns **whether the text actually reached the thread**. Still total —
+        the return value is the report, not an exception — and additive: every
+        caller that narrates progress ignores it, because a notice that could
+        not be posted is a cosmetic loss they cannot act on anyway.
+
+        It exists for the one caller that can: the streaming relay
+        (``channel_stream_relay``) *seals* a slice of the answer with this verb
+        and then advances past it, never sending that text again. Advancing on
+        an unconfirmed send turns a transport outage into a silent hole in the
+        middle of the reply — strictly worse than today's loud total failure —
+        so the relay needs to know.
+
+        **Reading ``set_status``'s ``None`` as "it failed" is a borrowed
+        certainty, so name what lends it.** That ``None`` has three meanings —
+        the post failed, the transport has no progress surface at all, or the
+        notice went out as an ordinary message on a transport that cannot edit.
+        Only the first is a failure. The other two never occur on the paths
+        that consult this return value, because ``maybe_attach_channel_relay``
+        will not build a relay unless the channel's adapter declares
+        ``supports_status_notice`` — the same capability ``set_status`` checks
+        before it will keep an id — and the settle branch above only *keeps* an
+        id a notice-less transport could never have had. Loosen that gate and
+        this reading has to be revisited with it: a notice-less transport would
+        then report every delivered message as a failure, and the relay would
+        re-send every slice it had already put on screen.
+
+        The one behaviour difference that reading is responsible for: on a
+        transport with no progress surface at all, the guard now skips a
+        ``_persist_status_message_id(db, binding, None)`` that used to run.
+        It was a no-op — such a transport can never have obtained an id for
+        the write to clear — and it is named here rather than left to be
+        rediscovered, because it is the case a loosened capability gate would
+        turn into a real one.
         """
         thread_key = _binding_thread_key(binding, channel)
         if thread_key is None:
-            return
+            return False
         message_id = await ChannelOutboundService.set_status(
             channel=channel,
             thread_key=thread_key,
             message_id=_binding_status_message_id(binding),
             text=text,
         )
+        if message_id is None:
+            # The write never reached the thread: leave the id alone so the
+            # next turn patches the notice that is still standing, instead of
+            # posting beneath it. See the docstring — this is one rule, not two
+            # branches: a *settle* that failed would otherwise release an id
+            # nothing had rewritten, and a *set* that failed would otherwise
+            # overwrite the live id with ``None``, which orphans the same
+            # message just as thoroughly. On the streaming path the second is
+            # the more damaging of the two, because the very next flush finds
+            # no id, posts the whole unsealed draft as a fresh message, and
+            # leaves the orphan standing above it with a prefix of the same
+            # paragraphs — permanently, since nothing can address it any more.
+            #
+            # Costs nothing where the id was already ``None``:
+            # ``_persist_status_message_id`` was a no-op there too.
+            return False
         ChannelOutboundService._persist_status_message_id(
             db, binding, None if settle else message_id
         )
+        return True
 
     @staticmethod
     async def clear_binding_status(
@@ -885,4 +1365,10 @@ class ChannelOutboundService:
                 )
 
 
-__all__ = ["ChannelOutboundService", "CHANNEL_INTEGRATION_PREFIX"]
+__all__ = [
+    "ChannelOutboundService",
+    "CHANNEL_INTEGRATION_PREFIX",
+    "STOPPED_NOTICE",
+    "STOPPED_SUFFIX",
+    "TURN_FAILED_TEXT",
+]

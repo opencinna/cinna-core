@@ -64,6 +64,7 @@ from app.services.server_channels.adapters.base import (
     ChannelSendError,
     ChannelVerificationError,
 )
+from app.services.server_channels.adapters.chat_text_chunking import chunk_text
 from app.services.server_channels.adapters.google_chat_format import markdown_to_chat
 
 logger = logging.getLogger(__name__)
@@ -994,67 +995,13 @@ class GoogleChatAdapter(ChannelAdapter):
         await asyncio.sleep(seconds)
 
     def _chunk(self, text: str) -> list[str]:
-        """Split at the message limit, preferring a newline boundary.
+        """Split at this transport's message limit, preferring a newline.
 
-        Code fences are closed and re-opened across the split. A ```````
-        block cut in half leaves the first chunk with an unterminated fence —
-        Chat renders the rest of that message as prose — and the second chunk
-        opening with the block's *closing* fence, which then swallows whatever
-        follows it. The reserve below is what keeps re-opening the fence from
-        pushing the chunk back over the limit.
+        The splitting itself lives in :mod:`chat_text_chunking`, shared with
+        the streaming relay so the two cannot drift on "where may a Chat
+        message be cut"; the adapter only supplies its own limit.
         """
-        limit = _MAX_MESSAGE_CHARS
-        if len(text) <= limit:
-            return [text]
-
-        chunks: list[str] = []
-        remaining = text
-        # Room for a closing "\n```" on the chunk we cut and an opening
-        # "```\n" on the next. Reserved for the whole split rather than per
-        # chunk, because whether a given chunk needs one fence, both, or
-        # neither is only known after it has been cut — and not reserved at all
-        # for text that has no fences in it, so ordinary prose splits exactly
-        # where it always did.
-        reserve = 8 if "```" in text else 0
-        open_fence = False
-        # ``limit - reserve``, not ``limit``: the loop condition decides how
-        # big the FINAL chunk may be, and that chunk gets the re-opening
-        # "```\n" prepended like any other. Exiting at ``limit`` let a tail of
-        # exactly ``limit`` characters become ``limit + 4`` — Chat answers 400,
-        # ``_request_with_retries`` gives up immediately on a non-429 4xx, and
-        # the earlier chunks are already posted, so the end of a long reply
-        # vanishes AND the binding records a delivery failure for an answer the
-        # reader mostly received.
-        while len(remaining) > limit - reserve:
-            window_size = limit - reserve
-            window = remaining[:window_size]
-            split_at = window.rfind("\n")
-            # Only honour a newline if it isn't pathologically early, otherwise
-            # a long unbroken line would produce a stream of tiny chunks.
-            if split_at < window_size // 2:
-                split_at = window_size
-            piece = remaining[:split_at].rstrip("\n")
-            remaining = remaining[split_at:].lstrip("\n")
-
-            was_open = open_fence
-            open_fence = self._fence_open_after(piece, was_open)
-            if was_open:
-                piece = f"```\n{piece}"
-            if open_fence:
-                piece = f"{piece}\n```"
-            chunks.append(piece)
-        if remaining:
-            chunks.append(f"```\n{remaining}" if open_fence else remaining)
-        return chunks
-
-    @staticmethod
-    def _fence_open_after(piece: str, open_before: bool) -> bool:
-        """Whether a fenced block is still open at the end of ``piece``."""
-        state = open_before
-        for line in piece.split("\n"):
-            if line.lstrip().startswith("```"):
-                state = not state
-        return state
+        return chunk_text(text, _MAX_MESSAGE_CHARS)
 
     @staticmethod
     def _space_from_thread_key(thread_key: str) -> str | None:

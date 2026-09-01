@@ -83,11 +83,15 @@ def test_process_pending_messages_serializes_same_session_calls() -> None:
 
     @contextmanager
     def fake_db_session():
-        # `.get(Model, id)` just needs to return something truthy; the
-        # session-lock quick-check never inspects/mutates it because
-        # collect_pending_messages is mocked to report "pending work
-        # exists", which skips the assignment branch entirely.
-        yield SimpleNamespace(get=lambda model, sid: SimpleNamespace())
+        # `.get(Model, id)` needs to return something truthy that carries
+        # `integration_type` — the quick-check reads it (to decide whether the
+        # turn also streams into a server-channel thread) and nothing else.
+        # It never mutates the row, because collect_pending_messages is mocked
+        # to report "pending work exists", which skips the assignment branch
+        # entirely. `None` = not a channel session, so no relay is attached.
+        yield SimpleNamespace(
+            get=lambda model, sid: SimpleNamespace(integration_type=None)
+        )
 
     unblock_first_stream = asyncio.Event()
     events_log: list[str] = []

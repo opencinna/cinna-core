@@ -477,6 +477,34 @@ class Settings(BaseSettings):
     # a cleared cache costs one extra lookup per user, never a wrong answer.
     APP_MCP_AVAILABILITY_CACHE_MAX_ENTRIES: int = 10_000
 
+    # ── Streaming updates in the channel status notice ──────────────────
+    # While the agent streams, the thread's status notice stops being a
+    # spinner and becomes a rolling draft: the same message is rewritten in
+    # place with the assistant text accumulated so far, and is *sealed* (left
+    # standing, a fresh draft opened below it) when it approaches the
+    # transport's per-message cap. See
+    # ``app/services/server_channels/channel_stream_relay.py``.
+    #
+    # Only transports that declare ``supports_status_notice`` are affected;
+    # email and App MCP have no progress surface and see no change.
+    CHANNEL_STREAM_UPDATES_ENABLED: bool = True  # global kill switch
+    # Minimum seconds between two rewrites of the same draft. The default is
+    # deliberately conservative: Google Chat's write quota (~60/min) is per
+    # **space**, shared by every thread in a group space, so a chatty draft in
+    # one thread spends the budget of all of them.
+    #
+    # **A value <= 0 means "flush immediately on every event"** — no debounce
+    # and, importantly, no sleeping. That is what the tests set so they can
+    # observe a draft patch without waiting for a timer; it is a legitimate
+    # (if quota-hungry) production setting too.
+    CHANNEL_STREAM_UPDATE_INTERVAL_SECONDS: float = 3.0
+    # Soft threshold, measured on the **translated** draft (what the reader's
+    # client actually receives), at which the relay starts looking for a place
+    # to seal. Comfortably under Google Chat's 4096-character hard cap so the
+    # seal has room to prefer a good boundary — a blank line, never inside a
+    # code fence — instead of cutting wherever the cap falls.
+    CHANNEL_STREAM_SEAL_TARGET_CHARS: int = 3400
+
     # ── Routing traces (auto-routing tuning) ────────────────────────────
     # Durable, superuser-only record of each routing decision — candidates
     # (including rejected ones), rendered prompt, provider attempts, verdict.
