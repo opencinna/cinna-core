@@ -50,6 +50,9 @@ from app.models import (
     Session as ChatSession,
     SessionMessage,
 )
+from app.models.events.event import (
+    AGENT_MESSAGE_ID_META_KEY as _AGENT_MESSAGE_ID_META_KEY,
+)
 from app.services.routing import routing_trace
 from app.services.server_channels.adapters.email import build_reply_thread_key
 from app.services.server_channels.adapters.registry import (
@@ -60,6 +63,15 @@ from app.services.server_channels.channel_debug_buffer import (
     DEBUG_REPLIED,
     DEBUG_SEND_FAILED,
     ChannelDebugBuffer,
+)
+# Module scope, unlike the relay import below: the ledger service imports
+# nothing from this module (it reaches the relay's ``_visible`` lazily), so
+# there is no cycle to dodge here.
+from app.services.server_channels.channel_tool_summary import (
+    tool_only_summary_for_message,
+)
+from app.services.server_channels.channel_turn_delivery_service import (
+    ChannelTurnDeliveryLedger,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,6 +190,32 @@ def _binding_status_message_id(binding: ChannelThreadBinding) -> str | None:
         return None
 
 
+def _binding_row_id(binding: ChannelThreadBinding) -> uuid.UUID | None:
+    """The binding's own primary key, or ``None``. Never raises.
+
+    A third instance of the hazard :func:`_binding_thread_key` and
+    :func:`_binding_status_message_id` exist for, and it looks even more like a
+    plain field read than they do — which is exactly why it needs a helper of
+    its own. Every caller here arrives after a ``db.commit()``, so ``binding.id``
+    is a lazy reload and a concurrently deleted row raises
+    ``ObjectDeletedError`` from it.
+
+    Its one consumer is the turn-delivery ledger, whose whole contract is that
+    a failed write costs observability and nothing else — so ``None`` means
+    "no ledger for this turn", which the ledger's own entry points already
+    accept.
+    """
+    try:
+        return binding.id
+    except Exception:  # noqa: BLE001 — see the docstring
+        logger.warning(
+            "%s Could not read the binding's id for the delivery ledger",
+            _LOG_PREFIX,
+            exc_info=True,
+        )
+        return None
+
+
 # Prefix used for the integration_type stamped on channel sessions.
 CHANNEL_INTEGRATION_PREFIX = "channel_"
 
@@ -197,6 +235,170 @@ STOPPED_NOTICE = "⏹️ Stopped."
 TURN_FAILED_TEXT = (
     "Something went wrong while I was working on that. Please try again."
 )
+
+
+#: Meta key on the terminal stream events (``STREAM_COMPLETED`` /
+#: ``STREAM_ERROR`` / ``STREAM_INTERRUPTED``) carrying **turn identity**: the
+#: id of the agent ``SessionMessage`` that batch wrote, stringified, or an
+#: explicit ``None`` for a batch that wrote none. Genuinely **shared** with
+#: the emitters: this is a re-export of
+#: ``app.models.events.event.AGENT_MESSAGE_ID_META_KEY``, and
+#: ``sessions/message_service.py`` passes the key through the same symbol
+#: (``**{AGENT_MESSAGE_ID_META_KEY: ...}``) at every emission site — so a
+#: rename is one edit, not two edits joined by a string that fails silently.
+#:
+#: **The id names a *finalized* row only on ``STREAM_COMPLETED``.** The other
+#: two events are emitted from inside the streaming loop, before
+#: ``_finalize_agent_message`` has run, so what they name is a row **mid-write**
+#: and never a settled turn result:
+#:
+#: * ``STREAM_INTERRUPTED`` names the row created on the first assistant event,
+#:   whose content is whatever ``_flush_streaming_to_db`` last checkpointed —
+#:   a partial, roughly two seconds stale. And its ``None`` is not durable
+#:   either: the finalize that runs after the loop breaks can retroactively
+#:   create a row, so "this turn wrote nothing" may be false by the time
+#:   anything reads it.
+#: * the mid-stream ``STREAM_ERROR`` returns before finalize entirely, so the
+#:   row it names is never finalized at all.
+#:
+#: Only ``handle_stream_completed`` therefore loads the row. A reader that
+#: wants "the settled text of this turn" must take it from the completion
+#: event, not from whichever terminal event arrived.
+AGENT_MESSAGE_ID_META_KEY = _AGENT_MESSAGE_ID_META_KEY
+
+#: Distinguishes "the event carries no ``agent_message_id`` key at all" from
+#: "it carries the key, set to ``None``". ``meta.get(key)`` cannot tell those
+#: apart and they are opposite instructions: the first is an event from code
+#: predating the key (rolling deploy, stale fixture) and keeps the legacy
+#: newest-row behaviour; the second is an emitter stating on the record that
+#: this turn produced no agent message, where falling back to the newest row
+#: is precisely the bug.
+_MISSING = object()
+
+
+class _Unreadable:
+    """Type of :data:`_UNREADABLE`. A class so the sentinel is *typed*.
+
+    ``object()`` would work at runtime, but it makes the helper's return type
+    collapse to ``object`` and costs the caller its narrowing — and the whole
+    point of this sentinel is that the caller must not be able to confuse it
+    with the ``None`` beside it.
+    """
+
+    __slots__ = ()
+
+
+#: "The read failed, so we do not know what this turn said" — as opposed to
+#: ``None``, "we know, and it said nothing".
+#:
+#: The distinction is load-bearing and not defensive tidiness. ``None`` sends
+#: :meth:`ChannelOutboundService.handle_stream_completed` to
+#: ``clear_binding_status``, which **deletes the status notice**. That is right
+#: when the turn genuinely produced no text, and catastrophic when the read
+#: merely failed: a relay that narrated a partial answer into that notice and
+#: then broke leaves the reader's only copy of that text standing there, and a
+#: transient ``OperationalError`` on the row lookup would delete it — for a
+#: reply that exists in ``SessionMessage`` and would never be sent again. It is
+#: the same direction the tail contract forbids for ``take_tail`` returning
+#: ``None`` (see :meth:`ChannelOutboundService._take_stream_tail`), for the
+#: same reason, and folding it into ``None`` was a regression against the
+#: pre-turn-identity code, where such a raise propagated to the handler's outer
+#: ``except`` and left the notice alone.
+#:
+#: The caller's only correct response is to do nothing at all: leave the thread
+#: exactly as the relay left it.
+_UNREADABLE = _Unreadable()
+
+
+def _agent_message_uuid(raw_message_id: Any) -> uuid.UUID | None:
+    """The uuid a stream event named, or ``None``. Never raises.
+
+    The turn-delivery ledger needs the id itself, not the text
+    :func:`_agent_message_text` resolves from it — to gate on an already
+    settled turn, and to attribute the turn's rows.
+
+    **Silent by design**, unlike its sibling: the two are called on the same
+    meta value in the same handler, and an unusable id is already reported at
+    WARNING there. Logging it twice would read like two different problems.
+    ``None`` covers ``_MISSING``, an explicit ``None`` and an unparseable
+    value alike — all three mean "this event does not name a row the ledger
+    can attribute to", which is one instruction, not three.
+    """
+    if raw_message_id is None or raw_message_id is _MISSING:
+        return None
+    try:
+        return uuid.UUID(str(raw_message_id))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _agent_message_text(
+    db: DBSession, raw_message_id: Any
+) -> str | _Unreadable | None:
+    """The text of the agent message a stream event named.
+
+    **Total** — it never raises, because its caller's contract is to be total.
+    Three answers, and the third exists because it is not the second:
+
+    * a ``str`` — the text to deliver.
+    * ``None`` — **there is nothing to deliver for this turn.** A malformed or
+      unparseable id in the meta, a row that has since been deleted, a row
+      whose content is empty or whitespace. Folded together on purpose: each
+      means the same thing to the caller, and each is a fact we actually
+      established.
+    * :data:`_UNREADABLE` — **the read itself failed**, so nothing was
+      established. Never merged into ``None``: see that sentinel's own note.
+      The caller must leave the thread untouched rather than act on a fact it
+      does not have.
+
+    The meta value crosses a process boundary as JSON, so "it is a uuid string"
+    is an expectation and not a guarantee — hence the parse guard, which is a
+    genuine ``None`` (we read the event fine; what it named cannot exist).
+
+    Deliberately **not** ``_last_agent_message``: this loads exactly the row
+    the completing batch wrote. That is the whole fix — see
+    :attr:`AGENT_MESSAGE_ID_META_KEY`.
+    """
+    try:
+        message_uuid = uuid.UUID(str(raw_message_id))
+    except (TypeError, ValueError, AttributeError):
+        logger.warning(
+            "%s Stream event carried an unusable %s (%r) — treating the turn "
+            "as having produced no message",
+            _LOG_PREFIX,
+            AGENT_MESSAGE_ID_META_KEY,
+            raw_message_id,
+        )
+        return None
+
+    try:
+        row = db.get(SessionMessage, message_uuid)
+    except Exception:  # noqa: BLE001 — see the docstring
+        logger.warning(
+            "%s Could not read agent message %s named by the stream event — "
+            "leaving the thread untouched rather than assuming the turn said "
+            "nothing",
+            _LOG_PREFIX,
+            message_uuid,
+            exc_info=True,
+        )
+        return _UNREADABLE
+
+    try:
+        if row is None:
+            return None
+        return (row.content or "").strip() or None
+    except Exception:  # noqa: BLE001 — ``row.content`` is a lazy reload on an
+        # instance an earlier commit expired, exactly like the binding reads
+        # above; a concurrently deleted row raises here rather than at ``get``.
+        logger.warning(
+            "%s Could not read the content of agent message %s — leaving the "
+            "thread untouched",
+            _LOG_PREFIX,
+            message_uuid,
+            exc_info=True,
+        )
+        return _UNREADABLE
 
 
 class ChannelOutboundService:
@@ -287,7 +489,8 @@ class ChannelOutboundService:
         send?". It answers with two values and no third state to get wrong:
 
         * ``None`` — **behave exactly as if this feature did not exist.** Take
-          the pre-relay path: the stored ``SessionMessage``, the bare failure
+          the pre-relay path: this turn's stored ``SessionMessage`` (resolved
+          by the id the event carries, never by recency), the bare failure
           text, the notice-only stop acknowledgement.
         * a ``str`` — the relay owns this turn. Deliver this text (``""`` means
           it already delivered everything itself).
@@ -365,6 +568,44 @@ class ChannelOutboundService:
         attached each call delivers that batch's increment (``take_tail`` is
         idempotent and advances past what it hands over) and a duplicate event
         delivers nothing.
+
+        **The relay-absent arm delivers by turn identity, never by recency.**
+        The event names the agent ``SessionMessage`` its batch wrote
+        (:attr:`AGENT_MESSAGE_ID_META_KEY`), and three states of that key are
+        three different instructions:
+
+        * **a uuid** → deliver *that* row's text, and nothing else. An empty
+          row, or one that has since gone, reads as "the turn said nothing".
+        * **an explicit ``None``** → the turn wrote no agent message (a command
+          stream, a batch that never got an assistant event). Settle the
+          notice; **never** fall back to the newest row. Doing so is the bug
+          this arm exists to fix: it re-delivered the *previous* turn's answer
+          into the thread as if it answered the new question.
+        * **the key absent entirely** → an event from code predating the key
+          (a rolling deploy, a stale fixture). Only there does the legacy
+          newest-row query survive, logged at debug.
+
+        A fourth outcome is not a state of the key but of the lookup: if
+        reading the named row **fails** (:data:`_UNREADABLE`), this handler
+        returns having done nothing — it may not settle a notice on a fact it
+        failed to establish. That case and the ``None`` above look alike and
+        are opposites; the sentinel's note says why.
+
+        The relay-present arm above is untouched: its tail is turn-scoped by
+        construction, because the relay is created per turn.
+
+        **The turn-delivery ledger wraps all of it.** Before anything is sent,
+        an existing ``final`` row for this batch's agent message means the turn
+        is already answered and this event is a duplicate — the one place a
+        racing or redelivered ``STREAM_COMPLETED`` is stopped. After the send,
+        :meth:`_settle_turn_ledger` attributes the rows the relay wrote at its
+        seals, records the final message, and checks that the finalized
+        canonical text still starts with what was already sealed into the
+        thread. That check **changes no behaviour in either outcome** — the
+        settled reply is the relay's own text by decision, and stays so — it
+        only turns a silent assumption into a warning that can fire. Every
+        ledger call here is total: a delivery is never gated on, delayed by, or
+        lost to bookkeeping.
         """
         try:
             from app.core.db import create_session
@@ -374,18 +615,16 @@ class ChannelOutboundService:
             if not session_id or meta.get("was_interrupted"):
                 return
 
+            # Read with the sentinel, not ``meta.get(...)``: "key absent" and
+            # "key present, None" are opposite instructions here and a plain
+            # ``get`` collapses them into one. See the docstring.
+            raw_agent_message_id = meta.get(AGENT_MESSAGE_ID_META_KEY, _MISSING)
+            # The same value as an id rather than as text: the ledger gates and
+            # attributes on it. ``None`` for every shape that does not name a
+            # row — see the helper.
+            agent_message_uuid = _agent_message_uuid(raw_agent_message_id)
+
             tail = await ChannelOutboundService._take_stream_tail(session_id)
-            if tail is not None and not tail:
-                # The relay already put this batch's text on screen. Nothing to
-                # send, and nothing to clean up either way: usually the draft's
-                # id was released by the seal that emptied it, but an id CAN
-                # still be standing here (an earlier batch's ``take_tail``
-                # empties the draft, and ``_deliver`` keeps the id whenever it
-                # fell back to a plain post), and it is left alone on purpose —
-                # a notice standing from an earlier state is patched by the
-                # next turn. Returning before the DB session is opened keeps a
-                # no-op free.
-                return
 
             with create_session() as db:
                 resolved = ChannelOutboundService._resolve_channel_session(
@@ -394,6 +633,57 @@ class ChannelOutboundService:
                 if resolved is None:
                     return
                 binding, channel = resolved
+                binding_id = _binding_row_id(binding)
+
+                if ChannelTurnDeliveryLedger.turn_already_settled(
+                    db, agent_message_uuid, binding_id
+                ):
+                    # This batch's agent message already has a ``final`` row
+                    # that reached the thread, so this event is a duplicate (a
+                    # redelivered bus event, a racing scheduler flush) and
+                    # delivering again would post the answer twice. Safe for a
+                    # multi-batch turn: every batch writes its own agent
+                    # message, so batch 2 asks about an id batch 1 never
+                    # settled. A ``failed`` final row deliberately does not
+                    # gate — see the ledger method.
+                    logger.debug(
+                        "%s Turn %s for session %s is already settled — "
+                        "skipping a duplicate completion",
+                        _LOG_PREFIX,
+                        agent_message_uuid,
+                        session_id,
+                    )
+                    return
+
+                if tail is not None and not tail:
+                    # The relay already put this batch's text on screen. Nothing
+                    # to send, and nothing to clean up either way: usually the
+                    # draft's id was released by the seal that emptied it, but
+                    # an id CAN still be standing here (an earlier batch's
+                    # ``take_tail`` empties the draft, and ``_deliver`` keeps
+                    # the id whenever it fell back to a plain post), and it is
+                    # left alone on purpose — a notice standing from an earlier
+                    # state is patched by the next turn.
+                    #
+                    # It used to return above, before the DB session was
+                    # opened, to keep the no-op free. It no longer can: the
+                    # turn is over, the relay's boundary rows are sitting in
+                    # the ledger unattributed, and the id that attributes them
+                    # arrived on this event and nowhere else. Left unsettled
+                    # they would be adopted by the *next* completion on this
+                    # thread and recorded against the wrong turn. The cost is
+                    # one pooled connection on a path that is already the
+                    # rarer of the two (it needs a relay that delivered
+                    # everything within the flush interval), and every other
+                    # branch of this handler opens one anyway.
+                    ChannelOutboundService._settle_turn_ledger(
+                        db,
+                        binding_id=binding_id,
+                        session_message_id=agent_message_uuid,
+                        external_message_id=None,
+                        delivered=True,
+                    )
+                    return
 
                 if tail is not None:
                     # The relay has been rewriting the notice all turn; the
@@ -403,23 +693,123 @@ class ChannelOutboundService:
                     # webapp-action stripping and ``<cinna_attach>``
                     # materialisation, and the reader has been watching this
                     # one.
-                    await ChannelOutboundService._deliver(
+                    sent, written_id = await ChannelOutboundService._deliver_ex(
                         db=db,
                         channel=channel,
                         binding=binding,
                         text=tail,
                         into_status_notice=True,
                     )
+                    # After the delivery, never before it: the ledger is
+                    # bookkeeping about a message that has already gone out,
+                    # and reading the canonical text ahead of the send would
+                    # put a database round trip in front of the reader's reply
+                    # for no gain.
+                    ChannelOutboundService._settle_turn_ledger(
+                        db,
+                        binding_id=binding_id,
+                        session_message_id=agent_message_uuid,
+                        external_message_id=written_id,
+                        delivered=sent,
+                    )
                     return
 
-                text = ChannelOutboundService._last_agent_message(
-                    db, uuid.UUID(str(session_id))
-                )
-                if not text:
+                if raw_agent_message_id is _MISSING:
+                    # Legacy arm, and the only surviving caller of the
+                    # newest-row query. An event emitted before this key
+                    # existed cannot say which message its turn wrote, so the
+                    # honest fallback is the behaviour that event was written
+                    # against — wrong on a turn that produced nothing, right
+                    # on the overwhelmingly common turn that produced one.
                     logger.debug(
-                        "%s No agent message for session %s — nothing to send",
+                        "%s Stream event for session %s carries no %s — "
+                        "falling back to the newest agent message (an event "
+                        "from code predating turn identity)",
                         _LOG_PREFIX,
                         session_id,
+                        AGENT_MESSAGE_ID_META_KEY,
+                    )
+                    text = ChannelOutboundService._last_agent_message(
+                        db, uuid.UUID(str(session_id))
+                    )
+                elif raw_agent_message_id is None:
+                    # The emitter states this batch wrote no agent message.
+                    # There is nothing to deliver, and looking for something
+                    # anyway is the whole bug.
+                    text = None
+                else:
+                    resolved_text = _agent_message_text(
+                        db, raw_agent_message_id
+                    )
+                    if isinstance(resolved_text, _Unreadable):
+                        # The read failed, so we do not know whether this turn
+                        # said anything — and every other branch here acts on
+                        # knowing. Falling through would reach
+                        # ``clear_binding_status`` and DELETE the notice, which
+                        # is where a broken relay's partial answer is standing:
+                        # the reader's only copy of text that exists in
+                        # ``SessionMessage`` and will never be sent again.
+                        # Leaving the thread exactly as the relay left it costs
+                        # this batch's delivery and keeps what is on screen,
+                        # which is the same way round the tail contract
+                        # resolves ``take_tail`` returning ``None``. Already
+                        # logged at WARNING inside the helper.
+                        #
+                        # The ledger still gets its attribution, because it is
+                        # not a statement about the thread: ``tail is None``
+                        # covers a relay that **broke**, and such a relay may
+                        # have sealed messages standing with rows waiting for
+                        # a turn id. ``write_final=False`` — nothing was
+                        # delivered here, so nothing may be recorded as final.
+                        ChannelOutboundService._settle_turn_ledger(
+                            db,
+                            binding_id=binding_id,
+                            session_message_id=agent_message_uuid,
+                            external_message_id=None,
+                            delivered=False,
+                            write_final=False,
+                        )
+                        return
+                    text = resolved_text
+                    # A tool-only turn stores the "Agent response" finalize
+                    # placeholder as its content (the row exists precisely
+                    # because tool events are storable), and the web UI never
+                    # shows it — it renders the stored events instead. A
+                    # channel reader has no event renderer, so this is where
+                    # the placeholder used to reach them verbatim. Deliver the
+                    # channel-side equivalent of the UI's compact tool blocks
+                    # instead: one fenced line per call, no payload content.
+                    # Decided on events, never by comparing content against
+                    # the placeholder literal — a summary replaces the text
+                    # only when the events prove the turn said nothing.
+                    # Reaches both arms that matter: with no relay this is the
+                    # only delivery path, and with one, a tool-only turn gave
+                    # the relay nothing so its ("", False) lands here too.
+                    #
+                    # Gated on ``text``: an EMPTY row keeps the documented
+                    # "turn said nothing" contract below even when tool events
+                    # are stored beside it (reachable — a turn whose whole
+                    # output was an attachment tag has the tag stripped after
+                    # the placeholder fallback ran). The actual tool-only turn
+                    # always has the truthy placeholder as content, so the
+                    # gate costs it nothing.
+                    if text and agent_message_uuid is not None:
+                        summary = tool_only_summary_for_message(
+                            db, agent_message_uuid
+                        )
+                        if summary is not None:
+                            text = summary
+
+                if not text:
+                    logger.debug(
+                        "%s Nothing to deliver for session %s (%s=%s) — "
+                        "settling the notice",
+                        _LOG_PREFIX,
+                        session_id,
+                        AGENT_MESSAGE_ID_META_KEY,
+                        raw_agent_message_id
+                        if raw_agent_message_id is not _MISSING
+                        else "<absent>",
                     )
                     # Nothing to put in the notice's slot, and the turn is over
                     # — so this is one of the two edges where the notice really
@@ -428,22 +818,190 @@ class ChannelOutboundService:
                     # work it narrates and be rewritten by the NEXT turn,
                     # telling the person we are still busy with a message they
                     # sent minutes ago.
+                    #
+                    # **No ``final`` row**: nothing was delivered, and a final
+                    # row would record a delivery that did not happen. The
+                    # pending rows are still attributed, though — ``tail is
+                    # None`` is the tristate's *relay-failed* answer as well as
+                    # its relay-absent one (see ``_take_stream_tail``), so a
+                    # relay that narrated half an answer into sealed messages
+                    # and then broke reaches exactly here. Leaving its rows
+                    # unattributed would hand them to the next completion on
+                    # this thread and record them against the wrong turn. With
+                    # no relay at all there is nothing pending and this is a
+                    # no-op.
+                    #
+                    # The remaining cost is that a duplicate completion is not
+                    # gated here — it re-runs a delete that is already
+                    # idempotent.
+                    ChannelOutboundService._settle_turn_ledger(
+                        db,
+                        binding_id=binding_id,
+                        session_message_id=agent_message_uuid,
+                        external_message_id=None,
+                        delivered=False,
+                        write_final=False,
+                    )
                     await ChannelOutboundService.clear_binding_status(
                         db=db, channel=channel, binding=binding
                     )
                     return
 
                 # Into the notice's slot, not underneath it. See `_deliver`.
-                await ChannelOutboundService._deliver(
+                sent, written_id = await ChannelOutboundService._deliver_ex(
                     db=db,
                     channel=channel,
                     binding=binding,
                     text=text,
                     into_status_notice=True,
                 )
+                ChannelOutboundService._settle_turn_ledger(
+                    db,
+                    binding_id=binding_id,
+                    session_message_id=agent_message_uuid,
+                    external_message_id=written_id,
+                    delivered=sent,
+                    canonical_text=text,
+                )
         except Exception:
             # An event handler must never raise into the bus.
             logger.exception("%s handle_stream_completed failed", _LOG_PREFIX)
+
+    @staticmethod
+    def _settle_turn_ledger(
+        db: DBSession,
+        *,
+        binding_id: uuid.UUID | None,
+        session_message_id: uuid.UUID | None,
+        external_message_id: str | None,
+        delivered: bool,
+        canonical_text: str | None = None,
+        write_final: bool = True,
+    ) -> None:
+        """Close this turn in the delivery ledger. Never raises.
+
+        Called from :meth:`handle_stream_completed` **after** the delivery, on
+        every arm that actually wrote a message. It hands the turn's identity
+        to the rows the relay wrote at its boundaries (the only place that
+        column is ever filled in), settles the last one as ``final``, and runs
+        the divergence check.
+
+        ``canonical_text`` is the finalized ``SessionMessage`` content where
+        the caller already has it — or, on a tool-only turn, the compact tool
+        summary that was substituted for the stored placeholder and actually
+        delivered: the ledger records what went out, and such a turn has no
+        sealed rows for the divergence check to compare against anyway. Where it does not — the relay arms, which
+        deliver the relay's own accumulated text and never load the row — it is
+        read here, because the divergence check has nothing to compare against
+        without it. That read is the *only* reason this arm touches the row at
+        all, it happens after the reply is already out, and its failure
+        (:data:`_UNREADABLE`) costs the check and nothing else: the ledger
+        still records what was delivered.
+
+        ``write_final=False`` is for the two arms that deliver **nothing** and
+        still owe the ledger an attribution — see the call sites. They pass it
+        because a ``final`` row would claim a delivery that did not happen,
+        while leaving the rows pending hands a broken relay's already-posted
+        messages to the *next* turn on this thread.
+
+        Total twice over. The ledger's own entry points swallow everything, and
+        this wrapper swallows again, because it is called from the middle of a
+        handler whose remaining statements must run — §11a Rule 2, the same
+        reason ``_deliver``'s argument expressions are hoisted.
+        """
+        try:
+            if canonical_text is None and session_message_id is not None:
+                resolved = _agent_message_text(db, session_message_id)
+                canonical_text = resolved if isinstance(resolved, str) else None
+            ChannelTurnDeliveryLedger.settle_turn(
+                db,
+                binding_id=binding_id,
+                session_message_id=session_message_id,
+                external_message_id=external_message_id,
+                delivered=delivered,
+                canonical_text=canonical_text,
+                write_final=write_final,
+            )
+        except Exception:  # noqa: BLE001 — bookkeeping may not cost a reply
+            logger.warning(
+                "%s Could not settle the delivery ledger for turn %s",
+                _LOG_PREFIX,
+                session_message_id,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _close_out_unsettled_ledger(
+        db: DBSession,
+        *,
+        binding_id: uuid.UUID | None,
+        session_message_id: uuid.UUID | None,
+    ) -> None:
+        """Attribute a terminated turn's pending rows. Never raises, never sends.
+
+        The counterpart to :meth:`_settle_turn_ledger` for the two handlers
+        that end a turn **without** a completion: an interrupt and a
+        mid-stream error. Without it their rows keep ``session_message_id
+        IS NULL`` forever, and ``settle_turn``'s adoption is deliberately
+        greedy — every pending row on the binding — so the *next* completion
+        on this thread picks them up and stamps them with its own message id.
+        That is wrong twice: the ledger records a previous turn's sealed
+        message as part of a turn it was never in, and the divergence check
+        then compares the new turn's answer against the old turn's prefix and
+        reports a mismatch that did not happen. A check that cries wolf is
+        worse than no check, because the mismatch policy is explicitly one we
+        revisit "only if logs show it firing".
+
+        **Attribution only — ``write_final=False`` and ``canonical_text=None``.**
+        Nothing was delivered as this turn's answer, so no ``final`` row is
+        written (which is also what keeps these rows out of
+        :meth:`ChannelTurnDeliveryLedger.turn_already_settled`, whose gate
+        matches on ``role == final``: a close-out can never be the reason a
+        later real completion withholds a reply). And with no canonical text
+        there is nothing for the divergence check to compare, which is correct
+        rather than merely convenient — see below.
+
+        **Why using ``agent_message_id`` here does not break the rule that
+        this event's row must not be read.** The hazard the interrupt handler
+        documents is that the row's *content* at this moment is whatever
+        ``_flush_streaming_to_db`` last checkpointed — a partial of a partial,
+        or the previous turn's text on a row not yet written. That forbids
+        reading the content, and this does not read it: the id is used as a
+        foreign key and nothing else, no text is loaded, and no claim is made
+        about what was settled. It is deliberately routed around
+        :meth:`_settle_turn_ledger`, whose convenience read of the canonical
+        text is exactly the forbidden read on this path.
+
+        **Idempotent by construction**, which matters because
+        ``STREAM_INTERRUPTED`` fires once per interrupted *batch* and
+        ``STREAM_ERROR`` has more than one emission shape. A second
+        invocation finds nothing pending, stages nothing and commits nothing.
+
+        A missing or unparseable id (``None``) leaves the rows pending and
+        does nothing. Inventing a key would put a row under a turn that did
+        not write it, which is the failure this method exists to prevent.
+        """
+        if binding_id is None or session_message_id is None:
+            return
+        try:
+            ChannelTurnDeliveryLedger.settle_turn(
+                db,
+                binding_id=binding_id,
+                session_message_id=session_message_id,
+                external_message_id=None,
+                delivered=False,
+                canonical_text=None,
+                write_final=False,
+            )
+        except Exception:  # noqa: BLE001 — §11a Rule 2; bookkeeping about a
+            # turn that is already over may not disturb the handler that is
+            # closing it, and the ledger's own entry points swallow first.
+            logger.warning(
+                "%s Could not close out the delivery ledger for turn %s",
+                _LOG_PREFIX,
+                session_message_id,
+                exc_info=True,
+            )
 
     @staticmethod
     async def handle_stream_error(event_data: dict[str, Any]) -> None:
@@ -465,6 +1023,16 @@ class ChannelOutboundService:
             session_id = meta.get("session_id")
             if not session_id:
                 return
+
+            # For the ledger close-out below, and for nothing else — the
+            # apology this handler delivers is fixed and reads no row. A plain
+            # ``get`` rather than the completion handler's sentinel dance
+            # because here "key absent" and "key present, None" really are one
+            # instruction: both mean this event names no row to attribute to,
+            # and there is no legacy fall-back branch to tell apart.
+            agent_message_uuid = _agent_message_uuid(
+                meta.get(AGENT_MESSAGE_ID_META_KEY)
+            )
 
             # ``partial``: a failed stream can stop in the middle of a control
             # tag, and this text is settled into the thread as the answer.
@@ -498,6 +1066,17 @@ class ChannelOutboundService:
                     ),
                     into_status_notice=True,
                 )
+
+                # Last statement, after the apology has already gone out: the
+                # relay's boundary rows for this turn would otherwise stay
+                # pending and be adopted by the next completion on the thread.
+                # Attribution only — nothing here decides, delays or alters
+                # what was just delivered.
+                ChannelOutboundService._close_out_unsettled_ledger(
+                    db,
+                    binding_id=_binding_row_id(binding),
+                    session_message_id=agent_message_uuid,
+                )
         except Exception:
             logger.exception("%s handle_stream_error failed", _LOG_PREFIX)
 
@@ -516,10 +1095,17 @@ class ChannelOutboundService:
         thing itself rather than to be paired with a reply.
 
         **There is no full-text fallback here, and that is forced.**
-        ``handle_stream_completed`` recovers through ``_last_agent_message``
-        (``handle_stream_error`` reads no row either — it has a fixed apology
-        to fall back on); this one can do neither, because the stored message
-        is not written yet when the event fires.
+        ``handle_stream_completed`` recovers by loading the message its event
+        names (``handle_stream_error`` reads no row either — it has a fixed
+        apology to fall back on); this one can do neither, because the stored
+        message is not written yet when the event fires. That is also why no
+        branch below resolves text through the event's ``agent_message_id``
+        even though the event now carries one: the id may name a row whose
+        content is still a mid-stream checkpoint, and reading it would
+        reintroduce exactly the "a partial of a partial" text the branches
+        below exist to avoid. The prohibition is on the row's **content**; the
+        id is used once, below every branch, as the key that closes this
+        turn's ledger rows out — see :meth:`_close_out_unsettled_ledger`.
         ``STREAM_INTERRUPTED`` is emitted the moment the ``interrupted`` event
         is seen, inside the streaming loop; ``_finalize_agent_message`` runs
         several hundred lines later, after the loop breaks — and bus handlers
@@ -593,6 +1179,23 @@ class ChannelOutboundService:
         second batch is also interrupted acknowledges twice. Left alone
         deliberately: the duplicate is one short line, and suppressing it means
         per-turn state in a handler whose whole virtue is having none.
+
+        **It does not read the turn-delivery ledger either, and that is the
+        same refusal.** "Was anything delivered this turn?" looks like a
+        question the ledger could answer for the relay-absent arms, and it
+        cannot answer it *for this turn*: the only key available here is the
+        binding, because a row is attributed to its agent message at
+        completion and this event is not one — and rows keyed by binding
+        alone belong to whatever ran on this thread most recently, which is
+        the recency inference the ledger exists to delete. The five branches
+        below stay exactly as they are; they work from what is on the reader's
+        screen, which is a fact this handler actually has.
+
+        That refusal is about *reading* the ledger to decide a delivery, and
+        it stands. It says nothing against *writing* to it once every such
+        decision has been made and acted on, which is what the close-out in
+        the ``finally`` does — and which is what stops this turn's rows from
+        being adopted by the next completion on the thread.
         """
         try:
             from app.core.db import create_session
@@ -601,6 +1204,15 @@ class ChannelOutboundService:
             session_id = meta.get("session_id")
             if not session_id:
                 return
+
+            # The turn's key for the ledger close-out at the bottom, and the
+            # only use this handler has for the id: none of the five branches
+            # below consults it, and none of them may. Absent, ``None`` and
+            # unparseable collapse to ``None`` here, which the close-out
+            # reads as "leave these rows pending".
+            agent_message_uuid = _agent_message_uuid(
+                meta.get(AGENT_MESSAGE_ID_META_KEY)
+            )
 
             # ``partial``: an interrupted stream can stop in the middle of a
             # control tag, and this text is settled into the thread as the
@@ -621,53 +1233,71 @@ class ChannelOutboundService:
                     return
                 binding, channel = resolved
 
-                if tail:
-                    await ChannelOutboundService._deliver(
+                try:
+                    if tail:
+                        await ChannelOutboundService._deliver(
+                            db=db,
+                            channel=channel,
+                            binding=binding,
+                            text=f"{tail}\n\n{STOPPED_SUFFIX}",
+                            into_status_notice=True,
+                        )
+                        return
+
+                    if relay_failed:
+                        # The relay owned this notice and could not tell us what is
+                        # in it. Anything written here risks overwriting the only
+                        # copy of the answer. See the docstring.
+                        logger.warning(
+                            "%s Stream interrupted for session %s while its relay "
+                            "could not hand over a tail — leaving the draft "
+                            "standing rather than settling over it",
+                            _LOG_PREFIX,
+                            session_id,
+                        )
+                        return
+
+                    if tail is None and _binding_status_message_id(binding) is None:
+                        # Nothing was narrating this thread — no relay, and no
+                        # notice standing either. ``tail is None`` also covers the
+                        # relay that is perfectly healthy and simply has nothing
+                        # (a turn stopped before the agent spoke), and that is
+                        # exactly right: such a turn *does* have a spinner
+                        # standing, so it falls through to the settle below and
+                        # gets its acknowledgement. Read through the total helper:
+                        # this is a lazy reload on an instance the resolve above
+                        # expired.
+                        return
+
+                    # ``settle``: the marker IS this turn's last word, so it is
+                    # written once and the id let go. Where there is no id (the
+                    # relay's last act was a seal) this posts it as a fresh message
+                    # under the sealed text — the same acknowledgement, one message
+                    # lower.
+                    await ChannelOutboundService.set_binding_status(
                         db=db,
                         channel=channel,
                         binding=binding,
-                        text=f"{tail}\n\n{STOPPED_SUFFIX}",
-                        into_status_notice=True,
+                        text=STOPPED_NOTICE,
+                        settle=True,
                     )
-                    return
-
-                if relay_failed:
-                    # The relay owned this notice and could not tell us what is
-                    # in it. Anything written here risks overwriting the only
-                    # copy of the answer. See the docstring.
-                    logger.warning(
-                        "%s Stream interrupted for session %s while its relay "
-                        "could not hand over a tail — leaving the draft "
-                        "standing rather than settling over it",
-                        _LOG_PREFIX,
-                        session_id,
+                finally:
+                    # Runs on every exit above, including each early
+                    # ``return``, and deliberately as a ``finally`` rather than
+                    # five copies: the branches are regression guards and the
+                    # close-out has to be reachable from all of them without
+                    # any of them being restructured to reach it. It cannot
+                    # touch delivery — a ``finally`` that neither raises nor
+                    # returns cannot change which branch ran or what it
+                    # returned, the helper is total, and every send above has
+                    # already been awaited by the time it runs. Attribution
+                    # only; see the helper for why the id is usable here when
+                    # the row it names is not.
+                    ChannelOutboundService._close_out_unsettled_ledger(
+                        db,
+                        binding_id=_binding_row_id(binding),
+                        session_message_id=agent_message_uuid,
                     )
-                    return
-
-                if tail is None and _binding_status_message_id(binding) is None:
-                    # Nothing was narrating this thread — no relay, and no
-                    # notice standing either. ``tail is None`` also covers the
-                    # relay that is perfectly healthy and simply has nothing
-                    # (a turn stopped before the agent spoke), and that is
-                    # exactly right: such a turn *does* have a spinner
-                    # standing, so it falls through to the settle below and
-                    # gets its acknowledgement. Read through the total helper:
-                    # this is a lazy reload on an instance the resolve above
-                    # expired.
-                    return
-
-                # ``settle``: the marker IS this turn's last word, so it is
-                # written once and the id let go. Where there is no id (the
-                # relay's last act was a seal) this posts it as a fresh message
-                # under the sealed text — the same acknowledgement, one message
-                # lower.
-                await ChannelOutboundService.set_binding_status(
-                    db=db,
-                    channel=channel,
-                    binding=binding,
-                    text=STOPPED_NOTICE,
-                    settle=True,
-                )
         except Exception:
             logger.exception("%s handle_stream_interrupted failed", _LOG_PREFIX)
 
@@ -919,10 +1549,46 @@ class ChannelOutboundService:
         the write to clear — and it is named here rather than left to be
         rediscovered, because it is the case a loosened capability gate would
         turn into a real one.
+
+        The implementation is :meth:`set_binding_status_ex` with its second
+        answer dropped — the same shape, and for the same reason, as
+        :meth:`_take_stream_tail` over :meth:`_take_stream_tail_ex`. **The
+        ``bool`` return is a contract**: the relay gates its seal advance on
+        it, so this signature does not grow a tuple.
+        """
+        delivered, _message_id = await ChannelOutboundService.set_binding_status_ex(
+            db=db, channel=channel, binding=binding, text=text, settle=settle
+        )
+        return delivered
+
+    @staticmethod
+    async def set_binding_status_ex(
+        *,
+        db: DBSession,
+        channel: ServerChannel,
+        binding: ChannelThreadBinding,
+        text: str,
+        settle: bool = False,
+    ) -> tuple[bool, str | None]:
+        """:meth:`set_binding_status`, plus the id of the message it wrote.
+
+        Answers ``(delivered, external_message_id)``. Read
+        :meth:`set_binding_status` for everything about the first value — it is
+        the whole of that method's contract, unchanged, and this is where it is
+        computed.
+
+        The second value exists for the turn-delivery ledger, which records
+        *which* external message now carries a sealed slice or a fresh draft.
+        It is the id ``set_status`` reports, so it is the message actually
+        written whichever path that took — the patched notice, or the fresh
+        post a failed patch degraded to. ``None`` accompanies every
+        ``False``, and is also what a transport with no progress surface
+        returns; a ledger row records it as "delivered, message unknown"
+        rather than inventing one.
         """
         thread_key = _binding_thread_key(binding, channel)
         if thread_key is None:
-            return False
+            return False, None
         message_id = await ChannelOutboundService.set_status(
             channel=channel,
             thread_key=thread_key,
@@ -944,11 +1610,11 @@ class ChannelOutboundService:
             #
             # Costs nothing where the id was already ``None``:
             # ``_persist_status_message_id`` was a no-op there too.
-            return False
+            return False, None
         ChannelOutboundService._persist_status_message_id(
             db, binding, None if settle else message_id
         )
-        return True
+        return True, message_id
 
     @staticmethod
     async def clear_binding_status(
@@ -1134,6 +1800,22 @@ class ChannelOutboundService:
 
     @staticmethod
     def _last_agent_message(db: DBSession, session_id: uuid.UUID) -> str | None:
+        """The newest agent message in the session. **Never turn attribution.**
+
+        A session outlives a turn, so "newest agent row" answers a question no
+        caller here is actually asking. Resolving a completing turn's reply
+        through it re-delivers the *previous* turn's answer whenever this turn
+        produced no agent message — a tool-only batch, an empty model output, a
+        command stream — which is the bug turn identity in the event meta was
+        added to close. Deliver by :attr:`AGENT_MESSAGE_ID_META_KEY` via
+        :func:`_agent_message_text` instead.
+
+        It survives for exactly one caller: the backward-compatibility arm in
+        :meth:`handle_stream_completed`, for events emitted by code predating
+        that meta key (a rolling deploy, a stale test fixture). That arm is the
+        only place the old query is still correct-by-default, because such an
+        event carries nothing better. Do not add a second caller.
+        """
         row = db.exec(
             select(SessionMessage)
             .where(
@@ -1156,7 +1838,39 @@ class ChannelOutboundService:
         text: str,
         into_status_notice: bool = False,
     ) -> bool:
+        """Whether :meth:`_deliver_ex` sent this text. See it for everything.
+
+        The ``bool`` form is what every delivery call site wants, and it stays
+        the signature so none of them have to unpack a tuple they would
+        immediately discard — the same split as
+        :meth:`set_binding_status` over :meth:`set_binding_status_ex`.
+        """
+        sent, _message_id = await ChannelOutboundService._deliver_ex(
+            db=db,
+            channel=channel,
+            binding=binding,
+            text=text,
+            into_status_notice=into_status_notice,
+        )
+        return sent
+
+    @staticmethod
+    async def _deliver_ex(
+        *,
+        db: DBSession,
+        channel: ServerChannel,
+        binding: ChannelThreadBinding,
+        text: str,
+        into_status_notice: bool = False,
+    ) -> tuple[bool, str | None]:
         """Send through the adapter, recording failure on the binding.
+
+        Answers ``(sent, external_message_id)``. The id is the transport's own
+        name for the message this call wrote — the notice it patched, or the
+        message it posted — and is carried for the turn-delivery ledger, which
+        records which external message holds the turn's final text. ``None``
+        where the adapter did not name one; the ledger stores that honestly
+        rather than guessing.
 
         ``into_status_notice`` delivers **into** the thread's open status
         notice — the message that has been narrating this turn is rewritten to
@@ -1234,7 +1948,7 @@ class ChannelOutboundService:
         if thread_key is None:
             # Nothing to address the message to. Sending anyway would post to a
             # null thread; the warning is already logged by the helper.
-            return False
+            return False, None
         # Hoisted with the rest, and for the same reason: this is a lazy reload
         # on an expired instance, and it is about to be read inside a `try`
         # whose `except` may not raise anything of its own.
@@ -1245,17 +1959,21 @@ class ChannelOutboundService:
         # so the failure path below can read it without a NameError, and only
         # ever set from the adapter's own report.
         replaced = False
+        # The transport's name for the message this call wrote, for the ledger.
+        # Bound before the ``try`` for the same reason ``replaced`` is.
+        written_id: Any = None
         try:
             adapter = get_adapter(channel.channel_type)
             if notice_id:
                 outcome = await adapter.replace_message(
                     channel, thread_key, notice_id, text
                 )
-                # A frozen-dataclass attribute, so this read cannot raise
+                # Frozen-dataclass attributes, so these reads cannot raise
                 # (§11a Rule 2) — unlike everything else being hoisted here.
                 replaced = outcome.replaced
+                written_id = outcome.message_id
             else:
-                await adapter.send_message(channel, thread_key, text)
+                written_id = await adapter.send_message(channel, thread_key, text)
         except Exception as exc:  # noqa: BLE001 — delivery is best-effort
             failure = routing_trace.describe_exception(exc)
             detail = _log_detail(exc)
@@ -1284,7 +2002,7 @@ class ChannelOutboundService:
                     text=text,
                 )
             ChannelOutboundService._record_error(db, binding, detail)
-            return False
+            return False, None
         if debug_channel_id is not None:
             ChannelDebugBuffer.record(
                 channel_id=debug_channel_id,
@@ -1311,7 +2029,16 @@ class ChannelOutboundService:
             # the id is what lets the next turn rewrite it instead of stranding
             # a new orphan every turn.
             ChannelOutboundService._persist_status_message_id(db, binding, None)
-        return True
+        # Normalised the same way ``_send_notice`` normalises its own: the id
+        # goes into a varchar column, so an adapter that answered with
+        # something other than a non-empty string is recorded as "delivered,
+        # message unknown" rather than as a value nothing can use.
+        external_id = (
+            written_id[:255]
+            if isinstance(written_id, str) and written_id
+            else None
+        )
+        return True, external_id
 
     @staticmethod
     def _record_error(

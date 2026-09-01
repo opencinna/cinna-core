@@ -8,7 +8,7 @@ Covers the Phase 2 module of ``docs/plans/google_chat_streaming_updates_plan.md`
 which the relay is teed onto the UI handler through.
 
 Pure logic with fakes: no DB, no ``TestClient``, no real HTTP. The one real
-outbound seam, ``ChannelOutboundService.set_binding_status``, is mocked out —
+outbound seam, ``ChannelOutboundService.set_binding_status_ex``, is mocked out —
 see ``backend/tests/README.md`` ("Unit Tests") for why that is the right line
 to mock rather than reaching for a database. ``CHANNEL_STREAM_UPDATE_INTERVAL_SECONDS``
 is patched to ``0`` everywhere a flush is expected, per the module's own
@@ -53,8 +53,8 @@ class _FakeChannel:
 class _FakeBinding:
     """Stands in for a ``ChannelThreadBinding`` row — an opaque id is enough.
 
-    ``ChannelOutboundService.set_binding_status`` is mocked in every test that
-    reaches it, so the relay never actually reads binding attributes.
+    ``ChannelOutboundService.set_binding_status_ex`` is mocked in every test
+    that reaches it, so the relay never actually reads binding attributes.
     """
 
     def __init__(self) -> None:
@@ -67,13 +67,48 @@ class _FakeDB:
     Keyed by id alone (not id *and* model) since ``binding.id`` and
     ``channel.id`` are independently random UUIDs in every test — good enough
     for ``_resolve``'s two ``db.get(Model, id)`` calls.
+
+    **``add`` really stores.** It used to only append to ``added``, which made
+    every ``db.get`` of a ledger row answer ``None`` — so ``record_seal``
+    always took its *insert* branch and the ``draft`` → ``sealed``
+    **update-in-place** transition had no coverage at all, in a fake that
+    looked like it did. Storing by id is what lets the relay's own boundary
+    bookkeeping (one row per external message, not one per flush) be asserted
+    here rather than only inferred from a database further away. ``added``
+    stays a full append-only log, so a row written twice appears twice — which
+    is how "updated in place" is told apart from "inserted again".
     """
 
     def __init__(self, rows: dict[uuid.UUID, Any]) -> None:
         self._rows = rows
+        self.added: list[Any] = []
 
     def get(self, model: Any, obj_id: Any) -> Any:
         return self._rows.get(obj_id)
+
+    # The turn-delivery ledger writes through the flush's own session at the
+    # relay's seal and fresh-draft boundaries. These three exist so those
+    # writes are absorbed instead of failing into the ledger's guards and
+    # filling every relay test's log with warnings about a fake session.
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
+        obj_id = getattr(obj, "id", None)
+        if obj_id is not None:
+            self._rows[obj_id] = obj
+
+    def commit(self) -> None:
+        return None
+
+    def rollback(self) -> None:
+        return None
+
+    def stored(self, model: Any) -> list[Any]:
+        """Every stored row of one type, in insertion order."""
+        seen: list[Any] = []
+        for obj in self._rows.values():
+            if isinstance(obj, model) and obj not in seen:
+                seen.append(obj)
+        return seen
 
 
 def _session_factory(db: Any):
@@ -138,13 +173,37 @@ def _seal_target(value: int):
 
 
 def _mock_set_binding_status(*, return_value: bool = True, side_effect=None):
+    """Mock the outbound seam the relay actually calls.
+
+    That seam is ``set_binding_status_ex``: the relay needs the id of the
+    message a seal or a fresh draft landed in, for the turn-delivery ledger,
+    and the ``bool`` form drops it. Nothing about the seam's *shape* changed
+    for a test — the awaited kwargs are identical, so every ``sbs`` assertion
+    below still reads the same call — so this helper keeps taking plain
+    booleans and widens them here into the ``(delivered, external_message_id)``
+    pair the relay unpacks.
+    """
+
+    def _pair(value: Any) -> Any:
+        if not isinstance(value, bool):
+            return value
+        # ``None`` accompanies every ``False``: a send that did not land has no
+        # message id to report, and ``set_binding_status_ex`` guarantees that
+        # pairing. Handing back an id here would let a future caller trust one
+        # after a failed send and have the mock agree with it.
+        return (value, "external-message-id" if value else None)
+
     kwargs: dict[str, Any] = {}
     if side_effect is not None:
-        kwargs["side_effect"] = side_effect
+        kwargs["side_effect"] = (
+            [_pair(item) for item in side_effect]
+            if isinstance(side_effect, list)
+            else side_effect
+        )
     else:
-        kwargs["return_value"] = return_value
+        kwargs["return_value"] = _pair(return_value)
     return mock.patch(
-        f"{_MODULE}.ChannelOutboundService.set_binding_status",
+        f"{_MODULE}.ChannelOutboundService.set_binding_status_ex",
         new_callable=mock.AsyncMock,
         **kwargs,
     )
@@ -1217,5 +1276,253 @@ def test_a_partial_tail_cuts_at_the_outermost_open_tag_not_the_last_one() -> Non
         assert tail == "Sure.\n", tail
         assert "webapp_action" not in tail
         assert "cinna_attach" not in tail
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# The turn-delivery ledger's boundary rows (turn-scoped delivery ledger, §B)
+# ---------------------------------------------------------------------------
+#
+# One row per external *message*, never one per flush. The relay writes at
+# exactly three moments — a fresh draft appears, a slice is sealed, a seal
+# fails — and the rolling ~3-second patches in between write nothing. These
+# drive ``_flush`` directly (``stop()`` first, so ``feed`` buffers without
+# starting the flusher task and nothing races the assertions) and read the
+# rows back out of the fake session, which is why that fake now stores.
+#
+# The completion end of the same machine — attribution, the ``final`` row, the
+# divergence check — is ``tests/unit/test_channel_turn_delivery_ledger.py``,
+# and both ends over a real database are
+# ``tests/api/server_channels/server_channels_turn_identity_test.py``.
+
+
+def _relay_with_db() -> tuple[ChannelStreamRelay, _FakeDB]:
+    """``_make_relay``, with the fake session handed back too.
+
+    Additive sibling rather than a signature change on ``_make_relay``: every
+    existing test wants the relay and nothing else.
+    """
+    channel = _FakeChannel()
+    binding = _FakeBinding()
+    db = _FakeDB({binding.id: binding, channel.id: channel})
+    relay = ChannelStreamRelay(
+        session_id=uuid.uuid4(),
+        binding_id=binding.id,
+        channel_id=channel.id,
+        get_fresh_db_session=_session_factory(db),
+    )
+    return relay, db
+
+
+def _ledger_rows(db: _FakeDB) -> list[Any]:
+    from app.models import ChannelTurnDelivery
+
+    return db.stored(ChannelTurnDelivery)
+
+
+def test_a_sealed_slice_settles_the_draft_row_it_was_holding() -> None:
+    """draft → sealed, **in place** — and a fresh row for the message below it.
+
+    The draft and the slice sealed out of it are the same external message, so
+    the row the relay opened for that draft becomes the ``sealed`` row rather
+    than being superseded by a second one. Superseding would leave the draft
+    standing in the ledger as a message that is no longer a draft and no
+    longer anywhere, and would double-count the turn's parts — which is
+    exactly what this fake could not catch until it started storing what it
+    was handed.
+
+    Written as two flushes because that is the shape it happens in: the first
+    opens the draft (one row), the second seals it and opens the next one.
+    """
+
+    async def run() -> None:
+        from app.models import ChannelTurnDelivery
+        from app.services.server_channels.channel_turn_delivery_service import (
+            visible_digest,
+        )
+
+        head = "A" * 150
+        tail = "B" * 150
+        relay, db = _relay_with_db()
+        # No flusher task: ``feed`` buffers, and every flush below is this
+        # test's own, so nothing interleaves with the assertions.
+        relay.stop()
+        try:
+            with _zero_interval(), _seal_target(200), _mock_set_binding_status(
+                return_value=True
+            ):
+                # ── Flush 1: nothing to seal yet — one draft row ──────────
+                relay.feed(head)
+                await relay._flush()
+
+                rows = _ledger_rows(db)
+                assert len(rows) == 1, [(r.role, r.part_index) for r in rows]
+                draft_row = rows[0]
+                assert draft_row.role == "draft"
+                assert draft_row.part_index == 0
+                assert draft_row.status == "delivered"
+                assert draft_row.external_message_id == "external-message-id"
+                assert draft_row.binding_id == relay.binding_id
+                # A draft's content is still moving: no offsets until it stops.
+                assert draft_row.visible_char_end is None
+                assert draft_row.content_sha256 is None
+                # Written at a boundary, long before the turn is named.
+                assert draft_row.session_message_id is None
+
+                # ── Flush 2: the seal settles THAT row and opens the next ─
+                relay.feed(f"\n\n{tail}")
+                await relay._flush()
+
+                rows = _ledger_rows(db)
+                assert len(rows) == 2, [(r.role, r.part_index) for r in rows]
+                sealed, fresh = rows
+                assert sealed is draft_row, "the seal must not insert a second row"
+                assert sealed.role == "sealed"
+                assert sealed.part_index == 0
+                assert sealed.status == "delivered"
+                # The cumulative visible prefix now standing in the thread —
+                # measured on the buffer, so the paragraph break the seal
+                # consumed is part of it.
+                assert sealed.visible_char_end == len(f"{head}\n\n")
+                assert sealed.content_sha256 == visible_digest(f"{head}\n\n")
+
+                assert fresh.role == "draft"
+                assert fresh.part_index == 1, "the turn's parts stay in order"
+                assert fresh.visible_char_end is None
+
+            # The same object was handed to the session twice — once as a
+            # draft, once as the sealed row — which is what "updated in place"
+            # looks like from outside, and what a second insert would not.
+            written = [r for r in db.added if isinstance(r, ChannelTurnDelivery)]
+            assert written.count(draft_row) == 2, len(written)
+            assert len(written) == 3
+        finally:
+            await _shutdown(relay)
+
+    asyncio.run(run())
+
+
+def test_the_rolling_patches_between_boundaries_write_no_rows() -> None:
+    """Boundary-only, stated as a count.
+
+    The ledger's grain is one row per external message however many times that
+    message is later rewritten. Persisting the ~3-second patches would turn
+    one row per turn into hundreds, and the rows would be stale the moment
+    they landed. Three further flushes of a growing draft that never crosses
+    the seal target must leave the single draft row exactly as it was.
+    """
+
+    async def run() -> None:
+        relay, db = _relay_with_db()
+        relay.stop()
+        try:
+            with _zero_interval(), _seal_target(4000), _mock_set_binding_status(
+                return_value=True
+            ) as sbs:
+                for chunk in ("first ", "second ", "third ", "fourth "):
+                    relay.feed(chunk)
+                    await relay._flush()
+
+                # The patches really happened — otherwise "no new rows" would
+                # be true of a relay that did nothing at all.
+                assert len(sbs.await_args_list) == 4, sbs.await_args_list
+                assert sbs.await_args_list[-1].kwargs["text"] == (
+                    "first second third fourth "
+                )
+
+            rows = _ledger_rows(db)
+            assert len(rows) == 1, [(r.role, r.part_index) for r in rows]
+            assert rows[0].role == "draft"
+            assert rows[0].part_index == 0
+        finally:
+            await _shutdown(relay)
+
+    asyncio.run(run())
+
+
+def test_a_seal_that_did_not_land_is_flagged_and_keeps_its_draft_role() -> None:
+    """A failed boundary delivery marks the row and never advances the relay.
+
+    The row keeps ``draft``: the message it names is still standing and still
+    being rewritten. ``failed`` records only that a boundary write on it did
+    not land, and the next flush retries the same seal — so the text is never
+    lost, and a successful retry flips the row to ``sealed``/``delivered``.
+    """
+
+    async def run() -> None:
+        head = "A" * 150
+        tail = "B" * 150
+        relay, db = _relay_with_db()
+        relay.stop()
+        try:
+            with _zero_interval(), _seal_target(200), _mock_set_binding_status(
+                # Flush 1 patches the draft; flush 2 attempts the seal (it
+                # fails) and then still patches the draft; flush 3 retries the
+                # same seal (it lands) and patches the fresh draft below it.
+                side_effect=[True, False, True, True, True]
+            ):
+                relay.feed(head)
+                await relay._flush()
+                row = _ledger_rows(db)[0]
+
+                relay.feed(f"\n\n{tail}")
+                await relay._flush()
+                assert row.role == "draft", "a failed seal may not advance the row"
+                assert row.status == "failed"
+                # The relay did not move past the slice either.
+                assert relay._sealed_offset == 0
+
+                await relay._flush()
+                assert row.role == "sealed"
+                assert row.status == "delivered"
+                assert relay._sealed_offset == len(f"{head}\n\n")
+        finally:
+            await _shutdown(relay)
+
+    asyncio.run(run())
+
+
+def test_handing_the_tail_over_releases_the_draft_row_for_the_next_batch() -> None:
+    """``take_tail`` ends the batch for the ledger as well as for the buffer.
+
+    A multi-batch turn keeps feeding the same relay — bus handlers never stop
+    one — and the completion that just took this batch's tail is about to
+    settle the row it was holding as that batch's ``final``. Holding the id
+    across the boundary would make the next batch's seal reach back and
+    rewrite a finished row from ``final`` to ``sealed``, corrupting the record
+    of a message that had already been settled. So the id is let go and the
+    part index moves on with it.
+    """
+
+    async def run() -> None:
+        relay, db = _relay_with_db()
+        relay.stop()
+        try:
+            with _zero_interval(), _seal_target(4000), _mock_set_binding_status(
+                return_value=True
+            ):
+                relay.feed("Batch one's answer.")
+                await relay._flush()
+                first = _ledger_rows(db)[0]
+                assert relay._ledger_row_id == first.id
+
+                taken = await relay.take_tail()
+                assert taken == ("Batch one's answer.", True)
+                assert relay._ledger_row_id is None, "the row was handed over"
+                assert relay._ledger_part_index == 1
+
+                # Batch two opens a genuinely new message, and a genuinely new
+                # row — it does not reach back into batch one's.
+                relay.feed("Batch two's answer.")
+                await relay._flush()
+
+            rows = _ledger_rows(db)
+            assert len(rows) == 2, [(r.role, r.part_index) for r in rows]
+            assert rows[1] is not first
+            assert (rows[1].role, rows[1].part_index) == ("draft", 1)
+            assert first.role == "draft", "batch one's row was left alone"
+        finally:
+            await _shutdown(relay)
 
     asyncio.run(run())

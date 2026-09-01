@@ -7,6 +7,21 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 from sqlmodel import SQLModel
 
+#: Meta key on the terminal stream events (``STREAM_COMPLETED`` /
+#: ``STREAM_ERROR`` / ``STREAM_INTERRUPTED``) carrying **turn identity**: the
+#: id of the agent ``SessionMessage`` that batch wrote, stringified, or an
+#: explicit ``None`` for a batch that wrote none.
+#:
+#: Defined here — the one module both sides already import — so the emitters
+#: (``sessions/message_service.py``) and the consumer
+#: (``server_channels/channel_outbound_service.py``, which re-exports it under
+#: the same name) share one symbol. A consumer that reads a key the emitter
+#: does not send falls back to its legacy newest-row arm *silently*, so the
+#: two sides drifting apart is exactly the failure this shared symbol exists
+#: to make impossible. The semantics of the key's three states, and which
+#: events name a *finalized* row, are documented at the consumer's re-export.
+AGENT_MESSAGE_ID_META_KEY = "agent_message_id"
+
 
 # Event types - can be extended as needed
 class EventType:

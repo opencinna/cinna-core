@@ -30,6 +30,17 @@ Covers three things:
    it held: that the status notice id is actually released (set to ``NULL``)
    on the binding once a reply takes its slot. Kept to one field, read-only,
    named so it stays easy to grep for and does not encourage a second one.
+5. ``list_turn_deliveries`` / ``replay_stream_completed`` — the turn-delivery
+   ledger's two seams, added with that feature. The first is the same
+   read-only posture as point 4 one table further down: ``ChannelTurnDelivery``
+   has no API surface at all, and the ledger's own contract (what was
+   attributed to which turn, which row is ``final``, which one is
+   ``diverged``) is invisible from the thread by construction, because the
+   divergence check is deliberately observational and delivers nothing in
+   either outcome. The second is the ``deliver_via_binding`` shape: a
+   duplicate ``STREAM_COMPLETED`` is a real production event with no HTTP
+   route that can produce it, so the honest reproduction is handing the bus
+   subscriber the same event twice.
 """
 from __future__ import annotations
 
@@ -562,6 +573,96 @@ def get_binding_status_message_id(
 
 
 # ---------------------------------------------------------------------------
+# Turn-delivery ledger — read-only Rule-1 exemption + one replay seam
+# ---------------------------------------------------------------------------
+
+
+def list_turn_deliveries(
+    db: Session, channel_id: str | uuid.UUID, thread_key: str
+) -> list:
+    """Every ``channel_turn_delivery`` row for one thread, oldest part first.
+
+    EXEMPTION — the same posture as :func:`get_binding_status_message_id`
+    above, one table further down. ``ChannelTurnDelivery`` has no API surface
+    at all *by design*: it is internal bookkeeping about what the transport
+    was handed, and the plan's optional debug-panel exposure was not built.
+    Everything the ledger *changes* about a reader's thread is asserted
+    through the four adapter verbs like the rest of this domain — but the
+    ledger's own contract (what was attributed to which turn, which row is
+    ``final``, which one is ``diverged``) is invisible from there by
+    construction, because the divergence check is deliberately observational
+    and delivers nothing either way.
+
+    Read-only, one thread at a time, ordered the way a reader would see the
+    messages. The rows come back as ORM instances; treat them as a snapshot —
+    ``db.expire_all()`` first so a caller that just drove a turn sees what the
+    handler committed rather than what its own identity map remembers.
+    """
+    from app.models import ChannelThreadBinding, ChannelTurnDelivery
+
+    if isinstance(channel_id, str):
+        channel_id = uuid.UUID(channel_id)
+    db.expire_all()
+    binding = db.exec(
+        select(ChannelThreadBinding).where(
+            ChannelThreadBinding.server_channel_id == channel_id,
+            ChannelThreadBinding.thread_key == thread_key,
+        )
+    ).first()
+    if binding is None:
+        return []
+    return list(
+        db.exec(
+            select(ChannelTurnDelivery)
+            .where(ChannelTurnDelivery.binding_id == binding.id)
+            .order_by(
+                ChannelTurnDelivery.created_at,
+                ChannelTurnDelivery.part_index,
+            )
+        ).all()
+    )
+
+
+def replay_stream_completed(
+    session_id: str | uuid.UUID, agent_message_id: str | uuid.UUID | None
+) -> None:
+    """Re-deliver one ``STREAM_COMPLETED`` to the channel outbound subscriber.
+
+    EXEMPTION — same shape as :func:`deliver_via_binding` below: the handler
+    is a bus subscriber, and the bus is what a duplicate event arrives on. A
+    redelivered or raced ``STREAM_COMPLETED`` for a batch that already
+    answered is a real production shape (a redelivered bus event, a scheduler
+    flush racing the stream's own completion) and the ledger's idempotency
+    gate exists for exactly it — but nothing in the HTTP surface can emit the
+    same completion twice for the same batch, so there is no route to drive it
+    through. Handing the handler the same event a second time is the honest
+    reproduction.
+
+    The payload is the one ``message_service._emit_activity_event`` builds:
+    the handler reads ``meta.session_id``, ``meta.was_interrupted`` and
+    ``meta.agent_message_id`` and nothing else. ``agent_message_id=None`` is
+    passed through as an explicit ``None``, which is a different instruction
+    from omitting the key — so this helper always sets it.
+    """
+    from app.services.server_channels.channel_outbound_service import (
+        ChannelOutboundService,
+    )
+
+    asyncio.run(
+        ChannelOutboundService.handle_stream_completed(
+            {
+                "meta": {
+                    "session_id": str(session_id),
+                    "agent_message_id": (
+                        str(agent_message_id) if agent_message_id else None
+                    ),
+                }
+            }
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # Pass 1 ownership filter — Rule-1 exemption
 # ---------------------------------------------------------------------------
 
@@ -751,6 +852,8 @@ __all__ = [
     "post_webhook",
     "GoogleChatJWTSigner",
     "flush_pending_bindings",
+    "list_turn_deliveries",
+    "replay_stream_completed",
     "route_installed",
     "verify_resume_sender",
     "build_channel_candidate",

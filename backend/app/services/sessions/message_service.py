@@ -9,6 +9,7 @@ import logging
 import asyncio
 from sqlmodel import Session, select, func
 from app.models import SessionMessage, Session as ChatSession, AgentEnvironment, Agent, SessionUpdate, MessagePublic
+from app.models.events.event import AGENT_MESSAGE_ID_META_KEY
 from app.services.sessions.active_streaming_manager import active_streaming_manager
 from app.services.environments.agent_env_connector import agent_env_connector
 from app.services.agents.agent_service import AgentService
@@ -2448,6 +2449,15 @@ class MessageService:
             post_event_type, session_id, environment_id,
             post_session_mode, post_user_id,
             agent_id=post_agent_id,
+            # Turn identity, and it is literally None here: a command stream
+            # writes ONE ``system`` message (the placeholder created above,
+            # finalized with the command output) and never an ``agent`` row.
+            # Saying so explicitly is the point — a consumer that fell back to
+            # "the newest agent message in this session" would re-deliver the
+            # PREVIOUS turn's answer as if it were this command's result.
+            # What a command turn delivers outbound is a separate question and
+            # deliberately unchanged here.
+            **{AGENT_MESSAGE_ID_META_KEY: None},
             **post_extra,
         )
 
@@ -2469,9 +2479,22 @@ class MessageService:
         tool_questions_status: str | None,
         was_interrupted: bool,
         get_fresh_db_session: callable,
-    ) -> None:
-        """Save or update the final agent message after stream completes."""
-        def _save_or_update():
+    ) -> UUID | None:
+        """Save or update the final agent message after stream completes.
+
+        Returns **the id of the row this batch actually wrote** — the one it
+        updated, or the one the fallback below created. That return value is
+        not a convenience: the fallback creates a row whenever the caller's
+        local ``agent_message_id`` is unset or its row has gone, so the caller
+        cannot know from its own local whether an agent message exists for
+        this batch. The terminal stream events carry that id as turn identity
+        (channel/outbound consumers deliver *that* message and nothing else),
+        so a caller emitting its stale local would claim "this turn wrote
+        nothing" about a turn that wrote a row.
+
+        ``None`` only if the write itself did not happen.
+        """
+        def _save_or_update() -> UUID | None:
             from sqlalchemy.orm.attributes import flag_modified
             response_metadata["streaming_in_progress"] = False
             status = "user_interrupted" if was_interrupted else ""
@@ -2489,12 +2512,12 @@ class MessageService:
                         db.add(agent_message)
                         db.commit()
                         logger.info(f"Updated agent message {agent_message_id} with final content")
-                        return
+                        return agent_message_id
                     else:
                         logger.error(f"Agent message {agent_message_id} not found for update, creating new one")
 
                 # Fallback: create new message
-                MessageService.create_message(
+                created = MessageService.create_message(
                     session=db,
                     session_id=session_id,
                     role="agent",
@@ -2504,7 +2527,11 @@ class MessageService:
                     status=status,
                     status_message=status_msg,
                 )
-        await asyncio.to_thread(_save_or_update)
+                # Read inside the session: ``create_message`` refreshes the
+                # instance, but the id would be a lazy reload once the block
+                # below closes it.
+                return created.id
+        return await asyncio.to_thread(_save_or_update)
 
     @staticmethod
     async def stream_message_with_events(
@@ -2610,6 +2637,15 @@ class MessageService:
                     await _emit_activity_event(
                         EventType.STREAM_INTERRUPTED, session_id, environment_id,
                         session_mode, ctx.user_id,
+                        # Turn identity. Emitted from inside the streaming
+                        # loop, so this is the row created on the first
+                        # assistant event — None when the turn was stopped
+                        # before the agent said anything.
+                        **{
+                            AGENT_MESSAGE_ID_META_KEY: (
+                                str(agent_message_id) if agent_message_id else None
+                            )
+                        },
                     )
                     yield event
                     break
@@ -2651,6 +2687,16 @@ class MessageService:
                         EventType.STREAM_ERROR, session_id, environment_id,
                         session_mode, ctx.user_id,
                         error_type=error_type, error_message=error_content,
+                        # Turn identity, same contract as the other terminal
+                        # events. The error message itself is saved as a
+                        # ``system`` row above, not an agent one, so this is
+                        # None for a stream that failed before its first
+                        # assistant event.
+                        **{
+                            AGENT_MESSAGE_ID_META_KEY: (
+                                str(agent_message_id) if agent_message_id else None
+                            )
+                        },
                     )
 
                     yield event
@@ -2784,6 +2830,15 @@ class MessageService:
                 streaming_events = _coalesce_assistant_events(streaming_events)
 
                 text_parts = [e["content"] for e in streaming_events if e["type"] == "assistant" and e.get("content")]
+                # NOTE: a batch with only tool/thinking/system events still
+                # lands here (the guard above is truthy for those too) and gets
+                # the "Agent response" placeholder as its content. The web UI
+                # never shows it (it renders the stored events); channel
+                # delivery detects the tool-only shape from the stored events
+                # and sends a compact tool summary instead of this literal
+                # (``server_channels/channel_tool_summary.py``). What the web
+                # UI should store/show for such a turn is still a separate,
+                # pre-existing question — deliberately not answered here.
                 agent_content = "".join(text_parts) if text_parts else "Agent response"
 
                 # Emit any webapp_action tags that appear in the final assembled content
@@ -2898,7 +2953,14 @@ class MessageService:
                 has_questions = MessageService.detect_ask_user_question_tool(streaming_events)
                 tool_questions_status = "unanswered" if has_questions else None
 
-                await MessageService._finalize_agent_message(
+                # Reassigned, not merely awaited: ``_finalize_agent_message``
+                # creates the row itself when this local is unset or its row
+                # has gone, and the id it returns is the one this batch
+                # actually wrote. The terminal events below carry that id as
+                # turn identity, so emitting the stale local would tell a
+                # channel consumer "this turn produced no agent message" about
+                # a turn that produced one.
+                agent_message_id = await MessageService._finalize_agent_message(
                     agent_message_id=agent_message_id,
                     session_id=session_id,
                     agent_content=agent_content,
@@ -2927,6 +2989,15 @@ class MessageService:
                         session_mode, user_id,
                         agent_id=str(agent_id) if agent_id else None,
                         was_interrupted=was_interrupted,
+                        # Turn identity: the agent message THIS batch wrote, or
+                        # an explicit None for a batch that wrote none. Outbound
+                        # consumers deliver exactly this message and never "the
+                        # newest agent message in the session".
+                        **{
+                            AGENT_MESSAGE_ID_META_KEY: (
+                                str(agent_message_id) if agent_message_id else None
+                            )
+                        },
                     )
                 except Exception as event_error:
                     logger.error(f"Failed to emit stream_completed event: {event_error}", exc_info=True)
@@ -2948,6 +3019,15 @@ class MessageService:
                 EventType.STREAM_ERROR, session_id, environment_id,
                 session_mode, ctx.user_id,
                 error_type=type(e).__name__, error_message=str(e),
+                # Turn identity. Whatever this batch had written when it blew
+                # up — the finalized row if the exception came after finalize,
+                # the mid-stream row if before, None if the stream never got
+                # an assistant event.
+                **{
+                    AGENT_MESSAGE_ID_META_KEY: (
+                        str(agent_message_id) if agent_message_id else None
+                    )
+                },
             )
 
             yield {

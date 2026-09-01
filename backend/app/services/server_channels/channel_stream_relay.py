@@ -54,8 +54,9 @@ is silently lost", and each has a failure mode that no test of the consumer
 alone would catch.
 
 1. **``take_tail`` answers ``None`` for "ask me nothing, I failed".** ``None``
-   means *relay-absent*: take the full-text ``_last_agent_message`` path, the
-   same as if there were no relay at all. It must never be routed to
+   means *relay-absent*: take the full-text path — this turn's stored
+   ``SessionMessage``, resolved by the id the stream event carries — the same
+   as if there were no relay at all. It must never be routed to
    ``clear_binding_status`` — the agent's reply exists in ``SessionMessage``
    and deleting the notice would throw it away. ``("", False)`` — the genuine
    "this stream produced nothing" — also belongs on the full-text path, which
@@ -94,6 +95,10 @@ from app.services.server_channels.adapters.registry import get_adapter
 from app.services.server_channels.channel_outbound_service import (
     CHANNEL_INTEGRATION_PREFIX,
     ChannelOutboundService,
+)
+from app.services.server_channels.channel_turn_delivery_service import (
+    ChannelTurnDeliveryLedger,
+    delivered_prefix_key,
 )
 # The finalize path's own tag patterns, imported rather than re-declared. The
 # relay sends assistant text *before* finalize strips these, so without them
@@ -223,6 +228,25 @@ class ChannelStreamRelay:
         # The registry reads it to evict the relay of a *cancelled* turn, which
         # is the one ending where nothing ever calls :meth:`stop`.
         self._retired = False
+        # The turn-delivery ledger row for the draft currently standing, and
+        # the part index the next boundary write will take. **Plain values, and
+        # that is the same rule the ids above follow**: no ORM instance and no
+        # session is ever held here (see the module docstring), so the row is
+        # remembered by id and re-fetched by the ledger inside the flush's own
+        # session. ``None`` means "no draft row" — the ordinary state until the
+        # first seal, since draft rows are only written *after* one — and the
+        # next seal inserts instead of updating. Both reset per turn because
+        # the relay is per turn.
+        self._ledger_row_id: uuid.UUID | None = None
+        self._ledger_part_index = 0
+        # Where **this batch's** text starts in the buffer. ``_sealed_offset``
+        # is a whole-turn offset and the buffer accumulates across batches, but
+        # the answer a sealed prefix is checked against at completion is the
+        # batch's own ``SessionMessage`` — so a prefix measured from 0 would
+        # count the previous batch's text and make the divergence check fire on
+        # every multi-batch turn. Advanced at each hand-over, in
+        # :meth:`take_tail`, beside the other per-batch resets.
+        self._ledger_batch_base = 0
         # One flush's worth of ``markdown_to_chat`` lengths. A seal search
         # measures the same draft several times over (the loop condition, the
         # defer test, the clamp) and translation is a synchronous parse of the
@@ -384,7 +408,8 @@ class ChannelStreamRelay:
         loses an answer that exists:
 
         * ``None`` — something in here broke. Treat the relay as **absent**:
-          take the full-text ``_last_agent_message`` path. Never
+          take the full-text path (this turn's stored ``SessionMessage``,
+          resolved by the id the stream event carries). Never
           ``clear_binding_status`` — the agent's reply is in ``SessionMessage``
           whatever happened here, and deleting the notice would be the relay
           throwing away text it merely failed to read.
@@ -395,6 +420,10 @@ class ChannelStreamRelay:
           turn whose relay this consumer does not actually own (see
           :class:`ChannelStreamRegistry`).
         * ``("", True)`` — everything is already on screen. Nothing to do.
+
+        **It also ends the batch for the turn-delivery ledger**, releasing the
+        draft row this relay was holding — see the comment at that line, which
+        names the corruption holding it across a batch boundary would cause.
 
         **Idempotent**: a second call returns ``("", …)``. That is what makes a
         multi-batch turn correct — ``STREAM_COMPLETED`` fires once per LLM
@@ -431,6 +460,27 @@ class ChannelStreamRelay:
                 self._sealed_offset = len(self._text())
                 self._fence_prefix = ""
                 self._tail_taken = True
+                # **Let go of the ledger's draft row too.** Handing the tail
+                # over ends this *batch*, and the completion handler that just
+                # asked for it is about to settle that row as the batch's
+                # ``final``. A multi-batch turn keeps feeding this same relay
+                # afterwards (bus handlers never stop a relay — see
+                # :meth:`stop`), so holding the id would make the next batch's
+                # seal reach back and rewrite a finished row from ``final``
+                # to ``sealed``, corrupting the record of a message that had
+                # already been settled. Releasing it here costs nothing: the
+                # completion's delivery releases the notice id as well, so the
+                # next batch opens a genuinely new message and gets a genuinely
+                # new row. The part index moves on with it, so the turn's parts
+                # stay in order.
+                if self._ledger_row_id is not None:
+                    self._ledger_row_id = None
+                    self._ledger_part_index += 1
+                # The next batch's text starts here. See the field's comment:
+                # without this the next batch's sealed prefix would be measured
+                # from the start of the *turn* and compared against that
+                # batch's own answer.
+                self._ledger_batch_base = self._sealed_offset
                 return tail, self._delivered_any
         except Exception:  # noqa: BLE001 — the module's claim, made literal
             logger.warning(
@@ -608,14 +658,42 @@ class ChannelStreamRelay:
                 visible = self._clamp_draft(_visible_draft(draft), limit)
                 if not visible.strip():
                     return
-                if await ChannelOutboundService.set_binding_status(
+                (
+                    patched,
+                    draft_message_id,
+                ) = await ChannelOutboundService.set_binding_status_ex(
                     db=db, channel=channel, binding=binding, text=visible
-                ):
+                )
+                if patched:
                     # Only on a confirmed send. ``_delivered_any`` is the
                     # outbound handler's evidence that the answer is already on
                     # screen; claiming it after a failed patch makes that
                     # handler skip its own delivery and the reader gets nothing.
                     self._delivered_any = True
+                    if self._ledger_row_id is None:
+                        # A **fresh** draft: either the turn's first, or the
+                        # one that opened after a seal let the notice id go.
+                        # Both created a new external message, and the ledger's
+                        # grain is one row per external message — so both get a
+                        # row, and the rolling patches that follow get none.
+                        # That is the boundary-only rule, not an exception to
+                        # it: what it forbids is per-*flush* persistence, and
+                        # this writes once per message however many times that
+                        # message is later rewritten. Recording the turn's
+                        # first draft as well is what lets a process that dies
+                        # mid-turn leave behind a record of the message left
+                        # standing in the thread, which is the crash knowledge
+                        # this table exists for.
+                        #
+                        # The row's offsets stay NULL until its content stops
+                        # moving — at the seal that settles it, or the
+                        # completion that finalizes it.
+                        self._ledger_row_id = ChannelTurnDeliveryLedger.record_draft(
+                            db,
+                            binding_id=self.binding_id,
+                            part_index=self._ledger_part_index,
+                            external_message_id=draft_message_id,
+                        )
 
     async def _seal_down(
         self,
@@ -634,6 +712,15 @@ class ChannelStreamRelay:
         draft below it. The relay adds only the decision of where to cut; the
         posting, the id bookkeeping and the failure degradation are all the
         outbound service's, unchanged.
+
+        ``set_binding_status_ex`` rather than ``set_binding_status`` only to
+        learn *which* message the seal landed in, for the turn-delivery ledger.
+        The first value it returns is the same ``bool`` this loop has always
+        gated its advance on, with the same meaning.
+
+        A seal is one of the ledger's three boundaries. The write happens after
+        the advance and never before it, is total, and cannot fail the turn:
+        losing it costs a row, never a message.
         """
         target = _seal_target()
         for _ in range(_MAX_SEALS_PER_FLUSH):
@@ -645,7 +732,10 @@ class ChannelStreamRelay:
             if seal is None:
                 return draft
             sealed_text, cut, next_prefix = seal
-            delivered = await ChannelOutboundService.set_binding_status(
+            (
+                delivered,
+                sealed_message_id,
+            ) = await ChannelOutboundService.set_binding_status_ex(
                 db=db,
                 channel=channel,
                 binding=binding,
@@ -653,6 +743,12 @@ class ChannelStreamRelay:
                 settle=True,
             )
             if not delivered:
+                # A boundary delivery that did not land. Recorded on the row
+                # the seal was attempting, purely so the failure is visible;
+                # the row keeps its ``draft`` role because the message it names
+                # is still standing and still being rewritten, and the retry
+                # below flips it to ``sealed``. Total, like every ledger call.
+                ChannelTurnDeliveryLedger.mark_failed(db, self._ledger_row_id)
                 # **The advance is gated on a confirmed send, and it has to be.**
                 # A seal is the one irreversible thing this relay does: it
                 # moves past a slice and never offers it again. Advancing on a
@@ -679,6 +775,30 @@ class ChannelStreamRelay:
             # repeat exactly that many characters of the answer.
             self._sealed_offset += cut - len(self._fence_prefix)
             self._fence_prefix = next_prefix
+            # **After the advance, and only on a confirmed send.** The ledger
+            # records what is standing in the thread, so it may only be written
+            # once the two facts it describes are true: the message went out,
+            # and the relay has moved past that text for good. The prefix is
+            # measured on the *buffer*, not on what was posted — the fence runs
+            # a forced mid-fence seal synthesises are this relay's own, not the
+            # agent's, and the completion compares this digest against the
+            # finalized canonical answer, which does not contain them. It is
+            # measured from this **batch's** base, not the turn's, because that
+            # canonical answer is the batch's own ``SessionMessage``.
+            visible_char_end, content_sha256 = delivered_prefix_key(
+                _visible(self._text()[self._ledger_batch_base : self._sealed_offset])
+            )
+            ChannelTurnDeliveryLedger.record_seal(
+                db,
+                binding_id=self.binding_id,
+                row_id=self._ledger_row_id,
+                part_index=self._ledger_part_index,
+                external_message_id=sealed_message_id,
+                visible_char_end=visible_char_end,
+                content_sha256=content_sha256,
+            )
+            self._ledger_row_id = None
+            self._ledger_part_index += 1
             draft = self._draft()
         return draft
 
