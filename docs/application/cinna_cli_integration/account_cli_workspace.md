@@ -97,6 +97,7 @@ my-cinna/
     guides/              # end-to-end worked walkthroughs (Phase 4)
       build-an-agentic-network.md   # how to build a delegating multi-agent network
       authoring-agent-prompts.md    # how to author prompts and finalize the description
+    local-kit/            # Local Agent Kit, rendered for this instance (see below)
   agents/
     crm-agent/           # 100% standard cinna per-agent workspace
       .cinna/config.json
@@ -118,8 +119,12 @@ template environment.
    the account workspace's `context/` tree.
 3. The orchestrator `CLAUDE.md` points at `context/README.md` as its first
    read. From there the agent navigates to `context/platform/` for feature
-   docs, `context/api_reference/` for endpoint signatures, and
-   `context/guides/` for end-to-end worked walkthroughs (Phase 4).
+   docs, `context/api_reference/` for endpoint signatures, `context/guides/`
+   for end-to-end worked walkthroughs (Phase 4), and `context/local-kit/` for
+   the [Local Agent Kit](../local_agent_kit/local_agent_kit.md)'s conventions —
+   read `context/local-kit/guides/11-go-cloud.md` when the orchestrator is
+   asked to import an agent someone built locally with `cinna agent import`
+   (cinna-cli, separate repo).
 4. `cinna account refresh-context` re-downloads and replaces the `context/`
    tree in place. If the download fails, the command warns and exits without
    corrupting the existing `context/` content.
@@ -138,12 +143,20 @@ The package is assembled from the committed `platform-knowledge-env`
 template snapshot inside the backend container (the only copy of this
 knowledge available at runtime — `docs/` is not in the image). It is
 built once per deployment and then memoized in-process (keyed by snapshot
-mtime + file count across all three source dirs), so repeated downloads are
-cheap. If the snapshot is missing or empty, the endpoint returns **503**
-rather than serving a near-empty package — the caller can detect and report
-the deploy defect. Missing `examples/` or `guides/` is tolerated: a
-warning is logged and the corresponding `context/` subtree is simply
-omitted from the package.
+mtime + file count across all four source dirs, `local-kit/` included), so
+repeated downloads are cheap. If the platform-docs snapshot is missing or
+empty, the endpoint returns **503** rather than serving a near-empty package —
+the caller can detect and report the deploy defect. Missing `examples/`,
+`guides/`, or `local-kit/` is tolerated: a warning is logged and the
+corresponding `context/` subtree is simply omitted from the package.
+`local-kit/` is packaged **rendered** (through
+[`LocalAgentKitService`](../local_agent_kit/local_agent_kit_tech.md), reusing
+its own memoized build rather than reading the raw snapshot a second time), so
+this instance's URLs are already resolved and the copy inside the context
+package is byte-identical to the one an assistant downloads from `/agent-start` —
+never gated on `ServerConfig.local_agent_kit_enabled`, since that flag governs
+only the public anonymous surface, not what an already-authenticated account
+workspace may read.
 
 ### 3. Choosing an Active Workspace
 
@@ -1213,3 +1226,13 @@ This document covers **Phases 1 through 5** — all phases are now shipped:
   because the escape hatch is JSON-only and cannot carry a binary body — the same
   reason `/account/files/upload` is a dedicated route. See
   [agent_improvement_requests.md](../agent_improvement_requests/agent_improvement_requests.md)
+- **local_agent_kit** — the context package's 4th source, `context/local-kit/`,
+  is the rendered [Local Agent Kit](../local_agent_kit/local_agent_kit.md),
+  shared via `LocalAgentKitService.get_rendered_tree()` and the same
+  `snapshot_cache_key` helper this endpoint uses for its other three sources.
+  `cinna agent import` — the go-cloud counterpart to this workspace, invoked
+  from `Cloud/` against an agent scaffolded by `kit.py new` — lives in the
+  separate `cinna-cli` repository and reuses `run_agent_create`,
+  `run_agent_sync`, and the credential-drafting / schedule / status verbs
+  documented above (flows 5, 7c, 7d); no dedicated backend endpoint exists for
+  it. See [local_agent_kit.md](../local_agent_kit/local_agent_kit.md)

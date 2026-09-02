@@ -1,0 +1,15 @@
+# Secrets
+credentials/.env
+credentials/credentials.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data — per machine, regenerated
+app-data/
+temp/
+
+.DS_Store

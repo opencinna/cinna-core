@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinna.dev/schema/cinna-agent.schema.json",
+  "title": "cinna-agent.json",
+  "description": "Definitional metadata for a locally built agent. Lives at the agent folder root and travels unchanged into a cloud agent workspace and into bundle revisions. Unknown keys are preserved for forward compatibility.",
+  "type": "object",
+  "required": ["schema_version", "name", "slug", "description"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "description": "Manifest contract version. A tool that does not understand this number must refuse to parse the file.",
+      "type": "integer",
+      "const": 1
+    },
+    "kit_version": {
+      "description": "Version of the kit that scaffolded this agent. Informational.",
+      "type": ["string", "null"]
+    },
+    "name": {
+      "description": "Display name shown to humans.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "slug": {
+      "description": "Folder name and cloud reference. Must equal the agent folder's name.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+    },
+    "description": {
+      "description": "One sentence describing what the agent does. Feeds agent cards, the A2A card and router-trigger generation.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "example_prompts": {
+      "description": "Ready-to-send task suggestions AND a first-class routing input. At least one is required for a cloud-ready agent.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 500},
+      "maxItems": 20
+    },
+    "router_trigger_prompt": {
+      "description": "One capability-verb sentence used only by the routing classifier. Describes when to route here, never how to behave.",
+      "type": ["string", "null"],
+      "maxLength": 2000
+    },
+    "prompts": {
+      "description": "Paths, relative to the agent root, of the three document-backed prompts.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {"type": "string"},
+        "entrypoint": {"type": "string"},
+        "refiner": {"type": "string"}
+      }
+    },
+    "status_refresh_command": {
+      "description": "Shell command, or a /run:<name> reference into docs/CLI_COMMANDS.yaml, executed before the platform reads STATUS.md.",
+      "type": ["string", "null"],
+      "maxLength": 1024
+    },
+    "credentials": {
+      "description": "Credential slots the agent needs. Never contains secret values.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 255},
+          "type": {
+            "description": "A platform CredentialType value.",
+            "type": "string",
+            "enum": [
+              "email_imap",
+              "email_smtp",
+              "odoo",
+              "gmail_oauth",
+              "gmail_oauth_readonly",
+              "gdrive_oauth",
+              "gdrive_oauth_readonly",
+              "gcalendar_oauth",
+              "gcalendar_oauth_readonly",
+              "google_service_account",
+              "api_token",
+              "ssh_key"
+            ]
+          },
+          "description": {"type": "string", "maxLength": 2000},
+          "env_prefix": {
+            "description": "Prefix of the local .env variable names for this slot. Variable name is <env_prefix><FIELD in upper case>.",
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*_$"
+          },
+          "fields": {
+            "description": "Field names of the credential payload, as the platform names them.",
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "optional": {"type": "boolean"}
+        }
+      }
+    },
+    "schedules": {
+      "description": "Unattended runs. Declared locally, created on the platform at import time.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "cron_string", "schedule_type"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 255},
+          "cron_string": {
+            "description": "Standard five-field cron expression.",
+            "type": "string",
+            "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$"
+          },
+          "timezone": {
+            "description": "IANA timezone name. Local-only metadata used to render the cron description at import.",
+            "type": ["string", "null"]
+          },
+          "schedule_type": {
+            "type": "string",
+            "enum": ["static_prompt", "script_trigger"]
+          },
+          "prompt": {
+            "description": "Required for static_prompt: the message sent to start the run.",
+            "type": ["string", "null"]
+          },
+          "command": {
+            "description": "Required for script_trigger: the shell command whose non-OK output starts a session.",
+            "type": ["string", "null"]
+          },
+          "enabled": {"type": "boolean"}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"schedule_type": {"const": "script_trigger"}}, "required": ["schedule_type"]},
+            "then": {"required": ["command"], "properties": {"command": {"type": "string", "minLength": 1}}}
+          },
+          {
+            "if": {"properties": {"schedule_type": {"const": "static_prompt"}}, "required": ["schedule_type"]},
+            "then": {"required": ["prompt"], "properties": {"prompt": {"type": "string", "minLength": 1}}}
+          }
+        ]
+      }
+    },
+    "handovers": {
+      "description": "Other agents this one may delegate to. Targets are slugs of sibling agents.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target_slug"],
+        "additionalProperties": true,
+        "properties": {
+          "target_slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
+          "description": {"type": "string", "maxLength": 2000}
+        }
+      }
+    },
+    "features": {
+      "description": "Cloud-only capabilities the agent expects once imported. Ignored locally.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "webapp": {"type": "boolean"},
+        "agent_api": {"type": "boolean"}
+      }
+    },
+    "cloud": {
+      "description": "Written only by the cloud import step. Cleared when the agent folder is copied or exported.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "platform_url": {"type": ["string", "null"]},
+        "agent_id": {"type": ["string", "null"]},
+        "imported_at": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

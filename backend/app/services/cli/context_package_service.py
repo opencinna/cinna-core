@@ -17,12 +17,14 @@ Contents (static platform knowledge only — never any user-specific secret):
     api_reference/            # generated REST API reference, one file per domain
     examples/                 # working API-script patterns (platform_helper + samples)
     guides/                   # hand-authored worked playbooks (e.g. build a network)
+    local-kit/                # the Local Agent Kit, rendered — conventions for
+                              #   agents built locally with a coding assistant
 
 Source of truth
 ---------------
 The package is assembled from the committed ``platform-knowledge-env`` template
 snapshot (``…/knowledge/platform/`` + ``…/scripts/examples/`` +
-``…/knowledge/guides/``). That snapshot is
+``…/knowledge/guides/`` + ``…/knowledge/local-kit/``). That snapshot is
 the only copy of this knowledge present inside the backend container at runtime
 — the repo-root ``docs/`` tree and ``frontend/openapi.json`` are not shipped in
 the image. The snapshot is refreshed by
@@ -60,10 +62,13 @@ from pathlib import Path
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from app.services.cli.local_agent_kit_service import LocalAgentKitService
 from app.services.cli.platform_knowledge_assets import (
     example_scripts_dir,
     guides_dir as guides_snapshot_dir,
+    local_kit_dir,
     platform_knowledge_dir,
+    snapshot_cache_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +83,10 @@ _API_REFERENCE_SUBDIR = "api_reference"
 # workspace's ``context/`` tree is behind.
 CONTEXT_PACKAGE_VERSION_MEMBER = "context/VERSION"
 CONTEXT_PACKAGE_VERSION_HEADER = "X-Context-Package-Version"
+
+# Where the Local Agent Kit lands inside the package, and the label its files
+# carry in the content hash.
+_LOCAL_KIT_SUBDIR = "local-kit"
 
 
 class ContextPackageService:
@@ -134,7 +143,13 @@ class ContextPackageService:
         platform_dir = platform_knowledge_dir()
         examples_dir = example_scripts_dir()
         guides_dir = guides_snapshot_dir()
-        cache_key = cls._snapshot_version(platform_dir, examples_dir, guides_dir)
+        # Shared with LocalAgentKitService: one mtime+count probe shape for
+        # every consumer that memoizes work derived from the snapshot. The kit
+        # directory is part of the key so an edited kit rebuilds this package
+        # too — the kit ships *inside* it.
+        cache_key = snapshot_cache_key(
+            platform_dir, examples_dir, guides_dir, local_kit_dir()
+        )
 
         cached = cls._cache
         if cached is not None and cached[0] == cache_key:
@@ -147,11 +162,12 @@ class ContextPackageService:
                 return cached[1], cached[2]
 
             index = cls._render_index()
+            local_kit = cls._local_kit_tree()
             content_version = cls._content_version(
-                platform_dir, examples_dir, guides_dir, index
+                platform_dir, examples_dir, guides_dir, local_kit, index
             )
             content = cls._build_tarball(
-                platform_dir, examples_dir, guides_dir, index, content_version
+                platform_dir, examples_dir, guides_dir, local_kit, index, content_version
             )
             cls._cache = (cache_key, content_version, content)
             logger.info(
@@ -164,8 +180,53 @@ class ContextPackageService:
             return content_version, content
 
     @staticmethod
+    def _local_kit_tree() -> dict[str, bytes]:
+        """The rendered Local Agent Kit, or ``{}`` when this image has none.
+
+        Rendered, never the raw snapshot: the packaged copy has to carry this
+        instance's URLs, exactly like the one an assistant downloads from
+        ``/agent-start``. Reusing ``LocalAgentKitService``'s own memoized build also
+        keeps the two byte-identical, so a cloud orchestrator reading
+        ``context/local-kit/`` and a local assistant reading the tarball never
+        disagree about the conventions.
+
+        Absence is tolerated like ``examples/`` and ``guides/``: the kit tells a
+        cloud orchestrator how a locally built agent is laid out, which is
+        helpful but not the core knowledge. ``LocalAgentKitService`` raises 503
+        on a missing snapshot because *its own* endpoint has nothing else to
+        serve; here that must not take the whole package down.
+
+        The instance's ``local_agent_kit_enabled`` switch is deliberately not
+        consulted: it governs the *public, anonymous* surface. This package is
+        served to an authenticated account workspace, and an operator who
+        stopped publishing to strangers has not thereby withdrawn the
+        conventions from their own users.
+        """
+        try:
+            _, rendered = LocalAgentKitService.get_rendered_tree()
+        except Exception:
+            # Deliberately every exception, not just the 503 the service raises
+            # for a missing snapshot: it also stats and reads every file in the
+            # tree, so a bad mount or a half-extracted image layer surfaces as
+            # an OSError. Letting that through would turn a fault in the
+            # *optional* source into a 500 on the whole package — exactly the
+            # failure this degradation exists to prevent.
+            logger.warning(
+                "Context package: local agent kit unavailable at %s — serving "
+                "package without local-kit/",
+                local_kit_dir(),
+                exc_info=True,
+            )
+            return {}
+        return rendered
+
+    @staticmethod
     def _content_version(
-        platform_dir: Path, examples_dir: Path, guides_dir: Path, index: str
+        platform_dir: Path,
+        examples_dir: Path,
+        guides_dir: Path,
+        local_kit: dict[str, bytes],
+        index: str,
     ) -> str:
         """Stable hash of everything the package ships.
 
@@ -189,37 +250,14 @@ class ContextPackageService:
                 rel = file.relative_to(root).as_posix()
                 digest.update(f"{label}/{rel}\0".encode("utf-8"))
                 digest.update(hashlib.sha256(file.read_bytes()).digest())
+        # The kit is folded in from its *rendered* bytes, not from disk: the
+        # rendering is what ships, and it moves when this instance's settings do.
+        for rel in sorted(local_kit):
+            digest.update(f"{_LOCAL_KIT_SUBDIR}/{rel}\0".encode("utf-8"))
+            digest.update(hashlib.sha256(local_kit[rel]).digest())
         digest.update(b"index\0")
         digest.update(index.encode("utf-8"))
         return digest.hexdigest()[:16]
-
-    @staticmethod
-    def _snapshot_version(
-        platform_dir: Path, examples_dir: Path, guides_dir: Path
-    ) -> str:
-        """
-        Cache key derived from the newest mtime AND file count across the
-        snapshot sources.
-
-        A redeploy that ships a freshly-synced snapshot bumps file mtimes, which
-        changes the key and invalidates the cached tarball automatically. The
-        file count is folded in so a pure deletion (which leaves the max mtime
-        unchanged) still invalidates the cache — belt-and-suspenders, since the
-        sync script rewrites the whole tree anyway. The guides dir is included so
-        adding or editing a hand-authored playbook also invalidates the cache.
-        """
-        newest = 0.0
-        count = 0
-        for root in (platform_dir, examples_dir, guides_dir):
-            if not root.is_dir():
-                continue
-            for p in root.rglob("*"):
-                if p.is_file():
-                    count += 1
-                    mtime = p.stat().st_mtime
-                    if mtime > newest:
-                        newest = mtime
-        return f"{newest:.6f}:{count}"
 
     @classmethod
     def _build_tarball(
@@ -227,6 +265,7 @@ class ContextPackageService:
         platform_dir: Path,
         examples_dir: Path,
         guides_dir: Path,
+        local_kit: dict[str, bytes],
         index: str,
         content_version: str,
     ) -> bytes:
@@ -242,10 +281,10 @@ class ContextPackageService:
         propagates out of ``_build_or_cached`` before the result is cached, so a
         failure is never memoized.
 
-        A missing ``examples/`` or ``guides/`` directory alone is tolerable
-        (warn + omit): the example scripts and worked playbooks are helpful but
-        not the core knowledge, so we degrade gracefully on those rather than
-        fail the whole download.
+        A missing ``examples/``, ``guides/`` or ``local-kit/`` tree alone is
+        tolerable (warn + omit): the example scripts, worked playbooks and local
+        agent kit are helpful but not the core knowledge, so we degrade
+        gracefully on those rather than fail the whole download.
         """
         platform_files = (
             sorted(p for p in platform_dir.rglob("*") if p.is_file())
@@ -309,13 +348,28 @@ class ContextPackageService:
                     guides_dir,
                 )
 
-            # 4. Package index the orchestrator CLAUDE.md points at.
+            # 4. The Local Agent Kit, rendered for this instance, so a cloud
+            #    orchestrator importing a locally built agent reads the same
+            #    conventions the local assistant followed. Already warned about
+            #    upstream when absent (see `_local_kit_tree`).
+            for rel in sorted(local_kit):
+                member = local_kit[rel]
+                info = tarfile.TarInfo(name=f"context/{_LOCAL_KIT_SUBDIR}/{rel}")
+                info.size = len(member)
+                # Same mode rule as the kit's own tarball
+                # (`LocalAgentKitService._build_tarball`): `tools/kit.py` is a
+                # program in both copies, and the point of packaging the
+                # rendered tree is that the two copies are the same thing.
+                info.mode = 0o755 if rel.endswith(".py") else 0o644
+                tar.addfile(info, io.BytesIO(member))
+
+            # 5. Package index the orchestrator CLAUDE.md points at.
             index_bytes = index.encode("utf-8")
             info = tarfile.TarInfo(name="context/README.md")
             info.size = len(index_bytes)
             tar.addfile(info, io.BytesIO(index_bytes))
 
-            # 5. The version stamp, so an extracted workspace knows which
+            # 6. The version stamp, so an extracted workspace knows which
             #    package it holds without keeping state anywhere else.
             version_bytes = f"{content_version}\n".encode("utf-8")
             info = tarfile.TarInfo(name=CONTEXT_PACKAGE_VERSION_MEMBER)
@@ -347,6 +401,7 @@ class ContextPackageService:
             "| `api_reference/README.md` | Index of the REST API reference by domain. |\n"
             "| `api_reference/*.md` | Generated endpoint reference, one file per domain. |\n"
             "| `examples/` | Working API-script patterns (`platform_helper.py` + samples). |\n"
+            "| `local-kit/` | Conventions for agents built locally with a coding assistant; read `local-kit/guides/11-go-cloud.md` when importing one. |\n"
             "| `guides/` | Worked walkthroughs — stand up a delegating multi-agent network, expose an agent as a REST API, author an agent's prompts & description, and turn a user's improvement request into a fix. |\n"
             "| `VERSION` | Content version of this package. Compare it against `GET /api/v1/cli/account/context-package/version` to find out whether this workspace is behind; `cinna account refresh-context` brings it up to date. |\n"
             "\n"

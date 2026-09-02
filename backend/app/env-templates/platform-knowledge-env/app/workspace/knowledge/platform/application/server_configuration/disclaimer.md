@@ -11,7 +11,7 @@ Allow a superuser to display a server-wide notice to users at login — rendered
   - **New User Only** (`new_users`) — shown once and remembered in `localStorage`; the user never sees it again on the same browser unless the disclaimer content or mode changes
   - **Every Login** (`every_login`) — shown once per browser session via `sessionStorage`; reappears on every new tab or fresh browser start
 - **Versioned Acknowledgement** — The backend tracks a `disclaimer_version` integer. Any change to the Markdown content or display mode increments the version. Because storage keys are versioned (`disclaimer_ack_v{version}` / `disclaimer_session_v{version}`), all previous acknowledgements are automatically invalidated and users see the updated disclaimer
-- **Singleton Config** — One `ServerConfig` row holds all settings. There is no per-user or per-agent configuration; the same disclaimer applies to everyone on the instance
+- **Singleton Config** — One `ServerConfig` row holds all settings. There is no per-user or per-agent configuration; the same disclaimer applies to everyone on the instance. The row also carries the unrelated `local_agent_kit_enabled` instance switch (see [Local Agent Kit](../local_agent_kit/local_agent_kit.md)) — its card lives on the same Interface tab, next to the Disclaimer card, and shares this doc's `["serverConfig"]` query key and update endpoint. Updating one field never touches the other's semantics: `local_agent_kit_enabled` never bumps `disclaimer_version`, and disclaimer edits never affect the kit toggle
 - **Browser-Storage Only** — No per-user DB record tracks acknowledgement. Dismissal is tracked entirely in client-side browser storage
 
 ## Admin User Stories / Flows
@@ -78,7 +78,8 @@ When both the disclaimer and the Getting Started Modal would show for a new user
 - **Getting Started / Onboarding** — The dashboard defers the Getting Started Modal until after the disclaimer is acknowledged. The ordering is enforced by the `shouldShowDisclaimer` flag and the `pendingGettingStarted` state variable. See [Getting Started](../getting_started/getting_started.md)
 - **Authentication** — The disclaimer gate runs on the Dashboard after the user is already authenticated. It is not part of the login flow itself — users complete authentication first, then see the disclaimer
 - **Admin Agent Environments** — Lives in the same admin surface (`Admin →`) as the superuser-only routes; uses the same `is_superuser` guard pattern. See [Admin Agent Environments](../admin_agent_environments/admin_agent_environments.md)
+- **Local Agent Kit** — Shares the `ServerConfig` singleton row, the Interface tab, and the `PUT /admin/server-config` mutation / `["serverConfig"]` query key; `LocalAgentKitCard` sits next to `DisclaimerCard`. See [Local Agent Kit](../local_agent_kit/local_agent_kit.md)
 
 ---
 
-*Last updated: 2026-06-14*
+*Last updated: 2026-09-02*

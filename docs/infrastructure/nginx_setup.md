@@ -103,6 +103,17 @@ location /api/v1/env-console/ {
 
 Note: `/hooks/` (task triggers) carries the same requirement. Both paths must appear in the production reverse proxy config. In local docker-compose mode requests reach the backend directly via `VITE_API_URL`, so no `frontend/nginx.conf` block is needed.
 
+### `/agent-start`
+
+**Feature:** Local Agent Kit public entrypoint — see [Local Agent Kit](../application/local_agent_kit/local_agent_kit.md).
+**Why at origin root:** `/agent-start` is the URL a user pastes into a coding assistant ("read `https://{instance}/agent-start` and help me start making my agents"). It has to be short and memorable, and it is read by callers that know nothing about the instance — including a plain browser, which gets an HTML landing page. Without this block the SPA shell answers it and the assistant reads an empty React page instead of the kit.
+**Match:** `location ~ ^/agent-start(/|$)` — a regex, not the prefix form. `/agent-start`, `/agent-start/`, `/agent-start/kit.tar.gz` and `/agent-start/kit/<path>` all reach the backend, and a future SPA route such as `/startup` does not (an nginx prefix match is on the raw string, so `location /agent-start` would swallow it).
+**Upstream:** backend. Unauthenticated and read-only by design; responses are `Cache-Control: public, max-age=300` and identical for every caller, so an intermediary cache in front is fine.
+
+**Local dev (Vite):** the Vite dev server has no nginx in front, so `frontend/vite.config.ts` carries the same rule as a `server.proxy` entry (`^/agent-start(/|$)` → `VITE_API_URL`). Without it `http://localhost:5173/agent-start` falls through to the SPA and 404s.
+
+**`/api/agent-start` alias:** the same router is mounted a second time under `/api/agent-start`, which the universal `/api/` block above already proxies. Every link *inside* the kit points at the alias, so an instance whose reverse proxy was never given a `/agent-start` block still serves a fully working kit — only the pretty URL is affected. Adding the block is still recommended: the pasteable prompt is the feature's entry point.
+
 ### `/`
 
 **Feature:** frontend SPA. `try_files $uri $uri/ /index.html` to support client-side routing.
@@ -110,7 +121,7 @@ Note: `/hooks/` (task triggers) carries the same requirement. Both paths must ap
 
 ## Configuration Files
 
-- `frontend/nginx.conf` — in-container nginx config baked into the frontend Docker image. Serves the SPA and proxies `/api/`, the two WebSocket/SSE-upgrade blocks (`/api/v1/cli/`, `/api/v1/env-console/`) that must precede it, and the `.well-known/*` URIs above. Kept in parity with the production reverse proxy so the frontend container can act as the entry point in local docker-compose. (When the SPA talks to the backend directly via `VITE_API_URL`, these blocks are bypassed — but they must still match prod for correctness.)
+- `frontend/nginx.conf` — in-container nginx config baked into the frontend Docker image. Serves the SPA and proxies `/api/`, the two WebSocket/SSE-upgrade blocks (`/api/v1/cli/`, `/api/v1/env-console/`) that must precede it, the `.well-known/*` URIs above, and `/agent-start`. Kept in parity with the production reverse proxy so the frontend container can act as the entry point in local docker-compose. (When the SPA talks to the backend directly via `VITE_API_URL`, these blocks are bypassed — but they must still match prod for correctness.)
 - `frontend/nginx-backend-not-found.conf` — mountable snippet that returns 404 for `/api`, `/docs`, `/redoc` when the frontend container is used without a backend in front.
 - Production reverse-proxy config — lives in deployment infrastructure (outside this repo). Must include all location blocks listed above.
 
@@ -133,3 +144,4 @@ When a new feature introduces a `/.well-known/*` endpoint:
 - [Agent Environment Console](../agents/agent_environments/agent_env_console.md) — uses `/api/v1/env-console/` (`WS .../{id}/terminal` + `WS .../{id}/logs/stream`, web terminal + live logs follow)
 - [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md) — uses `/agent-hooks/` (public webhook execution, no JWT)
 - [Task Triggers](../application/input_tasks/task_triggers.md) — uses `/hooks/` (same pattern as agent webhooks, public webhook execution, no JWT)
+- [Local Agent Kit](../application/local_agent_kit/local_agent_kit.md) — uses `/agent-start` (public kit entrypoint, no auth) with the `/api/agent-start` alias as the no-proxy-change fallback

@@ -1483,6 +1483,44 @@ def test_context_package_content(
         f"guides members found: {guides_members}"
     )
 
+    # ── Phase 14: the Local Agent Kit rides along under context/local-kit/ ───
+    # A cloud orchestrator asked to import an agent someone built locally needs
+    # the conventions that agent was built to — the same rendered kit the local
+    # assistant downloaded from /agent-start, not a paraphrase of it.
+    assert "context/local-kit/START.md" in member_names, (
+        "context/local-kit/START.md must be present — the kit is synced into "
+        "backend/app/env-templates/platform-knowledge-env/app/workspace/"
+        "knowledge/local-kit/ by `make sync-platform-knowledge` and rendered "
+        f"into the package by ContextPackageService; members: {member_names[:30]}"
+    )
+    assert "context/local-kit/guides/11-go-cloud.md" in member_names, (
+        "context/local-kit/guides/11-go-cloud.md must be present — it is the "
+        "playbook the package index points the orchestrator at for an import"
+    )
+
+    # Rendered, not raw: an unresolved {{KIT_BASE_URL}} would describe no
+    # instance at all, and is the failure a verbatim file copy would produce.
+    tf = tarfile.open(fileobj=io.BytesIO(body), mode="r:gz")
+    try:
+        start_md = tf.extractfile("context/local-kit/START.md").read().decode("utf-8")
+    finally:
+        tf.close()
+    assert "{{" not in start_md, (
+        "context/local-kit/START.md still carries an unrendered placeholder — "
+        "the package must embed LocalAgentKitService's rendered tree"
+    )
+
+    # The index has to name the new tree, or nothing ever opens it.
+    tf = tarfile.open(fileobj=io.BytesIO(body), mode="r:gz")
+    try:
+        index = tf.extractfile("context/README.md").read().decode("utf-8")
+    finally:
+        tf.close()
+    assert "local-kit/" in index, (
+        "context/README.md must list local-kit/ — an unlisted tree is one the "
+        "orchestrator never reads"
+    )
+
 
 # ── Scenario 14b: Context-package staleness signal ───────────────────────────
 
@@ -1540,6 +1578,58 @@ def test_context_package_carries_a_content_version(
     # Same content, same version: the signal only fires on a real change.
     again = client.get(f"{_BASE}/account/context-package/version", headers=acc_headers)
     assert again.json()["version"] == version
+
+
+def test_context_package_version_moves_when_the_local_kit_changes(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    """A kit edit must reach workspaces that already ran ``account setup``.
+
+    The kit ships inside the package, so it has to be folded into the content
+    version — otherwise an instance that updated its kit would keep telling every
+    workspace it is current while serving different bytes, and the staleness
+    signal would be silently wrong for exactly the tree that changed most often.
+
+    The kit is monkeypatched rather than edited on disk: the package memoizes on
+    an mtime probe, and the point here is the *content* hash, so both caches are
+    dropped and the same request is made twice.
+    """
+    from app.services.cli.context_package_service import ContextPackageService
+    from app.services.cli.local_agent_kit_service import LocalAgentKitService
+
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Kit Version Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    def probe() -> str:
+        r = client.get(
+            f"{_BASE}/account/context-package/version", headers=acc_headers
+        )
+        assert r.status_code == 200, r.text
+        return r.json()["version"]
+
+    monkeypatch.setattr(ContextPackageService, "_cache", None)
+    baseline = probe()
+
+    monkeypatch.setattr(
+        LocalAgentKitService,
+        "get_rendered_tree",
+        classmethod(lambda cls: ("deadbeef", {"START.md": b"a different kit\n"})),
+    )
+    monkeypatch.setattr(ContextPackageService, "_cache", None)
+    changed = probe()
+
+    assert changed != baseline, (
+        "The context-package content version must move when the packaged kit "
+        "does — it is the only signal a set-up workspace has"
+    )
+
+    # And it is stable for unchanged content: the signal has to mean something.
+    monkeypatch.setattr(ContextPackageService, "_cache", None)
+    assert probe() == changed
 
 
 def test_context_package_version_requires_an_account_token(

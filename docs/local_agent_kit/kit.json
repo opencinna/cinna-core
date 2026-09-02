@@ -1,0 +1,88 @@
+{
+  "kit_version": "{{KIT_VERSION}}",
+  "schema_version": 1,
+  "platform_url": "{{PLATFORM_URL}}",
+  "kit_base_url": "{{KIT_BASE_URL}}",
+  "start_url": "{{START_URL}}",
+  "instance_name": "{{INSTANCE_NAME}}",
+  "signup_url": "{{SIGNUP_URL}}",
+  "login_url": "{{LOGIN_URL}}",
+  "cli": {
+    "install_spec": "{{CLI_INSTALL_SPEC}}",
+    "min_version": "{{MIN_CLI_VERSION}}"
+  },
+  "entry": "START.md",
+  "index": "README.md",
+  "manifest_schema": "schema/cinna-agent.schema.json",
+  "agent_template": "templates/agent",
+  "root_template": "templates/root",
+  "tool": "tools/kit.py",
+  "ladder": [
+    {
+      "rung": "prompts",
+      "doc": "guides/02-prompts-and-description.md",
+      "trigger": "always, before the agent is tested for the first time"
+    },
+    {
+      "rung": "scripts",
+      "doc": "guides/03-scripts-and-data.md",
+      "trigger": "the agent does anything beyond answering from its prompts"
+    },
+    {
+      "rung": "credentials",
+      "doc": "guides/04-credentials.md",
+      "trigger": "workflow calls any external system that needs a token, login or key"
+    },
+    {
+      "rung": "schedules",
+      "doc": "guides/05-schedules.md",
+      "trigger": "the user says daily/weekly/every/at, or the agent should run unattended"
+    },
+    {
+      "rung": "status",
+      "doc": "guides/06-status-reporting.md",
+      "trigger": "the agent runs unattended or performs long-running checks"
+    },
+    {
+      "rung": "cli_commands",
+      "doc": "guides/07-cli-commands.md",
+      "trigger": "the same operation is run repeatedly and deserves a name"
+    },
+    {
+      "rung": "knowledge",
+      "doc": "guides/08-knowledge-and-local-skills.md",
+      "trigger": "three or more distinct capabilities, or domain docs longer than a page"
+    },
+    {
+      "rung": "multi_agent",
+      "doc": "guides/09-multi-agent.md",
+      "trigger": "a second agent appears, or one agent should delegate to another"
+    },
+    {
+      "rung": "go_cloud",
+      "doc": "guides/11-go-cloud.md",
+      "trigger": "the user asks, or the agent needs 24/7, channels, sharing or webapps"
+    }
+  ],
+  "cloud_import": {
+    "exclude": [
+      "credentials/",
+      ".venv/",
+      ".claude/",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "app-data/",
+      "temp/",
+      "__pycache__/",
+      "*.pyc",
+      ".git/",
+      ".DS_Store"
+    ]
+  },
+  "tool_command": "uv run .cinna-kit/tools/kit.py",
+  "runtime": {
+    "tool_runner": "uv",
+    "requires_python": ">=3.10",
+    "install_uv": "https://docs.astral.sh/uv/getting-started/installation/"
+  }
+}

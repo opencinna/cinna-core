@@ -166,6 +166,7 @@ User's IDE          cinna CLI / Mutagen         Platform Backend        Agent en
 - **Knowledge Sources** — MCP proxy calls existing vector search infrastructure. See [knowledge_sources](../knowledge_sources/knowledge_sources.md)
 - **Frontend Integrations Tab** — LocalDevCard sits alongside A2A, MCP, Access Token cards in the agent detail page
 - **Account CLI Workspace** — Account-level bootstrap (Phase 1): one setup token bootstraps a multi-agent account workspace; account token mints per-agent child tokens on demand. See [account_cli_workspace.md](account_cli_workspace.md)
+- **Local Agent Kit** — The auth-free on-ramp that precedes any of this: `cinna login <host> --dir Cloud` (turning a folder into an account workspace, as above) and the new `cinna agent import Local/<slug>` verb are how an agent scaffolded on the public `/agent-start` surface — no account required until this step — moves onto the platform. `agent import` itself lives in the separate `cinna-cli` repo, layered entirely on the existing account-workspace endpoints (no new backend route). See [local_agent_kit.md](../local_agent_kit/local_agent_kit.md)
 
 ## Aspects
 

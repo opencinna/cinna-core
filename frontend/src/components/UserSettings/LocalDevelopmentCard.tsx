@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Copy, Check, Key, Laptop, MonitorDot, RefreshCw, Unplug } from "lucide-react"
+import { ChevronDown, Copy, Check, Key, Laptop, MonitorDot, RefreshCw, Unplug } from "lucide-react"
 import { useState, useEffect } from "react"
 
 import type { CLISetupTokenCreated, CLIAccountTokenPublic } from "@/client"
 import { CliService } from "@/client"
+import { CopyPromptSnippet } from "@/components/Common/CopyPromptSnippet"
 import useCustomToast from "@/hooks/useCustomToast"
+import { useLocalAgentKitAvailable } from "@/hooks/useLocalAgentKit"
 import useRole from "@/hooks/useRole"
 import {
   Card,
@@ -48,6 +50,10 @@ export function LocalDevelopmentCard() {
   const [setupToken, setSetupToken] = useState<CLISetupTokenCreated | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [secondsLeft, setSecondsLeft] = useState(0)
+  const [scratchOpen, setScratchOpen] = useState(false)
+  // Hidden entirely when the instance does not publish the starter surface —
+  // the prompt would send the user's assistant at a URL that 404s.
+  const localAgentKitAvailable = useLocalAgentKitAvailable()
 
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -286,6 +292,30 @@ export function LocalDevelopmentCard() {
             </ul>
           )}
         </div>
+
+        {/*
+          The setup command above bootstraps a *cloud* workspace and needs this
+          account. Someone on a machine with nothing on it yet needs the other
+          entrypoint — the public starter kit, which asks for no account at all —
+          so it is offered here, collapsed, rather than competing with Setup.
+        */}
+        {localAgentKitAvailable && (
+        <div className="mt-4 border-t pt-3">
+          <button
+            type="button"
+            onClick={() => setScratchOpen((open) => !open)}
+            className="flex w-full items-center gap-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
+            aria-expanded={scratchOpen}
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${scratchOpen ? "" : "-rotate-90"}`}
+            />
+            Starting from scratch on a new machine? Paste into your coding
+            assistant
+          </button>
+          {scratchOpen && <CopyPromptSnippet className="mt-2" />}
+        </div>
+        )}
       </CardContent>
     </Card>
   )

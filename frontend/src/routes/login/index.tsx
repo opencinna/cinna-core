@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
+import { useLocalAgentKitAvailable } from "@/hooks/useLocalAgentKit"
 import { APP_NAME, safeRedirectPath } from "@/utils"
 
 const formSchema = z.object({
@@ -63,6 +64,7 @@ function Login() {
   const { loginMutation } = useAuth()
   const { redirect: redirectParam } = Route.useSearch()
   const signupSearch = redirectParam ? { redirect: redirectParam } : undefined
+  const localAgentKitAvailable = useLocalAgentKitAvailable()
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     mode: "onBlur",
@@ -167,6 +169,26 @@ function Login() {
               Sign up
             </RouterLink>
           </div>
+
+          {/*
+            The link points at the pretty `/agent-start`, not the `/api/agent-start` alias
+            the probe used: it is the URL a person would share or type. On an
+            instance whose reverse proxy has no `location /agent-start` block that
+            lands on the SPA shell instead — see `frontend/nginx.conf` and
+            `docs/infrastructure/nginx_setup.md`, which is where that is fixed.
+          */}
+          {localAgentKitAvailable && (
+            <div className="text-center text-xs text-muted-foreground">
+              <a
+                href="/agent-start?format=html"
+                target="_blank"
+                rel="noopener"
+                className="underline underline-offset-4 hover:text-foreground"
+              >
+                Building agents locally with Claude Code or Codex? Start here
+              </a>
+            </div>
+          )}
         </form>
       </Form>
     </AuthLayout>

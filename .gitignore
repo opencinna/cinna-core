@@ -14,3 +14,20 @@ backend/data/uploads/
 backend/data/agents/
 backend/data/bundles/
 notes.txt
+
+# The Local Agent Kit ships a scaffold whose `.claude/` contents are CONTENT,
+# not repo artefacts. A developer's global excludes file commonly carries
+# `**/.claude/settings.local.json` (and `.git/info/exclude` here carries several
+# `**/.claude/<file>` rules), which hides them from `git add` — so without these
+# negations a fresh clone syncs a kit missing files into the knowledge template:
+# a different kit_version and a broken scaffold, silently, for everyone who was
+# not the author. The whole directory is negated, not one filename, so a second
+# file added to the scaffold's `.claude/` is covered too.
+#
+# The scaffold's own path-excluding ignore rules ship as dotless `gitignore`
+# files (renamed to `.gitignore` by `kit.py new`) precisely so they cannot hide
+# scaffold content from this repository the way a nested `.gitignore` would.
+!docs/local_agent_kit/templates/agent/.claude/
+!docs/local_agent_kit/templates/agent/.claude/**
+!backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/local-kit/templates/agent/.claude/
+!backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/local-kit/templates/agent/.claude/**

@@ -1,0 +1,5 @@
+# Runtime dependencies for the cloud workspace, one requirement specifier per line.
+# Mirrors [project.dependencies] in pyproject.toml — regenerate with
+#   uv run ../../.cinna-kit/tools/kit.py validate . --fix
+# Keep it non-empty only when the agent really needs third-party packages; the
+# scaffolded scripts are stdlib-only on purpose.

@@ -55,6 +55,9 @@ class ServerConfigService:
 
         Increments ``disclaimer_version`` only when the disclaimer content or
         display mode actually changes, so acknowledged users re-see edits.
+        Every other field — ``local_agent_kit_enabled`` included — is copied
+        without touching the version: bumping it would force every user to
+        re-acknowledge an unchanged disclaimer.
         """
         config = ServerConfigService.get_or_create(session)
         update_dict = data.model_dump(exclude_unset=True)

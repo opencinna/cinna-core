@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "kit_version": "{{KIT_VERSION}}",
+  "name": "New Agent",
+  "slug": "new-agent",
+  "description": "One sentence describing exactly what this agent does. Rewrite this last, from what you actually built.",
+  "example_prompts": [],
+  "router_trigger_prompt": null,
+  "prompts": {
+    "workflow": "docs/WORKFLOW_PROMPT.md",
+    "entrypoint": "docs/ENTRYPOINT_PROMPT.md",
+    "refiner": "docs/REFINER_PROMPT.md"
+  },
+  "status_refresh_command": "/run:status",
+  "credentials": [],
+  "schedules": [],
+  "handovers": [],
+  "features": {
+    "webapp": false,
+    "agent_api": false
+  },
+  "cloud": {
+    "platform_url": null,
+    "agent_id": null,
+    "imported_at": null
+  }
+}

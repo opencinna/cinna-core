@@ -2,6 +2,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useEffect } from "react"
 
 import { DisclaimerCard } from "@/components/Admin/DisclaimerCard"
+import { LocalAgentKitCard } from "@/components/Admin/LocalAgentKitCard"
 import { MailServersCard } from "@/components/Admin/MailServersCard"
 import { AutoInstallAgentsCard } from "@/components/Admin/ServerChannels/AutoInstallAgentsCard"
 import { ServerChannelsCard } from "@/components/Admin/ServerChannels/ServerChannelsCard"
@@ -64,6 +65,7 @@ function AdminServerConfiguration() {
       content: (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <DisclaimerCard />
+          <LocalAgentKitCard />
         </div>
       ),
     },

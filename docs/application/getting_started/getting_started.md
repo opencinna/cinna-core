@@ -7,8 +7,8 @@ Guide new instances and first-time users through initial platform setup — conf
 ## Core Concepts
 
 - **Onboarding Gate** — Blocks the main Dashboard until the user has configured at least one AI credential. Without a valid API key the agent runtime cannot function, so setup is mandatory before any other feature is accessible
-- **Getting Started Modal** — Encyclopedia-style dialog with four articles covering the essential patterns: quick-start workflow, building agents, sharing credentials, and the building/conversation mode distinction
-- **Rotating Hints** — Persistent inline widget in the Dashboard and message input that surfaces contextual tips and re-opens the Getting Started Modal on demand
+- **Getting Started Modal** — Encyclopedia-style dialog covering the essential patterns: quick-start workflow, building agents locally with a coding assistant, building agents in-app, sharing credentials, and the building/conversation mode distinction
+- **Rotating Hints** — Persistent inline widget in the Dashboard and message input that surfaces contextual tips and re-opens the Getting Started Modal on demand. One hint is conditional — see "Local-first hint" below
 - **New Instance Setup** — When a platform instance is deployed for the first time, the first registered user follows the same onboarding gate flow. Admins may pre-configure plugin marketplaces or shared knowledge sources to make the experience richer for subsequent users
 
 ## User Stories / Flows
@@ -31,6 +31,7 @@ Guide new instances and first-time users through initial platform setup — conf
 2. Default article: **Gmail Agent Quick Start** — a visual 3-step flow (credentials → build → converse)
 3. User navigates between articles via the sidebar:
    - **How to Build An Agent** — building mode prompt patterns, script creation, tips
+   - **Build agents locally with your coding assistant** (`local-first`) — the copy-able `read <startUrl> and help me start making my agents` prompt, a 3-step flow (paste prompt → build in `Local/` → say "move it to the cloud"), the resulting folder diagram, and a note that no account is needed until the cloud step. Only listed when this instance publishes the [Local Agent Kit](../local_agent_kit/local_agent_kit.md); cross-links to "How to Build An Agent" and "Conversation vs Building"
    - **How to Share Credentials** — OAuth setup guide, credential types overview
    - **Conversation vs Building** — mode comparison, typical workflow steps
    - **Connect via MCP** — step-by-step guide for connecting an MCP client (Claude Desktop, Cursor, etc.) using the App MCP Server URL
@@ -69,6 +70,7 @@ Guide new instances and first-time users through initial platform setup — conf
 - **Credential type agnostic** — The gate currently checks for `has_anthropic_api_key`, but the underlying credential system supports multiple provider types; see [AI Credentials](../ai_credentials/ai_credentials.md)
 - **Google OAuth optional** — The login and signup pages gracefully hide the Google OAuth button and "Or continue with email" divider when `VITE_GOOGLE_CLIENT_ID` is not configured. The `GoogleOAuthProvider` wrapper is also conditionally rendered to prevent SDK errors. Fresh installs without Google OAuth credentials work with email/password login only
 - **Onboarding scope** — The gate and modal cover the minimum viable setup. Knowledge sources, plugin marketplaces, and workspaces are supplementary and introduced after initial setup
+- **Local-first hint is conditional** — The `local-first` article and its matching `RotatingHints` entry both gate on `useLocalAgentKitAvailable()`, an unauthenticated probe of the [Local Agent Kit](../local_agent_kit/local_agent_kit.md)'s own `/api/agent-start/version` endpoint (not a privileged `ServerConfig` read — the Dashboard already has a session, but the probe is shared verbatim with the login page, which does not). An instance that disabled the public kit surface never shows either surface, since both would otherwise point at a URL that 404s
 
 ## Architecture Overview
 
@@ -100,7 +102,8 @@ Dashboard (aiCredentialsStatus query)
 - **Knowledge Sources** — Users who want agents to answer questions about their own documentation can add a knowledge source after initial setup. Agents in building mode gain access to a RAG query tool that searches indexed articles. Recommended for more capable, context-aware agents. See [Knowledge Sources](../knowledge_sources/knowledge_sources.md)
 - **Plugin Marketplaces** — When agents need specialised capabilities beyond the default toolset (e.g., domain-specific integrations), platform admins register Git-based plugin catalogs. Users can then discover and install plugins per-agent. New instance admins should configure this before users start building. See [Plugin Marketplaces](../plugin_marketplaces/plugin_marketplaces.md)
 - **User Workspaces** — Once users have multiple agents and credentials, workspaces help separate concerns (e.g., "Email Automation" vs "Data Analysis"). Workspace assignment is available from the first agent creation and the active workspace is preserved across browser sessions. See [User Workspaces](../user_workspaces/user_workspaces.md)
+- **Local Agent Kit** — An alternative on-ramp for users who already have a coding assistant: the `local-first` article and a matching Rotating Hints entry point at the public `/agent-start` surface, which lets someone build and test agents on their own machine before ever creating a Cinna account. See [Local Agent Kit](../local_agent_kit/local_agent_kit.md)
 
 ---
 
-*Last updated: 2026-04-10*
+*Last updated: 2026-09-02*

@@ -5263,7 +5263,8 @@ export type ServerChannelUpdate = {
  * Singleton server-wide configuration.
  *
  * Only one row ever exists; it is created lazily on first access. Holds the
- * admin-configurable disclaimer settings shown to users at login.
+ * admin-configurable disclaimer settings shown to users at login and the
+ * instance-level switches for public surfaces.
  */
 export type ServerConfig = {
     id?: string;
@@ -5271,6 +5272,7 @@ export type ServerConfig = {
     disclaimer_markdown?: string;
     disclaimer_display_mode?: string;
     disclaimer_version?: number;
+    local_agent_kit_enabled?: boolean;
     updated_at?: string;
     updated_by_id?: (string | null);
 };
@@ -5282,6 +5284,7 @@ export type ServerConfigUpdate = {
     disclaimer_enabled?: (boolean | null);
     disclaimer_markdown?: (string | null);
     disclaimer_display_mode?: (string | null);
+    local_agent_kit_enabled?: (boolean | null);
 };
 
 export type SessionCommandPublic = {

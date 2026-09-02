@@ -22715,6 +22715,11 @@ export const ServerConfigSchema = {
             title: 'Disclaimer Version',
             default: 1
         },
+        local_agent_kit_enabled: {
+            type: 'boolean',
+            title: 'Local Agent Kit Enabled',
+            default: true
+        },
         updated_at: {
             type: 'string',
             format: 'date-time',
@@ -22738,7 +22743,8 @@ export const ServerConfigSchema = {
     description: `Singleton server-wide configuration.
 
 Only one row ever exists; it is created lazily on first access. Holds the
-admin-configurable disclaimer settings shown to users at login.`
+admin-configurable disclaimer settings shown to users at login and the
+instance-level switches for public surfaces.`
 } as const;
 
 export const ServerConfigUpdateSchema = {
@@ -22775,6 +22781,17 @@ export const ServerConfigUpdateSchema = {
                 }
             ],
             title: 'Disclaimer Display Mode'
+        },
+        local_agent_kit_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Local Agent Kit Enabled'
         }
     },
     type: 'object',

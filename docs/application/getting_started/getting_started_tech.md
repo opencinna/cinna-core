@@ -7,6 +7,7 @@
 - `frontend/src/components/Onboarding/GettingStartedModal.tsx` — Encyclopedia modal with article navigation
 - `frontend/src/components/Common/RotatingHints.tsx` — Clickable rotating hints widget
 - `frontend/src/components/Chat/MessageInput.tsx` — Embeds `RotatingHints`, manages its own modal instance
+- `frontend/src/hooks/useLocalAgentKit.ts` — `useLocalAgentKitAvailable()`, the shared probe that gates the `local-first` article and its hint (see [Local Agent Kit — tech](../local_agent_kit/local_agent_kit_tech.md))
 - `frontend/src/routes/_layout/index.tsx` — Dashboard: credentials status query, conditional rendering, modal state
 
 ### Backend
@@ -39,17 +40,19 @@
 - Articles defined in a local `articles[]` config array (not fetched from backend)
 - `setSelectedArticle` passed into article content functions to enable cross-article navigation
 - "Start Building" gradient button closes the modal
-- Five articles (IDs): `gmail-quickstart`, `build-agent`, `share-credentials`, `conversation-vs-building`, `app-mcp-setup`
+- Six articles (IDs): `gmail-quickstart`, `build-agent`, `local-first`, `share-credentials`, `conversation-vs-building`, `app-mcp-setup`
 - Accepts optional `initialArticle` prop to open the modal at a specific article (used by the MCP Server card in Settings > Channels)
 - Exports `ArticleId` type for use by other components
+- `local-first` is conditionally hidden: `useLocalAgentKitAvailable()` (`frontend/src/hooks/useLocalAgentKit.ts`) filters `articles[]` into `visibleArticles` before rendering the sidebar or resolving `currentArticle`, so a disabled [Local Agent Kit](../local_agent_kit/local_agent_kit.md) instance never shows it (and never falls back onto it as the default article)
 
 ### RotatingHints (`frontend/src/components/Common/RotatingHints.tsx`)
 
 - Renders as a `<button>` element with darkened hover state
-- Hints array shuffled on mount via Fisher-Yates shuffle
+- Hints array shuffled on mount via Fisher-Yates shuffle (`useMemo`, re-run when the hints array or the Local Agent Kit probe result changes)
 - Rotates every 8 seconds using a `setInterval` (configurable via prop)
 - 600ms CSS fade transition between hints
 - Accepts `onClick` prop; parent passes `() => setShowGettingStarted(true)`
+- Appends one conditional hint (pointing at the `local-first` article) to the shuffled pool when `useLocalAgentKitAvailable()` is true; omitted entirely on an instance that disabled the public kit surface
 
 ## State Management — Dashboard
 
@@ -83,4 +86,4 @@ Location: `frontend/src/components/Chat/MessageInput.tsx`
 
 ---
 
-*Last updated: 2026-04-10*
+*Last updated: 2026-09-02*

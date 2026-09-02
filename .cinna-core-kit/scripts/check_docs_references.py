@@ -278,6 +278,16 @@ def main():
             drafts_dir = os.path.join(docs_dir, "drafts")
             if os.path.isdir(drafts_dir):
                 exclude_dirs.append(drafts_dir)
+
+        # docs/local_agent_kit/ is shipped content, not repo documentation. Its
+        # paths are resolved on the *user's* machine against a scaffolded agent
+        # folder (`docs/WORKFLOW_PROMPT.md`, `scripts/update_status.py`) or
+        # against their chosen root (`~/Documents/MyAgents`, `Local/`, `Cloud/`,
+        # `.cinna-kit/`). Checking them against this repo's tree compares two
+        # unrelated namespaces and reports every one of them as broken.
+        kit_dir = os.path.join(docs_dir, "local_agent_kit")
+        if os.path.isdir(kit_dir):
+            exclude_dirs.append(kit_dir)
         md_files = find_markdown_files(docs_dir, exclude_dirs=exclude_dirs)
 
         # Also include CLAUDE.md at project root

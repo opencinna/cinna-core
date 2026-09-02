@@ -40,6 +40,9 @@ from pathlib import Path
 
 KNOWLEDGE_TEMPLATE_NAME = "platform-knowledge-env"
 
+# ``knowledge/local-kit/`` — the Local Agent Kit, synced from ``docs/local_agent_kit/``.
+LOCAL_KIT_SUBDIR = "local-kit"
+
 
 def _knowledge_workspace_dir() -> Path:
     """Absolute path to the knowledge template's container workspace root."""
@@ -72,6 +75,48 @@ def guides_dir() -> Path:
     every knowledge re-sync.
     """
     return _knowledge_workspace_dir() / "knowledge" / "guides"
+
+
+def local_kit_dir() -> Path:
+    """``knowledge/local-kit/`` — the Local Agent Kit snapshot.
+
+    Unlike ``knowledge/guides/`` (hand-authored in place), this tree is a
+    *synced snapshot*: ``sync_platform_knowledge.py`` mirrors
+    ``docs/local_agent_kit/`` into it verbatim (step 3, clearing only this
+    subtree). ``docs/`` is not shipped in the backend image, so this is the only
+    copy of the kit available at runtime — the public ``/agent-start`` surface and the
+    account context package both read it from here.
+    """
+    return _knowledge_workspace_dir() / "knowledge" / LOCAL_KIT_SUBDIR
+
+
+def snapshot_cache_key(*dirs: Path) -> str:
+    """
+    Cheap cache key derived from the newest mtime AND file count across ``dirs``.
+
+    A redeploy that ships a freshly-synced snapshot bumps file mtimes, which
+    changes the key and invalidates any cached build automatically. The file
+    count is folded in so a pure deletion (which leaves the max mtime unchanged)
+    still invalidates the cache — belt-and-suspenders, since the sync script
+    rewrites whole trees anyway. Missing directories contribute nothing, so a
+    snapshot source that is absent in one deployment does not break the key.
+
+    Shared by every consumer that memoizes work derived from the snapshot
+    (``ContextPackageService``, ``LocalAgentKitService``) so they invalidate on
+    exactly the same signal.
+    """
+    newest = 0.0
+    count = 0
+    for root in dirs:
+        if not root.is_dir():
+            continue
+        for p in root.rglob("*"):
+            if p.is_file():
+                count += 1
+                mtime = p.stat().st_mtime
+                if mtime > newest:
+                    newest = mtime
+    return f"{newest:.6f}:{count}"
 
 
 # Tags to skip — internal/irrelevant for orchestration knowledge.

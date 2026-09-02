@@ -9,6 +9,7 @@ from app.api.main import api_router
 from app.api.routes.agent_hooks import router as agent_hooks_router
 from app.api.routes.cli import setup_router as cli_setup_router
 from app.api.routes.desktop_auth import router as desktop_auth_router  # noqa: F401 (used below)
+from app.api.routes.local_agent_kit import start_router as local_agent_kit_router
 from app.mcp.oauth_routes import router as mcp_oauth_router, wellknown_router as mcp_wellknown_router
 from app.mcp.upload_routes import router as mcp_upload_router
 from app.mcp.server import mcp_registry
@@ -433,7 +434,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["mcp-session-id", "mcp-protocol-version"],
+    # This middleware *replaces* any Access-Control-Expose-Headers a route set
+    # for itself, so a header a cross-origin caller must read has to be listed
+    # here. X-Kit-Version is how a browser-hosted assistant checks whether its
+    # copy of the Local Agent Kit is current without re-downloading it.
+    expose_headers=["mcp-session-id", "mcp-protocol-version", "X-Kit-Version"],
 )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
@@ -449,6 +454,14 @@ app.include_router(cli_setup_router)
 app.include_router(_desktop_wellknown_router)
 # Mobile app instance discovery (parallel /app-auth surface)
 app.include_router(_app_wellknown_router)
+
+# Local Agent Kit — public, unauthenticated /agent-start surface. Mounted twice on
+# purpose: /agent-start is the canonical pasteable URL (needs its own reverse-proxy
+# block, since it sits at the origin root next to the SPA), and /api/agent-start is
+# the alias every deployment already proxies via the universal /api/ rule.
+# All kit-internal links use the alias, so an un-updated proxy still works.
+app.include_router(local_agent_kit_router, prefix="/agent-start")
+app.include_router(local_agent_kit_router, prefix="/api/agent-start")
 
 # RFC 9728 Protected Resource Metadata (must be at root level)
 app.include_router(mcp_wellknown_router)

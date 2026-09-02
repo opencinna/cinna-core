@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from "react"
 
+import { useLocalAgentKitAvailable } from "@/hooks/useLocalAgentKit"
+
 interface RotatingHintsProps {
   hints?: string[]
   interval?: number
@@ -20,6 +22,11 @@ const defaultHints = [
   "You can drag-n-drop files to the message input area to send them to the agent",
 ]
 
+// Hints that are only true on some instances. Appended to whatever hint list
+// the caller passed, so no call site has to know the surface exists.
+const LOCAL_AGENT_KIT_HINT =
+  "Already use Claude Code or Codex? You can build agents locally first — see Getting Started"
+
 // Fisher-Yates shuffle algorithm
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array]
@@ -36,8 +43,20 @@ export function RotatingHints({
   className = "",
   onClick,
 }: RotatingHintsProps) {
+  // The local-first hint points at `/agent-start`, which 404s on an instance that
+  // switched the public kit off — so it is conditional, and conditional here
+  // rather than at each call site because every caller wants the same answer.
+  // The probe is one cached query per session, shared with the other surfaces.
+  const localAgentKitAvailable = useLocalAgentKitAvailable()
+
   // Shuffle hints once when component loads or hints prop changes
-  const shuffledHints = useMemo(() => shuffleArray(hints), [hints])
+  const shuffledHints = useMemo(
+    () =>
+      shuffleArray(
+        localAgentKitAvailable ? [...hints, LOCAL_AGENT_KIT_HINT] : hints,
+      ),
+    [hints, localAgentKitAvailable],
+  )
 
   const [currentIndex, setCurrentIndex] = useState(0)
   const [isVisible, setIsVisible] = useState(true)

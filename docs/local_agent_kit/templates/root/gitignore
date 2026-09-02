@@ -1,0 +1,22 @@
+# Secrets — never committed, never leave this machine.
+**/credentials/.env
+**/credentials/credentials.json
+**/*.env
+!**/credentials/.env.example
+
+# Python environments and build artefacts
+**/.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data: per-machine, regenerated, not part of the agent definition
+**/app-data/
+**/temp/
+
+# The kit is re-downloadable from the platform; do not version it here.
+.cinna-kit/
+
+# OS noise
+.DS_Store
+Thumbs.db

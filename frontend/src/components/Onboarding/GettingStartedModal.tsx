@@ -6,7 +6,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { BookOpen, Key, Bot, ChevronRight, Sparkles, ArrowRight, ToggleRight, Mail, MessageSquare, Network } from "lucide-react"
+import { BookOpen, Key, Bot, ChevronRight, Sparkles, ArrowRight, ToggleRight, Mail, MessageSquare, Network, Laptop } from "lucide-react"
+import { CopyPromptSnippet } from "@/components/Common/CopyPromptSnippet"
+import { useLocalAgentKitAvailable } from "@/hooks/useLocalAgentKit"
 import { cn } from "@/lib/utils"
 
 interface GettingStartedModalProps {
@@ -15,7 +17,7 @@ interface GettingStartedModalProps {
   initialArticle?: ArticleId
 }
 
-export type ArticleId = "gmail-quickstart" | "build-agent" | "share-credentials" | "conversation-vs-building" | "app-mcp-setup"
+export type ArticleId = "gmail-quickstart" | "build-agent" | "local-first" | "share-credentials" | "conversation-vs-building" | "app-mcp-setup"
 
 interface Article {
   id: ArticleId
@@ -172,6 +174,100 @@ const articles: Article[] = [
           </div>
           <p className="text-xs text-amber-600/80 dark:text-amber-400/80 mt-1 ml-6">
             Set up credentials first so your agent can connect to Gmail, calendars, and other services.
+          </p>
+        </button>
+      </div>
+    ),
+  },
+  {
+    id: "local-first",
+    title: "Build agents locally with your coding assistant",
+    icon: <Laptop className="h-4 w-4" />,
+    content: (onNavigate) => (
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            You can build agents on your own machine first, with the coding
+            assistant you already use — Claude Code, Codex, or anything that can
+            read a URL. Your assistant fetches a starter kit from this server and
+            follows the same conventions the platform uses, so an agent you build
+            locally moves to the cloud without being rewritten.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="font-medium text-base mb-2">Three steps</h3>
+          <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
+            <li>
+              <strong className="text-foreground">Paste this prompt</strong> into
+              your coding assistant, in whichever folder you want your agents to
+              live.
+            </li>
+            <li>
+              <strong className="text-foreground">Build in <code className="text-xs">Local/</code></strong>{" "}
+              — describe what you want; the assistant scaffolds the agent, writes
+              its scripts and prompts, and tests it with you on your machine.
+            </li>
+            <li>
+              <strong className="text-foreground">Say &ldquo;move it to the cloud&rdquo;</strong>{" "}
+              when it works — the assistant follows the kit&rsquo;s go-cloud
+              playbook and imports the agent into your account here.
+            </li>
+          </ol>
+        </div>
+
+        <CopyPromptSnippet />
+
+        <div>
+          <h3 className="font-medium text-base mb-2">What it creates</h3>
+          <pre className="bg-muted/50 rounded-lg p-4 border text-xs font-mono leading-relaxed overflow-x-auto">
+{`MyAgents/
+├── Local/       # your agents — everything runs on this machine
+├── Cloud/       # empty until you move an agent to the platform
+└── .cinna-kit/  # the conventions your assistant follows`}
+          </pre>
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            <strong className="text-foreground">No account is needed</strong>{" "}
+            until the cloud step. The starter kit is public and read-only — build
+            and test as much as you like locally first, and sign in only when you
+            want an agent to run here around the clock.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onNavigate("build-agent")}
+          className="w-full mt-2 p-3 rounded-lg border hover:bg-muted/50 transition-colors text-left group"
+        >
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">
+              Prefer to build right here instead?
+            </span>
+            <ArrowRight className="h-4 w-4 text-muted-foreground ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+          <p className="text-xs text-muted-foreground mt-1 ml-6">
+            How to Build An Agent — the same result, driven from this app.
+          </p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onNavigate("conversation-vs-building")}
+          className="w-full p-3 rounded-lg border hover:bg-muted/50 transition-colors text-left group"
+        >
+          <div className="flex items-center gap-2">
+            <ToggleRight className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">
+              Conversation vs Building
+            </span>
+            <ArrowRight className="h-4 w-4 text-muted-foreground ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+          <p className="text-xs text-muted-foreground mt-1 ml-6">
+            The same distinction applies once your agent is here.
           </p>
         </button>
       </div>
@@ -349,6 +445,13 @@ const articles: Article[] = [
 
 export function GettingStartedModal({ open, onOpenChange, initialArticle }: GettingStartedModalProps) {
   const [selectedArticle, setSelectedArticle] = useState<ArticleId>(initialArticle ?? "gmail-quickstart")
+  // The local-first article's whole content is a prompt pointing at `/agent-start`.
+  // An instance that switched that surface off would be handing the user a URL
+  // that 404s, so the article goes with it.
+  const localAgentKitAvailable = useLocalAgentKitAvailable()
+  const visibleArticles = localAgentKitAvailable
+    ? articles
+    : articles.filter((article) => article.id !== "local-first")
 
   useEffect(() => {
     if (open && initialArticle) {
@@ -356,7 +459,8 @@ export function GettingStartedModal({ open, onOpenChange, initialArticle }: Gett
     }
   }, [open, initialArticle])
 
-  const currentArticle = articles.find((a) => a.id === selectedArticle) || articles[0]
+  const currentArticle =
+    visibleArticles.find((a) => a.id === selectedArticle) || visibleArticles[0]
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -372,7 +476,7 @@ export function GettingStartedModal({ open, onOpenChange, initialArticle }: Gett
             </DialogHeader>
 
             <nav className="space-y-1 flex-1">
-              {articles.map((article) => (
+              {visibleArticles.map((article) => (
                 <button
                   key={article.id}
                   onClick={() => setSelectedArticle(article.id)}

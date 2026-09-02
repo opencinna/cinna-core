@@ -10,7 +10,8 @@ class ServerConfig(SQLModel, table=True):
     Singleton server-wide configuration.
 
     Only one row ever exists; it is created lazily on first access. Holds the
-    admin-configurable disclaimer settings shown to users at login.
+    admin-configurable disclaimer settings shown to users at login and the
+    instance-level switches for public surfaces.
     """
     __tablename__ = "server_config"
 
@@ -24,6 +25,10 @@ class ServerConfig(SQLModel, table=True):
     # Bumped on every content/mode change so acknowledged users re-see edits.
     disclaimer_version: int = Field(default=1)
 
+    # Local Agent Kit: whether this instance publishes the public, auth-free
+    # `/agent-start` surface. Opt-out, so a fresh instance ships the kit.
+    local_agent_kit_enabled: bool = Field(default=True)
+
     # Audit
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_by_id: uuid.UUID | None = Field(
@@ -36,6 +41,7 @@ class ServerConfigUpdate(SQLModel):
     disclaimer_enabled: bool | None = None
     disclaimer_markdown: str | None = None
     disclaimer_display_mode: str | None = None
+    local_agent_kit_enabled: bool | None = None
 
 
 class DisclaimerPublic(SQLModel):

@@ -137,6 +137,17 @@ class Settings(BaseSettings):
     # otherwise fail with a confusing "No such command" error). Bump this when a
     # setup-flow change requires a newer CLI.
     MINIMUM_CLI_VERSION: str = "0.2.3"
+    # Package spec used to install the CLI, rendered into the Local Agent Kit's
+    # go-cloud guide (`uv tool install <spec>`). A dev instance points this at a
+    # VCS or local path spec (`git+https://…`, `-e /path/to/cinna-cli`) so the
+    # kit tells the user how to install the CLI *this* instance expects.
+    CINNA_CLI_INSTALL_SPEC: str = "cinna-cli"
+
+    # ── Local Agent Kit (public /agent-start surface) ──────────────────────────
+    # The kit surface is unauthenticated by design and serves only static,
+    # cached, rendered content — identical for every caller. The limit is a
+    # per-IP backstop against tarball hammering, not a billing control.
+    LOCAL_AGENT_KIT_RATE_LIMIT_PER_MIN: int = 120
 
     # ── Environment console (web terminal + logs follow) ─────────────────
     # Idle timeout for an interactive PTY shell: the env-core /shell/pty

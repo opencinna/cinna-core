@@ -28,6 +28,7 @@ Singleton row — only one ever exists; created lazily on first access.
 | `disclaimer_markdown` | `str` (Text) | `""` | Markdown content shown in the modal |
 | `disclaimer_display_mode` | `str` | `"new_users"` | `"new_users"` or `"every_login"` |
 | `disclaimer_version` | `int` | `1` | Incremented on content or mode change |
+| `local_agent_kit_enabled` | `bool` | `True` | Instance opt-out of the public `/agent-start` Local Agent Kit surface — unrelated to the disclaimer fields above; see [Local Agent Kit — tech](../local_agent_kit/local_agent_kit_tech.md) |
 | `updated_at` | `datetime` | `now(UTC)` | Timestamp of last update |
 | `updated_by_id` | `uuid.UUID \| None` | `None` | FK → `user.id` (SET NULL on delete) |
 
@@ -40,6 +41,7 @@ All fields optional; sent as the `PUT /admin/server-config` request body.
 | `disclaimer_enabled` | `bool \| None` |
 | `disclaimer_markdown` | `str \| None` |
 | `disclaimer_display_mode` | `str \| None` |
+| `local_agent_kit_enabled` | `bool \| None` |
 
 ### `DisclaimerPublic` (Pydantic, no table)
 
@@ -69,7 +71,7 @@ Minimal projection returned to any authenticated user.
 - **Auth**: Superuser only
 - **Body**: `ServerConfigUpdate` (all optional fields)
 - **Response**: Updated `ServerConfig` row
-- **Side effect**: Increments `disclaimer_version` if `disclaimer_markdown` or `disclaimer_display_mode` changed; stamps `updated_at` and `updated_by_id` on every call
+- **Side effect**: Increments `disclaimer_version` if `disclaimer_markdown` or `disclaimer_display_mode` changed; stamps `updated_at` and `updated_by_id` on every call. `local_agent_kit_enabled` is copied through the same partial update but never participates in the version-bump check
 
 ## Service Layer
 
@@ -111,7 +113,7 @@ Non-dismissible user-facing dialog.
 
 - Route path: `/admin/server-configuration`
 - `beforeLoad` guard: redirects to `/login` if not authenticated; redirects to `/` if not `is_superuser`
-- Renders `HashTabs` with a single tab `interface` → `<DisclaimerCard />`
+- Renders `HashTabs` with a tab `interface` → a two-column grid holding `<DisclaimerCard />` and `<LocalAgentKitCard />` (see [Local Agent Kit — tech](../local_agent_kit/local_agent_kit_tech.md))
 - Page header: "Server Configuration" / "Configure server-wide settings"
 
 ### `AdminMenu` (`frontend/src/components/Sidebar/AdminMenu.tsx`)
@@ -156,4 +158,4 @@ Operation: Creates the `server_config` table with all columns described above. N
 
 ---
 
-*Last updated: 2026-06-14*
+*Last updated: 2026-09-02*
