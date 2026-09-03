@@ -286,20 +286,39 @@
 
 ### Backend — Credential-minting gate
 
-- `backend/app/api/deps.py` — `forbid_cli_exchanged_desktop_session` (exported as
-  `NoCliExchangedSession`). Refuses, with 403, any request whose JWT belongs to a
-  desktop session created by `POST /account/desktop-token`. Applied to the routes
-  matching the property *credential-minting surfaces reachable from an ordinary
-  user JWT that produce a token outliving the revoke cascade*: `POST /cli/setup-tokens`,
-  `POST /cli/account/setup-tokens`, `POST /cli/account/login/approve` (which
-  mints an account token with no role gate at all), and the desktop + mobile
-  `POST /consent` endpoints (approving mints a whole new native session with
-  clean `browser_consent` provenance and no cascade link — the same
-  self-replication shape one router over). Deliberately **not** applied to revocation or listing routes — a
-  compromised session must never be able to stop its victim revoking things.
-  Scoped by provenance, not client kind: a browser-consented desktop session is
-  unaffected. **Re-derive the route set rather than trusting this list** — a new
-  minting route added later inherits the loop silently.
+- `backend/app/api/deps.py` — `ensure_not_cli_exchanged_session(db, external_client_id)`,
+  the framework-free core, plus `forbid_cli_exchanged_desktop_session`, its
+  `Depends` adapter (exported as `NoCliExchangedSession`), which holds no logic
+  of its own. Refuses, with 403, any request whose JWT belongs to a desktop
+  session whose current grant came from `POST /account/desktop-token`. Applied
+  to the routes matching the property, stated no wider than the gate's own
+  rationale: *surfaces that mint a credential of a class the account-token
+  revoke cascade is built to reach — an account CLI token, a per-agent CLI
+  token, or a native desktop/mobile session — through a path that records no
+  `minted_by_account_token_id` link*. Two application shapes: as a route
+  dependency on `POST /cli/setup-tokens`, `POST /cli/account/setup-tokens` and
+  `POST /cli/account/login/approve` (which mints an account token with no role
+  gate at all), and as an **in-handler call on the approving branch** of the
+  desktop + mobile `POST /consent` endpoints (approving mints a whole new native
+  session with clean `browser_consent` provenance and no cascade link — the same
+  self-replication shape one router over; deny mints nothing and must stay
+  reachable, which is why those two are not route dependencies). Deliberately
+  **not** applied to revocation or listing routes — a compromised session must
+  never be able to stop its victim revoking things. Scoped by provenance, not
+  client kind: a browser-consented desktop session is unaffected. The property
+  is deliberately narrower than "any token outliving the cascade", which would
+  also select agent-API keys and A2A tokens — listed and revocable through their
+  own routes, and excluded by decision. **Known residue outside the property:**
+  the MCP OAuth consent (`routes/mcp_consent.py`) mints a credential that
+  outlives the cascade and has no owner-reachable revocation; that is a
+  revocation gap on the MCP side, tracked separately. **Re-derive the route set
+  against the property rather than trusting this list** — a new minting route
+  added later inherits the loop silently. **That re-derivation is now executed by a test**:
+  `backend/tests/architecture/credential_minting_gate_test.py` derives the set from what the
+  two cascade functions revoke (sinks) and what auth-free routes redeem into them (proxies),
+  walks each `CurrentUser` route's receiver-resolved call closure, and asserts the gate in
+  either shape — with a permanent red-proof against a synthetic ungated route and against
+  each real route with its gate stripped in memory. Its docstring lists what it cannot see.
 
 ### Backend — Security Events
 
@@ -492,7 +511,7 @@ Response:
 | `GET` | `/api/v1/cli/account/user-workspaces` | 200 | List the account user's own workspaces (catalogue for `cinna account user-workspace`); response `UserWorkspacesPublic` |
 | `GET` | `/api/v1/cli/account/agents` | 200 | List accessible agents with `can_build` / `is_foreign_install` / `has_active_environment` |
 | `POST` | `/api/v1/cli/account/agents/{agent_id}/mint` | 200 / 403 / 404 | Mint per-agent child token; 403 / 404 on `can_build` failures |
-| `POST` | `/api/v1/cli/account/desktop-token` | 200 / 401 / 403 / 429 | Exchange the account token for a Cinna Desktop access + refresh pair bound to `client_id` (lazily registered when absent), plus the account `email`. No role gate. 403 when `client_id` is revoked / unknown / another user's (one merged status — the id is not probeable). Rate-limited per account token (`DESKTOP_TOKEN_EXCHANGE_LIMIT_PER_MIN`, default 10) because a `client_id`-less call creates rows. Body `AccountDesktopTokenBody`, response `AccountDesktopTokenResponse`. Issuance runs through `DesktopAuthService`; see [Desktop App Authentication](../desktop_auth/desktop_auth_tech.md) |
+| `POST` | `/api/v1/cli/account/desktop-token` | 200 / 401 / 403 / 429 | Exchange the account token for a Cinna Desktop access + refresh pair bound to `client_id` (lazily registered when absent), plus the account `email`. No role gate. 403 when `client_id` is revoked / unknown / another user's (one merged status — the id is not probeable). Rate-limited per account token (`DESKTOP_TOKEN_EXCHANGE_LIMIT_PER_MIN`, a module constant in `account_cli_service.py` set to 10 — not a `Settings` field) because a `client_id`-less call creates rows. Body `AccountDesktopTokenBody`, response `AccountDesktopTokenResponse`. Issuance runs through `DesktopAuthService`; see [Desktop App Authentication](../desktop_auth/desktop_auth_tech.md) |
 | `DELETE` | `/api/v1/cli/account/tokens/children/{child_token_id}` | 200 / 401 / 404 | Revoke a child token minted by this account token (`cinna agent unsync`); idempotent on already-revoked; 404 for any token not provenance-matched to the calling account token |
 | `POST` | `/api/v1/cli/account/agents` | 200 / 403 / 404 | Create agent (thin client); `require_developer`-gated; body `AccountAgentCreateBody`; response `AgentPublic`; 404 if `user_workspace_id` is not owned by the caller |
 | `POST` | `/api/v1/cli/account/connect/agent-api` | 200 / 400 / 403 / 404 | Wire consumer → producer REST API; `require_developer`-gated; body `AccountConnectAgentApiBody`; response `ConnectAgentApiResponse` |

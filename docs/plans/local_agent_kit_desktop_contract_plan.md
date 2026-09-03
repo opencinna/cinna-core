@@ -4532,6 +4532,439 @@ residue of earlier runs, and their divergent bytes (192441 vs 192429) are the tw
 compilers, not a stale copy. **A tree-state claim goes stale faster than any other kind**
 (Bucket 26i); this one was re-derived after the last test run rather than before the first.
 
+### Bucket 28 — the §8.2 verification pass: two properties that did not hold, a credential that outlives every revocation control, and a stranger's approval
+
+**Status: VERIFIED (recording run, §8.2 verification round).** §8.2 is outside this plan's
+phases (see the opening "Out of scope" list and the Standing checklist's scoping note) and
+was handed to a separate run; that run's verification pass is recorded here because §0 is the
+answer-back's sole source and §11 of that document was still a placeholder. Every protection
+claim below carries the grep or transcript that shows it. Every figure is re-derived in this
+bucket. Where this recorder re-ran a reproduction and the handed-over characterisation did not
+survive it, the correction is recorded as a correction, not silently applied.
+
+**28a — Two of the three properties the pass was asked to verify did NOT hold as asserted, in
+code that had already been committed.** Landed in commit `eaa3e78c`; the tests that now pin
+them are found by name rather than quoted:
+
+```
+$ grep -n "def test_cli_exchanged_session_may_deny\|def test_supersession_does_not_sign_out" \
+    backend/tests/api/cli/test_account_desktop_token.py
+829:def test_cli_exchanged_session_may_deny_the_consent_it_may_not_approve(
+979:def test_supersession_does_not_sign_out_the_users_other_desktops(
+```
+
+*(i) The credential-minting gate refused the safety action.* It was a route-level
+`dependency` on both `POST /consent` routes, so it refused `action="deny"` — which mints
+nothing, and which the gate's own docstring reserves as never-blocked. It now runs inside the
+handler on the minting branch, keyed `!= "deny"` so an action added later fails closed, and is
+split into a framework-free core (`ensure_not_cli_exchanged_session`) plus an injection adapter
+(`forbid_cli_exchanged_desktop_session`, aliased `NoCliExchangedSession`):
+
+```
+$ grep -rn "NoCliExchangedSession\|ensure_not_cli_exchanged_session" backend/app | grep -v deps.py
+backend/app/api/routes/desktop_auth.py:28:    ensure_not_cli_exchanged_session,
+backend/app/api/routes/desktop_auth.py:193:    see ``ensure_not_cli_exchanged_session`` for the full argument.
+backend/app/api/routes/desktop_auth.py:200:        ensure_not_cli_exchanged_session(session, external_client_id)
+backend/app/api/routes/cli.py:33:    NoCliExchangedSession,
+backend/app/api/routes/cli.py:280:    dependencies=[NoCliExchangedSession],
+backend/app/api/routes/cli.py:596:    dependencies=[NoCliExchangedSession],
+backend/app/api/routes/cli.py:1878:    dependencies=[NoCliExchangedSession],
+backend/app/api/routes/app_auth.py:34:    ensure_not_cli_exchanged_session,
+backend/app/api/routes/app_auth.py:191:        ensure_not_cli_exchanged_session(session, external_client_id)
+```
+
+So the gate now has **two application shapes** — three route dependencies and two in-handler
+calls on a body-field branch — which is what 28g's feasibility question is about.
+
+*(ii) The multi-device blast radius was documented nowhere and enforced by nothing.* Widening
+the supersede-revoke's filter from one client row to the whole user passed the suite. It is
+now pinned by the second test above, which holds two clients and proves the revoke fired on
+one before asserting it did not reach the other.
+
+*(iii) The consent ownership check protected deny by accident.* Both branches consume the
+pending request; only approve happened to resolve a client, so a deny on someone else's named
+client was refused by the shape of the code rather than by a check. The check is hoisted above
+the branch; the lazy-registration case, which names no client, stays approvable by any
+authenticated holder of the nonce, by decision (28c, 28e).
+
+**28b — THE LEAD FINDING: an MCP OAuth credential minted by a CLI-exchanged desktop session
+survives every revocation control the product has.** Reproduced by execution in one run, with
+a positive control in the same run, against the committed tree at `701ba7e5`. The scratch
+test drove the real App MCP OAuth dance (DCR → authorize → `POST /mcp/consent/{nonce}/approve`
+→ `POST /mcp/oauth/token`) with the exchanged session's JWT as the consenting identity, then
+revoked the account token through `DELETE /cli/account/tokens/{id}`. The scratch file was
+removed afterwards and is not in the tree, so this is recorded as a **method and transcript**,
+not a checked artefact:
+
+```
+DESKTOP CONSENT APPROVE by the same session -> 403 (gate)
+MCP CONSENT APPROVE by CLI-exchanged desktop session -> 200
+MCP REFRESH before revocation -> 200
+REVOKE ACCOUNT TOKEN -> {'message': 'Account token revoked; 2 session(s) disconnected'}
+DESKTOP SESSION /users/me after revocation -> 401
+DESKTOP REFRESH after revocation -> 400
+MCP REFRESH after account-token revocation -> 200
+MCP REFRESH again (refresh token not rotated) -> 200
+APP SESSIONS after revocation -> []
+POST /mcp/oauth/revoke (no auth, token value) -> 200
+MCP REFRESH after /mcp/oauth/revoke -> 400 {"detail":"Refresh token revoked"}
+```
+
+The first two lines are the contrast that makes this a gap in the *gate* and not only in
+revocation: the same session is refused on the desktop consent surface and accepted on the MCP
+one. "2 session(s) disconnected" is the account token plus the desktop client — the MCP
+credential is not a session the cascade knows about.
+
+**One handed-over characterisation did not survive re-derivation.** The handover said the
+credential "refreshes indefinitely". It does not: `AppMCPOAuthService.refresh_access_token`
+issues a fresh one-hour access token and does **not** rotate the refresh token, whose expiry is
+set once at issue:
+
+```
+$ grep -n "timedelta" backend/app/services/app_mcp/app_mcp_oauth_service.py
+12:from datetime import datetime, timedelta, UTC
+170:            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+237:            expires_at=datetime.now(UTC) + timedelta(hours=1),
+246:            expires_at=datetime.now(UTC) + timedelta(days=30),
+320:            expires_at=datetime.now(UTC) + timedelta(hours=1),
+375:            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+```
+
+(`:237`/`:246` are the access and refresh tokens at code exchange; `:320` is the access token
+the refresh grant issues, and there is no refresh-token line in that method; `:170` and `:375`
+are the consent request and authorization code. **This transcript was re-taken once already
+within this round**: the first capture predated this same round's three-line docstring edit to
+the file it greps, so every line number was off by three by the time a reviewer re-ran it — the
+Standing checklist's concurrent-edit rule, met by the recorder on its own bucket. The
+identifiers are what to re-derive against; the numbers are as of this capture.)
+
+So the accurate statement is: **the credential stays usable for up to thirty days from issue,
+through any number of refreshes, with nothing the user can do about it.** Thirty days is not
+"indefinitely", and the correction matters in the direction that helps the reader — it is a
+bounded window, and it is the *whole* of the window.
+
+**The revocation control exists, is wired, and is structurally unreachable by the person who
+needs it.** Earlier in the previous session the coordinator asserted the revoke route had "no
+route caller anywhere"; that was a probe scoped to `backend/app/api/routes/` and it missed
+`backend/app/mcp/`. Corrected by the artefact:
+
+```
+$ grep -n -A15 '@router.post("/revoke")' backend/app/mcp/oauth_routes.py | grep 'Form\|revoke_token\|CurrentUser'
+343-def revoke_token(
+344-    token: str = Form(...),
+345-    client_id: str = Form(""),
+346-    client_secret: str = Form(""),
+355-        AppMCPOAuthService.revoke_token(db, token)
+357-        MCPOAuthService.revoke_token(db, token)
+```
+
+No `CurrentUser` in that signature: the route takes the token **value** as a form field and
+enforces no authentication. And nothing lists the token so the owner could discover the value:
+
+```
+$ grep -rn "AppMCPToken\|app_mcp_token" backend/app/api/routes
+(no output)
+$ grep -rn "MCPToken\b" backend/app/api/routes
+(no output)
+$ grep -rln "AppMCPToken\b" backend/app
+backend/app/mcp/app_token_verifier.py
+backend/app/mcp/oauth_routes.py
+backend/app/models/__init__.py
+backend/app/models/app_mcp/app_mcp_token.py
+backend/app/services/app_mcp/app_mcp_oauth_service.py
+```
+
+(The empty greps are non-vacuous: the same pattern over `backend/app` returns the readers
+shown.) The per-connector table has a listing, and it is filtered to exclude OAuth-issued rows
+by construction — `MCPDirectTokenService.list_tokens` selects
+`MCPToken.token_type == "direct"`, and the only frontend reader is
+`McpDirectTokensManager.tsx`. So OAuth-issued MCP tokens of either kind appear in no card and
+no list. Their only teardown is the foreign key:
+
+```
+$ grep -n "foreign_key=\"user.id\"" backend/app/models/app_mcp/app_mcp_token.py
+16:    user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", index=True)
+```
+
+**Why this is worse than an absent control, stated as a mechanism.** Anyone who greps for a
+revoke route finds one and stops looking. The control's *presence* is what ends the search;
+its *reachability* is what would have ended the credential. The thief holds exactly what the
+route requires (the value); the victim holds nothing it accepts.
+
+**Team lead's ruling: correct our own documentation, record it, disclose it, and raise the
+revocation gap separately.** Do NOT wire these tokens into the cascade or widen the gate in
+this branch — that is another feature's territory. The documentation correction leads because
+`docs/application/desktop_auth/desktop_auth.md` told a user that revoking the account token
+ends the desktop session and its children and hedged only with "not a complete remediation";
+it never said the session can mint a credential that outlives every revocation control. A user
+told the revocation ended it stops looking, and nothing in the system corrects them. Corrected
+in this round in the desktop-auth business doc, the account-CLI workspace docs, the gate's
+docstring, and `docs/README.md`'s account-CLI row (which claimed the cascade "cannot be
+outlived").
+
+**28c — A stranger who knows a consent nonce can approve it, and the victim's app is then
+authenticated as the stranger.** Pre-existing, not caused by this branch. The reproduction is
+committed and durable:
+
+```
+$ grep -n "def test_token_response_email_reveals_a_substituted_account" \
+    backend/tests/api/desktop_auth/test_desktop_auth.py
+1895:def test_token_response_email_reveals_a_substituted_account(
+```
+
+The victim's desktop starts the flow and holds the PKCE verifier; the stranger, holding only
+the nonce, approves; the victim's desktop redeems the code and `/userinfo` returns the
+stranger's email. Everything the victim then does lands in the stranger's account.
+
+**This inverts an argument the previous round was about to send to the desktop team**: that
+deny is a destruction primitive while approve "mainly harms the misuser". The deny half stands
+— any authenticated holder of the nonce can burn a pending request, and that is the residual
+the lazy-registration test pins by decision. The approve half is wrong: **approve is the more
+severe branch.** No residual text may describe approve as self-limiting.
+
+**Ruling: add the account identity to the token response, additive and non-breaking.**
+Implemented in `eaa3e78c`: `_token_payload` is the single writer of the response shape and
+carries `email`; three issuance paths that each built the dict independently now share it, so
+a field cannot reach some paths and not others. **The field makes the substitution visible; it
+does not prevent it.** Prevention is a check the *client* performs — comparing the returned
+address with the account the user expected — and that obligation is disclosed to the desktop
+team in §11 of the answer-back as theirs.
+
+**28d — General results, each with the instance that produced it.**
+
+- **A characterisation goes stale by adjacency, not only by copying.** Two surfaces described
+  in one message with a property asserted of one read as true of both. Instance: the A2A
+  token surface was described adjacent to the MCP one and inherited "no revocation path"; A2A
+  has its own list and revoke routes (`backend/app/api/routes/access_tokens.py`, prefix
+  `/agents/{agent_id}/access-tokens`). Only MCP is exceptional.
+- **A rule that no artefact executes will diverge from the code it governs, with nothing to
+  report it.** The gate's docstring says "re-derive the set rather than trust a list". By this
+  plan's own taxonomy (Standing checklist: structural prevents, heuristic detects, intention
+  neither) that is an intention. 28g is the attempt to make it an artefact.
+- **A control that exists but is structurally unreachable by the person who needs it is worse
+  than an absent one** (28b). The search ends at the control's existence.
+- **The inert-fix shape, now twice.** A ruling names a mechanism; whether that mechanism
+  exists in the flow is a question about the code, not about the ruling. Second instance this
+  feature: an owner-stamping fix for the consent request was ruled, then withdrawn when the
+  consent POST turned out to be itself the first authenticated touch — stamping and spending
+  in one request would have bound nothing while looking correct.
+- **The re-derivation obligation applies upward.** The coordinator's own "no route caller
+  anywhere" (28b) was false and would have shipped; it was caught only because the obligation
+  was standing before the sentence was written.
+- **Probes scoped to the author's paraphrase rather than to the artefact hit every kind of
+  participant in the session**, and the mechanism is the same each time: wrong span (a handler
+  body where the claim covered the request path), wrong process's exit code
+  (`grep ... | head; echo $?` reports `head`'s status, not `grep`'s), a file count that
+  included unrelated `/tmp` residue, and a directory one level too narrow (`api/routes/` where
+  the route lived in `mcp/`). Recorded as the mechanism, not as a tally: a count reads as the
+  strength of a claim while being the part that decays.
+
+**28e — Composition-round findings, each verified by grep before any prose was changed.**
+
+*(i) The gate's derivation rule was too broad.* Its imperative asked for "credential-minting
+surfaces reachable from an ordinary user JWT that produce a token outliving the cascade"
+while its own rationale paragraph requires "a **fresh** account CLI token — one carrying no
+provenance link to the original". The stated property over-selects by construction: it
+selects `POST /agents/{agent_id}/agent-api/keys`, which mints an external key reachable from a
+user JWT that no cascade reaches, and which the team lead deliberately excluded (it is listed
+and revocable through its own routes):
+
+```
+$ grep -n "APIRouter(\|@router.post(\"/keys\"" backend/app/api/routes/agent_api.py
+54:router = APIRouter(prefix="/agents/{agent_id}/agent-api", tags=["agent-api"])
+439:@router.post("/keys", response_model=AgentApiKeyCreated)
+$ grep -c "NoCliExchangedSession\|ensure_not_cli_exchanged_session" backend/app/api/routes/agent_api.py
+0
+```
+
+The imperative is narrowed in this round to the property the shipped set actually satisfies,
+derived from what `revoke_account_token` cascades over — account CLI tokens, per-agent child
+CLI tokens, and desktop clients, each found by `minted_by_account_token_id`:
+
+```
+$ grep -n "minted_by_account_token_id == token.id" backend/app/services/cli/account_cli_service.py
+499:                CLIToken.minted_by_account_token_id == token.id,
+505:                DesktopOAuthClient.minted_by_account_token_id == token.id,
+561:            CLIToken.minted_by_account_token_id == token.id,
+```
+
+So: *surfaces that mint a credential of a class the account-token cascade is built to reach —
+an account CLI token, a per-agent CLI token, or a native desktop/mobile session — through a
+path that records no link to the account token.* That selects exactly the five gated sites
+and nothing else. The re-derive instruction is kept; it was pointed at the wrong property,
+not wrong in itself. **Under the narrowed property, the MCP consent path is the sole surface
+reachable from the exchanged session that mints a credential outliving the cascade AND has no
+user-reachable revocation** — the residue 28b describes, disclosed rather than gated.
+
+*(ii) `DesktopAuthService.register_client`'s docstring claimed it "takes the `browser_consent`
+default".* There is no such default: the model field is `origin: str = Field(max_length=32)`
+with no Python default, and migration `c9a2f5b1d604` sets `server_default=None`
+(`op.alter_column('desktop_oauth_client', 'origin', server_default=None)` at its line 44). The
+uncalled function would raise a NOT NULL violation, not mislabel a row. Corrected to say so.
+
+*(iii) `AppMCPOAuthService.register_client`'s docstring said "any authenticated user can
+connect"* on a path that enforces no authentication — `POST /mcp/oauth/register` is
+`def register_client(body: DCRRequest)` with no `CurrentUser`, which is the unauthenticated
+DCR that makes an attacker-controlled client possible in the first place. Corrected.
+
+*(iv) The old gate name survived in prose as "the" gate* after the rename made it the adapter.
+Found by identifier, not by wording:
+
+```
+$ grep -rn "forbid_cli_exchanged_desktop_session" docs backend/app backend/tests | grep -v "plans/\|deps.py"
+backend/app/services/cli/account_cli_service.py:1898:        ending anything. ``forbid_cli_exchanged_desktop_session`` closes that
+docs/application/cinna_cli_integration/account_cli_workspace_tech.md:289:- `backend/app/api/deps.py` — `forbid_cli_exchanged_desktop_session` (exported as
+docs/application/desktop_auth/desktop_auth_tech.md:182:- `is_cli_exchanged_session(session, external_client_id) -> bool` — Predicate behind the credential-minting gate (`forbid_cli_exchanged_desktop_session` in `api/deps.py`). Reads the provenance `_stamp_grant` maintains, so a session since re-authorized in a browser answers False. Returns False for anything that is not a live desktop session — safe rather than fail-open, because a revoked client cannot authenticate at all
+```
+
+Each corrected to name the core function, with the adapter named as the adapter. The
+desktop-auth tech doc's consent row additionally said "Gated by `NoCliExchangedSession`",
+which after 28a(i) describes the defect rather than the fix.
+
+*(v) The lazy-registration residual test justified its assertions with the PKCE argument* —
+sound, and about the wrong harm. Its assertions are permanent by ruling (no owner column, no
+migration, no code change); its stated reason now gives the request-burning account, with the
+PKCE point labelled as answering a different attack (code interception), and points at the
+substitution test for the branch that is not self-limiting. Changed after the residual
+wording in the docs settled, so the two tell one story.
+
+**28f — Recorded, not acted on.** `connect_agent_api` mints a connection token that never
+expires and that the cascade does not reach:
+
+```
+$ grep -n "Connection tokens never expire" backend/app/services/agent_api/agent_api_token_service.py
+653:        Connection tokens never expire (``expires_at`` is NULL). External keys
+```
+
+Real but narrow: it is revocable through `DELETE /agents/{agent_id}/agent-api/connections/{token_id}`
+and listed beside it. It does not change the MCP ruling. Agent-API external keys and A2A
+access tokens are both out: A2A is a distinct surface from agent-API keys — different table,
+router, service and token format — and is agent-scoped, listed and revocable
+(`access_tokens.py` above). The agent-API model's docstring says it *mirrors* A2A; a thing
+describing itself as mirroring another is not that thing.
+
+**28g — The enumeration test: commissioned behind a feasibility gate, found expressible, built,
+and shown red against the real tree.** The gate's docstring instruction "re-derive the set rather
+than trust a list" is now executed by an artefact:
+`backend/tests/architecture/credential_minting_gate_test.py` (placed under `tests/architecture/`,
+which `tests/README.md` defines for structural invariants over the source tree — the API-only rule
+does not apply there). Four tests:
+
+```
+$ grep -n "def test_" backend/tests/architecture/credential_minting_gate_test.py
+616:def test_hand_written_inputs_all_exist() -> None:
+655:def test_every_derived_minting_route_carries_the_gate() -> None:
+715:def test_detector_reports_a_new_ungated_minting_route() -> None:
+808:def test_removing_the_gate_from_a_real_route_is_reported() -> None:
+```
+
+**How it derives the set without a list.** Sinks are the models named in `select(...)`/`db.get(...)`
+inside the two cascade functions (`AccountCLIService.revoke_account_token`,
+`DesktopAuthService.revoke_clients_for_account_token`) — derived: `CLIToken`, `DesktopOAuthClient`,
+`DesktopRefreshToken`. Proxies are bearer-shaped models (`is_used`/`used_at` **and** `expires_at`)
+read by an auth-free route whose call closure constructs a sink — derived: `CLISetupToken`,
+`DesktopAuthCode`, from exactly four auth-free redeeming routes (the two `/token` endpoints and the
+two setup-token exchanges). A route with `CurrentUser` whose receiver-resolved call closure (run to a
+fixpoint over an SCC condensation, not a fixed depth) constructs a sink or proxy must carry the gate,
+detected in either shape: the gate in the live route's `route.dependant` tree, or a direct call to
+`ensure_not_cli_exchanged_session` in the handler's **own** body — and for the second shape the call's
+nearest enclosing `if` must test `body.action != "deny"`, which makes the docstring's fail-closed
+rule executable. The only hand-written inputs are the two cascade function names, the three gate
+identifiers and the three auth-annotation names, and the first test asserts each resolves, so a
+rename fails loudly instead of emptying the derivation into a green no-op. Selected at baseline:
+the five gated routes, three by dependency and two in-handler, and nothing else;
+`routes/mcp_consent.py` is asserted **not** selected, with the note that it must not be "fixed" by
+gating it (28b, 28e(i)).
+
+**Shown red two ways.** In the file, permanently: a synthetic ungated `CurrentUser` handler calling
+`DeviceLoginService.approve` is reported; the same handler gated on `!= "deny"` is clean; gated on
+`== "approve"` it is a branch-shape problem; and each of the five real routes with its gate stripped
+from an in-memory copy of its AST is reported. And once, by this recorder, against the **real tree**:
+`dependencies=[NoCliExchangedSession]` removed from `/account/login/approve` in `routes/cli.py`,
+the test run, the file restored from a saved copy and proven byte-identical:
+
+```
+E           POST /api/v1/cli/account/login/approve (cli.py::device_login_approve)
+E       assert not ['POST /api/v1/cli/account/login/approve (cli.py::device_login_approve)']
+restore: before=9308f5b40786e988e5bebc6733dc3806 after=9308f5b40786e988e5bebc6733dc3806
+RESTORED-IDENTICAL
+```
+
+Recorded as a method: the mutation left no residue, so there is nothing to check afterwards.
+
+**Two things the prototype got right by luck, found only because the implementer re-ran it in the
+container rather than trusting the study's host run.** (i) Inside the backend container
+`app/env-templates/` holds a materialised virtualenv (~10,200 `.py` files, absent from a checkout);
+an unpruned `os.walk("app")` indexed ~80,000 methods instead of ~2,200, climbed past 1.6 GB and had
+to be killed. The shipped test prunes `env-templates`, `alembic`, `__pycache__`, `.venv`,
+`node_modules`, `site-packages`, `.git`, and the docstring records it as a scope decision — unpruned,
+the derivation would depend on whether a venv happens to exist and vendored class names would inject
+spurious receiver-resolved edges. (ii) The host prototype ran under Python 3.9, which raises
+`SyntaxError` on every app file containing a `match` statement, and the prototype's
+`except SyntaxError: continue` swallowed those silently — so the host baseline was computed over a
+strictly smaller tree. Both effects cancelled here (same sets either way); **the study's agreement
+with the container was partly luck, and "the prototype reproduces" was true of a different tree
+than the one that ships.** Same family as 27e's container-versus-host reading: name which tree a
+run exercised.
+
+**What the test does not see, documented in its module docstring so a maintainer does not believe
+it is watching something it is not:** dynamic dispatch (getattr, dispatch dicts, partials, background
+tasks); non-Name receivers (`self.svc.m()`, local aliases); a cascade class that ought to be
+cascaded but is not yet in the two cascade functions (invisible here, loud in the cascade's own
+tests); proxy-shape drift; auth-annotation drift in both directions; and branch-insensitivity — the
+closure cannot tell a sink sits only on a non-minting branch, which is why the consent routes are
+over-selected and pass on the in-handler detector, and why a future two-action route gated on the
+wrong branch would pass (the `!= "deny"` assertion narrows that hole; it does not close it). A
+simple-name call graph, without receiver resolution, over-selects three `routes/mcp_providers.py`
+routes through a `register_client` name clash between `MCPProviderOAuthService` and
+`DesktopAuthService` — the study traced the path, and the shipped test resolves by receiver.
+
+**28h — Review round, two notes recorded not acted on, and final tree state, re-derived at the end
+of this run.** A read-only reviewer reproduced every protection-shaped claim in this round's prose
+against the code (the gate's two shapes and five sites; the unauthenticated form-field revoke; the
+absence of any listing route; token lifetimes and no refresh rotation; `_token_payload` as sole
+builder with three callers; the cascade's classes; the `origin` column and migration; the
+unauthenticated DCR; §11's status codes and constants) and found no claim outrunning the code and no
+contradiction among the changed files. Three defects, all fixed in place: the mirror had diverged
+(closed by the sync below); 28b's `timedelta` transcript had gone stale by this round's own sibling
+edit (re-taken, and the mechanism noted there); and a pre-existing "default 10" described a module
+constant as a setting. An earlier reviewer was stopped by the team lead before it reported and wrote
+nothing.
+
+Two low notes from that review, recorded here so they are not rediscovered: §11's error table
+documents **422 and 429 that no test asserts** (`test_account_desktop_token.py` covers 200/400/401/
+403); and the live access-token revocation check in `get_current_user` fires only for
+`client_kind == "desktop"`, which the CLI exchange stamps — so "rejected on its next request" holds
+for this feature, while a *mobile* client the same cascade revokes keeps its access token until
+expiry. Pre-existing, already implied by the tech doc; do not widen that sentence to mobile.
+
+**The answer-back is a rendered kit member** (`local-kit/desktop_contract_answers.md` in the mirror
+changed with it), so §11 was checked for braced tokens before the sync: none.
+
+**Sync, proven by comparison rather than exit code.** `sync_platform_knowledge.py` run once, after
+the last doc edit; host and mirror md5 equal for `desktop_auth.md`, `account_cli_workspace.md`,
+`local_agent_kit.md` and `README.md`; the retracted sentences ("nothing survives the call still
+live", "cannot be outlived") return zero hits in the mirror and the new MCP sentence returns one; no
+`_tech` file is mirrored. Four mirror files changed: the two feature docs, the platform README, and
+the kit copy of the answer-back.
+
+**Tree state.** `HEAD` is unmoved at `701ba7e5`, `git stash list` is empty, **nothing is
+committed** (the team lead has not asked). `git status --short`: 16 ` M` and 1 `??` — the twelve
+paths this round edited (four backend docstrings, one test docstring, six docs, the plan), the four
+mirror files above, and the new `tests/architecture/credential_minting_gate_test.py`. Final
+regression, container, after the sync:
+
+```
+$ docker compose exec -T backend python -m pytest tests/api/desktop_auth tests/api/app_auth \
+    tests/api/cli tests/api/app_mcp tests/architecture -q -p no:cacheprovider
+324 passed in 116.56s
+```
+
+Non-vacuity for that run is 28g's differential: the same architecture test went red against the
+real tree with one gate removed, minutes earlier, in this container. Every backend change outside
+the new test file is docstring-only, verified by diff. **The scratch reproduction file of 28b and the
+saved copy of `cli.py` used for 28g's differential are both gone; neither is in the tree.**
+
 ## §1 Corrections to the requirements brief
 
 Recorded here so no phase silently works around them.
@@ -5639,7 +6072,11 @@ No phase depends on a later one. Phases 3, 4, 8 and 9 can run in parallel once 1
       characterisations differ **to a reader**: one is an edit to a file they bundle, the other
       is a change to a public response shape they may poll. **So re-derive what a site IS, not
       only how many of them there are** — read the function before repeating a sentence about
-      what it does. Evidence from this run
+      what it does. **A characterisation also goes stale by ADJACENCY, with no copy involved
+      at all**: two surfaces described in one message, a property asserted of one, and the
+      reader carries it to both (§0 Bucket 28d — the A2A token surface inherited the MCP one's
+      "no revocation path"; A2A has list and revoke routes of its own). Probe each surface
+      separately. Evidence from this run
       alone: the exclude count corrected 40 → 41 in two places (Bucket 9f, Bucket 10, both
       pointing at 16h); three citation line-ranges handed to a recorder that did not check
       out; the required-desktop-changes ordinal that went "fifth" → "sixth" → "seven", each
