@@ -447,7 +447,7 @@ the pairing requirement and why, so the apparent duplicates are not "simplified"
 
 Take the additions in paired form too, not the `**/`-only form.
 
-**A related latent defect, present identically on both sides, so neither of us gets a
+**A related defect that was present identically on all three hosts, so none of us got a
 mismatch alarm.** `matches_pattern` selects its directory branch from the **raw** pattern
 (`pattern.rstrip().endswith("/")` on our side, `pattern.trimEnd().endsWith('/')` at
 `layout.ts:275` on yours) while path normalisation strips only slashes. Trailing whitespace
@@ -457,13 +457,25 @@ matches nothing: `app-data/ ` matches neither `app-data/x.json` nor `app-data` n
 but a hand-edited contract would silently drop a directory from the exclude set and move the
 `content_hash`, with every individual step still looking like it worked. **A faithful port
 inherits the original's defects faithfully** — which is the property the port was written
-for, so this is not a criticism of it. The one-line fix is to normalise the pattern before
-choosing the branch, and it wants doing on both hosts in the same change: a one-sided fix
-turns a shared blind spot into a cross-host divergence.
+for, so this is not a criticism of it.
 
-**Our half is deliberately unfixed, and will stay that way until both sides move.** That is
-a decision, not an outstanding task on our side — so this is not "we fixed ours, please fix
-yours". Neither host should take it alone.
+**Update: two of the three hosts have now fixed it, and you are the third.** When this
+section was first written our half was deliberately unfixed, on the reasoning that a
+one-sided fix turns a shared blind spot into a cross-host divergence. That reasoning held
+right up until cinna-cli fixed its half, at which point leaving ours alone *was* the
+divergence, and we followed. Both of us now do the same thing:
+
+- the pattern is **stripped** before the branch is chosen, so the branch test and the
+  pattern body derive from the same text;
+- and the strip is **announced** — a warning naming the pattern, so an author learns their
+  pattern was read differently from how they wrote it.
+
+**Implement strip-and-warn rather than choosing your own resolution.** Silent acceptance is
+the one behaviour none of us should have: all three hosts hash the file set these patterns
+select, and a difference of a single file makes the hashes disagree forever while every
+individual step still looks like it worked. Rejecting a whitespace-bearing pattern outright
+would also be defensible in isolation, but it would put you out of step with the two hosts
+that have already moved, which is the thing this whole section exists to prevent.
 
 ---
 
@@ -1075,10 +1087,15 @@ One list, and every item above points here rather than asserting its own positio
   Node decode such a name to different strings, so `content_hash` parity is unreachable for
   it whatever either side encodes with.
 
-- **Normalise an exclude pattern before choosing its directory branch — on both hosts, in one
-  change.** Trailing whitespace in a pattern currently survives into the pattern body as a
-  segment and matches nothing, identically on both sides. A one-sided fix converts a shared
-  blind spot into a cross-host divergence. (Section 7.)
+- **Normalise an exclude pattern before choosing its directory branch — and match what the other
+  two hosts now do, which is strip it and warn.** Trailing whitespace in a pattern survives into
+  the pattern body as a segment and matches nothing. This was a blind spot shared by all three
+  hosts when section 7 was written; it no longer is. cinna-cli and cinna-core have both since
+  adopted **strip-and-warn**: the pattern is read stripped, and a warning naming it is printed so
+  the author learns their pattern was read differently from how they wrote it. Silent acceptance
+  is the one behaviour none of us should have, because both of us hash the file set these patterns
+  select. **You are the remaining host**, so this is now a matching change rather than a
+  coordinated one — implement strip-and-warn rather than choosing your own resolution. (Section 7.)
 
 - **Check your HTTP stack for the two token-egress properties in section 8** — a redirect
   carrying `Authorization` to another host, and a configured proxy carrying it to

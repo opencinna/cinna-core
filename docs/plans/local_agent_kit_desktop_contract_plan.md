@@ -4430,6 +4430,37 @@ Three parties in a row reached for a set or a shape where only provenance answer
 strongest available evidence that the conflation is *attractive* rather than careless, exactly as
 Bucket 24b reads the twice-made false protection claim.
 
+[**SUPERSEDED 2026-09-03 — the ruling below has inverted, and the reason is worth more than the
+fix.** This bucket ruled the defect a both-hosts-one-change fix, on the ground that a one-sided
+fix converts a shared blind spot into a cross-host divergence. That reasoning was right, and it is
+exactly what happened. **cinna-cli fixed its half unilaterally** (commit `c587fc7`), and it did so
+**because the handover we wrote them told them to and did not say it needed coordinating** — the
+instruction was ours, they followed it, and no blame attaches to them. Their resolution is also
+better than either option this bucket offered: they strip *and* warn, where the bucket framed the
+choice as strip **or** reject.
+
+Measured before the fix:
+
+```
+cinna-core  matches_pattern('temp/ ', 'temp/x.txt')  ->  False   (matched nothing)
+cinna-cli   matches_pattern('temp/ ', 'temp/x.txt')  ->  True    (strips, and warns)
+```
+
+**So "leave ours alone" stopped being the safe option and became the divergence itself.**
+cinna-core has now adopted the same behaviour: `matches_pattern` strips before the branch test so
+the branch and the body derive from the same text, and `contract_exclude_patterns()` strips at load
+and prints a warning naming the pattern. Verified by differential — the unit tests failed against
+the pre-fix mirror and pass against the fixed one, with host/mirror md5 parity confirmed, since
+`docs/` is not mounted into the backend container.
+
+**The transferable half is not about whitespace.** A finding recorded as "deliberately not fixed,
+pending coordination" has a **dependency on the other party not acting** that nothing in the record
+enforces — and here the same author both wrote the coordination requirement and, in a different
+document for a different repo, instructed the unilateral fix that broke it. **A cross-repo hold is
+only as good as the instruction sent to the other repo**, so when a finding is deferred pending
+coordination, the deferral belongs in every handover that could reach a party able to act on it,
+not only in the plan that records it.]
+
 **27i — a latent defect found and deliberately NOT fixed.** `matches_pattern` selects its
 directory branch from the **raw** pattern with `pattern.rstrip().endswith("/")` — whitespace
 tolerant — while `normalize_rel_path` strips only `/` (`.lstrip("/").rstrip("/")`). So trailing
