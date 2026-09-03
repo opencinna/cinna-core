@@ -99,7 +99,10 @@ class AppMCPOAuthService:
     ) -> dict:
         """Dynamic Client Registration for the App MCP Server.
 
-        No max_clients limit — any authenticated user can connect.
+        No max_clients limit. The route that calls this (``POST /mcp/oauth/register``
+        in ``app/mcp/oauth_routes.py``) enforces **no authentication** — RFC 7591
+        dynamic registration is open — so any caller, signed in or not, can
+        register a client; the binding to a user happens later, at consent.
         Returns dict with client_id and client_secret.
         """
         client_id = str(uuid.uuid4())

@@ -1895,8 +1895,9 @@ class AccountCLIService:
         It also used to reach the platform's credential-minting surfaces, which
         made the session self-replicating: mint a *fresh* account CLI token,
         carrying no provenance link, and the original could be revoked without
-        ending anything. ``forbid_cli_exchanged_desktop_session`` closes that
-        loop — see property 2 for what it does and does not buy.
+        ending anything. ``ensure_not_cli_exchanged_session`` (and its ``Depends``
+        adapter ``forbid_cli_exchanged_desktop_session``) closes that loop — see
+        property 2 for what it does and does not buy.
 
         Two properties make that acceptable. Note which argument is doing the
         work, because the obvious one does not hold in general:
@@ -1951,7 +1952,8 @@ class AccountCLIService:
            ``get_current_user`` re-checks the client row on every call.
            Revoking the account CLI token itself cascades into the desktop
            session too (``revoke_account_token``), and the session cannot mint
-           replacement CLI credentials to outlive that cascade.
+           replacement CLI credentials or a fresh native session to outlive
+           that cascade.
 
            **What that remediation is NOT is complete, and saying otherwise is
            the most harmful thing this docstring could do.** A compromised user
@@ -1971,10 +1973,19 @@ class AccountCLIService:
            that nobody re-derives the property against, which is why the
            dependency's docstring tells you to re-derive rather than copy a list.
 
+           And one class of credential outlives every revocation control the
+           product has, recorded here rather than fixed: the exchanged session is
+           not refused on the MCP OAuth consent (``routes/mcp_consent.py``), and
+           the App MCP access + refresh pair it can mint there survives this
+           cascade and an App Sessions disconnect for up to thirty days, is
+           listed nowhere, and is revocable only through ``POST /mcp/oauth/revoke``
+           with the token *value* and no authentication. Reproduced by execution.
+           Closing it is the MCP feature's territory and is raised separately.
+
            So revoking the account token and disconnecting the session are
            necessary and not sufficient: credentials the session could read must
-           be rotated, and App Sessions must be read for entries nobody
-           recognises.
+           be rotated, App Sessions must be read for entries nobody recognises,
+           and until the MCP gap is closed an MCP credential may still be live.
 
            One further gap in the badge, disclosed here because this is where
            the contrapositive is asserted rather than only where it is

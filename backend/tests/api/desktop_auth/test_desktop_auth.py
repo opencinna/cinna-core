@@ -1785,9 +1785,27 @@ def test_consent_lazy_registration_request_has_no_owner_to_bind_to(
     has no owner: ``/authorize`` is public, and the row it creates is tied to
     nobody until someone consents. There is therefore nothing for the ownership
     check to compare against, and any authenticated holder of the nonce may
-    claim it — which is the flow's design, since the nonce travels only in the
-    requesting browser's URL and the code that comes back is useless without the
-    PKCE verifier the desktop app kept.
+    claim it. That is permanent by ruling — no owner column, no migration, no
+    code change — because the consent POST is itself the first authenticated
+    touch, so there is no earlier point at which an owner could be stamped
+    without the same holder of the nonce supplying it.
+
+    What that residual costs, stated so the two halves are not confused:
+
+    - **Deny by a stranger burns the pending request.** The user's own consent
+      then fails as already used and they start over. That is the milder half,
+      and it is what phases 1 and 4 below are about.
+    - **Approve by a stranger hands the requesting app the stranger's session.**
+      The app that started the flow holds the PKCE verifier and redeems the
+      code, and is then authenticated as the approver. That is the severe half;
+      it is reproduced, and its mitigation (``email`` in the token response)
+      pinned, by ``test_token_response_email_reveals_a_substituted_account``.
+      It must not be described as self-limiting.
+
+    The PKCE argument — the code is useless without the verifier the desktop
+    kept — answers a *different* attack (a third party intercepting the code)
+    and bounds neither cost above; it is not the reason this residual is
+    accepted.
 
     What this pins is that the check does not *pretend* to cover that case, and
     that guarding both branches did not cost a spurious client row:

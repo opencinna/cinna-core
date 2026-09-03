@@ -171,8 +171,12 @@ class DesktopAuthService:
         ``_resolve_or_register_client`` on the consent and CLI-exchange paths.
         If it is revived, it must set the grant columns (``origin`` and
         ``minted_by_account_token_id``, via ``_stamp_grant`` at the point tokens
-        are actually issued); as written it takes the ``browser_consent``
-        default, which would silently mislabel a client registered any other way.
+        are actually issued). As written it sets no ``origin`` at all — and
+        since the column has no Python default and migration ``c9a2f5b1d604``
+        removed the server default, the insert raises a NOT NULL violation
+        rather than mislabelling anything. Loud, which is the intended failure
+        for an unseeded row; a revived caller should go through
+        ``_resolve_or_register_client`` rather than seed the column here.
         """
         client = DesktopOAuthClient(
             client_id=generate_client_id(),
@@ -824,7 +828,8 @@ class DesktopAuthService:
         """True if this desktop session's current grant came from a CLI exchange.
 
         The predicate behind the credential-minting gate (see
-        ``forbid_cli_exchanged_desktop_session`` in ``api/deps.py``). Reads the
+        ``ensure_not_cli_exchanged_session`` in ``api/deps.py``; the ``Depends``
+        adapter ``forbid_cli_exchanged_desktop_session`` wraps it). Reads the
         provenance ``_stamp_grant`` maintains, so a session the user has since
         re-authorized in a browser answers False — the gate follows the *current*
         grant, exactly like the badge and the cascade do.

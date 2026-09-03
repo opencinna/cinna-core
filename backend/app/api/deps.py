@@ -973,10 +973,24 @@ def ensure_not_cli_exchanged_session(
     outliving the revoke cascade. A user who revoked the leaked ``account.json``
     would have ended nothing.
 
-    Apply it to every route matching that property: *credential-minting surfaces
-    reachable from an ordinary user JWT that produce a token outliving the
-    cascade.* Do not apply it by route list learned from a document — re-derive
-    the set, because a new minting route added later inherits the loop silently.
+    Apply it to every route matching that property, stated no wider than the
+    paragraph above: *surfaces that mint a credential of a class the
+    account-token revoke cascade is built to reach — an account CLI token, a
+    per-agent CLI token, or a native desktop/mobile session — through a path
+    that records no ``minted_by_account_token_id`` link to the account token.*
+    ``AccountCLIService.revoke_account_token`` is the authority on which classes
+    those are. Stated as "any token outliving the cascade" the property
+    over-selects: it takes in agent-API external keys and A2A access tokens,
+    which are listed and revocable through their own routes and are excluded by
+    decision. Do not apply it by route list learned from a document — re-derive
+    the set against the property, because a new minting route added later
+    inherits the loop silently.
+
+    Known residue *outside* the property, recorded so nobody rediscovers it as a
+    gap in this gate: the MCP OAuth consent (``routes/mcp_consent.py``) is
+    reachable from the exchanged session and mints a credential that outlives
+    the cascade and has no owner-reachable revocation. That is a revocation gap
+    on the MCP side, tracked separately; it is not a member of this set.
 
     Deliberately **not** applied to revocation or read routes: a compromised
     session must never be able to stop its victim from revoking things, and
