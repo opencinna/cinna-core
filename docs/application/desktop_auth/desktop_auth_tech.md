@@ -5,7 +5,7 @@
 ### Backend — Models
 
 - `backend/app/models/desktop_auth/__init__.py` — Re-exports all desktop auth models
-- `backend/app/models/desktop_auth/desktop_oauth_client.py` — DesktopOAuthClient (table), DesktopOAuthClientCreate, DesktopOAuthClientPublic
+- `backend/app/models/desktop_auth/desktop_oauth_client.py` — DesktopOAuthClient (table), DesktopOAuthClientCreate, DesktopOAuthClientPublic; also the `CLIENT_ORIGIN_BROWSER_CONSENT` / `CLIENT_ORIGIN_CLI_EXCHANGE` constants that populate the `origin` column
 - `backend/app/models/desktop_auth/desktop_refresh_token.py` — DesktopRefreshToken (table)
 - `backend/app/models/desktop_auth/desktop_auth_code.py` — DesktopAuthCode (table)
 - `backend/app/models/desktop_auth/desktop_auth_request.py` — DesktopAuthRequest (table) — pending consent requests
@@ -15,10 +15,12 @@
 - `backend/app/api/routes/desktop_auth.py` — All OAuth endpoints under `/desktop-auth` prefix; also defines the shared request/response models (`ConsentRequest`, `ConsentResponse`, `TokenRequest`, `TokenResponse`, `UserInfoResponse`, `RevokeRequest`) and the `_parse_token_request` helper reused by the app surface
 - `backend/app/api/routes/app_auth.py` — **Parallel mobile surface** under `/app-auth` prefix (tag `app-auth`). Mirrors every desktop endpoint but delegates to the same `DesktopAuthService` and reuses the desktop route's shared models/helpers; the only behavioural difference is that `authorize` redirects to `/app-auth/consent`. No new tables — writes to the same `desktop_*` store.
 - `backend/app/main.py` — `/.well-known/cinna-desktop` and `/.well-known/cinna-app` discovery endpoints registered at app level (not under `/api/v1`)
+- `backend/app/api/routes/cli.py` — `POST /cli/account/desktop-token` lives here, not on the desktop-auth surface: it is authenticated by the account CLI token (`AccountCLIContextDep`), so it belongs to the CLI router. It writes to the same `desktop_*` tables through `DesktopAuthService`
 
 ### Backend — Services
 
-- `backend/app/services/desktop_auth/desktop_auth_service.py` — DesktopAuthService: consent flow, client management, authorization code, token exchange, refresh rotation, revocation, cleanup
+- `backend/app/services/desktop_auth/desktop_auth_service.py` — DesktopAuthService: consent flow, client management, authorization code, token exchange, CLI-account-token exchange, refresh rotation, revocation, cleanup
+- `backend/app/services/cli/account_cli_service.py` — `AccountCLIService.exchange_for_desktop_token()`: the account-CLI half of the exchange (authorization decision, audit, email in the response). Carries the written security position on converting an account CLI token into a user session
 - `backend/app/services/desktop_auth/desktop_auth_crypto.py` — Crypto helpers: ID/token generation, SHA-256 hashing, PKCE S256 verification
 - `backend/app/services/desktop_auth/desktop_auth_scheduler.py` — Background cleanup scheduler (every 15 minutes)
 
@@ -31,12 +33,16 @@
 - `backend/app/alembic/versions/d3e4f5a6b7c8_add_desktop_auth_tables.py` — Creates desktop_oauth_client, desktop_refresh_token, desktop_auth_code tables
 - `backend/app/alembic/versions/d7e34bcff709_add_desktop_auth_request_table.py` — Adds desktop_auth_request table (consent-page nonce store)
 - `backend/app/alembic/versions/e8f1a2b3c4d5_add_revoked_at_to_desktop_refresh_token.py` — Adds nullable `revoked_at` column to desktop_refresh_token (down_revision: ab55mcpprovider01); legacy NULL rows fall through to genuine-replay behaviour
+- `backend/app/alembic/versions/21729ab9b43d_add_origin_to_desktop_oauth_client.py` — Adds `origin` to desktop_oauth_client with `server_default='browser_consent'` (down_revision: 7de57f5d4b8f). Every pre-existing row predates the exchange endpoint, so the backfill is true by construction
+- `backend/app/alembic/versions/b4c1d7e93f28_add_account_token_provenance_to_desktop_client.py` — Adds nullable `minted_by_account_token_id` + index + `SET NULL` FK to cli_token (down_revision: 21729ab9b43d). No backfill: every existing row was browser-granted, for which NULL is the true value, not a missing one
+- `backend/app/alembic/versions/c9a2f5b1d604_make_desktop_client_origin_explicit.py` — Backfills `origin` and **drops its server default** (down_revision: b4c1d7e93f28). The default was doing two jobs and only one was wanted: giving pre-existing rows a true value (kept, as a one-time UPDATE) and silently supplying a value for future inserts (removed). Note that dropping the *Python-side* default alone achieves nothing — SQLModel does not validate `table=True` models, so the attribute is `None` and the server default fills it in; the DB constraint is what makes omission loud
 
 ### Backend — Tests
 
 - `backend/tests/api/desktop_auth/test_desktop_auth.py` — Scenario-based integration tests covering the full consent flow, redirect-URI validation (incl. native mobile schemes + env gating), and `client_kind` metadata
 - `backend/tests/api/app_auth/test_app_auth.py` — Parallel-surface tests: `/.well-known/cinna-app` discovery, full mobile PKCE flow, `client_kind="mobile"` metadata, redirect validation, refresh rotation, and cross-surface token interoperability (app token works on `/desktop-auth/userinfo`)
 - `backend/tests/utils/desktop_auth.py` — Test helpers: PKCE pair generation, consent flow steps, token exchange
+- `backend/tests/api/cli/test_account_desktop_token.py` — Scenario tests for the CLI account-token exchange: lifecycle, client binding + origin laundering, auth matrix, audit events, role gating
 
 ### Frontend
 
@@ -60,8 +66,18 @@
 | platform | VARCHAR(50) | nullable |
 | app_version | VARCHAR(50) | nullable |
 | is_revoked | BOOLEAN | default false |
+| origin | VARCHAR(32) | not null, **no default** (see c9a2f5b1d604 — an insert that omits it raises, so a new creation path cannot be handed the reassuring value for free); `'cli_exchange'` when the client's most recent grant came from `POST /cli/account/desktop-token`. Provenance, not display text — never accepted from a request body |
+| minted_by_account_token_id | UUID | nullable, indexed (ix_desktop_oauth_client_minted_by_account_token_id), FK -> cli_token.id **SET NULL**; the account CLI token behind a `cli_exchange` grant, NULL for a browser consent. Written and cleared together with `origin` by `_stamp_grant`. Not projected into `DesktopOAuthClientPublic` — it identifies a *different* credential |
 | last_used_at | TIMESTAMP WITH TZ | nullable |
 | created_at | TIMESTAMP WITH TZ | default now |
+
+**`GrantProvenance`** (`models/desktop_auth/desktop_oauth_client.py`) — a frozen
+dataclass pairing `origin` with `minted_by_account_token_id`. Both columns
+describe one grant, so they are written and compared as one value: `__eq__` is
+derived from the fields, so a provenance field added to the class necessarily
+enters the comparison that decides whether a grant supersedes the previous one.
+It does **not** prevent someone adding a provenance column and writing it outside
+`_stamp_grant` — that exposure is the same either way.
 
 ### desktop_refresh_token
 
@@ -125,12 +141,20 @@
 | DELETE | `/clients/{client_id}` | CurrentUser | Revoke client + all its tokens |
 | GET | `/authorize` | None (public) | Store consent request, redirect to SPA consent page |
 | GET | `/requests/{nonce}` | None (public) | Return display metadata for a pending consent request |
-| POST | `/consent` | CurrentUser | Approve or deny a pending consent request; returns redirect_to URL |
+| POST | `/consent` | CurrentUser, **not a CLI-exchanged session** | Approve or deny a pending consent request; returns redirect_to URL. Gated by `NoCliExchangedSession`: approving mints a *new* native client with clean `browser_consent` provenance and no cascade link, which is the same self-replication shape as minting a CLI token. The SPA calls this with the browser's localStorage JWT, so no legitimate flow presents a native token here (verified against the desktop client, which never calls it) |
 | POST | `/token` | None (public) | Exchange code or refresh token for token pair (includes client_id). Accepts both `application/x-www-form-urlencoded` (OAuth 2.0 RFC 6749 §3.2) and `application/json` request bodies |
 | GET | `/userinfo` | CurrentUser | Return `{sub, email, full_name, username}` for the bearer token holder |
 | POST | `/revoke` | CurrentUser | Revoke client or specific refresh token |
 
 Note: `POST /clients` (explicit client registration) has been removed. Clients are created lazily on first consent approval.
+
+### CLI account-token exchange (under `/api/v1/cli`)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/cli/account/desktop-token` | Account CLI token (`AccountCLIContextDep`) | Exchange a CLI account token for a desktop access + refresh pair bound to the supplied `client_id` (lazily registering one from `device_name` / `platform` / `app_version` when absent), plus the account owner's `email`. 403 when `client_id` names a client that is revoked, unknown, or another user's — the three cases are deliberately indistinguishable |
+
+The response body is the `/desktop-auth/token` shape plus `email`, so the desktop refreshes it through the ordinary token endpoint afterwards. See [CLI account-token exchange](desktop_auth.md#cli-account-token-exchange) for the security position and [Account CLI Workspace](../cinna_cli_integration/account_cli_workspace.md) for the token being spent.
 
 ### OAuth Flow (under `/api/v1/app-auth`)
 
@@ -152,9 +176,17 @@ All methods are `@staticmethod`:
 - `get_auth_request(session, nonce) -> dict | None` — Returns display metadata or None if not found/used/expired
 - `process_consent(session, user_id, nonce, action) -> dict` — Returns `{"redirect_to": "..."}`. On approve: resolves or lazily creates client, issues auth code, marks nonce used. On deny: marks nonce used, returns redirect with error=access_denied.
 
+**CLI account-token exchange:**
+- `issue_tokens_for_cli_exchange(session, user_id, client_id_str?, device_name?, platform?, app_version?, account_token_id) -> dict[str, Any]` — Resolve-or-lazily-register the client, stamp the grant, mint through `_create_token_pair`. Returns the same dict shape as `exchange_code`. Makes **no authorization decision** — the caller has already authenticated; `AccountCLIService.exchange_for_desktop_token` owns the decision and the audit
+- `revoke_clients_for_account_token(session, account_token_id) -> int` — The desktop half of `AccountCLIService.revoke_account_token`'s cascade: revokes every client whose *current* grant came from that account token, plus its live refresh tokens. Returns the client count. Does not commit, so the CLI and desktop halves land in one transaction
+- `is_cli_exchanged_session(session, external_client_id) -> bool` — Predicate behind the credential-minting gate (`forbid_cli_exchanged_desktop_session` in `api/deps.py`). Reads the provenance `_stamp_grant` maintains, so a session since re-authorized in a browser answers False. Returns False for anything that is not a live desktop session — safe rather than fail-open, because a revoked client cannot authenticate at all
+- `classify_client_rejection(session, user_id, client_id_str) -> str` — Audit-only label for a refused `client_id`: `"revoked_own"` (the caller's own disconnected client, the routine retry) vs `"unknown_or_foreign"`. Runs only on the failure path, only for the audit record; the caller-facing 403 is raised earlier and is identical either way, so this cannot widen what a caller learns
+- `_stamp_grant(session, client, provenance: GrantProvenance) -> None` — Private; the **single writer** of both grant columns, so they can never disagree about one session. When the provenance actually **changes**, it also revokes the client's still-live refresh tokens (without stamping `revoked_at`, so they are ineligible for grace re-rotation) — which is what lets per-client scalars describe a per-family fact. Conditional rather than unconditional on purpose: a same-provenance re-grant shares a badge and a cascade link, so retiring it buys nothing, while an unconditional revoke would reach two shipped surfaces this feature does not otherwise touch (the browser consent flow and the mobile `/app-auth` flow) and hard-fail an in-flight refresh — on mobile, the exact scenario the reuse-grace window exists for. Does not commit
+- `_resolve_or_register_client(session, user_id, client_id_str?, device_name?, platform?, app_version?, created_origin) -> DesktopOAuthClient` — Private; the lazy-registration path shared by `process_consent` and the CLI exchange, so both apply identical ownership checks (403 on missing/revoked/foreign) and identical registration semantics. Does not commit
+
 **Token flow:**
 - `create_authorization_code(session, user_id, client_id_str, code_challenge, redirect_uri) -> str` — Issue auth code for existing client (used by process_consent internally)
-- `exchange_code(session, code, client_id_str, redirect_uri, code_verifier) -> dict` — Validate code + PKCE, issue token pair; dict includes `client_id`
+- `exchange_code(session, code, client_id_str, redirect_uri, code_verifier) -> dict` — Validate code + PKCE, stamp `origin="browser_consent"`, issue token pair; dict includes `client_id`
 - `refresh_tokens(session, refresh_token_value, client_id_str) -> dict` — Validate + rotate, replay detection with reuse-grace window, issue new pair; dict includes `client_id`
 
 **Revocation:**
@@ -210,7 +242,10 @@ Route: `/desktop-auth/consent?request={nonce}` (file: `frontend/src/routes/deskt
 - `GET /authorize` is now public — authentication happens at `POST /consent` via the SPA's localStorage JWT
 - Replay detection with rotation reuse-grace window (RFC 9700 §4.14.2): when a revoked token is re-presented, `refresh_tokens()` checks whether `revoked_at` is set AND `now - revoked_at <= DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS` (default 60 s). If within the window, the token is treated as a benign lost-rotation-response retry: the token is re-validated (must not be expired, client must be active), any still-live successor in the family is revoked via `_revoke_live_family_tokens()` (family collapses to one live token), and a fresh pair is issued from the same `token_family`. Outside the window, or when `revoked_at` is NULL (legacy rows, or tokens hard-revoked by `revoke_token_family()` / `revoke_client()`), the full-family revocation path runs and returns 400 `invalid_grant`. Hard-revocation paths deliberately do not stamp `revoked_at`, ensuring that tokens revoked for security reasons (theft detection, explicit disconnect) can never enter the grace path.
 - `code_challenge_method` must be `S256`; other methods rejected with 400
-- Cross-user protection: if a `client_id` is provided in the authorize request, `POST /consent` validates that the client belongs to the consenting user (HTTP 403 if not)
+- Cross-user protection: if a `client_id` is provided in the authorize request, `POST /consent` validates that the client belongs to the consenting user (HTTP 403 if not). The CLI exchange runs the identical check through the shared `_resolve_or_register_client`
+- `origin` is stamped **per grant**, not at registration only: both `exchange_code` and `issue_tokens_for_cli_exchange` write it through `_stamp_grant`. Freezing it at registration would let a CLI exchange that names an already-browser-registered `client_id` produce a session indistinguishable from a browser one. Refresh rotation leaves it alone — rotating is not a new grant
+- **A grant supersedes the client's previous one.** `_stamp_grant` revokes the client's live refresh tokens as it writes the columns. Without that, a client could hold several concurrent live families (each `_create_token_pair` call without a parent mints a fresh one) while a single-valued `origin` described only the newest — so a later browser consent would clear the `cli_exchange` badge while the CLI-minted family kept working. Users read the badge in the contrapositive (*no badge ⇒ no CLI-minted session*), so that direction is the one that matters. The residue is bounded: an access token from the superseded grant lives until it expires, because access tokens are checked against the client's `is_revoked`, which a re-grant deliberately does not set
+- The refusal path returns **one merged 403** for missing / revoked / foreign so a client id cannot be probed; `classify_client_rejection` distinguishes them for the audit log only
 
 ## Live Access Token Revocation Check
 

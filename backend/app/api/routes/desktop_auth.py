@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ValidationError
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, NoCliExchangedSession, SessionDep
 from app.core.config import settings
 from app.models.desktop_auth.desktop_oauth_client import (
     DesktopOAuthClientPublic,
@@ -156,7 +156,11 @@ class ConsentResponse(BaseModel):
     redirect_to: str
 
 
-@router.post("/consent", response_model=ConsentResponse)
+@router.post(
+    "/consent",
+    response_model=ConsentResponse,
+    dependencies=[NoCliExchangedSession],
+)
 def consent(
     body: ConsentRequest,
     session: SessionDep,

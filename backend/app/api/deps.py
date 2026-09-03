@@ -470,6 +470,13 @@ class AccountCLIContext(SQLModel):
     exactly the ``/account/*`` routes and is rejected by the per-agent CLI
     context dep, so it physically cannot reach sync/exec/credential routes.
 
+    Read that last sentence as a statement about *this token*, not about its
+    holder. ``POST /cli/account/desktop-token`` exchanges an account token for a
+    desktop session, which is an ordinary user JWT and reaches all of those
+    routes; ``AccountCLIService.exchange_for_desktop_token`` carries the security
+    position on why that is allowed. Anyone reasoning about the blast radius of a
+    leaked ``account.json`` needs both halves.
+
     Uses ``Any`` for ``cli_token`` to avoid circular imports with models.
     """
     user: User
@@ -948,3 +955,52 @@ def get_current_client_claims(token: TokenDep) -> tuple[str | None, str | None]:
 CurrentClientClaims = Annotated[
     tuple[str | None, str | None], Depends(get_current_client_claims)
 ]
+
+
+# ── Credential-minting gate for CLI-exchanged desktop sessions ─────────
+
+
+def forbid_cli_exchanged_desktop_session(
+    claims: CurrentClientClaims,
+    db: SessionDep,
+) -> None:
+    """Refuse a desktop session that was bought with a CLI account token.
+
+    ``POST /cli/account/desktop-token`` converts an account CLI token into an
+    ordinary user JWT. Without this gate that session can walk back to the
+    platform's credential-minting surfaces and produce a **fresh** account CLI
+    token — one carrying no provenance link to the original, and therefore
+    outliving the revoke cascade. A user who revoked the leaked ``account.json``
+    would have ended nothing.
+
+    Apply it to every route matching that property: *credential-minting surfaces
+    reachable from an ordinary user JWT that produce a token outliving the
+    cascade.* Do not apply it by route list learned from a document — re-derive
+    the set, because a new minting route added later inherits the loop silently.
+
+    Deliberately **not** applied to revocation or read routes: a compromised
+    session must never be able to stop its victim from revoking things, and
+    withholding a listing buys nothing.
+
+    Scoped by provenance, not by client kind — a desktop session created by a
+    human browser consent is unaffected, including one on a client that was
+    CLI-exchanged earlier and has since been re-consented.
+
+    Raises:
+        HTTPException: 403 when the caller is a live CLI-exchanged session.
+    """
+    from app.services.desktop_auth.desktop_auth_service import DesktopAuthService
+
+    _client_kind, external_client_id = claims
+    if DesktopAuthService.is_cli_exchanged_session(db, external_client_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This desktop session was linked from a CLI account token and "
+                "cannot create new CLI credentials. Sign in through the browser "
+                "to do this."
+            ),
+        )
+
+
+NoCliExchangedSession = Depends(forbid_cli_exchanged_desktop_session)

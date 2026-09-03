@@ -341,6 +341,42 @@ export type AccountCredentialUpdateBody = {
 };
 
 /**
+ * Body of ``POST /cli/account/desktop-token``.
+ *
+ * ``client_id`` is the desktop's own client id when it has one. A desktop that
+ * has never authenticated against this instance has none, so it sends the same
+ * three display fields the browser consent flow accepts (``device_name``,
+ * ``platform``, ``app_version``) and a client is registered for it — the
+ * identical lazy-registration path, not a copy of it.
+ *
+ * There is deliberately no field for the client's *origin*: provenance is set
+ * by the server, never claimed by the caller.
+ */
+export type AccountDesktopTokenBody = {
+    client_id?: (string | null);
+    device_name?: (string | null);
+    platform?: (string | null);
+    app_version?: (string | null);
+};
+
+/**
+ * Desktop tokens issued from a CLI account token.
+ *
+ * Mirrors the ``/desktop-auth/token`` response the desktop already knows how to
+ * consume — same field names, same semantics, same refresh endpoint — plus
+ * ``email``, which lets the desktop name the profile it is about to create
+ * without a second round-trip to ``/desktop-auth/userinfo``.
+ */
+export type AccountDesktopTokenResponse = {
+    access_token: string;
+    refresh_token: string;
+    token_type?: string;
+    expires_in: number;
+    client_id: string;
+    email: string;
+};
+
+/**
  * Result of ``cinna agent restart-env`` — the env's post-restart state.
  */
 export type AccountRestartEnvResult = {
@@ -2509,6 +2545,7 @@ export type CLIAccountTokenPublic = {
     expires_at: string;
     created_at: string;
     child_count: number;
+    desktop_session_count: number;
 };
 
 export type CLIAccountTokensPublic = {
@@ -2953,6 +2990,7 @@ export type DesktopOAuthClientPublic = {
     device_name: string;
     platform?: (string | null);
     app_version?: (string | null);
+    origin: string;
     last_used_at?: (string | null);
     created_at: string;
     is_revoked: boolean;
@@ -7874,6 +7912,12 @@ export type CliDeviceLoginRejectData = {
 };
 
 export type CliDeviceLoginRejectResponse = (Message);
+
+export type CliExchangeAccountTokenForDesktopTokenData = {
+    requestBody: AccountDesktopTokenBody;
+};
+
+export type CliExchangeAccountTokenForDesktopTokenResponse = (AccountDesktopTokenResponse);
 
 export type CliGetBootstrapScriptData = {
     token: string;

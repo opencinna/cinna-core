@@ -98,6 +98,11 @@ class CLIAccountTokenPublic(SQLModel):
     # Number of active (non-revoked, non-expired) per-agent child tokens this
     # account token has minted — i.e. how many agents are synced from it.
     child_count: int
+    # Number of active Cinna Desktop sessions bought with this account token
+    # (``POST /account/desktop-token``). Revoking the token disconnects these
+    # too, so the revoke confirmation can state what it actually costs instead
+    # of naming only the agents.
+    desktop_session_count: int
 
 
 class CLIAccountTokensPublic(SQLModel):

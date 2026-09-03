@@ -241,6 +241,11 @@ export function LocalDevelopmentCard() {
                         <span className="text-muted-foreground text-xs">
                           {token.child_count} agent
                           {token.child_count === 1 ? "" : "s"} synced
+                          {token.desktop_session_count > 0
+                            ? ` · ${token.desktop_session_count} desktop session${
+                                token.desktop_session_count === 1 ? "" : "s"
+                              }`
+                            : ""}
                         </span>
                       </div>
                     </div>
@@ -268,9 +273,20 @@ export function LocalDevelopmentCard() {
                         <AlertDialogDescription>
                           Revoking disconnects all agents synced from this
                           machine ({token.child_count} agent
-                          {token.child_count === 1 ? "" : "s"}). Local files
-                          remain intact, but the CLI will need to be set up
-                          again.
+                          {token.child_count === 1 ? "" : "s"})
+                          {token.desktop_session_count > 0 ? (
+                            <>
+                              {" "}
+                              <strong>
+                                and signs out {token.desktop_session_count} Cinna
+                                Desktop session
+                                {token.desktop_session_count === 1 ? "" : "s"}
+                              </strong>{" "}
+                              linked from this machine's account file
+                            </>
+                          ) : null}
+                          . Local files remain intact, but the CLI will need to
+                          be set up again.
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>

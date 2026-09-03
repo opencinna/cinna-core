@@ -4,12 +4,14 @@ Handles the server-side OAuth 2.0 with PKCE flow for Cinna Desktop clients:
   - Client registration and revocation
   - Authorization code issuance via consent flow (after browser redirect + SPA consent)
   - Token exchange (code → access + refresh token pair)
+  - Token issuance for a CLI account-token exchange (POST /cli/account/desktop-token)
   - Refresh token rotation with replay detection
   - Expired record cleanup
 """
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -19,8 +21,11 @@ from app.core.config import settings
 from app.core.security import create_access_token
 from app.models.desktop_auth.desktop_auth_code import DesktopAuthCode
 from app.models.desktop_auth.desktop_oauth_client import (
+    CLIENT_ORIGIN_BROWSER_CONSENT,
+    CLIENT_ORIGIN_CLI_EXCHANGE,
     DesktopOAuthClient,
     DesktopOAuthClientPublic,
+    GrantProvenance,
 )
 from app.models.desktop_auth.desktop_refresh_token import DesktopRefreshToken
 from app.services.desktop_auth.desktop_auth_crypto import (
@@ -159,7 +164,15 @@ class DesktopAuthService:
         platform: str | None = None,
         app_version: str | None = None,
     ) -> DesktopOAuthClientPublic:
-        """Register a new desktop client and return its public representation."""
+        """Register a new desktop client and return its public representation.
+
+        NOTE: currently has no caller — registration happens lazily through
+        ``_resolve_or_register_client`` on the consent and CLI-exchange paths.
+        If it is revived, it must set the grant columns (``origin`` and
+        ``minted_by_account_token_id``, via ``_stamp_grant`` at the point tokens
+        are actually issued); as written it takes the ``browser_consent``
+        default, which would silently mislabel a client registered any other way.
+        """
         client = DesktopOAuthClient(
             client_id=generate_client_id(),
             user_id=user_id,
@@ -175,6 +188,7 @@ class DesktopAuthService:
             device_name=client.device_name,
             platform=client.platform,
             app_version=client.app_version,
+            origin=client.origin,
             last_used_at=client.last_used_at,
             created_at=client.created_at,
             is_revoked=client.is_revoked,
@@ -197,6 +211,7 @@ class DesktopAuthService:
                 device_name=c.device_name,
                 platform=c.platform,
                 app_version=c.app_version,
+                origin=c.origin,
                 last_used_at=c.last_used_at,
                 created_at=c.created_at,
                 is_revoked=c.is_revoked,
@@ -383,30 +398,20 @@ class DesktopAuthService:
             session.commit()
             return {"redirect_to": f"{redirect_uri}{separator}error=access_denied&state={state}"}
 
-        # action == "approve": resolve or lazily create client
-        if record.client_id:
-            # Existing client — must belong to the current user
-            client_stmt = select(DesktopOAuthClient).where(
-                DesktopOAuthClient.client_id == record.client_id,
-                DesktopOAuthClient.user_id == user_id,
-                DesktopOAuthClient.is_revoked == False,  # noqa: E712
-            )
-            client = session.exec(client_stmt).first()
-            if not client:
-                raise HTTPException(status_code=403, detail="client_not_found_or_forbidden")
-            resolved_client_id = record.client_id
-        else:
-            # Lazy registration: create a new client for this user
-            new_client = DesktopOAuthClient(
-                client_id=generate_client_id(),
-                user_id=user_id,
-                device_name=record.device_name or "Unknown Device",
-                platform=record.platform,
-                app_version=record.app_version,
-            )
-            session.add(new_client)
-            session.flush()  # assigns PK without committing
-            resolved_client_id = new_client.client_id
+        # action == "approve": resolve the named client or lazily register one.
+        # Shared with the CLI token exchange (``issue_tokens_for_cli_exchange``)
+        # so both surfaces apply identical ownership checks and identical
+        # lazy-registration semantics.
+        client = DesktopAuthService._resolve_or_register_client(
+            session,
+            user_id=user_id,
+            client_id_str=record.client_id,
+            device_name=record.device_name,
+            platform=record.platform,
+            app_version=record.app_version,
+            created_origin=CLIENT_ORIGIN_BROWSER_CONSENT,
+        )
+        resolved_client_id = client.client_id
 
         # Issue a single-use authorization code
         raw_code = generate_auth_code()
@@ -520,6 +525,17 @@ class DesktopAuthService:
             raise HTTPException(status_code=400, detail="invalid_client")
 
         client.last_used_at = now
+        # This grant came from a browser consent (an authorization code only
+        # exists because a signed-in human approved one), and it supersedes any
+        # earlier grant on this client — including a CLI-exchanged one.
+        DesktopAuthService._stamp_grant(
+            session,
+            client,
+            GrantProvenance(
+                origin=CLIENT_ORIGIN_BROWSER_CONSENT,
+                minted_by_account_token_id=None,
+            ),
+        )
 
         access_token, refresh_token_raw = DesktopAuthService._create_token_pair(
             session, client, auth_code.user_id
@@ -531,6 +547,84 @@ class DesktopAuthService:
             "token_type": "bearer",
             "expires_in": settings.DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             "client_id": client_id_str,
+        }
+
+    # ── CLI account-token exchange ─────────────────────────────────────────
+
+    @staticmethod
+    def issue_tokens_for_cli_exchange(
+        session: Session,
+        user_id: UUID,
+        client_id_str: str | None,
+        device_name: str | None,
+        platform: str | None,
+        app_version: str | None,
+        account_token_id: UUID,
+    ) -> dict[str, Any]:
+        """Issue a desktop token pair for a caller already authenticated elsewhere.
+
+        The issuance half of ``POST /cli/account/desktop-token``: Cinna Desktop
+        finds a CLI account token in the workshop tree and trades it for a
+        desktop session instead of making the user re-authenticate in a browser.
+        **The authorization decision is not made here** — the caller has already
+        proved who it is, and ``AccountCLIService.exchange_for_desktop_token``
+        holds the reasoning for why that proof is allowed to buy this token, plus
+        the audit record. Read that before calling this from anywhere new.
+
+        Deliberately *not* a parallel issuance path: it resolves-or-lazily-
+        registers through the same helper the consent flow uses and mints
+        through ``_create_token_pair``, the single primitive behind
+        ``exchange_code`` and every rotation. So the pair it returns is
+        indistinguishable to the refresh endpoint from a browser-issued one —
+        rotation, replay detection, family revocation, the reuse-grace window and
+        per-client revocation all apply to it unchanged, with no branch anywhere
+        that has to remember this path exists.
+
+        What it does *not* do is bypass the consent flow's checks silently: the
+        resulting client is stamped ``origin="cli_exchange"`` so the session is
+        distinguishable from a browser consent wherever clients are listed.
+
+        Returns the same shape as ``exchange_code`` (minus nothing, plus
+        nothing), so a caller can hand it to the desktop unchanged.
+
+        Raises:
+            HTTPException: 403 if ``client_id_str`` names a client that is
+                revoked, missing, or another user's.
+        """
+        client = DesktopAuthService._resolve_or_register_client(
+            session,
+            user_id=user_id,
+            client_id_str=client_id_str,
+            device_name=device_name,
+            platform=platform,
+            app_version=app_version,
+            created_origin=CLIENT_ORIGIN_CLI_EXCHANGE,
+        )
+
+        client.last_used_at = datetime.now(UTC)
+        # Stamp the grant, not just the registration: an existing client id
+        # (registered long ago in a browser) that is handed to this endpoint
+        # must still surface as a CLI-exchanged session, or the origin field
+        # would be trivially bypassable by reusing a known client id.
+        DesktopAuthService._stamp_grant(
+            session,
+            client,
+            GrantProvenance(
+                origin=CLIENT_ORIGIN_CLI_EXCHANGE,
+                minted_by_account_token_id=account_token_id,
+            ),
+        )
+
+        access_token, refresh_token_raw = DesktopAuthService._create_token_pair(
+            session, client, user_id
+        )
+
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token_raw,
+            "token_type": "bearer",
+            "expires_in": settings.DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "client_id": client.client_id,
         }
 
     # ── Refresh token rotation ─────────────────────────────────────────────
@@ -696,6 +790,244 @@ class DesktopAuthService:
         return count
 
     # ── Private helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def is_cli_exchanged_session(
+        session: Session,
+        external_client_id: str | None,
+    ) -> bool:
+        """True if this desktop session's current grant came from a CLI exchange.
+
+        The predicate behind the credential-minting gate (see
+        ``forbid_cli_exchanged_desktop_session`` in ``api/deps.py``). Reads the
+        provenance ``_stamp_grant`` maintains, so a session the user has since
+        re-authorized in a browser answers False — the gate follows the *current*
+        grant, exactly like the badge and the cascade do.
+
+        Returns False for anything that is not a live desktop session (a web JWT
+        with no claims, a malformed id, a missing or revoked client). That is
+        safe here rather than fail-open: a revoked client cannot authenticate at
+        all — ``get_current_user`` rejects it before any route runs — so the only
+        callers that reach a False are ones this gate was never meant to catch.
+        """
+        if not external_client_id:
+            return False
+        try:
+            client_uuid = UUID(str(external_client_id))
+        except (TypeError, ValueError):
+            return False
+        client = session.get(DesktopOAuthClient, client_uuid)
+        if client is None or client.is_revoked:
+            return False
+        return client.origin == CLIENT_ORIGIN_CLI_EXCHANGE
+
+    @staticmethod
+    def classify_client_rejection(
+        session: Session,
+        user_id: UUID,
+        client_id_str: str | None,
+    ) -> str:
+        """Label a rejected ``client_id`` **for audit purposes only**.
+
+        ``_resolve_or_register_client`` answers the caller with one merged 403
+        for missing / revoked / foreign, deliberately, so a client id cannot be
+        probed for existence. That is right for the response and useless for the
+        audit log, where the two cases could not be less alike:
+
+        - ``"revoked_own"`` — the caller's own client, which they disconnected
+          from Settings. A desktop that has not been told retries at every app
+          start, so this fires repeatedly and benignly.
+        - ``"unknown_or_foreign"`` — no such client, or someone else's. Rare,
+          and the case worth looking at.
+
+        Called only on the failure path, and only by the auditing caller. It
+        never influences the response: the 403 is raised by the resolve path
+        before this runs, so there is no way for this classification to widen
+        what a caller can learn.
+        """
+        if not client_id_str:
+            return "unknown_or_foreign"
+        stmt = select(DesktopOAuthClient).where(
+            DesktopOAuthClient.client_id == client_id_str,
+            DesktopOAuthClient.user_id == user_id,
+        )
+        client = session.exec(stmt).first()
+        if client is not None and client.is_revoked:
+            return "revoked_own"
+        return "unknown_or_foreign"
+
+    @staticmethod
+    def _stamp_grant(
+        session: Session,
+        client: DesktopOAuthClient,
+        provenance: GrantProvenance,
+    ) -> None:
+        """Record how this client's *current* grant was obtained.
+
+        The single writer of ``origin`` and ``minted_by_account_token_id``. They
+        describe one grant between them, so they are never written apart — a row
+        saying ``origin="browser_consent"`` while still pointing at the account
+        token that bought it would make the App Sessions badge and the
+        revocation cascade disagree about the same session. ``GrantProvenance``
+        exists so the pair is one value rather than two assignments.
+
+        **When the provenance actually changes, every still-live refresh token
+        on the client is revoked**, and that is what lets two per-client scalars
+        describe a per-family fact. A client can otherwise hold concurrent live
+        families — ``_create_token_pair`` mints a fresh family whenever it is
+        called without a parent — while these columns describe only the newest.
+        The consequence was not academic: a session obtained by exchanging a
+        stolen CLI account token could be *unbadged* by a later ordinary browser
+        consent on the same client id, which overwrote ``origin`` while leaving
+        the CLI-minted family alive and refreshable. The badge is relied on in
+        the contrapositive — no badge means no live CLI-minted session — so
+        laundering it in that direction defeats the control, and the same stale
+        link would drop the session out of the revoke cascade's filter.
+
+        **Why it is conditional rather than unconditional**, since a security
+        primitive is usually better off simple: an unconditional revoke also
+        fires on same-provenance re-grants, which reaches two shipped surfaces
+        this feature otherwise does not touch — the browser consent flow and the
+        mobile ``/app-auth`` flow, both of which route through here. There it
+        buys nothing: families that share a provenance share a badge and a
+        cascade link, so leaving them live loses no property. And it costs
+        something real on mobile, where an app suspended mid-refresh is the
+        very scenario the reuse-grace window exists for, while a superseded
+        token is deliberately ineligible for that window (below). Conditioning
+        on the provenance changing confines the behaviour change to the mixed
+        case, which is the only case that needs it.
+
+        The comparison is the same value that gets written, so a provenance
+        field added to ``GrantProvenance`` enters both automatically. What that
+        does **not** cover — say it plainly rather than let a reader assume
+        more — is someone adding a provenance column and writing it outside this
+        function; that exposure is identical whether the revoke is conditional
+        or not.
+
+        Revoked **without** stamping ``revoked_at``: this is a hard revocation
+        (a new grant supersedes the old), not a rotation, so the superseded
+        tokens must never qualify for the reuse-grace re-rotation window — the
+        same rule the disconnect and replay paths follow.
+
+        The bounded gap: an access token already issued from the superseded
+        grant keeps working until it expires (``DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES``),
+        because access tokens are only checked against the *client's*
+        ``is_revoked``, which a re-grant deliberately does not set. Killing that
+        too would mean revoking the client the user is in the middle of signing
+        in to.
+
+        Does NOT commit — the caller's ``_create_token_pair`` does.
+        """
+        superseded = GrantProvenance.of(client) != provenance
+        provenance.apply(client)
+
+        if not superseded:
+            return
+
+        stmt = select(DesktopRefreshToken).where(
+            DesktopRefreshToken.client_id == client.id,
+            DesktopRefreshToken.is_revoked == False,  # noqa: E712
+        )
+        for token in session.exec(stmt).all():
+            token.is_revoked = True
+
+    @staticmethod
+    def revoke_clients_for_account_token(
+        session: Session,
+        account_token_id: UUID,
+    ) -> int:
+        """Revoke every desktop client whose live grant came from this account token.
+
+        The desktop half of ``AccountCLIService.revoke_account_token``'s cascade:
+        revoking a CLI account token disconnects the desktop sessions it minted,
+        the same way it disconnects the per-agent child tokens it minted.
+
+        Only clients whose *current* grant is the CLI exchange are matched —
+        ``_stamp_grant`` clears the link when a later browser consent supersedes
+        it, so a session the user has since re-authorized in a browser survives,
+        and there is no live CLI-granted family left behind when it does.
+
+        Returns the number of clients revoked. Does NOT commit: the caller
+        commits the whole cascade at once, so the CLI tokens and the desktop
+        sessions are revoked together or not at all.
+        """
+        stmt = select(DesktopOAuthClient).where(
+            DesktopOAuthClient.minted_by_account_token_id == account_token_id,
+            DesktopOAuthClient.is_revoked == False,  # noqa: E712
+        )
+        revoked = 0
+        for client in session.exec(stmt).all():
+            client.is_revoked = True
+            token_stmt = select(DesktopRefreshToken).where(
+                DesktopRefreshToken.client_id == client.id,
+                DesktopRefreshToken.is_revoked == False,  # noqa: E712
+            )
+            for token in session.exec(token_stmt).all():
+                token.is_revoked = True
+            revoked += 1
+
+        if revoked:
+            logger.info(
+                "Revoked %d desktop client(s) minted by account token %s",
+                revoked,
+                account_token_id,
+            )
+        return revoked
+
+    @staticmethod
+    def _resolve_or_register_client(
+        session: Session,
+        user_id: UUID,
+        client_id_str: str | None,
+        device_name: str | None,
+        platform: str | None,
+        app_version: str | None,
+        created_origin: str,
+    ) -> DesktopOAuthClient:
+        """Resolve a named client for ``user_id``, or lazily register a new one.
+
+        The lazy-registration path both native-client surfaces need: a client
+        that has never talked to this instance has no ``client_id`` yet, so the
+        first successful authorization creates its row from the display fields
+        it supplied (``device_name`` / ``platform`` / ``app_version``).
+
+        ``created_origin`` seeds ``origin`` on a newly created row only — an
+        existing row keeps whatever its last grant stamped, and the *granting*
+        caller re-stamps it (see ``origin`` on ``DesktopOAuthClient``).
+
+        Does NOT commit: callers flush-and-commit alongside whatever else the
+        grant writes.
+
+        Raises:
+            HTTPException: 403 if ``client_id_str`` names a client that does not
+                exist, is revoked, or belongs to another user. The three are
+                deliberately one response — a client id is guessable-ish and
+                confirming existence would leak another user's registrations.
+        """
+        if client_id_str:
+            client_stmt = select(DesktopOAuthClient).where(
+                DesktopOAuthClient.client_id == client_id_str,
+                DesktopOAuthClient.user_id == user_id,
+                DesktopOAuthClient.is_revoked == False,  # noqa: E712
+            )
+            client = session.exec(client_stmt).first()
+            if not client:
+                raise HTTPException(
+                    status_code=403, detail="client_not_found_or_forbidden"
+                )
+            return client
+
+        client = DesktopOAuthClient(
+            client_id=generate_client_id(),
+            user_id=user_id,
+            device_name=device_name or "Unknown Device",
+            platform=platform,
+            app_version=app_version,
+            origin=created_origin,
+        )
+        session.add(client)
+        session.flush()  # assigns PK without committing
+        return client
 
     @staticmethod
     def _resolve_refresh_client(

@@ -657,6 +657,10 @@ from .cli.account_convenience import (
     AccountConnectMcpBody,
     AccountApiProxyRequest,
 )
+from .cli.account_desktop_token import (
+    AccountDesktopTokenBody,
+    AccountDesktopTokenResponse,
+)
 from .cli.cli_token import (
     CLIToken,
     CLITokenBase,

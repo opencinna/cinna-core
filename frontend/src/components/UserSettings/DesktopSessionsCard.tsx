@@ -6,6 +6,12 @@
  * Both client kinds share the same `desktop_oauth_client` backing table, so
  * this single card lists them together.  Follows the same card layout as other
  * Settings sections.
+ *
+ * This card is also the only surface on which a session created by
+ * `POST /cli/account/desktop-token` — a desktop that linked itself from a CLI
+ * `account.json` rather than through a browser consent — is visible to the
+ * account owner, which is why such rows are badged.  See the backend's
+ * `AccountCLIService.exchange_for_desktop_token`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Monitor, Apple, Chrome, Laptop, Smartphone, Unplug } from "lucide-react"
@@ -131,6 +137,18 @@ export function DesktopSessionsCard() {
                       {c.app_version && (
                         <Badge variant="outline" className="text-xs px-1 py-0">
                           v{c.app_version}
+                        </Badge>
+                      )}
+                      {/* Only the CLI-exchanged origin is badged: a browser
+                          consent is the ordinary way to connect an app, and a
+                          badge on every row would bury the one that matters. */}
+                      {c.origin === "cli_exchange" && (
+                        <Badge
+                          variant="secondary"
+                          className="text-xs px-1 py-0"
+                          title="Linked from a CLI account token on this machine, without a browser sign-in."
+                        >
+                          CLI link
                         </Badge>
                       )}
                       <RelativeTime iso={c.last_used_at ?? null} />

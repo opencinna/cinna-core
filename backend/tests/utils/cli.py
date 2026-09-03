@@ -317,3 +317,36 @@ def get_account_context_package(
     r = client.get(f"{_BASE}/account/context-package", headers=account_headers)
     assert r.status_code == 200, f"Get account context package failed: {r.text}"
     return r.content
+
+
+def exchange_for_desktop_token(
+    client: TestClient,
+    account_headers: dict[str, str],
+    client_id: str | None = None,
+    device_name: str | None = "Test Desktop",
+    platform: str | None = "macos",
+    app_version: str | None = "1.2.3",
+    expected_status: int = 200,
+) -> dict:
+    """POST /api/v1/cli/account/desktop-token — trade an account token for desktop tokens.
+
+    Pass ``client_id=None`` (the default) to exercise lazy registration, or an
+    existing desktop client id to bind the issued pair to it. ``expected_status``
+    lets error-path tests reuse the helper without a second call shape.
+    """
+    body: dict = {
+        "client_id": client_id,
+        "device_name": device_name,
+        "platform": platform,
+        "app_version": app_version,
+    }
+    r = client.post(
+        f"{_BASE}/account/desktop-token",
+        headers=account_headers,
+        json=body,
+    )
+    assert r.status_code == expected_status, (
+        f"Desktop-token exchange: expected {expected_status}, got "
+        f"{r.status_code}: {r.text}"
+    )
+    return r.json()

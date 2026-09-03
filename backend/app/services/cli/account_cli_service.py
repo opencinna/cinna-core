@@ -26,7 +26,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from sqlmodel import Session, select
 
 if TYPE_CHECKING:
@@ -51,6 +51,10 @@ if TYPE_CHECKING:
         AccountCredentialTypesPublic,
         AccountCredentialUpdateBody,
     )
+    from app.models.cli.account_desktop_token import (
+        AccountDesktopTokenBody,
+        AccountDesktopTokenResponse,
+    )
     from app.models.credentials.credential import CredentialPublic, CredentialsPublic
     from app.models.mcp.mcp_provider import (
         DiscoverableAgents,
@@ -74,6 +78,8 @@ from app.models.events.security_event import (
     CLI_ACCOUNT_CREDENTIAL_DELETED,
     CLI_ACCOUNT_CREDENTIAL_SHARED_WITH_AGENT,
     CLI_ACCOUNT_CREDENTIAL_UPDATED,
+    CLI_ACCOUNT_DESKTOP_TOKEN_DENIED,
+    CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED,
     CLI_ACCOUNT_ENV_RESTARTED,
     CLI_ACCOUNT_SCHEDULE_CREATED,
     CLI_ACCOUNT_SCHEDULE_DELETED,
@@ -85,6 +91,7 @@ from app.models.events.security_event import (
 )
 from app.services.agents.agent_service import AgentService, CanBuildError
 from app.services.cli.cli_auth import CLI_TOKEN_EXPIRY_DAYS, CLIAuthService
+from app.services.common.rate_limiter import RateLimiter
 from app.services.cli.cli_service import (
     SETUP_TOKEN_EXPIRY_MINUTES,
     _ensure_utc,
@@ -94,6 +101,11 @@ from app.services.events.security_event_service import SecurityEventService
 from app.utils import client_ip
 
 logger = logging.getLogger(__name__)
+
+# Desktop-token exchanges per account token per minute. A desktop links once per
+# workshop and re-exchanges only when it has lost its refresh token, so a real
+# client stays far below this; the ceiling exists to bound row creation.
+DESKTOP_TOKEN_EXCHANGE_LIMIT_PER_MIN = 10
 
 
 class WorkspaceNotFoundError(Exception):
@@ -106,6 +118,11 @@ class WorkspaceNotFoundError(Exception):
 
 class AccountCLIService:
     """Account-level CLI operations. All methods are static (mirrors CLIService)."""
+
+    # Throttles ``POST /account/desktop-token`` per account token. Process-local,
+    # like every other consumer of this limiter — a backstop against a runaway
+    # client, not a billing control.
+    _desktop_token_rate_limiter = RateLimiter()
 
     # ── Account Setup Token Lifecycle ────────────────────────────────────
 
@@ -453,7 +470,16 @@ class AccountCLIService:
 
     @staticmethod
     def list_account_tokens(db: Session, user: User) -> list[CLIAccountTokenPublic]:
-        """List the user's active account tokens with a synced-child count."""
+        """List the user's active account tokens with their blast radius.
+
+        Each row carries what revoking it would disconnect: the per-agent child
+        tokens it minted (``child_count``) and the desktop sessions bought with
+        it (``desktop_session_count``). Both are counted here because the
+        revoke confirmation dialog is the only place a user can learn the cost
+        before paying it, and the cascade now covers both.
+        """
+        from app.models.desktop_auth.desktop_oauth_client import DesktopOAuthClient
+
         now = datetime.now(UTC)
         stmt = (
             select(CLIToken)
@@ -475,6 +501,11 @@ class AccountCLIService:
                 CLIToken.expires_at > now,
             )
             child_count = len(list(db.exec(child_stmt).all()))
+            desktop_stmt = select(DesktopOAuthClient).where(
+                DesktopOAuthClient.minted_by_account_token_id == token.id,
+                DesktopOAuthClient.is_revoked == False,  # noqa: E712
+            )
+            desktop_session_count = len(list(db.exec(desktop_stmt).all()))
             results.append(
                 CLIAccountTokenPublic(
                     id=token.id,
@@ -487,6 +518,7 @@ class AccountCLIService:
                     expires_at=token.expires_at,
                     created_at=token.created_at,
                     child_count=child_count,
+                    desktop_session_count=desktop_session_count,
                 )
             )
         return results
@@ -494,12 +526,25 @@ class AccountCLIService:
     @staticmethod
     def revoke_account_token(db: Session, token_id: uuid.UUID, user: User) -> int:
         """
-        Soft-revoke an account token *and* every child it minted.
+        Soft-revoke an account token, every child it minted, and every desktop
+        session bought with it.
 
-        Ownership-checked. Returns the number of tokens revoked (the account
-        token plus its children). This is the cascade described in the plan —
-        revocation, not row deletion, is the primary teardown mechanism.
+        Ownership-checked. Returns the number of **sessions** revoked: the
+        account token, its per-agent child tokens, and any desktop client whose
+        live grant came from this token via ``POST /account/desktop-token``
+        (each such client counts once, however many refresh tokens it holds).
+        The route surfaces that number as "N session(s) disconnected", and a
+        desktop app is a session in the plain reading of that sentence — so
+        counting it here is what makes the message true rather than merely
+        larger. This is the cascade described in the plan — revocation, not row
+        deletion, is the primary teardown mechanism.
+
+        The desktop half runs in the same transaction as the CLI half, so a
+        caller can never be told sessions were disconnected while some of them
+        are still live.
         """
+        from app.services.desktop_auth.desktop_auth_service import DesktopAuthService
+
         token = db.get(CLIToken, token_id)
         if not token or token.token_type != "cli-account":
             raise ValueError("Account token not found")
@@ -520,6 +565,8 @@ class AccountCLIService:
             child.is_revoked = True
             db.add(child)
             revoked += 1
+
+        revoked += DesktopAuthService.revoke_clients_for_account_token(db, token.id)
 
         db.commit()
         return revoked
@@ -1503,6 +1550,12 @@ class AccountCLIService:
     # in the UI. ``credential_data`` is never accepted from the account body and
     # ``with-data`` is never called. This preserves Decision 6 (no credential
     # secrets via the account token) for writes as well as reads.
+    #
+    # Scope note, so the invariant is not read as more than it is: it is about
+    # what *these routes* return. ``exchange_for_desktop_token`` (below) hands
+    # the caller a standard user JWT, which can call ``with-data`` — read its
+    # SECURITY POSITION before treating Decision 6 as a property of anyone
+    # holding an account CLI token.
 
     @staticmethod
     def _credential_public(db: Session, credential) -> "CredentialPublic":
@@ -1798,3 +1851,230 @@ class AccountCLIService:
                 },
             ),
         )
+
+    # ── Desktop token exchange (handover §8.2) ───────────────────────────
+
+    @staticmethod
+    async def exchange_for_desktop_token(
+        db: Session,
+        user: User,
+        cli_token: CLIToken,
+        body: "AccountDesktopTokenBody",
+        request: Request,
+    ) -> "AccountDesktopTokenResponse":
+        """Trade an account CLI token for a Cinna Desktop session.
+
+        Cinna Desktop opens a workshop tree, finds the ``account.json`` a
+        previous ``cinna login`` left there, and silently links the profile
+        instead of making the user type credentials into a connect card. This is
+        the server half of that: prove-once-with-the-CLI-token, receive a desktop
+        access + refresh pair bound to the desktop's client id, plus the account
+        email so the desktop can name the profile without a second call.
+
+        The CLI token is **used, not spent**: it is neither consumed nor revoked
+        here, and its rolling expiry rolls exactly as it does on any other
+        account route (``_resolve_account_cli_context``). Repeating the exchange
+        is legitimate — a desktop that lost its refresh token can simply ask
+        again.
+
+        SECURITY POSITION — this is the whole question on this endpoint, so it is
+        written here rather than left to be re-derived:
+
+        **The exchange converts a deliberately scope-restricted credential into a
+        broader one, and that is a real escalation, not a relabelling.** An
+        account CLI token reaches ``/cli/account/*`` and nothing else
+        (``AccountCLIContext`` rejects it everywhere else, and the generic
+        ``api-proxy`` hatch subtracts credentials, admin, MFA, the CLI router
+        itself and other clients' auth surfaces — user management too, bar two
+        explicitly re-admitted GETs). The desktop access token it buys is a
+        **standard user JWT**: it satisfies ``CurrentUser`` on every route,
+        including ``GET /credentials/{id}/with-data``, which returns decrypted
+        secret values that no account-CLI route will ever return — the very
+        thing the credential-drafting invariant above exists to prevent.
+
+        It also used to reach the platform's credential-minting surfaces, which
+        made the session self-replicating: mint a *fresh* account CLI token,
+        carrying no provenance link, and the original could be revoked without
+        ending anything. ``forbid_cli_exchanged_desktop_session`` closes that
+        loop — see property 2 for what it does and does not buy.
+
+        Two properties make that acceptable. Note which argument is doing the
+        work, because the obvious one does not hold in general:
+
+        1. **The capabilities it adds are mostly ones the file already carried
+           — for a developer.** Whoever can read an ``account.json`` can already
+           mint a per-agent CLI token for every agent that user can build
+           (``POST /account/agents/{id}/mint``) and run arbitrary commands inside
+           those environments (``POST /cli/agents/{id}/exec``).
+           **This argument fails for a non-developer holder**, and the failure is
+           reachable: ``cinna login`` device approval has no role gate, so an
+           agent-user can hold an account token, and ``mint`` would refuse them
+           every agent. For them the exchange is a straight escalation from
+           account routes to a full user session. It is still allowed, on a
+           different and narrower ground: that session is *their own* account,
+           no more than they already get by signing in to the web app with their
+           password. What the exchange never does is cross to another user.
+        2. **The result is visible, killable, and now revoked by the same act
+           that revokes the token that bought it.** The client is stamped
+           ``origin="cli_exchange"`` and linked to the account token
+           (``_stamp_grant`` writes both, and collapses the client to a single
+           live grant so neither column can be laundered by a later browser
+           consent). Disconnecting from Settings revokes the refresh family and
+           kills the access token on its next request —
+           ``get_current_user`` re-checks the client row on every call.
+           Revoking the account CLI token itself cascades into the desktop
+           session too (``revoke_account_token``), and the session cannot mint
+           replacement CLI credentials to outlive that cascade.
+
+           **What that remediation is NOT is complete, and saying otherwise is
+           the most harmful thing this docstring could do.** A compromised user
+           who believes one revocation ended it stops looking, and nothing in
+           the system will ever correct them — no test fails, no alert fires.
+           So, plainly: the exchanged session is a full user JWT for as long as
+           it lives, and a full user JWT has persistence routes no gate here
+           can reach. It can read decrypted credential values and use them
+           anywhere, off-platform and after every token in this system is dead;
+           nothing here can recall a secret that has already left.
+
+           The gate covers the minting surfaces known to satisfy its property
+           today — the two CLI setup-token routes, device-login approval, and
+           the desktop and mobile **consent** endpoints, which would otherwise
+           mint a whole new native session with clean browser provenance and no
+           cascade link. What it cannot cover is a minting route added tomorrow
+           that nobody re-derives the property against, which is why the
+           dependency's docstring tells you to re-derive rather than copy a list.
+
+           So revoking the account token and disconnecting the session are
+           necessary and not sufficient: credentials the session could read must
+           be rotated, and App Sessions must be read for entries nobody
+           recognises.
+
+           One further gap in the badge, disclosed here because this is where
+           the contrapositive is asserted rather than only where it is
+           implemented: after a browser or mobile re-consent on a CLI-exchanged
+           client, an access token issued by the superseded grant stays valid
+           until it expires (``DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES``) while the
+           row already reads ``browser_consent``. For that window the badge
+           understates what is live. Revoking the client, or the account token
+           behind it, closes it on the next request.
+
+        **What is NOT claimed, because the server does not enforce it:** that
+        the exchange stays on one machine. A CLI account token is a bearer
+        credential with no device binding — ``machine_name`` / ``machine_info``
+        are self-reported at mint time — and this endpoint checks no IP, origin
+        or device. A copied ``account.json`` works from anywhere. ``cinna login``
+        exists precisely so the approving browser and the requesting machine can
+        differ, so this is not a corner case. The single-machine story is the
+        *intended* usage, never a control, and must not be written down as one.
+
+        **Both outcomes are audited** — issued and refused — with the client id
+        and source IP, never a token value. The audit row is written after the
+        tokens are committed (matching every other account-CLI verb), so a
+        database failure between the two would leave a live session with no
+        ``ISSUED`` row; the user-facing control does not depend on that row,
+        since the session is listed in App Sessions either way.
+
+        **What must NOT be done to "narrow" the escalation:** mint a restricted
+        token variant here. The desktop refreshes this pair through the same
+        ``/desktop-auth/token`` endpoint as a browser-issued one, and a token the
+        rotation logic has never seen is exactly the failure mode D12 names. The
+        scope question is answered by audit, revocability and the cascade, not by
+        a bespoke token shape.
+        """
+        from app.models.cli.account_desktop_token import AccountDesktopTokenResponse
+        from app.services.desktop_auth.desktop_auth_service import DesktopAuthService
+
+        # Per-account-token backstop. Every call with no ``client_id`` registers
+        # a client row and a refresh token, so an unthrottled loop would both
+        # amplify writes and bury the App Sessions list the security position
+        # above depends on being readable. Mirrors the escape hatch's limiter.
+        if (
+            AccountCLIService._desktop_token_rate_limiter.check(
+                str(cli_token.id), DESKTOP_TOKEN_EXCHANGE_LIMIT_PER_MIN
+            )
+            is not None
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many desktop-token exchanges. Try again shortly.",
+            )
+
+        try:
+            tokens = DesktopAuthService.issue_tokens_for_cli_exchange(
+                session=db,
+                user_id=user.id,
+                client_id_str=body.client_id,
+                device_name=body.device_name,
+                platform=body.platform,
+                app_version=body.app_version,
+                account_token_id=cli_token.id,
+            )
+        except HTTPException as e:
+            if e.status_code != 403:
+                # Only the authorization refusal is a DENIED event. Anything
+                # else raised from the issuance path is a failure, not a
+                # decision, and auditing it as one would file a misleading row
+                # (``requested_client_id`` on an error that had nothing to do
+                # with the client id). Let it propagate untouched.
+                raise
+            # Authorization failure (a client id that is revoked, unknown, or
+            # another user's). Nothing has been written at this point — the
+            # resolve step raises before any insert — so the audit write below
+            # commits only itself.
+            #
+            # The caller gets one merged 403 so a client id cannot be probed,
+            # but the audit log distinguishes the two: a desktop retrying with a
+            # client the user disconnected is routine and would otherwise flood
+            # the feed with high-severity rows that all say the same thing.
+            classification = DesktopAuthService.classify_client_rejection(
+                db, user.id, body.client_id
+            )
+            await SecurityEventService.create_event(
+                session=db,
+                user_id=user.id,
+                data=SecurityEventCreate(
+                    event_type=CLI_ACCOUNT_DESKTOP_TOKEN_DENIED,
+                    severity="low" if classification == "revoked_own" else "high",
+                    details={
+                        "requested_client_id": body.client_id,
+                        "reason": classification,
+                        "detail": str(e.detail),
+                        "cli_token_id": str(cli_token.id),
+                        "ip": client_ip(request),
+                    },
+                ),
+            )
+            raise
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                event_type=CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED,
+                severity="high",
+                details={
+                    "client_id": tokens["client_id"],
+                    "registered_client": body.client_id is None,
+                    "device_name": body.device_name,
+                    "platform": body.platform,
+                    "app_version": body.app_version,
+                    # Which CLI token bought the session — the link an
+                    # investigator follows back to the account-token row, and
+                    # from there to its machine label, which is self-reported
+                    # and therefore a lead rather than an attribution (see the
+                    # SECURITY POSITION above). The token VALUE is never
+                    # recorded, here or anywhere.
+                    "cli_token_id": str(cli_token.id),
+                    "ip": client_ip(request),
+                },
+            ),
+        )
+
+        logger.info(
+            "Issued desktop tokens for user %s via CLI account-token exchange "
+            "(desktop client %s)",
+            user.id,
+            tokens["client_id"],
+        )
+
+        return AccountDesktopTokenResponse(**tokens, email=user.email)

@@ -92,6 +92,18 @@ CLI_ACCOUNT_SCHEDULE_RUN = "CLI_ACCOUNT_SCHEDULE_RUN"
 # audited (mirrors the REST status read).
 CLI_ACCOUNT_STATUS_COMMAND_SET = "CLI_ACCOUNT_STATUS_COMMAND_SET"
 
+# ── Account-CLI → desktop token exchange ──────────────────────────────
+# ``POST /cli/account/desktop-token`` trades an account CLI token for a desktop
+# session (a standard user JWT + rotating refresh token). That is a conversion
+# between credential CLASSES, not another account-CLI operation, so it is audited
+# on every call — including the ones that fail authorization: unlike the verbs
+# above there is no "diagnostic read" variant of it to mirror, and an attempt
+# against a client id the caller does not own is precisely the event a user needs
+# to see. The payload carries the desktop client id, its display name and the
+# source IP; the issued tokens are NEVER logged, in any form.
+CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED = "CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED"
+CLI_ACCOUNT_DESKTOP_TOKEN_DENIED = "CLI_ACCOUNT_DESKTOP_TOKEN_DENIED"
+
 # ── Account-CLI device-login (``cinna login``) ────────────────────────
 # A device-login approval mints a fresh account CLI token (same audit as the
 # setup-token path via ``CLI_ACCOUNT_TOKEN_CREATED``); these record the

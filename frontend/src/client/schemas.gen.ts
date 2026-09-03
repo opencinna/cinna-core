@@ -1967,6 +1967,110 @@ fields are editable here. All fields optional; only the provided ones are
 applied (\`\`exclude_unset\`\` semantics).`
 } as const;
 
+export const AccountDesktopTokenBodySchema = {
+    properties: {
+        client_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Client Id'
+        },
+        device_name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Device Name'
+        },
+        platform: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Platform'
+        },
+        app_version: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'App Version'
+        }
+    },
+    type: 'object',
+    title: 'AccountDesktopTokenBody',
+    description: `Body of \`\`POST /cli/account/desktop-token\`\`.
+
+\`\`client_id\`\` is the desktop's own client id when it has one. A desktop that
+has never authenticated against this instance has none, so it sends the same
+three display fields the browser consent flow accepts (\`\`device_name\`\`,
+\`\`platform\`\`, \`\`app_version\`\`) and a client is registered for it — the
+identical lazy-registration path, not a copy of it.
+
+There is deliberately no field for the client's *origin*: provenance is set
+by the server, never claimed by the caller.`
+} as const;
+
+export const AccountDesktopTokenResponseSchema = {
+    properties: {
+        access_token: {
+            type: 'string',
+            title: 'Access Token'
+        },
+        refresh_token: {
+            type: 'string',
+            title: 'Refresh Token'
+        },
+        token_type: {
+            type: 'string',
+            title: 'Token Type',
+            default: 'bearer'
+        },
+        expires_in: {
+            type: 'integer',
+            title: 'Expires In'
+        },
+        client_id: {
+            type: 'string',
+            title: 'Client Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        }
+    },
+    type: 'object',
+    required: ['access_token', 'refresh_token', 'expires_in', 'client_id', 'email'],
+    title: 'AccountDesktopTokenResponse',
+    description: `Desktop tokens issued from a CLI account token.
+
+Mirrors the \`\`/desktop-auth/token\`\` response the desktop already knows how to
+consume — same field names, same semantics, same refresh endpoint — plus
+\`\`email\`\`, which lets the desktop name the profile it is about to create
+without a second round-trip to \`\`/desktop-auth/userinfo\`\`.`
+} as const;
+
 export const AccountRestartEnvResultSchema = {
     properties: {
         environment_id: {
@@ -10239,10 +10343,14 @@ export const CLIAccountTokenPublicSchema = {
         child_count: {
             type: 'integer',
             title: 'Child Count'
+        },
+        desktop_session_count: {
+            type: 'integer',
+            title: 'Desktop Session Count'
         }
     },
     type: 'object',
-    required: ['id', 'name', 'owner_id', 'prefix', 'is_revoked', 'last_used_at', 'machine_info', 'expires_at', 'created_at', 'child_count'],
+    required: ['id', 'name', 'owner_id', 'prefix', 'is_revoked', 'last_used_at', 'machine_info', 'expires_at', 'created_at', 'child_count', 'desktop_session_count'],
     title: 'CLIAccountTokenPublic',
     description: 'Public projection of an account CLI token, with synced-child count.'
 } as const;
@@ -12837,6 +12945,10 @@ export const DesktopOAuthClientPublicSchema = {
             ],
             title: 'App Version'
         },
+        origin: {
+            type: 'string',
+            title: 'Origin'
+        },
         last_used_at: {
             anyOf: [
                 {
@@ -12860,7 +12972,7 @@ export const DesktopOAuthClientPublicSchema = {
         }
     },
     type: 'object',
-    required: ['client_id', 'device_name', 'created_at', 'is_revoked'],
+    required: ['client_id', 'device_name', 'origin', 'created_at', 'is_revoked'],
     title: 'DesktopOAuthClientPublic'
 } as const;
 

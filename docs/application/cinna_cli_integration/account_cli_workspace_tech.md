@@ -20,6 +20,10 @@
   - `AccountAgentStatusResult` — `{status: AgentStatusPublic, status_refresh_command: str|None}` (Phase 5). The combined status read — the `STATUS.md` snapshot plus the configured pre-command, returned by both the status get and the set-command verbs. (Imports `AgentStatusPublic` from `agents/agent_status.py`.)
   - **Schedule verbs reuse existing schedule models** — no new request/response models. `ScheduleRequest`, `ScheduleResponse`, `CreateScheduleRequest`, `UpdateScheduleRequest`, `AgentSchedulePublic`, `AgentSchedulesPublic` (from `models/agents/agent_schedule.py`) and `AgentScheduleLogsPublic` (from `models/agents/agent_schedule_log.py`); run-now returns `Message`.
 
+- `backend/app/models/cli/account_desktop_token.py` — New file (desktop-token exchange schemas, no `table=True`):
+  - `AccountDesktopTokenBody` — `{client_id: str|None, device_name: str|None, platform: str|None, app_version: str|None}`. **No `origin` field** by design: provenance is set by the server, never claimed by the caller.
+  - `AccountDesktopTokenResponse` — the `/desktop-auth/token` shape (`access_token`, `refresh_token`, `token_type`, `expires_in`, `client_id`) plus `email`, so the desktop can name the profile without calling `/desktop-auth/userinfo`.
+
 ### Backend — Models (Phases 1–2)
 
 - `backend/app/models/cli/cli_token.py` — Extended with:
@@ -280,6 +284,23 @@
   - `_resolve_cli_context` hardened: rejects `token_type != "cli"` (account
     tokens cannot satisfy per-agent context)
 
+### Backend — Credential-minting gate
+
+- `backend/app/api/deps.py` — `forbid_cli_exchanged_desktop_session` (exported as
+  `NoCliExchangedSession`). Refuses, with 403, any request whose JWT belongs to a
+  desktop session created by `POST /account/desktop-token`. Applied to the routes
+  matching the property *credential-minting surfaces reachable from an ordinary
+  user JWT that produce a token outliving the revoke cascade*: `POST /cli/setup-tokens`,
+  `POST /cli/account/setup-tokens`, `POST /cli/account/login/approve` (which
+  mints an account token with no role gate at all), and the desktop + mobile
+  `POST /consent` endpoints (approving mints a whole new native session with
+  clean `browser_consent` provenance and no cascade link — the same
+  self-replication shape one router over). Deliberately **not** applied to revocation or listing routes — a
+  compromised session must never be able to stop its victim revoking things.
+  Scoped by provenance, not client kind: a browser-consented desktop session is
+  unaffected. **Re-derive the route set rather than trusting this list** — a new
+  minting route added later inherits the loop silently.
+
 ### Backend — Security Events
 
 - `backend/app/models/events/security_event.py`:
@@ -294,6 +315,7 @@
   - `CLI_ACCOUNT_ENV_RESTARTED = "CLI_ACCOUNT_ENV_RESTARTED"` — written on `agent restart-env` (a build-rights state change that bounces the container); `details={environment_id, ip}`, `agent_id` = target. `agent show` (inspect) is diagnostic and **not** audited.
   - `CLI_ACCOUNT_SCHEDULE_CREATED` / `CLI_ACCOUNT_SCHEDULE_UPDATED` / `CLI_ACCOUNT_SCHEDULE_DELETED` / `CLI_ACCOUNT_SCHEDULE_RUN` (Phase 5) — one per schedule write (`severity="low"`); `agent_id` = target. `list` / `generate` / `logs` are diagnostic reads and **not** audited.
   - `CLI_ACCOUNT_STATUS_COMMAND_SET` (Phase 5) — written on `agent status set-command`; `details={command, ip}`, `agent_id` = target. `status show` / `refresh` are diagnostic and **not** audited.
+  - `CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED` / `CLI_ACCOUNT_DESKTOP_TOKEN_DENIED` — written on every desktop-token exchange, success and authorization failure alike (`severity="high"`, `agent_id=None`). The failure case is audited unlike other read failures because the call converts one credential class into another; token values are never in the payload.
 
 ### Frontend — Components
 
@@ -343,6 +365,14 @@
 
 ### Tests
 
+- `backend/tests/api/cli/test_account_desktop_token.py` — 5 scenario tests for the
+  desktop-token exchange: full lifecycle (lazy registration → user-JWT session →
+  App Sessions entry with `origin` → CLI token unspent → rotation through
+  `/desktop-auth/token` → revocation kills access *and* refresh), binding to a
+  supplied client id including the origin-laundering case, the auth matrix
+  (no auth / user JWT / per-agent CLI token / revoked account token → 401;
+  another user's client id → 403 with nothing issued), audit events, and the
+  absence of a role gate.
 - `backend/tests/api/cli/test_account_cli.py` — 16 scenario-based API tests
   (Scenarios 1–13: Phase 1 flows; Scenarios 14–16: Phase 2 context package;
   Scenario 14 extended in Phase 4 to also assert `context/guides/`):
@@ -462,6 +492,7 @@ Response:
 | `GET` | `/api/v1/cli/account/user-workspaces` | 200 | List the account user's own workspaces (catalogue for `cinna account user-workspace`); response `UserWorkspacesPublic` |
 | `GET` | `/api/v1/cli/account/agents` | 200 | List accessible agents with `can_build` / `is_foreign_install` / `has_active_environment` |
 | `POST` | `/api/v1/cli/account/agents/{agent_id}/mint` | 200 / 403 / 404 | Mint per-agent child token; 403 / 404 on `can_build` failures |
+| `POST` | `/api/v1/cli/account/desktop-token` | 200 / 401 / 403 / 429 | Exchange the account token for a Cinna Desktop access + refresh pair bound to `client_id` (lazily registered when absent), plus the account `email`. No role gate. 403 when `client_id` is revoked / unknown / another user's (one merged status — the id is not probeable). Rate-limited per account token (`DESKTOP_TOKEN_EXCHANGE_LIMIT_PER_MIN`, default 10) because a `client_id`-less call creates rows. Body `AccountDesktopTokenBody`, response `AccountDesktopTokenResponse`. Issuance runs through `DesktopAuthService`; see [Desktop App Authentication](../desktop_auth/desktop_auth_tech.md) |
 | `DELETE` | `/api/v1/cli/account/tokens/children/{child_token_id}` | 200 / 401 / 404 | Revoke a child token minted by this account token (`cinna agent unsync`); idempotent on already-revoked; 404 for any token not provenance-matched to the calling account token |
 | `POST` | `/api/v1/cli/account/agents` | 200 / 403 / 404 | Create agent (thin client); `require_developer`-gated; body `AccountAgentCreateBody`; response `AgentPublic`; 404 if `user_workspace_id` is not owned by the caller |
 | `POST` | `/api/v1/cli/account/connect/agent-api` | 200 / 400 / 403 / 404 | Wire consumer → producer REST API; `require_developer`-gated; body `AccountConnectAgentApiBody`; response `ConnectAgentApiResponse` |
@@ -577,6 +608,29 @@ Three new settings in `backend/app/core/config.py`:
 def create_account_setup_token(
     db: Session, user: User, request: Request
 ) -> CLISetupTokenCreated: ...
+
+@staticmethod
+async def exchange_for_desktop_token(
+    db: Session,
+    user: User,
+    cli_token: CLIToken,
+    body: AccountDesktopTokenBody,
+    request: Request,
+) -> AccountDesktopTokenResponse: ...
+# Delegates issuance to DesktopAuthService.issue_tokens_for_cli_exchange (no
+# parallel token path), rate-limits per account token, audits both outcomes
+# (classifying refusals so a routine retry is not logged as suspicious), and
+# adds the account email to the response. Its docstring carries the security
+# position on converting a scope-restricted account token into a full user
+# session — read it before changing the endpoint or its role gating.
+
+@staticmethod
+def revoke_account_token(db: Session, token_id: uuid.UUID, user: User) -> int: ...
+# Now cascades twice in one transaction: child CLI tokens (as before) and any
+# desktop client whose live grant came from this account token, via
+# DesktopAuthService.revoke_clients_for_account_token. The returned count is
+# sessions — the account token, each child, each desktop client once — and the
+# route renders it as "N session(s) disconnected".
 
 @staticmethod
 async def exchange_account_setup_token(

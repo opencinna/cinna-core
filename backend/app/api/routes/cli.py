@@ -30,6 +30,7 @@ from sqlmodel import Session, select
 
 from app.api.deps import (
     AccountCLIContextDep,
+    NoCliExchangedSession,
     CLIContext,
     CLIContextDep,
     CLIContextWSDep,
@@ -68,6 +69,10 @@ from app.models.cli.account_convenience import (
     AccountRestartEnvResult,
     AccountStatusRefreshCommandBody,
     ContextPackageVersionPublic,
+)
+from app.models.cli.account_desktop_token import (
+    AccountDesktopTokenBody,
+    AccountDesktopTokenResponse,
 )
 from app.models.cli.cli_device_login import (
     DeviceLoginPollRequest,
@@ -269,7 +274,11 @@ router = APIRouter(prefix="/cli", tags=["cli"])
 
 # ── Setup Token Management (user-auth) ──────────────────────────────────────
 
-@router.post("/setup-tokens", response_model=CLISetupTokenCreated)
+@router.post(
+    "/setup-tokens",
+    response_model=CLISetupTokenCreated,
+    dependencies=[NoCliExchangedSession],
+)
 def create_setup_token(
     request: Request,
     db: SessionDep,
@@ -581,7 +590,11 @@ async def sync_stream_ws(
 # authenticate via the account CLI token (AccountCLIContextDep).
 
 
-@router.post("/account/setup-tokens", response_model=CLISetupTokenCreated)
+@router.post(
+    "/account/setup-tokens",
+    response_model=CLISetupTokenCreated,
+    dependencies=[NoCliExchangedSession],
+)
 def create_account_setup_token(
     request: Request,
     db: SessionDep,
@@ -625,10 +638,17 @@ def revoke_account_token(
     current_user: CurrentUser,
 ) -> Any:
     """
-    Revoke an account token and cascade-revoke every child token it minted.
+    Revoke an account token and cascade-revoke everything it minted.
 
-    On the next API call each synced agent gets 401 and Mutagen pauses. Local
-    files remain intact.
+    Two cascades, one transaction: every per-agent child CLI token, and every
+    Cinna Desktop session bought from this token through
+    ``POST /account/desktop-token``. On the next API call each synced agent gets
+    401 and Mutagen pauses; a cascaded desktop app is rejected on its next
+    request too, not merely at its next refresh. Local files remain intact.
+
+    The returned count is sessions, not rows: the account token, each child
+    token, and each desktop client (once, whatever number of refresh tokens it
+    held).
     """
     try:
         count = AccountCLIService.revoke_account_token(
@@ -1852,7 +1872,11 @@ def device_login_request_metadata(
     return public
 
 
-@router.post("/account/login/approve", response_model=Message)
+@router.post(
+    "/account/login/approve",
+    response_model=Message,
+    dependencies=[NoCliExchangedSession],
+)
 async def device_login_approve(
     body: DeviceLoginResolveBody,
     request: Request,
@@ -1891,3 +1915,49 @@ async def device_login_reject(
     except DeviceLoginError as e:
         _map_device_login_error(e)
     return Message(message="Device login rejected")
+
+
+# ── Account CLI → desktop token exchange ─────────────────────────────────────
+
+
+@router.post("/account/desktop-token", response_model=AccountDesktopTokenResponse)
+async def exchange_account_token_for_desktop_token(
+    body: AccountDesktopTokenBody,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """Exchange this account CLI token for a Cinna Desktop access + refresh pair.
+
+    Lets Cinna Desktop link a workshop tree that already contains an
+    ``account.json`` without sending the user through a browser consent. The
+    tokens are bound to the supplied desktop ``client_id``; a desktop that has
+    none yet omits it and is lazily registered from ``device_name`` /
+    ``platform`` / ``app_version``, exactly as the consent flow registers it.
+    The response adds the account email so the desktop can name the profile.
+
+    The CLI token is used, not spent: this neither consumes nor revokes it.
+
+    **This converts a scope-restricted credential into a full user session.** The
+    reasoning, what is deliberately *not* claimed about it, and the reasons a
+    future editor must not "fix" it by minting a narrowed token all live in
+    ``AccountCLIService.exchange_for_desktop_token`` — read it before changing
+    anything here.
+
+    403 if ``client_id`` names a client that is revoked, unknown, or another
+    user's (raised by the desktop-auth service and passed through unchanged, so
+    the three cases stay indistinguishable to the caller). 429 past the
+    per-account-token exchange ceiling.
+
+    The issued session is revoked by disconnecting it in Settings → App Sessions
+    **or** by revoking the account CLI token that bought it — the latter
+    cascades, so rotating a leaked ``account.json`` does not leave a live
+    desktop app behind.
+    """
+    return await AccountCLIService.exchange_for_desktop_token(
+        db=db,
+        user=account_ctx.user,
+        cli_token=account_ctx.cli_token,
+        body=body,
+        request=request,
+    )

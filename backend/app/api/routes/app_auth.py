@@ -27,7 +27,7 @@ main.py (not under /api/v1).
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, NoCliExchangedSession, SessionDep
 from app.api.routes.desktop_auth import (
     ConsentRequest,
     ConsentResponse,
@@ -162,7 +162,11 @@ def get_app_auth_request(
 # ── Consent processing ─────────────────────────────────────────────────────
 
 
-@router.post("/consent", response_model=ConsentResponse)
+@router.post(
+    "/consent",
+    response_model=ConsentResponse,
+    dependencies=[NoCliExchangedSession],
+)
 def app_consent(
     body: ConsentRequest,
     session: SessionDep,
