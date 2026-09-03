@@ -6,8 +6,8 @@ it. This document is the reply: what we decided, what we found while building it
 costs you that we did not build, and what you have to change on your side.
 
 **How to read it.** Sections 2 to 9 are the findings, ranked — the first is the one that
-changes your plan most. Section 10 is the scope exclusion and its price. Section 11 is a
-gap we owe you. Section 12 answers your assumption table. Section 15 gathers every
+changes your plan most. Section 10 is the scope exclusion and its price. Section 11 is
+the §8.2 exchange, built, with three disclosures you must act on. Section 12 answers your assumption table. Section 15 gathers every
 required change on your side into one checklist; the sections above explain them, the
 checklist is what you work from.
 
@@ -447,7 +447,7 @@ the pairing requirement and why, so the apparent duplicates are not "simplified"
 
 Take the additions in paired form too, not the `**/`-only form.
 
-**A related latent defect, present identically on both sides, so neither of us gets a
+**A related defect that was present identically on all three hosts, so none of us got a
 mismatch alarm.** `matches_pattern` selects its directory branch from the **raw** pattern
 (`pattern.rstrip().endswith("/")` on our side, `pattern.trimEnd().endsWith('/')` at
 `layout.ts:275` on yours) while path normalisation strips only slashes. Trailing whitespace
@@ -457,13 +457,25 @@ matches nothing: `app-data/ ` matches neither `app-data/x.json` nor `app-data` n
 but a hand-edited contract would silently drop a directory from the exclude set and move the
 `content_hash`, with every individual step still looking like it worked. **A faithful port
 inherits the original's defects faithfully** — which is the property the port was written
-for, so this is not a criticism of it. The one-line fix is to normalise the pattern before
-choosing the branch, and it wants doing on both hosts in the same change: a one-sided fix
-turns a shared blind spot into a cross-host divergence.
+for, so this is not a criticism of it.
 
-**Our half is deliberately unfixed, and will stay that way until both sides move.** That is
-a decision, not an outstanding task on our side — so this is not "we fixed ours, please fix
-yours". Neither host should take it alone.
+**Update: two of the three hosts have now fixed it, and you are the third.** When this
+section was first written our half was deliberately unfixed, on the reasoning that a
+one-sided fix turns a shared blind spot into a cross-host divergence. That reasoning held
+right up until cinna-cli fixed its half, at which point leaving ours alone *was* the
+divergence, and we followed. Both of us now do the same thing:
+
+- the pattern is **stripped** before the branch is chosen, so the branch test and the
+  pattern body derive from the same text;
+- and the strip is **announced** — a warning naming the pattern, so an author learns their
+  pattern was read differently from how they wrote it.
+
+**Implement strip-and-warn rather than choosing your own resolution.** Silent acceptance is
+the one behaviour none of us should have: all three hosts hash the file set these patterns
+select, and a difference of a single file makes the hashes disagree forever while every
+individual step still looks like it worked. Rejecting a whitespace-bearing pattern outright
+would also be defensible in isolation, but it would put you out of step with the two hosts
+that have already moved, which is the thing this whole section exists to prevent.
 
 ---
 
@@ -617,7 +629,7 @@ response there was a comment, not a change.
 tarball and version endpoint), §3 (manifest schema), §4 (versioning rules and the
 compatibility gate), §5 (`kit.py` changes including the new `chat` verb), §6 (templates and
 guides), §7 (default workshop path, now `~/Documents/CinnaAgents`), §9 (the conformance
-affordances). §8.1 is built. §8.2 is in progress — section 11.
+affordances). §8.1 and §8.2 are built — section 11.
 
 **Out of scope, deliberately:** §8.3 server-side import changes, and §8.4 "account-CLI
 endpoints accept desktop tokens". Also §10 in its entirety (cloud→desktop relay, proxy agent
@@ -642,31 +654,184 @@ lands on the same feature.
 
 ---
 
-## 11. §8.2 `POST /api/v1/cli/account/desktop-token` — placeholder, to be filled in
+## 11. §8.2 `POST /api/v1/cli/account/desktop-token` — built. The contract, and three things you must act on
 
-> **This section is deliberately incomplete.** The endpoint is being implemented right now,
-> concurrently with this document. **Its request and response shapes are not stated here,
-> because an invented shape in a document another team codes against is worse than an
-> admitted gap.** This section will be completed with the endpoint's actual contract —
-> path, authentication, request body, response body, error cases, and where the issued
-> client appears in `GET /desktop-auth/clients` — before you should implement against it.
->
-> Ask us before coding this one. Do not infer the shape from handover §8.2's "shape TBD".
+The placeholder that stood here is gone. What follows is the endpoint as registered, then
+three disclosures. **Read the disclosures even if you already coded against the shape** —
+two of them change what your app must do after it receives a token, and one changes what
+you may tell a user about revocation.
 
-What is already settled, and will not change when the shape lands:
+### The endpoint
 
-- It is **in scope** and is being built. Your §8.2 fallback (the connect card with the
-  instance URL pre-filled from `account.json`) does not have to be permanent.
-- It is authenticated by the CLI **account** token in the usual account-CLI way. The CLI
-  token is **used, never stored**, and is neither consumed nor revoked by the exchange.
-- The resulting tokens are **bound to the desktop client id** carried in the request.
-- The response carries a desktop access token, a refresh token, and the account owner's
-  email address — so you can name the profile without a second round-trip.
-- The issued client and refresh token appear in `GET /desktop-auth/clients` as a
-  distinguishable entry the user can revoke, with an origin saying it came from a CLI token
-  exchange rather than a browser consent.
-- It reuses the existing desktop-auth issuance and rotation, so your existing refresh,
-  reuse-grace and revocation paths apply unchanged.
+**Path and method, as registered:** `POST /api/v1/cli/account/desktop-token` — the `/cli`
+router's `/account/desktop-token` route, in `backend/app/api/routes/cli.py`. It lives on the
+CLI router and not on `/desktop-auth` because of what authenticates it.
+
+**Authentication:** the CLI **account** token, as a bearer credential, the usual account-CLI
+way (`Authorization: Bearer <the token from account.json>`). The token is used, never
+stored, and is neither consumed nor revoked by the exchange, so a desktop that lost its
+refresh token can simply exchange again. Anything else — a per-agent CLI token, a web or
+desktop JWT, no credential, a revoked or expired account token — is refused with **401**.
+
+**Request body** (JSON; every field optional):
+
+```json
+{
+  "client_id": "<your desktop client id, if you have one>",
+  "device_name": "Evgeny's MacBook",
+  "platform": "macos",
+  "app_version": "1.2.3"
+}
+```
+
+Send `client_id` when this desktop already has one for this instance. Omit it (or send
+`null`) the first time, together with the three display fields, and a client is registered
+for you through the identical lazy-registration path the browser consent uses. There is
+deliberately no field for the client's origin: provenance is set by the server and never
+accepted from a caller.
+
+**Response body** (200) — the `/desktop-auth/token` shape plus `email`:
+
+```json
+{
+  "access_token": "<JWT>",
+  "refresh_token": "<opaque>",
+  "token_type": "bearer",
+  "expires_in": 900,
+  "client_id": "<the client the pair is bound to>",
+  "email": "<the account these tokens belong to>"
+}
+```
+
+`expires_in` is `DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES × 60` (900 with the default of 15).
+Store `client_id` — a lazily registered desktop learns its id here. Refresh the pair
+afterwards through the ordinary `POST /api/v1/desktop-auth/token` with
+`grant_type=refresh_token`; nothing about the session is special after issuance, so
+rotation, replay detection and the reuse-grace window all apply to it unchanged. **`email` is
+not a convenience field. Section "Disclosure 2" below says what you must do with it.**
+
+**Error cases:**
+
+| Status | When |
+|---|---|
+| 401 | The bearer credential is not a live account CLI token (missing, wrong type, revoked, expired) |
+| 403 | `client_id` names a client that is revoked, unknown, or belongs to another user. The three are **deliberately indistinguishable** to the caller, so a client id cannot be probed for existence; our audit log tells them apart. Treat it as "this client id is no longer usable here": drop it and either exchange again without one or send the user through the browser consent |
+| 422 | Body validation (a field over its length limit, wrong type) |
+| 429 | More than the per-account-token ceiling of exchanges in a minute (`DESKTOP_TOKEN_EXCHANGE_LIMIT_PER_MIN`, 10). Every `client_id`-less exchange registers a client row, which is why the ceiling exists. Back off; do not retry in a loop |
+
+**How the issued client appears in `GET /api/v1/desktop-auth/clients`:** as an ordinary
+client row with `origin: "cli_exchange"` (a browser-consented one reads `browser_consent`).
+Settings → Security → App Sessions renders that as a **CLI link** badge. `origin` describes
+the client's *most recent grant*, not how the row was created: a browser consent on the same
+`client_id` later flips it to `browser_consent` and retires the CLI-minted refresh family
+(scoped to that one client — the user's other devices are untouched), and a CLI exchange onto
+a browser-registered client flips it the other way. Both outcomes of every exchange are
+audited (`CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED` / `_DENIED`), never with a token value.
+
+**How it is revoked:** disconnecting it in App Sessions (`DELETE /desktop-auth/clients/{client_id}`),
+or revoking the account CLI token that bought it (`DELETE /api/v1/cli/account/tokens/{id}`,
+or the Settings card) — the latter cascades into every desktop session that token bought, and
+the session is rejected on its **next request**, not merely at its next refresh. Then read
+disclosure 1, because that sentence is not the end of the story.
+
+**Two settled properties, restated so they are not re-derived from the shape:** the exchange
+is **not role-gated**, deliberately — an agent-user can hold a linked session and the backend
+refuses what they may not do (a publish, say) when they ask for it, which is the layer that
+decision belongs to. And the exchange is **not bound to a machine**: an account token is a
+bearer credential with no device binding, the machine name is self-reported, and the endpoint
+checks no IP, origin or device. Do not describe the silent link to users as "only works on
+this computer".
+
+### Disclosure 1 — a linked session can mint a credential that outlives every revocation control we have
+
+We reproduced this by execution against the shipped tree, with a positive control in the same
+run. A desktop session obtained through this exchange is an ordinary user JWT. It is
+**refused** when it tries to approve a desktop or mobile consent, mint a CLI setup token, or
+approve a `cinna login` — those surfaces are gated, because each would mint a credential with
+no link to the account token, and revoking the token would then end nothing. **It is not
+refused on the platform's MCP OAuth consent.** Through `POST /mcp/consent/{nonce}/approve`
+and `POST /mcp/oauth/token` it can mint an App MCP access + refresh pair bound to the user.
+Then:
+
+- revoking the account token kills the desktop session (401 on the next request, 400 on
+  refresh) and reports "2 session(s) disconnected";
+- the MCP refresh token keeps answering **200**, for up to thirty days from issue, through
+  any number of refreshes;
+- it appears in **no** list — not App Sessions, not the connector's token card (which lists
+  direct tokens only) — so its owner cannot discover it;
+- the one route that revokes it, `POST /mcp/oauth/revoke`, takes the token **value** as a
+  form field and enforces no authentication. The thief holds exactly what it requires; the
+  victim holds nothing it accepts.
+
+Its only teardown today is deleting the user. We have **not** fixed this in this delivery —
+wiring those tokens into the cascade and giving them a listing and an owner-reachable revoke
+is another feature's territory and is being raised separately. What we have done is correct
+our own documentation, which until now told a user that revoking the account token ended the
+session and its children and hedged only with "not a complete remediation".
+
+**What this means for you:** never tell a user that disconnecting a session or revoking the
+account token ends everything that session did. If your app has any leak-response guidance,
+it must say: revoke, then rotate the credentials that session could read, and — until the gap
+is closed on our side — assume an MCP credential may still be live for up to thirty days.
+Do not build a feature on the premise that App Sessions is a complete inventory of what a
+linked session can hold.
+
+### Disclosure 2 — a stranger's approval can hand your app someone else's session. You must verify the account.
+
+Pre-existing, not caused by this delivery, and it inverts something we nearly sent you. A
+consent request that names no `client_id` — the lazy-registration flow your first sign-in
+uses — has no owner until someone consents. **Any authenticated holder of the nonce may
+approve it.** Your app started the flow and holds the PKCE verifier, so your app is the one
+that redeems the resulting code — and it is then authenticated as **the approver**, not as
+the user who typed the instance URL. `/userinfo` returns the stranger's email. Everything the
+user does from then on lands in the stranger's account. The reproduction is committed as
+`test_token_response_email_reveals_a_substituted_account` in
+`backend/tests/api/desktop_auth/test_desktop_auth.py`.
+
+An earlier draft of this document argued that *deny* was the dangerous branch (anyone holding
+the nonce can burn a pending request) while *approve* "mainly harms the misuser". The deny
+half stands and is a residual we accept by decision — the nonce travels only in the
+requesting browser's URL, and there is no owner column to bind a lazy request to, nor will
+there be. **The approve half was wrong, and approve is the more severe branch.** Nothing in
+this document or ours describes approve as self-limiting any more.
+
+**What we changed:** every desktop token response — this exchange, `POST /desktop-auth/token`
+on code exchange, and on every refresh — now carries `email`, the account the tokens actually
+belong to. Additive and non-breaking. One builder owns the response shape, so the field cannot
+reach some issuance paths and not others.
+
+**What you must do, because the field makes the substitution visible and does not prevent
+it:** compare `email` against the account your user expected — the profile they are signing
+in to, or the one already stored for that instance — on the code-exchange response **and on
+refresh responses**, and refuse the session (discard the tokens, tell the user) when it
+differs. A client that ignores the field is exactly as exposed as before the field existed.
+Do not treat its presence as the fix; the fix is your comparison.
+
+Our consent page shows "Signed in as …" and offers "Use another account", which protects
+against the *user's own* wrong-account case; it does nothing for this one, because the
+stranger's browser is the one on the consent page.
+
+### Disclosure 3 — the credential-minting gate on `/consent` refused *deny*, and now does not
+
+The gate that stops a linked session from minting a fresh native session was, until this
+round, a route-level dependency on `POST /desktop-auth/consent` and `POST /app-auth/consent`,
+so it refused `action="deny"` as well as approve — the safety action, which mints nothing.
+It now runs inside the handler on the approving branch only, keyed on "not deny" so an action
+added later is gated by default. Observable behaviour for a CLI-linked session driving the
+consent endpoints directly: `approve` → **403** with a message naming the reason ("linked from
+a CLI account token … cannot grant new credentials or approve new sign-ins"); `deny` →
+**200** with the normal `error=access_denied` redirect. Nothing changes for a browser session.
+If your app ever presents its own token to a consent endpoint (we found no path where it
+does), this is what it will see.
+
+### What we could not verify: the mobile `/app-auth` surface
+
+The mobile surface shares the service, the tables, and — as of this round — the in-handler
+gate placement, and our tests exercise both surfaces for every behaviour above. **We did not
+verify anything about the Cinna Mobile app itself**: its repository is not on this machine,
+and nothing in this document should be read as a claim that the mobile client handles `email`,
+the 403-on-approve, or the consent flow correctly. That is stated as unverifiable here, not
+as checked.
 
 ---
 
@@ -1075,15 +1240,38 @@ One list, and every item above points here rather than asserting its own positio
   Node decode such a name to different strings, so `content_hash` parity is unreachable for
   it whatever either side encodes with.
 
-- **Normalise an exclude pattern before choosing its directory branch — on both hosts, in one
-  change.** Trailing whitespace in a pattern currently survives into the pattern body as a
-  segment and matches nothing, identically on both sides. A one-sided fix converts a shared
-  blind spot into a cross-host divergence. (Section 7.)
+- **Normalise an exclude pattern before choosing its directory branch — and match what the other
+  two hosts now do, which is strip it and warn.** Trailing whitespace in a pattern survives into
+  the pattern body as a segment and matches nothing. This was a blind spot shared by all three
+  hosts when section 7 was written; it no longer is. cinna-cli and cinna-core have both since
+  adopted **strip-and-warn**: the pattern is read stripped, and a warning naming it is printed so
+  the author learns their pattern was read differently from how they wrote it. Silent acceptance
+  is the one behaviour none of us should have, because both of us hash the file set these patterns
+  select. **You are the remaining host**, so this is now a matching change rather than a
+  coordinated one — implement strip-and-warn rather than choosing your own resolution. (Section 7.)
 
 - **Check your HTTP stack for the two token-egress properties in section 8** — a redirect
   carrying `Authorization` to another host, and a configured proxy carrying it to
   `127.0.0.1`. Both were demonstrated, not reasoned about, and the redirect leak's symptom is
   a chat that appears to have worked.
+
+- **Compare `email` in every desktop token response — the exchange, the code exchange, and
+  every refresh — against the account your user expected, and refuse the session when it
+  differs.** A consent request naming no client can be approved by any authenticated holder of
+  its nonce, and your app then redeems a code for the approver's account. The field makes that
+  visible; your comparison is the only thing that prevents it. (Section 11, disclosure 2.)
+
+- **Never tell a user that disconnecting a session or revoking the account token ends
+  everything a linked session did.** An MCP OAuth credential such a session mints outlives
+  both, is listed nowhere, and is revocable only by whoever holds its value — for up to thirty
+  days. We are raising the fix separately; until it lands, your leak-response guidance must say
+  revoke, then rotate. (Section 11, disclosure 1.)
+
+- **Code the silent link against section 11's registered contract**, not against handover
+  §8.2's "shape TBD": account token as bearer; optional `client_id`, else the three display
+  fields; treat 403 as "drop this client id and fall back to the browser consent" and 429 as
+  back-off, never retry-in-a-loop. The exchange is not role-gated and not machine-bound, by
+  decision — do not describe it to users as either.
 
 ---
 
@@ -1093,6 +1281,7 @@ One list, and every item above points here rather than asserting its own positio
 |---|---|
 | Contract identity | `layout.json` and `CONTRACT_VERSION` added at kit root; contract members are `kit.json`, `layout.json`, `CONTRACT_VERSION`, `CHANGELOG.md`, `schema/**`, `templates/**`. No second tree and no `contract/` subdirectory — the contract is a declared member list rendered from the one kit snapshot |
 | Endpoints | `GET /agent-start/contract.tar.gz` and `GET /agent-start/contract/version` added (both also under `/api/agent-start`); `schema_version` removed from `GET /agent-start/version` |
+| Desktop token exchange (§8.2) | `POST /api/v1/cli/account/desktop-token` built — account CLI token as bearer, desktop pair bound to `client_id`, `email` in the response, `origin="cli_exchange"` in App Sessions, revoked by disconnect or by the account token's cascade. Every desktop token response (exchange, code exchange, refresh) now carries `email`. Two disclosures not fixed here: an MCP OAuth credential minted by a linked session outlives every revocation control; a stranger's approval of a lazy-registration consent hands the redeeming app the stranger's session (section 11) |
 | Manifest schema | Your authored schema adopted, with our `$id` kept. New properties `id`, `contract_version`, `runtime`, `created_at`; `required` down to `["name","slug","description"]`; top-level legacy-exemption `allOf`; `credentials[].type` enum dropped for `examples` plus a description; `publications` moved out to `schema/publications.schema.json` |
 | Folder rules | One exclude list, in `layout.json` → `cloud_import_excludes` (41 patterns), replacing four separate mechanisms; new `secret_files` block declaring the dotenv rule as data; `desktop_owned` in object form carrying `contract_keys` |
 | Ledger | `publications[]` lives in `publications.json` at the agent root, excluded root-anchored, schema pointed at from `kit.json` → `publications_schema` |
