@@ -97,6 +97,17 @@ Focus on backend route and service files matching patterns:
 
 **Silent-Skip on Missing File/Directory** - Flag any code path where a file/directory that *should* exist (a referenced snapshot, a row's `snapshot_path`, a resolved-but-absent baseline) is missing and the code treats that as "nothing to compare / no changes / clean" instead of raising or self-healing. A missing-but-expected artifact is a corrupt/lost-state condition, not a legitimate empty/default state — silently defaulting to a negative/clean result there is a data-integrity bug, not a UX nicety.
 
+### 6. Guard Asymmetry
+
+**Mismatched Conditionals on Sibling Statements** - When two adjacent statements do the same job (two clears, two resets, two deletes, two assignments) and one is wrapped in a condition while the other is not, the asymmetry itself is the finding — either the new guard is unnecessary, or the unguarded line is missing one, and both cannot be true. Unlike most review heuristics this needs no judgement about intent: it is mechanically checkable, since it only requires noticing that two sibling statements disagree about whether they need a guard.
+
+This earns a place on the checklist because it is easy to miss precisely when it matters most: in a multi-phase plan, the line that becomes wrong is often untouched by the diff that invalidates it. Example: a function clears two deprecated keys side by side, one guarded on the key being present, the other left unconditional because at the time every input carried that key — a later phase changes what produces the input so it no longer does, and the unconditional clear now injects the key into inputs that never had it, silently corrupting an ordering a downstream consumer depends on byte-for-byte. Neither diff looks wrong in isolation — the diff that invalidated the premise never touched the defective line, and the diff containing the defective line hadn't changed — only the pair does. Treat this as a habit applied to the code *surrounding* a change, not just the changed lines: when a phase adds a guard, check the neighboring statements doing similar work for whether they need the same guard.
+
+**Look for:**
+- A newly added conditional sitting beside an unconditional sibling doing similar work
+- Two clears, resets, or deletes of related state where only one tests for presence
+- A guard added in one branch of a copy-paste-derived pair but not the other
+
 ## Output Format
 
 Generate a review report with:
