@@ -1,7 +1,11 @@
 # Local Agent Kit → Cinna Desktop contract: implementation plan
 
 **Status:** phased implementation plan. Input: `docs/plans/local_agent_kit_desktop_contract_requirements.md`
-(decisions D1–D12, settled — this plan executes them, it does not re-open them).
+(decisions D1–D17, settled — this plan executes them, it does not re-open them).
+That range is stated as of this writing and has already grown once past what this header
+originally claimed — D13 opens by naming an inconsistency "D1–D12 did not cover".
+**Re-derive it from that file (`grep -n "^### D[0-9]"`) rather than trusting this line**,
+per the standing checklist's rule on figures quoted forward.
 Source request: `/Users/evgenyl/dev/ml-llm/cinna-desktop/docs/agents/local_agents/cinna_core_handover.md`.
 Section numbers written as "§N" are the handover's unless prefixed "brief §N".
 
@@ -5580,6 +5584,22 @@ No phase depends on a later one. Phases 3, 4, 8 and 9 can run in parallel once 1
 - [ ] Never write, edit or run anything inside `/Users/evgenyl/dev/ml-llm/cinna-desktop/`.
 - [ ] Never touch `backend/app/api/routes/desktop_auth.py`,
       `backend/app/services/desktop_auth/`, or `backend/app/api/routes/cli.py`.
+      **Scope, carried down from the opening "Out of scope" list so that it reads
+      correctly here — thousands of lines from the heading that qualifies it, which is
+      where this bullet is actually read. It binds every phase of THIS plan, at full
+      force, and nothing has relaxed it. And it is a rule about what this plan's phases
+      may WRITE, not a claim about what those files CONTAIN.** Other work reaches them
+      legitimately, most specifically handover §8.2
+      (`POST /api/v1/cli/account/desktop-token`, brief D12) — which that same opening
+      list places outside this plan and hands to a **separate run**, and which
+      necessarily lands in `routes/cli.py` and on the desktop-auth surface. §8.2 is not
+      one of this plan's phases, so the prohibition never governed it. **Finding those
+      files edited, or finding that endpoint inside them, therefore says nothing about
+      this bullet**: it is not a breach, not an exception, and not evidence that the rule
+      was overtaken. That work is settled at **D12** in
+      `docs/plans/local_agent_kit_desktop_contract_requirements.md` and documented at
+      `docs/application/desktop_auth/desktop_auth.md` and its `_tech` sibling — read
+      those before drawing any conclusion here, rather than searching for it.
 - [ ] Scaffold ignore files ship **dotless** (`gitignore`); `templates/agent/credentials/.gitignore`
       is the one deliberate dotted exception.
 - [ ] Any new kit file must ride both `sync_platform_knowledge.py` and `_read_snapshot`,
@@ -5859,6 +5879,29 @@ No phase depends on a later one. Phases 3, 4, 8 and 9 can run in parallel once 1
       "provoke the complaint you expect" rule meeting the stale-characterisation rule, and
       **neither one alone would have caught it** — the probe ran, and the characterisation it
       encoded was the stale thing.
+      **Prose is where this was first met, not where it lives.** The same defect runs on code
+      and on document structure with no sentence involved, so state it generally: **the probe
+      was scoped to the author's expectation of how the thing would be WORDED, or of WHERE it
+      would LIVE, rather than to the thing itself** — and both halves fail silently in the
+      reassuring direction, because a probe that looked in the wrong place is indistinguishable
+      from one that looked in the right place and found nothing. Two instances with no prose in
+      them. **(a) Wrong span.** A grep for a role gate was run over a route handler's own body
+      and reported "no gate", while the claim under test covered the whole request path —
+      dependency and service method included. Live in this tree: `mint_child_token` in
+      `backend/app/api/routes/cli.py` calls no gate in its own body, and
+      `AgentService.assert_can_build` sits one layer down inside
+      `AccountCLIService.mint_child_token`. **A handler span looks identical whether or not a
+      gate sits beneath it**, and the only gate-shaped thing inside that span is a docstring
+      asserting one — which, by the protection rule above, is precisely what must never be
+      counted as the gate. **(b) Wrong wording, right thing.** A probe for this document's
+      files-no-phase-may-modify rule used the phrasing that one of its two sites happens to use
+      and found a single site; the two sites state the same rule in different words. Probing on
+      the invariant instead — the path strings the rule is *about* — found both.
+      **So scope the probe to the artefact's stable identity, never to your expectation of its
+      shape:** grep the whole path a claim covers, not the span you expect the answer to sit
+      in; grep the identifier, path or literal that cannot be reworded, not the sentence you
+      expect to be wrapped around it. A reader applying this to a grep over code must reach the
+      same conclusion as one applying it to a grep over a sentence.
       **The copy is itself an instrument, and it has its own failure mode: `docker compose cp`
       NESTS when the destination already exists.** Copying into a `/tmp/<dir>` that is already
       there creates `/tmp/<dir>/local_agent_kit/` and leaves the top-level `kit.py` **stale**,
