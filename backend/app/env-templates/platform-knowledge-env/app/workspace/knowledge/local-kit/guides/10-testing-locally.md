@@ -9,9 +9,29 @@ too much: which script you just wrote, what the test data looked like, what the
 argument was called. The agent, in a fresh session, knows only its prompts and its
 files. Testing is how you find the gap.
 
-## 1. The role-switch test
+## 1. Test the real agent; role-play only when you cannot
 
-The core test, and the one that finds most defects.
+There are two ways to run the agent, and they are not equals.
+
+**If the agent folder has an `app-data/desktop.json`, talk to the real agent.** Cinna
+Desktop is running it behind a local API, and `kit.py chat` sends one prompt to it and
+streams the answer back:
+
+```bash
+uv run ../../.cinna-kit/tools/kit.py chat . "<the agent's first example prompt>"
+```
+
+`kit.py list` carries a DESKTOP column saying, per agent, whether that call will get as
+far as the network. When the marker is missing, or the desktop is not running with this
+agent connected, `chat` exits non-zero with one line saying exactly that and prints
+nothing else. It **never** falls back to role-play, on purpose: an answer you cannot
+attribute is worse than no answer, and a tester who cannot tell whether they read the
+agent or an assistant imitating it has learned nothing. Treat a failed `chat` as the cue
+to fall back deliberately, not as something to work around.
+
+**With no desktop, role-play the agent.** The role-switch test below is the fallback —
+and it is still the test that finds most defects, so it is a fallback, not a
+consolation. Judge either run with the same table.
 
 1. Deliberately drop the build context. Say so out loud: *"Switching to the Agent
    role."*
@@ -35,8 +55,11 @@ Fix the agent, never the answer. Then run the test again from a clean read.
 
 ## 2. Example prompts are the acceptance suite
 
-Every entry in `example_prompts` must be answerable, in the Agent role, with only
-the prompt and the files. Run through all of them.
+Every entry in `example_prompts` must be answerable with only the prompt and the
+files — through `kit.py chat` where the desktop marker exists, in the Agent role where
+it does not. Run **every** entry. Not the first one, not a representative sample: the
+examples are what a stranger will actually type, and the one you skipped is the one that
+turns out to need a script that was never written.
 
 If an example needs a value from the user (`"Summarize invoice <invoice number>"`),
 supply a plausible value **from the user's real data**, not from your fixtures — and
@@ -104,9 +127,10 @@ script, no framework.
 
 ## Done when
 
-- The role-switch test was run from a clean read of `docs/WORKFLOW_PROMPT.md` and
+- The agent answered correctly for real through `kit.py chat`, or — with no desktop —
+  the role-switch test was run from a clean read of `docs/WORKFLOW_PROMPT.md` and
   produced a correct answer with no build-session knowledge.
-- Every `example_prompt` was executed and answered.
+- Every `example_prompt` was executed and answered, not a sample of them.
 - Every script's `--help`, happy path and missing-credential path were run.
 - The secret sweep returned nothing.
 - `kit.py validate` exits 0, and every warning was consciously accepted.

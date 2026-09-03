@@ -14,8 +14,21 @@
 **/app-data/
 **/temp/
 
+# Cloud account workspaces: `.cinna/account.json` holds an account token, which is
+# why the CLI writes it 0600. TWO patterns, and neither covers the other — a `*`
+# segment cannot match an empty one, so `Cloud/*/.cinna/` misses `Cloud/.cinna/`
+# (verified with `git check-ignore`). The first line is the older flat workspace,
+# the second the per-instance `Cloud/<host>/` layout; both still exist in the
+# wild, so both are listed. Do not "simplify" this to one line.
+Cloud/.cinna/
+Cloud/*/.cinna/
+
 # The kit is re-downloadable from the platform; do not version it here.
 .cinna-kit/
+# Redundant while the line above stands, and here for the workshop that decides to
+# version its kit anyway: this file is a per-machine timestamp, rewritten by every
+# `kit.py refresh` run including `--check`, and it is never worth a commit.
+.cinna-kit/.last_refresh_check
 
 # OS noise
 .DS_Store

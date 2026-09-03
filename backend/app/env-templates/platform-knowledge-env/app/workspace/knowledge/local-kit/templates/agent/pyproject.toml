@@ -1,7 +1,7 @@
 [project]
-name = "{{slug}}"
+name = "{{SLUG}}"
 version = "0.1.0"
-description = "{{name}}"
+description = "{{NAME}}"
 requires-python = ">=3.11"
 dependencies = []
 

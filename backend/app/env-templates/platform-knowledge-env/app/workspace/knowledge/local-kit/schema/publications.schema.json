@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinna.dev/schema/publications.schema.json",
+  "title": "publications.json",
+  "description": "Where an agent folder has been published. Lives beside cinna-agent.json at the agent root, is excluded from cloud import, and is absent until the first publish. It is a sibling of the manifest and not a key inside it because it is a mutable per-instance sync ledger rather than identity, and because each entry records a content_hash OF the exported tree - a tree the manifest is a member of, so a hash written into the manifest could never match the tree it describes. The top level is an object, not a bare array, so a later contract can add a sibling key without a breaking change to readers that already read `publications`. Unknown keys are preserved for forward compatibility.",
+  "type": "object",
+  "required": ["publications"],
+  "additionalProperties": true,
+  "properties": {
+    "publications": {
+      "description": "One entry per Cinna instance this agent was published to. Written only by a publish/import step. An update resolves the entry whose platform_url matches the instance it runs against.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["platform_url", "agent_id"],
+        "additionalProperties": true,
+        "properties": {
+          "platform_url": {
+            "description": "Origin of the instance, e.g. https://acme.opencinna.io.",
+            "type": "string",
+            "minLength": 1
+          },
+          "agent_id": {
+            "description": "Id of the agent created on that instance.",
+            "type": "string",
+            "minLength": 1
+          },
+          "workspace": {
+            "description": "Account workspace the CLI pushed from, relative to the workshop root, e.g. Cloud/acme.opencinna.io. Absent when the desktop published directly through the account API.",
+            "type": ["string", "null"]
+          },
+          "imported_at": {"type": ["string", "null"]},
+          "updated_at": {"type": ["string", "null"]},
+          "contract_version": {
+            "description": "Contract version the folder was pushed with.",
+            "type": ["string", "null"]
+          },
+          "content_hash": {
+            "description": "Hash of the exported tree at the last push, over the files that survive both cloud_import_excludes and the secret_files rules in layout.json. A mismatch against the current export means the instance is behind.",
+            "type": ["string", "null"]
+          }
+        }
+      }
+    }
+  }
+}

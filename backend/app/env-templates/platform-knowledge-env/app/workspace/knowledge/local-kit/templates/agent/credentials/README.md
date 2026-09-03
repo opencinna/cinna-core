@@ -1,4 +1,4 @@
-# Credentials — {{name}}
+# Credentials — {{NAME}}
 
 **No secret value is ever written in this file.** This is the redacted description
 of what the agent needs and what each value is for — the same role the platform's

@@ -1,4 +1,4 @@
-# Config — {{name}}
+# Config — {{NAME}}
 
 User-editable parameters. Committed to git: this folder represents the agent's
 current operational configuration, and in the cloud it is bundle-owned — shipped

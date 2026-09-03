@@ -1,6 +1,6 @@
 {
   "kit_version": "{{KIT_VERSION}}",
-  "schema_version": 1,
+  "contract_version": "1.0.0",
   "platform_url": "{{PLATFORM_URL}}",
   "kit_base_url": "{{KIT_BASE_URL}}",
   "start_url": "{{START_URL}}",
@@ -14,6 +14,7 @@
   "entry": "START.md",
   "index": "README.md",
   "manifest_schema": "schema/cinna-agent.schema.json",
+  "publications_schema": "schema/publications.schema.json",
   "agent_template": "templates/agent",
   "root_template": "templates/root",
   "tool": "tools/kit.py",
@@ -64,21 +65,6 @@
       "trigger": "the user asks, or the agent needs 24/7, channels, sharing or webapps"
     }
   ],
-  "cloud_import": {
-    "exclude": [
-      "credentials/",
-      ".venv/",
-      ".claude/",
-      "AGENTS.md",
-      "CLAUDE.md",
-      "app-data/",
-      "temp/",
-      "__pycache__/",
-      "*.pyc",
-      ".git/",
-      ".DS_Store"
-    ]
-  },
   "tool_command": "uv run .cinna-kit/tools/kit.py",
   "runtime": {
     "tool_runner": "uv",

@@ -1,4 +1,4 @@
-# Scripts catalog — {{name}}
+# Scripts catalog — {{NAME}}
 
 **This file is mandatory and must never fall behind reality.** Every time a script
 is added, renamed, changed or removed, update the matching entry here in the same

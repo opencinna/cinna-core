@@ -108,7 +108,7 @@ install it themselves:
 
 ```
 # crontab -e   (macOS / Linux)
-0 6 * * 1-5 cd ~/Documents/MyAgents/Local/<slug> && /usr/bin/make run-morning-check >> app-data/storage/cron.log 2>&1
+0 6 * * 1-5 cd ~/Documents/CinnaAgents/Local/<slug> && /usr/bin/make run-morning-check >> app-data/storage/cron.log 2>&1
 ```
 
 Say clearly what this does not give them: no retries, no logs in the UI, no
