@@ -1609,29 +1609,55 @@ def test_is_excluded_pattern_semantics(kit_module, pattern, path, expected, why)
     assert kit_module.matches_pattern(pattern, path) is expected, why
 
 
-def test_trailing_whitespace_selects_the_directory_branch_but_not_the_body(
-    kit_module,
+def test_stray_whitespace_in_a_pattern_is_stripped_not_silently_dropped(
+    kit_module, capsys
 ) -> None:
-    """A recorded ASYMMETRY in `matches_pattern`, asserted so it cannot drift silently.
+    """Whitespace is stripped, and the two hosts agree about what it means.
 
-    The directory branch is selected by `pattern.rstrip().endswith("/")`, which
-    tolerates trailing whitespace; `normalize_rel_path` strips only `/`, so the
-    whitespace survives into the pattern BODY as a segment of its own. A pattern
-    written `"app-data/ "` therefore takes the directory branch and then matches
-    nothing at all.
+    This asserted the opposite until 2026-09-03, and the inversion is the point.
+    `matches_pattern` used to select the directory branch from the *raw* pattern
+    (whitespace-tolerant) while `normalize_rel_path` strips only `/`, so a space
+    survived into the pattern BODY as a segment of its own and `"app-data/ "`
+    matched nothing at all — a directory silently dropped from the exclude set.
 
-    This is latent rather than live — no shipped `cloud_import_excludes` entry has
-    trailing whitespace, and this test asserts that too — but the two halves of
-    one decision disagree about what "trailing" means, so a hand-edited contract
-    would silently drop a directory from the exclude set and change the hash.
-    Reported, not repaired: this file does not own `kit.py`.
+    It was recorded as latent and deliberately left, because a one-sided fix
+    converts a shared blind spot into a cross-host divergence and both hosts hash
+    the file set these patterns select. cinna-cli then fixed its half (it strips
+    and warns), so leaving ours was no longer the safe option: it *was* the
+    divergence. cinna-core now matches that behaviour.
+
+    The shipped list must still be clean — stripping is defence for a
+    hand-edited contract, not a licence to ship sloppy patterns.
     """
-    assert kit_module.matches_pattern("app-data/ ", "app-data/storage/x") is False
+    assert kit_module.matches_pattern("app-data/ ", "app-data/storage/x") is True
+    assert kit_module.matches_pattern("  app-data/", "app-data/storage/x") is True
     assert kit_module.matches_pattern("app-data/", "app-data/storage/x") is True
 
     layout = json.loads((KIT_DIR / "layout.json").read_text(encoding="utf-8"))
     untrimmed = [p for p in layout["cloud_import_excludes"] if p != p.strip()]
     assert untrimmed == [], f"contract patterns with stray whitespace: {untrimmed}"
+
+
+def test_a_stripped_pattern_is_announced_rather_than_silently_accepted(
+    kit_module, monkeypatch, capsys
+) -> None:
+    """Silent acceptance is the one option that is neither sanctioned fix.
+
+    Stripping without saying so reads a pattern differently from how its author
+    wrote it, with nothing to tell them. The warning is what keeps this from
+    being the silent acceptance the contract forbids, and cinna-cli emits the
+    equivalent one.
+    """
+    monkeypatch.setattr(
+        kit_module,
+        "layout_config",
+        lambda: {"cloud_import_excludes": ["temp/ ", "app-data/"]},
+    )
+    assert kit_module.contract_exclude_patterns() == ["temp/", "app-data/"]
+
+    err = capsys.readouterr().err
+    assert "stray whitespace" in err, err
+    assert "'temp/ '" in err, err
 
 
 def test_pattern_matching_is_anchored_by_fullmatch_not_by_dollar(kit_module) -> None:

@@ -877,6 +877,31 @@ Behavioural notes:
   `delete` verb — consent to share is final, raised only from the web UI or
   `/session-improve`, and only the recipient can act on a request once raised.
 
+### 7g. Exchanging the Account Token for a Desktop Session
+
+`POST /api/v1/cli/account/desktop-token` — used by **Cinna Desktop**, not by the
+CLI itself. When the desktop opens a workshop folder containing a
+`Cloud/<host>/.cinna/account.json`, it trades that account token for a desktop
+access + refresh pair plus the account email, and links the profile without a
+browser sign-in.
+
+- The account token is **used, not spent** — the exchange neither consumes nor revokes it, and it may be repeated
+- The issued pair is bound to the desktop's `client_id`; a desktop with no client id yet supplies `device_name` / `platform` / `app_version` and one is registered for it
+- The issued session is an **ordinary user JWT**, not an account-CLI credential: it is not subject to the token-type isolation above and can do anything the user can do in the web app, including reading credential secret values
+- The desktop client is stamped `origin="cli_exchange"` and appears in **Settings > Security > App Sessions** with a **CLI link** badge, revocable there
+- **Revoking the account token also disconnects it** — the cascade covers desktop sessions as well as child CLI tokens, in one transaction, so the "N session(s) disconnected" count includes them and nothing survives the call still live
+- **The issued session cannot mint replacement CLI credentials.** A desktop session carrying `cli_exchange` provenance is refused (403) by `POST /cli/setup-tokens`, `POST /account/setup-tokens` and `POST /account/login/approve`. Without that gate it could mint a *fresh* account CLI token with no provenance link, and revoking the leaked one would have ended nothing. Revocation and listing routes are deliberately left open — a compromised session must not be able to block its victim from revoking
+- Both success and authorization failure are audited (`CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED` / `CLI_ACCOUNT_DESKTOP_TOKEN_DENIED`); a refusal is classified so that a desktop retrying a disconnected client id is logged as routine rather than suspicious
+- Rate-limited per account token (a `client_id`-less call registers a client row, so it is bounded)
+- No role gate: linking a desktop is not a build-rights operation. The developer gate sits earlier, on obtaining the account token from the Settings card (`cinna login` device approval has no role gate at all). For a non-developer holder this *is* a genuine escalation — see the position doc — allowed because the session is no more than their own web login
+
+**Revoking is necessary and not sufficient.** The exchanged session is an
+ordinary user JWT while it lives, so a leaked `account.json` is an account
+compromise: rotate the credentials that session could read, and check App
+Sessions. The full position lives in
+[Desktop App Authentication § CLI account-token exchange](../desktop_auth/desktop_auth.md#cli-account-token-exchange)
+and in `AccountCLIService.exchange_for_desktop_token`'s docstring.
+
 ### 8. Managing Account Sessions (UI)
 
 1. Settings → Security → Local Development card lists active account sessions.
@@ -891,6 +916,10 @@ Behavioural notes:
    next CLI call all child tokens return 401 and Mutagen pauses.
 5. Local files remain intact on the developer's machine; only the session
    credentials are revoked.
+6. The same call also disconnects any **Cinna Desktop session** linked from this
+   machine's `account.json` (see 7g) — desktop apps are included in the
+   "N session(s) disconnected" count, and are rejected on their next request
+   rather than at their next token refresh.
 
 ## Business Rules
 
@@ -906,6 +935,15 @@ The account token and per-agent tokens operate on **separate route groups**:
 This is a structural guarantee — the account token is wired only through
 `AccountCLIContextDep`, which requires `token_type == "cli-account"`.
 `CLIContextDep` / `CLIContextWSDep` explicitly reject `"cli-account"` tokens.
+
+**Read it as a statement about the token, not about its holder.** Two account-CLI
+routes hand out credentials of a *different* class, and the isolation above says
+nothing about those: `POST /account/agents/{id}/mint` mints a per-agent CLI token
+(which does reach sync/exec on that agent), and
+`POST /account/desktop-token` mints a desktop session, which is an ordinary user
+JWT and reaches everything. Both are tied back to the minting account token, so
+revoking it revokes them. See
+[Exchanging the Account Token for a Desktop Session](#7g-exchanging-the-account-token-for-a-desktop-session).
 
 ### `can_build` Predicate
 
@@ -936,8 +974,18 @@ Revoking an account token:
 - Soft-revokes (`is_revoked=True`) the account token itself.
 - Soft-revokes all `CLIToken` rows where `minted_by_account_token_id` equals
   the revoked token's ID.
+- Soft-revokes every `DesktopOAuthClient` whose *current* grant came from this
+  account token (`minted_by_account_token_id`), plus that client's live refresh
+  tokens — the desktop half of the cascade, added with
+  `POST /account/desktop-token`. A desktop session the user has since
+  re-authorized through a browser consent is **not** collateral: the browser
+  grant clears the link, and retires the CLI-granted tokens as it does so, so
+  nothing CLI-granted is left alive behind the cleared link.
+- Runs in a single transaction, so the caller is never told sessions were
+  disconnected while some are still live.
 - Does NOT touch per-agent tokens from other sources (hand-created via the
-  per-agent Integrations tab or via separate `cinna setup` runs).
+  per-agent Integrations tab or via separate `cinna setup` runs), nor desktop
+  sessions created by an ordinary browser consent.
 
 Independently revoking a child (via the per-agent UI Disconnect button or
 `cinna disconnect`):
@@ -991,6 +1039,8 @@ normal JWT auth.
 | `CLI_ACCOUNT_SCHEDULE_DELETED` | Successful `cinna agent schedule delete` | target agent | `{schedule_id, ip}` |
 | `CLI_ACCOUNT_SCHEDULE_RUN` | Successful `cinna agent schedule run` (spends tokens / spins a session) | target agent | `{schedule_id, action, ip}` |
 | `CLI_ACCOUNT_STATUS_COMMAND_SET` | Successful `cinna agent status set-command` — `show` / `refresh` are diagnostic and **not** audited | target agent | `{command, ip}` |
+| `CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED` | Successful desktop-token exchange | `None` | `{client_id, registered_client, device_name, platform, app_version, cli_token_id, ip}` |
+| `CLI_ACCOUNT_DESKTOP_TOKEN_DENIED` | Refused desktop-token exchange (client id revoked / unknown / another user's). Audited unlike other read failures — it is a credential-class conversion attempt | `None` | `{requested_client_id, reason, cli_token_id, ip}` |
 
 ### Setup-Token Kind Guard
 

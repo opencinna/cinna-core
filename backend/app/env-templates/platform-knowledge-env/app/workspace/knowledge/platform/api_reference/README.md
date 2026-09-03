@@ -26,7 +26,7 @@ Each file below documents one API domain.
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
-| Cli | [cli.md](./cli.md) | 59 |
+| Cli | [cli.md](./cli.md) | 60 |
 | Credentials | [credentials.md](./credentials.md) | 20 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Environments | [environments.md](./environments.md) | 17 |

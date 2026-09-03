@@ -387,9 +387,15 @@ publishing the kit — see **Business Rules** below.
   `kit.json` + `layout.json` at the root, pins `contract_version` through the
   same major-version gate, scaffolds from the same `templates/agent/`, and owns
   `app-data/desktop.json` in each agent folder. `kit.py chat` calls its
-  loopback API. Nothing in this repository imports from it, and no platform
-  endpoint is desktop-specific: the contract endpoints inherit the anonymous
-  `/agent-start` surface's behaviour unchanged.
+  loopback API. Nothing in this repository imports from it, and **no *contract*
+  endpoint is desktop-specific**: the contract endpoints inherit the anonymous
+  `/agent-start` surface's behaviour unchanged. One platform endpoint outside the
+  contract does exist for the desktop —
+  [`POST /api/v1/cli/account/desktop-token`](../cinna_cli_integration/account_cli_workspace.md#7g-exchanging-the-account-token-for-a-desktop-session),
+  which trades a `Cloud/<host>/.cinna/account.json` account token for a desktop
+  session so the desktop can link a workshop it finds already logged in. It is
+  authenticated by the account CLI token, not by the anonymous kit surface, and
+  no kit or contract member depends on it.
 - **cinna-cli (separate repo)** — `cinna agent import` and the go-cloud manual
   fallback are implemented in the `cinna-cli` repository
   (`src/cinna/local_import.py`), not in this backend. This platform's only

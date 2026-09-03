@@ -17,6 +17,7 @@ Cinna Mobile uses the **same flow** through a parallel route namespace mounted a
 - **Parallel mobile surface** — Cinna Mobile authenticates through `/app-auth/*` (mirror of `/desktop-auth/*`) backed by the same service and storage; only the URL namespace and native redirect schemes differ
 - **Client-kind-aware consent** — The consent screen renders "Cinna Mobile" vs "Cinna Desktop" copy/icon based on the `client_kind` the backend derives from the redirect URI scheme
 - **Lazy client registration** — Native apps do not need to pre-register; a new `DesktopOAuthClient` is created automatically on first consent approval
+- **CLI account-token exchange (silent link)** — A desktop that finds a CLI `account.json` in a workshop tree can trade that account token for a desktop session at `POST /api/v1/cli/account/desktop-token`, with no browser consent. The resulting client is stamped `origin="cli_exchange"` so it stays distinguishable in the App Sessions list
 - **Token pair** — Short-lived access token (15 min) + long-lived refresh token (30 days)
 - **Silent refresh** — Desktop app renews access tokens without user interaction
 - **Multi-instance** — User can be logged into multiple instances simultaneously
@@ -50,6 +51,27 @@ If the desktop app already has a `client_id` from a previous registration:
 3. Consent page shows "Allow {device_name} (from stored client metadata) to sign in..."
 4. User approves → existing client is reused (no new `DesktopOAuthClient` created)
 5. Flow continues from step 9 above
+
+### Linking from a CLI account token (silent link)
+
+When Cinna Desktop opens a workshop folder that already contains a CLI
+`Cloud/<host>/.cinna/account.json` — i.e. the user has already run `cinna login`
+against that instance — it can link the profile without asking for credentials
+again:
+
+1. Desktop reads the account CLI token out of `account.json` (same OS user, same machine)
+2. Desktop calls `POST /api/v1/cli/account/desktop-token` with that token as the bearer credential, plus its own `client_id` if it has one (otherwise `device_name` / `platform` / `app_version` for lazy registration, exactly as the consent flow accepts them)
+3. Backend issues a normal desktop access + refresh pair bound to that client, and returns the account owner's `email` so the desktop can name the profile without a second round-trip
+4. Desktop stores the pair and refreshes it through the ordinary `POST /desktop-auth/token` endpoint from then on — nothing about the session is special after issuance
+5. The CLI token is **used, not spent**: the exchange neither consumes nor revokes it, and it can be exchanged again (e.g. by a desktop that lost its refresh token)
+
+The session appears in **Settings > Security > App Sessions** with a **CLI link**
+badge, because no human approved it in a browser. It is revoked either by
+disconnecting it there or by revoking the account CLI token that bought it —
+that revocation cascades. See
+[CLI account-token exchange](#cli-account-token-exchange) for the security
+position, and the [Account CLI Workspace](../cinna_cli_integration/account_cli_workspace.md)
+docs for the account token itself.
 
 ### Token Refresh (silent)
 
@@ -122,9 +144,61 @@ Everything else (e.g. arbitrary `https://` URIs) is rejected with HTTP 400 `inva
 - The same lookup also stamps `last_used_at` on success (throttled to once per minute) so the Settings UI reflects recent activity
 - Google OAuth users (no password) can authenticate via the browser-based authorize flow
 
+### CLI account-token exchange
+
+`POST /api/v1/cli/account/desktop-token` is the one path that issues a desktop
+session without a browser consent, so it is also the one that needs its scope
+stated rather than assumed.
+
+**It converts a scope-restricted credential into a broader one.** An account CLI
+token reaches `/cli/account/*` and nothing else, and the account CLI's generic
+API-proxy hatch additionally denies credentials, users, admin, MFA and the other
+clients' auth surfaces. The desktop access token it buys is an ordinary user
+JWT — every route `CurrentUser` guards, including `GET /credentials/{id}/with-data`,
+which returns decrypted secret values no account-CLI route will return.
+
+What makes that acceptable:
+
+- **For a developer, the capabilities are mostly ones the file already carried.** An account CLI token only comes into existence under a live signed-in browser session (a developer-gated Settings card, or a `cinna login` device approval), and whoever can read the resulting file can already mint per-agent CLI tokens for every agent that user can build, and run arbitrary commands inside those environments. **The argument does not hold for a non-developer holder** — `cinna login` approval has no role gate, and minting would refuse them every agent, so for them this is a straight escalation to a full user session. It is still allowed on the narrower ground that the session is their *own* account, no more than signing in to the web app with their password gives them. What the exchange never does is cross to another user.
+- **The result is visible, killable, and dies with the token that bought it.** The client is stamped `origin="cli_exchange"` and linked to the account token, both written by one function that also retires the client's previous grant — so a later browser consent on the same client id cannot clear the badge while leaving the CLI-minted session alive. Disconnecting from Settings revokes the refresh family and kills the access token on its next request. Revoking the account CLI token cascades into the desktop session too, and the session cannot mint replacement CLI credentials to outlive that cascade (see below). It is **not** a complete remediation — see the leak-response note.
+- **Both outcomes are audited.** `CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED` on success and `CLI_ACCOUNT_DESKTOP_TOKEN_DENIED` on an authorization failure, each carrying the client id and source IP, never a token value. A refusal is classified for the log — a desktop retrying a client the user disconnected is recorded as routine, so it cannot bury the rare suspicious case.
+
+**What is deliberately not claimed: that the exchange stays on one machine.** A
+CLI account token is a bearer credential with no device binding — the machine
+name recorded with it is self-reported — and the endpoint checks no IP, origin or
+device. A copied `account.json` works from anywhere, and `cinna login` exists
+precisely so the approving browser and the requesting machine can differ. The
+single-machine story is the intended usage, never a control.
+
+**Responding to a leaked `account.json` — what actually ends it.** The exchanged
+session is a full user JWT for as long as it lives, so treat it as an account
+compromise rather than a token compromise:
+
+- Revoking the account CLI token disconnects the desktop session it bought (cascade) and any per-agent child tokens.
+- The session cannot mint replacement credentials: a desktop session whose client carries `cli_exchange` provenance is refused by the account-setup-token, per-agent-setup-token and device-login-approval routes, and by the desktop and mobile **consent** endpoints — approving a consent would otherwise mint a whole new native session with clean browser provenance and no cascade link. Without the gate it could mint a *fresh* account CLI token carrying no provenance link, and revoking the original would have ended nothing.
+- **That is still not complete, and the docs will not pretend otherwise.** A full user JWT can read decrypted credential values and use them off-platform after every token here is dead — nothing in this system can recall a secret that has already left it. And the gate covers the minting surfaces known to satisfy its property today; it cannot cover one added tomorrow that nobody re-derives it against. So: rotate the credentials that session could read, and read App Sessions for entries nobody recognises.
+
+**One gap in the badge itself.** After a browser or mobile re-consent on a
+CLI-exchanged client, an access token issued by the superseded grant stays valid
+until it expires (15 minutes by default) while the row already reads
+`browser_consent`. For that window the badge understates what is live. Revoking
+the client, or the account token behind it, closes it on the next request.
+
+The exchange reuses `DesktopAuthService`'s issuance primitive rather than minting
+its own token shape, so rotation, replay detection, family revocation and the
+reuse-grace window all apply to the issued pair unchanged. It is rate-limited per
+account token, since every exchange without a `client_id` registers a new client.
+
 ### 2FA and Desktop Auth
 
 The desktop OAuth flow reuses the browser session: the user logs in via their browser (step 4 above), and any 2FA challenge required by the platform is satisfied during that browser login before the consent page is reached. The desktop-auth flow itself adds no extra MFA step and issues no separate challenge. As a result, a user who has 2FA enabled on their account will complete the second factor in the browser as part of normal login; the desktop app then receives a short-lived access token scoped to that already-MFA-verified session.
+
+The CLI account-token exchange above is the exception worth naming: it issues a
+desktop session with no browser step at all, so no 2FA challenge is presented at
+exchange time. The second factor was satisfied earlier — when the user signed in
+to the browser session that minted the account CLI token — and the exchange
+inherits that, in the same way the CLI's own account routes do. A desktop session
+linked this way is therefore no stronger than the account token on disk.
 
 See [Two-Factor Authentication](../user_2fa/user_2fa.md) for full 2FA details.
 
@@ -136,6 +210,7 @@ The `/.well-known/cinna-desktop` (desktop) and `/.well-known/cinna-app` (mobile)
 
 **Settings > Security > App Sessions card** shows:
 - List of connected **desktop and mobile** apps — both surfaces share the `DesktopOAuthClient` table, so the card lists every native client kind together — with device name, platform icon (macOS/Windows/Linux/iOS/Android, falling back to a generic device icon), app version badge, and last-used time
+- A **CLI link** badge on any session created by the CLI account-token exchange (`origin="cli_exchange"`). Browser-consent sessions are unbadged — the badge marks the exception, not the rule, so it is not buried
 - Disconnect icon button (ghost, turns destructive-red on hover, requires confirmation) to revoke a specific device
 - Empty state with a "Download Cinna Desktop or Cinna Mobile" prompt when no devices are connected
 

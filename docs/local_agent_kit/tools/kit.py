@@ -816,7 +816,23 @@ def contract_exclude_patterns() -> list[str] | None:
         return None
     if any(not isinstance(p, str) or not p.strip() for p in patterns):
         return None
-    return list(patterns)
+    # Stray surrounding whitespace is stripped and SAID OUT LOUD. Silent
+    # acceptance is the one option that is neither of the two sanctioned fixes:
+    # a pattern read differently from how it was written, with nothing telling
+    # the author. cinna-cli's `_clean_patterns` does the same, deliberately —
+    # both hosts hash the file set these patterns select, so a difference of one
+    # file makes the two hashes disagree forever.
+    cleaned = []
+    for pattern in patterns:
+        stripped = pattern.strip()
+        if stripped != pattern:
+            print(
+                f"warning: layout.json: exclude pattern {pattern!r} has stray "
+                f"whitespace - reading it as {stripped!r}.",
+                file=sys.stderr,
+            )
+        cleaned.append(stripped)
+    return cleaned
 
 
 def cloud_import_excludes() -> list[str]:
@@ -3276,6 +3292,18 @@ def matches_pattern(pattern: str, rel_path: str) -> bool:
       `docs/README.md` or `scripts/README.md`
     """
     path = normalize_rel_path(rel_path)
+    # Strip BEFORE anything reads the pattern, so the branch test below and the
+    # body below are derived from the same text. They were not: the branch test
+    # was whitespace-tolerant (`pattern.rstrip()`) while `normalize_rel_path`
+    # strips only "/", so a trailing space took the directory branch and then
+    # survived into the body as a segment of its own, and the pattern matched
+    # nothing — a directory silently dropped from the exclude set, with every
+    # individual step looking like it worked. `contract_exclude_patterns()`
+    # already strips and warns at load, so a shipped list cannot reach here
+    # dirty; this keeps the function honest for a direct caller, and keeps the
+    # two hosts' matchers observably identical, which is the property that
+    # actually matters (both hash the file set this selects).
+    pattern = pattern.strip()
     body = normalize_rel_path(pattern)
     if not body or not path:
         return False
@@ -3283,9 +3311,7 @@ def matches_pattern(pattern: str, rel_path: str) -> bool:
     pattern_segments = tuple(body.split("/"))
     path_segments = tuple(path.split("/"))
 
-    # The directory branch is chosen from the RAW pattern, before normalisation
-    # stripped the trailing slash that selects it.
-    if pattern.rstrip().endswith("/"):
+    if pattern.endswith("/"):
         for end in range(len(pattern_segments), len(path_segments) + 1):
             if _match_segments(pattern_segments, path_segments[:end]):
                 return True

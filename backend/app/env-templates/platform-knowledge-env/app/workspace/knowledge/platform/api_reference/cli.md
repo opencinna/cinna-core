@@ -594,6 +594,19 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## POST `/api/v1/cli/account/desktop-token`
+**Exchange Account Token For Desktop Token**
+
+**Request body** (`AccountDesktopTokenBody`):
+  - `client_id`: string | null
+  - `device_name`: string | null
+  - `platform`: string | null
+  - `app_version`: string | null
+
+**Response:** `AccountDesktopTokenResponse`
+
+---
+
 ## GET `/api/cli-setup/{token}`
 **Get Bootstrap Script**
 
