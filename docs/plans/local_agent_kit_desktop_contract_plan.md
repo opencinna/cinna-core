@@ -5809,6 +5809,25 @@ No phase depends on a later one. Phases 3, 4, 8 and 9 can run in parallel once 1
       (ii) **Use an exact-substring test, not a multi-line `grep -F`**: `grep -F` counts per
       LINE, so a multi-line needle yields a pair of numbers that looks like a measurement and
       measures nothing. Prefer a one-line `python3 -c` substring check over file bytes.
+      **(iii) An absence probe over PROSE must be run against text you have just READ, not text
+      you have just WRITTEN.** Third instance, and the first one caught by the person who caused
+      it. An implementer corrected a sentence of its own that a later ruling had falsified, its
+      edit script's assertion **failed**, and its absence probe reported the file clean anyway —
+      the probe pattern was `"not behind this gate"` while the file said `"**not** behind this
+      gate"`, with the markdown emphasis sitting between the words. **A failed edit plus a blind
+      probe is indistinguishable from a successful edit**, and that combination produces a
+      confident green over an unmade change. It was caught only because a traceback's line number
+      did not match the assertion that was expected to fail, so its author went back for ground
+      truth instead of trusting the green.
+      **The transferable half is not "be careful with greps" — it is that the probe author was
+      probing for their own PARAPHRASE of the file rather than for the file.** Prose carries
+      markup, line wrapping and punctuation that a remembered sentence does not, so a pattern
+      written from memory is a different string from the one on disk, and every one of those
+      differences fails silently in the reassuring direction. So: copy the needle out of the file
+      you just read, never type it from what you believe the file says. This is the
+      "provoke the complaint you expect" rule meeting the stale-characterisation rule, and
+      **neither one alone would have caught it** — the probe ran, and the characterisation it
+      encoded was the stale thing.
       **The copy is itself an instrument, and it has its own failure mode: `docker compose cp`
       NESTS when the destination already exists.** Copying into a `/tmp/<dir>` that is already
       there creates `/tmp/<dir>/local_agent_kit/` and leaves the top-level `kit.py` **stale**,
