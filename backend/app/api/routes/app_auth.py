@@ -27,7 +27,12 @@ main.py (not under /api/v1).
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import CurrentUser, NoCliExchangedSession, SessionDep
+from app.api.deps import (
+    CurrentClientClaims,
+    CurrentUser,
+    SessionDep,
+    ensure_not_cli_exchanged_session,
+)
 from app.api.routes.desktop_auth import (
     ConsentRequest,
     ConsentResponse,
@@ -162,23 +167,28 @@ def get_app_auth_request(
 # ── Consent processing ─────────────────────────────────────────────────────
 
 
-@router.post(
-    "/consent",
-    response_model=ConsentResponse,
-    dependencies=[NoCliExchangedSession],
-)
+@router.post("/consent", response_model=ConsentResponse)
 def app_consent(
     body: ConsentRequest,
     session: SessionDep,
     current_user: CurrentUser,
+    client_claims: CurrentClientClaims,
 ) -> ConsentResponse:
     """Process user consent for an app auth request.
 
     Requires authentication (the SPA calls this with its localStorage JWT).
-    Behaviour matches the desktop flow — see ``DesktopAuthService.process_consent``.
+    Behaviour matches the desktop flow — see ``DesktopAuthService.process_consent``,
+    including the CLI-exchanged-session gate being applied to the minting branch
+    only. Deny mints nothing and stays reachable; see the desktop ``consent``
+    handler for why that must not be a route dependency, and for why the branch
+    tests ``!= "deny"`` rather than ``== "approve"``.
     """
     if body.action not in ("approve", "deny"):
         raise HTTPException(status_code=400, detail="invalid_action")
+
+    if body.action != "deny":
+        _client_kind, external_client_id = client_claims
+        ensure_not_cli_exchanged_session(session, external_client_id)
 
     result = DesktopAuthService.process_consent(
         session, current_user.id, body.request_nonce, body.action

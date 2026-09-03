@@ -960,9 +960,9 @@ CurrentClientClaims = Annotated[
 # ── Credential-minting gate for CLI-exchanged desktop sessions ─────────
 
 
-def forbid_cli_exchanged_desktop_session(
-    claims: CurrentClientClaims,
-    db: SessionDep,
+def ensure_not_cli_exchanged_session(
+    db: Session,
+    external_client_id: str | None,
 ) -> None:
     """Refuse a desktop session that was bought with a CLI account token.
 
@@ -982,25 +982,77 @@ def forbid_cli_exchanged_desktop_session(
     session must never be able to stop its victim from revoking things, and
     withholding a listing buys nothing.
 
+    **The property is action-granular, so the application must be too.** Where a
+    route carries the action in its *body* rather than in its path — the consent
+    endpoints, whose ``action`` is ``"approve"`` or ``"deny"`` — a route-level
+    ``dependency`` refuses both halves, and the half that mints nothing is the
+    safety action. That is the same class of mistake this paragraph's neighbour
+    identifies for revocation routes, though weaker in consequence: a blocked
+    revoke leaves a live credential live, while a blocked deny only leaves the
+    pending request to expire, and the user can still refuse it from a browser
+    session. Such a route calls this function *inside the handler*, on the
+    minting branch (see ``routes/desktop_auth.py::consent`` and
+    ``routes/app_auth.py``); the ``NoCliExchangedSession`` dependency is for
+    routes that mint unconditionally. Where the two actions are already two
+    routes — ``/cli/account/login/approve`` versus ``/cli/account/login/reject``
+    — the route list already expresses that, and only the approving one is gated.
+
+    **The in-handler branch is written as "not the non-minting action", never as
+    "the minting action".** ``DesktopAuthService.process_consent`` treats
+    anything that is not ``"deny"`` as an approval, so a gate keyed on
+    ``== "approve"`` matches it only because the handler rejects every other
+    value with a 400 first — three places that must agree where the route
+    ``dependency`` needed no agreement at all. Keyed on ``!= "deny"`` the gate
+    fails closed instead: a third action added later is gated by default rather
+    than silently reopening the loop.
+
     Scoped by provenance, not by client kind — a desktop session created by a
     human browser consent is unaffected, including one on a client that was
     CLI-exchanged earlier and has since been re-consented.
+
+    **This is the plain function, and the in-handler callers must use it rather
+    than the dependency below.** Calling a FastAPI dependency directly happens to
+    work today only because it takes no injected defaults and is ``def`` rather
+    than ``async def``; making it ``async`` later, or giving it a parameter with a
+    ``= Depends(...)`` default, would turn every in-handler call into a silent
+    no-op — the gate would stop firing with no error, while the route-``dependency``
+    call sites kept working. Splitting the check out of the injection removes that
+    failure mode structurally instead of asking the next editor to remember it.
 
     Raises:
         HTTPException: 403 when the caller is a live CLI-exchanged session.
     """
     from app.services.desktop_auth.desktop_auth_service import DesktopAuthService
 
-    _client_kind, external_client_id = claims
     if DesktopAuthService.is_cli_exchanged_session(db, external_client_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
+            # Names the property, not one route's flavour of it. The gated set
+            # spans the two CLI setup-token routes and device-login approval,
+            # which do mint a CLI credential, *and* consent approval, which
+            # mints a native desktop/mobile session instead — so a message
+            # naming CLI-credential creation misdescribes the last of them.
             detail=(
                 "This desktop session was linked from a CLI account token and "
-                "cannot create new CLI credentials. Sign in through the browser "
-                "to do this."
+                "cannot grant new credentials or approve new sign-ins. Sign in "
+                "through the browser to do this."
             ),
         )
+
+
+def forbid_cli_exchanged_desktop_session(
+    claims: CurrentClientClaims,
+    db: SessionDep,
+) -> None:
+    """Injection adapter over ``ensure_not_cli_exchanged_session``.
+
+    Holds no logic of its own so the two forms can never disagree. Use it as a
+    route ``dependency`` (via ``NoCliExchangedSession``) on routes that mint
+    unconditionally; a route whose minting depends on a body field calls
+    ``ensure_not_cli_exchanged_session`` directly on the minting branch.
+    """
+    _client_kind, external_client_id = claims
+    ensure_not_cli_exchanged_session(db, external_client_id)
 
 
 NoCliExchangedSession = Depends(forbid_cli_exchanged_desktop_session)

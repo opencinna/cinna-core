@@ -1910,10 +1910,37 @@ class AccountCLIService:
            reachable: ``cinna login`` device approval has no role gate, so an
            agent-user can hold an account token, and ``mint`` would refuse them
            every agent. For them the exchange is a straight escalation from
-           account routes to a full user session. It is still allowed, on a
+           account routes to a full user session. **That escalation was weighed
+           and accepted, not relabelled away**: it is a real increase in what a
+           stolen ``account.json`` yields for that group, and this docstring
+           will not describe it as anything smaller. It is still allowed, on a
            different and narrower ground: that session is *their own* account,
            no more than they already get by signing in to the web app with their
            password. What the exchange never does is cross to another user.
+
+           **RULING — the exchange is ungated by role, deliberately. Do not
+           "harden" it by adding one.** Written as a ruling so that a future
+           editor arriving here finds a decision rather than a gap: the absence
+           of a role check is the decision. The reasoning, in the terms it was
+           ruled in: **role restrictions belong in the backend's reply to a
+           specific capability, not in gating authentication.** An agent-user
+           develops locally all day; when they ask to publish, the backend
+           refuses *the publish*. That is the platform answering a capability
+           request on its own merits — it is not the CLI, and not the desktop,
+           deciding by role who may hold a session at all. A gate here would put
+           the refusal at the wrong layer and would still withhold nothing,
+           since the session it denied is one the same user obtains by typing
+           their password into the web app.
+
+           **And on hijacking, which is the objection this ruling meets first:
+           a compromised session is compromised whatever its type** — a
+           role-gated one no less than this one, since the compromise is of the
+           session and not of the path that issued it. The remedy is revoking it
+           in the UI, not a narrower issuance path. Which is precisely why
+           revoke must *actually* revoke, and what property 2's cascade and the
+           badge's honesty about its own bounded gap exist for: they are the
+           controls this ruling leans on, so weakening either of them is what
+           would make the ruling wrong.
         2. **The result is visible, killable, and now revoked by the same act
            that revokes the token that bought it.** The client is stamped
            ``origin="cli_exchange"`` and linked to the account token
@@ -2077,4 +2104,8 @@ class AccountCLIService:
             tokens["client_id"],
         )
 
-        return AccountDesktopTokenResponse(**tokens, email=user.email)
+        # ``email`` now rides the shared token payload (``_token_payload``), so it
+        # is already in ``tokens`` — passing it again here would be a duplicate
+        # keyword. Kept as one dict rather than re-adding the field so this path
+        # and ``/desktop-auth/token`` cannot disagree about the account they name.
+        return AccountDesktopTokenResponse(**tokens)

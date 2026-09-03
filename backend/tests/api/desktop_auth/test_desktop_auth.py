@@ -1674,3 +1674,258 @@ def test_grace_family_collapse(
     assert r6 not in (r0, r1, r2, r3, r4, r5), (
         "Chain must continue producing unique tokens after grace re-rotation sequences"
     )
+
+
+# ── Test: a pending request is bound to its client's owner on BOTH actions ──
+
+
+def test_consent_cross_user_cannot_burn_a_pending_request(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    A pending consent request that names a client belongs to that client's
+    owner, and neither action may be exercised by anyone else.
+
+    ``/authorize`` is public, so a pending request is created with no
+    authenticated user attached. Its only tie to a user is the ``client_id`` it
+    names. The approve branch enforces that tie as a side effect of resolving
+    the client; the deny branch marked the request used *before* anything looked
+    at ownership, so any authenticated user who learned a nonce could burn
+    someone else's pending consent — a one-shot denial of service on another
+    account's sign-in, from an ordinary session.
+
+    Both branches are asserted here, and both are asserted twice: the refusal
+    itself, and the *non-destruction* — a refused action must leave the request
+    still pending, or the refusal has already done the damage it refused.
+
+      1. User A registers a client
+      2. A starts an authorize naming that client → pending request
+      3. User B denies it → 403, and the request survives
+      4. A can still approve it → proves step 3 destroyed nothing
+      5. A fresh pending request; B approves it → 403, and it survives
+      6. A can still deny it → proves step 5 destroyed nothing
+    """
+    # ── Phase 1: User A registers a client ────────────────────────────────
+    a_tokens = obtain_desktop_tokens(
+        client, superuser_token_headers, device_name="Owner A Device"
+    )
+    client_id_a = a_tokens["client_id"]
+
+    _user_b, b_headers = create_random_user_with_headers(client)
+
+    # ── Phase 2: A starts an authorize naming that client ─────────────────
+    verifier_1, challenge_1 = generate_pkce_pair()
+    nonce_1 = initiate_authorize(
+        client,
+        code_challenge=challenge_1,
+        existing_client_id=client_id_a,
+        device_name=None,
+    )
+
+    # ── Phase 3: B denies A's pending request → refused ───────────────────
+    r = client.post(
+        f"{_BASE}/consent",
+        headers=b_headers,
+        json={"request_nonce": nonce_1, "action": "deny"},
+    )
+    assert r.status_code == 403, (
+        "Denying is not a harmless read: it marks the request used. A user who "
+        "does not own the named client must not be able to burn it. Got "
+        f"{r.status_code}: {r.text}"
+    )
+    assert r.json()["detail"] == "client_not_found_or_forbidden", r.text
+
+    # ── Phase 4: the request survived — A can still approve it ────────────
+    r = client.post(
+        f"{_BASE}/consent",
+        headers=superuser_token_headers,
+        json={"request_nonce": nonce_1, "action": "approve"},
+    )
+    assert r.status_code == 200, (
+        "The refused deny must not have consumed the request — this is the "
+        f"half that makes the 403 worth anything. Got {r.status_code}: {r.text}"
+    )
+    assert "code=" in r.json()["redirect_to"]
+
+    # ── Phase 5: the approve branch, same question ────────────────────────
+    verifier_2, challenge_2 = generate_pkce_pair()
+    nonce_2 = initiate_authorize(
+        client,
+        code_challenge=challenge_2,
+        existing_client_id=client_id_a,
+        device_name=None,
+    )
+    r = client.post(
+        f"{_BASE}/consent",
+        headers=b_headers,
+        json={"request_nonce": nonce_2, "action": "approve"},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == "client_not_found_or_forbidden", r.text
+
+    # ── Phase 6: and it too left the request pending ──────────────────────
+    r = client.post(
+        f"{_BASE}/consent",
+        headers=superuser_token_headers,
+        json={"request_nonce": nonce_2, "action": "deny"},
+    )
+    assert r.status_code == 200, (
+        f"The refused approve must not have consumed the request: {r.text}"
+    )
+    assert "error=access_denied" in r.json()["redirect_to"]
+
+
+def test_consent_lazy_registration_request_has_no_owner_to_bind_to(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    The deliberate residual, asserted so it is a decision and not an oversight.
+
+    A lazy-registration authorize names no ``client_id``, so the pending request
+    has no owner: ``/authorize`` is public, and the row it creates is tied to
+    nobody until someone consents. There is therefore nothing for the ownership
+    check to compare against, and any authenticated holder of the nonce may
+    claim it — which is the flow's design, since the nonce travels only in the
+    requesting browser's URL and the code that comes back is useless without the
+    PKCE verifier the desktop app kept.
+
+    What this pins is that the check does not *pretend* to cover that case, and
+    that guarding both branches did not cost a spurious client row:
+      1. A lazy-registration request (no client_id)
+      2. Consented by a user who did not initiate it → allowed
+      3. The client it creates belongs to that consenting user, not the initiator
+      4. Denying a lazy-registration request registers nothing — the ownership
+         guard resolves a *named* client only, precisely so that denying does
+         not create the client the user just refused
+    """
+    _user_b, b_headers = create_random_user_with_headers(client)
+
+    # ── Phase 4 first, on its own request: deny must register nothing ─────
+    _v_deny, challenge_deny = generate_pkce_pair()
+    nonce_deny = initiate_authorize(
+        client, code_challenge=challenge_deny, device_name="Refused Device"
+    )
+    before = {c["client_id"] for c in list_desktop_clients(client, b_headers)}
+    r = client.post(
+        f"{_BASE}/consent",
+        headers=b_headers,
+        json={"request_nonce": nonce_deny, "action": "deny"},
+    )
+    assert r.status_code == 200, r.text
+    after = list_desktop_clients(client, b_headers)
+    assert {c["client_id"] for c in after} == before, (
+        "Denying a lazy-registration request must not register a client. If "
+        "the ownership guard resolved unconditionally it would create the very "
+        "client the user refused."
+    )
+    assert not any(c["device_name"] == "Refused Device" for c in after)
+
+    _verifier, challenge = generate_pkce_pair()
+    nonce = initiate_authorize(
+        client, code_challenge=challenge, device_name="Unclaimed Device"
+    )
+
+    r = client.post(
+        f"{_BASE}/consent",
+        headers=b_headers,
+        json={"request_nonce": nonce, "action": "approve"},
+    )
+    assert r.status_code == 200, (
+        "A request naming no client has no owner to bind to; the ownership "
+        f"check must not invent one. Got {r.status_code}: {r.text}"
+    )
+
+    # The new client belongs to whoever consented.
+    b_clients = list_desktop_clients(client, b_headers)
+    assert any(c["device_name"] == "Unclaimed Device" for c in b_clients)
+    su_clients = list_desktop_clients(client, superuser_token_headers)
+    assert not any(c["device_name"] == "Unclaimed Device" for c in su_clients)
+
+
+# ── Scenario: the token response names the account it belongs to ────────────
+
+
+def test_token_response_names_the_account_the_tokens_belong_to(
+    client: TestClient,
+) -> None:
+    """Every desktop token response carries the account it authenticates as.
+
+    The field exists so a client can detect being handed a session for an
+    account its user did not mean to sign in to. A consent request naming no
+    client is approvable by any authenticated holder of its nonce, and the app
+    that redeems the resulting code is the one that started the flow — so the
+    account can differ from the expected one with nothing else in the response
+    revealing it. Asserted on both issuance paths a client sees, because the
+    check is only as good as its presence on the path actually taken.
+    """
+    user, headers = create_random_user_with_headers(client)
+
+    verifier, challenge = generate_pkce_pair()
+    nonce = initiate_authorize(client, code_challenge=challenge)
+    result = submit_consent(client, headers, nonce, action="approve")
+    params = parse_qs(urlparse(result["redirect_to"]).query)
+
+    r = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "authorization_code",
+            "code": params["code"][0],
+            "client_id": params["client_id"][0],
+            "redirect_uri": "http://localhost:19836/callback",
+            "code_verifier": verifier,
+        },
+    )
+    assert r.status_code == 200, f"Code exchange failed: {r.text}"
+    assert r.json()["email"] == user["email"]
+
+    # And on rotation — a client that only ever refreshes must still be able to
+    # see whose account it is holding.
+    r2 = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "refresh_token",
+            "refresh_token": r.json()["refresh_token"],
+            "client_id": r.json()["client_id"],
+        },
+    )
+    assert r2.status_code == 200, f"Refresh failed: {r2.text}"
+    assert r2.json()["email"] == user["email"]
+
+
+def test_token_response_email_reveals_a_substituted_account(
+    client: TestClient,
+) -> None:
+    """A stranger's approval is detectable by the app that redeems the code.
+
+    Reproduces the substitution itself, so the field is pinned against the case
+    it exists for rather than only against the happy path: a test that checks
+    the address only when it already matches would pass with the field wired to
+    the wrong user.
+    """
+    victim, _ = create_random_user_with_headers(client)
+    stranger, stranger_headers = create_random_user_with_headers(client)
+
+    # The victim's app starts the flow and holds the verifier.
+    verifier, challenge = generate_pkce_pair()
+    nonce = initiate_authorize(client, code_challenge=challenge)
+
+    # The stranger approves it, holding only the nonce.
+    result = submit_consent(client, stranger_headers, nonce, action="approve")
+    params = parse_qs(urlparse(result["redirect_to"]).query)
+
+    r = client.post(
+        f"{_BASE}/token",
+        json={
+            "grant_type": "authorization_code",
+            "code": params["code"][0],
+            "client_id": params["client_id"][0],
+            "redirect_uri": "http://localhost:19836/callback",
+            "code_verifier": verifier,
+        },
+    )
+    assert r.status_code == 200, f"Redemption failed: {r.text}"
+
+    # The substitution still happens — this field does not prevent it. What it
+    # buys is that the redeeming app can now see it, and refuse.
+    assert r.json()["email"] == stranger["email"]
+    assert r.json()["email"] != victim["email"]

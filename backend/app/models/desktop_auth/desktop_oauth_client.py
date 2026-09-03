@@ -65,10 +65,32 @@ class GrantProvenance:
 
     Both columns describe a single grant, so they are written together and
     compared together. Making that a value rather than two assignments is the
-    point: ``__eq__`` is derived from the fields, so a provenance field added
-    here necessarily enters the comparison that decides whether a grant
-    supersedes the previous one. The write and the check cannot fall out of step
-    by omission — which they could when the check named the fields separately.
+    point: ``__eq__`` is derived from the fields, so a provenance field
+    *declared* here necessarily enters the comparison that decides whether a
+    grant supersedes the previous one.
+
+    **What that couples is field-to-compared, not written-to-compared, and the
+    distinction is the whole of the safety margin — do not read it as the
+    stronger claim.** ``of`` and ``apply`` are hand-written enumerations, so a
+    new field has to be added in three places, not one. Exactly one omission
+    shape is loud, and it is the narrowest of the three:
+
+    * Declared with **no default** and forgotten in ``of`` (the read) — ``of``'s
+      constructor call raises ``TypeError`` on the first grant. Loud.
+    * Declared **with a default** and forgotten in ``of`` — **silent.** The read
+      yields the default while the caller supplies the real value.
+    * Forgotten in ``apply`` (the write), **with or without a default** —
+      **silent.** The column is never written, so ``of`` keeps returning the
+      stale value.
+
+    Both silent shapes have the same consequence: an identical row compares
+    unequal and is treated as superseded, retiring the client's live refresh
+    tokens on **every** grant. That runs in the fail-safe direction, and **"it
+    fails safe" is not an adequate defence of it** — over-revoking is precisely
+    what the conditional in ``_stamp_grant`` exists to prevent, so the safe
+    direction is the cost here, not the excuse. **So: give a new provenance
+    field no default, and add it to ``of`` and ``apply`` in the same edit;
+    neither the dataclass nor the type checker will tell you if you don't.**
 
     **What this does not do**, stated so nobody reads more into it: it cannot
     stop someone adding a provenance column and writing it outside

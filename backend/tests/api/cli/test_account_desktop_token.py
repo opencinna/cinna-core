@@ -18,6 +18,11 @@ Covers:
   account token are all rejected; another user's client id is 403.
 - Audit: ``CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED`` on success,
   ``CLI_ACCOUNT_DESKTOP_TOKEN_DENIED`` on an authorization failure.
+- The minting gate on the exchanged session: which surfaces it closes, and the
+  action granularity that keeps ``action="deny"`` on the two consent routes
+  reachable — deny mints nothing, so a gate against minting must not touch it.
+- The blast radius of the provenance-change revoke: one client row, never the
+  owning user, so linking a device does not sign the user's others out.
 
 Note on token expiry: the account-token expiry check lives in the shared
 ``_resolve_account_cli_context`` dep and has no API surface that can age a token,
@@ -816,3 +821,225 @@ def test_browser_reconsent_does_not_revoke_a_live_session(
         "A CLI exchange changes the provenance, so it must still retire the "
         "browser-granted family — narrowing must not cost the laundering defence"
     )
+
+
+# ── Scenario 12: the gate is action-granular, so DENY stays reachable ───────
+
+
+def test_cli_exchanged_session_may_deny_the_consent_it_may_not_approve(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    The gate refuses credential *minting*, not the consent surface.
+
+    ``POST /desktop-auth/consent`` and ``POST /app-auth/consent`` are one route
+    each carrying two opposite actions in the body. ``action="approve"`` mints a
+    native session with clean provenance — the self-replication loop Scenario 10
+    closes. ``action="deny"`` mints nothing: it marks the pending request used
+    and returns ``error=access_denied``. Refusing deny would let a compromised
+    session block its victim from turning down a sign-in it can see pending,
+    which is the exact property the gate's own docstring reserves for revocation
+    and read routes.
+
+      1. A CLI-exchanged desktop session, with a consent request pending
+      2. approve on /desktop-auth/consent → 403 (the loop stays closed)
+      3. deny on the SAME request → 200 with error=access_denied. Reusing the
+         nonce is load-bearing beyond the stated property: it also pins that
+         the 403 fires *before* ``process_consent`` marks the request used, so
+         a refused approve does not burn the user's pending request
+      4. The same pair on the mobile /app-auth surface
+      5. The refusal names what it actually refuses, and fires before the
+         nonce is read — so a refused approve does not burn a pending request
+      6. An unrecognised action is refused rather than treated as an approval
+      7. An ordinary web session can still approve — narrowing costs nothing
+    """
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Deny Machine"
+    )
+    issued = exchange_for_desktop_token(
+        client, account_cli_headers(account_jwt), device_name="Denying Desktop"
+    )
+    # ── Phase 1: a live, working CLI-exchanged session ───────────────────
+    cli_session = _bearer(issued["access_token"])
+    assert _me(client, cli_session).status_code == 200
+
+    # ── Phase 2: approve is still refused ─────────────────────────────────
+    _verifier, challenge = generate_pkce_pair()
+    nonce = initiate_authorize(
+        client, code_challenge=challenge, device_name="Pending Desktop"
+    )
+    r = client.post(
+        f"{_DESKTOP}/consent",
+        headers=cli_session,
+        json={"request_nonce": nonce, "action": "approve"},
+    )
+    assert r.status_code == 403, (
+        "Approving a consent mints a native session with clean provenance and "
+        "must stay closed to a CLI-exchanged session"
+    )
+
+    # ── Phase 3: deny on the same, still-pending request is allowed ───────
+    r = client.post(
+        f"{_DESKTOP}/consent",
+        headers=cli_session,
+        json={"request_nonce": nonce, "action": "deny"},
+    )
+    assert r.status_code == 200, (
+        "Deny mints nothing — it is the safety action, and a gate against "
+        f"credential minting must never block it. Got {r.status_code}: {r.text}"
+    )
+    assert "error=access_denied" in r.json()["redirect_to"], (
+        "The deny must actually have been processed, not merely accepted"
+    )
+
+    # ── Phase 4: the mobile surface behaves identically ───────────────────
+    _verifier, challenge = generate_pkce_pair()
+    nonce = initiate_authorize(
+        client, code_challenge=challenge, device_name="Pending Phone"
+    )
+    r = client.post(
+        f"{settings.API_V1_STR}/app-auth/consent",
+        headers=cli_session,
+        json={"request_nonce": nonce, "action": "approve"},
+    )
+    assert r.status_code == 403, "The mobile surface shares the loop and the gate"
+    assert "CLI account token" in r.json()["detail"], (
+        "…and refuses for the gate's reason, not for a client-ownership one"
+    )
+    r = client.post(
+        f"{settings.API_V1_STR}/app-auth/consent",
+        headers=cli_session,
+        json={"request_nonce": nonce, "action": "deny"},
+    )
+    assert r.status_code == 200, (
+        f"…and shares the deny exemption. Got {r.status_code}: {r.text}"
+    )
+    assert "error=access_denied" in r.json()["redirect_to"]
+
+    # ── Phase 5: the refusal describes the request it refused ────────────
+    # A consent approval mints a desktop/mobile session, not a CLI credential,
+    # so the message must not tell the user they cannot "create new CLI
+    # credentials" — that names a capability this request never exercises. The
+    # gate raises before ``process_consent`` reads the nonce, so no pending
+    # request is needed here; the point is only the wording.
+    r = client.post(
+        f"{_DESKTOP}/consent",
+        headers=cli_session,
+        json={"request_nonce": "no-such-nonce", "action": "approve"},
+    )
+    assert r.status_code == 403, (
+        "The gate must fire before the nonce is looked up, or a refused "
+        f"approve would leak whether a request exists. Got {r.text}"
+    )
+    detail = r.json()["detail"]
+    assert "CLI account token" in detail and "browser" in detail, detail
+    # The positive half has to name the clause this fix introduced. Without it
+    # the phase rests on a negative substring, which passes for *any* rewording
+    # — including a worse one — and so cannot fail on a partial revert.
+    assert "approve new sign-ins" in detail, (
+        f"The refusal must name sign-in approval, not only credentials: {detail}"
+    )
+    assert "cannot create new CLI credentials" not in detail, (
+        "The refusal must not name CLI-credential creation on a route that "
+        f"mints a native session: {detail}"
+    )
+
+    # ── Phase 5b: an unrecognised action is rejected, never minted ────────
+    # ``process_consent`` treats anything that is not "deny" as an approval, so
+    # the handler's 400 is what keeps that branch unreachable. Pin it: if the
+    # validation were dropped, "Approve" must not become a 200 that mints.
+    r = client.post(
+        f"{_DESKTOP}/consent",
+        headers=cli_session,
+        json={"request_nonce": "no-such-nonce", "action": "Approve"},
+    )
+    assert r.status_code in (400, 403), (
+        "An unrecognised action must be refused, not treated as an approval. "
+        f"Got {r.status_code}: {r.text}"
+    )
+
+    # ── Phase 7: an ordinary web session can still approve ───────────────
+    _verifier, challenge = generate_pkce_pair()
+    nonce = initiate_authorize(
+        client, code_challenge=challenge, device_name="Human Desktop"
+    )
+    r = client.post(
+        f"{_DESKTOP}/consent",
+        headers=superuser_token_headers,
+        json={"request_nonce": nonce, "action": "approve"},
+    )
+    assert r.status_code == 200, (
+        f"Narrowing the gate must not disturb the human path: {r.text}"
+    )
+
+
+# ── Scenario 13: supersession is client-scoped, not user-scoped ─────────────
+
+
+def test_supersession_does_not_sign_out_the_users_other_desktops(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    Blast radius of the provenance-change revoke.
+
+    When a CLI exchange changes a client's provenance, ``_stamp_grant`` revokes
+    the live refresh tokens **on that client row**. Widening that filter to the
+    owning user — one word in a `where` clause — would turn "link this device"
+    into "sign out of every other device", silently, on a security primitive
+    nobody re-reads. Scenario 11 pins that a same-provenance re-grant leaves a
+    family alone, but it only ever holds one client, so a user-scoped filter
+    passes it. This holds two.
+
+      1. Two browser-consented desktops A and B, same user, both live
+      2. A CLI exchange onto B's client id changes B's provenance
+      3. B's browser-granted family is retired — the revoke did fire, so a
+         green here is not the vacuous kind
+      4. A's family still rotates — the revoke stopped at the client row
+    """
+    bystander = obtain_desktop_tokens(
+        client, superuser_token_headers, device_name="Bystander Desktop"
+    )
+    superseded = obtain_desktop_tokens(
+        client, superuser_token_headers, device_name="Superseded Desktop"
+    )
+    assert bystander["client_id"] != superseded["client_id"]
+
+    # ── Phase 2: change the provenance of ONE of them ────────────────────
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Blast Radius Machine"
+    )
+    exchange_for_desktop_token(
+        client,
+        account_cli_headers(account_jwt),
+        client_id=superseded["client_id"],
+    )
+
+    # ── Phase 3: that client's browser-granted family is retired ─────────
+    r = client.post(
+        f"{_DESKTOP}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": superseded["client_id"],
+            "refresh_token": superseded["refresh_token"],
+        },
+    )
+    assert r.status_code == 400, (
+        "The provenance change must retire the superseded family — if this "
+        "passes, the test below proves nothing"
+    )
+
+    # ── Phase 4: the user's other desktop is untouched ───────────────────
+    r = client.post(
+        f"{_DESKTOP}/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": bystander["client_id"],
+            "refresh_token": bystander["refresh_token"],
+        },
+    )
+    assert r.status_code == 200, (
+        "Linking one device must not sign the user out of the others: the "
+        "supersession revoke is scoped to the client row, never to the user. "
+        f"Got {r.status_code}: {r.text}"
+    )
+    assert r.json()["client_id"] == bystander["client_id"]

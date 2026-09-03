@@ -28,6 +28,7 @@ from app.models.desktop_auth.desktop_oauth_client import (
     GrantProvenance,
 )
 from app.models.desktop_auth.desktop_refresh_token import DesktopRefreshToken
+from app.models.users.user import User
 from app.services.desktop_auth.desktop_auth_crypto import (
     generate_auth_code,
     generate_client_id,
@@ -393,6 +394,38 @@ class DesktopAuthService:
         state = record.state
         separator = "&" if "?" in redirect_uri else "?"
 
+        # ── Bind the request to the caller, before either action spends it ──
+        # ``/authorize`` is public, so a pending request is stored with no
+        # authenticated user on it. Its only tie to one is the ``client_id`` it
+        # names, and that tie is checked here rather than inside a branch,
+        # because BOTH actions consume the request: deny mints nothing, but it
+        # still sets ``is_used``, so an unowned deny is a one-shot denial of
+        # service on the owner's pending sign-in. The approve branch below used
+        # to be the only guarded one, and only incidentally — it had to resolve
+        # the client in order to mint a code, so the ownership check came along
+        # for free. Nothing forced deny to resolve anything, so nothing did.
+        #
+        # Conditional on a named client for a reason, not for tidiness:
+        # ``_resolve_or_register_client`` *registers* when handed no client id,
+        # so calling it unconditionally would create a client row for a request
+        # the user is about to deny. With an id it is a pure read that raises
+        # 403, which is exactly the guard wanted on both paths. A request naming
+        # no client has no owner to compare against — see
+        # ``test_consent_lazy_registration_request_has_no_owner_to_bind_to``.
+        named_client = (
+            DesktopAuthService._resolve_or_register_client(
+                session,
+                user_id=user_id,
+                client_id_str=record.client_id,
+                device_name=record.device_name,
+                platform=record.platform,
+                app_version=record.app_version,
+                created_origin=CLIENT_ORIGIN_BROWSER_CONSENT,
+            )
+            if record.client_id
+            else None
+        )
+
         if action == "deny":
             record.is_used = True
             session.commit()
@@ -402,10 +435,10 @@ class DesktopAuthService:
         # Shared with the CLI token exchange (``issue_tokens_for_cli_exchange``)
         # so both surfaces apply identical ownership checks and identical
         # lazy-registration semantics.
-        client = DesktopAuthService._resolve_or_register_client(
+        client = named_client or DesktopAuthService._resolve_or_register_client(
             session,
             user_id=user_id,
-            client_id_str=record.client_id,
+            client_id_str=None,
             device_name=record.device_name,
             platform=record.platform,
             app_version=record.app_version,
@@ -541,13 +574,9 @@ class DesktopAuthService:
             session, client, auth_code.user_id
         )
 
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token_raw,
-            "token_type": "bearer",
-            "expires_in": settings.DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "client_id": client_id_str,
-        }
+        return DesktopAuthService._token_payload(
+            session, client_id_str, auth_code.user_id, access_token, refresh_token_raw
+        )
 
     # ── CLI account-token exchange ─────────────────────────────────────────
 
@@ -619,13 +648,9 @@ class DesktopAuthService:
             session, client, user_id
         )
 
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token_raw,
-            "token_type": "bearer",
-            "expires_in": settings.DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "client_id": client.client_id,
-        }
+        return DesktopAuthService._token_payload(
+            session, client.client_id, user_id, access_token, refresh_token_raw
+        )
 
     # ── Refresh token rotation ─────────────────────────────────────────────
 
@@ -864,12 +889,23 @@ class DesktopAuthService:
     ) -> None:
         """Record how this client's *current* grant was obtained.
 
-        The single writer of ``origin`` and ``minted_by_account_token_id``. They
-        describe one grant between them, so they are never written apart — a row
-        saying ``origin="browser_consent"`` while still pointing at the account
-        token that bought it would make the App Sessions badge and the
-        revocation cascade disagree about the same session. ``GrantProvenance``
-        exists so the pair is one value rather than two assignments.
+        **The single writer of every *grant* of ``origin`` and
+        ``minted_by_account_token_id`` — which is not the same as being the
+        single writer of the columns, and the difference is worth stating so
+        nobody audits for the wrong property.** ``origin`` is also written at
+        row creation, by ``_resolve_or_register_client``, which mints no tokens
+        and does not call this function; it seeds the column so it is never null
+        before the first grant. What holds is that no *grant* stamps provenance
+        anywhere else: the only callers are ``exchange_code`` and
+        ``issue_tokens_for_cli_exchange``, and rotation carries the pair forward
+        untouched.
+
+        The two columns describe one grant between them, so they are never
+        written apart — a row saying ``origin="browser_consent"`` while still
+        pointing at the account token that bought it would make the App Sessions
+        badge and the revocation cascade disagree about the same session.
+        ``GrantProvenance`` exists so the pair is one value rather than two
+        assignments.
 
         **When the provenance actually changes, every still-live refresh token
         on the client is revoked**, and that is what lets two per-client scalars
@@ -883,6 +919,18 @@ class DesktopAuthService:
         the contrapositive — no badge means no live CLI-minted session — so
         laundering it in that direction defeats the control, and the same stale
         link would drop the session out of the revoke cascade's filter.
+
+        **How far that revoke reaches, since neither this function's name nor
+        its callers show it: one client row, never the user.** The filter is
+        ``DesktopRefreshToken.client_id == client.id``, and nothing widens it to
+        ``user_id`` — so the user's other registered clients keep their sessions
+        untouched: a second desktop, a phone on the ``/app-auth`` surface, and
+        every ordinary web session, which does not live in this table at all.
+        Linking a new machine does not sign the old ones out. Combined with the
+        conditionality below, a re-grant that changes no provenance ends nothing
+        whatsoever. This is written down because it is the first question anyone
+        asks of a rule that revokes tokens while stamping a column, and the code
+        answers it only for a reader who goes and reads the ``where`` clause.
 
         **Why it is conditional rather than unconditional**, since a security
         primitive is usually better off simple: an unconditional revoke also
@@ -1073,6 +1121,54 @@ class DesktopAuthService:
             token.revoked_at = now
 
     @staticmethod
+    def _token_payload(
+        session: Session,
+        client_id_str: str,
+        user_id: UUID,
+        access_token: str,
+        refresh_token_raw: str,
+    ) -> dict[str, Any]:
+        """Build the token-endpoint response body. The single writer of its shape.
+
+        Three paths issue desktop tokens — ``exchange_code``,
+        ``issue_tokens_for_cli_exchange`` and ``_issue_refresh_pair`` — and each
+        built this dict itself. A field added to one was silently absent from the
+        others, which is the drift this consolidation removes: there is now one
+        place to add a field and no way to add it to only some responses.
+
+        ``email`` names the account the returned tokens actually belong to, and
+        it is here for a security reason rather than for convenience. A consent
+        request that names no client can be approved by any authenticated caller
+        holding its nonce (see ``process_consent``); the resulting code is bound
+        to *that* caller, while the app which redeems it is the one that started
+        the flow and holds the PKCE verifier. So an app can be handed a working
+        session for an account that is not the one its user meant to sign in to.
+        Nothing in the rest of this response would reveal that.
+
+        **This field makes that substitution visible; it does not prevent it.**
+        Preventing it needs a check the client performs — comparing this address
+        against the account the user expected — so a reader must not treat the
+        field's presence as the fix. Removing it, or letting a new issuance path
+        skip it, silently removes a client's only means of detecting the swap.
+        """
+        user = session.get(User, user_id)
+        if user is None:
+            # The row a live token points at cannot normally vanish mid-request.
+            # Fail closed rather than return a payload with no account named:
+            # a caller cannot compare an address that is not there, so a
+            # silently-absent email would defeat the check this field exists for.
+            raise HTTPException(status_code=400, detail="invalid_grant")
+
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token_raw,
+            "token_type": "bearer",
+            "expires_in": settings.DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "client_id": client_id_str,
+            "email": user.email,
+        }
+
+    @staticmethod
     def _issue_refresh_pair(
         session: Session,
         client: DesktopOAuthClient,
@@ -1087,13 +1183,9 @@ class DesktopAuthService:
         access_token, refresh_token_raw = DesktopAuthService._create_token_pair(
             session, client, user_id, token_family
         )
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token_raw,
-            "token_type": "bearer",
-            "expires_in": settings.DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "client_id": client.client_id,
-        }
+        return DesktopAuthService._token_payload(
+            session, client.client_id, user_id, access_token, refresh_token_raw
+        )
 
     @staticmethod
     def _create_token_pair(

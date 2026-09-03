@@ -21,7 +21,12 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ValidationError
 
-from app.api.deps import CurrentUser, NoCliExchangedSession, SessionDep
+from app.api.deps import (
+    CurrentClientClaims,
+    CurrentUser,
+    SessionDep,
+    ensure_not_cli_exchanged_session,
+)
 from app.core.config import settings
 from app.models.desktop_auth.desktop_oauth_client import (
     DesktopOAuthClientPublic,
@@ -156,15 +161,12 @@ class ConsentResponse(BaseModel):
     redirect_to: str
 
 
-@router.post(
-    "/consent",
-    response_model=ConsentResponse,
-    dependencies=[NoCliExchangedSession],
-)
+@router.post("/consent", response_model=ConsentResponse)
 def consent(
     body: ConsentRequest,
     session: SessionDep,
     current_user: CurrentUser,
+    client_claims: CurrentClientClaims,
 ) -> ConsentResponse:
     """Process user consent for a desktop auth request.
 
@@ -177,9 +179,25 @@ def consent(
     action="deny":
       - Marks the request as used
       - Returns redirect URL with error=access_denied
+
+    The CLI-exchanged-session gate is invoked **in the body, on the minting
+    branch**, rather than as a route ``dependency``. One route carries two
+    opposite actions here: approving mints a single-use authorization code
+    redeemable at ``/token`` — with no further authentication — for a native
+    session carrying clean ``browser_consent`` provenance and no cascade link,
+    which is the self-replication loop the gate closes. Denying mints nothing
+    and is the safety action. As a route dependency the gate refused both.
+
+    The branch tests ``!= "deny"``, not ``== "approve"``, to match
+    ``process_consent``'s own branch and fail closed on any action added later —
+    see ``ensure_not_cli_exchanged_session`` for the full argument.
     """
     if body.action not in ("approve", "deny"):
         raise HTTPException(status_code=400, detail="invalid_action")
+
+    if body.action != "deny":
+        _client_kind, external_client_id = client_claims
+        ensure_not_cli_exchanged_session(session, external_client_id)
 
     result = DesktopAuthService.process_consent(
         session, current_user.id, body.request_nonce, body.action
@@ -207,6 +225,14 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     client_id: str
+    # The account these tokens belong to. A client must compare it against the
+    # account its user meant to sign in to: a consent request naming no client
+    # can be approved by any authenticated holder of its nonce, and the app that
+    # redeems the resulting code is the one that started the flow, so an app can
+    # be handed a working session for someone else's account. This field makes
+    # that visible and does not prevent it — see
+    # ``DesktopAuthService._token_payload``.
+    email: str
 
 
 async def _parse_token_request(request: Request) -> TokenRequest:
