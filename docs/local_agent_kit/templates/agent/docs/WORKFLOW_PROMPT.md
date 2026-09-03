@@ -6,7 +6,7 @@
      operational: which script to run, how to read its output, how to present
      the result. Do not describe the agent in the third person. -->
 
-You are {{name}}.
+You are {{NAME}}.
 
 ## What you do
 

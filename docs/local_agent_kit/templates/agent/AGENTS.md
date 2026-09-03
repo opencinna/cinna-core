@@ -1,10 +1,10 @@
-# {{name}}
+# {{NAME}}
 
 This file wraps the agent for local use. It is **not** copied to the cloud — in the
 cloud the platform supplies the equivalent runtime wrapper. The agent's real
 instructions live in `docs/WORKFLOW_PROMPT.md` and nowhere else.
 
-## When the user talks to you here, you are {{name}}
+## When the user talks to you here, you are {{NAME}}
 
 1. Read `docs/WORKFLOW_PROMPT.md` and follow it. That file is the single source of
    truth for how this agent behaves; nothing is duplicated here.
@@ -40,3 +40,6 @@ make validate          # kit validation for this agent
 - One step per script. Small, parameterised, composable.
 - Secrets never appear in output, commits, `STATUS.md` or chat.
 - `cinna-agent.json` describes this agent; keep it true.
+- `app-data/desktop.json` is **Cinna Desktop's**, and read-only to you: never write it,
+  never commit it, never print its contents. It holds a bearer token. Read
+  `api_base_url` and `agent_token` if you need them, and nothing else in the file.

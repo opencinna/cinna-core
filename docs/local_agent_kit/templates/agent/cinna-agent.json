@@ -1,9 +1,11 @@
 {
-  "schema_version": 1,
+  "contract_version": "{{CONTRACT_VERSION}}",
+  "id": "{{ID}}",
   "kit_version": "{{KIT_VERSION}}",
-  "name": "New Agent",
-  "slug": "new-agent",
-  "description": "One sentence describing exactly what this agent does. Rewrite this last, from what you actually built.",
+  "created_at": "{{CREATED_AT}}",
+  "name": "{{NAME}}",
+  "slug": "{{SLUG}}",
+  "description": "{{DESCRIPTION}}",
   "example_prompts": [],
   "router_trigger_prompt": null,
   "prompts": {
@@ -11,6 +13,7 @@
     "entrypoint": "docs/ENTRYPOINT_PROMPT.md",
     "refiner": "docs/REFINER_PROMPT.md"
   },
+  "runtime": null,
   "status_refresh_command": "/run:status",
   "credentials": [],
   "schedules": [],
@@ -18,10 +21,5 @@
   "features": {
     "webapp": false,
     "agent_api": false
-  },
-  "cloud": {
-    "platform_url": null,
-    "agent_id": null,
-    "imported_at": null
   }
 }

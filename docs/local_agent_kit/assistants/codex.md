@@ -15,7 +15,7 @@ imports `AGENTS.md`, so you can ignore it.
 Assume the network is unavailable, and get everything in one request at the start:
 
 ```bash
-cd ~/Documents/MyAgents
+cd ~/Documents/CinnaAgents
 curl -sL {{KIT_BASE_URL}}/kit.tar.gz | tar xz
 rm -rf .cinna-kit && mv cinna-kit .cinna-kit
 ```

@@ -1,12 +1,20 @@
 <!-- cinna-kit:scaffold-note
-This file came from the kit scaffold. `{{name}}` and `{{slug}}` are the only two
-placeholders the scaffolder substitutes, and they are used only inside
-`templates/agent/`. No other double-brace token appears in this folder except the
-platform-rendered ones (`{{KIT_VERSION}}` and friends), which the platform has
-already replaced by the time you read this. Delete this comment block.
+This file came from the kit scaffold. Seven double-brace placeholders are
+written inside `templates/agent/`: NAME, SLUG, DESCRIPTION, ID,
+CONTRACT_VERSION, CREATED_AT and KIT_VERSION. They are UPPER_SNAKE, the same
+shape as the platform-rendered tokens (PLATFORM_URL, INSTANCE_NAME and
+friends), so shape never separates the two classes — the lists do, except for
+KIT_VERSION, which is on both and which the lists therefore cannot settle. What
+settles it is where the kit came from: the platform substitutes KIT_VERSION
+across every file when it renders a kit for download, and `kit.py new` fills it
+only in a kit that was never rendered. Any kit you downloaded is a rendered one,
+so there KIT_VERSION is already a value and only the other six are still waiting
+for the scaffolder.
+Nothing here should still be in braces by the time you read this. Delete this
+comment block.
 -->
 
-# {{name}}
+# {{NAME}}
 
 One paragraph: what this agent does and who it is for. Rewrite it once the agent
 actually works.
@@ -14,7 +22,7 @@ actually works.
 ## Install
 
 ```bash
-cd Local/{{slug}}
+cd Local/{{SLUG}}
 cp credentials/.env.example credentials/.env
 # fill in credentials/.env — see credentials/README.md for what each value is
 uv sync

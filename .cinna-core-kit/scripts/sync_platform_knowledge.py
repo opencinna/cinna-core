@@ -141,7 +141,21 @@ KIT_SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", ".venv", "node_modules"
 # /agent-start/kit/<path>, so anything a developer leaves next to
 # credentials/.env.example — a real .env, a key, an editor scratch file — would
 # be world-readable. The kit's own .env.example is the one env file that ships.
-KIT_DENY_SUFFIXES = (".key", ".pem", ".p12", ".pfx", ".crt", ".swp", ".orig")
+# `.pyc` is here rather than only in KIT_SKIP_DIRS because this list is the
+# suffix denylist and `_is_publishable` is ALLOW-BY-DEFAULT: KIT_SKIP_DIRS stops
+# bytecode that sits inside a `__pycache__/` directory, but nothing stops a
+# stray `tools/kit.pyc` written beside its source. Compiled bytecode is never
+# kit content — the kit is served as UTF-8 text — so deny it by suffix too.
+KIT_DENY_SUFFIXES = (
+    ".key",
+    ".pem",
+    ".p12",
+    ".pfx",
+    ".crt",
+    ".swp",
+    ".orig",
+    ".pyc",
+)
 KIT_DENY_NAMES = {".DS_Store", "Thumbs.db"}
 
 

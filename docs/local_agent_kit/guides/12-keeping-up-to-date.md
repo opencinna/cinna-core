@@ -23,6 +23,14 @@ whether an update exists, and writes `.cinna-kit/.last_refresh_check`.
 Offline or unreachable? It warns and exits 0. Say so in one line and continue with
 the kit you have — a stale kit is fine; a blocked session is not.
 
+**Two versions, two questions.** `VERSION` and `{{KIT_BASE_URL}}/version` are the *kit*
+content version: it moves with every guide, template and tool change, and it gates
+nothing. `CONTRACT_VERSION` and `{{KIT_BASE_URL}}/contract/version` are the *contract*
+version — the semantic version in `kit.json`'s `contract_version` that every host agrees
+on and that `kit.py validate` gates a folder against. `refresh --check` only ever asks
+the first question; ask the second one directly when you need to know whether another
+tool holding this contract (Cinna Desktop, for one) can still operate these folders.
+
 ## Update
 
 ```bash
@@ -41,10 +49,17 @@ cat .cinna-kit/CHANGELOG.md      # top entry first
 
 ## Read the changelog properly
 
-Entries are grouped in a fixed order:
+One file serves both purposes: `CHANGELOG.md` is the kit's changelog *and* the
+contract's, and it ships in the contract tarball as well as the kit one — so Cinna
+Desktop reads exactly these entries. Entries are headed by the **contract** version they
+belong to, not by the kit version printed at the top of the file.
+
+Within an entry, items are grouped in a fixed order:
 
 1. **Breaking** — a convention that makes an existing agent invalid. Migrate now;
-   the entry says how. A bump of `schema_version` is always breaking.
+   the entry says how. A **major** bump of `contract_version` is always breaking; a
+   minor bump is additive and safe to ignore. (`schema_version` is legacy: it is still
+   parsed, but nothing gates on it any more.)
 2. **Added** — new optional artefacts. Existing agents keep working untouched. Adopt
    only when the relevant ladder trigger has fired.
 3. **Changed** — wording, defaults, reorganisation. No action.
@@ -56,7 +71,7 @@ useful; "Kit updated — schedules now need a timezone, I fixed both agents" is.
 
 | Touched | Not touched |
 |---------|-------------|
-| `.cinna-kit/` in full: guides, templates, schema, tools, VERSION | Anything under `Local/` |
+| `.cinna-kit/` in full: guides, templates, schema, tools, `kit.json`, `layout.json`, `VERSION`, `CONTRACT_VERSION` | Anything under `Local/` |
 | | Anything under `Cloud/` |
 | | The root `AGENTS.md`, `CLAUDE.md`, `README.md`, `.gitignore` |
 
@@ -67,13 +82,32 @@ by hand either unless a Breaking entry says to.
 If a root file needs a change, the changelog says so explicitly; apply it yourself,
 preserving anything the user added.
 
-## Kit version on an agent
+## Versions on an agent
 
-Each agent records the kit version it was scaffolded with, in `cinna-agent.json`
-`kit_version`. `kit.py validate` reports (at info level) when an agent predates the
-current kit. That is information, not a defect: an older agent that validates cleanly
-is fine, and there is no upgrade command. Migrate only what a Breaking entry
-requires.
+Each agent folder records two of them in `cinna-agent.json`, and only one of them
+decides anything.
+
+`kit_version` is the kit the agent was scaffolded with. `kit.py validate` reports (at
+info level) when it differs from the kit you are running — it is a content version, not
+an ordered one, so "differs" is all either of us can say. That is information, not a
+defect: an agent scaffolded by an older kit that validates cleanly is fine, and there is
+no upgrade command.
+
+`contract_version` is the gate. `validate` compares its **major** against the contract
+this kit ships — `kit.json`'s `contract_version`, mirrored in the bare
+`.cinna-kit/CONTRACT_VERSION` file:
+
+| Folder vs. this kit | What `validate` does |
+|---------------------|----------------------|
+| Same major | Nothing — it runs as-is, whatever the minor. |
+| Folder's major **newer** | An error: refresh the kit before touching the folder. |
+| Folder's major **older** | A warning: the folder is migratable — apply the Breaking entries for the gap. |
+| `schema_version`, no `contract_version` and no `id` | A warning: a pre-1.0.0 folder. Read it, then re-stamp it. |
+| No `contract_version` in anything else | An error: it is required of every folder that is not that legacy shape. |
+
+That is the contract's own rule, not this tool's — the same table is in `CHANGELOG.md`
+under "Compatibility", and Cinna Desktop applies it to the same folders. Migrate only
+what a Breaking entry requires.
 
 ## After a refresh
 

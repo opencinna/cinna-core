@@ -221,7 +221,7 @@ const articles: Article[] = [
         <div>
           <h3 className="font-medium text-base mb-2">What it creates</h3>
           <pre className="bg-muted/50 rounded-lg p-4 border text-xs font-mono leading-relaxed overflow-x-auto">
-{`MyAgents/
+{`CinnaAgents/
 ├── Local/       # your agents — everything runs on this machine
 ├── Cloud/       # empty until you move an agent to the platform
 └── .cinna-kit/  # the conventions your assistant follows`}

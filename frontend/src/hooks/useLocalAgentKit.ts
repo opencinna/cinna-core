@@ -6,9 +6,15 @@ import { useQuery } from "@tanstack/react-query"
 // is unset, producing a literal "undefined/api/agent-start/version" request.
 const API_BASE_URL = import.meta.env.VITE_API_URL || ""
 
+// The shape of `GET /api/agent-start/version`. `schema_version` was removed from
+// that response (and from the kit's own `kit.json` in the same change), so it is
+// not declared here either: the field no longer arrives, and a type that still
+// names it tells the next reader the endpoint returns something it does not.
+// Nothing here read it — only `kit_version` is consulted below — and the `as`
+// cast is unchecked, so its presence broke nothing and failed no typecheck,
+// which is exactly why it would have survived indefinitely.
 interface LocalAgentKitVersion {
   kit_version: string
-  schema_version: number
   platform_url: string
   kit_base_url: string
   start_url: string

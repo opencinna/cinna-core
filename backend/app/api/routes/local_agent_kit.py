@@ -31,6 +31,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from app.api.deps import SessionDep
 from app.core.config import settings
 from app.services.cli.local_agent_kit_service import (
+    CONTRACT_TARBALL_FILENAME,
     HTML_CSP,
     INDEX_MEMBER,
     KIT_VERSION_HEADER,
@@ -200,6 +201,35 @@ def _not_modified(
     return None
 
 
+def _serve_tarball(
+    request: Request,
+    version: str,
+    tarball: bytes,
+    representation: str,
+    filename: str,
+) -> Response:
+    """Serve one prebuilt archive with the standard headers, or a 304.
+
+    Both archives are the same kind of response — an already-packed, already-
+    versioned blob offered as a download — so they share one body here as well
+    as the header/validator plumbing. A future change (a ``Content-Length``
+    nuance, ranges, a different media type) then lands in one place.
+    """
+    cached = _not_modified(request, version, representation)
+    if cached is not None:
+        return cached
+
+    return Response(
+        content=tarball,
+        media_type="application/tar+gzip",
+        headers=_kit_headers(
+            version,
+            representation,
+            {"Content-Disposition": f'attachment; filename="{filename}"'},
+        ),
+    )
+
+
 def _wants_html(request: Request, format_param: str | None) -> bool:
     """Decide markdown vs HTML for the mount root.
 
@@ -308,18 +338,51 @@ def get_kit_index(request: Request) -> Response:
 def get_kit_tarball(request: Request) -> Response:
     """The whole rendered kit, rooted at ``cinna-kit/``."""
     version, tarball = LocalAgentKitService.get_versioned_tarball()
-    cached = _not_modified(request, version, "kit.tar.gz")
+    return _serve_tarball(request, version, tarball, "kit.tar.gz", TARBALL_FILENAME)
+
+
+# The contract — the machine-readable subset of the kit (``kit.json``,
+# ``layout.json``, ``CONTRACT_VERSION``, ``CHANGELOG.md``, ``schema/``,
+# ``templates/``) a non-kit host needs to create and validate agent folders.
+#
+# Both contract representations are validated by **``kit_version``**, the
+# content hash — deliberately NOT by ``contract_version``. ``contract_version``
+# is hand-maintained and does not move when a template or the schema changes,
+# so an ETag (or ``X-Kit-Version``) keyed on it would answer "unchanged" to a
+# client that is in fact holding a stale contract, which is the one thing a
+# validator promises cannot happen. ``kit_version`` moves on any content
+# change. Do not "simplify" these to key on the version they carry in the body.
+#
+# Both also degrade together: an incoherent snapshot 503s BOTH of them and
+# neither of the kit routes above (D16 amended — the boundary and its rationale
+# live on ``LocalAgentKitService._require_serviceable_contract``). Nothing in
+# this file decides that; both handlers inherit it from the service accessor
+# they already call.
+
+
+@start_router.get("/contract/version")
+def get_contract_version(request: Request) -> Response:
+    """Contract version + instance coordinates, for a host that consumes only
+    the contract (Cinna Desktop) rather than the whole kit.
+
+    The ``/version`` envelope plus ``contract_version``.
+    """
+    payload: dict[str, Any] = LocalAgentKitService.get_contract_version_payload()
+    version = payload["kit_version"]
+    cached = _not_modified(request, version, "contract/version")
     if cached is not None:
         return cached
+    return JSONResponse(
+        content=payload, headers=_kit_headers(version, "contract/version")
+    )
 
-    return Response(
-        content=tarball,
-        media_type="application/tar+gzip",
-        headers=_kit_headers(
-            version,
-            "kit.tar.gz",
-            {"Content-Disposition": f'attachment; filename="{TARBALL_FILENAME}"'},
-        ),
+
+@start_router.get("/contract.tar.gz")
+def get_contract_tarball(request: Request) -> Response:
+    """The contract subset of the rendered kit, rooted at ``cinna-contract/``."""
+    version, tarball = LocalAgentKitService.get_versioned_contract_tarball()
+    return _serve_tarball(
+        request, version, tarball, "contract.tar.gz", CONTRACT_TARBALL_FILENAME
     )
 
 

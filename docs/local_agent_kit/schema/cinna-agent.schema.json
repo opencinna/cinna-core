@@ -4,16 +4,44 @@
   "title": "cinna-agent.json",
   "description": "Definitional metadata for a locally built agent. Lives at the agent folder root and travels unchanged into a cloud agent workspace and into bundle revisions. Unknown keys are preserved for forward compatibility.",
   "type": "object",
-  "required": ["schema_version", "name", "slug", "description"],
+  "required": ["name", "slug", "description"],
+  "allOf": [
+    {
+      "$comment": "Identity is required of every folder scaffolded at contract 1.0.0 or later, and tolerated as absent in exactly one case: a legacy folder, which carries the integer schema_version and neither contract_version nor id. Such a folder must still parse - it is read, reported, and re-stamped - which is why contract_version and id are not in the top-level `required`. Any other manifest needs both. This encodes the same rule as the desktop's checkIdentity() and the CHANGELOG's Compatibility table; if you change one, change all three.",
+      "if": {
+        "allOf": [
+          {"required": ["schema_version"]},
+          {"not": {"required": ["contract_version"]}},
+          {"not": {"required": ["id"]}}
+        ]
+      },
+      "then": {"$comment": "Legacy folder: read it, warn, ask for a re-stamp."},
+      "else": {"required": ["contract_version", "id"]}
+    }
+  ],
   "additionalProperties": true,
   "properties": {
+    "contract_version": {
+      "description": "Version of the folder contract this agent was scaffolded against, and the compatibility gate: a tool whose contract major is older than this must refuse to operate the folder. Required of every folder except a legacy one (see the top-level allOf).",
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?$"
+    },
+    "id": {
+      "description": "Stable identity of this agent, written once at scaffold and never rewritten. Survives folder moves and slug renames; preserved through cloud import as the agent's local origin. Required of every folder except a legacy one (see the top-level allOf).",
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
     "schema_version": {
-      "description": "Manifest contract version. A tool that does not understand this number must refuse to parse the file.",
+      "description": "Legacy manifest version. A manifest that carries it, and neither contract_version nor id, is a pre-1.0.0 folder: it still parses, and a tool should re-stamp it rather than reject it. It is no longer the compatibility gate and nothing should branch on its value.",
       "type": "integer",
-      "const": 1
+      "deprecated": true
     },
     "kit_version": {
-      "description": "Version of the kit that scaffolded this agent. Informational.",
+      "description": "Version of the kit that scaffolded this agent. Informational only - never a gate.",
+      "type": ["string", "null"]
+    },
+    "created_at": {
+      "description": "ISO 8601 timestamp written by the scaffolder. Informational.",
       "type": ["string", "null"]
     },
     "name": {
@@ -54,6 +82,26 @@
         "refiner": {"type": "string"}
       }
     },
+    "runtime": {
+      "description": "How this agent should be run by a host that offers a choice. Absent means the host's default runtime. Never contains a secret: credential is a reference, not a key.",
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "model": {
+          "description": "Model identifier as the host names it. Seeds the cloud's per-mode model override at import.",
+          "type": ["string", "null"]
+        },
+        "credential": {
+          "description": "Reference to the AI credential to run on: a credential type, or the name of a credential configured in the host. NEVER a key, token or secret value.",
+          "type": ["string", "null"]
+        },
+        "permissions": {
+          "description": "Host-specific permission profile for the agent's own tools. Interpreted by the host that wrote it; unknown keys are preserved.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
     "status_refresh_command": {
       "description": "Shell command, or a /run:<name> reference into docs/CLI_COMMANDS.yaml, executed before the platform reads STATUS.md.",
       "type": ["string", "null"],
@@ -69,9 +117,9 @@
         "properties": {
           "name": {"type": "string", "minLength": 1, "maxLength": 255},
           "type": {
-            "description": "A platform CredentialType value.",
+            "description": "A platform credential type. The values below are the types known at contract 1.0.0; they are advisory, not a closed set. The platform's list grows independently of any bundled contract, so a contract pinned in a shipped desktop build cannot track it - an unrecognised value is therefore tolerated here and reported as a warning, and is resolved against the authoritative list at import.",
             "type": "string",
-            "enum": [
+            "examples": [
               "email_imap",
               "email_smtp",
               "odoo",
@@ -168,8 +216,9 @@
       }
     },
     "cloud": {
-      "description": "Written only by the cloud import step. Cleared when the agent folder is copied or exported.",
+      "description": "DEPRECATED, replaced by the publications[] ledger, which lives in the sibling file publications.json and not in this one. Still accepted so a folder written before contract 1.0.0 parses; a tool that writes this manifest for any other reason migrates it into publications.json and drops the key. Never migrated at export time - an export must not mutate the manifest.",
       "type": "object",
+      "deprecated": true,
       "additionalProperties": true,
       "properties": {
         "platform_url": {"type": ["string", "null"]},

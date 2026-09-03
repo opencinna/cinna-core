@@ -4,7 +4,7 @@ Local Agent Kit — the public, unauthenticated ``/agent-start`` surface.
 A user with any local coding assistant and *no account* pastes one prompt
 ("read https://<instance>/agent-start and help me start making my agents"). The
 assistant fetches this surface and receives a versioned, platform-maintained
-kit: how to lay out ``~/Documents/MyAgents/{Local,Cloud}``, how to build a local
+kit: how to lay out ``~/Documents/CinnaAgents/{Local,Cloud}``, how to build a local
 agent whose folder layout and metadata are byte-compatible with a cloud agent
 workspace, a capability ladder, and the go-cloud playbook.
 
@@ -41,11 +41,12 @@ afterwards, which fills both the ``VERSION`` member and ``kit.json``'s
 ``kit_version`` field. ``kit.py refresh`` compares the local ``VERSION`` with
 ``GET /api/agent-start/version`` to decide whether to re-download.
 
-The rendered tree and its tarball are built once per snapshot and memoized (key:
-``snapshot_cache_key``, the same mtime+count probe ``ContextPackageService``
-uses). Requests are served from the in-memory tree only — the filesystem is
-never touched per-request, which makes path traversal impossible by
-construction rather than by validation.
+The rendered tree and its two tarballs (the full kit, and the contract subset
+described at ``CONTRACT_MEMBERS`` below) are built once per snapshot and
+memoized (key: ``snapshot_cache_key``, the same mtime+count probe
+``ContextPackageService`` uses). Requests are served from the in-memory tree
+only — the filesystem is never touched per-request, which makes path traversal
+impossible by construction rather than by validation.
 """
 
 from __future__ import annotations
@@ -58,8 +59,9 @@ import json
 import logging
 import tarfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple, NoReturn
 
 from fastapi import HTTPException, status
 from sqlmodel import Session
@@ -80,6 +82,34 @@ INDEX_MEMBER = "kit.json"
 VERSION_MEMBER = "VERSION"
 TARBALL_ROOT = "cinna-kit"
 TARBALL_FILENAME = "cinna-kit.tar.gz"
+
+# ── The contract ─────────────────────────────────────────────────────────
+# The *contract* is the machine-readable half of the kit — the folder model,
+# the manifest schema and the scaffold templates — that a non-kit host (Cinna
+# Desktop) needs in order to create and validate agent folders that stay
+# byte-compatible with ``kit.py``'s. It is a declared **subset of this one
+# tree**, never a second tree: two trees would be two truths, and the drift
+# would only surface when a desktop scaffold and a ``kit.py new`` scaffold
+# stopped matching.
+CONTRACT_VERSION_MEMBER = "CONTRACT_VERSION"
+LAYOUT_MEMBER = "layout.json"
+CHANGELOG_MEMBER = "CHANGELOG.md"
+CONTRACT_TARBALL_ROOT = "cinna-contract"
+CONTRACT_TARBALL_FILENAME = "cinna-contract.tar.gz"
+
+# Exact member names in the contract, plus the directory prefixes that carry
+# the rest of it. Everything else in the kit (the guides, ``tools/``,
+# ``START.md``, ``README.md``, ``assistants/``) is prose for a human or a
+# coding assistant and is deliberately not part of the contract.
+#
+# ``VERSION`` is deliberately absent: it holds the *kit* content version, and
+# shipping it inside a contract tree would put two meanings on one filename.
+# The contract's own version is ``CONTRACT_VERSION`` (and ``kit.json``'s
+# ``contract_version``), which is hand-maintained rather than derived.
+CONTRACT_MEMBERS = frozenset(
+    {INDEX_MEMBER, LAYOUT_MEMBER, CONTRACT_VERSION_MEMBER, CHANGELOG_MEMBER}
+)
+CONTRACT_MEMBER_PREFIXES = ("schema/", "templates/")
 
 KIT_VERSION_HEADER = "X-Kit-Version"
 
@@ -133,12 +163,35 @@ def instance_display_name(raw: str) -> str:
     return name or raw
 
 
+class _KitBuild(NamedTuple):
+    """Everything derived from one render of one snapshot.
+
+    A record rather than a bare tuple because it grew a fifth field: positional
+    unpacking with a row of underscores is how a later edit silently reads the
+    contract tarball as the kit one.
+    """
+
+    version: str
+    rendered: dict[str, bytes]
+    tarball: bytes
+    contract_tarball: bytes
+    # ``None`` when the contract is serviceable, else the diagnostic naming why
+    # it is not. Computed once per snapshot (see ``_build_or_cached``); it is
+    # deliberately data here rather than an exception, so that carrying it
+    # cannot 503 the kit surface — only the two contract accessors read it.
+    contract_defect: str | None
+
+
 class LocalAgentKitService:
     """Builds, renders, versions and caches the Local Agent Kit."""
 
-    # (cache_key, kit_version, rendered tree, tarball). Process-local, rebuilt
-    # when the snapshot changes on disk (i.e. on redeploy).
-    _cache: tuple[str, str, dict[str, bytes], bytes] | None = None
+    # ``(cache_key, build)``. Process-local, rebuilt when the snapshot changes
+    # on disk (i.e. on redeploy). Everything derived from one render lives in
+    # one entry behind one lock — both tarballs and the contract verdict —
+    # because a second cache could hold a contract built from a different
+    # render than the kit it claims to belong to, while reporting one
+    # kit_version for both.
+    _cache: tuple[str, _KitBuild] | None = None
     _lock = threading.Lock()
 
     # ── Instance toggle ──────────────────────────────────────────────────
@@ -189,16 +242,33 @@ class LocalAgentKitService:
     @classmethod
     def get_version(cls) -> str:
         """The current kit's content version."""
-        return cls._build_or_cached()[0]
+        return cls._build_or_cached().version
 
     @classmethod
     def get_version_payload(cls) -> dict[str, Any]:
         """Body of ``GET /agent-start/version`` — enough for ``kit.py refresh``."""
-        version = cls.get_version()
+        return cls._version_payload(cls.get_version())
+
+    @classmethod
+    def _version_payload(cls, version: str) -> dict[str, Any]:
+        """The ``/version`` envelope for an already-resolved ``kit_version``.
+
+        Split from :meth:`get_version_payload` so the contract payload can be
+        built from the *same* build as its contract version instead of probing
+        the snapshot a second time.
+
+        There is deliberately **no** ``schema_version`` here. It used to be
+        synthesised as a literal ``1`` mirroring ``kit.json``; both were removed
+        together, because a second version number that decides nothing is the
+        exact artefact this contract exists to eliminate. The compatibility gate
+        is ``contract_version`` (``/contract/version``); the manifest's own
+        ``schema_version`` is a different, still-live legacy marker and is not
+        this. Do not re-add it "for parity with ``kit.json``" — ``kit.json`` no
+        longer carries one either.
+        """
         values = cls.placeholders()
         return {
             "kit_version": version,
-            "schema_version": 1,
             "platform_url": values["PLATFORM_URL"],
             "kit_base_url": values["KIT_BASE_URL"],
             "start_url": values["START_URL"],
@@ -208,6 +278,158 @@ class LocalAgentKitService:
                 "min_version": values["MIN_CLI_VERSION"],
             },
         }
+
+    @classmethod
+    def get_contract_version(cls) -> str:
+        """The hand-maintained contract version, from the ``CONTRACT_VERSION`` member."""
+        build = cls._build_or_cached()
+        cls._require_serviceable_contract(build)
+        version = cls._read_contract_version(build.rendered)
+        if version is None:  # unreachable: the gate above already rejected it
+            cls._contract_defect("Local agent kit contract version vanished mid-build")
+        return version
+
+    @classmethod
+    def get_contract_version_payload(cls) -> dict[str, Any]:
+        """Body of ``GET /agent-start/contract/version``.
+
+        The ``/version`` envelope plus ``contract_version``, so there is one
+        payload builder and a consumer polling either endpoint parses the same
+        shape.
+
+        Both halves come out of **one** build: a second call would re-probe the
+        snapshot (an ``rglob`` + a ``stat`` per file) on an anonymous endpoint,
+        and — if a redeploy landed between the two probes — would pair one
+        build's ``kit_version`` with another's ``contract_version``.
+        """
+        build = cls._build_or_cached()
+        cls._require_serviceable_contract(build)
+        contract_version = cls._read_contract_version(build.rendered)
+        if contract_version is None:  # unreachable: the gate rejected it
+            cls._contract_defect("Local agent kit contract version vanished mid-build")
+        payload = cls._version_payload(build.version)
+        payload["contract_version"] = contract_version
+        return payload
+
+    # ── Contract coherence (D16, amended) ────────────────────────────────
+
+    @classmethod
+    def _require_serviceable_contract(cls, build: _KitBuild) -> None:
+        """503 unless this build's contract is coherent. The boundary is exact.
+
+        **The anonymous kit surface — ``START.md``, ``/version``,
+        ``kit.tar.gz``, ``/kit/{path}`` — never calls this.** It must keep
+        serving a stranger whatever state the contract is in; that is the whole
+        reason the verdict is carried as data rather than raised from
+        :meth:`_build_or_cached`.
+
+        **Both contract representations — ``/contract.tar.gz`` and
+        ``/contract/version`` — always call it, and so degrade together.** Two
+        representations of one thing reporting different health is the same
+        asymmetry this guard exists to remove. ``/contract/version`` is the
+        endpoint a consumer *polls*, and the number it publishes is what a
+        major-version compatibility gate keys on: publishing an unvalidated one
+        is worse than publishing nothing, because a false *compatibility*
+        fails silently where a refusal at least stops.
+
+        Do not narrow this to one representation, and do not widen it to the
+        kit surface. Both directions have been tried and ruled on.
+        """
+        if build.contract_defect is not None:
+            # Already logged with its specifics once per snapshot, at build.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Local agent kit is not available on this instance",
+            )
+
+    @classmethod
+    def _contract_defect_reason(cls, rendered: dict[str, bytes]) -> str | None:
+        """Why this rendered tree cannot serve a contract, or ``None`` if it can.
+
+        Pure: it decides, it does not raise and does not log. Called once per
+        snapshot from :meth:`_build_or_cached`; the two contract accessors turn
+        its verdict into a 503 and the kit surface ignores it entirely.
+
+        Two classes of defect, both of which would otherwise ship as a **200**
+        carrying a quietly wrong archive or a quietly wrong number — the packer
+        is a filter, not an assertion, so a member that is not in the tree is
+        simply not packed.
+
+        **1. The load-bearing member set: ``kit.json``, ``layout.json``,
+        ``CONTRACT_VERSION``.** The first two are the consumer's own identity
+        pair (Cinna Desktop's ``contractStore.isContractTree`` is exactly
+        "``kit.json`` and ``layout.json`` at the root"), so an archive missing
+        either is not a contract tree by the only definition that matters and
+        there is nothing to gain by shipping it. The third is what D2 rests the
+        version fallback on.
+
+        ``schema/`` and ``templates/`` are deliberately **not** in this set: a
+        thin or empty schema/templates tree is a *content* problem, and a
+        content problem must not be dressed up as an identity failure.
+
+        **2. The three declarations of ``contract_version`` must agree** —
+        ``CONTRACT_VERSION``, ``kit.json``, ``layout.json``. A Phase 12
+        invariant test only catches drift if someone runs it before shipping;
+        checking here converts a silent inconsistency into a loud one at the
+        one moment anyone can still act on it.
+        """
+        missing = sorted(
+            member
+            for member in (INDEX_MEMBER, LAYOUT_MEMBER, CONTRACT_VERSION_MEMBER)
+            if member not in rendered
+        )
+        if missing:
+            return f"missing {', '.join(missing)}"
+
+        contract_version = cls._read_contract_version(rendered)
+        if contract_version is None:
+            return f"{CONTRACT_VERSION_MEMBER} is empty or undecodable"
+
+        declared = {CONTRACT_VERSION_MEMBER: contract_version}
+        for member in (INDEX_MEMBER, LAYOUT_MEMBER):
+            try:
+                document = json.loads(rendered[member])
+            except (UnicodeDecodeError, ValueError):
+                return f"unparseable {member}"
+            value = (
+                document.get("contract_version") if isinstance(document, dict) else None
+            )
+            if not isinstance(value, str) or not value.strip():
+                return f"no usable contract_version in {member}"
+            declared[member] = value.strip()
+
+        if len(set(declared.values())) > 1:
+            # All three are named, not just the disagreeing pair: it costs
+            # nothing and saves the reader reconstructing the odd one out.
+            values = ", ".join(f"{m}={v!r}" for m, v in declared.items())
+            return f"contract_version disagrees across the snapshot: {values}"
+        return None
+
+    @staticmethod
+    def _read_contract_version(rendered: dict[str, bytes]) -> str | None:
+        """``CONTRACT_VERSION``, stripped — or ``None`` if it is unusable.
+
+        Unlike ``kit_version`` this is **not** derived from the content: it is a
+        literal file the kit authors bump when the folder model, the manifest
+        schema or the templates change in a way a consuming host must know
+        about. An absent, empty or undecodable member is a build defect (a
+        snapshot that predates the contract, or a truncated sync) — a consumer
+        cannot check compatibility against nothing, and an empty string would
+        read as "compatible with anything".
+
+        The decode is lenient because ``_render_bytes`` passes undecodable
+        bytes through untouched: a corrupt member must land in the one
+        "build defect ⇒ 503" mode, not in a 500.
+        """
+        raw = rendered.get(CONTRACT_VERSION_MEMBER)
+        if raw is None:
+            return None
+        contract_version = raw.decode("utf-8", errors="replace").strip()
+        # U+FFFD can only be the lenient decode's marker: the file is a
+        # semver literal, so a replacement char means corrupt bytes.
+        if not contract_version or "\ufffd" in contract_version:
+            return None
+        return contract_version
 
     @classmethod
     def get_versioned_file(
@@ -224,7 +446,8 @@ class LocalAgentKitService:
         cache key — cheap once, wasteful three times on the hot path of an
         anonymous surface.
         """
-        version, rendered, _ = cls._build_or_cached()
+        build = cls._build_or_cached()
+        version, rendered = build.version, build.rendered
         normalized = cls._normalize_rel_path(rel_path)
         if normalized is None:
             return version, None
@@ -241,7 +464,7 @@ class LocalAgentKitService:
     @classmethod
     def get_start_markdown(cls) -> str:
         """The rendered ``START.md``."""
-        _, rendered, _ = cls._build_or_cached()
+        rendered = cls._build_or_cached().rendered
         content = rendered.get(START_MEMBER)
         if content is None:
             logger.error(
@@ -286,19 +509,48 @@ class LocalAgentKitService:
         the kit would describe no instance at all. The account context package
         embeds this tree under ``context/local-kit/``.
         """
-        version, rendered, _ = cls._build_or_cached()
-        return version, rendered
+        build = cls._build_or_cached()
+        return build.version, build.rendered
 
     @classmethod
     def get_tarball(cls) -> bytes:
         """The whole rendered kit as a gzip tarball rooted at ``cinna-kit/``."""
-        return cls._build_or_cached()[2]
+        return cls._build_or_cached().tarball
 
     @classmethod
     def get_versioned_tarball(cls) -> tuple[str, bytes]:
         """``(kit_version, tarball)`` from one build, for the download route."""
-        version, _, tarball = cls._build_or_cached()
-        return version, tarball
+        build = cls._build_or_cached()
+        return build.version, build.tarball
+
+    @classmethod
+    def get_versioned_contract_tarball(cls) -> tuple[str, bytes]:
+        """``(kit_version, contract tarball)`` — the contract subset, rooted at
+        ``cinna-contract/``.
+
+        The version is the **kit** content version, not ``contract_version``:
+        it is what the caching layer needs (see the route's ETag comment), and
+        it is the version the contract was rendered as part of.
+
+        Coherence is checked **here**, not in :meth:`_build_or_cached` and not
+        in the route (D16). The kit surface — ``START.md``, ``/version``,
+        ``kit.tar.gz``, ``/kit/{path}`` — is designed to degrade gracefully for
+        an anonymous caller, and 503ing all of it because one contract file is
+        missing would break exactly the property it exists to have. The failure
+        is scoped to the representation that is actually broken.
+        """
+        build = cls._build_or_cached()
+        cls._require_serviceable_contract(build)
+        return build.version, build.contract_tarball
+
+    @staticmethod
+    def _contract_defect(message: str, *args: Any) -> NoReturn:
+        """Log a contract build defect and raise the surface's standard 503."""
+        logger.error(message, *args)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Local agent kit is not available on this instance",
+        )
 
     @staticmethod
     def media_type_for(rel_path: str) -> str:
@@ -316,33 +568,76 @@ class LocalAgentKitService:
     # ── Build / cache ────────────────────────────────────────────────────
 
     @classmethod
-    def _build_or_cached(cls) -> tuple[str, dict[str, bytes], bytes]:
-        """Return ``(kit_version, rendered tree, tarball)``, building if stale."""
+    def _build_or_cached(cls) -> _KitBuild:
+        """The current :class:`_KitBuild`, rebuilding if the snapshot changed.
+
+        Both tarballs are packed, and the contract verdict decided, inside the
+        one critical section from the one rendered tree — so they can never
+        disagree about what the kit at ``kit_version`` contains, and an
+        anonymous caller never pays for either.
+
+        This method **never raises on a contract defect**, only on a defect of
+        the kit itself (a missing or oversized snapshot). D16 forbids raising
+        here because every kit-surface path goes through it: the verdict is
+        computed here and *carried*, and only the two contract accessors turn
+        it into a 503.
+        """
         kit_dir = local_kit_dir()
         cache_key = snapshot_cache_key(kit_dir)
 
         cached = cls._cache
         if cached is not None and cached[0] == cache_key:
-            return cached[1], cached[2], cached[3]
+            return cached[1]
 
         with cls._lock:
             # Re-check inside the lock: another thread may have just built it.
             cached = cls._cache
             if cached is not None and cached[0] == cache_key:
-                return cached[1], cached[2], cached[3]
+                return cached[1]
 
             version, rendered = cls._render_tree(kit_dir)
-            tarball = cls._build_tarball(rendered)
-            cls._cache = (cache_key, version, rendered, tarball)
+            build = _KitBuild(
+                version=version,
+                rendered=rendered,
+                tarball=cls._build_tarball(rendered),
+                contract_tarball=cls._build_tarball(
+                    rendered,
+                    root=CONTRACT_TARBALL_ROOT,
+                    include=cls._is_contract_member,
+                ),
+                contract_defect=cls._contract_defect_reason(rendered),
+            )
+            cls._cache = (cache_key, build)
             logger.info(
                 "Built local agent kit (%d files, %d tarball bytes, "
-                "kit_version=%s, cache_key=%s)",
+                "%d contract tarball bytes, kit_version=%s, cache_key=%s)",
                 len(rendered),
-                len(tarball),
+                len(build.tarball),
+                len(build.contract_tarball),
                 version,
                 cache_key,
             )
-            return version, rendered, tarball
+            if build.contract_defect is not None:
+                # Logged once per snapshot, here, where the specifics are still
+                # in hand. The per-request 503 carries only the surface's
+                # generic detail, so this line is the one place a defect is
+                # named — at ERROR, so it is not filtered out of a production
+                # log by level.
+                logger.error(
+                    "Local agent kit contract is not serviceable — %s "
+                    "(snapshot at %s). The kit itself is unaffected and keeps "
+                    "serving; only /contract.tar.gz and /contract/version 503.",
+                    build.contract_defect,
+                    kit_dir,
+                )
+            return build
+
+    @staticmethod
+    def _is_contract_member(rel_path: str) -> bool:
+        """Whether a rendered kit member belongs to the contract subset."""
+        return rel_path in CONTRACT_MEMBERS or rel_path.startswith(
+            CONTRACT_MEMBER_PREFIXES
+        )
 
     @classmethod
     def _render_tree(cls, kit_dir: Path) -> tuple[str, dict[str, bytes]]:
@@ -463,8 +758,21 @@ class LocalAgentKitService:
         return digest.hexdigest()[:16]
 
     @staticmethod
-    def _build_tarball(rendered: dict[str, bytes]) -> bytes:
-        """Pack the rendered tree into a gzip tarball rooted at ``cinna-kit/``."""
+    def _build_tarball(
+        rendered: dict[str, bytes],
+        *,
+        root: str = TARBALL_ROOT,
+        include: Callable[[str], bool] | None = None,
+    ) -> bytes:
+        """Pack the rendered tree into a gzip tarball rooted at ``root``.
+
+        One packer for both archives. ``include`` selects a subset (the
+        contract); ``None`` packs everything (the full kit). Determinism —
+        fixed member mtimes, a zeroed gzip header, sorted members — is the
+        whole reason this is not duplicated per archive: two packers would be
+        two chances to reintroduce a wall-clock timestamp and serve two
+        different bodies under one strong ETag.
+        """
         buffer = io.BytesIO()
         # Fixed member mtimes and a zeroed gzip header: the same rendered tree
         # must produce the same bytes in every worker and on every rebuild.
@@ -474,8 +782,10 @@ class LocalAgentKitService:
         with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as gz:
             with tarfile.open(fileobj=gz, mode="w") as tar:
                 for rel in sorted(rendered):
+                    if include is not None and not include(rel):
+                        continue
                     content = rendered[rel]
-                    info = tarfile.TarInfo(name=f"{TARBALL_ROOT}/{rel}")
+                    info = tarfile.TarInfo(name=f"{root}/{rel}")
                     info.size = len(content)
                     info.mtime = 0
                     info.mode = 0o755 if rel.endswith(".py") else 0o644

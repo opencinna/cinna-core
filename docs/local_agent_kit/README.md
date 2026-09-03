@@ -3,7 +3,7 @@
 This is the index of `.cinna-kit/`. Read this file at the start of any session that
 changes an agent. Then read only the guides whose trigger has fired.
 
-Kit version `{{KIT_VERSION}}` · schema version `1` · instance {{PLATFORM_URL}}
+Kit version `{{KIT_VERSION}}` · contract version in `CONTRACT_VERSION` · instance {{PLATFORM_URL}}
 
 ## Documents
 
@@ -24,8 +24,11 @@ Kit version `{{KIT_VERSION}}` · schema version `1` · instance {{PLATFORM_URL}}
 | `guides/12-keeping-up-to-date.md` | The kit may be stale, or a convention changed under you. |
 | `assistants/claude-code.md` | You are Claude Code. |
 | `assistants/codex.md` | You are Codex or another sandboxed CLI assistant. |
+| `assistants/cinna-desktop.md` | You are the assistant building agents inside Cinna Desktop. |
 | `assistants/other.md` | You are anything else. |
 | `schema/cinna-agent.schema.json` | You need the exact manifest contract. |
+| `layout.json` | You need the folder model as data: what each folder is for, what a kit refresh may replace, what never travels to the cloud, and which file Cinna Desktop owns. |
+| `CONTRACT_VERSION` | You need the contract version this kit ships — the number `kit.py validate` gates a folder against. |
 | `templates/root/` | Setting up the root folder. |
 | `templates/agent/` | The scaffold `kit.py new` copies. |
 | `CHANGELOG.md` | After a kit refresh, to see what changed. |
@@ -110,9 +113,18 @@ the kit version, the CLI install spec and minimum version, and the signup and lo
 URLs. By the time this text reaches you they are already real values. No other
 double-brace token appears anywhere in the kit.
 
-**One exception, inside `templates/agent/` only:** two further tokens are left
-deliberately unsubstituted — a lowercase `name` token and a lowercase `slug` token,
-written in the same double-brace style. They are what `kit.py new` fills in when it
-scaffolds an agent, using the display name and slug you gave it. They appear nowhere
-outside that folder. The scaffold's own `README.md` repeats this note in a comment
-block you delete after scaffolding.
+**One exception, inside `templates/agent/` only:** seven tokens are written there —
+`NAME`, `SLUG`, `DESCRIPTION`, `ID`, `CONTRACT_VERSION`, `CREATED_AT` and `KIT_VERSION`,
+UPPER_SNAKE in the same double-brace style. Six of them reach you unresolved, and are
+what `kit.py new` fills in when it scaffolds an agent, from the name, slug and
+description you gave it plus a fresh identity. Those six appear nowhere outside that
+folder. The scaffold's own `README.md` repeats this note in a comment block you delete
+after scaffolding.
+
+`KIT_VERSION` is the seventh, and the awkward one: it is on the scaffolder's list **and**
+on the platform's, so neither list settles it — and shape settles nothing either, since
+both classes are UPPER_SNAKE. What settles it is where the kit came from. The platform
+substitutes it across every file when it renders a kit for download; `kit.py new` fills
+it only in a kit that was never rendered. You downloaded this one, so in
+`templates/agent/cinna-agent.json` it is already a value, and the scaffolder's seventh
+substitution finds nothing left to do.

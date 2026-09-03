@@ -56,6 +56,19 @@ The rule that matters: **`files/` is what the author ships; `app-data/storage/` 
 what the agent produces.** Writing runtime output to `files/` means it is silently
 replaced the next time the agent is updated in the cloud.
 
+One file in that tree belongs to nobody in the table: **`app-data/desktop.json`**. Cinna
+Desktop writes it, to say where its local API is listening and which token speaks for
+this one agent, and rewrites it on every start — the port is random. It is **read-only
+to you and to every tool**: never write it, never commit it, and never print or quote
+its contents, because it holds a bearer token and the cheapest way to leak one is an
+error message that interpolates the file it came from. The contract freezes exactly two
+keys in it — `api_base_url` and `agent_token` (plus an optional `chat_path`) — and
+everything else in the file is the desktop's to shape and change, so read those and
+nothing else. It is git-ignored and never travels to the cloud. Its absence is not a
+fault: it simply means Cinna Desktop is not running with this agent connected, which is
+also what `kit.py chat` reports when you try to talk to the agent through it (see
+`10-testing-locally.md`).
+
 ## Config, not constants
 
 Anything a user might want to change without editing code goes in `config/`: date

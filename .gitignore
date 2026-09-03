@@ -31,3 +31,14 @@ notes.txt
 !docs/local_agent_kit/templates/agent/.claude/**
 !backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/local-kit/templates/agent/.claude/
 !backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/local-kit/templates/agent/.claude/**
+
+# Python bytecode compiled from the Local Agent Kit's `tools/kit.py`. It has no
+# rule anywhere today: `backend/.gitignore` scopes `__pycache__`/`*.pyc` to
+# backend/ only, and a nested `.gitignore` under docs/local_agent_kit/ is not an
+# option — a live one inside that tree hides scaffold content from this repo,
+# from the knowledge snapshot and from the contract tarball (see the note above
+# about the dotless `gitignore` files). Without these two lines a compiled
+# tools/__pycache__/kit.cpython-*.pyc is one `git add -A` away from being
+# committed into a tree that is served, and asserted, as UTF-8 text only.
+docs/local_agent_kit/**/__pycache__/
+docs/local_agent_kit/**/*.pyc

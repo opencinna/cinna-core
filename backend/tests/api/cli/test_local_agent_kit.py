@@ -12,6 +12,11 @@ Notes
 -----
 * ``kit.py`` itself (the shipped tool) is unit-tested in
   ``tests/unit/test_local_kit_tool.py``; this file covers the serving side only.
+* The kit has a second representation, the **contract** — the machine-readable
+  subset (``kit.json``, ``layout.json``, ``CONTRACT_VERSION``, ``CHANGELOG.md``,
+  ``schema/``, ``templates/``) a non-kit host consumes at ``/contract.tar.gz``
+  and ``/contract/version``. It is a subset of the same rendered tree, never a
+  second tree, and it inherits every piece of this surface's plumbing.
 * The rendered tree and tarball are memoized process-wide on a snapshot mtime
   key. Two autouse fixtures reset the per-process state that key does not cover:
   the rate limiter (otherwise the 429 boundary would depend on how many requests
@@ -22,6 +27,7 @@ Notes
 
 from __future__ import annotations
 
+import ast
 import io
 import json
 import re
@@ -31,17 +37,83 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.services.cli.local_agent_kit_service import instance_display_name
+from app.services.cli.local_agent_kit_service import (
+    CONTRACT_MEMBERS,
+    CONTRACT_MEMBER_PREFIXES,
+    CONTRACT_TARBALL_FILENAME,
+    CONTRACT_TARBALL_ROOT,
+    instance_display_name,
+)
 
 # Both mounts of the same router. Every content assertion runs against both:
 # `/agent-start` is the pasteable URL, `/api/agent-start` the alias that survives a reverse
 # proxy nobody updated, and a kit that differs between them is a broken kit.
 MOUNTS = ["/agent-start", "/api/agent-start"]
 
-# Placeholders are `{{UPPER_SNAKE}}`. The lowercase `{{name}}` / `{{slug}}`
-# tokens in `templates/agent/**` are deliberately *not* rendered here — they are
-# scaffold placeholders that `kit.py new` fills in on the user's machine.
-_UNRENDERED_TOKEN = re.compile(r"\{\{[A-Z][A-Z0-9_]*\}\}")
+# The two contract representations, relative to a mount. Both inherit the kit
+# surface's plumbing without exception (D9): the enabled guard, the rate limit,
+# per-representation ETags, `X-Kit-Version`, `Cache-Control`.
+CONTRACT_PATHS = ["/contract.tar.gz", "/contract/version"]
+
+# ── Token provenance ─────────────────────────────────────────────────────
+# Two classes of `{{TOKEN}}` travel in this tree and **neither their shape nor
+# their membership tells them apart**: both are `{{UPPER_SNAKE}}`, and
+# `KIT_VERSION` is in both sets. What settles it is PROVENANCE — who
+# substitutes the token, and when:
+#
+#   platform  `LocalAgentKitService.placeholders()` plus `{{KIT_VERSION}}`,
+#             substituted here before download, so none of them may survive
+#             into a served file;
+#   scaffold  `tools/kit.py`'s `SCAFFOLD_TOKENS`, filled by `kit.py new` on the
+#             user's machine, so the ones the platform does *not* also render
+#             must survive untouched.
+#
+# `KIT_VERSION` sits in both on purpose — the platform fills it when it renders
+# a kit for download, `kit.py new` fills it when the kit was never rendered —
+# and for a *served* tree the platform's provenance is the one that applies.
+# `kit.py`'s `SCAFFOLD_TOKENS` comment is the upstream authority for all of this
+# and says so in as many words; the helpers below derive both sets from the
+# artefacts that own them rather than restating either. That is the whole point:
+# the previous scan classified by CASE, and when the scaffold tokens moved from
+# `{{name}}` to `{{NAME}}` it did not go red — it silently began flagging every
+# legitimate placeholder as a leftover. A flat list would have failed the same
+# way one change later.
+_ANY_TOKEN = re.compile(r"\{\{([A-Za-z][A-Za-z0-9_]*)\}\}")
+
+
+def _platform_token_names() -> frozenset[str]:
+    """Every token the *platform* substitutes, from the renderer itself."""
+    from app.services.cli.local_agent_kit_service import (
+        LocalAgentKitService,
+        _VERSION_TOKEN,
+    )
+
+    # `KIT_VERSION` is resolved after hashing, so it is deliberately absent from
+    # `placeholders()` — it is still platform-rendered and still must not ship.
+    version_token = _ANY_TOKEN.fullmatch(_VERSION_TOKEN)
+    assert version_token is not None, _VERSION_TOKEN
+    return frozenset(LocalAgentKitService.placeholders()) | {version_token.group(1)}
+
+
+def _scaffold_token_names(members: dict[str, bytes]) -> frozenset[str]:
+    """`SCAFFOLD_TOKENS` as the *shipped* `tools/kit.py` declares it.
+
+    Parsed rather than imported: `kit.py` is a stdlib-only script that runs on
+    the user's machine, and the copy that matters is the one this response just
+    served — the same bytes the scan runs over.
+    """
+    for node in ast.parse(members["tools/kit.py"].decode("utf-8")).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "SCAFFOLD_TOKENS"
+            for target in node.targets
+        ):
+            return frozenset(ast.literal_eval(node.value))
+    pytest.fail(
+        "tools/kit.py no longer declares a module-level SCAFFOLD_TOKENS tuple. "
+        "The placeholder scan classifies tokens by provenance and reads that "
+        "declaration for the scaffold half — re-point it at wherever the "
+        "declaration moved; do not fall back to matching on case."
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +156,30 @@ def _tarball_members(client: TestClient, mount: str = "/api/agent-start") -> dic
             extracted = tar.extractfile(info)
             assert extracted is not None
             members[info.name[len("cinna-kit/") :]] = extracted.read()
+    return members
+
+
+def _contract_tarball_members(
+    client: TestClient, mount: str = "/api/agent-start"
+) -> dict[str, bytes]:
+    """Download and unpack the *contract* tarball into ``{relative path: bytes}``.
+
+    Deliberately a second helper rather than a ``root=`` parameter on the one
+    above: the root prefix is itself under test on this side (D9 — exactly one
+    top-level ``cinna-contract/``), and a shared helper parameterised on it
+    would assert that property inside the helper instead of in the test that
+    owns it.
+    """
+    response = client.get(f"{mount}/contract.tar.gz")
+    assert response.status_code == 200, response.text
+    prefix = f"{CONTRACT_TARBALL_ROOT}/"
+    members: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as tar:
+        for info in tar.getmembers():
+            assert info.name.startswith(prefix), info.name
+            extracted = tar.extractfile(info)
+            assert extracted is not None
+            members[info.name[len(prefix) :]] = extracted.read()
     return members
 
 
@@ -348,6 +444,250 @@ def test_served_file_matches_the_tarball_copy(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The contract — the machine-readable subset a non-kit host consumes (D9, D16)
+#
+# `/contract.tar.gz` and `/contract/version` are a second *representation* of
+# the same rendered tree, not a second tree. Two trees would be two truths, and
+# the drift would only surface when a Cinna Desktop scaffold and a `kit.py new`
+# scaffold stopped matching — on someone else's machine, months later.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", CONTRACT_PATHS)
+def test_contract_is_served_on_both_mounts(client: TestClient, path: str) -> None:
+    """The alias carries the contract too, byte-for-byte.
+
+    A host that pulls the contract through `/api/agent-start` because its proxy
+    has no pretty `/agent-start` location must get the same archive, not a
+    second copy that can drift.
+    """
+    canonical = client.get(f"/agent-start{path}")
+    alias = client.get(f"/api/agent-start{path}")
+
+    assert canonical.status_code == alias.status_code == 200, canonical.text
+    assert canonical.content == alias.content
+    assert canonical.headers["x-kit-version"] == alias.headers["x-kit-version"]
+    assert canonical.headers["etag"] == alias.headers["etag"]
+
+
+def test_contract_tarball_has_exactly_one_top_level_directory(
+    client: TestClient,
+) -> None:
+    """Extracting anywhere yields one obvious folder, `cinna-contract/`.
+
+    The consuming host descends exactly one level (D9). A second top-level
+    entry — or a member packed at the root — makes that descent land somewhere
+    unintended, and the desktop's `isContractTree` probe then fails against a
+    tree that is actually complete.
+    """
+    response = client.get("/api/agent-start/contract.tar.gz")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/tar+gzip"
+    assert (
+        f'filename="{CONTRACT_TARBALL_FILENAME}"'
+        in response.headers["content-disposition"]
+    )
+
+    with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as tar:
+        names = [info.name for info in tar.getmembers()]
+
+    assert names, "the contract archive is empty"
+    assert {name.split("/")[0] for name in names} == {CONTRACT_TARBALL_ROOT}
+    # Every member is *below* the root, not the root itself: a bare
+    # `cinna-contract` entry would pass the set check above and still be a file
+    # sitting where the directory should be.
+    assert all(len(name.split("/")) > 1 for name in names), names
+
+
+def test_contract_membership_is_the_declared_subset(client: TestClient) -> None:
+    """What the contract carries, and — the load-bearing half — what it does not.
+
+    Spelled out as literals on purpose. This is the independent statement of
+    intent; `test_every_declared_contract_member_reaches_the_tree` reads the
+    service's own declaration, so between them a change to `CONTRACT_MEMBERS`
+    has to be made deliberately in two places rather than sliding through.
+
+    The exclusions each have a reason worth keeping:
+
+    * `VERSION` holds the *kit* content version. Shipping it inside a contract
+      tree would put two meanings on one filename, next to the `CONTRACT_VERSION`
+      that is the contract's own.
+    * `START.md`, `README.md`, `guides/`, `assistants/` and `tools/` are prose
+      for a human or a coding assistant. `assistants/` in particular is
+      deliberately outside the contract even though it now carries a
+      desktop-facing page — the contract is the machine-readable half.
+    """
+    members = _contract_tarball_members(client)
+
+    for member in ("kit.json", "layout.json", "CONTRACT_VERSION", "CHANGELOG.md"):
+        assert member in members, sorted(members)
+    for prefix in ("schema/", "templates/"):
+        assert any(rel.startswith(prefix) for rel in members), (prefix, sorted(members))
+
+    for member in ("VERSION", "START.md", "README.md"):
+        assert member not in members, member
+    for prefix in ("guides/", "assistants/", "tools/"):
+        assert not [rel for rel in members if rel.startswith(prefix)], prefix
+
+
+def test_every_declared_contract_member_reaches_the_tree(client: TestClient) -> None:
+    """A declared member that is not in the tree ships as a silent 200.
+
+    The packer is a **filter**, not an assertion: a member that is not in the
+    rendered tree is simply not packed, so a rename of `templates/` in the
+    snapshot yields a perfectly valid archive, a perfectly valid ETag, and no
+    templates. The service's own coherence gate (D16) covers only the identity
+    trio — `kit.json`, `layout.json`, `CONTRACT_VERSION` — because a thin
+    `schema/` or `templates/` is a *content* problem and must not be dressed up
+    as an identity failure. That is precisely why the completeness assertion has
+    to live somewhere, and this is the somewhere.
+
+    Reads the declaration rather than restating it, so a member added to
+    `CONTRACT_MEMBERS` is covered the day it is added.
+    """
+    members = _contract_tarball_members(client)
+
+    assert sorted(m for m in CONTRACT_MEMBERS if m not in members) == []
+    assert (
+        sorted(
+            prefix
+            for prefix in CONTRACT_MEMBER_PREFIXES
+            if not any(rel.startswith(prefix) for rel in members)
+        )
+        == []
+    )
+
+
+def test_contract_tarball_bytes_are_deterministic(client: TestClient) -> None:
+    """Two builds of the same contract must be byte-identical.
+
+    Same property as the kit tarball, asserted separately because it is a
+    separate archive: a wall-clock timestamp in the members or the gzip header
+    would make two workers serve different bodies under one strong ETag.
+    """
+    from app.services.cli.local_agent_kit_service import LocalAgentKitService
+
+    first = client.get("/api/agent-start/contract.tar.gz").content
+    LocalAgentKitService._cache = None  # force a genuine rebuild
+    second = client.get("/api/agent-start/contract.tar.gz").content
+
+    assert first
+    assert first == second
+
+
+def test_contract_version_payload_carries_both_versions(client: TestClient) -> None:
+    """`/contract/version` publishes the number the archive actually carries.
+
+    The two versions answer different questions and must not be confused:
+    `contract_version` is a hand-maintained semver the consuming host's
+    major-version compatibility gate keys on, `kit_version` is a content hash
+    that moves on any edit. Publishing a `contract_version` that disagrees with
+    the `CONTRACT_VERSION` member is worse than publishing nothing, because a
+    false *compatibility* fails silently where a refusal at least stops.
+    """
+    payload = client.get("/api/agent-start/contract/version").json()
+    kit_payload = client.get("/api/agent-start/version").json()
+    members = _contract_tarball_members(client)
+
+    shipped = members["CONTRACT_VERSION"].decode("utf-8").strip()
+    assert payload["contract_version"] == shipped
+    assert re.fullmatch(r"\d+\.\d+\.\d+", payload["contract_version"]), shipped
+
+    assert payload["kit_version"] == kit_payload["kit_version"]
+    assert re.fullmatch(r"[0-9a-f]{16}", payload["kit_version"])
+    assert payload["contract_version"] != payload["kit_version"]
+
+    # One envelope, one payload builder: `/contract/version` is `/version` plus
+    # the one key, so a host polling either parses the same shape.
+    assert {k: v for k, v in payload.items() if k != "contract_version"} == kit_payload
+
+
+@pytest.mark.parametrize("path", CONTRACT_PATHS)
+def test_contract_responses_carry_the_kit_version_not_the_contract_version(
+    client: TestClient, path: str
+) -> None:
+    """`X-Kit-Version` on a contract response is the *kit* version.
+
+    `contract_version` is hand-maintained and does not move when a template or
+    the schema changes, so a validator keyed on it would answer "unchanged" to a
+    host that is in fact holding a stale contract — the one thing a validator
+    promises cannot happen. The ETag is scoped the same way, off `kit_version`.
+    """
+    contract_version = client.get("/api/agent-start/contract/version").json()[
+        "contract_version"
+    ]
+    kit_version = client.get("/api/agent-start/version").json()["kit_version"]
+
+    response = client.get(f"/api/agent-start{path}")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["x-kit-version"] == kit_version
+    assert response.headers["x-kit-version"] != contract_version
+    assert response.headers["etag"].startswith(f'"{kit_version}-')
+    assert response.headers["cache-control"] == "public, max-age=300"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_contract_and_kit_representations_do_not_share_a_validator(
+    client: TestClient,
+) -> None:
+    """One kit version, four resources, four validators.
+
+    Every response carries the same `X-Kit-Version`, so the ETag folds the
+    representation in. Without that, a host holding the kit tarball's validator
+    would be told the contract tarball — a *different, smaller archive* — is
+    unchanged, and would never fetch it.
+    """
+    kit_tarball = client.get("/api/agent-start/kit.tar.gz")
+    contract_tarball = client.get("/api/agent-start/contract.tar.gz")
+    kit_version = client.get("/api/agent-start/version")
+    contract_version = client.get("/api/agent-start/contract/version")
+
+    tags = {
+        response.headers["etag"]
+        for response in (kit_tarball, contract_tarball, kit_version, contract_version)
+    }
+    assert len(tags) == 4, tags
+    assert (
+        kit_tarball.headers["x-kit-version"]
+        == contract_tarball.headers["x-kit-version"]
+    )
+    # The contract really is the smaller archive, so a shared validator would
+    # have been a live bug rather than a theoretical one.
+    assert contract_tarball.content != kit_tarball.content
+    assert len(contract_tarball.content) < len(kit_tarball.content)
+
+    crossed = client.get(
+        "/api/agent-start/contract.tar.gz",
+        headers={"If-None-Match": kit_tarball.headers["etag"]},
+    )
+
+    assert crossed.status_code == 200
+    assert crossed.content == contract_tarball.content
+
+
+def test_contract_shares_the_kit_rate_limit_budget(
+    client: TestClient, monkeypatch
+) -> None:
+    """One budget per caller across the whole surface, contract included.
+
+    The contract tarball is the most expensive thing here to hand out, so a
+    per-URL budget — or a contract route that skipped the limiter dependency —
+    would be no budget at all.
+    """
+    monkeypatch.setattr(settings, "LOCAL_AGENT_KIT_RATE_LIMIT_PER_MIN", 2)
+
+    assert client.get("/api/agent-start/contract/version").status_code == 200
+    assert client.get("/api/agent-start/contract.tar.gz").status_code == 200
+
+    blocked = client.get("/agent-start/contract.tar.gz")
+
+    assert blocked.status_code == 429
+    assert int(blocked.headers["Retry-After"]) >= 1
+
+
+# ---------------------------------------------------------------------------
 # Path safety
 # ---------------------------------------------------------------------------
 
@@ -402,37 +742,91 @@ def test_host_header_is_never_reflected(client: TestClient) -> None:
 
 
 def test_no_unrendered_placeholder_survives(client: TestClient) -> None:
-    """An `{{UPPER}}` token in a shipped file is a typo nobody would notice.
+    """A token the *platform* owns is a typo nobody would notice.
 
     A misspelt `{{PLATFORM_URl}}` renders as itself and reaches the user's
     machine as literal braces in an instruction. Scanning the whole rendered
     tree catches it here instead.
+
+    The scan matches **any** `{{token}}`, in any case, and exempts exactly one
+    class: the scaffold tokens `kit.py new` fills in on the user's machine,
+    minus any the platform also renders. So a platform token that failed to
+    substitute, a typo, a token nobody has heard of, and a reintroduced
+    lowercase `{{name}}` are all leftovers. Nothing here keys on case — see the
+    provenance note at the top of the file for why case cannot decide this.
     """
+    members = _tarball_members(client)
+    platform = _platform_token_names()
+    scaffold = _scaffold_token_names(members)
+    survivors = scaffold - platform
+
+    # Both halves must be non-empty or the exemption is decoration: an empty
+    # `survivors` degrades the scan to "no braces anywhere" (which the templates
+    # would fail), and an empty `platform` would mean the renderer substitutes
+    # nothing at all.
+    assert platform, "the renderer declares no tokens; this scan has nothing to catch"
+    assert survivors, (
+        "every scaffold token is also platform-rendered, so this scan now "
+        "exempts nothing — reconcile kit.py's SCAFFOLD_TOKENS with "
+        "LocalAgentKitService.placeholders()"
+    )
+
     leftovers: dict[str, list[str]] = {}
-    for rel, content in _tarball_members(client).items():
+    for rel, content in members.items():
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError:
             pytest.fail(f"{rel} is not UTF-8 text; the kit ships text only")
-        found = _UNRENDERED_TOKEN.findall(text)
+        found = sorted(set(_ANY_TOKEN.findall(text)) - survivors)
         if found:
-            leftovers[rel] = sorted(set(found))
+            leftovers[rel] = found
 
     assert leftovers == {}
 
 
 def test_scaffold_placeholders_are_left_for_kit_py(client: TestClient) -> None:
-    """`{{name}}`/`{{slug}}` are *not* ours to render.
+    """The scaffold's own tokens are *not* ours to render.
 
     They belong to `kit.py new`, which fills them in on the user's machine with
     the agent's own name. Rendering them server-side would ship a scaffold with
-    the instance name baked in where the agent name belongs — so this asserts the
-    lowercase tokens survive, the complement of the test above.
+    the instance name baked in where the agent name belongs — so this asserts
+    they survive, the complement of the test above.
+
+    No token is spelled out. `kit.py`'s `SCAFFOLD_TOKENS` is the authority for
+    which they are, and the assertion is that every one the platform does *not*
+    render reaches the user intact.
     """
     members = _tarball_members(client)
-    agent_template = members["templates/agent/AGENTS.md"].decode("utf-8")
+    platform = _platform_token_names()
+    scaffold = _scaffold_token_names(members)
 
-    assert "{{name}}" in agent_template
+    # Membership cannot classify either — `KIT_VERSION` is in both sets, and for
+    # a served tree the platform's provenance is the one that wins. Pinned so a
+    # later "simplification" back to a single flat list is a red test rather than
+    # a silently vacuous one. If a second dual-provenance token is ever added,
+    # update this alongside `kit.py`'s SCAFFOLD_TOKENS comment, which is the
+    # upstream authority both this and the desktop's MANIFEST_TOKENS derive from.
+    assert scaffold & platform == {"KIT_VERSION"}, (sorted(scaffold), sorted(platform))
+
+    templates = [
+        content.decode("utf-8")
+        for rel, content in members.items()
+        if rel.startswith("templates/")
+    ]
+    assert templates, "the kit shipped no templates/ member at all"
+
+    for name in sorted(scaffold - platform):
+        token = "{{" + name + "}}"
+        assert any(token in text for text in templates), (
+            f"{token} is declared a scaffold token but no shipped template "
+            "carries it — either the templates lost it, or the declaration is "
+            "stale"
+        )
+
+    # `templates/agent/AGENTS.md` is the file a reader checks by hand, so it is
+    # named; the token it must carry is still derived, not spelled out.
+    agent_template = members["templates/agent/AGENTS.md"].decode("utf-8")
+    assert any("{{" + name + "}}" in agent_template for name in scaffold - platform)
 
 
 def test_every_rendered_json_member_parses(client: TestClient) -> None:
@@ -496,7 +890,19 @@ def test_version_payload_matches_the_index(client: TestClient) -> None:
     assert payload["kit_version"] == index["kit_version"]
     assert payload["kit_base_url"] == index["kit_base_url"]
     assert payload["cli"] == index["cli"]
-    assert payload["schema_version"] == index["schema_version"]
+
+    # D17 dissolved the `schema_version` coupling this used to assert: it was a
+    # synthesised constant that decided nothing, and it left `_version_payload`
+    # and `kit.json` in one change. The assertion becomes the opposite one
+    # rather than being dropped, because the two sites must move *together* —
+    # a wire shape carrying a field with no backing artefact in the tree (or the
+    # reverse) reads as a serving bug and sends the next reader hunting a fault
+    # that is not there. The compatibility gate is `contract_version`, on
+    # `/contract/version`. The **manifest's** `schema_version` (in
+    # `cinna-agent.json`) shares only the name: it is a live, load-bearing
+    # legacy marker and is untouched by this.
+    assert "schema_version" not in payload
+    assert "schema_version" not in index
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +1014,9 @@ def test_kit_version_is_readable_cross_origin(client: TestClient) -> None:
         "/api/agent-start/kit.json",
         "/api/agent-start/kit.tar.gz",
         "/api/agent-start/kit/guides/11-go-cloud.md",
+        # The contract inherits this plumbing rather than forking it (D9).
+        "/api/agent-start/contract.tar.gz",
+        "/api/agent-start/contract/version",
     ],
 )
 def test_if_none_match_returns_304(client: TestClient, path: str) -> None:
@@ -760,6 +1169,12 @@ def test_rate_limit_covers_every_path_on_both_mounts(
         "/api/agent-start/kit.json",
         "/api/agent-start/kit.tar.gz",
         "/api/agent-start/kit/guides/11-go-cloud.md",
+        # An instance that opted out publishes no contract either — the guard is
+        # a router dependency, so it runs before either contract handler.
+        "/agent-start/contract.tar.gz",
+        "/api/agent-start/contract.tar.gz",
+        "/agent-start/contract/version",
+        "/api/agent-start/contract/version",
     ],
 )
 def test_disabled_instance_returns_404_everywhere(
@@ -836,6 +1251,13 @@ def test_admin_toggle_flips_both_mounts(
         "/api/agent-start/kit.json",
         "/api/agent-start/kit.tar.gz",
         "/api/agent-start/kit/guides/11-go-cloud.md",
+        # A snapshot that is absent entirely is a defect of the *kit*, not of
+        # the contract, so it 503s before the contract's own coherence gate
+        # (`_require_serviceable_contract`) is ever consulted. Both mattering
+        # here is the point: the two contract routes must not be the one pair
+        # that answers 200 with an empty archive.
+        "/api/agent-start/contract.tar.gz",
+        "/api/agent-start/contract/version",
     ],
 )
 def test_missing_snapshot_is_503_never_an_empty_200(

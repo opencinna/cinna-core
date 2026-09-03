@@ -1,4 +1,4 @@
-# Knowledge — {{name}}
+# Knowledge — {{NAME}}
 
 Static reference material this agent needs in order to be correct: business rules,
 how an external system actually behaves, terminology, decision rationale. Read-only

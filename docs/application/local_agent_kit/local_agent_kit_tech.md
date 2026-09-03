@@ -33,11 +33,14 @@ content sync, frontend surfaces, and tests.
 
 ### Kit content (shipped product, not repo documentation)
 
-- `docs/local_agent_kit/` — the kit's source of truth: `START.md`, `README.md`
-  (index + capability ladder), `kit.json`, `VERSION` (placeholder), `CHANGELOG.md`,
-  `guides/01`–`12-*.md`, `assistants/{claude-code,codex,other}.md`,
-  `schema/cinna-agent.schema.json`, `templates/root/*`, `templates/agent/*`
-  (the scaffold), `tools/kit.py`
+- `docs/local_agent_kit/` — the kit's source of truth. **Contract members**
+  (see **The contract** below): `kit.json`, `layout.json`, `CONTRACT_VERSION`,
+  `CHANGELOG.md`, `schema/**` (`cinna-agent.schema.json`,
+  `publications.schema.json`), `templates/**` (`templates/root/*`,
+  `templates/agent/*` — the scaffold). **Kit-only**: `START.md`, `README.md`
+  (index + capability ladder), `VERSION` (a `{{KIT_VERSION}}` placeholder),
+  `guides/01`–`12-*.md`, `assistants/{claude-code,codex,other,cinna-desktop}.md`,
+  `tools/kit.py`
 - `.cinna-core-kit/scripts/sync_platform_knowledge.py` — step 3, copies
   `docs/local_agent_kit/` → the knowledge-template snapshot below
 - `backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/local-kit/` —
@@ -133,10 +136,43 @@ Two mounts of **one router** (never two copies that could drift):
 |--------|---------------------------|----------|-------|
 | `GET` | `` / `/` | `text/markdown` (START.md) or `text/html` (landing page) | Content negotiation — see below. Registered on both `""` and `"/"` so `/agent-start` and `/agent-start/` resolve without a redirect. |
 | `GET` | `/START.md` | `text/markdown` | Always raw, ignores `Accept`. |
-| `GET` | `/version` | JSON: `kit_version`, `schema_version`, `platform_url`, `kit_base_url`, `start_url`, `instance_name`, `cli.{install_spec,min_version}` | What `kit.py refresh` polls. |
+| `GET` | `/version` | JSON: `kit_version`, `platform_url`, `kit_base_url`, `start_url`, `instance_name`, `cli.{install_spec,min_version}` | What `kit.py refresh` polls. Built by `_version_payload`. **No `schema_version`** — see below. |
 | `GET` | `/kit.json` | JSON | Same bytes as `/kit/kit.json`. |
 | `GET` | `/kit.tar.gz` | `application/tar+gzip`, `Content-Disposition: attachment; filename="cinna-kit.tar.gz"` | Whole rendered kit, rooted at `cinna-kit/`. |
+| `GET` | `/contract/version` | JSON: the `/version` envelope **plus** `contract_version` | For a host that consumes only the contract. **503** on an incoherent snapshot. |
+| `GET` | `/contract.tar.gz` | `application/tar+gzip`, `Content-Disposition: attachment; filename="cinna-contract.tar.gz"` | Contract subset only, rooted at `cinna-contract/`. **503** on an incoherent snapshot. |
 | `GET` | `/kit/{path:path}` | file | Exact-key lookup in the in-memory rendered tree; unknown → 404. |
+
+**`schema_version` is not in the `/version` response.** It used to be
+synthesised there as a literal `1`, mirroring a field `kit.json` also carried;
+both were removed in one change, because a payload that disagrees with the
+shipped file is worse than either state alone — a number on the wire with no
+backing artefact in the tree reads as a serving bug rather than a deliberate
+removal. The literal was a compiled-in constant, so nothing could have branched
+on it: a constant field is exactly the one whose removal breaks only code that
+reads it without using it. `_version_payload` carries a note saying so; do not
+re-add it "for parity with `kit.json`". **The manifest's own `schema_version`
+is a different, still-live legacy marker** (`cinna-agent.json`, the schema's
+legacy-exemption `allOf`, `kit.py`'s `_validate_identity`) and is untouched by
+this — `kit.py`'s `MANIFEST_NAME` is `cinna-agent.json` and its `KIT_JSON_PATH`
+is `kit.json`; no code path reads one for the other.
+
+Both contract routes share `_serve_tarball` with `/kit.tar.gz` (one body for
+the validator, header and `Content-Disposition` plumbing) and inherit the
+surface's behaviour without exception: unauthenticated, the
+`local_agent_kit_enabled` 404 guard, the rate limiter, per-representation
+ETags, `X-Kit-Version`, `Cache-Control`. `frontend/nginx.conf` and the Vite dev
+proxy both match `^/agent-start(/|$)`, so the two new paths ride the existing
+block with no config change.
+
+**Both contract representations are validated by `kit_version`, never by
+`contract_version`** (the decision is recorded in a comment above the two route
+handlers). `contract_version` is hand-maintained and does not move when a
+template or the schema changes, so an ETag — or `X-Kit-Version` — keyed on it
+would answer "unchanged" to a client that is in fact holding a stale contract,
+which is the one thing a validator promises cannot happen. `kit_version` moves
+on any content change. The body still carries `contract_version`; the validator
+does not.
 
 Every response carries: `ETag` (per-representation, see below), `Cache-Control:
 public, max-age=300`, `Vary: Accept` (mount root only), `X-Kit-Version`,
@@ -240,11 +276,96 @@ afterwards. Independent of mtimes, so a redeploy shipping byte-identical
 content produces the same version. `kit.py refresh` compares this against the
 locally stored `VERSION`.
 
-### Caching (`_build_or_cached`)
+### The contract (`CONTRACT_MEMBERS`, `CONTRACT_TARBALL_ROOT`)
 
-Process-local memo: `(cache_key, kit_version, rendered_tree, tarball)` behind a
-`threading.Lock`, double-checked inside the lock. `cache_key` =
-`snapshot_cache_key(local_kit_dir())` — the **shared** helper in
+```python
+CONTRACT_VERSION_MEMBER = "CONTRACT_VERSION"
+LAYOUT_MEMBER           = "layout.json"
+CHANGELOG_MEMBER        = "CHANGELOG.md"
+CONTRACT_TARBALL_ROOT     = "cinna-contract"
+CONTRACT_TARBALL_FILENAME = "cinna-contract.tar.gz"
+
+CONTRACT_MEMBERS = frozenset({INDEX_MEMBER, LAYOUT_MEMBER, CONTRACT_VERSION_MEMBER, CHANGELOG_MEMBER})
+CONTRACT_MEMBER_PREFIXES = ("schema/", "templates/")
+```
+
+`_is_contract_member(rel_path)` is `rel_path in CONTRACT_MEMBERS or
+rel_path.startswith(CONTRACT_MEMBER_PREFIXES)` — a **selector over the one
+rendered tree**, not a second tree. Everything else in the kit (`START.md`,
+`README.md`, `guides/`, `assistants/`, `tools/`) is prose for a human or a
+coding assistant and is deliberately outside it.
+
+`VERSION` is deliberately **absent** from the contract: it holds the *kit*
+content version, and shipping it inside a contract tree would put two meanings
+on one filename. The contract's own version is `CONTRACT_VERSION` (and
+`kit.json`'s `contract_version`), hand-maintained rather than derived. So a
+consumer's secondary read must be `CONTRACT_VERSION` — Cinna Desktop's
+`readVersionAt` (`src/main/kit/contractStore.ts`) currently falls back to
+`VERSION`, which a contract tarball never ships; that is a required
+desktop-side change, and it should never fire in practice since `kit.json` is
+the primary read and the coherence guard refuses to serve an archive without
+it.
+
+### Contract coherence (`_contract_defect_reason`, `_require_serviceable_contract`)
+
+The packer is a **filter**, not an assertion: a member that is not in the
+rendered tree is simply not packed, so an incomplete contract would otherwise
+ship as a 200 with a truncated archive and a perfectly valid ETag. Two classes
+of defect are checked once per snapshot, in `_contract_defect_reason` (pure —
+it decides, it neither raises nor logs):
+
+1. **The load-bearing member set** — `kit.json`, `layout.json`,
+   `CONTRACT_VERSION`. The first two are the consumer's own identity pair
+   (Cinna Desktop's `contractStore.isContractTree` is exactly "`kit.json` and
+   `layout.json` at the root"), so an archive missing either is not a contract
+   tree by the only definition that matters. The third is what the version
+   fallback rests on. `schema/` and `templates/` are **not** in this set: a thin
+   or empty schema/templates tree is a *content* problem and must not be dressed
+   up as an identity failure.
+2. **The three `contract_version` declarations must agree** —
+   `CONTRACT_VERSION`, `kit.json`, `layout.json`. All three are named in the
+   diagnostic, not just the disagreeing pair. An invariant test only catches
+   drift if someone runs it before shipping; checking in the serving path turns
+   a silent inconsistency into a loud one at the one moment anyone can act on
+   it.
+
+The verdict is carried on the build as **data** (`_KitBuild.contract_defect`),
+not raised from `_build_or_cached`, and that is the whole boundary:
+
+- `_require_serviceable_contract` raises **503** and is called by
+  `get_versioned_contract_tarball()`, `get_contract_version_payload()` and
+  `get_contract_version()` — so `/contract.tar.gz` and `/contract/version`
+  **degrade together**. Two representations of one thing reporting different
+  health is the asymmetry the guard exists to remove, and `/contract/version` is
+  the one a consumer polls: publishing an unvalidated number that a
+  major-version gate keys on is worse than publishing nothing, because a false
+  *compatibility* fails silently where a refusal at least stops.
+- The kit surface — `START.md`, `/version`, `kit.tar.gz`, `/kit/{path}` — never
+  calls it, and keeps serving whatever state the contract is in. Do not narrow
+  the guard to one representation and do not widen it to the kit surface; both
+  directions have been tried and ruled on.
+
+The specific reason is logged once per snapshot at `ERROR` in
+`_build_or_cached` (the per-request 503 carries only the surface's generic
+detail). `_read_contract_version` decodes leniently with `errors="replace"` and
+treats a `U+FFFD` as corruption — `_render_bytes` passes undecodable bytes
+through untouched, and a corrupt member must land in the "build defect ⇒ 503"
+mode, not in a 500.
+
+### Caching (`_build_or_cached`, `_KitBuild`)
+
+Process-local memo: `(cache_key, _KitBuild)` behind a `threading.Lock`,
+double-checked inside the lock. `_KitBuild` is a `NamedTuple` — `version`,
+`rendered`, `tarball`, `contract_tarball`, `contract_defect` — rather than a
+bare tuple, because positional unpacking with a row of underscores is how a
+later edit silently reads the contract tarball as the kit one. **Both tarballs
+are packed and the contract verdict decided inside the one critical section
+from the one rendered tree**, so they can never disagree about what the kit at
+`kit_version` contains; a second cache could otherwise hold a contract built
+from a different render than the kit it claims to belong to while reporting one
+`kit_version` for both.
+
+`cache_key` = `snapshot_cache_key(local_kit_dir())` — the **shared** helper in
 `platform_knowledge_assets.py` (newest mtime + file count across the given
 dirs), the same shape `ContextPackageService` uses so both invalidate on
 exactly the same redeploy signal. A pure deletion (max mtime unchanged) is
@@ -263,17 +384,25 @@ defect) rather than after loading it all. Missing or empty snapshot dir → `503
 
 ### Tarball (`_build_tarball`)
 
-Members are added in sorted path order, rooted at `cinna-kit/`; **fixed mtime
-(`0`) on every member and the gzip header itself**, so two workers building the
-same rendered tree produce byte-identical tarballs — required for one strong
-ETag to mean what it promises. File mode `0o755` for `*.py`, else `0o644`.
+**One packer for both archives**, parameterised by `root` and an optional
+`include: Callable[[str], bool]` predicate: `None` packs everything
+(`cinna-kit/`), `_is_contract_member` packs the contract (`cinna-contract/`).
+Two packers would be two chances to reintroduce a wall-clock timestamp and
+serve two different bodies under one strong ETag.
+
+Members are added in sorted path order; **fixed mtime (`0`) on every member and
+the gzip header itself**, so two workers building the same rendered tree produce
+byte-identical tarballs — required for one strong ETag to mean what it promises.
+File mode `0o755` for `*.py`, else `0o644`.
 
 ### `LocalAgentKitService` public surface
 
 | Method | Returns |
 |--------|---------|
 | `is_enabled(session)` | `bool` — the `ServerConfig` flag |
-| `get_version()` / `get_version_payload()` | content version / the `/version` JSON body |
+| `get_version()` / `get_version_payload()` | content version / the `/version` JSON body (via `_version_payload`) |
+| `get_contract_version()` / `get_contract_version_payload()` | `CONTRACT_VERSION` / the `/contract/version` body — the `/version` envelope plus `contract_version`, both halves from **one** build so a redeploy landing between two probes cannot pair one build's `kit_version` with another's `contract_version`. 503 on an incoherent contract. |
+| `get_versioned_contract_tarball()` | `(kit_version, contract tarball)`. 503 on an incoherent contract. |
 | `get_versioned_file(rel_path)` | `(version, (bytes, media_type) \| None)` — one build for both |
 | `get_file(rel_path)` | `(bytes, media_type) \| None` |
 | `get_start_markdown()` / `get_start_html()` | rendered `START.md` / the landing page |
@@ -335,7 +464,7 @@ asserts no other `.gitignore` exists anywhere under the kit.
 `docs/local_agent_kit/` is excluded entirely from the repo's doc-reference
 checker: its internal references resolve against a *scaffolded agent folder on
 the user's machine* (`docs/WORKFLOW_PROMPT.md`, `scripts/update_status.py`) or <!-- nocheck -->
-the user's chosen root (`~/Documents/MyAgents`, `Local/`, `Cloud/`,
+the user's chosen root (`~/Documents/CinnaAgents`, `Local/`, `Cloud/`,
 `.cinna-kit/`), not against this repository's tree — checking them here would
 report every one as broken.
 
@@ -477,11 +606,153 @@ no-third-party-imports constraint.
 
 | Command | Behaviour |
 |---------|-----------|
-| `new <slug> [--name N] [--root DIR]` | Copies `templates/agent/` to `<root>/Local/<slug>/`, restores dotted `.gitignore` files (`restore_scaffold_ignore_files`), substitutes `{{name}}`/`{{slug}}`, stamps `slug`/`name`/`kit_version` into the manifest. Refuses if the target folder already exists. |
-| `validate <path> [--fix] [--json] [--cloud-ready]` | Manifest schema subset (`validate_manifest`), required/expected files, secret hygiene (`_validate_secrets` — tracked/untracked `.env`, stray env files outside `credentials/`, key-material filenames), `workspace_requirements.txt` mirrors `pyproject.toml` deps (`--fix` regenerates), `CLI_COMMANDS.yaml` names valid + mirrored in the Makefile, scripts catalogued in `scripts/README.md`. `--cloud-ready` promotes readiness *advice* (empty `example_prompts`, an unedited scaffold `description`) to hard errors — the gate `guides/11-go-cloud.md` step 7 requires. Exit 1 on any error (warnings never fail a run). |
-| `list [--root DIR]` | Table of `Local/*` — slug, name, ladder rungs present (`_rungs_present`, inferred from the manifest and folder contents, never hand-tracked), cloud-imported flag — plus `Cloud/agents/*` if `Cloud/.cinna/account.json` exists. |
-| `refresh [--check]` | Reads `kit.json.kit_base_url`, `GET {base}/version`; if different from the local `VERSION`, downloads `{base}/kit.tar.gz` and atomically swaps `.cinna-kit/` (old tree kept as a timestamped backup only until the swap succeeds). Any network failure is a **warning, never a blocked session** — `refresh` always exits 0 except on a genuinely malformed archive. Refuses a non-`http(s)` `kit_base_url` outright. |
-| `export <path> --to DIR [--force]` | Produces the exact tree `cinna agent import` pushes: applies `kit.json.cloud_import.exclude` (gitignore-shaped matching, `is_excluded`) plus a hardcoded `ALWAYS_EXCLUDE` (`credentials/`, `.git/`, `.venv/`, every `.env*` shape, `credentials.json`) that applies **even if** `kit.json` says otherwise; regenerates `workspace_requirements.txt`; clears the manifest's `cloud` block. Runs the same `--cloud-ready` validation gate first and refuses on any error unless `--force`. |
+| `new <slug> [--name N] [--description S] [--root DIR] [--json]` | Copies `templates/agent/` into `<root>/<agents_dir>/<slug>/` (`workshop_agents_dir()`, not a literal `Local`), restores dotted `.gitignore` files (`restore_scaffold_ignore_files`), then **one** `substitute_tokens` pass fills the whole tree — `NAME`, `SLUG`, `DESCRIPTION`, `ID` (a fresh UUID v4), `CREATED_AT` (UTC, second precision, `Z`), `CONTRACT_VERSION`, `KIT_VERSION`. Nothing is patched onto the parsed dict afterwards. Asserts the shipped template carries no `publications`/`cloud` ledger key (an error naming the *kit* as the defect), then re-writes through `write_manifest` — the sole manifest writer — so the scaffold shares one serialisation and the ledger migration is structural. `--json` prints only `{path, slug, id, contract_version}`. Refuses if the target folder already exists. |
+| `validate <path> [--fix] [--json] [--cloud-ready]` | Manifest schema subset (`validate_manifest` → `_validate_identity` + the rest), required/expected files, secret hygiene (`_validate_secrets`), `workspace_requirements.txt` mirrors `pyproject.toml` deps (`--fix` regenerates), `CLI_COMMANDS.yaml` names valid + mirrored in the Makefile, scripts catalogued in `scripts/README.md`, `publications.json` shape. Every path read is guarded: an unreadable **directory** is an error and an immediate return (a "missing required file" that is really "unreadable directory" is a filter standing where an assertion belongs), and an unreadable **file** is caught per-check so the other checks still run — one error per failing check, not per file. `--cloud-ready` promotes readiness *advice* (empty `example_prompts`, an unedited scaffold `description`) to hard errors. `--json` also reports `contract_version` (the folder's) and `tool_contract_version` (this kit's), so a conformance harness sees both sides of the gate rather than inferring it from a message. Exit 1 on any error (warnings never fail a run). |
+| `list [--root DIR]` | Table of the agents directory — `SLUG`, `NAME`, `RUNGS` (`_rungs_present`, inferred from the manifest and folder contents, never hand-tracked), `CLOUD` (`is_published`, the one reader of that question, shared with the `go_cloud` rung so the two cells cannot contradict), `DESKTOP` (`_desktop_connected`). Then every cinna-cli account workspace under `Cloud/` — `Cloud/<host>/` per instance, **and** the flat legacy `Cloud/` itself, both reported (`_cloud_workspaces`). Unreadability is a second return value, not an empty list: a directory that could not be probed is skipped, its siblings still listed, and a line says the listing may be short. |
+| `refresh [--check]` | Reads `kit.json.kit_base_url`, `GET {base}/version`; if different from the local `VERSION`, downloads `{base}/kit.tar.gz` and atomically swaps `.cinna-kit/` (old tree kept as a timestamped backup only until the swap succeeds). Any network failure is a **warning, never a blocked session** — `refresh` always exits 0 except on a genuinely malformed archive. Refuses a non-`http(s)` `kit_base_url` outright. `_parse_remote_version` takes the key names to read (`("kit_version", "version")` by default), so a contract-version poll reuses the one parser instead of growing a second that drifts from it; `refresh` itself still polls `/version` only. |
+| `export <path> --to DIR [--force] [--hash]` | Produces the exact tree `cinna agent import` pushes. Runs the `--cloud-ready` validation gate first and refuses on any error unless `--force`. Excludes come from **`layout.json` `cloud_import_excludes`** (see below), joined once with `ALWAYS_EXCLUDE` by `_with_always_excluded` so the walk that validates and the walk that exports can never combine them differently; the secret rules come from `layout.json` too. One walk of the **source** produces both the tree that travels and the hash over it. Regenerates `workspace_requirements.txt` in the destination, and **asserts** `cinna-agent.json` was copied — contract data a later version can change must not be able to produce a cheerful 0-error export of a tree no host can identify. **Export never writes the manifest**: the ledger lives in the excluded `publications.json`, so there is nothing to clear, and the exported manifest is byte-identical to the source. `--hash` prints the tree's `content_hash` bare on the final line for a conformance harness. |
+| `chat <path> "<prompt>"` | Sends one prompt to an agent running under Cinna Desktop. Reads the desktop-owned state file named by `layout.json` (`desktop_state_file()`), `POST {api_base_url}{chat_path or "/chat"}` with `Authorization: Bearer <agent_token>` and body `{"prompt": …}`, and prints each NDJSON line's text as it arrives. **Never falls back to role-play**: not connected, connection refused, 401, any non-2xx ⇒ one line on stderr and a non-zero exit, and nothing that could be mistaken for the agent's answer. Nothing on any path prints the token, the URL, or the text of an exception raised while reading the file (`_network_reason`, not `str(exc)`). `_chat_url` refuses a non-`http(s)` base URL — `urllib` will happily open `file://`, and `Request()` quotes an unclassifiable URL back in its `ValueError`. |
+
+**Provisional, and marked as such in the source.** The desktop has not built the
+chat endpoint yet, so two things in `chat` are a seam rather than settled
+contract: `chat_path` defaulting to `/chat`, and a line's text being the first
+present of `CHAT_TEXT_KEYS` (`text`, then `content`, then `delta`). Both
+collapse to the one shape the endpoint emits when it ships.
+
+### Reading the contract (`layout.json`)
+
+`kit.py` reads the folder model rather than knowing it. `layout_config()` never
+raises — an unreadable contract degrades to `{}`, exactly as the desktop's
+`parseLayout` degrades to an empty layout — and each accessor then decides its
+own fallback direction:
+
+| Accessor | Reads | On unevaluable |
+|----------|-------|----------------|
+| `workshop_kit_dir/agents_dir/cloud_dir()` | `workshop.{kit_dir,agents_dir,cloud_dir}` | falls back to `.cinna-kit` / `Local` / `Cloud` — guessing costs a visible empty listing, refusing costs every verb |
+| `agent_command_catalog()`, `agent_status_file()` | `agent.{command_catalog,status_file}` | falls back to the built-in path |
+| `scaffold_ignore_files()` | `scaffold_ignore_files.agent` | falls back **whole**, never a subset — a partly applied rename ships an agent with no `.gitignore` |
+| `contract_exclude_patterns()` | `cloud_import_excludes` | **`None`** — the caller that emits a `content_hash` must refuse |
+| `cloud_import_excludes()` | the same, for *what travels* | falls back to `DEFAULT_EXCLUDES` |
+| `secret_file_rules()` | `secret_files.rules` | fails toward **treating the file as secret** |
+| `desktop_state_file()` | `desktop_owned` | tristate: declared ⇒ that path; block **absent** ⇒ `app-data/desktop.json`; block present and unreadable ⇒ `None`, and `chat` refuses |
+| `contract_version()` | `kit.json` `contract_version`, then the `CONTRACT_VERSION` file | `None` |
+
+**`contract_exclude_patterns()` and `secret_file_rules()` fail in opposite
+directions on purpose, and each carries a cross-reference note saying not to
+harmonise them.** An unevaluable *exclude list* withholds the **hash** (a
+plausible wrong drift number is untraceable; a missing one is merely visible);
+an unevaluable *secret rule* withholds the **file** (a leaked credential is
+unrecoverable). Met cold the pair reads as an inconsistency and is not one: the
+safe direction is a property of the consequence, not a house style. The same
+reasoning, derived rather than copied, makes `desktop_state_file()` refuse.
+
+Each `DEFAULT_*` constant in `kit.py` (`DEFAULT_EXCLUDES`,
+`DEFAULT_SCAFFOLD_IGNORE_FILES`, `DEFAULT_SECRET_FILE_RULES`,
+`DEFAULT_KIT_DIR`/`AGENTS_DIR`/`CLOUD_DIR`, `DESKTOP_STATE_FILE`) is an offline
+**fallback** that must stay content-identical to the shipped `layout.json`
+block — same entries, same order. A fallback that diverges is a silent
+hash-parity break: the two hosts hash different file sets and the drift
+indicator never clears.
+
+### Exclude-pattern semantics (`matches_pattern`, `is_excluded`)
+
+A port of the desktop's `matchesPattern` (`src/main/kit/layout.ts`), and it has
+to stay one: both hosts hash the file set this function selects, and a
+difference of a single file makes the two hashes disagree forever while every
+individual step still looks like it worked. `normalize_rel_path` (POSIX,
+root-relative, no `./`, no leading/trailing `/`) is applied to both the pattern
+and the path first.
+
+- trailing `/` — the directory itself and everything beneath it
+- `*` — any run of characters inside one segment
+- `?` — one character inside one segment
+- `**` — zero or more whole segments
+- no leading `**` ⇒ **anchored at the agent root**, and the pattern must consume
+  the whole path: `README.md` drops the agent's own README and never
+  `docs/README.md` or `scripts/README.md`
+
+Two portability details are load-bearing rather than fussy. Segment regexes are
+compiled unanchored and used with **`fullmatch`**, not `^…$` with `match`:
+Python's `$` also matches just before a trailing newline and JavaScript's does
+not, so `README.md` would drop a file literally named `README.md\n` here and
+keep it there. And both pattern and path segment go through `_to_code_units`
+before matching, because JavaScript indexes by UTF-16 code unit — its `[^/]`
+(what `?` compiles to) consumes half a non-BMP character where Python's
+consumes a whole code point.
+
+`is_excluded(relative, patterns)` is `any(matches_pattern(p, relative) …)` and
+is asked about **directories before descending**, so an excluded directory is
+never opened. `ALWAYS_EXCLUDE` (`credentials/`, `.git/`, `.venv/`, `**/.env`,
+`**/*.env`, `**/credentials.json`) applies even if `layout.json` says otherwise;
+every one of its patterns is already covered by the shipped
+`cloud_import_excludes`, so the append is provably a no-op against an untampered
+contract — keep it that way, since a pattern that *added* something would make
+the exported tree a different set from the hashed one.
+
+`is_env_filename` is the **wide** reading (`.env`, `*.env`, `.env.*`, including
+`.env.example`) and is used by `validate` only: an `.env.example` outside
+`credentials/` is misplaced whether or not it holds a value. What may *travel*
+is a different question, answered by the contract's `secret_files` rules
+through `is_secret_filename` — which exempts `.example`, `.sample` and
+`.template` suffixes.
+
+### `content_hash` (`hash_export_files`, `content_hash`)
+
+The desktop's `hashExportFiles`, byte-for-byte. One line per file,
+`<relpath>` NUL `<sha256 hex of the bytes>` LF, in sorted order, fed into one
+running SHA-256; result `sha256:<hex>`. No mtimes, sizes, modes or directory
+entries. Symlinks are never followed and never listed; excluded directories are
+never descended into.
+
+- **Sorted by `path.encode("utf-16-be", "surrogatepass")`**, not by Python's
+  default ordering. The desktop sorts with `Array.prototype.sort` (UTF-16
+  code-unit order); plain `sorted()` agrees for ASCII and diverges for non-BMP
+  characters, so an emoji in a filename would reorder two lines and change the
+  digest — whose only symptom is a host reporting "unpublished changes"
+  forever.
+- **`UNREADABLE_MARKER` is `"\0unreadable"`** — with a leading NUL, so the
+  emitted line carries two. That matches the desktop's `exportTree.ts`; do not
+  tidy the leading NUL away.
+- **`hash_export_files` returns `(digest, unreadable)`; `content_hash` refuses
+  when that list is non-empty.** A digest folding in the unreadable marker is
+  stable and comparable but no longer describes the bytes that would be
+  uploaded — recorded on a publication it reads "up to date" forever. The
+  refusal is structural, not advice in a docstring: the previous version
+  returned the digest and told callers in prose to use the primitive instead,
+  and the reader who most needs that warning is exactly the one who will not go
+  looking for it.
+- `cmd_export` refuses the same way, at two levels of one walk (an unscannable
+  directory, and an unreadable file), before writing anything — and `--force`
+  waives neither: it waives validation findings, not a tree this host could not
+  read.
+- Known parity limit: for a filename that is not valid UTF-8 the two hosts hash
+  *different strings* (Python decodes with `surrogateescape`, Node with lossy
+  `U+FFFD`). `surrogatepass` only guarantees this side stays deterministic.
+
+### The compatibility gate (`parse_semver`, `check_contract_compatibility`, `_validate_identity`)
+
+`SEMVER_RE` and `UUID_RE` are character-identical to the schema's and to the
+desktop's `src/shared/kit/manifest.ts` / `contractVersion.ts`, so no two hosts
+can disagree about what a well-formed value looks like.
+`check_contract_compatibility(agent_version, tool_version)` returns
+`(status, reason)` with `status ∈ {ok, app_too_old, migratable, unknown}` and a
+reason a UI can show as written. **Only the major version decides** — the
+contract's minor releases are additive by definition. `_validate_identity` maps
+the verdict onto severities: `app_too_old` ⇒ error, `migratable` ⇒ warning,
+`unknown` ⇒ info.
+
+One deliberate divergence from the desktop: they report an unusable *tool*
+version through `manifest.contract_version.invalid`, which blames the folder for
+the host's problem. Here the folder parsed and the kit is what cannot answer, so
+it is reported as information about the kit.
+
+**The one tolerated identity absence:** a manifest with `schema_version` and
+neither `contract_version` nor `id` is a pre-1.0.0 folder — warned, asked to be
+re-stamped, and the rest of the identity checks skipped (mirroring the early
+return in the desktop's `checkIdentity()`; without it a legacy folder would
+collect two "required" errors for the very keys the branch exists to excuse).
+This is why `contract_version` and `id` are **not** in the schema's top-level
+`required`.
 
 ### Safe tar extraction (`safe_extract`, used by `refresh`)
 
@@ -493,15 +764,40 @@ member's mode.
 
 ### Manifest validation subset
 
-`validate_manifest` checks `schema_version` (must equal `1`; a newer value the
-tool has never seen is a hard error telling the user to `kit.py refresh`
-first), `name`/`description`/`slug` shape, `prompts{}` keys, `example_prompts[]`
-non-empty strings, `credentials[]` (type ∈ the platform `CredentialType` names,
-`env_prefix` shape, and a guard that flags any accidental `value`/`secret`/
-`token`/`password`/… key — the manifest never holds a credential value),
-`schedules[]` (`cron_string` shape, `schedule_type` ∈ `static_prompt` |
-`script_trigger`, `prompt` required for the former / `command` for the latter),
-`handovers[].target_slug` shape. This is a **pragmatic stdlib-only subset** of
+`validate_manifest` runs `_validate_identity` (above) first, then checks
+`name`/`description`/`slug` shape, `prompts{}` keys, `example_prompts[]`
+non-empty strings, `runtime` (`_validate_runtime` — `credential` is a
+*reference*, so a value matching `SECRET_LOOKALIKE_RE` — `sk-`, `sk_`, `ghp_`,
+`gho_`, `xox[baprs]-`, `AIza`, `AKIA` — or longer than 200 characters is an
+error with a rotate-it message), `credentials[]`, `schedules[]` (`cron_string`
+shape, `schedule_type` ∈ `static_prompt` | `script_trigger`, `prompt` required
+for the former / `command` for the latter), `handovers[].target_slug` shape,
+the legacy ledger keys (`_validate_manifest_ledger_keys`), and — in its own
+file — `publications.json` (`_validate_publications`).
+
+Three severity choices are worth naming because they are contract decisions,
+not style:
+
+- **An unrecognised `credentials[].type` is a warning**, and the schema agrees:
+  `type` is `"string"` with the twelve current values as `examples`, **not a
+  closed `enum`**. A closed enum inside a contract that is pinned, bundled and
+  carried offline retroactively invalidates every folder using the first type
+  the platform adds, on a machine that cannot learn about it. `CREDENTIAL_TYPES`
+  in `kit.py` is what the kit knows at contract 1.0.0; the authoritative list
+  lives at import.
+- **A credential slot carrying a `value`/`secret`/`token`/`password`/`api_key`/…
+  key is an error**, and this is the one place `kit.py` is deliberately stricter
+  than the desktop's validator, which has no equivalent check. Demoting a
+  secret-leak guard to buy severity parity is the wrong trade: the cost of the
+  false positive is an edit, the cost of the false negative is a published key.
+- **A catalogued command with no Makefile target is a warning**, and command
+  names have two thresholds: `COMMAND_NAME_RE` (what the desktop can turn into a
+  `/run:` command — broken everywhere, so an error) and the stricter house-style
+  `COMMAND_NAME_CONVENTION_RE` (runnable but unconventional, so a warning).
+  Making the stricter one the error was a false-positive generator — `kit.py`
+  refused folders the desktop runs happily.
+
+This is a **pragmatic stdlib-only subset** of
 `schema/cinna-agent.schema.json` — a backend unit test
 (`test_template_manifest_matches_the_shipped_schema`) validates the shipped
 scaffold manifest against the full JSON Schema (via `jsonschema`, skipped if
@@ -559,4 +855,4 @@ Reused unchanged: `FRONTEND_HOST`, `backend_base_url`, `PROJECT_NAME`,
 
 ---
 
-*Last updated: 2026-09-02*
+*Last updated: 2026-09-03*

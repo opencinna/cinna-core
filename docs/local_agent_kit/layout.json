@@ -1,0 +1,328 @@
+{
+  "contract_version": "1.0.0",
+  "description": "The folder model as data. Every host that creates, refreshes, exports or validates an agent folder reads its rules from here instead of hard-coding them.",
+  "workshop": {
+    "kit_dir": ".cinna-kit",
+    "agents_dir": "Local",
+    "cloud_dir": "Cloud",
+    "root_files": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "README.md",
+      ".gitignore"
+    ],
+    "roles": [
+      {
+        "path": ".cinna-kit",
+        "kind": "directory",
+        "role": "kit",
+        "description": "The contract and, when installed by the kit installer, the guides and tools. Replaced wholesale by a refresh; never edited by hand.",
+        "survives_update": false
+      },
+      {
+        "path": "Local",
+        "kind": "directory",
+        "role": "agents",
+        "description": "One folder per agent. The agents the user builds.",
+        "survives_update": true
+      },
+      {
+        "path": "Cloud",
+        "kind": "directory",
+        "role": "cloud_workspaces",
+        "description": "One cinna-cli account workspace per instance, named by host. Empty until the user publishes.",
+        "survives_update": true
+      },
+      {
+        "path": "AGENTS.md",
+        "kind": "file",
+        "role": "orchestrator_instructions",
+        "description": "Workshop-level instructions for an assistant. Installed once; a changelog entry says when to update it by hand.",
+        "survives_update": true
+      },
+      {
+        "path": "CLAUDE.md",
+        "kind": "file",
+        "role": "assistant_pointer",
+        "description": "Points at AGENTS.md.",
+        "survives_update": true
+      },
+      {
+        "path": "README.md",
+        "kind": "file",
+        "role": "human_readme",
+        "description": "What this folder is, for the human who opens it.",
+        "survives_update": true
+      },
+      {
+        "path": ".gitignore",
+        "kind": "file",
+        "role": "ignore_rules",
+        "description": "Installed from templates/root/gitignore with the dot restored.",
+        "survives_update": true
+      }
+    ]
+  },
+  "agent": {
+    "manifest": "cinna-agent.json",
+    "publications": "publications.json",
+    "prompt_files": {
+      "workflow": "docs/WORKFLOW_PROMPT.md",
+      "entrypoint": "docs/ENTRYPOINT_PROMPT.md",
+      "refiner": "docs/REFINER_PROMPT.md"
+    },
+    "command_catalog": "docs/CLI_COMMANDS.yaml",
+    "status_file": "app-data/storage/STATUS.md",
+    "roles": [
+      {
+        "path": "cinna-agent.json",
+        "kind": "file",
+        "role": "manifest",
+        "description": "Identity and definitional metadata. The one file every tool agrees on. Unknown keys are preserved.",
+        "survives_update": true
+      },
+      {
+        "path": "publications.json",
+        "kind": "file",
+        "role": "publication_ledger",
+        "description": "Where this agent folder has been published: one entry per Cinna instance, under a top-level `publications` array. A mutable per-instance sync ledger written by a publish step, never identity - which is why it is a sibling of the manifest and not a key inside it. Each entry records a content_hash OF the exported tree, and the manifest is a member of that tree, so a hash stored in the manifest could never match the tree it describes. Absent until the first publish; excluded from cloud import. Must survive a kit update: it is the user's own record of where their agent was published, and a refresh of the kit has no business rewriting or removing it. See schema/publications.schema.json.",
+        "survives_update": true
+      },
+      {
+        "path": "docs",
+        "kind": "directory",
+        "role": "prompts_and_commands",
+        "description": "The three document-backed prompts, the command catalog, and one doc per local skill.",
+        "survives_update": true
+      },
+      {
+        "path": "scripts",
+        "kind": "directory",
+        "role": "scripts",
+        "description": "Everything the agent can execute, plus README.md cataloguing all of it. Run from the agent root, so top-level helpers stay importable.",
+        "survives_update": true
+      },
+      {
+        "path": "knowledge",
+        "kind": "directory",
+        "role": "knowledge",
+        "description": "Reference material the agent reads to be correct: business rules, external-system behaviour, terminology. Read-only at runtime. Never a secret.",
+        "survives_update": true
+      },
+      {
+        "path": "files",
+        "kind": "directory",
+        "role": "input_files",
+        "description": "Static inputs that ship with the agent: fixtures, sample documents, templates it fills in.",
+        "survives_update": true
+      },
+      {
+        "path": "config",
+        "kind": "directory",
+        "role": "config",
+        "description": "Non-secret configuration the agent's scripts read: endpoints, mappings, thresholds.",
+        "survives_update": true
+      },
+      {
+        "path": "credentials",
+        "kind": "directory",
+        "role": "credentials",
+        "description": "Credential documentation and the local .env. Values are read only from inside a script, never printed, never committed, never sent to a host's UI.",
+        "survives_update": true
+      },
+      {
+        "path": "app-data",
+        "kind": "directory",
+        "role": "runtime_data",
+        "description": "Everything written at runtime. Git-ignored and excluded from cloud import; the only place an agent may write.",
+        "survives_update": true
+      },
+      {
+        "path": "app-data/storage",
+        "kind": "directory",
+        "role": "runtime_storage",
+        "description": "Durable results the agent produces, including STATUS.md.",
+        "survives_update": true
+      },
+      {
+        "path": "app-data/cache",
+        "kind": "directory",
+        "role": "runtime_cache",
+        "description": "Disposable. Safe to delete at any time.",
+        "survives_update": true
+      },
+      {
+        "path": "app-data/uploads",
+        "kind": "directory",
+        "role": "runtime_uploads",
+        "description": "Files handed to the agent in a conversation.",
+        "survives_update": true
+      },
+      {
+        "path": "AGENTS.md",
+        "kind": "file",
+        "role": "assistant_wrapper",
+        "description": "Instructions for an assistant developing this agent. Points at docs/WORKFLOW_PROMPT.md and never duplicates it. Excluded from cloud import.",
+        "survives_update": true
+      },
+      {
+        "path": "CLAUDE.md",
+        "kind": "file",
+        "role": "assistant_pointer",
+        "description": "Points at AGENTS.md. Excluded from cloud import.",
+        "survives_update": true
+      },
+      {
+        "path": "README.md",
+        "kind": "file",
+        "role": "human_readme",
+        "description": "What this agent is, for the human who opens the folder. Excluded from cloud import.",
+        "survives_update": true
+      },
+      {
+        "path": "Makefile",
+        "kind": "file",
+        "role": "local_command_mirror",
+        "description": "One target per docs/CLI_COMMANDS.yaml command, localized by the local_command_runner rules. Local convenience only; excluded from cloud import.",
+        "survives_update": true
+      },
+      {
+        "path": ".gitignore",
+        "kind": "file",
+        "role": "ignore_rules",
+        "description": "Installed from templates/agent/gitignore with the dot restored.",
+        "survives_update": true
+      }
+    ]
+  },
+  "scaffold_ignore_files": {
+    "agent": [
+      [
+        "gitignore",
+        ".gitignore"
+      ],
+      [
+        "app-data/cache/gitignore",
+        "app-data/cache/.gitignore"
+      ]
+    ],
+    "root": [
+      [
+        "gitignore",
+        ".gitignore"
+      ]
+    ]
+  },
+  "scaffold_ignore_files_notes": "Ignore rules ship dotless in templates/ and the dot is restored at scaffold time: shipping them dotted would make them live ignore rules wherever the contract is stored, hiding scaffold files from that repository. Each pair is [path in the template tree, path in the created folder], relative to that tree's root. A scaffolder must read this list rather than hard-code the pairs - templates/agent/credentials/.gitignore is deliberately NOT in it, because it keeps its dot on purpose: it names files no repository should track, and that has to be true of this one too.",
+  "desktop_owned": [
+    {
+      "path": "app-data/desktop.json",
+      "owner": "cinna-desktop",
+      "contract_keys": {
+        "api_base_url": "Base URL of the desktop's loopback API, e.g. http://127.0.0.1:53411. Rewritten on every start; the port is random.",
+        "agent_token": "Bearer token scoped to this one agent. Absent or empty when the agent's Connected toggle is off.",
+        "chat_path": "Optional. Path appended to api_base_url for the chat call. Defaults to /chat."
+      },
+      "notes": "Everything else in this file is the desktop's to shape and change. A tool reads these keys and no others; it never writes the file, never commits it, never prints its contents."
+    }
+  ],
+  "cloud_import_excludes": [
+    ".git/",
+    "**/.git/",
+    ".gitignore",
+    "**/.gitignore",
+    ".gitattributes",
+    ".gitkeep",
+    "**/.gitkeep",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "Makefile",
+    "publications.json",
+    ".claude/",
+    ".cursor/",
+    ".vscode/",
+    ".idea/",
+    "app-data/",
+    "temp/",
+    "credentials/",
+    "credentials.json",
+    "**/credentials.json",
+    "credentials/.env",
+    "**/.env",
+    "**/.env.local",
+    "**/*.env",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.tmp",
+    "**/*.pyc",
+    "__pycache__/",
+    "**/__pycache__/",
+    ".mypy_cache/",
+    "**/.mypy_cache/",
+    ".ruff_cache/",
+    "**/.ruff_cache/",
+    ".venv/",
+    "venv/",
+    "node_modules/",
+    "**/.DS_Store",
+    "**/Thumbs.db"
+  ],
+  "cloud_import_excludes_notes": "Patterns are matched against the agent-root-relative POSIX path. A pattern with a trailing '/' excludes that directory and everything under it. '*' matches within one segment, '**' matches across segments; a pattern without '**' or a leading segment wildcard is anchored at the agent root, so 'README.md' excludes only the agent's own README and never docs/README.md or scripts/README.md. Everything that can hold a credential VALUE is excluded wherever it sits: credentials.json (what the platform injects at the agent root and what cinna_credentials.py reads in the cloud), any .env, and private key material. The whole credentials/ directory is excluded, documentation included: the platform generates its own credentials/credentials.json and credentials/README.md on every credential sync, and feeds that README straight into the agent's system prompt - so a local credentials/README.md would inject local-machine instructions into a cloud agent's prompt until the first sync silently overwrote it. credentials/.env.example is excluded with it; alone it buys nothing. The assistant wrapper (AGENTS.md, CLAUDE.md, README.md, Makefile) does not travel - the platform provides its own. publications.json does not travel either, for a different reason: it is a mutable per-instance sync ledger owned by whichever host published, not definitional metadata, and one instance's publication links have no business in another instance's workspace. It is deliberately listed ONLY in the root-anchored form. The paired root-plus-'**/' rule described below applies to DIRECTORY patterns, where the '**/' form cannot match at the root and the pair is the only way to cover both; a nested publications.json under files/ or knowledge/ is a user's own file and must travel. Do not 'fix' the asymmetry by adding a '**/publications.json' sibling - it would silently swallow user content. Tool caches (__pycache__, .mypy_cache, .ruff_cache) and the scratch directory temp/ are excluded because a folder that travels should carry what the agent IS, not what a tool left behind, and temp/ is the likeliest place for something the user never meant to publish. Directory patterns are listed in BOTH the root-anchored and the '**/' form on purpose: a '**/'-prefixed directory pattern cannot match at the root, because the directory branch only tries path prefixes at least as long as the pattern, so '**/.mypy_cache/' alone would miss the root-level .mypy_cache/ that is the only one that ever exists. The dotenv entries below are a deliberate subset of the secret_files rule, which is the authority for what holds a credential value; see that block.",
+  "secret_files": {
+    "description": "Paths that can hold a credential VALUE and must never travel, expressed as data so every host applies one rule instead of re-deriving it from prose. A path is secret when any clause of a rule's `match` hits and no clause of its `unless` does; clauses test the basename only, at any depth; rules OR together. Shaped like local_command_runner on purpose: declared rules a host reads, with an explicit fail-safe direction for anything it cannot evaluate.",
+    "rules": [
+      {
+        "id": "dotenv",
+        "description": "Every dotenv shape: `.env`, `.env.<suffix>` and `<name>.env`.",
+        "match": {
+          "basename_equals": [
+            ".env"
+          ],
+          "basename_prefix": [
+            ".env."
+          ],
+          "basename_suffix": [
+            ".env"
+          ]
+        },
+        "unless": {
+          "basename_suffix": [
+            ".example",
+            ".sample",
+            ".template"
+          ]
+        }
+      }
+    ],
+    "notes": "A glob list cannot express this rule, which is why it is here and not in cloud_import_excludes: enumerating suffixes leaks the first one nobody thought of (.env.prod, .env.staging), and no glob can say 'any .env.<suffix> except .example'. The `**/.env`, `**/.env.local` and `**/*.env` entries in cloud_import_excludes are a deliberate belt-and-braces subset, kept so a host that has not yet implemented this block still withholds the common cases; this block is the authority. A host MUST apply this rule to the same file set it hashes for content_hash, not only to the files it copies - a path withheld from the upload but counted in the hash makes the hash move for a change that can never be published, which presents as unpublished changes forever. Fail safe: a clause a host cannot evaluate resolves toward treating the path as secret - an unknown `match` clause counts as a hit, an unknown `unless` clause counts as a miss."
+  },
+  "local_command_runner": {
+    "description": "docs/CLI_COMMANDS.yaml is cloud-first: commands are written as the platform runs them. These rules turn such a command into the one a local host should run. Apply the first rule whose match succeeds and whose condition holds; if none does, run the command unchanged.",
+    "rules": [
+      {
+        "id": "python-to-uv-run",
+        "match": {
+          "type": "prefix",
+          "value": "python "
+        },
+        "replace_with": "uv run ",
+        "when": {
+          "file_exists": "pyproject.toml"
+        }
+      },
+      {
+        "id": "python3-to-uv-run",
+        "match": {
+          "type": "prefix",
+          "value": "python3 "
+        },
+        "replace_with": "uv run ",
+        "when": {
+          "file_exists": "pyproject.toml"
+        }
+      }
+    ]
+  }
+}

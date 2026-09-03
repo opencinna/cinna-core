@@ -17,15 +17,15 @@ step happens only when the user asks for it.
 
 ## 2. One-time setup (idempotent — skip anything already done)
 
-1. **Choose the root folder.** Default: `~/Documents/MyAgents`. Ask the user to
+1. **Choose the root folder.** Default: `~/Documents/CinnaAgents`. Ask the user to
    confirm or name a different one. Everything below is relative to that root.
 2. **Create the two folders:**
    ```bash
-   mkdir -p ~/Documents/MyAgents/Local ~/Documents/MyAgents/Cloud
+   mkdir -p ~/Documents/CinnaAgents/Local ~/Documents/CinnaAgents/Cloud
    ```
 3. **Download the kit** into the root:
    ```bash
-   cd ~/Documents/MyAgents
+   cd ~/Documents/CinnaAgents
    curl -sL {{KIT_BASE_URL}}/kit.tar.gz | tar xz
    rm -rf .cinna-kit && mv cinna-kit .cinna-kit
    ```
@@ -70,7 +70,7 @@ step happens only when the user asks for it.
 The finished root looks like this:
 
 ```
-~/Documents/MyAgents/
+~/Documents/CinnaAgents/
 ├── AGENTS.md          # your orchestrator role — read at the start of every session
 ├── CLAUDE.md
 ├── README.md

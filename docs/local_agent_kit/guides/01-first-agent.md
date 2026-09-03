@@ -29,11 +29,20 @@ the docs and the cloud reference.
 From the workshop root:
 
 ```bash
-uv run .cinna-kit/tools/kit.py new invoice-watcher --name "Invoice Watcher"
+uv run .cinna-kit/tools/kit.py new invoice-watcher \
+  --name "Invoice Watcher" \
+  --description "Flags invoices that arrive without a purchase-order number."
 ```
 
 This copies `templates/agent/`, fills `cinna-agent.json` and prints next steps. It
 refuses if the folder exists. Never build the folder by hand.
+
+`--description` takes the one sentence you got out of question 1 of the interview —
+write it in, even roughly. Leave it off and the manifest keeps the scaffold's
+placeholder sentence, which `kit.py validate` warns about for as long as it is there,
+and refuses outright once you ask it to check the agent as cloud-ready. You rewrite the
+sentence properly in step 4 either way; starting from a true one is cheaper than
+starting from a placeholder you have to notice.
 
 Look at what you got before writing anything: `AGENTS.md`, `README.md`, `Makefile`,
 `cinna-agent.json`, `docs/`, `scripts/`, `config/`, `credentials/`, `knowledge/`,
@@ -73,10 +82,12 @@ Also fill `docs/ENTRYPOINT_PROMPT.md` if the agent has (or will have) a schedule
 
 ## 5. Test as the agent
 
-Switch to the **Agent** role: forget the build context, read only
-`docs/WORKFLOW_PROMPT.md`, and answer the user's first example prompt. If you needed
-something that is not in the prompt or the scripts, that is the bug — fix the agent,
-not the answer. Full procedure in `10-testing-locally.md`.
+If Cinna Desktop is running this agent, send the first example prompt to the real
+thing — `kit.py chat . "<prompt>"` — and judge what comes back. Otherwise switch to the
+**Agent** role: forget the build context, read only `docs/WORKFLOW_PROMPT.md`, and
+answer the user's first example prompt yourself. Either way: if the answer needed
+something that is not in the prompt or the scripts, that is the bug — fix the agent, not
+the answer. Full procedure in `10-testing-locally.md`.
 
 ## 6. Validate
 

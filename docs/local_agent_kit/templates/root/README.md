@@ -12,7 +12,7 @@ in `.cinna-kit/` and does the work.
 | Folder | What it holds |
 |--------|---------------|
 | `Local/` | Your agents. One folder each. Everything runs on this machine. |
-| `Cloud/` | Empty until you decide to run an agent on the platform 24/7. |
+| `Cloud/` | Empty until you decide to run an agent on the platform 24/7. Then one folder per platform you connect to, named after it. |
 | `.cinna-kit/` | The conventions your assistant follows. Re-downloadable; do not edit. |
 
 ## Running an agent

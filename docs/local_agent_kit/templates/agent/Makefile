@@ -1,4 +1,4 @@
-# Local convenience targets for {{name}}.
+# Local convenience targets for {{NAME}}.
 #
 # Every target here mirrors an entry in docs/CLI_COMMANDS.yaml. The YAML file is
 # cloud-first (`python scripts/x.py`, paths relative to the workspace root); this
