@@ -17,7 +17,7 @@
 
 ### Backend — Rate Limiter
 
-- `backend/app/services/cli/rate_limiter.py` — `RateLimiter` class (process-local in-memory sliding window). Lifted from `account_api_proxy_service.py` to a shared module so both `DeviceLoginService` and `AccountApiProxyService` can import it without circular coupling. `DeviceLoginService._rate_limiter = RateLimiter()` is a class-level instance.
+- `backend/app/services/common/rate_limiter.py` — `RateLimiter` class (process-local in-memory sliding window). Lifted from `account_api_proxy_service.py` to a shared module so both `DeviceLoginService` and `AccountApiProxyService` can import it without circular coupling. `DeviceLoginService._rate_limiter = RateLimiter()` is a class-level instance.
 
 ### Backend — Routes
 
@@ -191,7 +191,7 @@ Creates a `CLIToken(token_type="cli-account", agent_id=None, owner_id=owner_id, 
 | `POST /account/agents/{id}/mint` | Accepts the minted token immediately after `cinna login` completes |
 | `CLIAuthService.hash_token` | Reused for `device_code_hash` (mirrors `CLIToken.token_hash`) |
 | `SecurityEventService` | `CLI_ACCOUNT_TOKEN_CREATED` + `CLI_DEVICE_LOGIN_APPROVED` / `CLI_DEVICE_LOGIN_REJECTED` |
-| `RateLimiter` | Shared with `AccountApiProxyService`; imported from `services/cli/rate_limiter.py` |
+| `RateLimiter` | Shared with `AccountApiProxyService`; imported from `services/common/rate_limiter.py` |
 | `client_ip` | Imported from `app/utils.py` (shared audit-IP helper) |
 | `_get_platform_url`, `_ensure_utc` | Imported from `cli_service.py` |
 
