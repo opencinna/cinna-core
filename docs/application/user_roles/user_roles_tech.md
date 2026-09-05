@@ -94,7 +94,7 @@ Superusers always pass (defense-in-depth check on `user.is_superuser` before che
 | `require_developer(user) -> None` | Raises `PermissionError` if not developer/admin |
 | `require_user(user) -> None` | No-op sanity check; any active user passes |
 | `set_role(session, target_user, new_role, changed_by) -> User` | Async; validates transition rules; emits `USER_ROLE_CHANGED` |
-| `derive_default_role(is_superuser: bool) -> str` | `'admin'` if superuser, else `'agent-user'` |
+| `derive_default_role(*, session, is_superuser: bool) -> str` | `'admin'` if superuser, else `AccessPolicyService.default_role(session)` |
 
 ### Transition Validation in `set_role`
 
@@ -152,37 +152,43 @@ The Bundle tab on the agent detail page remains developer-only.
 
 ## Configuration
 
-### `DEFAULT_USER_ROLE`
+### `ServerConfig.default_user_role`
 
-Controls the `UserRole` assigned to newly created **non-superuser** accounts at creation time. Set it in the project root `.env` file.
+Controls the `UserRole` assigned to newly created **non-superuser** accounts at creation time. Edited by a superuser on **Admin → Server Configuration → Access → New users** (`/admin/server-configuration#access`), persisted on the `ServerConfig` singleton, and read through `AccessPolicyService.default_role(session)`.
 
 | Property | Value |
 |----------|-------|
-| Type | `Literal["agent-user", "agent-developer"]` |
+| Column | `server_config.default_user_role`, `varchar(32)` |
 | Default | `"agent-user"` |
-| File | `backend/app/core/config.py`, field `DEFAULT_USER_ROLE` |
+| Allowed | `agent-user`, `agent-developer` — enforced by `AccessPolicyService.validate_update` (400 `invalid_default_user_role`) |
+| Migration | `1d737d7ef0a0` (down_revision `68aab27946e5`) |
 
 **Allowed values:**
 - `agent-user` — default; new signups can install, chat, and manage settings but cannot create agents or publish bundles
 - `agent-developer` — new signups start with full developer access; useful for internal/team deployments where every account is a developer
 
-`admin` is intentionally excluded from the `Literal` type. It cannot be configured here — that would break the `role ⇔ is_superuser` invariant. A present-but-invalid value (e.g. `admin` or a typo) causes `Settings()` to raise a `ValidationError` at startup and the backend will not start. This fail-loud behaviour is consistent with the existing `ENVIRONMENT: Literal[...]` pattern in `config.py`: a mis-configured provisioning value is a security-relevant error that should never be silently masked.
+`admin` is rejected at validation — configuring it would break the `role ⇔ is_superuser` invariant. `AccessPolicyService.default_role` additionally clamps an out-of-range **stored** value (a hand-edited row, a value a later release removed) to `agent-user` rather than handing it on.
 
-**Unset/empty** falls back to `agent-user` via `env_ignore_empty=True` — behaviour is identical to before the setting was introduced.
+### Retired: the `DEFAULT_USER_ROLE` env setting
+
+`DEFAULT_USER_ROLE` in `backend/app/core/config.py` survives as a **seed only**. It is read in exactly two places: `ServerConfigService._first_boot_seed` when the singleton row is first created, and the alembic migration that added the column. Editing `.env` on a live instance changes nothing, so `AccessPolicyService.warn_if_env_overrides_present()` logs a startup warning naming the admin page when the setting is still present.
+
+Its own validation is unchanged: type `Literal["agent-user", "agent-developer"]`, unset/empty falls back to `agent-user` via `env_ignore_empty=True`, and a present-but-invalid value still raises a `ValidationError` at startup.
 
 ### Single source of truth: `RoleService.derive_default_role`
 
-`RoleService.derive_default_role(*, is_superuser: bool) -> str` in `backend/app/services/users/role_service.py` is the only place that translates the setting into an actual role value:
+`RoleService.derive_default_role(*, session: Session, is_superuser: bool) -> str` in `backend/app/services/users/role_service.py` is the only place that translates the policy into an actual role value:
 
-- `is_superuser=True` → always returns `'admin'`, ignoring `DEFAULT_USER_ROLE`
-- `is_superuser=False` → returns `settings.DEFAULT_USER_ROLE`; defends against any future config widening by falling back to `'agent-user'` if the value is outside `{'agent-user', 'agent-developer'}`
+- `is_superuser=True` → always returns `'admin'`, ignoring the configured default
+- `is_superuser=False` → returns `AccessPolicyService.default_role(session)`
 
-Both creation paths call through this helper:
+Creation paths call through this helper:
 
-- **Password signup** — `UserService.create_user` in `backend/app/services/users/user_service.py`: calls `derive_default_role` when the caller does not supply an explicit `role`. An explicit caller-provided role (e.g. an admin creating a developer through the admin form) is honoured as-is and is not overridden.
-- **Google OAuth first login** — `AuthService.create_user_from_google` in `backend/app/services/users/auth_service.py`: always calls `derive_default_role(is_superuser=False)` directly, since Google first-login users are always non-superusers.
+- **Password signup / admin creation** — `UserService.create_user` in `backend/app/services/users/user_service.py`: calls `derive_default_role` when the caller does not supply an explicit `role`. An explicit caller-provided role (e.g. an admin creating a developer through the admin form) is honoured as-is and is not overridden.
+- **Google OAuth first login** — `AuthService.create_user_from_google` in `backend/app/services/users/auth_service.py`: always calls `derive_default_role(session=session, is_superuser=False)` directly, since Google first-login users are always non-superusers.
+- **Externally-arriving senders** — `UserService.create_external_user` (email integration, server channels) creates ordinary accounts that pick up the same default.
 
-The setting affects **creation time only**. It never touches existing users and it never overrides the superuser → `admin` mapping.
+The default affects **creation time only**. It never touches existing users and it never overrides the superuser → `admin` mapping.
 
 ### Persistence-layer fallback
 

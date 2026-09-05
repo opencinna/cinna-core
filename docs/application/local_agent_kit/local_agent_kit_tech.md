@@ -213,9 +213,13 @@ path) so each validator answers for exactly one resource:
 existence *before* checking `If-None-Match`, so a stale ETag on an unknown path
 returns 404, not a misleading 304.
 
-### Rate limiting (`_limiter_key`)
+### Rate limiting (`anonymous_caller_key`)
 
-Keyed by the **socket peer**, not `app.utils.client_ip` (that helper trusts the
+The caller-key helper lives in `backend/app/services/common/rate_limiter.py` as
+`anonymous_caller_key(request)` (with `is_private_peer`), shared with the other
+anonymous surface that needs it — the public access-policy projection (see
+[Access Policy — tech](../server_configuration/access_policy_tech.md)). It is
+keyed by the **socket peer**, not `app.utils.client_ip` (that helper trusts the
 first `X-Forwarded-For` hop unconditionally — fine for an audit log line, fatal
 as the only control an anonymous surface has, since a caller can mint an
 unbounded number of distinct keys and starve the limiter's key ceiling for

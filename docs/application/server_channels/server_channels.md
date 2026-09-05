@@ -276,7 +276,7 @@ A sender's email is trusted only because the adapter verified it came from a pay
 
 ### Registration
 
-- **The channel's own email whitelist is the sole registration gate.** The platform-wide `AUTH_WHITELIST_USER_DOMAINS` signup allowlist is deliberately **not** re-checked — same precedent as the email integration's auto-user creation, so the two features can't silently disagree about who's allowed to have an account.
+- **The channel's own email whitelist is the sole registration gate.** The instance [access policy](../server_configuration/access_policy.md) — invite-only mode and the allowed email patterns — is deliberately **not** re-checked: `UserService.create_external_user` registers under the `external` origin, which carries its own admission decision. Same precedent as the email integration's auto-user creation, so the two features can't silently disagree about who's allowed to have an account. (The account still picks up the policy's default role.)
 - Auto-registered users are ordinary, passwordless, already-email-confirmed `agent-user` accounts — every downstream limit and gate (agent-count limits, credential isolation, catalog visibility) applies to them exactly as it would to anyone else. If the person later logs in with Google OAuth on the same address, the existing by-email account linking picks the account up naturally.
 - An inactive account (`is_active=False`) is treated as a denial, indistinguishable from a whitelist miss.
 - Registration only happens when `auto_register_users` is on; otherwise an unknown sender is simply denied.

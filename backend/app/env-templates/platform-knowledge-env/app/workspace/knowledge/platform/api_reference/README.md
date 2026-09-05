@@ -51,7 +51,7 @@ Each file below documents one API domain.
 | Mfa | [mfa.md](./mfa.md) | 13 |
 | Notification Settings | [notification_settings.md](./notification_settings.md) | 2 |
 | Server Channels | [server_channels.md](./server_channels.md) | 16 |
-| Server Config | [server_config.md](./server_config.md) | 3 |
+| Server Config | [server_config.md](./server_config.md) | 4 |
 | Sessions | [sessions.md](./sessions.md) | 9 |
 | Ssh Keys | [ssh_keys.md](./ssh_keys.md) | 6 |
 | Task Triggers | [task_triggers.md](./task_triggers.md) | 16 |

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Provides user identity and session management for the platform. Users authenticate via password or Google OAuth, receive a JWT token, and use it for all subsequent API requests. Supports dual authentication (both methods on one account), domain-restricted registration, and password recovery.
+Provides user identity and session management for the platform. Users authenticate via password or Google OAuth, receive a JWT token, and use it for all subsequent API requests. Supports dual authentication (both methods on one account), password recovery, and a database-backed access policy that decides who may register and which sign-in methods the instance offers.
 
 ## Core Concepts
 
@@ -11,7 +11,10 @@ Provides user identity and session management for the platform. Users authentica
 | **JWT Token** | HS256-signed token containing user ID and expiration. Used as bearer token for all API requests |
 | **Password Auth** | Email + password login using bcrypt-hashed passwords |
 | **Google OAuth** | Authorization code flow via Google popup. See [Google OAuth](google_oauth.md) |
-| **Domain Whitelist** | Optional restriction limiting new user registration to specific email domains |
+| **Access Policy** | The admin-configured front door: registration mode, allowed email patterns, and the password / Google sign-in switches. Stored on the `ServerConfig` singleton and resolved by `AccessPolicyService`. Replaces the retired `AUTH_WHITELIST_USER_DOMAINS` env setting. See [Access Policy](../server_configuration/access_policy.md) |
+| **Allowed Email Patterns** | Comma-separated globs (`*@acme.com`) restricting who may register. Empty means no restriction. Gates registration only — never login |
+| **Superuser Break-Glass** | Superusers keep password login, recovery and reset even when password sign-in is switched off for everyone else |
+| **Reason Code** | The machine-readable `detail` string a policy refusal returns (`registration_closed`, `email_not_allowed`, `password_auth_disabled`, `google_auto_register_disabled`) |
 | **Access Token** | The JWT stored in frontend `localStorage` and auto-included in API requests |
 | **Guest Token** | Special JWT with `role=chat-guest` for unauthenticated agent chat access via guest share links |
 
@@ -19,30 +22,34 @@ Provides user identity and session management for the platform. Users authentica
 
 ### Password Login
 
-1. User enters email and password on the login page
-2. Frontend submits credentials as OAuth2PasswordRequestForm
-3. Backend validates credentials (bcrypt comparison)
-4. Backend returns JWT access token
-5. Frontend stores token in `localStorage` and navigates to the post-login target — the validated `?redirect=` URL search param if present, otherwise the dashboard (see [Post-Login Redirect](#post-login-redirect))
+1. Login page reads the public access-policy projection and renders only what the policy allows — the password form is hidden on a Google-only instance, behind a "Sign in with password (administrators)" disclosure
+2. User enters email and password on the login page
+3. Frontend submits credentials as OAuth2PasswordRequestForm
+4. Backend validates credentials (bcrypt comparison), then the active check, then the access-policy check — in that order, so an address with no account never gets a different answer
+5. Non-superuser on an instance with password auth off → 403 `password_auth_disabled`; superusers pass (break-glass)
+6. Backend returns JWT access token
+7. Frontend stores token in `localStorage` and navigates to the post-login target — the validated `?redirect=` URL search param if present, otherwise the dashboard (see [Post-Login Redirect](#post-login-redirect))
 
 ### User Registration (Signup)
 
-1. User fills signup form (full name, email, password, confirm password)
-2. Frontend validates locally (email format, password >= 8 chars, passwords match)
-3. Backend checks domain whitelist (if configured)
-4. Backend checks email uniqueness
-5. Backend creates user with hashed password
-6. Welcome email sent (if SMTP configured)
-7. User redirected to login page
+1. Signup page reads the public access-policy projection. If registration is invite-only or password sign-in is off, the form is replaced by an explanatory panel (the Google button is kept when Google is configured, since it is how an existing account signs in)
+2. User fills signup form (full name, email, password, confirm password)
+3. Frontend validates locally (email format, password >= 8 chars, passwords match)
+4. Backend checks the access policy: open registration, password auth on, and a match against the allowed email patterns. Any refusal is a 403 carrying the reason code — raised **before** the uniqueness check, so a closed instance answers identically for known and unknown addresses
+5. Backend checks email uniqueness
+6. Backend creates user with hashed password and the policy's default role
+7. Confirmation email sent (if SMTP configured)
+8. User redirected to login page
 
 ### Password Recovery
 
 1. User enters email on recovery page
-2. Backend generates time-limited reset token
-3. Backend sends email with reset link containing token
-4. User clicks link, enters new password
-5. Backend validates token, hashes and saves new password
-6. User redirected to login page
+2. If password sign-in is off and the user is not a superuser, the send is skipped **silently** and the generic success message is still returned — saying otherwise would identify which addresses belong to superusers
+3. Backend generates time-limited reset token
+4. Backend sends email with reset link containing token
+5. User clicks link, enters new password
+6. Backend validates the token, re-checks the same policy gate for the token's owner (403 `password_auth_disabled` for a gated non-superuser), then hashes and saves the new password
+7. User redirected to login page
 
 ### Set Password (OAuth Users)
 
@@ -65,11 +72,19 @@ Provides user identity and session management for the platform. Users authentica
 - Frontend clears token and redirects to login on 401/404 errors
 
 ### Registration Restrictions
-- When `AUTH_WHITELIST_USER_DOMAINS` is set, only emails from listed domains can register
-- Whitelist applies to both password signup and OAuth registration
-- Admin-created users (`POST /api/v1/users/`) bypass the whitelist
-- Email-integration-created users bypass the whitelist
-- When whitelist is active, users cannot change their email address
+- Registration is governed by the [Access Policy](../server_configuration/access_policy.md) on the `ServerConfig` singleton, edited at **Admin → Server Configuration → Access**. `AUTH_WHITELIST_USER_DOMAINS` is retired: it seeds the policy on first boot and by migration, and nothing reads it for a live decision
+- In `invite_only` mode nobody self-registers — neither by password signup nor by Google
+- When `allowed_email_patterns` is non-empty, only matching addresses can register. An empty list (and the single pattern `*`) means no restriction
+- Patterns apply to both password signup and Google registration
+- Patterns gate **registration only**. Existing users are never locked out by a pattern edit, and switching to invite-only never evicts anyone
+- Admin-created users (`POST /api/v1/users/`), invitation acceptances, externally-arriving channel senders, and the first-superuser bootstrap all bypass the registration policy — each carries its own admission decision
+- While a pattern list is configured, users cannot change their own email address (`UserPublic.can_change_email` is false; `PATCH /users/me` refuses with 403)
+
+### Sign-in Method Restrictions
+- `password_auth_enabled=false` makes the instance Google-only: non-superusers are refused on login, signup, password recovery, reset, set-password and change-password with `password_auth_disabled`
+- Superusers keep every password path as a break-glass, so a broken Google configuration cannot lock all administrators out
+- The switch cannot be turned off unless Google OAuth is configured, some administrator can sign in with Google, **and** some administrator actually has a password (an admin provisioned only through Google has none, so the break-glass would open onto nothing) — all validated server-side on `PUT /admin/server-config`
+- The login page keeps the password form visible whenever Google is not actually usable in the browser (the frontend build also needs `VITE_GOOGLE_CLIENT_ID`, which the backend's lockout rule cannot see)
 
 ### Account Protection
 - Cannot unlink Google OAuth if no password is set (prevents lockout)
@@ -101,11 +116,16 @@ Provides user identity and session management for the platform. Users authentica
 ## Architecture Overview
 
 ```
-Login Page ──→ POST /login/access-token ──→ UserService.authenticate() ──→ JWT Token
+GET /server-config/access-policy (public) ──→ /login, /signup render themselves
                                                                               │
-Signup Page ──→ POST /users/signup ──→ UserService.register_user() ──→ User Created
+Login Page ──→ POST /login/access-token ──→ UserService.authenticate()
+                                              └─► AccessPolicyService.require_password_auth ──→ JWT Token
                                                                               │
-Google Button ──→ OAuth Flow ──→ AuthService.authenticate_with_google() ──→ JWT Token
+Signup Page ──→ POST /users/signup ──→ UserService.register_user()
+                                          └─► AccessPolicyService.can_register(origin="signup") ──→ User Created
+                                                                              │
+Google Button ──→ OAuth Flow ──→ AuthService.authenticate_with_google()
+                                    └─► can_register(origin="google") on first login ──→ JWT Token
                                                                               │
                                                                               ▼
 Frontend (localStorage) ──→ Authorization Header ──→ deps.get_current_user() ──→ CurrentUser
@@ -113,6 +133,7 @@ Frontend (localStorage) ──→ Authorization Header ──→ deps.get_curren
 
 ## Integration Points
 
+- **[Access Policy](../server_configuration/access_policy.md)** - The admin-configured front door: who may register, which sign-in methods exist, what role new accounts get, and whether users may edit their own email address
 - **[Google OAuth](google_oauth.md)** - Alternative authentication method via Google popup flow
 - **[Guest Sharing](../../agents/guest_sharing/guest_sharing.md)** - Special guest JWT tokens (`role=chat-guest`) for unauthenticated access to agent chat via guest share links
 - **[User Workspaces](../user_workspaces/user_workspaces.md)** - Workspace context applied after authentication
