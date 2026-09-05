@@ -1,6 +1,6 @@
 import { AxiosError } from "axios"
 import type { ApiError } from "./client"
-import { UsersService } from "./client"
+import { OpenAPI, UsersService } from "./client"
 
 export const APP_NAME = import.meta.env.VITE_APP_NAME || "Cinna"
 
@@ -147,6 +147,61 @@ export const safeRedirectPath = (
     return "/"
   }
 }
+
+// ── The backend origin, as an absolute URL ──────────────────────────────────
+
+/**
+ * The absolute `https://…` origin of the **API**, with no trailing slash.
+ *
+ * Needed wherever we hand the backend address to something outside this page —
+ * the `cinna://connect?server=…` deep link, and the paste-fallback address a
+ * user types into Cinna Desktop. Both are consumed by a native client that
+ * calls `<origin>/.well-known/cinna-desktop` and `<origin>/api/v1/…` directly.
+ *
+ * Deliberately **not** `window.location.origin`: on a split-host deployment the
+ * SPA is served from `app.example.com`, which has no `/api/v1` at all, so the
+ * desktop would discover against the wrong host and fail with nothing to see.
+ * (Contrast `localAgentKitStartUrl`, which *does* want the page origin because
+ * `/agent-start` is a frontend proxy path.)
+ *
+ * Deliberately **not** bare `import.meta.env.VITE_API_URL` either. That value
+ * is unvalidated build input and reaches us in three shapes this normalises:
+ *   - absent — `main.tsx` assigns it to `OpenAPI.BASE` with no fallback, so it
+ *     can be `undefined`, or the literal string `"undefined"` if a build
+ *     pipeline stringified an unset variable into it;
+ *   - relative (`/api`), which a native client cannot resolve;
+ *   - trailing-slashed, which would produce `https://host//api/v1/…`.
+ *
+ * The `OpenAPI.BASE || window.location.origin` shape mirrors the existing
+ * console-socket URL builder (`hooks/useEnvConsoleSocket.ts`).
+ */
+export const resolveApiOrigin = (): string => {
+  const configured = OpenAPI.BASE
+  // `=== "undefined"` is not redundant with `||`: it catches a *stringified*
+  // unset build variable, which `||` treats as a perfectly good origin. Worth
+  // guarding here specifically because this value is shown to a person and
+  // embedded in a deep link rather than fetched — a wrong one fails silently
+  // inside the desktop app instead of surfacing as a failed request.
+  const base = (
+    !configured || configured === "undefined"
+      ? window.location.origin
+      : configured
+  ).replace(/\/$/, "")
+  // A relative base (`VITE_API_URL=/api`) is meaningful only against the page
+  // it was loaded from; make it absolute before handing it to a native client.
+  return base.startsWith("http") ? base : `${window.location.origin}${base}`
+}
+
+/**
+ * The deep link that hands Cinna Desktop this instance's server address.
+ *
+ * `URLSearchParams` percent-encodes the `:` and `//` of the origin, so the
+ * `server` value survives a custom-scheme handler that parses the query with a
+ * standard URL parser. This string is a cross-repo contract with cinna-desktop
+ * — change it here and in the desktop's handler together.
+ */
+export const cinnaConnectDeepLink = (): string =>
+  `cinna://connect?${new URLSearchParams({ server: resolveApiOrigin() })}`
 
 // ── Authenticated binary downloads ──────────────────────────────────────────
 // The generated OpenAPI client is awkward with binary responses (it types them

@@ -14,6 +14,7 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as RecoverPasswordRouteImport } from './routes/recover-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DeviceRouteImport } from './routes/device'
+import { Route as DesktopRouteImport } from './routes/desktop'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LoginIndexRouteImport } from './routes/login/index'
@@ -90,6 +91,11 @@ const LoginRoute = LoginRouteImport.update({
 const DeviceRoute = DeviceRouteImport.update({
   id: '/device',
   path: '/device',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesktopRoute = DesktopRouteImport.update({
+  id: '/desktop',
+  path: '/desktop',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConfirmEmailRoute = ConfirmEmailRouteImport.update({
@@ -371,6 +377,7 @@ const LayoutAdminMarketplacePluginPluginIdRoute =
 
 export interface FileRoutesByFullPath {
   '/confirm-email': typeof ConfirmEmailRoute
+  '/desktop': typeof DesktopRoute
   '/device': typeof DeviceRoute
   '/login': typeof LoginRouteWithChildren
   '/recover-password': typeof RecoverPasswordRoute
@@ -429,6 +436,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/confirm-email': typeof ConfirmEmailRoute
+  '/desktop': typeof DesktopRoute
   '/device': typeof DeviceRoute
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
@@ -486,6 +494,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_layout': typeof LayoutRouteWithChildren
   '/confirm-email': typeof ConfirmEmailRoute
+  '/desktop': typeof DesktopRoute
   '/device': typeof DeviceRoute
   '/login': typeof LoginRouteWithChildren
   '/recover-password': typeof RecoverPasswordRoute
@@ -546,6 +555,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/confirm-email'
+    | '/desktop'
     | '/device'
     | '/login'
     | '/recover-password'
@@ -604,6 +614,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/confirm-email'
+    | '/desktop'
     | '/device'
     | '/recover-password'
     | '/reset-password'
@@ -660,6 +671,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_layout'
     | '/confirm-email'
+    | '/desktop'
     | '/device'
     | '/login'
     | '/recover-password'
@@ -720,6 +732,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   LayoutRoute: typeof LayoutRouteWithChildren
   ConfirmEmailRoute: typeof ConfirmEmailRoute
+  DesktopRoute: typeof DesktopRoute
   DeviceRoute: typeof DeviceRoute
   LoginRoute: typeof LoginRouteWithChildren
   RecoverPasswordRoute: typeof RecoverPasswordRoute
@@ -772,6 +785,13 @@ declare module '@tanstack/react-router' {
       path: '/device'
       fullPath: '/device'
       preLoaderRoute: typeof DeviceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/desktop': {
+      id: '/desktop'
+      path: '/desktop'
+      fullPath: '/desktop'
+      preLoaderRoute: typeof DesktopRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/confirm-email': {
@@ -1294,6 +1314,7 @@ const LoginRouteWithChildren = LoginRoute._addFileChildren(LoginRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   LayoutRoute: LayoutRouteWithChildren,
   ConfirmEmailRoute: ConfirmEmailRoute,
+  DesktopRoute: DesktopRoute,
   DeviceRoute: DeviceRoute,
   LoginRoute: LoginRouteWithChildren,
   RecoverPasswordRoute: RecoverPasswordRoute,
