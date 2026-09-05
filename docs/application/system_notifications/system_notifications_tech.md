@@ -26,6 +26,8 @@ npx mjml backend/app/email-templates/src/session_error.mjml \
 
 Commit the resulting `build/*.html`.
 
+**Pin the mjml version.** The committed build output was produced by mjml **4.x**; an unpinned `npx mjml` now resolves to **5.4.0**, which reformats the entire document and buries the real change in hundreds of chunks of unrelated diff. Either pin 4.x, or land the reformat as its own commit — see the [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding_tech.md#mjml-build-trap) tech doc, where the same trap was hit on `new_account.html`.
+
 ### Frontend
 
 - `frontend/src/components/UserSettings/NotificationSettings.tsx` — Settings card component

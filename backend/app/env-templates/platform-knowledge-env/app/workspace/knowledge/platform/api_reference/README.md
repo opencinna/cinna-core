@@ -29,6 +29,7 @@ Each file below documents one API domain.
 | Cli | [cli.md](./cli.md) | 60 |
 | Credentials | [credentials.md](./credentials.md) | 20 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
+| Desktop Download | [desktop_download.md](./desktop_download.md) | 1 |
 | Environments | [environments.md](./environments.md) | 17 |
 | Events | [events.md](./events.md) | 3 |
 | External | [external.md](./external.md) | 8 |

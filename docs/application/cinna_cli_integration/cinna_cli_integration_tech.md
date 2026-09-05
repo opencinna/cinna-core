@@ -133,7 +133,7 @@ Index: `ix_agent_environment_sync_active` (partial, `WHERE sync_active = true`)
 | POST | `/api/v1/cli/agents/{agent_id}/knowledge/search` | Search agent's knowledge sources |
 | WS | `/api/v1/cli/agents/{agent_id}/sync-stream` | Mutagen tunnel WebSocket. Route is a thin controller: scope check + `CLIService.run_sync_tunnel(websocket, cli_ctx)` which owns env readiness, tracker register/unregister, env-core `/sync/exec` proxy, and the 30 s heartbeat loop |
 | POST | `/api/v1/cli/agents/{agent_id}/exec` | Streaming SSE — body `{command, timeout?}` where `timeout` is optional wall-clock seconds (1–86400, defaults to `CLIService.DEFAULT_CLI_EXEC_TIMEOUT_SECONDS` = 1800); first event emits `exec_id`; delegates to env-core `/command/stream` |
-| GET | `/api/v1/cli/agents/{agent_id}/sync-runtime` | Returns pinned `{mutagen_version, mutagen_agent_sha256, platform_api_version}` for version verification |
+| GET | `/api/v1/cli/agents/{agent_id}/sync-runtime` | Returns pinned `{mutagen_version, mutagen_agent_sha256, platform_api_version, cinna_cli_version}` for version verification |
 
 ### Env-core callback (bearer + X-Agent-Env-Id header)
 
@@ -165,7 +165,7 @@ Index: `ix_agent_environment_sync_active` (partial, `WHERE sync_active = true`)
 - `get_workspace_tarball()` — Proxies to env-core HTTP API to download workspace (initial clone only)
 - `get_building_context()` — Proxies to env-core prompt generator; falls back to minimal context if env unavailable. The env-core response includes a `prompt_files: {filename: content}` dict with every `.md` under `/app/core/prompts/` except `BUILDING_AGENT.md` (currently `WEBAPP_BUILDING.md`, `COMPLEX_AGENT_DESIGN.md`); the CLI mirrors them next to `BUILDING_AGENT.md` so the on-demand `./<NAME>.md` references in the building prompt resolve locally without a Docker build context
 - `search_knowledge()` — Generates query embedding, searches accessible knowledge sources via vector search
-- `get_sync_runtime_info()` — Returns `{mutagen_version, mutagen_agent_sha256, platform_api_version}` from `settings.MUTAGEN_VERSION` / `settings.PLATFORM_API_VERSION` (kept in lockstep with the Dockerfile `MUTAGEN_VERSION` build arg)
+- `get_sync_runtime_info()` — Returns `{mutagen_version, mutagen_agent_sha256, platform_api_version, cinna_cli_version}` from `settings.MUTAGEN_VERSION` / `settings.PLATFORM_API_VERSION` / `settings.CINNA_CLI_VERSION` (the Mutagen pin is kept in lockstep with the Dockerfile `MUTAGEN_VERSION` build arg; `cinna_cli_version` is the same value the `/.well-known/cinna-desktop` `local_dev` block advertises, so `cinna doctor` and Cinna Desktop cannot be told different pins — see [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding.md))
 - `stream_exec(environment, command, timeout=None)` — Wraps env-core `/command/stream` via `AgentEnvConnector.stream_command()`; yields SSE-framed bytes and emits the `exec_id` event first. When `timeout` is `None`, falls back to `CLIService.DEFAULT_CLI_EXEC_TIMEOUT_SECONDS` (1800). Emits start/stop INFO logs carrying env id, exec id, command, and final event type
 - `run_sync_tunnel(websocket, cli_ctx)` — End-to-end sync-stream lifecycle: ensures env is running, accepts WS, registers with `SyncActivityTracker`, opens env-core `/sync/exec` WebSocket, runs client↔env byte pumps + 30 s heartbeat (fresh `Session(engine)` per tick — does not hold the request-scoped dep session for the WS lifetime), cancels pumps and unregisters on teardown
 
@@ -267,6 +267,7 @@ Entries are upserted on every `cinna setup` (refreshing the token) and removed b
 | Setting | File | Default | Purpose |
 |---------|------|---------|---------|
 | `MUTAGEN_VERSION` | `backend/app/core/config.py` | `"0.18.1"` | Pinned Mutagen version served by `/sync-runtime`; must match the Dockerfile `MUTAGEN_VERSION` build arg |
+| `CINNA_CLI_VERSION` | `backend/app/core/config.py` | `"0.3.0"` | Pinned cinna-cli version served by `/sync-runtime` and by the `/.well-known/cinna-desktop` `local_dev` block. A pin, not "latest" — bump when a newer CLI release is verified against this instance |
 | `PLATFORM_API_VERSION` | `backend/app/core/config.py` | `"1.0"` | Platform API version advertised alongside the Mutagen pin |
 | `MINIMUM_CLI_VERSION` | `backend/app/core/config.py` | `"0.2.3"` | Minimum `cinna` CLI version required by the bootstrap script. Embedded into every generated bootstrap script; bump this when a setup-flow change requires a newer CLI. The gate fires before the `cinna setup` / `cinna account setup` subcommand is invoked; unparseable version strings on either side degrade gracefully (never block) |
 | `CLI_TOKEN_EXPIRY_DAYS` | `backend/app/services/cli/cli_auth.py` | `7` | Rolling-expiry window applied by `CLIAuthService.refresh_token_usage()` on every CLI call and WS connect |

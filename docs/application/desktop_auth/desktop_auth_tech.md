@@ -26,7 +26,7 @@
 
 ### Backend — Configuration
 
-- `backend/app/core/config.py` — `DESKTOP_AUTH_ENABLED`, `DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES`, `DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS`, `DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS` (default 60; controls the rotation reuse-grace window), `APP_AUTH_ENABLED` (mobile surface toggle; token lifetimes are shared with desktop)
+- `backend/app/core/config.py` — `DESKTOP_AUTH_ENABLED`, `DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES`, `DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS`, `DESKTOP_REFRESH_TOKEN_REUSE_GRACE_SECONDS` (default 60; controls the rotation reuse-grace window), `APP_AUTH_ENABLED` (mobile surface toggle; token lifetimes are shared with desktop), `DESKTOP_LOCAL_DEV_ENABLED` (gates the discovery `local_dev` block only — **not** a kill switch on the setup-token route; see [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding.md))
 
 ### Backend — Migrations
 
@@ -131,7 +131,7 @@ It does **not** prevent someone adding a provenance column and writing it outsid
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/.well-known/cinna-desktop` | Instance metadata: `instance_name`, `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `version`, `desktop_auth_enabled` — field names follow RFC 8414 (OAuth 2.0 Authorization Server Metadata) |
+| GET | `/.well-known/cinna-desktop` | Instance metadata: `instance_name`, `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `version`, `desktop_auth_enabled` — field names follow RFC 8414 (OAuth 2.0 Authorization Server Metadata). Plus an **optional** `local_dev` object (`setup_token_endpoint`, `cinna_cli_version`, `mutagen_version`), emitted only when `DESKTOP_AUTH_ENABLED` **and** `DESKTOP_LOCAL_DEV_ENABLED` — see [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding_tech.md#local_dev-block). The six keys above are unchanged by it |
 | GET | `/.well-known/cinna-app` | Same shape as `cinna-desktop` but `authorization_endpoint`/`token_endpoint`/`userinfo_endpoint` point at `/api/v1/app-auth/*`, plus `app_auth_enabled`. Used by Cinna Mobile for instance discovery |
 
 ### OAuth Flow (under `/api/v1/desktop-auth`)
