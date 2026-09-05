@@ -25,6 +25,26 @@ export type _CredentialOverride = {
 };
 
 /**
+ * What an anonymous visitor is told about this instance's front door.
+ *
+ * Deliberately excludes ``allowed_email_patterns`` and
+ * ``default_user_role``. Both describe *who* gets in and *what they
+ * become* — customer domains and role policy are not for anonymous
+ * readers, and the login page never needs them to decide what to render.
+ *
+ * This projection says what the **instance offers**, never what a
+ * particular person may do: there is no viewer here to gate on.
+ */
+export type AccessPolicyPublic = {
+    registration_open: boolean;
+    password_auth_enabled: boolean;
+    google_auth_enabled: boolean;
+    google_auto_register: boolean;
+    desktop_enabled: boolean;
+    project_name: string;
+};
+
+/**
  * Access mode for the token - determines what operations are allowed.
  */
 export type AccessTokenMode = 'conversation' | 'building';
@@ -4584,9 +4604,17 @@ export type OAuthCallbackResponse = {
     message: string;
 };
 
+/**
+ * Availability of the OAuth providers on this instance.
+ *
+ * ``allow_email_change`` used to ride here, derived from the retired
+ * ``AUTH_WHITELIST_USER_DOMAINS`` setting. It moved to
+ * ``UserPublic.can_change_email``, which is the object the profile form
+ * already holds — a second projection of one policy fact is how the UI and
+ * the API end up disagreeing about it.
+ */
 export type OAuthConfig = {
     google_enabled: boolean;
-    allow_email_change?: boolean;
 };
 
 export type OAuthMetadataResponse = {
@@ -5311,6 +5339,12 @@ export type ServerConfig = {
     disclaimer_display_mode?: string;
     disclaimer_version?: number;
     local_agent_kit_enabled?: boolean;
+    registration_mode?: string;
+    allowed_email_patterns?: string;
+    password_auth_enabled?: boolean;
+    google_auto_register?: boolean;
+    default_user_role?: string;
+    invite_include_desktop_default?: boolean;
     updated_at?: string;
     updated_by_id?: (string | null);
 };
@@ -5323,6 +5357,12 @@ export type ServerConfigUpdate = {
     disclaimer_markdown?: (string | null);
     disclaimer_display_mode?: (string | null);
     local_agent_kit_enabled?: (boolean | null);
+    registration_mode?: (string | null);
+    allowed_email_patterns?: (string | null);
+    password_auth_enabled?: (boolean | null);
+    google_auto_register?: (boolean | null);
+    default_user_role?: (string | null);
+    invite_include_desktop_default?: (boolean | null);
 };
 
 export type SessionCommandPublic = {
@@ -6107,6 +6147,7 @@ export type UserPublic = {
     username?: (string | null);
     role?: string;
     id: string;
+    can_change_email: boolean;
     has_google_account?: boolean;
     has_password?: boolean;
     default_sdk_conversation?: (string | null);
@@ -6141,6 +6182,7 @@ export type UserPublicWithAICredentials = {
     username?: (string | null);
     role?: string;
     id: string;
+    can_change_email: boolean;
     has_google_account?: boolean;
     has_password?: boolean;
     default_sdk_conversation?: (string | null);
@@ -9451,6 +9493,8 @@ export type ServerChannelsReplaceChannelGrantsData = {
 };
 
 export type ServerChannelsReplaceChannelGrantsResponse = (Array<ChannelGrantPublic>);
+
+export type ServerConfigGetAccessPolicyResponse = (AccessPolicyPublic);
 
 export type ServerConfigGetDisclaimerResponse = (DisclaimerPublic);
 

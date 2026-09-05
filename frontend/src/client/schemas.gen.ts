@@ -1004,6 +1004,47 @@ export const AIServiceCredentialsUpdateSchema = {
     description: 'Update AI service credentials (partial update)'
 } as const;
 
+export const AccessPolicyPublicSchema = {
+    properties: {
+        registration_open: {
+            type: 'boolean',
+            title: 'Registration Open'
+        },
+        password_auth_enabled: {
+            type: 'boolean',
+            title: 'Password Auth Enabled'
+        },
+        google_auth_enabled: {
+            type: 'boolean',
+            title: 'Google Auth Enabled'
+        },
+        google_auto_register: {
+            type: 'boolean',
+            title: 'Google Auto Register'
+        },
+        desktop_enabled: {
+            type: 'boolean',
+            title: 'Desktop Enabled'
+        },
+        project_name: {
+            type: 'string',
+            title: 'Project Name'
+        }
+    },
+    type: 'object',
+    required: ['registration_open', 'password_auth_enabled', 'google_auth_enabled', 'google_auto_register', 'desktop_enabled', 'project_name'],
+    title: 'AccessPolicyPublic',
+    description: `What an anonymous visitor is told about this instance's front door.
+
+Deliberately excludes \`\`allowed_email_patterns\`\` and
+\`\`default_user_role\`\`. Both describe *who* gets in and *what they
+become* — customer domains and role policy are not for anonymous
+readers, and the login page never needs them to decide what to render.
+
+This projection says what the **instance offers**, never what a
+particular person may do: there is no viewer here to gate on.`
+} as const;
+
 export const AccessTokenModeSchema = {
     type: 'string',
     enum: ['conversation', 'building'],
@@ -19836,16 +19877,18 @@ export const OAuthConfigSchema = {
         google_enabled: {
             type: 'boolean',
             title: 'Google Enabled'
-        },
-        allow_email_change: {
-            type: 'boolean',
-            title: 'Allow Email Change',
-            default: true
         }
     },
     type: 'object',
     required: ['google_enabled'],
-    title: 'OAuthConfig'
+    title: 'OAuthConfig',
+    description: `Availability of the OAuth providers on this instance.
+
+\`\`allow_email_change\`\` used to ride here, derived from the retired
+\`\`AUTH_WHITELIST_USER_DOMAINS\`\` setting. It moved to
+\`\`UserPublic.can_change_email\`\`, which is the object the profile form
+already holds — a second projection of one policy fact is how the UI and
+the API end up disagreeing about it.`
 } as const;
 
 export const OAuthMetadataResponseSchema = {
@@ -22832,6 +22875,38 @@ export const ServerConfigSchema = {
             title: 'Local Agent Kit Enabled',
             default: true
         },
+        registration_mode: {
+            type: 'string',
+            maxLength: 16,
+            title: 'Registration Mode',
+            default: 'open'
+        },
+        allowed_email_patterns: {
+            type: 'string',
+            title: 'Allowed Email Patterns',
+            default: ''
+        },
+        password_auth_enabled: {
+            type: 'boolean',
+            title: 'Password Auth Enabled',
+            default: true
+        },
+        google_auto_register: {
+            type: 'boolean',
+            title: 'Google Auto Register',
+            default: true
+        },
+        default_user_role: {
+            type: 'string',
+            maxLength: 32,
+            title: 'Default User Role',
+            default: 'agent-user'
+        },
+        invite_include_desktop_default: {
+            type: 'boolean',
+            title: 'Invite Include Desktop Default',
+            default: true
+        },
         updated_at: {
             type: 'string',
             format: 'date-time',
@@ -22904,6 +22979,72 @@ export const ServerConfigUpdateSchema = {
                 }
             ],
             title: 'Local Agent Kit Enabled'
+        },
+        registration_mode: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Registration Mode'
+        },
+        allowed_email_patterns: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allowed Email Patterns'
+        },
+        password_auth_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Password Auth Enabled'
+        },
+        google_auto_register: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Google Auto Register'
+        },
+        default_user_role: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default User Role'
+        },
+        invite_include_desktop_default: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Invite Include Desktop Default'
         }
     },
     type: 'object',
@@ -26558,6 +26699,10 @@ export const UserPublicSchema = {
             format: 'uuid',
             title: 'Id'
         },
+        can_change_email: {
+            type: 'boolean',
+            title: 'Can Change Email'
+        },
         has_google_account: {
             type: 'boolean',
             title: 'Has Google Account',
@@ -26751,7 +26896,7 @@ export const UserPublicSchema = {
         }
     },
     type: 'object',
-    required: ['email', 'id'],
+    required: ['email', 'id', 'can_change_email'],
     title: 'UserPublic'
 } as const;
 
@@ -26807,6 +26952,10 @@ export const UserPublicWithAICredentialsSchema = {
             type: 'string',
             format: 'uuid',
             title: 'Id'
+        },
+        can_change_email: {
+            type: 'boolean',
+            title: 'Can Change Email'
         },
         has_google_account: {
             type: 'boolean',
@@ -27026,7 +27175,7 @@ export const UserPublicWithAICredentialsSchema = {
         }
     },
     type: 'object',
-    required: ['email', 'id'],
+    required: ['email', 'id', 'can_change_email'],
     title: 'UserPublicWithAICredentials',
     description: 'User info indicating which AI credentials are set (not the actual keys)'
 } as const;
