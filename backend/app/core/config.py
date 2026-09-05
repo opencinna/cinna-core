@@ -816,11 +816,19 @@ class Settings(BaseSettings):
 
     # Desktop App Authentication
     DESKTOP_AUTH_ENABLED: bool = True
-    # Whether this instance offers desktop clients the local-development
-    # bootstrap (the cinna-cli account workspace the desktop prepares on first
-    # run). Off → the ``local_dev`` block is omitted from discovery entirely and
-    # the desktop simply does not offer local dev. Gated in addition to
-    # DESKTOP_AUTH_ENABLED, never instead of it.
+    # Whether this instance *advertises* the local-development bootstrap (the
+    # cinna-cli account workspace the desktop prepares on first run) to desktop
+    # clients. Off → the ``local_dev`` block is omitted from the
+    # /.well-known/cinna-desktop discovery document, so a well-behaved desktop
+    # does not offer local dev. Gated in addition to DESKTOP_AUTH_ENABLED, never
+    # instead of it.
+    #
+    # NOT a kill switch. This flag controls the advertisement only: turning it
+    # off does not close POST /api/v1/cli/account/setup-tokens, which stays
+    # fully reachable by any client that knows the URL. That route is governed
+    # solely by its own guards — ``require_developer`` plus the
+    # ``NoCliExchangedSession`` check — and those, not this setting, are what
+    # decide who may mint a setup token.
     DESKTOP_LOCAL_DEV_ENABLED: bool = True
     # Optional asset mirror for the /desktop/download resolver. Empty (the
     # default) => resolve the latest release from GitHub. Set => skip GitHub

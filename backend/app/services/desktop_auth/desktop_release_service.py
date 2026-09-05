@@ -220,7 +220,12 @@ class DesktopReleaseService:
 
     @classmethod
     def reset_cache(cls) -> None:
-        """Drop the cached release (and the loop-bound lock). Test-only.
+        """Drop the cached release (and the loop-bound lock).
+
+        Written for tests, and nothing in the application calls it — but it is
+        ordinary public API, not enforced as test-only, so treat a production
+        call as legal rather than impossible. The blast radius is small: the
+        next resolve just re-fetches from GitHub.
 
         The cache is class-level state that outlives a single test, so a suite
         that fakes a release must reset between tests — otherwise the fake
