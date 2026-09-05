@@ -157,7 +157,15 @@ class AgentStatusService:
                     )
                 # Copy the latest status/config back onto the caller's instance
                 # (covers both our own activation and a concurrent one).
+                # ``status_changed_at`` travels WITH ``status`` — this is a value
+                # copy of an already-recorded transition, not a new one, so it
+                # must not go through ``_set_status`` (that would re-stamp the
+                # clock on a different session's row and hide the real age from
+                # the status-repair reconciler); but leaving the timestamp behind
+                # would pair a fresh status with a stale clock if this instance
+                # is ever flushed.
                 environment.status = fresh_env.status
+                environment.status_changed_at = fresh_env.status_changed_at
                 environment.config = fresh_env.config
         except Exception as exc:
             logger.warning(

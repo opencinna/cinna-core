@@ -19,7 +19,11 @@ from app.models.credentials.ai_credential import AICredential, AICredentialType
 from app.core.db import engine, create_session
 from app.utils import create_task_with_error_logging
 from datetime import timedelta
-from .environment_lifecycle import EnvironmentLifecycleManager
+from .environment_lifecycle import (
+    EnvironmentLifecycleManager,
+    _set_status,
+    _touch_progress,
+)
 from .prompt_sync import (
     PROMPT_FIELDS,
     ReconcileAction,
@@ -459,6 +463,23 @@ class EnvironmentService:
                 # Copy workspace from source to target (if found)
                 if source_env:
                     logger.info(f"Copying workspace from environment {source_env.id} to {target_env.id}")
+                    # Stamp before the copy, not just for the UI: this is a full
+                    # host-side workspace copy and it runs BEFORE the lifecycle's
+                    # own first progress write ("Checking container state..."),
+                    # so a large workspace can cross the status-repair threshold
+                    # for "starting" without the row ever showing a sign of life
+                    # — and get reaped mid-activation.
+                    #
+                    # It shifts the window; it does not close it. This is one
+                    # stamp, not a heartbeat: nothing writes again until the copy
+                    # returns, so a copy that itself outruns the threshold is
+                    # still reapable. What the stamp buys is that the clock starts
+                    # at the copy rather than at whatever wrote last before it.
+                    _touch_progress(
+                        target_env, "Copying workspace from the previous environment..."
+                    )
+                    session.add(target_env)
+                    session.commit()
                     try:
                         await lifecycle_manager.copy_workspace_between_environments(
                             source_env, target_env
@@ -468,15 +489,27 @@ class EnvironmentService:
                         # Continue with activation even if copy fails
 
                 # Stop all other environments first
-                for env in all_envs:
-                    if env.id != env_id and env.status == "running":
-                        try:
-                            await lifecycle_manager.stop_environment(session, env)
-                            env.is_active = False
-                            session.add(env)
-                        except Exception as e:
-                            # Log but continue
-                            logger.warning(f"Failed to stop environment {env.id}: {e}")
+                envs_to_stop = [
+                    env
+                    for env in all_envs
+                    if env.id != env_id and env.status == "running"
+                ]
+                if envs_to_stop:
+                    # Same reason as the copy above: each adapter.stop() is a
+                    # container shutdown, and the whole loop still precedes the
+                    # lifecycle's own first progress write.
+                    _touch_progress(target_env, "Stopping other environments...")
+                    session.add(target_env)
+                    session.commit()
+
+                for env in envs_to_stop:
+                    try:
+                        await lifecycle_manager.stop_environment(session, env)
+                        env.is_active = False
+                        session.add(env)
+                    except Exception as e:
+                        # Log but continue
+                        logger.warning(f"Failed to stop environment {env.id}: {e}")
 
                 # Start target environment (this updates status internally)
                 await lifecycle_manager.start_environment(session, target_env, agent)
@@ -499,8 +532,11 @@ class EnvironmentService:
                 with create_session() as error_session:
                     target_env = error_session.get(AgentEnvironment, env_id)
                     if target_env and target_env.status != "error":
-                        target_env.status = "error"
-                        target_env.status_message = f"Failed to activate environment: {str(e)}"
+                        _set_status(
+                            target_env,
+                            "error",
+                            f"Failed to activate environment: {str(e)}",
+                        )
                         error_session.add(target_env)
                         error_session.commit()
 
@@ -1042,8 +1078,7 @@ class EnvironmentService:
         source_env_id = source_env.id if source_env else None
 
         # Update target environment status immediately
-        target_env.status = "starting"
-        target_env.status_message = "Preparing to activate environment..."
+        _set_status(target_env, "starting", "Preparing to activate environment...")
         session.add(target_env)
         session.commit()
         session.refresh(target_env)

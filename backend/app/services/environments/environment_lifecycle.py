@@ -39,6 +39,75 @@ logger = logging.getLogger(__name__)
 # acceptable (at most one extra email after deploy).
 _critical_warned_env_ids: set[str] = set()
 
+
+def _set_status(
+    environment: AgentEnvironment,
+    status: str,
+    message: str | None = None,
+) -> None:
+    """Central writer for ``AgentEnvironment.status`` (+ its UI message).
+
+    Stamps ``status_changed_at`` on every call, which is the only honest
+    staleness signal the status-repair reconciler has: ``updated_at`` has no
+    ``onupdate`` and is never bumped here, ``last_activity_at`` is bumped by
+    usage-intent, and ``last_health_check`` is written only on success.
+
+    The stamp is deliberately unconditional rather than transition-only.
+    Re-asserting the *same* status is not a no-op here: it means a new operation
+    just started on a row that was already in that status — the reachable case
+    being a user clicking Activate on an environment stuck at ``starting`` from
+    a crash hours ago (``activate_environment`` has no transitional-status
+    guard, and adding one would take away the user's only way out). Keeping the
+    old clock there would hand a live activation a stale one, and the reconciler
+    would reap a genuinely in-flight operation within one tick. Re-stamping
+    cannot hide a stuck row instead, because a wedged operation writes nothing
+    at all — the only same-status re-assert in the lifecycle is the "rebuilding"
+    write a few seconds into the same rebuild.
+
+    Does not touch the session — callers keep their own ``add()``/``commit()``,
+    which is what makes the transitional status visible to the UI mid-operation.
+
+    Every writer of ``environment.status`` must go through this function; a raw
+    assignment leaves ``status_changed_at`` pointing at the previous transition
+    and makes the row look stale earlier than it is.
+    """
+    environment.status_changed_at = datetime.now(UTC)
+    environment.status = status
+    if message is not None:
+        environment.status_message = message
+
+
+def _touch_progress(environment: AgentEnvironment, message: str) -> None:
+    """Central writer for a progress message *within* the current status.
+
+    The same stamp as ``_set_status``, minus the status change: a long operation
+    (create, build, rebuild, start) reports its step through
+    ``status_message`` — "Building template image...", "Installing custom
+    packages...", "Syncing credentials..." — and each of those writes is proof
+    that the operation is *still alive*.
+
+    That is what makes ``status_changed_at`` a **liveness heartbeat** and not
+    merely a start timestamp, which is what the status-repair reconciler needs:
+    its build threshold then reads "no lifecycle progress for 60 minutes",
+    rather than the much more dangerous "this build started 60 minutes ago". A
+    genuinely slow build keeps re-stamping the clock and is never reaped; a
+    build whose process died stops writing entirely, because the write and the
+    work are the same thread of execution. A dead operation cannot fake a
+    heartbeat.
+
+    Like ``_set_status`` this does not touch the session — callers keep their
+    own ``add()``/``commit()``, and the commit is what publishes the heartbeat
+    to the reconciler (which runs in another process, or at least another
+    transaction).
+
+    Every writer of ``environment.status_message`` must go through this or
+    ``_set_status``; a raw assignment is a step that does real work and leaves
+    no trace of having done it.
+    """
+    environment.status_changed_at = datetime.now(UTC)
+    environment.status_message = message
+
+
 # Files from template root that should be overwritten during rebuild
 # These are infrastructure files that may be updated in the template
 REBUILD_OVERWRITE_FILES = [
@@ -182,8 +251,7 @@ class EnvironmentLifecycleManager:
         """
         try:
             # Update status: Creating
-            environment.status = "creating"
-            environment.status_message = "Preparing environment..."
+            _set_status(environment, "creating", "Preparing environment...")
             db_session.add(environment)
             db_session.commit()
 
@@ -203,14 +271,14 @@ class EnvironmentLifecycleManager:
             logger.debug(f"Instance directory created: {instance_dir}")
 
             # 2. Copy template files
-            environment.status_message = "Copying template files..."
+            _touch_progress(environment, "Copying template files...")
             db_session.add(environment)
             db_session.commit()
 
             await self._copy_template(template_dir, instance_dir)
 
             # 3. Allocate port (only on first create)
-            environment.status_message = "Configuring environment..."
+            _touch_progress(environment, "Configuring environment...")
             db_session.add(environment)
             db_session.commit()
 
@@ -221,8 +289,7 @@ class EnvironmentLifecycleManager:
             logger.debug(f"Allocated port {port} for environment {environment.id}")
 
             # 4. Build (or reuse) shared template image
-            environment.status = "building"
-            environment.status_message = "Building template image..."
+            _set_status(environment, "building", "Building template image...")
             db_session.add(environment)
             db_session.commit()
 
@@ -231,7 +298,7 @@ class EnvironmentLifecycleManager:
             logger.info(f"Template image ready: {image_tag}")
 
             # 5. Update configuration files (auth token, compose, env)
-            environment.status_message = "Configuring environment..."
+            _touch_progress(environment, "Configuring environment...")
             db_session.add(environment)
             db_session.commit()
 
@@ -245,8 +312,7 @@ class EnvironmentLifecycleManager:
             )
 
             # Update environment status
-            environment.status = "stopped"
-            environment.status_message = "Environment ready"
+            _set_status(environment, "stopped", "Environment ready")
             db_session.add(environment)
             db_session.commit()
 
@@ -254,8 +320,7 @@ class EnvironmentLifecycleManager:
 
         except Exception as e:
             # Update status to error with detailed message
-            environment.status = "error"
-            environment.status_message = f"Failed to create environment: {str(e)}"
+            _set_status(environment, "error", f"Failed to create environment: {str(e)}")
             db_session.add(environment)
             db_session.commit()
             logger.error(f"Failed to create environment {environment.id}: {e}")
@@ -295,7 +360,7 @@ class EnvironmentLifecycleManager:
         # overwrites either side, so an edit made inside the env via cinna-cli
         # survives a restart instead of being clobbered). Covers all three
         # prompts including refiner_prompt.
-        environment.status_message = "Syncing agent prompts..."
+        _touch_progress(environment, "Syncing agent prompts...")
         db_session.add(environment)
         db_session.commit()
 
@@ -323,7 +388,7 @@ class EnvironmentLifecycleManager:
             logger.debug(f"CLI commands refresh during start sweep failed for env {environment.id}: {e}")
 
         # Sync credentials to environment
-        environment.status_message = "Syncing credentials..."
+        _touch_progress(environment, "Syncing credentials...")
         db_session.add(environment)
         db_session.commit()
 
@@ -351,7 +416,7 @@ class EnvironmentLifecycleManager:
                 )
 
         # Sync plugins to environment
-        environment.status_message = "Syncing plugins..."
+        _touch_progress(environment, "Syncing plugins...")
         db_session.add(environment)
         db_session.commit()
 
@@ -368,7 +433,7 @@ class EnvironmentLifecycleManager:
         # Sync handover configuration to environment
         # This ensures cloned agents get empty handover config (not stale parent config)
         # and all agents have current handover state on activation
-        environment.status_message = "Syncing handover configuration..."
+        _touch_progress(environment, "Syncing handover configuration...")
         db_session.add(environment)
         db_session.commit()
 
@@ -379,7 +444,7 @@ class EnvironmentLifecycleManager:
         # injects credential-derived remote MCP servers into the SDK runtime
         # config; it runs after credential sync because the manifest is built
         # from the same mcp_provider credentials. Non-blocking.
-        environment.status_message = "Syncing MCP providers..."
+        _touch_progress(environment, "Syncing MCP providers...")
         db_session.add(environment)
         db_session.commit()
         await self._sync_mcp_servers_to_environment(db_session, environment, agent)
@@ -686,7 +751,7 @@ class EnvironmentLifecycleManager:
         environment.critical_cause = cause
         if not was_critical:
             environment.critical_since = datetime.now(UTC)
-        environment.status_message = f"Running, but setup incomplete: {summary}"
+        _touch_progress(environment, f"Running, but setup incomplete: {summary}")
         db_session.add(environment)
         db_session.commit()
 
@@ -775,7 +840,7 @@ class EnvironmentLifecycleManager:
         environment.critical_state = False
         environment.critical_cause = None
         environment.critical_since = None
-        environment.status_message = "Environment is running"
+        _touch_progress(environment, "Environment is running")
         db_session.add(environment)
         db_session.commit()
 
@@ -819,7 +884,7 @@ class EnvironmentLifecycleManager:
         # running-but-degraded: enter critical state and continue (the env stays
         # usable). Only re-raise (→ status="error" offline path) if the container
         # is gone. Probe errors default to re-raise (fail safe toward offline).
-        environment.status_message = "Installing custom packages..."
+        _touch_progress(environment, "Installing custom packages...")
         db_session.add(environment)
         db_session.commit()
 
@@ -838,7 +903,7 @@ class EnvironmentLifecycleManager:
                 )
 
         # Install system packages (only needed for new containers).
-        environment.status_message = "Installing system packages..."
+        _touch_progress(environment, "Installing system packages...")
         db_session.add(environment)
         db_session.commit()
 
@@ -862,7 +927,7 @@ class EnvironmentLifecycleManager:
         # idempotent ensure/heal step (re-fetches missing/partial plugin trees).
         # The manifest is rebuilt from DB here so a fresh container also gets a
         # correct manifest before the dynamic-data sync runs. Non-blocking.
-        environment.status_message = "Installing plugins..."
+        _touch_progress(environment, "Installing plugins...")
         db_session.add(environment)
         db_session.commit()
 
@@ -904,8 +969,7 @@ class EnvironmentLifecycleManager:
             agent: Agent instance
         """
         # Update status
-        environment.status = "starting"
-        environment.status_message = "Checking container state..."
+        _set_status(environment, "starting", "Checking container state...")
         db_session.add(environment)
         db_session.commit()
 
@@ -934,7 +998,7 @@ class EnvironmentLifecycleManager:
 
             # Update configuration files (generates new auth token, docker-compose.yml, .env)
             # This ensures the environment always has a fresh JWT token before starting
-            environment.status_message = "Updating configuration files..."
+            _touch_progress(environment, "Updating configuration files...")
             db_session.add(environment)
             db_session.commit()
 
@@ -949,7 +1013,7 @@ class EnvironmentLifecycleManager:
             adapter = self.get_adapter(environment)
 
             # Start container (docker-compose up)
-            environment.status_message = "Starting container..."
+            _touch_progress(environment, "Starting container...")
             db_session.add(environment)
             db_session.commit()
 
@@ -996,8 +1060,7 @@ class EnvironmentLifecycleManager:
                 await self._clear_critical_state(db_session, environment, agent)
 
             # Update status
-            environment.status = "running"
-            environment.status_message = "Environment is running"
+            _set_status(environment, "running", "Environment is running")
             environment.last_health_check = datetime.now(UTC)
             db_session.add(environment)
             db_session.commit()
@@ -1022,8 +1085,7 @@ class EnvironmentLifecycleManager:
 
         except Exception as e:
             # Update status to error
-            environment.status = "error"
-            environment.status_message = f"Failed to start environment: {str(e)}"
+            _set_status(environment, "error", f"Failed to start environment: {str(e)}")
             environment.config["last_error"] = str(e)
             flag_modified(environment, "config")
             db_session.add(environment)
@@ -1062,16 +1124,14 @@ class EnvironmentLifecycleManager:
             await adapter.stop()
 
             if update_status:
-                environment.status = "stopped"
-                environment.status_message = "Environment stopped"
+                _set_status(environment, "stopped", "Environment stopped")
                 db_session.add(environment)
                 db_session.commit()
 
             logger.info(f"Environment {environment.id} stopped successfully")
             return True
         except Exception as e:
-            environment.status = "error"
-            environment.status_message = f"Failed to stop environment: {str(e)}"
+            _set_status(environment, "error", f"Failed to stop environment: {str(e)}")
             environment.config["last_error"] = str(e)
             flag_modified(environment, "config")
             db_session.add(environment)
@@ -1105,8 +1165,7 @@ class EnvironmentLifecycleManager:
             adapter = self.get_adapter(environment)
             await adapter.stop()
 
-            environment.status = "suspended"
-            environment.status_message = "Environment suspended due to inactivity"
+            _set_status(environment, "suspended", "Environment suspended due to inactivity")
             db_session.add(environment)
             db_session.commit()
 
@@ -1114,8 +1173,7 @@ class EnvironmentLifecycleManager:
             return True
 
         except Exception as e:
-            environment.status = "error"
-            environment.status_message = f"Failed to suspend environment: {str(e)}"
+            _set_status(environment, "error", f"Failed to suspend environment: {str(e)}")
             environment.config["last_error"] = str(e)
             flag_modified(environment, "config")
             db_session.add(environment)
@@ -1169,8 +1227,7 @@ class EnvironmentLifecycleManager:
                 )
 
             # Update status
-            environment.status = "activating"
-            environment.status_message = "Activating environment..."
+            _set_status(environment, "activating", "Activating environment...")
             db_session.add(environment)
             db_session.commit()
 
@@ -1178,7 +1235,7 @@ class EnvironmentLifecycleManager:
             instance_dir = self.instances_dir / str(environment.id)
 
             # Update configuration files (generates new auth token, docker-compose.yml, .env)
-            environment.status_message = "Updating configuration files..."
+            _touch_progress(environment, "Updating configuration files...")
             db_session.add(environment)
             db_session.commit()
 
@@ -1193,7 +1250,7 @@ class EnvironmentLifecycleManager:
             adapter = self.get_adapter(environment)
 
             # Start container (docker-compose up on existing stopped container)
-            environment.status_message = "Starting container..."
+            _touch_progress(environment, "Starting container...")
             db_session.add(environment)
             db_session.commit()
 
@@ -1228,8 +1285,7 @@ class EnvironmentLifecycleManager:
                 await self._clear_critical_state(db_session, environment, agent)
 
             # Update status
-            environment.status = "running"
-            environment.status_message = "Environment activated"
+            _set_status(environment, "running", "Environment activated")
             environment.last_health_check = datetime.now(UTC)
             environment.last_activity_at = datetime.now(UTC)
             db_session.add(environment)
@@ -1253,8 +1309,7 @@ class EnvironmentLifecycleManager:
 
         except Exception as e:
             # Update status to error
-            environment.status = "error"
-            environment.status_message = f"Failed to activate environment: {str(e)}"
+            _set_status(environment, "error", f"Failed to activate environment: {str(e)}")
             environment.config["last_error"] = str(e)
             flag_modified(environment, "config")
             db_session.add(environment)
@@ -1329,8 +1384,7 @@ class EnvironmentLifecycleManager:
             logger.info(f"Rebuilding environment {environment.id} (was_running={was_running})")
 
             # Update status
-            environment.status = "rebuilding"
-            environment.status_message = "Stopping container for rebuild..."
+            _set_status(environment, "rebuilding", "Stopping container for rebuild...")
             db_session.add(environment)
             db_session.commit()
 
@@ -1356,8 +1410,7 @@ class EnvironmentLifecycleManager:
                 )
                 # Re-assert the in-progress status: adapter.stop() can take many
                 # seconds, and any concurrent refresh may have re-read the row.
-                environment.status = "rebuilding"
-                environment.status_message = "Container stopped; rebuilding..."
+                _set_status(environment, "rebuilding", "Container stopped; rebuilding...")
                 db_session.add(environment)
                 db_session.commit()
 
@@ -1375,7 +1428,7 @@ class EnvironmentLifecycleManager:
             instance_dir = self.instances_dir / str(environment.id)
 
             # Ensure shared template image is up to date (rebuilds only if hash changed)
-            environment.status_message = "Building template image..."
+            _touch_progress(environment, "Building template image...")
             db_session.add(environment)
             db_session.commit()
 
@@ -1401,7 +1454,7 @@ class EnvironmentLifecycleManager:
                     logger.info(f"Removed legacy file {legacy_name} from instance dir (now owned by TemplateImageService)")
 
             # Update configuration files (generates new auth token, docker-compose.yml, .env)
-            environment.status_message = "Updating configuration files..."
+            _touch_progress(environment, "Updating configuration files...")
             db_session.add(environment)
             db_session.commit()
 
@@ -1410,7 +1463,7 @@ class EnvironmentLifecycleManager:
             db_session.commit()
 
             # Update status
-            environment.status_message = "Updating core files and recreating container..."
+            _touch_progress(environment, "Updating core files and recreating container...")
             db_session.add(environment)
             db_session.commit()
 
@@ -1553,8 +1606,7 @@ class EnvironmentLifecycleManager:
                 if was_critical_before and not entered_critical_this_run:
                     await self._clear_critical_state(db_session, environment, agent)
 
-                environment.status = "running"
-                environment.status_message = "Environment rebuilt and restarted"
+                _set_status(environment, "running", "Environment rebuilt and restarted")
                 environment.last_health_check = datetime.now(UTC)
                 db_session.add(environment)
                 db_session.commit()
@@ -1572,8 +1624,7 @@ class EnvironmentLifecycleManager:
                 )
                 logger.info(f"Emitted ENVIRONMENT_ACTIVATED event for rebuilt environment {environment.id}")
             else:
-                environment.status = "stopped"
-                environment.status_message = "Environment rebuilt successfully"
+                _set_status(environment, "stopped", "Environment rebuilt successfully")
                 db_session.add(environment)
                 db_session.commit()
 
@@ -1593,8 +1644,7 @@ class EnvironmentLifecycleManager:
 
         except Exception as e:
             # Update status to error
-            environment.status = "error"
-            environment.status_message = f"Failed to rebuild environment: {str(e)}"
+            _set_status(environment, "error", f"Failed to rebuild environment: {str(e)}")
             environment.config["last_error"] = str(e)
             flag_modified(environment, "config")
             db_session.add(environment)

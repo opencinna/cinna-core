@@ -28,9 +28,28 @@ class AgentEnvironment(SQLModel, table=True):
     env_version: str = "1.0.0"  # e.g., "1.0.0"
     instance_name: str = "Instance"  # e.g., "Production", "Testing"
     type: str = "docker"  # "docker" | "remote_ssh" | "remote_http" | "kubernetes"
-    status: str = "stopped"  # "stopped" | "creating" | "building" | "initializing" | "starting" | "running" | "rebuilding" | "suspended" | "activating" | "error" | "deprecated"
+    status: str = "stopped"  # "stopped" | "creating" | "building" | "starting" | "running" | "rebuilding" | "suspended" | "activating" | "error" | "deprecated"
     is_active: bool = Field(default=False)
     status_message: str | None = None  # Detailed status message for UI (e.g., "Building Docker image...")
+    # When this environment's lifecycle state last MOVED — either a status
+    # change or a progress step within the current status ("Building template
+    # image...", "Installing custom packages..."). It is therefore a liveness
+    # heartbeat, not just a start timestamp: a slow-but-alive build keeps
+    # re-stamping it, while an operation whose process died stops writing
+    # entirely. The ONLY honest staleness signal for a transitional status:
+    # ``updated_at`` has no ``onupdate`` and the lifecycle never bumps it,
+    # ``last_activity_at`` is bumped by usage-intent, and ``last_health_check``
+    # is written only on success. Stamped exclusively by
+    # ``environment_lifecycle._set_status`` / ``_touch_progress`` — never assign
+    # ``status`` or ``status_message`` directly.
+    # Consumed by the system status-repair scheduler to find rows abandoned in a
+    # transitional state (a backend restart cancels the fire-and-forget lifecycle
+    # task via ``CancelledError``, which every ``except Exception`` fallback
+    # misses, so the row keeps the transitional status forever).
+    status_changed_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
     # Critical state — the container is running but a post-start/post-rebuild
     # provisioning step failed (e.g. custom package install, credential sync).
     # Coexists with status="running" (a separate axis from the lifecycle/container

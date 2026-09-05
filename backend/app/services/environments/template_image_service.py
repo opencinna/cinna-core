@@ -52,6 +52,36 @@ class TemplateImageService:
             self._locks[env_name] = asyncio.Lock()
         return self._locks[env_name]
 
+    def is_build_in_flight(self, env_name: str) -> bool:
+        """True if THIS process is currently inside ``ensure_template_image``.
+
+        Read-only liveness probe for the status-repair reconciler. ``docker
+        build`` is the one step of a create/rebuild that can run for a long time
+        while writing nothing to the environment row, so the row's own progress
+        heartbeat goes quiet for exactly the step where a stall is most
+        plausible. This closes that window.
+
+        Deliberately a **veto-only** signal, and safe to be process-local for
+        that reason: a hit can only stop a repair, never authorise one.
+
+        A build running in another worker is invisible here, and there is **no
+        cross-process fallback to catch it** — that absence is the whole reason
+        this veto exists. ``ensure_template_image`` writes no heartbeat of any
+        kind while it runs: ``AgentEnvironment.status_changed_at`` was last
+        stamped by the progress write *before* the build began, so a cold build
+        in a sibling worker looks to the reconciler exactly like a dead
+        operation and is reapable through the ordinary GONE path once it crosses
+        the threshold. Safe today only because ``docker-compose.yml`` pins
+        ``--workers 1`` (``backend/Dockerfile`` defaults to 4): with one worker,
+        the builder and the reconciler are the same process and this check sees
+        the lock.
+
+        Does not create the lock if none exists — asking whether a build is
+        running must not itself allocate per-template state.
+        """
+        lock = self._locks.get(env_name)
+        return lock is not None and lock.locked()
+
     def compute_template_hash(self, env_name: str) -> str:
         """
         Compute a 12-character SHA-256 hex digest over the build-input files.

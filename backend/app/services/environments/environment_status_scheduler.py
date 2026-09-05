@@ -7,7 +7,10 @@ from sqlmodel import select
 from app.core.db import create_session
 from app.models.environments.environment import AgentEnvironment
 from app.models.agents.agent import Agent
-from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+from app.services.environments.environment_lifecycle import (
+    EnvironmentLifecycleManager,
+    _set_status,
+)
 from app.services.events.event_service import event_service
 from app.models.events.event import EventType
 
@@ -66,9 +69,10 @@ async def _check_environment_statuses():
                             f"message={health.message}"
                         )
 
-                        env.status = "error"
-                        env.status_message = (
-                            f"Environment became unreachable: {health.message}"
+                        _set_status(
+                            env,
+                            "error",
+                            f"Environment became unreachable: {health.message}",
                         )
 
                         # Offline supersedes critical: the container is now
