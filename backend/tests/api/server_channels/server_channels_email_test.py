@@ -21,8 +21,9 @@ so they are read directly via `db.exec(select(...))`, exactly as
 Covers (phase 4 plan §6):
   1. A polled channel needs no webhook token; a webhook channel still does.
   2. Sender-routed: a known user's email routes over their own agent.
-  3. Auto-registration: the channel's own whitelist is the sole gate —
-     `AUTH_WHITELIST_USER_DOMAINS` is deliberately not re-checked.
+  3. Auto-registration: the channel's own whitelist is the sole gate — the
+     platform access policy's `allowed_email_patterns` is deliberately not
+     re-checked (origin `external` is ungated).
   4. Threading: a reply binds to the same thread, keyed on the *root*
      Message-ID in both directions.
   5. Reply headers: `In-Reply-To` / `References` on the queued reply, and the
@@ -89,6 +90,7 @@ from tests.utils.server_channel import (
     deliver_via_binding,
     update_server_channel,
 )
+from tests.utils.server_config import set_access_policy
 from tests.utils.session import list_sessions
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
 from tests.utils.utils import random_lower_string
@@ -236,10 +238,23 @@ def test_auto_registration_gate_is_the_channels_own_whitelist_not_platform_wide(
     client: TestClient, superuser_token_headers: dict[str, str], db: Session
 ) -> None:
     """
-    A domain the channel's whitelist allows, but ``AUTH_WHITELIST_USER_DOMAINS``
-    would reject, still gets auto-registered — proving the platform-wide
-    signup allowlist is genuinely not re-checked, not merely untested.
+    A domain the channel's whitelist allows, but the platform access policy's
+    ``allowed_email_patterns`` would reject, still gets auto-registered —
+    proving the platform-wide signup allowlist is genuinely not re-checked,
+    not merely untested.
+
+    The platform list is set through the admin API rather than by patching a
+    setting: since the zero-touch-onboarding access-policy phase the list lives
+    in ``server_config`` and no runtime decision reads the retired
+    ``AUTH_WHITELIST_USER_DOMAINS`` env value, so patching it would assert
+    nothing at all.
     """
+    set_access_policy(
+        client,
+        superuser_token_headers,
+        allowed_email_patterns="*@neverused.example",
+        registration_mode="invite_only",
+    )
     imap_id, smtp_id = _mail_servers(client, superuser_token_headers)
     mailbox = "support@corp.example"
     channel = create_email_channel(
@@ -255,8 +270,7 @@ def test_auto_registration_gate_is_the_channels_own_whitelist_not_platform_wide(
     msg_id = f"<{random_lower_string()}@sender.example>"
     raw = build_raw_email(message_id=msg_id, sender=sender_email, to=mailbox, body="hello")
 
-    with patch("app.core.config.settings.AUTH_WHITELIST_USER_DOMAINS", "neverused.example"):
-        processed, _ = _poll_with_stubs(db, [raw])
+    processed, _ = _poll_with_stubs(db, [raw])
     assert processed == 1
 
     r = client.get(

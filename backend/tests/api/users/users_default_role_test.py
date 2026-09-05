@@ -1,34 +1,36 @@
-"""API-level tests for the configurable DEFAULT_USER_ROLE setting.
+"""The role a new account gets, and where that default now comes from.
 
-Covers the observable API surface of the creation-time role assignment:
+The default used to be the ``DEFAULT_USER_ROLE`` env setting. It is now a
+column on the ``server_config`` singleton, edited on the Access tab of
+``/admin/server-configuration`` and read through ``AccessPolicyService``; the
+env setting survives only to seed a brand-new instance, and is deliberately not
+consulted at runtime — a setting that is sometimes authoritative and sometimes
+shadowed by the database is the worst of both, because an operator edits
+``.env``, nothing changes, and nothing complains.
 
-  1. Default (unset) — password-signup creates a user with role ``agent-user``
-     (regression guard for current behavior).
-  2. agent-developer configured — patching ``settings.DEFAULT_USER_ROLE`` to
-     ``agent-developer`` causes a new signup user to receive that role.
-  3. Superuser path unaffected — creating a user with ``is_superuser=True`` always
-     yields role ``admin`` regardless of ``DEFAULT_USER_ROLE``.
-  4. Explicit role override preserved — if a superuser creates a user with an
-     explicit ``role`` in the payload, that role is honoured and is NOT overridden
-     by ``DEFAULT_USER_ROLE``.
+So these tests configure the role **through the admin API**, which is both the
+real source of truth and the only one that can drift.
 
-The Google OAuth first-login path is tested at the service level in
-``tests/unit/test_default_user_role_service.py`` because it requires calling
-``AuthService.create_user_from_google`` directly (no HTTP route for a clean
-first-login simulation without real Google token exchange).
+Covered here:
 
-Unit tests for ``derive_default_role`` and ``Settings`` validation also live in
-``tests/unit/test_default_user_role_service.py``.
+  1. Default instance — password signup yields ``agent-user``
+  2. Configured ``agent-developer`` — signup and Google first-login both pick
+     it up, and existing users are untouched (the default is creation-time only)
+  3. Superuser creation always yields ``admin``, whatever the default says
+  4. An explicit ``role`` in an admin create payload wins over the default
 
-No agents or environments are created in this file, so the heavy env stubs
-from the users conftest are not needed.
+The admin endpoint's refusal to store ``admin`` as the default is covered in
+``tests/api/server_config/access_policy_test.py``; the clamp that protects the
+never-``admin``-for-a-non-superuser invariant even if a stored value drifts out
+of range is unit-tested in ``tests/unit/test_default_user_role_service.py``.
 """
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
+from tests.utils.google_oauth import login_with_google, random_google_id
+from tests.utils.server_config import set_access_policy
 from tests.utils.utils import random_email, random_lower_string
 
 # Opt out of the heavy agent/env stubs from tests/api/users/conftest.py
@@ -73,54 +75,100 @@ def _create_user_as_superuser(
     return r.json()
 
 
-# ── Scenario 1: Default (unset) — signup yields agent-user ───────────────────
+def _me(client: TestClient, headers: dict[str, str]) -> dict:
+    r = client.get(f"{API}/users/me", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+# ── Scenario 1: Default instance — signup yields agent-user ──────────────────
 
 
 def test_signup_default_role_is_agent_user(client: TestClient) -> None:
-    """With DEFAULT_USER_ROLE at its default ('agent-user'), a new signup user gets
-    role 'agent-user'. This is the regression guard for the existing behavior."""
+    """An instance nobody has configured still creates ordinary users.
+
+    Regression guard for the shipped default, and the control that keeps the
+    next test from passing vacuously.
+    """
     user = _signup_user(client)
     assert user["role"] == "agent-user"
     assert user["is_superuser"] is False
 
 
-# ── Scenario 2: agent-developer configured — signup gets agent-developer ──────
+# ── Scenario 2: The configured default is what new accounts get ──────────────
 
 
-def test_signup_role_respects_agent_developer_setting(client: TestClient) -> None:
-    """When DEFAULT_USER_ROLE is patched to 'agent-developer', a new password-signup
-    user receives role 'agent-developer'."""
-    with patch("app.core.config.settings.DEFAULT_USER_ROLE", "agent-developer"):
-        user = _signup_user(client)
-
-    assert user["role"] == "agent-developer"
-    assert user["is_superuser"] is False
-
-
-# ── Scenario 3: Superuser creation ignores DEFAULT_USER_ROLE ─────────────────
-
-
-def test_superuser_always_gets_admin_role_regardless_of_setting(
+def test_configured_default_role_applies_to_new_accounts_only(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """Creating a user with is_superuser=True always yields role 'admin',
-    even when DEFAULT_USER_ROLE is set to 'agent-developer'."""
-    with patch("app.core.config.settings.DEFAULT_USER_ROLE", "agent-developer"):
-        user = _create_user_as_superuser(
-            client,
-            superuser_token_headers,
-            extra_fields={"is_superuser": True},
-        )
+    """
+    The admin-configured default, end to end:
+      1. A user signs up before the change → ``agent-user``
+      2. Admin sets the default to ``agent-developer``
+      3. A new password signup gets ``agent-developer``
+      4. A Google first-login gets it too — one default, every path
+      5. The earlier user is unchanged: the default is creation-time only
+      6. Setting it back applies to the next account, not to the previous ones
+    """
+    # ── Phase 1: Before ───────────────────────────────────────────────
+    early = _signup_user(client)
+    assert early["role"] == "agent-user"
+
+    # ── Phase 2: Change the default through the admin surface ─────────
+    assert (
+        set_access_policy(
+            client, superuser_token_headers, default_user_role="agent-developer"
+        )["default_user_role"]
+        == "agent-developer"
+    )
+
+    # ── Phase 3: Password signup ──────────────────────────────────────
+    assert _signup_user(client)["role"] == "agent-developer"
+
+    # ── Phase 4: Google first login ───────────────────────────────────
+    google_headers = login_with_google(
+        client, email=random_email(), google_id=random_google_id()
+    )
+    google_user = _me(client, google_headers)
+    assert google_user["role"] == "agent-developer"
+    assert google_user["is_superuser"] is False
+
+    # ── Phase 5: Existing accounts are never re-roled ─────────────────
+    early_read = client.get(
+        f"{API}/users/{early['id']}", headers=superuser_token_headers
+    )
+    assert early_read.status_code == 200, early_read.text
+    assert early_read.json()["role"] == "agent-user"
+
+    # ── Phase 6: And back again ───────────────────────────────────────
+    set_access_policy(client, superuser_token_headers, default_user_role="agent-user")
+    assert _signup_user(client)["role"] == "agent-user"
+
+
+# ── Scenario 3: Superuser creation ignores the configured default ────────────
+
+
+def test_superuser_always_gets_admin_role_regardless_of_the_default(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The role ⇔ is_superuser invariant outranks the configured default."""
+    set_access_policy(
+        client, superuser_token_headers, default_user_role="agent-developer"
+    )
+    user = _create_user_as_superuser(
+        client,
+        superuser_token_headers,
+        extra_fields={"is_superuser": True},
+    )
 
     assert user["role"] == "admin"
     assert user["is_superuser"] is True
 
 
-def test_superuser_gets_admin_role_with_default_setting(
+def test_superuser_gets_admin_role_with_the_default_policy(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """With DEFAULT_USER_ROLE at its default, a newly created superuser still gets
-    role 'admin' (baseline check for the superuser ⇔ admin invariant)."""
+    """Baseline for the invariant on an unconfigured instance."""
     user = _create_user_as_superuser(
         client,
         superuser_token_headers,
@@ -133,28 +181,26 @@ def test_superuser_gets_admin_role_with_default_setting(
 # ── Scenario 4: Explicit caller-provided role is honoured ─────────────────────
 
 
-def test_explicit_role_in_payload_is_not_overridden_by_setting(
+def test_explicit_role_in_payload_is_not_overridden_by_the_default(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """When a superuser explicitly provides a 'role' in the create-user payload,
-    that role wins over DEFAULT_USER_ROLE. Here agent-user is explicitly set while
-    DEFAULT_USER_ROLE is patched to agent-developer — the user gets agent-user."""
-    with patch("app.core.config.settings.DEFAULT_USER_ROLE", "agent-developer"):
-        user = _create_user_as_superuser(
-            client,
-            superuser_token_headers,
-            extra_fields={"role": "agent-user"},
-        )
+    """An admin naming a role means it, even when the default says otherwise."""
+    set_access_policy(
+        client, superuser_token_headers, default_user_role="agent-developer"
+    )
+    user = _create_user_as_superuser(
+        client,
+        superuser_token_headers,
+        extra_fields={"role": "agent-user"},
+    )
 
     assert user["role"] == "agent-user"
 
 
-def test_explicit_agent_developer_role_honoured_when_setting_is_default(
+def test_explicit_agent_developer_role_honoured_when_the_default_is_agent_user(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """A caller-provided 'agent-developer' role is honoured even when DEFAULT_USER_ROLE
-    is at its default ('agent-user')."""
-    # DEFAULT_USER_ROLE is "agent-user" here (the default)
+    """The mirror image: an explicit upgrade on an otherwise default instance."""
     user = _create_user_as_superuser(
         client,
         superuser_token_headers,
