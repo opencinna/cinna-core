@@ -762,11 +762,17 @@ if __name__ == "__main__":
         that the installed Mutagen version matches what the platform expects. The
         version strings live in ``settings`` so they stay in lockstep with the
         ``MUTAGEN_VERSION`` build arg in the env-template Dockerfiles.
+
+        ``cinna_cli_version`` is the CLI pin this instance was verified with —
+        the same value the /.well-known/cinna-desktop ``local_dev`` block
+        advertises to Cinna Desktop, served here so `cinna doctor` can compare
+        the locally installed CLI against it.
         """
         return {
             "mutagen_version": settings.MUTAGEN_VERSION,
             "mutagen_agent_sha256": "",  # Populated from env image metadata when available
             "platform_api_version": settings.PLATFORM_API_VERSION,
+            "cinna_cli_version": settings.CINNA_CLI_VERSION,
         }
 
     # Default cap for `cinna exec` commands — generous enough for long

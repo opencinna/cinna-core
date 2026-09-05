@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     # VCS or local path spec (`git+https://…`, `-e /path/to/cinna-cli`) so the
     # kit tells the user how to install the CLI *this* instance expects.
     CINNA_CLI_INSTALL_SPEC: str = "cinna-cli"
+    # cinna-cli version this instance's onboarding flow is pinned to. Advertised
+    # in the /.well-known/cinna-desktop ``local_dev`` block and in
+    # /cli/agents/{id}/sync-runtime, so Cinna Desktop installs (and `cinna
+    # doctor` compares against) exactly the CLI the platform was verified with.
+    # A pin, not "latest" — bump it when a newer CLI release is verified here.
+    CINNA_CLI_VERSION: str = "0.3.0"
 
     # ── Local Agent Kit (public /agent-start surface) ──────────────────────────
     # The kit surface is unauthenticated by design and serves only static,
@@ -784,6 +790,12 @@ class Settings(BaseSettings):
 
     # Desktop App Authentication
     DESKTOP_AUTH_ENABLED: bool = True
+    # Whether this instance offers desktop clients the local-development
+    # bootstrap (the cinna-cli account workspace the desktop prepares on first
+    # run). Off → the ``local_dev`` block is omitted from discovery entirely and
+    # the desktop simply does not offer local dev. Gated in addition to
+    # DESKTOP_AUTH_ENABLED, never instead of it.
+    DESKTOP_LOCAL_DEV_ENABLED: bool = True
     DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     # Reuse-grace window for refresh-token rotation (OWASP / RFC 9700 §4.14.2).

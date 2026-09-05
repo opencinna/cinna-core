@@ -65,7 +65,7 @@ def cinna_desktop_discovery() -> dict:
     # directly (token, userinfo) or sends a browser to (authorize).
     # On a split-host deployment the SPA origin has no /api/v1.
     base = f"{settings.backend_base_url}{settings.API_V1_STR}/desktop-auth"
-    return {
+    payload = {
         "instance_name": settings.PROJECT_NAME,
         "authorization_endpoint": f"{base}/authorize",
         "token_endpoint": f"{base}/token",
@@ -73,6 +73,26 @@ def cinna_desktop_discovery() -> dict:
         "version": "1.0",
         "desktop_auth_enabled": settings.DESKTOP_AUTH_ENABLED,
     }
+
+    # Optional local-development block. Absent => this instance does not offer
+    # desktop clients the cinna-cli account-workspace bootstrap; a desktop that
+    # does not understand the block ignores it, so adding it is backward
+    # compatible. The setup-token endpoint is the EXISTING mint route the
+    # Settings card already calls — the desktop is just another CurrentUser
+    # caller against it. Backend origin again: the SPA origin has no /api/v1.
+    if settings.DESKTOP_AUTH_ENABLED and settings.DESKTOP_LOCAL_DEV_ENABLED:
+        payload["local_dev"] = {
+            "setup_token_endpoint": (
+                f"{settings.backend_base_url}{settings.API_V1_STR}"
+                f"/cli/account/setup-tokens"
+            ),
+            "cinna_cli_version": settings.CINNA_CLI_VERSION,
+            # Same value /cli/agents/{id}/sync-runtime returns, from the same
+            # setting, so the two can never diverge.
+            "mutagen_version": settings.MUTAGEN_VERSION,
+        }
+
+    return payload
 
 
 _app_wellknown_router = _APIRouter(tags=["app-auth"])
