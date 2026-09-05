@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 import { UsersService } from "@/client"
 import { redirectToLoginPreservingTarget } from "@/hooks/useAuth"
+import { cinnaConnectDeepLink } from "@/utils"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -136,6 +137,21 @@ export function NativeAuthConsentPage({
               You can close this tab and return to {appLabel}.
             </CardDescription>
           </CardHeader>
+          {/* Desktop only: `cinna://` is handled by Cinna Desktop, and there is
+              no mobile handler for it — offering this button on mobile would
+              advertise a link that does nothing. The desktop app also focuses
+              itself on the OAuth callback, so this is a fallback for browsers
+              that keep the tab in front, not the primary return path. */}
+          {!isMobile && (
+            <CardContent>
+              <Button asChild variant="outline" className="w-full">
+                <a href={cinnaConnectDeepLink()}>
+                  <Monitor className="mr-2 h-4 w-4" />
+                  Return to {appLabel}
+                </a>
+              </Button>
+            </CardContent>
+          )}
         </Card>
       </div>
     )
