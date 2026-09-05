@@ -132,7 +132,7 @@ The success state renders a "Return to {appLabel}" button carrying `cinnaConnect
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
-| `CINNA_CLI_VERSION` | `"0.3.0"` | The cinna-cli release this instance's onboarding flow is pinned to. Served by both the discovery `local_dev` block and `/cli/agents/{id}/sync-runtime`. A pin, not "latest" — bump when a newer CLI is verified here |
+| `CINNA_CLI_VERSION` | `"0.4.0"` | The cinna-cli release this instance's onboarding flow is pinned to. Served by both the discovery `local_dev` block and `/cli/agents/{id}/sync-runtime`. A pin, not "latest" — bump when a newer CLI is verified here. **0.4.0 is a floor, not just the newest**: the non-interactive surface the desktop drives (`account set-token`, `--no-input`, `--json`, stable exit codes) landed in 0.4.0, and `--no-input` does not exist in 0.3.0 at all — advertising an earlier pin would hand the desktop a CLI that stops at an interactive prompt |
 | `DESKTOP_LOCAL_DEV_ENABLED` | `True` | Whether the instance **advertises** the local-dev bootstrap. Gates the `local_dev` block only — see the warning below |
 | `DESKTOP_DOWNLOAD_BASE_URL` | `""` | Empty → resolve from GitHub. Set → skip GitHub and redirect to `{base}/{os}/{arch}/{kind}` |
 | `DESKTOP_AUTH_ENABLED` | `True` | Pre-existing. The `local_dev` block is gated on this **in addition**, never instead |

@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     # /cli/agents/{id}/sync-runtime, so Cinna Desktop installs (and `cinna
     # doctor` compares against) exactly the CLI the platform was verified with.
     # A pin, not "latest" — bump it when a newer CLI release is verified here.
-    CINNA_CLI_VERSION: str = "0.3.0"
+    CINNA_CLI_VERSION: str = "0.4.0"
 
     # ── Local Agent Kit (public /agent-start surface) ──────────────────────────
     # The kit surface is unauthenticated by design and serves only static,
