@@ -718,6 +718,32 @@ class Settings(BaseSettings):
         )
 
     @model_validator(mode="after")
+    def _validate_desktop_download_base_url(self) -> Self:
+        """Reject a mirror base that is not an absolute http(s) URL.
+
+        This is the only ``*_BASE_URL`` setting whose value is emitted straight
+        to an unauthenticated visitor as a ``Location`` header, so a typo does
+        not degrade into a puzzling log line an operator will eventually read —
+        it degrades into a stranger's first-run download landing somewhere
+        unexpected. ``cdn.internal/desktop`` (no scheme) would redirect
+        *relative to this API*, and ``//host`` or a ``javascript:`` value would
+        be passed through verbatim. Failing at startup costs the operator
+        seconds and names the problem; failing at download time costs them a
+        user and names nothing.
+        """
+        base = self.DESKTOP_DOWNLOAD_BASE_URL
+        if not base or base.startswith(("http://", "https://")):
+            return self
+        raise ValueError(
+            f"DESKTOP_DOWNLOAD_BASE_URL must be an absolute http:// or "
+            f"https:// URL (got {base!r}), or empty to resolve Cinna Desktop "
+            f"downloads from GitHub. Its value is served to unauthenticated "
+            f"visitors as a redirect target, so a scheme-less or protocol-"
+            f"relative value would send them somewhere other than the mirror "
+            f"you intended."
+        )
+
+    @model_validator(mode="after")
     def _validate_routing_trace_app_mcp_mode(self) -> Self:
         """Reject an unknown ``ROUTING_TRACE_APP_MCP_MODE`` at startup.
 
@@ -796,6 +822,13 @@ class Settings(BaseSettings):
     # the desktop simply does not offer local dev. Gated in addition to
     # DESKTOP_AUTH_ENABLED, never instead of it.
     DESKTOP_LOCAL_DEV_ENABLED: bool = True
+    # Optional asset mirror for the /desktop/download resolver. Empty (the
+    # default) => resolve the latest release from GitHub. Set => skip GitHub
+    # entirely and redirect to "<base>/<os>/<arch>/<kind>", letting the mirror
+    # decide which build that shape currently resolves to. Addressing the
+    # mirror by shape rather than by filename is what makes an air-gapped
+    # install work: it needs no version, and therefore no reachable GitHub.
+    DESKTOP_DOWNLOAD_BASE_URL: str = ""
     DESKTOP_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     DESKTOP_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     # Reuse-grace window for refresh-token rotation (OWASP / RFC 9700 §4.14.2).

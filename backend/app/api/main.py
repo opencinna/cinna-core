@@ -24,6 +24,7 @@ from app.api.routes import (
     credentials,
     credential_shares,
     desktop_auth,
+    desktop_download,
     environments,
     external_a2a,
     external_account_config,
@@ -152,6 +153,7 @@ api_router.include_router(identity.router)
 api_router.include_router(identity_contacts.router)
 api_router.include_router(cli.router)
 api_router.include_router(desktop_auth.router)
+api_router.include_router(desktop_download.router)  # /desktop/download (public installer redirect)
 api_router.include_router(app_auth.router)
 api_router.include_router(app_sync.router)
 api_router.include_router(external_agents.router)
