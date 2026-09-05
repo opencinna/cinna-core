@@ -144,6 +144,11 @@ def generate_new_account_email(
 ) -> EmailData:
     project_name = settings.PROJECT_NAME
     subject = f"{project_name} - New account for user {username}"
+    # Primary call to action is the desktop landing page: it hands the user the
+    # right build in one click and the desktop then bootstraps itself. The bare
+    # SPA origin stays available as the secondary "just use the browser" link.
+    link = f"{settings.FRONTEND_HOST}/desktop"
+    web_link = settings.FRONTEND_HOST
     html_content = render_email_template(
         template_name="new_account.html",
         context={
@@ -151,7 +156,8 @@ def generate_new_account_email(
             "username": username,
             "password": password,
             "email": email_to,
-            "link": settings.FRONTEND_HOST,
+            "link": link,
+            "web_link": web_link,
         },
     )
     return EmailData(html_content=html_content, subject=subject)
