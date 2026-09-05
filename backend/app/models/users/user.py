@@ -187,6 +187,17 @@ class User(UserBase, table=True):
 # Properties to return via API, id is always required
 class UserPublic(UserBase):
     id: uuid.UUID
+    # Instance-wide access-policy fact, not a per-user permission: false when
+    # the admin configured an allowed-email pattern list, since the address is
+    # the identity that list is written against. It rides on the user
+    # projection rather than the public policy projection because the profile
+    # form already has this object, and because "may I edit my email" is a
+    # question only a signed-in person asks.
+    #
+    # Required, with no default: a permissive default is how a producer that
+    # forgets the field ships an instance-wide policy fact as "yes" without
+    # anyone noticing. ``_user_public.user_to_public`` is the one builder.
+    can_change_email: bool
     has_google_account: bool = False
     has_password: bool = False
     default_sdk_conversation: str | None = SDK_ANTHROPIC
@@ -333,8 +344,15 @@ class SetPassword(SQLModel):
 
 
 class OAuthConfig(SQLModel):
+    """Availability of the OAuth providers on this instance.
+
+    ``allow_email_change`` used to ride here, derived from the retired
+    ``AUTH_WHITELIST_USER_DOMAINS`` setting. It moved to
+    ``UserPublic.can_change_email``, which is the object the profile form
+    already holds — a second projection of one policy fact is how the UI and
+    the API end up disagreeing about it.
+    """
     google_enabled: bool
-    allow_email_change: bool = True
 
 
 # AI Service Credentials schemas

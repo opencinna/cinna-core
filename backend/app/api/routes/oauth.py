@@ -2,8 +2,8 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
-from app.core.config import settings
 from app.models import LoginResponse, LoginToken, Message, MfaChallenge, OAuthConfig
+from app.services.users.access_policy_service import RegistrationNotAllowedError
 from app.services.users.auth_service import AuthService
 from app.services.users.mfa_service import MfaService
 
@@ -24,10 +24,7 @@ class GoogleCallbackRequest(BaseModel):
 @router.get("/oauth/config")
 def get_oauth_config() -> OAuthConfig:
     """Get OAuth provider availability and auth settings."""
-    return OAuthConfig(
-        google_enabled=AuthService.is_google_oauth_enabled(),
-        allow_email_change=settings.allow_user_email_change,
-    )
+    return OAuthConfig(google_enabled=AuthService.is_google_oauth_enabled())
 
 
 @router.get("/google/authorize")
@@ -95,6 +92,11 @@ async def google_callback(
         assert result.access_token is not None
         return LoginToken(access_token=result.access_token)
 
+    except RegistrationNotAllowedError as e:
+        # Same status and body as the signup route: one refusal shape for
+        # every registration path, and no hint about whether the address
+        # already has an account.
+        raise HTTPException(status_code=403, detail=e.reason)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

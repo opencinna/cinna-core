@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser
 from app.api.routes._mfa_errors import translate_mfa_error
+from app.api.routes._user_public import user_to_public
 from app.core import security
 from app.core.config import settings
 from app.models import (
@@ -24,6 +25,11 @@ from app.models import (
     PasskeyAuthOptionsResponse,
     User,
     UserPublic,
+)
+from app.services.users.access_policy_service import (
+    REASON_PASSWORD_AUTH_DISABLED,
+    AccessPolicyService,
+    PasswordAuthDisabledError,
 )
 from app.services.users.email_confirmation_service import EmailConfirmationService
 from app.services.users.mfa_service import FIRST_FACTOR_PASSWORD, MfaService
@@ -74,6 +80,15 @@ def login_access_token(
         raise HTTPException(status_code=400, detail="Incorrect email or password")
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+
+    # Policy check AFTER authentication, never before: checking first would
+    # answer for an address that has no account at all, and the constant-time
+    # credential check is what keeps this endpoint from being an oracle.
+    # Superusers keep password login as the break-glass path.
+    try:
+        AccessPolicyService.require_password_auth(session, user)
+    except PasswordAuthDisabledError as exc:
+        raise HTTPException(status_code=403, detail=exc.reason)
 
     if user.two_factor_enabled:
         # "Do not ask on this device" skip — only attempted when 2FA is
@@ -224,17 +239,25 @@ def login_mfa_verify(
 
 
 @router.post("/login/test-token", response_model=UserPublic)
-def test_token(current_user: CurrentUser) -> Any:
+def test_token(session: SessionDep, current_user: CurrentUser) -> Any:
     """
     Test access token
     """
-    return current_user
+    # Never return the ORM row here: ``UserPublic`` carries derived fields
+    # (the enrolment flags, ``can_change_email``) that coercion would fill
+    # from the model defaults rather than from reality.
+    return user_to_public(session, current_user)
 
 
 @router.post("/password-recovery/{email}")
 def recover_password(email: str, session: SessionDep) -> Message:
     """
     Password Recovery
+
+    When password auth is off the service skips the send silently and this
+    still answers with the generic success message — telling the caller that
+    recovery was refused would identify which addresses belong to superusers,
+    who keep the break-glass path.
     """
     try:
         UserService.recover_password(session=session, email=email)
@@ -258,6 +281,8 @@ def reset_password(session: SessionDep, body: NewPassword) -> Message:
             raise HTTPException(status_code=400, detail=detail)
         elif detail == "Inactive user":
             raise HTTPException(status_code=400, detail=detail)
+        elif detail == REASON_PASSWORD_AUTH_DISABLED:
+            raise HTTPException(status_code=403, detail=detail)
         else:
             raise HTTPException(status_code=404, detail=detail)
     return Message(message="Password updated successfully")

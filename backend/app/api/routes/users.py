@@ -3,7 +3,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import col, delete, func, select
+from sqlmodel import Session, col, delete, func, select
 
 from app.api.deps import (
     CurrentUser,
@@ -32,6 +32,12 @@ from app.models import (
     UserUpdate,
     UserUpdateMe,
 )
+from app.api.routes._user_public import user_to_public
+from app.services.users.access_policy_service import (
+    AccessPolicyService,
+    PasswordAuthDisabledError,
+    RegistrationNotAllowedError,
+)
 from app.services.users.email_confirmation_service import EmailConfirmationService
 from app.models.users.user import (
     AIServiceCredentials,
@@ -55,25 +61,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-def _user_to_public(session, user: User) -> UserPublic:
-    """Build :class:`UserPublic` for ``user``, populating the derived
-    ``has_*`` flags including the 2FA factor flags.
+# The builder lives in ``_user_public`` so ``routes/login.py`` shares it; the
+# module-local name is kept because every endpoint here already uses it.
+_user_to_public = user_to_public
 
-    Centralised so every endpoint that returns ``UserPublic`` reflects
-    enrolment state without each call site duplicating the query.
+
+def _require_password_auth(session: Session, user: User) -> None:
+    """403 when this user may not use the password paths.
+
+    Thin translation of the one policy gate into HTTP; the superuser
+    break-glass lives in the service so it cannot drift between here, the
+    login route and password reset.
     """
-    return UserPublic(
-        **user.model_dump(),
-        has_google_account=bool(user.google_id),
-        has_password=bool(user.hashed_password),
-        has_passkey=MfaService.has_passkey(session=session, user_id=user.id),
-        has_totp=MfaService.has_totp(session=session, user_id=user.id),
-        confirmation_resend_available_at=(
-            None
-            if user.email_confirmed
-            else EmailConfirmationService.resend_available_at(user)
-        ),
-    )
+    try:
+        AccessPolicyService.require_password_auth(session, user)
+    except PasswordAuthDisabledError as exc:
+        raise HTTPException(status_code=403, detail=exc.reason)
 
 
 @router.get(
@@ -111,8 +114,15 @@ def read_users(
     statement = statement.offset(skip).limit(limit)
     users = session.exec(statement).all()
 
+    # One policy read for the whole page — it is the same answer for every
+    # row, and resolving per row would be a query per user.
+    can_change_email = AccessPolicyService.can_change_email(session)
     return UsersPublic(
-        data=[_user_to_public(session, u) for u in users], count=count
+        data=[
+            _user_to_public(session, u, can_change_email=can_change_email)
+            for u in users
+        ],
+        count=count,
     )
 
 
@@ -200,8 +210,10 @@ async def update_user_me(
     """
 
     if user_in.email:
-        # Block email change if not allowed (domain whitelist is active)
-        if not settings.allow_user_email_change:
+        # Blocked while an allowed-email pattern list is configured: the
+        # address is the identity the policy is written against, so a user
+        # who could edit it could move themselves outside the allowlist.
+        if not AccessPolicyService.can_change_email(session):
             raise HTTPException(
                 status_code=403,
                 detail="Email changes are not allowed",
@@ -310,6 +322,7 @@ def update_password_me(
     """
     Update own password.
     """
+    _require_password_auth(session, current_user)
     try:
         UserService.update_password(
             session=session,
@@ -329,6 +342,7 @@ def set_password_me(
     """
     Set password for user (for OAuth users who don't have one).
     """
+    _require_password_auth(session, current_user)
     try:
         UserService.set_password(
             session=session, user=current_user, new_password=body.new_password
@@ -558,11 +572,14 @@ def register_user(session: SessionDep, user_in: UserRegister) -> Any:
             password=user_in.password,
             full_name=user_in.full_name,
         )
+    except RegistrationNotAllowedError as e:
+        # One 403 body for every policy refusal — closed instance, blocked
+        # sign-in method, or an address outside the allowlist — and it is
+        # raised before the duplicate check, so it never reveals whether the
+        # address already has an account.
+        raise HTTPException(status_code=403, detail=e.reason)
     except ValueError as e:
-        detail = str(e)
-        if "restricted" in detail:
-            raise HTTPException(status_code=403, detail=detail)
-        raise HTTPException(status_code=400, detail=detail)
+        raise HTTPException(status_code=400, detail=str(e))
 
     return _user_to_public(session, user)
 
@@ -681,10 +698,13 @@ def get_ai_credentials_status(
         session, current_user.id, AICredentialType.GOOGLE
     )
 
+    # Built on top of the one ``UserPublic`` builder rather than beside it:
+    # this response is a ``UserPublic`` plus five booleans, and hand-assembling
+    # the base half is how the projections start disagreeing (a second
+    # construction site is exactly what shipped ``has_passkey=False`` here and
+    # a 500 on the private create route).
     return UserPublicWithAICredentials(
-        **current_user.model_dump(),
-        has_google_account=bool(current_user.google_id),
-        has_password=bool(current_user.hashed_password),
+        **_user_to_public(session, current_user).model_dump(),
         has_anthropic_api_key=anthropic_default is not None,
         has_openai_api_key=openai_default is not None,
         has_google_ai_api_key=google_default is not None,

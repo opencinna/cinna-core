@@ -12,6 +12,11 @@ from sqlmodel import Session, select
 from app.core import security
 from app.core.config import settings
 from app.models import User, UserMfaChallenge
+from app.services.users.access_policy_service import (
+    ORIGIN_GOOGLE,
+    AccessPolicyService,
+    RegistrationNotAllowedError,
+)
 from app.services.users.role_service import RoleService
 
 
@@ -56,25 +61,6 @@ class AuthService:
     def is_google_oauth_enabled(cls) -> bool:
         """Check if Google OAuth is configured."""
         return settings.google_oauth_enabled
-
-    @classmethod
-    def is_email_domain_allowed(cls, email: str) -> bool:
-        """
-        Check if email domain is allowed for registration.
-
-        Returns True if:
-        - No whitelist is configured (all domains allowed)
-        - Email domain is in the whitelist
-        """
-        whitelist = settings.auth_whitelist_domains
-        if not whitelist:
-            return True
-
-        # Extract domain from email
-        if "@" not in email:
-            return False
-        domain = email.split("@")[1].lower()
-        return domain in whitelist
 
     @classmethod
     def generate_oauth_state(cls) -> str:
@@ -209,13 +195,21 @@ class AuthService:
             Created User
 
         Raises:
-            ValueError: If email domain is not in whitelist
+            RegistrationNotAllowedError: If the access policy refuses a
+                Google-originated registration for this address. ``str(exc)``
+                is the reason code, which the OAuth callback route surfaces
+                as the 403 detail.
         """
-        # Check domain whitelist for new user registration
-        if not cls.is_email_domain_allowed(email):
-            raise ValueError(
-                "Registration is restricted to specific email domains"
-            )
+        # The access policy is the single gate: open registration,
+        # ``google_auto_register``, and the email pattern list. In
+        # invite-only mode Google never creates an account, whatever
+        # ``google_auto_register`` says.
+        decision = AccessPolicyService.can_register(
+            session, email=email, origin=ORIGIN_GOOGLE
+        )
+        if not decision.allowed:
+            assert decision.reason is not None
+            raise RegistrationNotAllowedError(decision.reason)
 
         db_obj = User(
             email=email,
@@ -225,9 +219,11 @@ class AuthService:
             is_active=True,
             is_superuser=False,
             # Google first-login users are always non-superuser, so they
-            # pick up the operator-configured DEFAULT_USER_ROLE via the
+            # pick up the admin-configured default role via the
             # single-source-of-truth helper instead of the column default.
-            role=RoleService.derive_default_role(is_superuser=False),
+            role=RoleService.derive_default_role(
+                session=session, is_superuser=False
+            ),
             # Google verified the email — auto-confirm so the outbound-email
             # gate never blocks a Google user.
             email_confirmed=True,

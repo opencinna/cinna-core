@@ -476,6 +476,10 @@ from .email.mail_server_config import (
     EncryptionType,
 )
 from .server_config.server_config import (
+    REGISTRATION_MODE_INVITE_ONLY,
+    REGISTRATION_MODE_OPEN,
+    VALID_REGISTRATION_MODES,
+    AccessPolicyPublic,
     ServerConfig,
     ServerConfigUpdate,
     DisclaimerPublic,
@@ -1239,6 +1243,10 @@ __all__ = [
     "MailServerType",
     "EncryptionType",
     # Server Config
+    "REGISTRATION_MODE_INVITE_ONLY",
+    "REGISTRATION_MODE_OPEN",
+    "VALID_REGISTRATION_MODES",
+    "AccessPolicyPublic",
     "ServerConfig",
     "ServerConfigUpdate",
     "DisclaimerPublic",

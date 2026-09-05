@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.api.deps import SessionDep
+from app.api.routes._user_public import user_to_public
 from app.core.security import get_password_hash
 from app.models import (
     User,
@@ -35,4 +36,8 @@ def create_user(user_in: PrivateUserCreate, session: SessionDep) -> Any:
     session.add(user)
     session.commit()
 
-    return user
+    # Through the one builder, never the raw row: ``UserPublic`` carries
+    # derived fields (``can_change_email``, the enrolment flags) that exist
+    # nowhere on ``User``, and ``can_change_email`` has no default, so
+    # returning the ORM object is a 500 rather than a wrong answer.
+    return user_to_public(session, user)

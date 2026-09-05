@@ -34,7 +34,6 @@ from typing import Any
 
 from sqlmodel import Session
 
-from app.core.config import settings
 from app.models import User
 from app.models.events.event import EventType
 from app.models.users.user import (
@@ -42,6 +41,7 @@ from app.models.users.user import (
     UserRole,
     VALID_USER_ROLES,
 )
+from app.services.users.access_policy_service import AccessPolicyService
 
 logger = logging.getLogger(__name__)
 
@@ -192,29 +192,25 @@ class RoleService:
     # ── Bootstrapping ──────────────────────────────────────────────
 
     @staticmethod
-    def derive_default_role(*, is_superuser: bool) -> str:
+    def derive_default_role(*, session: Session, is_superuser: bool) -> str:
         """Default role for a freshly created user.
 
         Single source of truth for the creation-time default role.
 
         * Superusers always map to ``admin`` (mirrors the migration
           backfill and keeps the ``role ⇔ is_superuser`` invariant).
-        * Non-superusers pick up the operator-configured
-          ``settings.DEFAULT_USER_ROLE`` (``agent-user`` by default).
+        * Non-superusers pick up the admin-configured default from the
+          access policy (Access tab on ``/admin/server-configuration``),
+          which superseded the ``DEFAULT_USER_ROLE`` env setting — that
+          setting now only seeds a brand new instance.
 
-        The config is constrained to ``agent-user`` / ``agent-developer``
-        via a ``Literal`` at load time, but this helper also defends the
-        no-``admin``-for-non-superuser invariant: any value outside
-        ``{agent-user, agent-developer}`` falls back to ``agent-user`` so
-        the helper can never emit ``admin`` for a non-superuser even if
-        the setting is later widened.
+        ``AccessPolicyService.default_role`` already clamps an
+        out-of-range stored value to ``agent-user``; the superuser branch
+        here is what keeps ``admin`` unreachable for anyone else.
         """
         if is_superuser:
             return UserRole.ADMIN.value
-        configured = settings.DEFAULT_USER_ROLE
-        if configured in (UserRole.USER.value, UserRole.DEVELOPER.value):
-            return configured
-        return UserRole.USER.value
+        return AccessPolicyService.default_role(session)
 
 
 __all__ = ["RoleService"]

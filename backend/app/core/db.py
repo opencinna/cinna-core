@@ -46,3 +46,16 @@ def init_db(session: Session) -> None:
             user.role = UserRole.ADMIN.value
             session.add(user)
             session.commit()
+
+    # Materialize the ServerConfig singleton here, at prestart, rather than
+    # leaving it to whichever request happens to read the access policy
+    # first. ``get_or_create`` COMMITS when it creates the row, and the
+    # policy is now read from login, signup, the Google callback and every
+    # ``UserPublic`` projection — none of which should be the thing that
+    # commits an unrelated row. Creating it once, here, means every later
+    # call is a pure read. Also runs the env seed on a fresh instance.
+    from app.services.server_config.server_config_service import (
+        ServerConfigService,
+    )
+
+    ServerConfigService.get_or_create(session)

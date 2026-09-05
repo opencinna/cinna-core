@@ -402,6 +402,13 @@ async def lifespan(app: FastAPI):
 
     logger.info("Registered backend event handlers (EnvironmentService, ActivityService, SessionService, InputTaskService, ChannelOutboundService)")
 
+    # Retired access-policy env settings: still honoured as the first-boot
+    # seed, never as a live value. Warn so an operator who edits .env and
+    # restarts is told where the setting actually lives now.
+    from app.services.users.access_policy_service import AccessPolicyService
+
+    AccessPolicyService.warn_if_env_overrides_present()
+
     # Availability check for the platform email sender.
     if not settings.emails_enabled:
         logger.warning(

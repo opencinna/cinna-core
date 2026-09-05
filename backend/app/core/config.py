@@ -155,6 +155,10 @@ class Settings(BaseSettings):
     # per-IP backstop against tarball hammering, not a billing control.
     LOCAL_AGENT_KIT_RATE_LIMIT_PER_MIN: int = 120
 
+    # Per-IP budget for GET /server-config/access-policy — the anonymous
+    # projection the login and signup pages read before anyone has a token.
+    ACCESS_POLICY_RATE_LIMIT_PER_MIN: int = 120
+
     # ── Environment console (web terminal + logs follow) ─────────────────
     # Idle timeout for an interactive PTY shell: the env-core /shell/pty
     # endpoint and the backend terminal tunnel both auto-close a terminal
@@ -313,33 +317,29 @@ class Settings(BaseSettings):
     def google_oauth_enabled(self) -> bool:
         return bool(self.GOOGLE_CLIENT_ID and self.GOOGLE_CLIENT_SECRET)
 
-    # Auth domain whitelist - comma-separated list of allowed domains for new user registration
-    # Example: "example.com,company.org" - only emails from these domains can register
-    # Admin can still create users with any email
+    # ── Retired access-policy settings — SEED ONLY ─────────────────────
+    #
+    # Both fields below moved into ``server_config`` (the Access tab on
+    # /admin/server-configuration). They are read in exactly two places:
+    # ``ServerConfigService._first_boot_seed`` when the singleton row is first
+    # created, and the alembic migration that added the columns. No runtime
+    # decision reads them — a setting that is sometimes authoritative and
+    # sometimes shadowed by the database is worse than either, so
+    # ``AccessPolicyService.warn_if_env_overrides_present`` warns at startup
+    # when an operator still has them set.
+    #
+    # Comma-separated domains ("example.com,company.org"); seeded as the glob
+    # patterns "*@example.com, *@company.org".
     AUTH_WHITELIST_USER_DOMAINS: str | None = None
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def auth_whitelist_domains(self) -> list[str]:
-        """Parse comma-separated domains into list"""
-        if not self.AUTH_WHITELIST_USER_DOMAINS:
-            return []
-        return [d.strip().lower() for d in self.AUTH_WHITELIST_USER_DOMAINS.split(",") if d.strip()]
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def allow_user_email_change(self) -> bool:
-        """Allow users to change their email. Disabled when domain whitelist is active."""
-        return len(self.auth_whitelist_domains) == 0
-
-    # Role assigned to newly created NON-superuser accounts, on both password
-    # signup and Google OAuth first login. Creation-time only — it never touches
-    # existing users and never overrides an explicit caller-provided role or the
-    # superuser ⇒ ``admin`` mapping. Unset/empty falls back to ``agent-user`` via
-    # ``env_ignore_empty=True``; a present-but-invalid value fails loudly at
-    # startup (Literal). ``admin`` is intentionally not allowed here to preserve
-    # the role ⇔ is_superuser invariant. Values mirror ``UserRole`` enum members
-    # (UserRole.USER.value / UserRole.DEVELOPER.value) — keep them in sync.
+    # SEED ONLY (see the note above ``AUTH_WHITELIST_USER_DOMAINS``): the role
+    # a brand new instance starts with in ``server_config.default_user_role``.
+    # The live value is edited on the admin Access tab and read through
+    # ``AccessPolicyService.default_role``. Unset/empty falls back to
+    # ``agent-user`` via ``env_ignore_empty=True``; a present-but-invalid value
+    # fails loudly at startup (Literal). ``admin`` is intentionally not allowed
+    # here to preserve the role ⇔ is_superuser invariant. Values mirror
+    # ``UserRole`` enum members — keep them in sync.
     DEFAULT_USER_ROLE: Literal["agent-user", "agent-developer"] = "agent-user"
 
     # Google AI Configuration (for ADK agents)

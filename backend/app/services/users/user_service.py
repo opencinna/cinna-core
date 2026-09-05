@@ -28,7 +28,11 @@ from app.models import (
     UserUpdate,
 )
 from app.models.events import security_event as security_event_constants
-from app.services.users.auth_service import AuthService
+from app.services.users.access_policy_service import (
+    ORIGIN_SIGNUP,
+    AccessPolicyService,
+    RegistrationNotAllowedError,
+)
 from app.services.users.role_service import RoleService
 from app.utils import (
     generate_password_reset_token,
@@ -58,17 +62,16 @@ class UserService:
 
         Superusers are upgraded to ``admin`` so the
         ``role ⇔ is_superuser`` invariant holds for freshly created rows.
-        Non-superusers default to the operator-configured
-        ``DEFAULT_USER_ROLE`` (``agent-user`` by default), resolved via
-        ``RoleService.derive_default_role`` — the single source of truth
-        for the creation-time default.
+        Non-superusers default to the admin-configured access-policy
+        role, resolved via ``RoleService.derive_default_role`` — the
+        single source of truth for the creation-time default.
         """
         # Honour caller-provided role if present (e.g., admin creating
         # a developer); otherwise derive from is_superuser + config.
         provided = user_create.model_dump(exclude_unset=True)
         if "role" not in provided:
             provided_role = RoleService.derive_default_role(
-                is_superuser=user_create.is_superuser
+                session=session, is_superuser=user_create.is_superuser
             )
         else:
             provided_role = user_create.role
@@ -170,13 +173,25 @@ class UserService:
         *, session: Session, email: str, password: str, full_name: str | None = None
     ) -> User:
         """
-        Register a new user with domain whitelist and duplicate checks.
+        Register a new user through public signup.
+
+        The access policy is the gate: open registration, password auth on,
+        and a match against the allowed email patterns. Every refusal carries
+        a reason code and **no** hint about whether the address exists — the
+        duplicate check runs afterwards, so a closed instance answers the same
+        way for a known and an unknown address.
 
         Raises:
-            ValueError: If domain not allowed or email already exists.
+            RegistrationNotAllowedError: policy refusal; ``str(exc)`` is the
+                reason code.
+            ValueError: If the email already exists.
         """
-        if not AuthService.is_email_domain_allowed(email):
-            raise ValueError("Registration is restricted to specific email domains")
+        decision = AccessPolicyService.can_register(
+            session, email=email, origin=ORIGIN_SIGNUP
+        )
+        if not decision.allowed:
+            assert decision.reason is not None
+            raise RegistrationNotAllowedError(decision.reason)
 
         existing = UserService.get_user_by_email(session=session, email=email)
         if existing:
@@ -211,13 +226,14 @@ class UserService:
         Shared by every inbound integration that meets a person before that
         person has ever visited the platform: the email integration (sender of
         an inbound mail) and server channels (sender of a chat message). All
-        such accounts are ordinary users — they pick up ``DEFAULT_USER_ROLE``
-        and every downstream gate (agent limits, credential isolation, catalog
+        such accounts are ordinary users — they pick up the access policy's
+        default role and every downstream gate (agent limits, credential isolation, catalog
         visibility) applies unchanged.
 
-        Deliberately does **not** enforce ``AUTH_WHITELIST_USER_DOMAINS``: the
+        Deliberately does **not** consult the access policy's registration
+        mode or email patterns (``origin="external"`` is ungated): the
         integration's own allowlist is the registration gate, and re-checking
-        the signup whitelist here would silently break configurations where
+        the signup patterns here would silently break configurations where
         the two differ.
 
         Idempotent, and never mutates an account that already exists — an
@@ -268,7 +284,9 @@ class UserService:
                 hashed_password=None,
                 is_active=True,
                 is_superuser=False,
-                role=RoleService.derive_default_role(is_superuser=False),
+                role=RoleService.derive_default_role(
+                    session=session, is_superuser=False
+                ),
             )
             session.add(user)
             session.commit()
@@ -349,7 +367,9 @@ class UserService:
         Reset password using a password-reset token.
 
         Raises:
-            ValueError: If token invalid, user not found, or user inactive.
+            ValueError: If token invalid, user not found, user inactive, or
+                password auth is off for this user (message
+                ``password_auth_disabled``).
         """
         email = verify_password_reset_token(token=token)
         if not email:
@@ -361,6 +381,10 @@ class UserService:
             )
         if not user.is_active:
             raise ValueError("Inactive user")
+        # Gated here rather than in the route because this is the only place
+        # the token's owner is resolved; the route maps the reason code to a
+        # 403. Superusers keep the break-glass path.
+        AccessPolicyService.require_password_auth(session, user)
         user.hashed_password = get_password_hash(password=new_password)
         session.add(user)
         session.commit()
@@ -444,6 +468,13 @@ class UserService:
             raise ValueError(
                 "The user with this email does not exist in the system."
             )
+        # Password auth off — skip the send SILENTLY, exactly like the
+        # cooldown below. Raising here would turn recovery into an oracle for
+        # "this address belongs to a superuser", since superusers keep the
+        # break-glass path.
+        policy = AccessPolicyService.resolve(session)
+        if not AccessPolicyService.is_password_auth_allowed(policy, user):
+            return
         # Cooldown — skip the send silently if still cooling down (preserve
         # the generic success message; never raise here).
         last_sent = user.last_password_recovery_email_sent_at

@@ -16,6 +16,7 @@ from app.core import security
 from app.core.config import settings
 from app.core.db import engine
 from app.models import TokenPayload, User
+from app.services.users.access_policy_service import AccessPolicyService
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,11 @@ def get_current_user(session: SessionDep, token: TokenDep) -> User:
     user = session.get(User, token_data.sub)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if not user.is_active:
+    # Per-request account validity goes through the policy service — today
+    # that is exactly ``is_active``, but it is the single seam a later rule
+    # (suspension, expiry, licence) has to land in, so no caller here tests
+    # the flag inline.
+    if not AccessPolicyService.is_account_valid(user):
         raise HTTPException(status_code=400, detail="Inactive user")
 
     # Desktop-issued access tokens are stateless JWTs (15-min TTL) but
