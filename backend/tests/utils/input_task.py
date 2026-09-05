@@ -389,3 +389,43 @@ def agent_resolve_by_code(
     r = client.get(f"{_AGENT_BASE}/by-code/{short_code}", headers=headers)
     assert r.status_code == 200, f"Agent resolve by code failed: {r.text}"
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Status-repair (Pass C) seam
+# ---------------------------------------------------------------------------
+
+def force_task_stranded_in_progress(db, task_id: str, executed_at) -> None:
+    """Force a task straight to ``in_progress`` with a given ``executed_at``.
+
+    Documented seam for the status-repair sweep's tests (Pass C,
+    ``app/services/system/status_repair_tasks.py``). The precondition Pass C
+    repairs — a task at ``in_progress`` whose sessions have already moved on
+    — is the *result* of a real crash window: ``in_progress`` is written the
+    moment the ``STREAM_STARTED`` handler lands (an event-bus task, not
+    something ``execute_task`` sets synchronously), and the very next thing
+    that ordinarily happens in the same drain is the completion handler
+    re-syncing the task away from ``in_progress``. Landing exactly between
+    those two — the handler that set it having run, the one that would
+    correct it never getting the chance — is a process-death race no
+    in-process test can hold open: the same drain loop that can produce a
+    real ``in_progress`` also runs the resync in the same breath.
+
+    So this writes the one combination that crash produces — ``in_progress``
+    with a real, aged ``executed_at`` — directly, the same way
+    ``force_session_interaction_claim``'s "running" branch does for Pass B.
+    Everything downstream of it (the session state Pass C re-derives from,
+    the ``update_task_status`` call, the ``TaskStatusHistory`` row) is
+    exercised for real.
+    """
+    from app.models.tasks.input_task import InputTask, InputTaskStatus
+
+    if isinstance(task_id, str):
+        task_id = UUID(task_id)
+    task = db.get(InputTask, task_id)
+    assert task is not None, f"Task {task_id} not found"
+    task.status = InputTaskStatus.IN_PROGRESS
+    task.executed_at = executed_at
+    db.add(task)
+    db.commit()
+    db.refresh(task)

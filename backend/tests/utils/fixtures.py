@@ -33,6 +33,36 @@ from tests.utils.db_proxy import NonClosingSessionProxy
 CREATE_SESSION_TARGETS_BASE = [
     "app.core.db.create_session",
     "app.services.environments.environment_service.create_session",
+    # ── Status-repair sweep ──────────────────────────────────────────────
+    # These three are in BASE rather than AGENT because the reconciler is
+    # cross-domain: its passes repair environments, sessions, input tasks and
+    # channel deliveries, so a test in any of those domains may drive it, and
+    # BASE is a strict subset of AGENT so nothing is lost by putting them here.
+    #
+    # **BASE is enough to keep the sweep off the real database. It is NOT enough
+    # to drive Pass B or Pass C end-to-end.** Both reach further than their own
+    # module: ``_clear_to_idle`` calls ``SessionService.clear_interaction_status``
+    # (which opens ``session_service.create_session``), and Pass C's
+    # ``update_task_status`` reaches ``input_task_service`` (both its
+    # ``create_session`` and its ``create_task_with_error_logging``). Those
+    # targets live in CREATE_SESSION_TARGETS_AGENT and
+    # BACKGROUND_TASK_TARGETS_FULL. A Pass B test written in, say,
+    # ``tests/api/agent_environments/`` — which patches BASE only — would have
+    # the clear write to the REAL database while every assertion reads the
+    # untouched test transaction: a green test proving nothing. Drive B or C
+    # from a domain that uses AGENT + FULL.
+    #
+    # The sweep opens its own session (``repair_leader_session`` — under
+    # settings.TESTING it routes through create_session precisely so it lands on
+    # the test transaction instead of a real pooled connection).
+    "app.services.system.status_repair_scheduler.create_session",
+    # Pass B hands ``create_session`` to ``SessionService.initiate_stream`` when
+    # it re-enters the drain for a session whose environment came back up.
+    "app.services.system.status_repair_sessions.create_session",
+    # Pass A runs the interrupted bring-up's dynamic-data sync on a session of
+    # its own, rather than holding the sweep's pinned leader connection open
+    # across minutes of container round-trips.
+    "app.services.system.status_repair_environments.create_session",
 ]
 
 CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
@@ -63,6 +93,17 @@ CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
 BACKGROUND_TASK_TARGETS_BASE = [
     "app.services.events.event_service.create_task_with_error_logging",
     "app.services.environments.environment_service.create_task_with_error_logging",
+    # Status-repair Pass B spawns the re-entered drain fire-and-forget, exactly
+    # as ``handle_environment_activated`` does. Collected rather than scheduled
+    # so a test that drives the pass decides for itself whether the delivery
+    # actually runs — and so an unawaited ``initiate_stream`` cannot escape onto
+    # the real engine. BASE for the same cross-domain reason as its
+    # ``create_session`` target above — and with the same caveat: this target
+    # captures the drain B *spawns*, but Pass C's ``update_task_status`` reaches
+    # ``input_task_service.create_task_with_error_logging``, which is only in
+    # BACKGROUND_TASK_TARGETS_FULL. Driving Pass C under BASE alone leaks a real
+    # background task.
+    "app.services.system.status_repair_sessions.create_task_with_error_logging",
 ]
 
 BACKGROUND_TASK_TARGETS_FULL = BACKGROUND_TASK_TARGETS_BASE + [

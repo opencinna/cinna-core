@@ -833,6 +833,91 @@ def deliver_via_binding(db: Session, channel, binding, text: str) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Status-repair (Pass D) seam — constructing an abandoned draft directly
+# ---------------------------------------------------------------------------
+
+
+def seed_stale_draft_delivery(
+    db: Session,
+    channel_id: str | uuid.UUID,
+    *,
+    user_id: str | uuid.UUID,
+    agent_id: str | uuid.UUID,
+    thread_key: str | None = None,
+    session_id: str | uuid.UUID | None = None,
+    updated_at=None,
+    status_message_id: str | None = None,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Construct one binding + one ``draft`` ``ChannelTurnDelivery`` row directly.
+
+    EXEMPTION, the same posture as :func:`list_turn_deliveries` and
+    :func:`get_binding_status_message_id` above — this table has no API
+    surface at all. Those two are read-only exemptions; this one writes,
+    because the row Pass D repairs
+    (``app/services/system/status_repair_channels.py``) is itself a crash
+    artifact: a draft only stays ``draft`` forever when the process dies
+    before the seal/final write that would otherwise close it out in the same
+    turn. That close-out runs synchronously in this test harness (nothing here
+    kills the process mid-stream), so no sequence of API calls can leave the
+    gap this pass exists to reap — the same reason
+    ``force_session_interaction_claim``'s "running" branch and
+    ``force_task_stranded_in_progress`` construct their rows directly instead
+    of aging a real one. ``updated_at`` is the one clock this seam also moves
+    for a mundane reason shared with the other passes: the sweep's threshold
+    is an hour, too long to hold a test open for.
+
+    Returns ``(binding_id, delivery_id)``.
+    """
+    from datetime import UTC, datetime
+
+    from app.models import (
+        CHANNEL_DELIVERY_DELIVERED,
+        CHANNEL_DELIVERY_DRAFT,
+        ChannelThreadBinding,
+        ChannelTurnDelivery,
+    )
+
+    if isinstance(channel_id, str):
+        channel_id = uuid.UUID(channel_id)
+    if isinstance(user_id, str):
+        user_id = uuid.UUID(user_id)
+    if isinstance(agent_id, str):
+        agent_id = uuid.UUID(agent_id)
+    if isinstance(session_id, str):
+        session_id = uuid.UUID(session_id)
+
+    binding = ChannelThreadBinding(
+        server_channel_id=channel_id,
+        thread_key=thread_key or f"status-repair-thread-{uuid.uuid4().hex[:8]}",
+        user_id=user_id,
+        agent_id=agent_id,
+        session_id=session_id,
+        status="active",
+        status_message_id=status_message_id,
+    )
+    db.add(binding)
+    db.commit()
+    db.refresh(binding)
+
+    delivery = ChannelTurnDelivery(
+        binding_id=binding.id,
+        role=CHANNEL_DELIVERY_DRAFT,
+        status=CHANNEL_DELIVERY_DELIVERED,
+        part_index=0,
+    )
+    db.add(delivery)
+    db.commit()
+    db.refresh(delivery)
+
+    delivery.updated_at = updated_at or datetime.now(UTC)
+    db.add(delivery)
+    db.commit()
+    db.refresh(delivery)
+
+    return binding.id, delivery.id
+
+
 __all__ = [
     "create_server_channel",
     "list_server_channels",
@@ -859,5 +944,6 @@ __all__ = [
     "build_channel_candidate",
     "binding_thread_key",
     "deliver_via_binding",
+    "seed_stale_draft_delivery",
     "CHAT_ISSUER",
 ]

@@ -114,6 +114,39 @@ def set_environment_status(
     db.flush()
 
 
+def age_environment_status_changed_at(
+    db: Session,
+    env_id: str | uuid.UUID,
+    *,
+    minutes_ago: float,
+) -> None:
+    """Push ``AgentEnvironment.status_changed_at`` back in time, on the test DB.
+
+    Documented seam for the status-repair sweep's tests
+    (``app/services/system/status_repair_environments.py``, Pass A). The
+    precondition Pass A repairs — a row still claiming a transitional status
+    long after the operation behind it died — is *reachable* through the API:
+    create an environment (or activate one) and simply never drain the
+    background task that would have finished it, exactly as a killed process
+    never finishes it. What no API call can do is age the clock: the sweep's
+    threshold is tens of minutes, and no test may block that long. This seam
+    is narrowly for that one gap — it moves the clock, it does not fabricate
+    the status the API already produced honestly.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import AgentEnvironment
+
+    if isinstance(env_id, str):
+        env_id = uuid.UUID(env_id)
+    env = db.get(AgentEnvironment, env_id)
+    assert env is not None, f"Environment {env_id} not found"
+    env.status_changed_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    db.add(env)
+    db.commit()
+    db.refresh(env)
+
+
 def set_environment_critical_state(
     db: Session,
     env_id: str | uuid.UUID,
@@ -189,4 +222,24 @@ def activate_environment(
         headers=token_headers,
     )
     assert r.status_code == 200, f"Activate environment failed: {r.text}"
+    return r.json()
+
+
+def stop_environment(
+    client: TestClient,
+    token_headers: dict[str, str],
+    env_id: str,
+) -> dict:
+    """Stop environment via POST /api/v1/environments/{env_id}/stop.
+
+    Synchronous, unlike ``activate_environment``/``create_environment``: the
+    route awaits ``EnvironmentService.stop_environment`` directly with no
+    background task, so the environment is genuinely "stopped" by the time
+    this call returns — no ``drain_tasks()`` needed.
+    """
+    r = client.post(
+        f"{settings.API_V1_STR}/environments/{env_id}/stop",
+        headers=token_headers,
+    )
+    assert r.status_code == 200, f"Stop environment failed: {r.text}"
     return r.json()
