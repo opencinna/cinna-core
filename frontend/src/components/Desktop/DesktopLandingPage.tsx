@@ -1,5 +1,5 @@
-import { Check, Copy, Download, Monitor } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { Check, Copy, Download, ExternalLink, Monitor } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -11,7 +11,19 @@ import {
 } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import useCustomToast from "@/hooks/useCustomToast"
-import { cinnaConnectDeepLink, resolveApiOrigin } from "@/utils"
+import {
+  cinnaConnectDeepLink,
+  resolveApiBase,
+  resolveServerOrigin,
+} from "@/utils"
+
+/**
+ * Where to send someone we have no build for. The download resolver falls back
+ * to this same index, so an arm64 Linux visitor lands in the same place either
+ * way — just without first downloading an x86-64 binary that cannot run.
+ */
+const RELEASES_URL =
+  "https://github.com/opencinna/cinna-desktop/releases/latest"
 
 /**
  * The platforms the backend publishes an installer for. The resolver
@@ -58,15 +70,21 @@ function detectPlatform(): Platform | null {
   return null
 }
 
-/** The resolver URL for one platform/arch/format triple, on the API origin. */
+/**
+ * The resolver URL for one platform/arch/format triple.
+ *
+ * Takes the API *base* (`resolveApiBase`), not the server origin: this is a
+ * backend route, so it must carry whatever path prefix the deployment puts the
+ * API behind, exactly as the generated client does.
+ */
 function downloadUrl(
-  apiOrigin: string,
+  apiBase: string,
   os: Platform,
   arch: MacArch,
   kind: "dmg" | LinuxKind,
 ): string {
   const params = new URLSearchParams({ os, arch, kind })
-  return `${apiOrigin}/api/v1/desktop/download?${params}`
+  return `${apiBase}/api/v1/desktop/download?${params}`
 }
 
 /**
@@ -80,9 +98,15 @@ export function DesktopLandingPage() {
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [copied, setCopied] = useState(false)
 
-  // Resolved once: both values are derived from build-time config and the page
+  // Resolved once: all three are derived from build-time config and the page
   // URL, neither of which changes while the page is open.
-  const apiOrigin = useMemo(() => resolveApiOrigin(), [])
+  //
+  // `apiBase` builds backend URLs (it may carry a path prefix); `serverOrigin`
+  // is what the desktop app is handed. They differ behind a reverse proxy, and
+  // `serverOrigin` is by construction the same value `cinnaConnectDeepLink`
+  // embeds — so the address shown for copying is the one the deep link uses.
+  const apiBase = useMemo(() => resolveApiBase(), [])
+  const serverOrigin = useMemo(() => resolveServerOrigin(), [])
   const deepLink = useMemo(() => cinnaConnectDeepLink(), [])
   const [platform] = useState<Platform | null>(detectPlatform)
 
@@ -120,12 +144,24 @@ export function DesktopLandingPage() {
   const platforms: Platform[] =
     platform === null ? ["darwin", "linux"] : [platform]
 
+  // The "copied" tick reverts on a timer, which must not outlive the component:
+  // a `setCopied` after unmount is a React warning and, on a fast navigate-away,
+  // a leaked timer per click.
+  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+    },
+    [],
+  )
+
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(apiOrigin)
+      await navigator.clipboard.writeText(serverOrigin)
       setCopied(true)
       showSuccessToast("Server address copied")
-      setTimeout(() => setCopied(false), 2000)
+      if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+      copyResetTimer.current = setTimeout(() => setCopied(false), 2000)
     } catch {
       showErrorToast("Failed to copy — select the address and copy it manually")
     }
@@ -159,10 +195,14 @@ export function DesktopLandingPage() {
                     className="w-full"
                     variant={index === 0 ? "default" : "outline"}
                   >
-                    <a href={downloadUrl(apiOrigin, "darwin", macArch, "dmg")}>
+                    <a href={downloadUrl(apiBase, "darwin", macArch, "dmg")}>
                       <Download className="mr-2 h-4 w-4" />
-                      Download for macOS (
-                      {macArch === "arm64" ? "Apple Silicon" : "Intel"})
+                      {/* Live region: the toggle below rewrites this label in
+                          place, which is otherwise a silent change. */}
+                      <span aria-live="polite">
+                        Download for macOS (
+                        {macArch === "arm64" ? "Apple Silicon" : "Intel"})
+                      </span>
                     </a>
                   </Button>
                   <button
@@ -177,6 +217,32 @@ export function DesktopLandingPage() {
                       : "Apple Silicon Mac (M1 or later)?"}
                   </button>
                 </>
+              ) : detectedArch === "arm64" ? (
+                /* Only x86-64 Linux assets are published, so an arm64 machine
+                   gets the releases index instead of a download button. Saying
+                   "x86-64 only" while still linking the x64 build was the worst
+                   of both: the truth on screen, the wrong binary one click
+                   away. The format toggle goes with it — there is nothing here
+                   to choose a format for. */
+                <>
+                  <Button
+                    asChild
+                    className="w-full"
+                    variant={index === 0 ? "default" : "outline"}
+                  >
+                    <a
+                      href={RELEASES_URL}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    >
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      Browse Linux releases
+                    </a>
+                  </Button>
+                  <p className="text-center text-xs text-muted-foreground">
+                    Linux builds are x86-64 only for now.
+                  </p>
+                </>
               ) : (
                 <>
                   <Button
@@ -184,10 +250,14 @@ export function DesktopLandingPage() {
                     className="w-full"
                     variant={index === 0 ? "default" : "outline"}
                   >
-                    <a href={downloadUrl(apiOrigin, "linux", "x64", linuxKind)}>
+                    <a href={downloadUrl(apiBase, "linux", "x64", linuxKind)}>
                       <Download className="mr-2 h-4 w-4" />
-                      Download for Linux (
-                      {linuxKind === "appimage" ? "AppImage" : ".deb"})
+                      {/* Live region: the toggle below rewrites this label in
+                          place, which is otherwise a silent change. */}
+                      <span aria-live="polite">
+                        Download for Linux (
+                        {linuxKind === "appimage" ? "AppImage" : ".deb"})
+                      </span>
                     </a>
                   </Button>
                   <button
@@ -203,13 +273,6 @@ export function DesktopLandingPage() {
                       ? "Prefer a .deb package?"
                       : "Prefer the AppImage?"}
                   </button>
-                  {/* Only x86-64 Linux assets are published. Saying so beats
-                      handing an arm64 machine a build it cannot run. */}
-                  {detectedArch === "arm64" && (
-                    <p className="text-center text-xs text-muted-foreground">
-                      Linux builds are x86-64 only for now.
-                    </p>
-                  )}
                 </>
               )}
             </div>
@@ -233,10 +296,11 @@ export function DesktopLandingPage() {
             </p>
             {/* The *resolved* origin, never a hard-coded one: if this instance
                 is misconfigured, a person reads the wrong address here instead
-                of the desktop app failing silently against it. */}
+                of the desktop app failing silently against it. Same value the
+                deep link above carries, so the two paths cannot diverge. */}
             <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-2">
               <code className="min-w-0 flex-1 select-all break-all font-mono text-xs">
-                {apiOrigin}
+                {serverOrigin}
               </code>
               <Button
                 variant="ghost"

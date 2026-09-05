@@ -17,8 +17,7 @@ export const APP_NAME = import.meta.env.VITE_APP_NAME || "Cinna"
 export const persistDetectedLocaleDefaults = (): void => {
   try {
     const timezone =
-      typeof Intl !== "undefined" &&
-      typeof Intl.DateTimeFormat === "function"
+      typeof Intl !== "undefined" && typeof Intl.DateTimeFormat === "function"
         ? Intl.DateTimeFormat().resolvedOptions().timeZone
         : undefined
     const fullLocale =
@@ -57,7 +56,12 @@ function extractErrorMessage(err: ApiError): string {
     return errDetail
   }
   if (errDetail && typeof errDetail === "object") {
-    return errDetail.message || errDetail.msg || errDetail.code || "Something went wrong."
+    return (
+      errDetail.message ||
+      errDetail.msg ||
+      errDetail.code ||
+      "Something went wrong."
+    )
   }
   return "Something went wrong."
 }
@@ -132,9 +136,7 @@ export const getInitials = (name: string): string => {
  * are allowed, to prevent open-redirect attacks. Returns "/" for anything
  * unsafe or empty.
  */
-export const safeRedirectPath = (
-  input: string | null | undefined,
-): string => {
+export const safeRedirectPath = (input: string | null | undefined): string => {
   if (!input || typeof input !== "string") return "/"
   if (!input.startsWith("/")) return "/"
   // Reject protocol-relative URLs and backslash tricks
@@ -148,37 +150,41 @@ export const safeRedirectPath = (
   }
 }
 
-// ── The backend origin, as an absolute URL ──────────────────────────────────
+// ── The backend address, in the two shapes callers need ─────────────────────
+// These are *not* interchangeable. `resolveApiBase` is what you prepend to a
+// route path; `resolveServerOrigin` is what you hand to a native client. On a
+// reverse-proxy deployment (`VITE_API_URL=/api`) they differ by a path segment,
+// and using the wrong one fails silently — see each docstring.
 
 /**
- * The absolute `https://…` origin of the **API**, with no trailing slash.
+ * The absolute base URL the API is served from, with no trailing slash.
  *
- * Needed wherever we hand the backend address to something outside this page —
- * the `cinna://connect?server=…` deep link, and the paste-fallback address a
- * user types into Cinna Desktop. Both are consumed by a native client that
- * calls `<origin>/.well-known/cinna-desktop` and `<origin>/api/v1/…` directly.
+ * For **building URLs to backend routes**: `${resolveApiBase()}/api/v1/…`
+ * mirrors exactly how the generated client prepends `OpenAPI.BASE` to every
+ * path it calls, so a URL built this way reaches the same place the client
+ * does. Its only consumer today is the desktop download resolver
+ * (`components/Desktop/DesktopLandingPage.tsx`).
  *
- * Deliberately **not** `window.location.origin`: on a split-host deployment the
- * SPA is served from `app.example.com`, which has no `/api/v1` at all, so the
- * desktop would discover against the wrong host and fail with nothing to see.
- * (Contrast `localAgentKitStartUrl`, which *does* want the page origin because
- * `/agent-start` is a frontend proxy path.)
+ * This returns a **base, which may carry a path** — it is not an origin. With
+ * `VITE_API_URL=/api` it resolves to `https://app.example.com/api`. Anything
+ * that needs a bare `scheme://host[:port]` must use `resolveServerOrigin`.
  *
- * Deliberately **not** bare `import.meta.env.VITE_API_URL` either. That value
- * is unvalidated build input and reaches us in three shapes this normalises:
+ * Deliberately **not** bare `import.meta.env.VITE_API_URL`. That value is
+ * unvalidated build input and reaches us in three shapes this normalises:
  *   - absent — `main.tsx` assigns it to `OpenAPI.BASE` with no fallback, so it
  *     can be `undefined`, or the literal string `"undefined"` if a build
  *     pipeline stringified an unset variable into it;
- *   - relative (`/api`), which a native client cannot resolve;
+ *   - relative (`/api`), which is meaningful only against the page that loaded
+ *     it, and which a native client cannot resolve at all;
  *   - trailing-slashed, which would produce `https://host//api/v1/…`.
  *
  * The `OpenAPI.BASE || window.location.origin` shape mirrors the existing
  * console-socket URL builder (`hooks/useEnvConsoleSocket.ts`).
  */
-export const resolveApiOrigin = (): string => {
+export const resolveApiBase = (): string => {
   const configured = OpenAPI.BASE
   // `=== "undefined"` is not redundant with `||`: it catches a *stringified*
-  // unset build variable, which `||` treats as a perfectly good origin. Worth
+  // unset build variable, which `||` treats as a perfectly good base. Worth
   // guarding here specifically because this value is shown to a person and
   // embedded in a deep link rather than fetched — a wrong one fails silently
   // inside the desktop app instead of surfacing as a failed request.
@@ -186,14 +192,56 @@ export const resolveApiOrigin = (): string => {
     !configured || configured === "undefined"
       ? window.location.origin
       : configured
-  ).replace(/\/$/, "")
-  // A relative base (`VITE_API_URL=/api`) is meaningful only against the page
-  // it was loaded from; make it absolute before handing it to a native client.
-  return base.startsWith("http") ? base : `${window.location.origin}${base}`
+  )
+  // `\/+$`, not `\/$`: a single-slash strip leaves `https://host//` as
+  // `https://host/`, which still doubles the separator downstream.
+    .replace(/\/+$/, "")
+  // Match the scheme, not the prefix: `startsWith("http")` would also accept
+  // `httpx://…` and hand it out as if it were absolute.
+  if (/^https?:\/\//i.test(base)) return base
+  // Relative (`/api`, or a bare `api`): resolve against the page it was served
+  // from. An unrecognised scheme lands here too and produces a visibly broken
+  // URL, which beats silently passing garbage off as an absolute address.
+  return `${window.location.origin}${base.startsWith("/") ? "" : "/"}${base}`
+}
+
+/**
+ * This instance's server **origin** — `scheme://host[:port]`, no path.
+ *
+ * For **handing the backend address to Cinna Desktop**: the
+ * `cinna://connect?server=…` deep link and the paste-fallback address a person
+ * types into the app. The desktop resolves `<server>/.well-known/cinna-desktop`,
+ * which FastAPI mounts at the **app root** rather than under the API base path,
+ * so any path on the configured base must be dropped here. With
+ * `VITE_API_URL=/api`, handing over `resolveApiBase()` would have the desktop
+ * discover against `https://app.example.com/api/.well-known/cinna-desktop` and
+ * 404 — while downloads on the same page kept working, so nothing looked wrong.
+ *
+ * Deliberately **not** `window.location.origin`: on a split-host deployment the
+ * SPA is served from `app.example.com`, which has no backend at all, so the
+ * desktop would discover against the wrong host and fail with nothing to see.
+ * (Contrast `localAgentKitStartUrl`, which *does* want the page origin because
+ * `/agent-start` is a frontend proxy path.)
+ */
+export const resolveServerOrigin = (): string => {
+  const base = resolveApiBase()
+  try {
+    return new URL(base).origin
+  } catch {
+    // `base` is absolute by construction, so this needs a malformed
+    // `VITE_API_URL` to reach. Falling back keeps the page rendering and shows
+    // a wrong-but-visible address, instead of throwing inside a `useMemo`.
+    return window.location.origin
+  }
 }
 
 /**
  * The deep link that hands Cinna Desktop this instance's server address.
+ *
+ * Uses the origin, not the API base: this value is the desktop's discovery
+ * root. It must stay identical to the paste-fallback address the landing page
+ * displays, so that copying it by hand reaches the same server the deep link
+ * would have.
  *
  * `URLSearchParams` percent-encodes the `:` and `//` of the origin, so the
  * `server` value survives a custom-scheme handler that parses the query with a
@@ -201,7 +249,7 @@ export const resolveApiOrigin = (): string => {
  * — change it here and in the desktop's handler together.
  */
 export const cinnaConnectDeepLink = (): string =>
-  `cinna://connect?${new URLSearchParams({ server: resolveApiOrigin() })}`
+  `cinna://connect?${new URLSearchParams({ server: resolveServerOrigin() })}`
 
 // ── Authenticated binary downloads ──────────────────────────────────────────
 // The generated OpenAPI client is awkward with binary responses (it types them
