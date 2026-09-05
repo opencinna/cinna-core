@@ -23,7 +23,7 @@ import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { APP_NAME, handleError } from "@/utils"
+import { APP_NAME, handlePolicyAwareError } from "@/utils"
 
 const searchSchema = z.object({
   token: z.string().catch(""),
@@ -89,7 +89,7 @@ function ResetPassword() {
       form.reset()
       navigate({ to: "/login" })
     },
-    onError: handleError.bind(showErrorToast),
+    onError: handlePolicyAwareError.bind(showErrorToast),
   })
 
   const onSubmit = (data: FormData) => {

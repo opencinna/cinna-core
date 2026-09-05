@@ -44,6 +44,13 @@ const formSchema = z.object({
     .optional()
     .or(z.literal("")),
   full_name: z.string().max(30).optional(),
+  // Always in the schema, only rendered when the access policy allows the
+  // change: a conditional resolver would re-validate the whole form whenever
+  // the policy loads, and an unrendered field is never dirty.
+  email: z
+    .email({ message: "Enter a valid email address" })
+    .optional()
+    .or(z.literal("")),
 })
 
 type FormData = z.infer<typeof formSchema>
@@ -54,14 +61,24 @@ const UserInformation = () => {
   const [open, setOpen] = useState(false)
   const { user: currentUser } = useAuth()
 
+  // Whether the address may be edited at all is an instance-wide policy fact
+  // that rides on the user object the profile form already holds — a second
+  // projection of one policy fact is how the UI and the API end up
+  // disagreeing about it. Absent (still loading) means "not yet", so the field
+  // is never offered on a promise the server would refuse.
+  const canChangeEmail = currentUser?.can_change_email === true
+
+  const formValuesFromUser = () => ({
+    username: currentUser?.username ?? "",
+    full_name: currentUser?.full_name ?? undefined,
+    email: currentUser?.email ?? "",
+  })
+
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     mode: "onBlur",
     criteriaMode: "all",
-    defaultValues: {
-      username: currentUser?.username ?? "",
-      full_name: currentUser?.full_name ?? undefined,
-    },
+    defaultValues: formValuesFromUser(),
   })
 
   const mutation = useMutation({
@@ -138,6 +155,22 @@ const UserInformation = () => {
     if (data.full_name !== currentUser?.full_name) {
       updateData.full_name = data.full_name
     }
+    // Only sent when the policy allows it and the address actually changed:
+    // `PATCH /users/me` treats any non-empty `email` as a change attempt and
+    // 403s when the instance restricts addresses.
+    if (canChangeEmail) {
+      if (!data.email) {
+        // The schema tolerates "" so that an unrendered field never blocks a
+        // username-only save. When the field *is* rendered, silently dropping
+        // a cleared address would report "updated successfully" and put the
+        // old one back on reopen — say so instead.
+        form.setError("email", { message: "Email is required" })
+        return
+      }
+      if (data.email !== currentUser?.email) {
+        updateData.email = data.email
+      }
+    }
 
     mutation.mutate(updateData)
   }
@@ -147,7 +180,16 @@ const UserInformation = () => {
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle>User Information</CardTitle>
-          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // The controlled `open` prop means `onOpenChange` never fires for
+              // this path, so the reset has to happen here.
+              form.reset(formValuesFromUser())
+              setOpen(true)
+            }}
+          >
             <Pencil className="h-4 w-4 mr-2" />
             Edit
           </Button>
@@ -201,7 +243,16 @@ const UserInformation = () => {
             </div>
           </div>
       </CardContent>
-      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset() }}>
+      {/* Reset from the *current* user on open, not just on close: after a
+          successful save the mount-time defaults are stale, so reopening the
+          dialog would otherwise show the previous values. */}
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          setOpen(v)
+          form.reset(formValuesFromUser())
+        }}
+      >
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Edit Profile</DialogTitle>
@@ -239,6 +290,38 @@ const UserInformation = () => {
                       </FormItem>
                     )}
                   />
+
+                  {canChangeEmail ? (
+                    <FormField
+                      control={form.control}
+                      name="email"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Email</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="email"
+                              placeholder="user@example.com"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  ) : (
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Email</p>
+                      <p className="text-sm text-muted-foreground truncate">
+                        {currentUser?.email}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        This server restricts which email addresses may sign in,
+                        so the address cannot be changed here. Ask an
+                        administrator.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="flex justify-end gap-2">
                     <Button

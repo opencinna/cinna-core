@@ -25,6 +25,8 @@ import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
+import { getErrorMessage } from "@/utils"
+import { accessPolicyReasonCopy } from "@/utils/accessPolicyReasons"
 
 const formSchema = z
   .object({
@@ -64,7 +66,14 @@ export default function SetPassword() {
       queryClient.invalidateQueries({ queryKey: ["currentUser"] })
     },
     onError: (error: Error) => {
-      showErrorToast(error.message || "Failed to set password")
+      // Not `error.message`: the generated client fills it from the status code
+      // alone, so the policy refusal this endpoint can return
+      // (`password_auth_disabled`, on a Google-only instance) would arrive as
+      // the single word "Forbidden".
+      showErrorToast(
+        accessPolicyReasonCopy(error) ??
+          getErrorMessage(error, "Failed to set password"),
+      )
     },
   })
 

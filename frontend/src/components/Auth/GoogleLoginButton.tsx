@@ -8,7 +8,8 @@ import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
 import { Button } from "@/components/ui/button"
 import { isMfaChallengeResponse } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { clearLoginScopedDisclaimerAck, persistDetectedLocaleDefaults, safeRedirectPath } from "@/utils"
+import { clearLoginScopedDisclaimerAck, getErrorMessage, persistDetectedLocaleDefaults, safeRedirectPath } from "@/utils"
+import { accessPolicyReasonCopy } from "@/utils/accessPolicyReasons"
 import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 
 const GOOGLE_REDIRECT_KEY = "google_oauth_redirect"
@@ -66,7 +67,15 @@ export function GoogleLoginButton() {
     onError: (error: Error) => {
       sessionStorage.removeItem("google_oauth_state")
       sessionStorage.removeItem(GOOGLE_REDIRECT_KEY)
-      showErrorToast(error.message || "Failed to login with Google")
+      // Never `error.message`: the generated client fills it from the status
+      // code alone, so every policy refusal the callback can return — closed
+      // instance, auto-registration off, address outside the pattern list —
+      // arrives here as the single word "Forbidden". The reason lives in the
+      // body's `detail`.
+      showErrorToast(
+        accessPolicyReasonCopy(error) ??
+          getErrorMessage(error, "Failed to login with Google"),
+      )
     },
   })
 

@@ -1,6 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useEffect } from "react"
 
+import { AccessPolicyCard } from "@/components/Admin/AccessPolicyCard"
 import { DisclaimerCard } from "@/components/Admin/DisclaimerCard"
 import { LocalAgentKitCard } from "@/components/Admin/LocalAgentKitCard"
 import { MailServersCard } from "@/components/Admin/MailServersCard"
@@ -66,6 +67,19 @@ function AdminServerConfiguration() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <DisclaimerCard />
           <LocalAgentKitCard />
+        </div>
+      ),
+    },
+    {
+      // Deliberately not first: `HashTabs` lands on `tabs[0]` when there is no
+      // hash, and Interface has been that landing tab. The card is addressed
+      // directly as `/admin/server-configuration#access` from the startup
+      // warning about the retired env settings.
+      value: "access",
+      title: "Access",
+      content: (
+        <div className="max-w-3xl">
+          <AccessPolicyCard />
         </div>
       ),
     },

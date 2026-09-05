@@ -25,7 +25,7 @@ import {
 import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import useCustomToast from "@/hooks/useCustomToast"
-import { handleError } from "@/utils"
+import { handlePolicyAwareError } from "@/utils"
 
 const formSchema = z
   .object({
@@ -70,7 +70,7 @@ const ChangePassword = () => {
       form.reset()
       setOpen(false)
     },
-    onError: handleError.bind(showErrorToast),
+    onError: handlePolicyAwareError.bind(showErrorToast),
   })
 
   const onSubmit = async (data: FormData) => {

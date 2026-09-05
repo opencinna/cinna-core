@@ -1,6 +1,7 @@
 import { AxiosError } from "axios"
 import type { ApiError } from "./client"
 import { OpenAPI, UsersService } from "./client"
+import { accessPolicyReasonCopy } from "./utils/accessPolicyReasons"
 
 export const APP_NAME = import.meta.env.VITE_APP_NAME || "Cinna"
 
@@ -98,6 +99,31 @@ export const handleError = function (
 ) {
   const errorMessage = extractErrorMessage(err)
   this(errorMessage)
+}
+
+/**
+ * `handleError`, with the access policy's reason codes translated first.
+ *
+ * Signup, password login, password reset and set-password all answer a policy
+ * refusal with a bare machine-readable code as `detail` — `registration_closed`,
+ * `password_auth_disabled`. `extractErrorMessage` passes a string `detail`
+ * through verbatim, which is right for every other endpoint on the platform and
+ * exactly wrong for these: the visitor is shown the identifier itself.
+ *
+ * Bind this instead of `handleError` on any mutation that can be refused by the
+ * policy. Everything else falls through unchanged, so duplicate-email 400s and
+ * 422 field errors still render the way they always did.
+ */
+export const handlePolicyAwareError = function (
+  this: (msg: string) => void,
+  err: unknown,
+) {
+  const policyCopy = accessPolicyReasonCopy(err)
+  if (policyCopy) {
+    this(policyCopy)
+    return
+  }
+  handleError.call(this, err as ApiError)
 }
 
 /**

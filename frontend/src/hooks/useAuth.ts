@@ -11,7 +11,7 @@ import {
   UsersService,
 } from "@/client"
 import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
-import { clearLoginScopedDisclaimerAck, handleError, persistDetectedLocaleDefaults, safeRedirectPath } from "@/utils"
+import { clearLoginScopedDisclaimerAck, handlePolicyAwareError, persistDetectedLocaleDefaults, safeRedirectPath } from "@/utils"
 import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 import useCustomToast from "./useCustomToast"
 
@@ -159,7 +159,7 @@ const useAuth = () => {
         search: target ? { redirect: target } : undefined,
       })
     },
-    onError: handleError.bind(showErrorToast),
+    onError: handlePolicyAwareError.bind(showErrorToast),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] })
     },
@@ -204,7 +204,7 @@ const useAuth = () => {
       persistDetectedLocaleDefaults()
       navigateToPostAuthTarget(target)
     },
-    onError: handleError.bind(showErrorToast),
+    onError: handlePolicyAwareError.bind(showErrorToast),
   })
 
   const logout = () => {
