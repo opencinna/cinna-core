@@ -25271,10 +25271,14 @@ export const TokenResponseSchema = {
         client_id: {
             type: 'string',
             title: 'Client Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
         }
     },
     type: 'object',
-    required: ['access_token', 'refresh_token', 'expires_in', 'client_id'],
+    required: ['access_token', 'refresh_token', 'expires_in', 'client_id', 'email'],
     title: 'TokenResponse'
 } as const;
 

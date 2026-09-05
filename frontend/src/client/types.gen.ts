@@ -5799,6 +5799,7 @@ export type TokenResponse = {
     token_type?: string;
     expires_in: number;
     client_id: string;
+    email: string;
 };
 
 /**
@@ -8246,6 +8247,21 @@ export type DesktopAuthRevokeResponse = (void);
 export type DesktopAuthCinnaDesktopDiscoveryResponse = ({
     [key: string]: unknown;
 });
+
+export type DesktopDownloadDownloadDesktopData = {
+    /**
+     * Target architecture.
+     */
+    arch: 'arm64' | 'x64';
+    /**
+     * Installer format.
+     */
+    kind: 'dmg' | 'appimage' | 'deb';
+    /**
+     * Target operating system.
+     */
+    os: 'darwin' | 'linux';
+};
 
 export type EnvironmentsGetEnvironmentData = {
     id: string;
