@@ -21,9 +21,12 @@ flood a legitimate low-traffic caller whose bucket was swept can land in the
 overflow bucket and be throttled by the attacker's volume. Availability of the
 process is the property being protected; per-key fairness is what is traded.
 """
+import ipaddress
 import threading
 import time
 from collections import deque
+
+from fastapi import Request
 
 # Window length. Callers express limits per minute.
 _WINDOW_SECONDS = 60.0
@@ -89,3 +92,58 @@ class RateLimiter:
         ]
         for k in stale:
             del self._hits[k]
+
+
+def is_private_peer(peer: str) -> bool:
+    """Whether the socket peer looks like our own reverse proxy.
+
+    A non-address peer (the test transport's ``testclient``) is not private:
+    unparseable means untrusted.
+    """
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+def anonymous_caller_key(request: Request) -> str:
+    """The rate-limit identity of an anonymous caller.
+
+    Lives here rather than beside any one public route because every
+    unauthenticated surface needs the identical derivation, and a second
+    implementation that trusts one more hop is a silent bypass of the only
+    control such a surface has.
+
+    Deliberately **not** ``app.utils.client_ip``. That helper is best-effort
+    attribution for audit rows and trusts the *first* ``X-Forwarded-For`` hop
+    unconditionally, which is fine when the value is a hint in a log line and
+    fatal when it is the key of a rate limit: a caller who picks a new header
+    value per request gets an unlimited budget, and a caller who rotates 10 000
+    of them fills the limiter's key ceiling and pushes every legitimate visitor
+    into the shared overflow bucket.
+
+    So the header is trusted only where it cannot be forged, and only in the
+    position our own proxy writes:
+
+    * The socket peer is the one value a client cannot choose. If it is a public
+      address the backend is exposed directly, ``X-Forwarded-For`` is pure
+      caller input, and the peer is the key.
+    * If the peer is private/loopback the request arrived through the local
+      reverse proxy, whose ``$proxy_add_x_forwarded_for`` **appends** the address
+      it saw. The client controls every earlier hop but not the last one, so the
+      last hop is the key — taking the first would re-open the bypass.
+
+    Behind two or more appending proxies the last hop is the inner proxy's view
+    of the outer one, so those callers share a bucket. That fails closed
+    (over-throttling) rather than open, which is the right direction for a
+    control that exists to keep the surface available.
+    """
+    peer = request.client.host if request.client else ""
+    if is_private_peer(peer):
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            last = forwarded.rsplit(",", 1)[-1].strip()
+            if last:
+                return last[:64]
+    return (peer or "unknown")[:64]
