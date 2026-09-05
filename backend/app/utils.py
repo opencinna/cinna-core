@@ -17,6 +17,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def as_utc(value: datetime) -> datetime:
+    """Interpret a possibly-naive DB timestamp as UTC.
+
+    The platform's timestamp columns are a mix: some are ``TIMESTAMP WITH TIME
+    ZONE`` and read back aware, while older neighbours are ``TIMESTAMP WITHOUT
+    TIME ZONE`` and read back naive — but every one of them is written from
+    ``datetime.now(UTC)``, so a naive value is UTC wall-clock. Comparing the two
+    kinds directly raises ``TypeError`` rather than failing quietly, and this is
+    the shared reader that keeps that from happening.
+
+    Lives here rather than in any one domain service because it is a pure
+    datetime helper with no domain knowledge: bundle install bookkeeping and the
+    status-repair sweep both need it, and neither should have to import the
+    other to get it.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def create_task_with_error_logging(coro, task_name: str = "background_task"):
     """
     Create an asyncio task with proper exception logging.

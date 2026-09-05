@@ -207,7 +207,7 @@ class Agent(AgentBase, table=True):
     # retried on every 10-minute sweep). Stored naive (TIMESTAMP WITHOUT TIME
     # ZONE, like its neighbours) but always written from ``datetime.now(UTC)``,
     # so the stored wall-clock is UTC; the read side normalises it via
-    # ``install_service._as_utc``.
+    # ``app.utils.as_utc``.
     last_update_attempt_at: datetime | None = Field(default=None)
 
     # Publisher overrides (Phase 5 of the install-experience-redesign plan).

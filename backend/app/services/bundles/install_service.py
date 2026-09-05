@@ -63,6 +63,7 @@ from app.services.bundles.credential_spec import (
     parse_credential_spec,
 )
 from app.services.environments.sdk_constants import DEFAULT_SDK
+from app.utils import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -74,16 +75,6 @@ logger = logging.getLogger(__name__)
 # env would disrupt a live stream; applying to a transitional one would race the
 # lifecycle operation that currently owns the workspace directory.
 AUTO_UPDATE_ALLOWED_ENV_STATUSES = frozenset({"suspended", "stopped"})
-
-
-def _as_utc(value: datetime) -> datetime:
-    """Interpret a possibly-naive DB timestamp as UTC.
-
-    The install bookkeeping columns (``last_update_attempt_at`` and friends)
-    are ``TIMESTAMP WITHOUT TIME ZONE`` but always written from
-    ``datetime.now(UTC)``, so a naive value read back is UTC wall-clock.
-    """
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 # Stable, arbitrary 64-bit key for the Postgres advisory lock that makes the
@@ -1457,7 +1448,7 @@ class InstallService:
                 if (
                     last_update_status == "failed"
                     and last_update_attempt_at is not None
-                    and _as_utc(last_update_attempt_at) > backoff_cutoff
+                    and as_utc(last_update_attempt_at) > backoff_cutoff
                 ):
                     deferred += 1
                     logger.debug(
