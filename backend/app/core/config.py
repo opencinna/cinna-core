@@ -1014,6 +1014,44 @@ class Settings(BaseSettings):
     # backlog of large mail must not become an OOM.
     CHANNEL_ATTACHMENT_POLL_BUDGET_MULTIPLIER: int = Field(default=4, ge=1)
 
+    # ── System status repair (transitional-status reconciler) ──────────
+    #
+    # Long lifecycle operations set a transitional status, run under a
+    # fire-and-forget task, and clear it on completion. A backend restart
+    # (dev ``--reload``, deploy SIGTERM) cancels that task with
+    # ``asyncio.CancelledError`` — a ``BaseException``, so every
+    # ``except Exception`` error-fallback is skipped and the row keeps its
+    # transitional status forever. Nothing else in the platform queries for
+    # "transitional status + age", so those rows are invisible to the existing
+    # schedulers, which all filter on ``status == "running"``.
+    #
+    # Every threshold below is an AGE, not a timeout: it says how long a row
+    # may legitimately sit in a transitional state before the reconciler even
+    # LOOKS at it. The repair itself then verifies live evidence (is the
+    # container actually up?) before writing — a row that pattern-matches
+    # "stuck" may just be a slow operation, so the age alone never decides.
+    # That is why these can be generous without being unsafe, and why lowering
+    # one is not a way to make repairs "more aggressive".
+    STATUS_REPAIR_ENABLED: bool = True
+    STATUS_REPAIR_INTERVAL_MINUTES: int = Field(default=2, ge=1)
+    # Pass A — environments. Activation/start is a container start: minutes at
+    # worst. Create/build/rebuild pulls and builds images, which is legitimately
+    # long, hence the much wider window.
+    STATUS_REPAIR_ENV_ACTIVATING_MAX_AGE_MINUTES: int = Field(default=10, ge=1)
+    STATUS_REPAIR_ENV_BUILDING_MAX_AGE_MINUTES: int = Field(default=60, ge=1)
+    # Pass B — sessions. An agent turn can legitimately run for hours, and
+    # reaping one mid-flight destroys real work, so the streaming window is
+    # deliberately the widest threshold here. ``pending_stream`` is a session
+    # waiting on an ``ENVIRONMENT_ACTIVATED`` event that may never arrive, so
+    # it can be reclaimed much sooner.
+    STATUS_REPAIR_STREAM_MAX_AGE_MINUTES: int = Field(default=120, ge=1)
+    STATUS_REPAIR_PENDING_STREAM_MAX_AGE_MINUTES: int = Field(default=15, ge=1)
+    # Pass C — input tasks. Purely derived from the session states Pass B has
+    # just repaired, so it only needs to outlast one repair tick.
+    STATUS_REPAIR_TASK_MAX_AGE_MINUTES: int = Field(default=30, ge=1)
+    # Pass D — channel turn deliveries left as unsealed drafts by a dead stream.
+    STATUS_REPAIR_CHANNEL_DRAFT_MAX_AGE_MINUTES: int = Field(default=60, ge=1)
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def channel_attachment_max_file_bytes(self) -> int:
