@@ -2,6 +2,7 @@
 from sqlmodel import SQLModel
 from .credentials.link_models import AgentCredentialLink
 from .users.user import (
+    AccountOrigin,
     User,
     UserCreate,
     UserRegister,
@@ -831,6 +832,7 @@ __all__ = [
     # Link models
     "AgentCredentialLink",
     # Users
+    "AccountOrigin",
     "User",
     "UserCreate",
     "UserRegister",

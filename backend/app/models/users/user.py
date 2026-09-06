@@ -33,6 +33,33 @@ VALID_USER_ROLES = [r.value for r in UserRole]
 DEVELOPER_OR_ADMIN_ROLES = {UserRole.DEVELOPER.value, UserRole.ADMIN.value}
 
 
+# ── Account origin ─────────────────────────────────────────────────────
+#
+# Where an account-creation attempt came from. Every ``User`` row is built
+# in exactly one place — ``UserService.create_account`` — and that place
+# demands one of these. It is not decoration: the access policy uses it to
+# decide whether the front-door gate applies at all (``signup`` and
+# ``google`` are gated; ``admin``/``invite``/``external``/``seed`` carry
+# their own admission decision), and auto-provisioning records it on the
+# audit event so an admin can tell a self-service arrival from an invited
+# one.
+#
+# It lives here, next to ``UserRole``, rather than in the access-policy
+# service, because both that service and the creation chokepoint need it
+# and a constant owned by one of two peers is how an import cycle starts.
+#
+# Adding a member is a deliberate act: ``AccessPolicyService.can_register``
+# raises on an origin that is neither ungated nor explicitly gated, so a
+# new arrival path cannot silently inherit "no policy applies".
+class AccountOrigin(str, Enum):
+    SIGNUP = "signup"
+    GOOGLE = "google"
+    INVITE = "invite"
+    ADMIN = "admin"
+    EXTERNAL = "external"
+    SEED = "seed"
+
+
 # ── Conversation style ─────────────────────────────────────────────────
 #
 # A user-global tone hint that personalizes how every one of the user's
