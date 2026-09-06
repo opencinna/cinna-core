@@ -1065,10 +1065,14 @@ export const AccessPolicyPublicSchema = {
         project_name: {
             type: 'string',
             title: 'Project Name'
+        },
+        password_signup_available: {
+            type: 'boolean',
+            title: 'Password Signup Available'
         }
     },
     type: 'object',
-    required: ['registration_open', 'password_auth_enabled', 'google_auth_enabled', 'google_auto_register', 'desktop_enabled', 'project_name'],
+    required: ['registration_open', 'password_auth_enabled', 'google_auth_enabled', 'google_auto_register', 'desktop_enabled', 'project_name', 'password_signup_available'],
     title: 'AccessPolicyPublic',
     description: `What an anonymous visitor is told about this instance's front door.
 
@@ -17242,7 +17246,14 @@ export const InviteProvisioningSkipSchema = {
 already produces. The full vocabulary, because the wizard renders copy per
 reason and a value it has never heard of falls through to a blank line:
 
-* \`\`user_not_found\`\` / \`\`user_inactive\`\` — from the shared reconcile path;
+* \`\`user_not_found\`\` — from the shared reconcile path;
+* \`\`user_inactive\`\` — from \`\`_provision\`\`'s inactive short-circuit,
+  which is in practice the only producer this wizard ever sees: the
+  short-circuit returns before \`\`add_members\`\` is called, so the
+  reconcile path's own \`\`user_inactive\`\` cannot be reached from here.
+  One entry per **requested** credential, so that a deactivated
+  account does not report the empty summary an admin who ticked
+  nothing gets;
 * \`\`managed_credential_not_found\`\` — an id the admin ticked no longer
   exists, or is not a managed credential. Reachable **only** from the
   explicit invite path (\`\`provision_explicit\`\`), which is exactly this
@@ -18247,6 +18258,23 @@ export const LLMPluginMarketplacesPublicSchema = {
     required: ['data', 'count'],
     title: 'LLMPluginMarketplacesPublic',
     description: 'List response for plugin marketplaces.'
+} as const;
+
+export const LandingPagePublicSchema = {
+    properties: {
+        landing_markdown: {
+            type: 'string',
+            title: 'Landing Markdown'
+        }
+    },
+    type: 'object',
+    required: ['landing_markdown'],
+    title: 'LandingPagePublic',
+    description: `The admin-authored welcome copy for the public \`/start\` page.
+
+Its own projection, and its own endpoint, because it is content rather
+than policy: :class:\`AccessPolicyPublic\` is fetched by every login and
+signup page load under one shared cache key, and none of them render this.`
 } as const;
 
 export const LoginTokenSchema = {
@@ -23539,6 +23567,11 @@ export const ServerConfigSchema = {
             title: 'Local Agent Kit Enabled',
             default: true
         },
+        landing_markdown: {
+            type: 'string',
+            title: 'Landing Markdown',
+            default: ''
+        },
         registration_mode: {
             type: 'string',
             maxLength: 16,
@@ -23644,6 +23677,18 @@ export const ServerConfigUpdateSchema = {
             ],
             title: 'Local Agent Kit Enabled'
         },
+        landing_markdown: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 16384
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Landing Markdown'
+        },
         registration_mode: {
             anyOf: [
                 {
@@ -23713,7 +23758,8 @@ export const ServerConfigUpdateSchema = {
     },
     type: 'object',
     title: 'ServerConfigUpdate',
-    description: 'Admin update payload — all fields optional.'
+    description: `Admin update payload — all fields optional, and the only enforcement
+point for the \`\`landing_markdown\`\` length cap and raw-HTML refusal.`
 } as const;
 
 export const SessionCommandPublicSchema = {
