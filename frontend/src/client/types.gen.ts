@@ -910,6 +910,7 @@ export type AgentBundleRevisionPublic = {
     published_at: string;
     release_notes?: (string | null);
     install_count?: number;
+    publish_notices: Array<(string)>;
 };
 
 export type AgentBundleRevisionsPublic = {
@@ -1948,6 +1949,57 @@ export type AICredentialUpdate = {
     model?: (string | null);
     expiry_notification_date?: (string | null);
 };
+
+/**
+ * Whether this account still needs somebody to paste an API key.
+ *
+ * **Three states, because there are three.** The dashboard used to ask the
+ * two-valued question ``has_anthropic_api_key``, and per-user key minting adds
+ * a case it cannot express: a person for whom a key is being created right now
+ * holds no credential, so the boolean says "no key" and the paste-a-key wall
+ * goes up in front of someone who is about to be handed one.
+ *
+ * The obvious repair — let the browser fetch the memberships too and suppress
+ * the wall when one of them is in flight — is the one thing this must not be.
+ * That makes the client the second implementation of a policy the server
+ * already owns, and the two answers diverge the first time either side changes.
+ * So the *server* names the state and the client renders it.
+ *
+ * **The states are provider-agnostic; the wall's question is not, and the two
+ * are different decisions.** An agent environment requires a default AI
+ * credential of the type *its own SDK* expects — ``claude-code`` takes
+ * anthropic or minimax, ``opencode`` takes anthropic, openai,
+ * openai_compatible or google (``sdk_constants.SDK_CREDENTIAL_COMPATIBILITY``)
+ * — and nothing in that path requires Anthropic. So:
+ *
+ * - Which provider satisfies this state is **a consequence of what
+ * environments require**, and the answer is "any of them". Anything narrower
+ * is the platform asserting a requirement it does not have. It used to be
+ * scoped to Anthropic, which made ``preparing → has_key`` unreachable: the
+ * one provider whose administration API can mint keys is *not* Anthropic, so
+ * every successful mint resolved back to ``needs_key`` and the person who had
+ * just been given a key was asked to paste one.
+ * - Which provider the *onboarding screen asks for* when the state is
+ * ``needs_key`` is **a deliberate product choice** — it asks for the default
+ * provider, because a person with nothing needs one concrete instruction
+ * rather than a provider menu. Widening the state did not widen that ask,
+ * and it should not: they answer different questions.
+ *
+ * - ``has_key`` — a default AI credential exists, of any type. An environment
+ * can resolve a credential for this person.
+ * - ``preparing`` — no default credential, but a key is being minted for this
+ * person right now. Putting a wall in front of somebody who is about to be
+ * handed a key is the failure this state exists to prevent.
+ * - ``needs_key`` — nothing exists and nothing is coming. Ask.
+ *
+ * Note that "has a credential" and "has a *default* credential" are not the
+ * same, and this state means the second. An administrator who adds a key
+ * without making it the person's default leaves them at ``needs_key`` with
+ * that credential visible in their settings — which is a real state, so the
+ * admin surface reads this same field rather than announcing success on the
+ * strength of having created a row.
+ */
+export type AIKeyOnboardingState = 'has_key' | 'preparing' | 'needs_key';
 
 /**
  * Schema for creating a knowledge git repository.
@@ -4425,7 +4477,9 @@ export type ManagedAICredentialApplyResult = {
 export type ManagedAICredentialCreate = {
     name: string;
     type: AICredentialType;
-    api_key: string;
+    api_key?: (string | null);
+    provisioning_mode?: ProvisioningMode;
+    provider_admin_credential_id?: (string | null);
     base_url?: (string | null);
     model?: (string | null);
     default_model?: (string | null);
@@ -4441,15 +4495,29 @@ export type ManagedAICredentialCreate = {
 };
 
 /**
- * One member of a managed AI credential record — i.e. one child credential
- * and the user who owns it.
+ * One member of a managed AI credential record.
+ *
+ * A member is a **membership row**, not a credential: on a minted record a
+ * person is a member from the moment the admin adds them, and their key exists
+ * a little later or not at all. ``provisioning_status`` says which, and it is
+ * always populated — the client reads that one field and never reconstructs the
+ * state from which other fields happen to be null.
+ *
+ * ``child_credential_id`` is therefore optional. It is ``None`` for exactly the
+ * statuses that mean "no key exists right now" (``pending``, ``minting``,
+ * ``failed``, ``suspended``), and set for the two that mean one does
+ * (``not_applicable``, ``provisioned``).
  */
 export type ManagedAICredentialMember = {
     user_id: string;
     email: string;
     full_name?: (string | null);
-    child_credential_id: string;
+    child_credential_id?: (string | null);
     is_default?: boolean;
+    provisioning_status: MembershipProvisioningStatus;
+    provision_error?: (string | null);
+    provision_attempts?: number;
+    api_key_onboarding_state: AIKeyOnboardingState;
 };
 
 /**
@@ -4473,6 +4541,8 @@ export type ManagedAICredentialPublic = {
     model_override_building?: (string | null);
     expiry_notification_date?: (string | null);
     managed_by_id?: (string | null);
+    provisioning_mode: ProvisioningMode;
+    provider_admin_credential_id?: (string | null);
     has_api_key?: boolean;
     is_oauth_token?: boolean;
     members?: Array<ManagedAICredentialMember>;
@@ -4499,6 +4569,12 @@ export type ManagedAICredentialReconcileResult = {
  *
  * Omitting ``api_key`` keeps the stored key. Omitting ``target_user_ids``
  * leaves membership unchanged.
+ *
+ * ``api_key`` on a **minted** record is refused with a 400 rather than ignored:
+ * there is no stored key to replace, and silently accepting a rotation that
+ * rotates nothing is how an admin comes to believe they have rolled a key they
+ * have not. Rotating a minted member's key is a per-member mint, not a parent
+ * edit.
  */
 export type ManagedAICredentialUpdate = {
     name?: (string | null);
@@ -4518,12 +4594,22 @@ export type ManagedAICredentialUpdate = {
 };
 
 /**
- * A member that could not be removed because a child is in use (Tier-2
- * blast radius). ``impact`` carries the deletion-impact payload.
+ * A member that could not be removed, and why.
+ *
+ * ``reason`` is the machine-readable code and ``message`` is the sentence for
+ * a person — **stated by the server, rendered by every client**. The message
+ * travels with the block rather than being looked up per consumer for the
+ * reason the table above gives: three consumers previously each substituted a
+ * constant of their own, and all three named the wrong cause for two of the
+ * three reasons.
+ *
+ * ``impact`` carries the deletion-impact payload, and only ``in_use_bundle``
+ * has one.
  */
 export type ManagedReconcileBlock = {
     user_id: string;
     reason: string;
+    message: string;
     impact?: ({
     [key: string]: unknown;
 } | null);
@@ -4711,6 +4797,33 @@ export type MCPProviderTestResult = {
     tools?: Array<(string)>;
     error?: (string | null);
 };
+
+/**
+ * Where this member's key stands. Every value is explicit and terminal-or-
+ * working; none of them is "unknown".
+ *
+ * - ``not_applicable`` — **terminal.** The parent holds one shared key and the
+ * member's child row already carries it. There is no provider call in this
+ * member's story and there never will be. Distinct from ``provisioned``
+ * because the two revoke differently: a shared key must NOT be revoked when
+ * one of its many holders leaves, a minted one must.
+ * - ``pending`` — a mint is owed. The converge pass will attempt it.
+ * - ``minting`` — an attempt is in flight (claimed by a converge pass). A row
+ * left here by a crashed process is re-attempted, and the attempt begins by
+ * revoking whatever ``external_key_ref`` holds so a key is never leaked.
+ * - ``provisioned`` — **terminal.** A key was minted and the child row holds
+ * it. ``external_key_ref`` carries the handles needed to revoke it.
+ * - ``failed`` — **terminal.** Bounded retries were exhausted. Durable and
+ * visible: an administrator must look at it. Never cleaned up automatically,
+ * and never reached by a row that is merely slow.
+ * - ``suspended`` — **terminal until reactivation.** The owner's account was
+ * deactivated, their minted key was revoked and their child row deleted, but
+ * they are still a member of the record. Reactivating the account puts the
+ * row back to ``pending`` and they are minted a fresh key. Deliberately not
+ * ``pending``: a pending row on a disabled account would read as "still
+ * working" for as long as the account stays disabled.
+ */
+export type MembershipProvisioningStatus = 'not_applicable' | 'pending' | 'minting' | 'provisioned' | 'failed' | 'suspended';
 
 export type Message = {
     message: string;
@@ -5056,6 +5169,120 @@ export type PrivateUserCreate = {
     full_name: string;
     is_verified?: boolean;
 };
+
+/**
+ * One provider, as the server understands it.
+ */
+export type ProviderAdapterPublic = {
+    type: AICredentialType;
+    label: string;
+    account_config_display_name: string;
+    account_config_slug: string;
+    sdk_engine: string;
+    requires_base_url: boolean;
+    requires_model: boolean;
+    supports_model_listing: boolean;
+    issues_oauth_tokens: boolean;
+    supports_minting: boolean;
+    admin_config_schema?: ({
+    [key: string]: unknown;
+} | null);
+    can_mint_now: boolean;
+};
+
+export type ProviderAdaptersPublic = {
+    data: Array<ProviderAdapterPublic>;
+    count: number;
+};
+
+/**
+ * Non-secret configuration for one provider organisation.
+ *
+ * ``spend_limit_cents`` is **integer cents**, matching the provider's own
+ * contract. An off-by-100 here is a hundred-fold cap, so the unit is in the
+ * name at every layer rather than in a comment at one of them.
+ *
+ * ``project_id`` may be supplied by the administrator (an existing project) or
+ * left empty for the setup step to create one. Either way the project is
+ * verified to have an *enforcing* spend limit before the first key is minted —
+ * a limit is never applied after a key exists.
+ */
+export type ProviderAdminCredentialConfig = {
+    organization_id?: (string | null);
+    project_id?: (string | null);
+    spend_limit_cents: number;
+};
+
+/**
+ * Connect a provider organisation.
+ */
+export type ProviderAdminCredentialCreate = {
+    name: string;
+    provider_type: AICredentialType;
+    secret: string;
+    config: ProviderAdminCredentialConfig;
+};
+
+/**
+ * Admin-facing projection. **Never** includes the secret.
+ *
+ * ``has_secret`` rather than a nullable secret field, copying
+ * ``MailServerConfigPublic``: a projection that carries the value's *slot* is
+ * one refactor away from carrying the value.
+ */
+export type ProviderAdminCredentialPublic = {
+    id: string;
+    name: string;
+    provider_type: AICredentialType;
+    config: ProviderAdminCredentialConfig;
+    has_secret?: boolean;
+    last_verified_at?: (string | null);
+    last_verify_error?: (string | null);
+    created_by_id?: (string | null);
+    minting_credential_count?: number;
+    live_minted_key_count?: number;
+    delete_blocked?: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * Partial update. Every field's omission is representable and means "leave
+ * it alone" — in particular, omitting ``secret`` keeps the stored one, so the
+ * admin surface never has to round-trip a secret in order to rename a record.
+ */
+export type ProviderAdminCredentialUpdate = {
+    name?: (string | null);
+    secret?: (string | null);
+    config?: (ProviderAdminCredentialConfig | null);
+};
+
+/**
+ * Outcome of a Verify press.
+ *
+ * Two questions, one answer object, because they fail independently and an
+ * admin who fixes one wants to see the other: is the secret good, and is the
+ * project capped by an **enforcing** spend limit?
+ */
+export type ProviderAdminCredentialVerifyResult = {
+    ok: boolean;
+    account_ref?: (string | null);
+    spend_limit_enforcing?: boolean;
+    spend_limit_cents?: (number | null);
+    error?: (string | null);
+};
+
+/**
+ * How a parent record gets each member their key.
+ *
+ * - ``shared`` — the administrator pastes one key and every member's child row
+ * holds a copy of it. The historical behaviour and the default; the only mode
+ * available for a provider whose API cannot create keys.
+ * - ``minted`` — each member gets their **own** key, created at the provider
+ * through a :class:`ProviderAdminCredential`. The parent holds no key of its
+ * own, which is why ``encrypted_data`` is nullable.
+ */
+export type ProvisioningMode = 'shared' | 'minted';
 
 /**
  * Body of ``POST /agents/{agent_id}/publish``.
@@ -5794,11 +6021,11 @@ export type SetUpdateModeRequest = {
 export type SetupStatusMissingItem = {
     spec_name: string;
     spec_type: string;
-    reason: 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared';
+    reason: 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared' | 'publisher_credential_unshareable';
     is_ai?: boolean;
 };
 
-export type reason = 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared';
+export type reason = 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared' | 'publisher_credential_unshareable';
 
 /**
  * Response of ``GET /agents/{agent_id}/setup-status``.
@@ -6388,6 +6615,33 @@ export type UserInvitationPublic = {
 };
 
 /**
+ * One of *this user's* memberships that has no key behind it yet.
+ *
+ * The owner-facing counterpart of ``ManagedAICredentialMember``, and the only
+ * way a person can be told that a key is on its way. It has to be its own
+ * projection rather than an extra row in the credential list, because the list
+ * is ``AICredentialPublic`` and **every ``AICredential`` row that exists is
+ * usable** — an entry there with no key would break the one invariant every
+ * consumer of that table relies on.
+ *
+ * It is a *server* projection rather than a second list the browser folds into
+ * the first: the status is stated once, by the side that owns it.
+ *
+ * Only the states with no key are ever projected here (``pending``,
+ * ``minting``, ``failed``). ``provisioned`` and ``not_applicable`` are already
+ * in the credential list, and appearing in both is how one thing starts
+ * looking like two.
+ */
+export type UserKeyProvisioningPublic = {
+    managed_credential_id: string;
+    name: string;
+    type: AICredentialType;
+    status: MembershipProvisioningStatus;
+    last_error?: (string | null);
+    updated_at: string;
+};
+
+/**
  * Browser-detected locale defaults; server fills only still-NULL fields.
  *
  * Used by ``PATCH /users/me/locale-defaults``. ``conversation_style`` is
@@ -6502,6 +6756,7 @@ export type UserPublicWithAICredentials = {
     has_google_ai_api_key?: boolean;
     has_minimax_api_key?: boolean;
     has_openai_compatible_api_key?: boolean;
+    api_key_onboarding_state: AIKeyOnboardingState;
 };
 
 export type UserRegister = {
@@ -6875,6 +7130,13 @@ export type AdminLlmProvidersSetManagedAiCredentialDefaultData = {
 
 export type AdminLlmProvidersSetManagedAiCredentialDefaultResponse = (ManagedAICredentialPublic);
 
+export type AdminLlmProvidersRetryMemberKeyProvisioningData = {
+    managedCredentialId: string;
+    userId: string;
+};
+
+export type AdminLlmProvidersRetryMemberKeyProvisioningResponse = (ManagedAICredentialPublic);
+
 export type AdminLlmProvidersTestManagedAiCredentialConnectionData = {
     /**
      * When set and api_key is blank, resolve the stored parent key for the probe (Edit-with-blank-key case).
@@ -6884,6 +7146,48 @@ export type AdminLlmProvidersTestManagedAiCredentialConnectionData = {
 };
 
 export type AdminLlmProvidersTestManagedAiCredentialConnectionResponse = (AICredentialTestResult);
+
+export type AdminProviderAdaptersListProviderAdaptersResponse = (ProviderAdaptersPublic);
+
+export type AdminProviderCredentialsListProviderAdminCredentialsResponse = (Array<ProviderAdminCredentialPublic>);
+
+export type AdminProviderCredentialsCreateProviderAdminCredentialData = {
+    requestBody: ProviderAdminCredentialCreate;
+};
+
+export type AdminProviderCredentialsCreateProviderAdminCredentialResponse = (ProviderAdminCredentialPublic);
+
+export type AdminProviderCredentialsGetProviderAdminCredentialData = {
+    credentialId: string;
+};
+
+export type AdminProviderCredentialsGetProviderAdminCredentialResponse = (ProviderAdminCredentialPublic);
+
+export type AdminProviderCredentialsUpdateProviderAdminCredentialData = {
+    credentialId: string;
+    requestBody: ProviderAdminCredentialUpdate;
+};
+
+export type AdminProviderCredentialsUpdateProviderAdminCredentialResponse = (ProviderAdminCredentialPublic);
+
+export type AdminProviderCredentialsDeleteProviderAdminCredentialData = {
+    credentialId: string;
+    force?: boolean;
+};
+
+export type AdminProviderCredentialsDeleteProviderAdminCredentialResponse = (Message);
+
+export type AdminProviderCredentialsVerifyProviderAdminCredentialData = {
+    credentialId: string;
+};
+
+export type AdminProviderCredentialsVerifyProviderAdminCredentialResponse = (ProviderAdminCredentialVerifyResult);
+
+export type AdminProviderCredentialsApplyProviderSpendLimitData = {
+    credentialId: string;
+};
+
+export type AdminProviderCredentialsApplyProviderSpendLimitResponse = (ProviderAdminCredentialVerifyResult);
 
 export type AdminRoutingListRoutingTracesData = {
     channelId?: (string | null);
@@ -7631,6 +7935,8 @@ export type AiCredentialsCreateAiCredentialData = {
 };
 
 export type AiCredentialsCreateAiCredentialResponse = (AICredentialPublic);
+
+export type AiCredentialsListMyKeyProvisioningsResponse = (Array<UserKeyProvisioningPublic>);
 
 export type AiCredentialsResolveDefaultCredentialData = {
     sdkEngine: string;

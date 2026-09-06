@@ -536,6 +536,59 @@ export const AICredentialsPublicSchema = {
     description: 'List of AI credentials'
 } as const;
 
+export const AIKeyOnboardingStateSchema = {
+    type: 'string',
+    enum: ['has_key', 'preparing', 'needs_key'],
+    title: 'AIKeyOnboardingState',
+    description: `Whether this account still needs somebody to paste an API key.
+
+**Three states, because there are three.** The dashboard used to ask the
+two-valued question \`\`has_anthropic_api_key\`\`, and per-user key minting adds
+a case it cannot express: a person for whom a key is being created right now
+holds no credential, so the boolean says "no key" and the paste-a-key wall
+goes up in front of someone who is about to be handed one.
+
+The obvious repair — let the browser fetch the memberships too and suppress
+the wall when one of them is in flight — is the one thing this must not be.
+That makes the client the second implementation of a policy the server
+already owns, and the two answers diverge the first time either side changes.
+So the *server* names the state and the client renders it.
+
+**The states are provider-agnostic; the wall's question is not, and the two
+are different decisions.** An agent environment requires a default AI
+credential of the type *its own SDK* expects — \`\`claude-code\`\` takes
+anthropic or minimax, \`\`opencode\`\` takes anthropic, openai,
+openai_compatible or google (\`\`sdk_constants.SDK_CREDENTIAL_COMPATIBILITY\`\`)
+— and nothing in that path requires Anthropic. So:
+
+- Which provider satisfies this state is **a consequence of what
+  environments require**, and the answer is "any of them". Anything narrower
+  is the platform asserting a requirement it does not have. It used to be
+  scoped to Anthropic, which made \`\`preparing → has_key\`\` unreachable: the
+  one provider whose administration API can mint keys is *not* Anthropic, so
+  every successful mint resolved back to \`\`needs_key\`\` and the person who had
+  just been given a key was asked to paste one.
+- Which provider the *onboarding screen asks for* when the state is
+  \`\`needs_key\`\` is **a deliberate product choice** — it asks for the default
+  provider, because a person with nothing needs one concrete instruction
+  rather than a provider menu. Widening the state did not widen that ask,
+  and it should not: they answer different questions.
+
+- \`\`has_key\`\` — a default AI credential exists, of any type. An environment
+  can resolve a credential for this person.
+- \`\`preparing\`\` — no default credential, but a key is being minted for this
+  person right now. Putting a wall in front of somebody who is about to be
+  handed a key is the failure this state exists to prevent.
+- \`\`needs_key\`\` — nothing exists and nothing is coming. Ask.
+
+Note that "has a credential" and "has a *default* credential" are not the
+same, and this state means the second. An administrator who adds a key
+without making it the person's default leaves them at \`\`needs_key\`\` with
+that credential visible in their settings — which is a real state, so the
+admin surface reads this same field rather than announcing success on the
+strength of having created a row.`
+} as const;
+
 export const AIKnowledgeGitRepoCreateSchema = {
     properties: {
         name: {
@@ -4474,10 +4527,17 @@ export const AgentBundleRevisionPublicSchema = {
             type: 'integer',
             title: 'Install Count',
             default: 0
+        },
+        publish_notices: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Publish Notices'
         }
     },
     type: 'object',
-    required: ['id', 'bundle_id', 'revision_number', 'content_hash', 'published_by_user_id', 'published_at'],
+    required: ['id', 'bundle_id', 'revision_number', 'content_hash', 'published_by_user_id', 'published_at', 'publish_notices'],
     title: 'AgentBundleRevisionPublic',
     description: 'Response schema for revision listings + detail.'
 } as const;
@@ -19382,9 +19442,32 @@ export const ManagedAICredentialCreateSchema = {
             '$ref': '#/components/schemas/AICredentialType'
         },
         api_key: {
-            type: 'string',
-            minLength: 1,
+            anyOf: [
+                {
+                    type: 'string',
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Api Key'
+        },
+        provisioning_mode: {
+            '$ref': '#/components/schemas/ProvisioningMode',
+            default: 'shared'
+        },
+        provider_admin_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider Admin Credential Id'
         },
         base_url: {
             anyOf: [
@@ -19506,7 +19589,7 @@ export const ManagedAICredentialCreateSchema = {
         }
     },
     type: 'object',
-    required: ['name', 'type', 'api_key'],
+    required: ['name', 'type'],
     title: 'ManagedAICredentialCreate',
     description: `Admin request to create a managed AI credential record.
 
@@ -19537,21 +19620,60 @@ export const ManagedAICredentialMemberSchema = {
             title: 'Full Name'
         },
         child_credential_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Child Credential Id'
         },
         is_default: {
             type: 'boolean',
             title: 'Is Default',
             default: false
+        },
+        provisioning_status: {
+            '$ref': '#/components/schemas/MembershipProvisioningStatus'
+        },
+        provision_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provision Error'
+        },
+        provision_attempts: {
+            type: 'integer',
+            title: 'Provision Attempts',
+            default: 0
+        },
+        api_key_onboarding_state: {
+            '$ref': '#/components/schemas/AIKeyOnboardingState'
         }
     },
     type: 'object',
-    required: ['user_id', 'email', 'child_credential_id'],
+    required: ['user_id', 'email', 'provisioning_status', 'api_key_onboarding_state'],
     title: 'ManagedAICredentialMember',
-    description: `One member of a managed AI credential record — i.e. one child credential
-and the user who owns it.`
+    description: `One member of a managed AI credential record.
+
+A member is a **membership row**, not a credential: on a minted record a
+person is a member from the moment the admin adds them, and their key exists
+a little later or not at all. \`\`provisioning_status\`\` says which, and it is
+always populated — the client reads that one field and never reconstructs the
+state from which other fields happen to be null.
+
+\`\`child_credential_id\`\` is therefore optional. It is \`\`None\`\` for exactly the
+statuses that mean "no key exists right now" (\`\`pending\`\`, \`\`minting\`\`,
+\`\`failed\`\`, \`\`suspended\`\`), and set for the two that mean one does
+(\`\`not_applicable\`\`, \`\`provisioned\`\`).`
 } as const;
 
 export const ManagedAICredentialPublicSchema = {
@@ -19685,6 +19807,21 @@ export const ManagedAICredentialPublicSchema = {
             ],
             title: 'Managed By Id'
         },
+        provisioning_mode: {
+            '$ref': '#/components/schemas/ProvisioningMode'
+        },
+        provider_admin_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider Admin Credential Id'
+        },
         has_api_key: {
             type: 'boolean',
             title: 'Has Api Key',
@@ -19719,7 +19856,7 @@ export const ManagedAICredentialPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'name', 'type', 'created_at', 'updated_at'],
+    required: ['id', 'name', 'type', 'provisioning_mode', 'created_at', 'updated_at'],
     title: 'ManagedAICredentialPublic',
     description: `Admin-facing projection of a managed AI credential parent record.
 
@@ -19963,7 +20100,13 @@ export const ManagedAICredentialUpdateSchema = {
     description: `Admin request to update a managed AI credential record (partial update).
 
 Omitting \`\`api_key\`\` keeps the stored key. Omitting \`\`target_user_ids\`\`
-leaves membership unchanged.`
+leaves membership unchanged.
+
+\`\`api_key\`\` on a **minted** record is refused with a 400 rather than ignored:
+there is no stored key to replace, and silently accepting a rotation that
+rotates nothing is how an admin comes to believe they have rolled a key they
+have not. Rotating a minted member's key is a per-member mint, not a parent
+edit.`
 } as const;
 
 export const ManagedReconcileBlockSchema = {
@@ -19976,6 +20119,10 @@ export const ManagedReconcileBlockSchema = {
         reason: {
             type: 'string',
             title: 'Reason'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
         },
         impact: {
             anyOf: [
@@ -19991,10 +20138,19 @@ export const ManagedReconcileBlockSchema = {
         }
     },
     type: 'object',
-    required: ['user_id', 'reason'],
+    required: ['user_id', 'reason', 'message'],
     title: 'ManagedReconcileBlock',
-    description: `A member that could not be removed because a child is in use (Tier-2
-blast radius). \`\`impact\`\` carries the deletion-impact payload.`
+    description: `A member that could not be removed, and why.
+
+\`\`reason\`\` is the machine-readable code and \`\`message\`\` is the sentence for
+a person — **stated by the server, rendered by every client**. The message
+travels with the block rather than being looked up per consumer for the
+reason the table above gives: three consumers previously each substituted a
+constant of their own, and all three named the wrong cause for two of the
+three reasons.
+
+\`\`impact\`\` carries the deletion-impact payload, and only \`\`in_use_bundle\`\`
+has one.`
 } as const;
 
 export const ManagedReconcileSkipSchema = {
@@ -20033,6 +20189,35 @@ export const McpInfoResponseSchema = {
     required: ['mcp_server_url'],
     title: 'McpInfoResponse',
     description: 'App MCP Server connection info.'
+} as const;
+
+export const MembershipProvisioningStatusSchema = {
+    type: 'string',
+    enum: ['not_applicable', 'pending', 'minting', 'provisioned', 'failed', 'suspended'],
+    title: 'MembershipProvisioningStatus',
+    description: `Where this member's key stands. Every value is explicit and terminal-or-
+working; none of them is "unknown".
+
+- \`\`not_applicable\`\` — **terminal.** The parent holds one shared key and the
+  member's child row already carries it. There is no provider call in this
+  member's story and there never will be. Distinct from \`\`provisioned\`\`
+  because the two revoke differently: a shared key must NOT be revoked when
+  one of its many holders leaves, a minted one must.
+- \`\`pending\`\` — a mint is owed. The converge pass will attempt it.
+- \`\`minting\`\` — an attempt is in flight (claimed by a converge pass). A row
+  left here by a crashed process is re-attempted, and the attempt begins by
+  revoking whatever \`\`external_key_ref\`\` holds so a key is never leaked.
+- \`\`provisioned\`\` — **terminal.** A key was minted and the child row holds
+  it. \`\`external_key_ref\`\` carries the handles needed to revoke it.
+- \`\`failed\`\` — **terminal.** Bounded retries were exhausted. Durable and
+  visible: an administrator must look at it. Never cleaned up automatically,
+  and never reached by a row that is merely slow.
+- \`\`suspended\`\` — **terminal until reactivation.** The owner's account was
+  deactivated, their minted key was revoked and their child row deleted, but
+  they are still a member of the record. Reactivating the account puts the
+  row back to \`\`pending\`\` and they are minted a fresh key. Deliberately not
+  \`\`pending\`\`: a pending row on a disabled account would read as "still
+  working" for as long as the account stays disabled.`
 } as const;
 
 export const MessageSchema = {
@@ -21148,6 +21333,369 @@ export const PrivateUserCreateSchema = {
     type: 'object',
     required: ['email', 'password', 'full_name'],
     title: 'PrivateUserCreate'
+} as const;
+
+export const ProviderAdapterPublicSchema = {
+    properties: {
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        label: {
+            type: 'string',
+            title: 'Label'
+        },
+        account_config_display_name: {
+            type: 'string',
+            title: 'Account Config Display Name'
+        },
+        account_config_slug: {
+            type: 'string',
+            title: 'Account Config Slug'
+        },
+        sdk_engine: {
+            type: 'string',
+            title: 'Sdk Engine'
+        },
+        requires_base_url: {
+            type: 'boolean',
+            title: 'Requires Base Url'
+        },
+        requires_model: {
+            type: 'boolean',
+            title: 'Requires Model'
+        },
+        supports_model_listing: {
+            type: 'boolean',
+            title: 'Supports Model Listing'
+        },
+        issues_oauth_tokens: {
+            type: 'boolean',
+            title: 'Issues Oauth Tokens'
+        },
+        supports_minting: {
+            type: 'boolean',
+            title: 'Supports Minting'
+        },
+        admin_config_schema: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Admin Config Schema'
+        },
+        can_mint_now: {
+            type: 'boolean',
+            title: 'Can Mint Now'
+        }
+    },
+    type: 'object',
+    required: ['type', 'label', 'account_config_display_name', 'account_config_slug', 'sdk_engine', 'requires_base_url', 'requires_model', 'supports_model_listing', 'issues_oauth_tokens', 'supports_minting', 'can_mint_now'],
+    title: 'ProviderAdapterPublic',
+    description: 'One provider, as the server understands it.'
+} as const;
+
+export const ProviderAdaptersPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/ProviderAdapterPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'ProviderAdaptersPublic'
+} as const;
+
+export const ProviderAdminCredentialConfigSchema = {
+    properties: {
+        organization_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Organization Id'
+        },
+        project_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Project Id'
+        },
+        spend_limit_cents: {
+            type: 'integer',
+            minimum: 1,
+            title: 'Spend Limit Cents'
+        }
+    },
+    type: 'object',
+    required: ['spend_limit_cents'],
+    title: 'ProviderAdminCredentialConfig',
+    description: `Non-secret configuration for one provider organisation.
+
+\`\`spend_limit_cents\`\` is **integer cents**, matching the provider's own
+contract. An off-by-100 here is a hundred-fold cap, so the unit is in the
+name at every layer rather than in a comment at one of them.
+
+\`\`project_id\`\` may be supplied by the administrator (an existing project) or
+left empty for the setup step to create one. Either way the project is
+verified to have an *enforcing* spend limit before the first key is minted —
+a limit is never applied after a key exists.`
+} as const;
+
+export const ProviderAdminCredentialCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        provider_type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        secret: {
+            type: 'string',
+            minLength: 1,
+            title: 'Secret'
+        },
+        config: {
+            '$ref': '#/components/schemas/ProviderAdminCredentialConfig'
+        }
+    },
+    type: 'object',
+    required: ['name', 'provider_type', 'secret', 'config'],
+    title: 'ProviderAdminCredentialCreate',
+    description: 'Connect a provider organisation.'
+} as const;
+
+export const ProviderAdminCredentialPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        provider_type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        config: {
+            '$ref': '#/components/schemas/ProviderAdminCredentialConfig'
+        },
+        has_secret: {
+            type: 'boolean',
+            title: 'Has Secret',
+            default: true
+        },
+        last_verified_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Verified At'
+        },
+        last_verify_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Verify Error'
+        },
+        created_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By Id'
+        },
+        minting_credential_count: {
+            type: 'integer',
+            title: 'Minting Credential Count',
+            default: 0
+        },
+        live_minted_key_count: {
+            type: 'integer',
+            title: 'Live Minted Key Count',
+            default: 0
+        },
+        delete_blocked: {
+            type: 'boolean',
+            title: 'Delete Blocked',
+            default: false
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'provider_type', 'config', 'created_at', 'updated_at'],
+    title: 'ProviderAdminCredentialPublic',
+    description: `Admin-facing projection. **Never** includes the secret.
+
+\`\`has_secret\`\` rather than a nullable secret field, copying
+\`\`MailServerConfigPublic\`\`: a projection that carries the value's *slot* is
+one refactor away from carrying the value.`
+} as const;
+
+export const ProviderAdminCredentialUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        secret: {
+            anyOf: [
+                {
+                    type: 'string',
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Secret'
+        },
+        config: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/ProviderAdminCredentialConfig'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    title: 'ProviderAdminCredentialUpdate',
+    description: `Partial update. Every field's omission is representable and means "leave
+it alone" — in particular, omitting \`\`secret\`\` keeps the stored one, so the
+admin surface never has to round-trip a secret in order to rename a record.`
+} as const;
+
+export const ProviderAdminCredentialVerifyResultSchema = {
+    properties: {
+        ok: {
+            type: 'boolean',
+            title: 'Ok'
+        },
+        account_ref: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Account Ref'
+        },
+        spend_limit_enforcing: {
+            type: 'boolean',
+            title: 'Spend Limit Enforcing',
+            default: false
+        },
+        spend_limit_cents: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Spend Limit Cents'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['ok'],
+    title: 'ProviderAdminCredentialVerifyResult',
+    description: `Outcome of a Verify press.
+
+Two questions, one answer object, because they fail independently and an
+admin who fixes one wants to see the other: is the secret good, and is the
+project capped by an **enforcing** spend limit?`
+} as const;
+
+export const ProvisioningModeSchema = {
+    type: 'string',
+    enum: ['shared', 'minted'],
+    title: 'ProvisioningMode',
+    description: `How a parent record gets each member their key.
+
+- \`\`shared\`\` — the administrator pastes one key and every member's child row
+  holds a copy of it. The historical behaviour and the default; the only mode
+  available for a provider whose API cannot create keys.
+- \`\`minted\`\` — each member gets their **own** key, created at the provider
+  through a :class:\`ProviderAdminCredential\`. The parent holds no key of its
+  own, which is why \`\`encrypted_data\`\` is nullable.`
 } as const;
 
 export const PublishRequestSchema = {
@@ -24714,7 +25262,7 @@ export const SetupStatusMissingItemSchema = {
         },
         reason: {
             type: 'string',
-            enum: ['placeholder_empty', 'publisher_credential_missing', 'publisher_credential_unshared'],
+            enum: ['placeholder_empty', 'publisher_credential_missing', 'publisher_credential_unshared', 'publisher_credential_unshareable'],
             title: 'Reason'
         },
         is_ai: {
@@ -27289,6 +27837,61 @@ service resolves it, and a list endpoint must batch that lookup rather than
 doing one per row.`
 } as const;
 
+export const UserKeyProvisioningPublicSchema = {
+    properties: {
+        managed_credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Managed Credential Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        status: {
+            '$ref': '#/components/schemas/MembershipProvisioningStatus'
+        },
+        last_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Error'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['managed_credential_id', 'name', 'type', 'status', 'updated_at'],
+    title: 'UserKeyProvisioningPublic',
+    description: `One of *this user's* memberships that has no key behind it yet.
+
+The owner-facing counterpart of \`\`ManagedAICredentialMember\`\`, and the only
+way a person can be told that a key is on its way. It has to be its own
+projection rather than an extra row in the credential list, because the list
+is \`\`AICredentialPublic\`\` and **every \`\`AICredential\`\` row that exists is
+usable** — an entry there with no key would break the one invariant every
+consumer of that table relies on.
+
+It is a *server* projection rather than a second list the browser folds into
+the first: the status is stated once, by the side that owns it.
+
+Only the states with no key are ever projected here (\`\`pending\`\`,
+\`\`minting\`\`, \`\`failed\`\`). \`\`provisioned\`\` and \`\`not_applicable\`\` are already
+in the credential list, and appearing in both is how one thing starts
+looking like two.`
+} as const;
+
 export const UserLocaleDefaultsSchema = {
     properties: {
         timezone: {
@@ -27992,10 +28595,13 @@ export const UserPublicWithAICredentialsSchema = {
             type: 'boolean',
             title: 'Has Openai Compatible Api Key',
             default: false
+        },
+        api_key_onboarding_state: {
+            '$ref': '#/components/schemas/AIKeyOnboardingState'
         }
     },
     type: 'object',
-    required: ['email', 'id', 'can_change_email'],
+    required: ['email', 'id', 'can_change_email', 'api_key_onboarding_state'],
     title: 'UserPublicWithAICredentials',
     description: 'User info indicating which AI credentials are set (not the actual keys)'
 } as const;
