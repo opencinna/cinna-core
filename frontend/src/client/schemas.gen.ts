@@ -25262,7 +25262,7 @@ export const SetupStatusMissingItemSchema = {
         },
         reason: {
             type: 'string',
-            enum: ['placeholder_empty', 'publisher_credential_missing', 'publisher_credential_unshared', 'publisher_credential_unshareable'],
+            enum: ['placeholder_empty', 'publisher_credential_missing', 'publisher_credential_unshared'],
             title: 'Reason'
         },
         is_ai: {

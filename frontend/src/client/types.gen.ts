@@ -6021,11 +6021,11 @@ export type SetUpdateModeRequest = {
 export type SetupStatusMissingItem = {
     spec_name: string;
     spec_type: string;
-    reason: 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared' | 'publisher_credential_unshareable';
+    reason: 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared';
     is_ai?: boolean;
 };
 
-export type reason = 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared' | 'publisher_credential_unshareable';
+export type reason = 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared';
 
 /**
  * Response of ``GET /agents/{agent_id}/setup-status``.

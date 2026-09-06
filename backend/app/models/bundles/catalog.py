@@ -214,14 +214,17 @@ class CheckUpdatesResponse(BaseModel):
 
 #: Why one credential is blocking an install. **Declared here and imported by
 #: the gate**, rather than restated in both places: it used to be spelled out in
-#: the service and again in the response model below, and adding a fourth reason
+#: the service and again in the response model below, and adding a reason to one
 #: made the gate produce a value the response model rejected with a 500 — a
 #: validation error at the boundary between two copies of one list.
+#:
+#: ``publisher_credential_unshareable`` was removed once the gate stopped
+#: reporting it: an unshareable publisher credential is not missing, because
+#: the install resolves the installer's own credential instead.
 GateMissingReason = Literal[
     "placeholder_empty",
     "publisher_credential_missing",
     "publisher_credential_unshared",
-    "publisher_credential_unshareable",
 ]
 
 

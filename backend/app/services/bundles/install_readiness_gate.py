@@ -14,6 +14,11 @@ Returns a :class:`GateResult` describing one of three states:
   missing / unshared. The publisher must fix this; the installer can
   optionally provide their own override credential via the setup page.
 
+A publisher credential that *cannot* be shared is deliberately none of these.
+The install links the installer's own AI credential in its place and runs, so
+nothing is missing and the gate stays out of the way — see the note at the
+unshareable branch in ``_scan_publisher_ai``.
+
 The gate is purely a read-side helper. It DOES NOT mutate state, write
 events, or persist anything. Callers are responsible for: persisting a
 synthesised system-message reply, emitting WS events, and short-circuiting
@@ -91,7 +96,6 @@ class InstallReadinessGate:
             m.reason in (
                 "publisher_credential_missing",
                 "publisher_credential_unshared",
-                "publisher_credential_unshareable",
             )
             for m in missing
         )
@@ -287,19 +291,43 @@ class InstallReadinessGate:
             # for one person can never be shared, and telling the publisher to
             # share it is telling them to do something the server will refuse.
             if not ai_credentials_service.is_shareable(ai_cred):
-                items.append(GateMissingItem(
-                    spec_name=ai_cred.name or f"AI ({slot})",
-                    spec_type="ai_credential",
-                    reason="publisher_credential_unshareable",
-                    is_ai=True,
-                ))
-            else:
-                items.append(GateMissingItem(
-                    spec_name=ai_cred.name or f"AI ({slot})",
-                    spec_type="ai_credential",
-                    reason="publisher_credential_unshared",
-                    is_ai=True,
-                ))
+                # **Not missing, so not reported.** This is the same conclusion
+                # the existing-share branch above reaches, for the same reason,
+                # and it holds here because of what happens at install time:
+                # ``InstallService._linkable_publisher_ai_credential`` returns
+                # ``None`` for exactly this credential, so the environment never
+                # links it and resolves the installer's own AI credential
+                # instead. The agent has a working key. The install is not
+                # missing anything.
+                #
+                # It used to be reported, which made the status
+                # ``publisher_broken`` and blocked every inbound message on an
+                # install that ran fine. Worse, it was unclearable: the scan
+                # reads ``bundle.publisher_ai_credential_*_id``, which no
+                # installer action changes, so an installer could add and
+                # default their own credential — the very credential the agent
+                # was already using — and still be refused.
+                #
+                # Fact (3) from the note above is still true and still worth
+                # someone knowing: this credential will never be shared, for
+                # this or any other installer. It belongs to the publisher, at
+                # publish time, where somebody can act on it —
+                # ``PublishService.publisher_ai_credential_notices``. Dropping
+                # it here loses no information; it stops telling the wrong
+                # person a thing they cannot act on.
+                #
+                # The trade this accepts: an installer is silently using their
+                # own model rather than the one the bundle was designed around.
+                # That is the same position every ``provided_by="user"`` spec is
+                # in, and it is the publisher's to disclose.
+                continue
+
+            items.append(GateMissingItem(
+                spec_name=ai_cred.name or f"AI ({slot})",
+                spec_type="ai_credential",
+                reason="publisher_credential_unshared",
+                is_ai=True,
+            ))
         return items
 
     # ── Helpers ───────────────────────────────────────────────────
@@ -382,19 +410,7 @@ class InstallReadinessGate:
             f"- {m.spec_name} ({m.spec_type})" for m in missing
         )
 
-        if any(m.reason == "publisher_credential_unshareable" for m in missing):
-            # Said separately because the generic publisher-broken copy tells the
-            # publisher to fix it, and this one cannot be fixed by them: the
-            # credential is provisioned per-user by policy. The installer's own
-            # route out is the same, so the second sentence is the actionable
-            # one.
-            lead = (
-                "This bundle is wired to an AI credential that was provisioned "
-                "for one person and cannot be shared. The publisher needs to "
-                "point the bundle at a shareable credential; in the meantime "
-                "you can supply your own from the agent's Credentials tab."
-            )
-        elif status == "publisher_broken":
+        if status == "publisher_broken":
             lead = (
                 "This bundle's publisher-provided credentials are unavailable. "
                 "The publisher needs to fix this, or you can supply your own "

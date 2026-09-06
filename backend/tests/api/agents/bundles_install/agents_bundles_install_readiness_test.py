@@ -24,13 +24,14 @@ which surfaces the same gate verdict that the runtime gate uses):
   N. MCP short-circuit — handle_send_message returns gate shape, not LLM.
   O. Chat gate-block still generates session title from user message.
   P. setup-status — an existing AICredentialShare for an admin-managed
-     publisher AI credential must mask the unshareable policy: the item is
-     not reported at all (share-first reordering in ``_scan_ai_credentials``).
-  Q. setup-status — the same shape of admin-managed credential with NO share
-     reports publisher_credential_unshareable (paired with P).
+     publisher AI credential is not reported at all.
+  Q. setup-status — the same shape with NO share is also not reported: an
+     admin-managed publisher credential never gates an install, because the
+     install resolves the installer's own AI credential instead (paired with P,
+     reached by the other branch).
   R. setup-status — a plain shareable publisher AI credential with no share
-     reports publisher_credential_unshared, not publisher_credential_unshareable
-     (regression guard for the P/Q reordering; sibling to scenario F).
+     still reports publisher_credential_unshared, which is what proves P and Q
+     are not the gate having stopped reporting AI credentials at all.
 
 A2A and webhook short-circuit tests are deferred (deep transport mocking needed).
 Gate logic already validates the A2A/webhook channels — see scenarios A–G.
@@ -428,14 +429,24 @@ def test_gate_reports_a_publisher_credential_that_can_never_be_shared(
     db: Session,
     minted: bool,
 ) -> None:
-    """F2. The install must not create a share, and must say why honestly.
+    """F2. The install must not create a share, and must not be gated for it.
 
-    Two failures used to compound here. The share was refused correctly, but the
-    refusal was caught by the install's broad ``except HTTPException`` and logged
-    as a transient hiccup — so at the seam it was a silent skip. The gate then
-    reported ``publisher_credential_unshared``, which tells the publisher to
-    share a credential the server will always refuse to share. A reason nobody
-    can act on is worse than no reason.
+    Two properties, and they are independent — which is why they are asserted
+    separately below rather than through one status check.
+
+    **The share is refused.** A credential provisioned for one person is never
+    shared with an installer, and a share row here would prove the guard was
+    bypassed. That refusal used to be swallowed by the install's broad
+    ``except HTTPException`` and logged as a transient hiccup, so at the seam it
+    was a silent skip.
+
+    **The install is not blocked for it.** ``_linkable_publisher_ai_credential``
+    returns ``None`` for this credential, so the environment resolves the
+    installer's own AI credential instead and the agent has a working key. The
+    gate used to report ``publisher_credential_unshareable``, which made the
+    status ``publisher_broken`` and refused every inbound message on an install
+    that ran fine — and no installer action could clear it, because the scan
+    reads a field on the *bundle*. Nothing is missing, so nothing is reported.
     """
     publisher_agent = create_agent_via_api(
         client, superuser_token_headers, name=f"IR-F2-{uuid.uuid4().hex[:6]}"
@@ -477,21 +488,24 @@ def test_gate_reports_a_publisher_credential_that_can_never_be_shared(
     assert r.status_code == 200, r.text
     body = r.json()
 
-    assert body["status"] == "publisher_broken"
     ai_missing = [m for m in body["missing"] if m["is_ai"]]
-    assert len(ai_missing) == 1, ai_missing
-    assert ai_missing[0]["reason"] == "publisher_credential_unshareable", (
-        "The gate must name the state that is true — this credential cannot be "
-        "shared — rather than 'unshared', which reads as a missing action."
+    assert ai_missing == [], (
+        "An unshareable publisher credential is not missing: the install "
+        "resolves the installer's own AI credential in its place. Reporting it "
+        "blocked every message on an install that worked, and no installer "
+        "action could clear it."
     )
-    # The chat-level copy is not on this response model (the frontend renders
-    # its own from ``missing``), so it is asserted where it is produced.
+    assert body["status"] != "publisher_broken", body
+
+    # Asserted at the gate too, because the status above could be non-broken
+    # for an unrelated reason while the gate still refused the dispatch.
     from app.services.bundles.install_readiness_gate import InstallReadinessGate
 
     install_row = db.get(Agent, install_id)
     assert install_row is not None
     verdict = InstallReadinessGate.check(db, install_row)
-    assert "cannot be shared" in verdict.user_message
+    assert not any(m.is_ai for m in verdict.missing), verdict.missing
+    assert "cannot be shared" not in verdict.user_message
 
 
 # ── Scenario G — Gate: publisher installs own bundle, no share needed ─────────
@@ -950,8 +964,11 @@ def test_mcp_short_circuit_returns_gate_shape_without_llm(
 # ``_scan_ai_credentials`` used to ask ``ai_credentials_service.is_shareable``
 # BEFORE looking for an ``AICredentialShare`` row, so an admin-managed
 # credential was reported as ``publisher_credential_unshareable`` even when a
-# live share already existed and the install was working. The fix checks the
-# share first: an existing share means the item isn't reported at all.
+# live share already existed and the install was working. The fix checked the
+# share first; the reason has since been removed entirely, so both branches now
+# skip and this test no longer observes the ordering — what it still pins is
+# that a live share is never reported, which is the input scenario Q does not
+# cover.
 #
 # There is no route that creates an ``AICredentialShare`` for a credential
 # that ``is_shareable`` returns False for (the share-creation path enforces
@@ -1034,20 +1051,30 @@ def test_gate_skips_admin_managed_credential_when_legacy_share_exists(
     assert body["missing"] == []
 
 
-# ── Scenario Q — Gate: same shape, no share → unshareable (paired with P) ───
+# ── Scenario Q — Gate: same shape, no share → still not reported ────────────
 
 
-def test_gate_reports_unshareable_admin_managed_credential_without_share(
+def test_gate_ignores_unshareable_admin_managed_credential_without_share(
     client: TestClient,
     superuser_token_headers: dict[str, str],
     db: Session,
 ) -> None:
     """Q. Same admin-managed credential shape as P, but with no share at all.
 
-    Twin of P: proves the reordering doesn't just always skip admin-managed
-    credentials — it only skips the ones with a live share. Without one, the
-    gate must still name the state honestly as
-    ``publisher_credential_unshareable``.
+    P and Q reach the same verdict from different inputs, and that is the
+    point: an admin-managed publisher credential is never a reason to gate an
+    install, whether or not a legacy share happens to exist. The install links
+    the installer's own AI credential in its place and runs.
+
+    Q is not redundant with P, because the two arrive by different branches —
+    P through the share-exists path, Q through the policy path — and it is R,
+    not P, that proves the gate has not simply stopped reporting AI credentials
+    altogether.
+
+    This asserted ``publisher_credential_unshareable`` until that reason was
+    removed. It made the status ``publisher_broken`` and refused every message
+    on an install that had a working key, unclearable by anything the installer
+    could do.
     """
     publisher_agent = create_agent_via_api(
         client, superuser_token_headers, name=f"IR-Q-{uuid.uuid4().hex[:6]}"
@@ -1076,10 +1103,11 @@ def test_gate_reports_unshareable_admin_managed_credential_without_share(
     assert r.status_code == 200, r.text
     body = r.json()
 
-    assert body["status"] == "publisher_broken"
-    ai_missing = [m for m in body["missing"] if m["is_ai"]]
-    assert len(ai_missing) == 1, ai_missing
-    assert ai_missing[0]["reason"] == "publisher_credential_unshareable"
+    assert body["status"] == "ready", (
+        f"An unshareable publisher credential must not gate the install; got "
+        f"{body['status']} missing={body['missing']}"
+    )
+    assert body["missing"] == []
 
 
 # ── Scenario R — Gate: plain shareable credential, no share → unshared ──────
@@ -1092,12 +1120,14 @@ def test_gate_reports_unshared_for_shareable_credential_without_share(
 ) -> None:
     """R. A non-admin-managed publisher AI credential with no share → unshared.
 
-    Sibling regression guard to P/Q: proves the reordering distinguishes the
-    two reasons correctly rather than collapsing them — a credential that
-    *could* be shared (policy allows it) but currently isn't must still say
-    ``publisher_credential_unshared``, never ``publisher_credential_unshareable``.
-    Same shape as scenario F, kept here so P/Q/R read as one deliberate
-    before/after triplet for the reordering fix.
+    The load-bearing third of the triplet. P and Q both expect "not reported",
+    so on their own they would pass against a gate that had stopped scanning
+    publisher AI credentials altogether. R is what distinguishes "we skip the
+    admin-managed ones deliberately" from "we skip everything": a credential
+    that *could* be shared but currently isn't must still report
+    ``publisher_credential_unshared`` and still gate the install.
+
+    Same shape as scenario F, kept here so P/Q/R read as one triplet.
     """
     publisher_agent = create_agent_via_api(
         client, superuser_token_headers, name=f"IR-R-{uuid.uuid4().hex[:6]}"
