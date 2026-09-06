@@ -130,10 +130,6 @@ from .credentials.ai_credential import (
     AICredentialData,
     AICredentialBundleUsage,
     AICredentialDeletionImpact,
-    AdminAICredentialPublic,
-    AdminAICredentialCreate,
-    AdminProvisionSkip,
-    AdminAICredentialProvisionResult,
 )
 from .credentials.managed_ai_credential import (
     ManagedAICredential,
@@ -144,6 +140,20 @@ from .credentials.managed_ai_credential import (
     ManagedReconcileSkip,
     ManagedReconcileBlock,
     ManagedAICredentialReconcileResult,
+    ProvisioningMode,
+)
+from .credentials.managed_ai_credential_membership import (
+    ManagedAICredentialMembership,
+    MembershipProvisioningStatus,
+    UserKeyProvisioningPublic,
+)
+from .credentials.provider_admin_credential import (
+    ProviderAdminCredential,
+    ProviderAdminCredentialConfig,
+    ProviderAdminCredentialCreate,
+    ProviderAdminCredentialPublic,
+    ProviderAdminCredentialUpdate,
+    ProviderAdminCredentialVerifyResult,
 )
 from .credentials.ai_credential_share import (
     AICredentialShare,
@@ -958,10 +968,6 @@ __all__ = [
     "AICredentialPublic",
     "AICredentialBundleUsage",
     "AICredentialDeletionImpact",
-    "AdminAICredentialPublic",
-    "AdminAICredentialCreate",
-    "AdminProvisionSkip",
-    "AdminAICredentialProvisionResult",
     # Managed AI Credentials (admin-managed parent/child)
     "ManagedAICredential",
     "ManagedAICredentialMember",
@@ -970,6 +976,16 @@ __all__ = [
     "ManagedAICredentialUpdate",
     "ManagedReconcileSkip",
     "ManagedReconcileBlock",
+    "ManagedAICredentialMembership",
+    "MembershipProvisioningStatus",
+    "UserKeyProvisioningPublic",
+    "ProvisioningMode",
+    "ProviderAdminCredential",
+    "ProviderAdminCredentialConfig",
+    "ProviderAdminCredentialCreate",
+    "ProviderAdminCredentialPublic",
+    "ProviderAdminCredentialUpdate",
+    "ProviderAdminCredentialVerifyResult",
     "ManagedAICredentialReconcileResult",
     "AICredentialsPublic",
     "AICredentialType",

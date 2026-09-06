@@ -422,6 +422,61 @@ class AIServiceCredentialsUpdate(SQLModel):
     openai_compatible_model: str | None = None
 
 
+class AIKeyOnboardingState(str, Enum):
+    """Whether this account still needs somebody to paste an API key.
+
+    **Three states, because there are three.** The dashboard used to ask the
+    two-valued question ``has_anthropic_api_key``, and per-user key minting adds
+    a case it cannot express: a person for whom a key is being created right now
+    holds no credential, so the boolean says "no key" and the paste-a-key wall
+    goes up in front of someone who is about to be handed one.
+
+    The obvious repair — let the browser fetch the memberships too and suppress
+    the wall when one of them is in flight — is the one thing this must not be.
+    That makes the client the second implementation of a policy the server
+    already owns, and the two answers diverge the first time either side changes.
+    So the *server* names the state and the client renders it.
+
+    **The states are provider-agnostic; the wall's question is not, and the two
+    are different decisions.** An agent environment requires a default AI
+    credential of the type *its own SDK* expects — ``claude-code`` takes
+    anthropic or minimax, ``opencode`` takes anthropic, openai,
+    openai_compatible or google (``sdk_constants.SDK_CREDENTIAL_COMPATIBILITY``)
+    — and nothing in that path requires Anthropic. So:
+
+    - Which provider satisfies this state is **a consequence of what
+      environments require**, and the answer is "any of them". Anything narrower
+      is the platform asserting a requirement it does not have. It used to be
+      scoped to Anthropic, which made ``preparing → has_key`` unreachable: the
+      one provider whose administration API can mint keys is *not* Anthropic, so
+      every successful mint resolved back to ``needs_key`` and the person who had
+      just been given a key was asked to paste one.
+    - Which provider the *onboarding screen asks for* when the state is
+      ``needs_key`` is **a deliberate product choice** — it asks for the default
+      provider, because a person with nothing needs one concrete instruction
+      rather than a provider menu. Widening the state did not widen that ask,
+      and it should not: they answer different questions.
+
+    - ``has_key`` — a default AI credential exists, of any type. An environment
+      can resolve a credential for this person.
+    - ``preparing`` — no default credential, but a key is being minted for this
+      person right now. Putting a wall in front of somebody who is about to be
+      handed a key is the failure this state exists to prevent.
+    - ``needs_key`` — nothing exists and nothing is coming. Ask.
+
+    Note that "has a credential" and "has a *default* credential" are not the
+    same, and this state means the second. An administrator who adds a key
+    without making it the person's default leaves them at ``needs_key`` with
+    that credential visible in their settings — which is a real state, so the
+    admin surface reads this same field rather than announcing success on the
+    strength of having created a row.
+    """
+
+    HAS_KEY = "has_key"
+    PREPARING = "preparing"
+    NEEDS_KEY = "needs_key"
+
+
 class UserPublicWithAICredentials(UserPublic):
     """User info indicating which AI credentials are set (not the actual keys)"""
     has_anthropic_api_key: bool = False
@@ -429,3 +484,20 @@ class UserPublicWithAICredentials(UserPublic):
     has_google_ai_api_key: bool = False
     has_minimax_api_key: bool = False
     has_openai_compatible_api_key: bool = False
+    #: The onboarding decision itself, taken here rather than in the browser.
+    #: See :class:`AIKeyOnboardingState`. The five ``has_*`` booleans above are
+    #: *per-provider* facts and this is not one of them: ``has_key`` is true for
+    #: a default credential of **any** type, so it is deliberately not derivable
+    #: from ``has_anthropic_api_key`` and no reader should try.
+    #:
+    #: **Required, no default.** A default here is not a convenience: it makes
+    #: the field optional in the generated client, which forces every browser
+    #: reader to write ``?? "needs_key"`` — and that fallback *is* the
+    #: client-side policy this enum's docstring exists to forbid. It is also
+    #: silently wrong: the browser cannot tell "the server has not answered yet"
+    #: from "the server said ``needs_key``", so the fallback turns a query that
+    #: is pending, paused or errored into a confident ``needs_key`` and puts a
+    #: full-page paste-a-key wall in front of somebody who has a key. The server
+    #: names the state; a reader with no answer must be able to see that it has
+    #: no answer.
+    api_key_onboarding_state: AIKeyOnboardingState

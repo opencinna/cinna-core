@@ -156,7 +156,7 @@ class AICredentialPublic(AICredentialBase):
     is_default: bool
     # Read-only marker for the owner's own UI. Whether the row was provisioned
     # by an admin. ``managed_by_id`` (which admin) is deliberately NOT exposed
-    # here — it is admin-only (see AdminAICredentialPublic).
+    # here, on any surface — no admin-facing projection of this model exists.
     is_admin_managed: bool = False
     has_api_key: bool = True  # Always true for existing credentials
     is_oauth_token: bool = False  # True if this is an OAuth token (sk-ant-oat*)
@@ -184,59 +184,6 @@ class AICredentialsPublic(SQLModel):
     """List of AI credentials"""
     data: list[AICredentialPublic]
     count: int
-
-
-# ============= Admin provisioning DTOs =============
-
-
-class AdminAICredentialPublic(AICredentialPublic):
-    """Admin-facing projection of an AI credential.
-
-    Extends the shared :class:`AICredentialPublic` with the owner and
-    provisioning-admin identity that are intentionally hidden from the
-    owner-facing surface (see OQ-4). Used by the ``/admin/llm-providers/*``
-    routes only.
-    """
-    owner_id: uuid.UUID
-    managed_by_id: uuid.UUID | None = None
-
-
-class AdminAICredentialCreate(SQLModel):
-    """Admin request to provision an AI credential for one or more users.
-
-    One :class:`AICredential` row is created per ``target_user_id`` with
-    ``owner_id = target.id``, ``is_admin_managed=True`` and
-    ``managed_by_id = admin.id``. The provided key bytes are shared across the
-    created rows but each row is an independent credential owned by its user.
-    """
-    name: str = Field(min_length=1, max_length=255)
-    type: AICredentialType
-    api_key: str = Field(min_length=1)
-    base_url: str | None = Field(default=None, max_length=500)
-    model: str | None = Field(default=None, max_length=255)
-    expiry_notification_date: datetime | None = None
-    # Provisioning targets + behavior
-    target_user_ids: list[uuid.UUID] = Field(min_length=1)
-    set_as_default: bool = False
-    set_user_sdk_defaults: bool = False
-    # Which mode preferences to wire when set_user_sdk_defaults=True.
-    sdk_default_modes: list[str] = Field(
-        default_factory=lambda: ["conversation", "building"]
-    )
-
-
-class AdminProvisionSkip(SQLModel):
-    """A target user that was skipped during provisioning (e.g. unknown or
-    inactive). The whole call does not fail for an individual bad target."""
-    user_id: uuid.UUID
-    reason: str
-
-
-class AdminAICredentialProvisionResult(SQLModel):
-    """Result of an admin provision call — one created row per valid target,
-    plus any skipped targets."""
-    created: list[AdminAICredentialPublic]
-    skipped: list[AdminProvisionSkip] = []
 
 
 # Internal data structure for decrypted credential data

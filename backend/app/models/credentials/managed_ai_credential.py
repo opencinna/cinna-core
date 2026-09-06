@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -7,7 +8,25 @@ from sqlmodel import Field, Relationship, SQLModel, Column, Text, Index
 from sqlalchemy.dialects.postgresql import JSON as PG_JSON
 
 from app.models.credentials.ai_credential import AICredentialType
-from app.models.users.user import VALID_USER_ROLES
+from app.models.credentials.managed_ai_credential_membership import (
+    MembershipProvisioningStatus,
+)
+from app.models.users.user import VALID_USER_ROLES, AIKeyOnboardingState
+
+
+class ProvisioningMode(str, Enum):
+    """How a parent record gets each member their key.
+
+    - ``shared`` — the administrator pastes one key and every member's child row
+      holds a copy of it. The historical behaviour and the default; the only mode
+      available for a provider whose API cannot create keys.
+    - ``minted`` — each member gets their **own** key, created at the provider
+      through a :class:`ProviderAdminCredential`. The parent holds no key of its
+      own, which is why ``encrypted_data`` is nullable.
+    """
+
+    SHARED = "shared"
+    MINTED = "minted"
 
 if TYPE_CHECKING:
     from app.models.users.user import User
@@ -45,14 +64,20 @@ class ManagedAICredential(SQLModel, table=True):
     A single parent record that a superuser manages once. Its canonical config
     (name/type/key/base_url/model/default flags) and target user set are the
     source of truth, reconciled into per-user ``AICredential`` child rows on
-    every change. Membership is **derived** from the children (those whose
-    ``managed_credential_id`` points at this parent) — there is deliberately no
-    ``target_user_ids`` column here, to avoid drift between intended and actual
-    members.
+    every change.
 
-    The parent holds its own Fernet-encrypted copy of the key (same shape/codec
-    as ``ai_credential.encrypted_data``) so new children can be created and
-    existing children re-keyed without the admin re-typing the secret.
+    **Membership is a row**, one per (parent, user), in
+    ``managed_ai_credential_membership``. It used to be derived from the children
+    and is not any more — see that model's docstring for why, and note that the
+    two do not coexist: the derived notion is gone, and a member is a membership
+    row whatever its status.
+
+    In ``shared`` mode the parent holds its own Fernet-encrypted copy of the key
+    (same shape/codec as ``ai_credential.encrypted_data``) so new children can be
+    created and existing children re-keyed without the admin re-typing the
+    secret. In ``minted`` mode there is no such key: ``encrypted_data`` is NULL,
+    each member's key is created at the provider, and a rotation request is
+    refused because there is nothing here to rotate.
     """
 
     __tablename__ = "managed_ai_credential"
@@ -65,7 +90,34 @@ class ManagedAICredential(SQLModel, table=True):
     type: AICredentialType = Field(..., sa_type=sa.String(50))
 
     # Fernet-encrypted JSON {api_key, base_url?, model?} — the canonical key.
-    encrypted_data: str = Field(sa_column=Column(Text, nullable=False))
+    # NULL in ``minted`` mode, where the parent holds no key at all. Every reader
+    # goes through ``ManagedAICredentialsService._decrypt_parent``, which refuses
+    # a minted parent rather than dereferencing the NULL.
+    encrypted_data: str | None = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
+
+    # How members get their key. See :class:`ProvisioningMode`.
+    provisioning_mode: str = Field(
+        default=ProvisioningMode.SHARED.value,
+        sa_column=Column(
+            sa.String(24), nullable=False, server_default="shared"
+        ),
+    )
+    # The admin secret used to mint (and later revoke) this record's per-user
+    # keys. Required in ``minted`` mode, NULL in ``shared`` mode. SET NULL rather
+    # than CASCADE for the same reason as ``managed_by_id``: losing the pointer
+    # must degrade minting, not delete the record and its members' keys. Deleting
+    # a provider admin credential that any parent still points at is refused by
+    # the service, so this SET NULL is a safety net rather than a normal path.
+    provider_admin_credential_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            sa.Uuid(),
+            sa.ForeignKey("provider_admin_credential.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
 
     # Non-secret mirrors for projection/UI (openai_compatible/google).
     base_url: str | None = Field(default=None, max_length=500)
@@ -176,14 +228,47 @@ class ManagedAICredential(SQLModel, table=True):
 
 
 class ManagedAICredentialMember(SQLModel):
-    """One member of a managed AI credential record — i.e. one child credential
-    and the user who owns it."""
+    """One member of a managed AI credential record.
+
+    A member is a **membership row**, not a credential: on a minted record a
+    person is a member from the moment the admin adds them, and their key exists
+    a little later or not at all. ``provisioning_status`` says which, and it is
+    always populated — the client reads that one field and never reconstructs the
+    state from which other fields happen to be null.
+
+    ``child_credential_id`` is therefore optional. It is ``None`` for exactly the
+    statuses that mean "no key exists right now" (``pending``, ``minting``,
+    ``failed``, ``suspended``), and set for the two that mean one does
+    (``not_applicable``, ``provisioned``).
+    """
 
     user_id: uuid.UUID
     email: str
     full_name: str | None = None
-    child_credential_id: uuid.UUID
+    child_credential_id: uuid.UUID | None = None
     is_default: bool = False
+    #: One of :class:`MembershipProvisioningStatus`. **Required, no default.**
+    #: A default here would be optional on the wire, and a client reading an
+    #: absent status through a fallback is a client asserting a provisioning
+    #: policy it inferred from a missing field. The one construction site
+    #: already states it; nothing is left to infer.
+    provisioning_status: MembershipProvisioningStatus
+    #: Coarse failure reason for a ``failed``/retrying member. Never a provider
+    #: response body and never key material.
+    provision_error: str | None = None
+    provision_attempts: int = 0
+    #: **The owner's account-wide onboarding state** — the same field, computed
+    #: by the same function, that ``/users/me/ai-credentials/status`` returns to
+    #: that person's own dashboard. Not a property of this membership.
+    #:
+    #: It is here so an admin surface can say what is true of the person it just
+    #: acted on. Creating a credential for somebody and announcing "they now
+    #: have their own AI credential" is a claim about their account, and it was
+    #: being made from the fact that a row had been written — while
+    #: ``set_as_default`` defaults to false, so the person could be looking at
+    #: the paste-a-key wall with that exact credential listed in their settings.
+    #: The admin now reads the same answer the wall reads.
+    api_key_onboarding_state: AIKeyOnboardingState
 
 
 class ManagedAICredentialPublic(SQLModel):
@@ -209,7 +294,17 @@ class ManagedAICredentialPublic(SQLModel):
     model_override_building: str | None = None
     expiry_notification_date: datetime | None = None
     managed_by_id: uuid.UUID | None = None
-    has_api_key: bool = True  # Always true — a parent always holds a key.
+    #: Required for the same reason as ``provisioning_status`` above: an absent
+    #: mode rendered through a client-side ``!== "minted"`` fallback is the
+    #: browser deciding a record holds one shared key because a field did not
+    #: arrive.
+    provisioning_mode: ProvisioningMode
+    provider_admin_credential_id: uuid.UUID | None = None
+    # Whether this parent holds a key of its own. True for every shared record;
+    # **false for every minted one**, which is why it is computed rather than the
+    # constant it used to be. A reader who trusts the old "always true" comment
+    # concludes a minted parent's key is missing rather than absent by design.
+    has_api_key: bool = True
     is_oauth_token: bool = False  # Derived from type/key prefix (as today).
     members: list[ManagedAICredentialMember] = Field(default_factory=list)
     member_count: int = 0
@@ -226,7 +321,15 @@ class ManagedAICredentialCreate(SQLModel):
 
     name: str = Field(min_length=1, max_length=255)
     type: AICredentialType
-    api_key: str = Field(min_length=1)
+    # Required in ``shared`` mode, refused in ``minted`` mode — a minted parent
+    # holds no key. Nullable rather than required-with-a-sentinel so the omission
+    # is representable in the request model itself; the service raises the 400
+    # that ties it to ``provisioning_mode``, because that rule is a policy and
+    # policies live in one place, not in a validator on every write site.
+    api_key: str | None = Field(default=None, min_length=1)
+    provisioning_mode: ProvisioningMode = ProvisioningMode.SHARED
+    # Required in ``minted`` mode: the admin secret the keys are minted with.
+    provider_admin_credential_id: uuid.UUID | None = None
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=255)
     # Admin-curated model metadata (normalized + prefix-stripped server-side).
@@ -251,6 +354,12 @@ class ManagedAICredentialUpdate(SQLModel):
 
     Omitting ``api_key`` keeps the stored key. Omitting ``target_user_ids``
     leaves membership unchanged.
+
+    ``api_key`` on a **minted** record is refused with a 400 rather than ignored:
+    there is no stored key to replace, and silently accepting a rotation that
+    rotates nothing is how an admin comes to believe they have rolled a key they
+    have not. Rotating a minted member's key is a per-member mint, not a parent
+    edit.
     """
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
@@ -294,13 +403,77 @@ class ManagedReconcileSkip(SQLModel):
     reason: str
 
 
+#: The reasons a member removal can be refused, each with the one sentence that
+#: explains it. **Declared here, once**, because a reason code with no stated
+#: meaning is a reason code every consumer invents a meaning for — which is what
+#: happened: the delete route's 409, the member-dialog toast and the force-delete
+#: confirmation each said "in use by a published bundle" for all three reasons.
+#: An administrator blocked by a mint that is still in flight was therefore told
+#: it was a bundle conflict, whose obvious remedy is ``force=true``.
+#:
+#: A fourth reason cannot be introduced without a sentence to go with it — but
+#: **this table is not what stops it**, and the difference is worth stating
+#: because it was previously claimed the other way round. :meth:`
+#: ManagedReconcileBlock.of` looks the reason up with a ``.get`` and falls back
+#: to a generic sentence, so an unknown reason is accepted silently at runtime;
+#: that fallback is deliberate (a block an admin cannot read is worse than a
+#: vague one) and is therefore *not* enforcement. The enforcement is a test —
+#: ``test_every_block_reason_the_service_can_produce_has_a_sentence`` — which
+#: parses the services for ``ManagedReconcileBlock.of(reason=...)`` literals and
+#: fails in both directions: a reason with no sentence, and a sentence for a
+#: reason nothing produces.
+MANAGED_RECONCILE_BLOCK_MESSAGES: dict[str, str] = {
+    "in_use_bundle": (
+        "Their credential is in use by a published bundle. Removing them "
+        "anyway degrades that bundle back to \"user provides\"."
+    ),
+    "mint_in_flight": (
+        "A key is being created for them right now. Try again in a moment — "
+        "forcing it through does not help and is not needed."
+    ),
+    "remove_failed": (
+        "Removing their credential failed unexpectedly. It has been logged; "
+        "try again."
+    ),
+}
+
+
 class ManagedReconcileBlock(SQLModel):
-    """A member that could not be removed because a child is in use (Tier-2
-    blast radius). ``impact`` carries the deletion-impact payload."""
+    """A member that could not be removed, and why.
+
+    ``reason`` is the machine-readable code and ``message`` is the sentence for
+    a person — **stated by the server, rendered by every client**. The message
+    travels with the block rather than being looked up per consumer for the
+    reason the table above gives: three consumers previously each substituted a
+    constant of their own, and all three named the wrong cause for two of the
+    three reasons.
+
+    ``impact`` carries the deletion-impact payload, and only ``in_use_bundle``
+    has one.
+    """
 
     user_id: uuid.UUID
     reason: str
+    #: Human-readable, server-authored. **Required, no default**, which is what
+    #: makes :meth:`of` the only practical constructor: a default would let a
+    #: new block site ship an empty sentence, and an empty sentence is exactly
+    #: the vacuum the three clients filled with a constant of their own.
+    message: str
     impact: dict | None = None
+
+    @classmethod
+    def of(
+        cls, *, user_id: uuid.UUID, reason: str, impact: dict | None = None
+    ) -> "ManagedReconcileBlock":
+        """The only sanctioned constructor — it is what fills ``message``."""
+        return cls(
+            user_id=user_id,
+            reason=reason,
+            message=MANAGED_RECONCILE_BLOCK_MESSAGES.get(
+                reason, "This member could not be removed."
+            ),
+            impact=impact,
+        )
 
 
 class ManagedAICredentialReconcileResult(SQLModel):
