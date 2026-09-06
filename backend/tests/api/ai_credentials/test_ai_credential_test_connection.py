@@ -1,9 +1,20 @@
 """
 Tests for POST /ai-credentials/test-connection
 
-Scenario-based integration tests. All provider I/O is intercepted by patching
-``app.services.credentials.model_discovery_service.probe_models`` so no real
-network call is ever made.
+Scenario-based integration tests. All provider I/O is intercepted through the
+adapter registry (``stub_all_providers`` → ``registry.override_for_tests``), and
+**every test asserts on the stub's call count** — ``assert_probed()`` where a
+provider should have been reached, ``assert_not_probed()`` where the request
+must be refused before any I/O.
+
+That pairing is the point. These tests used to patch one module attribute,
+``model_discovery_service.probe_models``. The moment the dispatch stopped being
+a global in that module the patch would still have *resolved* — and the tests
+whose assertions do not depend on the stub's specific return value (the
+invalid-key ones especially, since a fake key really does get a 401) would have
+gone on passing while calling api.anthropic.com from CI. Replacing what the
+registry returns closes the "went around the patch" hole; counting the calls
+closes the "never happened" one. A fixture that is merely present proves nothing.
 
 Scenarios:
   1. Happy-path (Add form — api_key only, no credential_id)
@@ -28,7 +39,6 @@ Scenarios:
   10. Response shape invariant: model_count == len(models) always
 """
 import uuid
-from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -37,43 +47,26 @@ from tests.utils.ai_credential import (
     create_random_ai_credential,
     get_ai_credential,
 )
+from tests.utils.ai_provider import (
+    probe_invalid_key,
+    probe_skip,
+    probe_success,
+    stub_all_providers,
+)
 from tests.utils.user import create_random_user, user_authentication_headers
 
-# Does its own targeted ``probe_models`` patching and never creates an
-# agent/environment, so skip the heavy agent/env stubs and the
-# default-AI-credential setup from the dir conftest.
+# Stubs providers through the registry and never creates an agent/environment,
+# so skip the heavy agent/env stubs and the default-AI-credential setup from the
+# dir conftest.
 NEEDS_AGENT_STUBS = False
 NEEDS_DEFAULT_CREDENTIALS = False
 
 _BASE = f"{settings.API_V1_STR}/ai-credentials"
-_PROBE_TARGET = "app.services.credentials.model_discovery_service.probe_models"
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _probe_success(models: list[str]):
-    """Return a probe_models AsyncMock that signals a successful listing."""
-    from app.services.credentials.model_discovery_service import ProbeResult
-    return AsyncMock(return_value=ProbeResult(ok=True, models=models, reason=None))
-
-
-def _probe_skip(reason: str):
-    """Return a probe_models AsyncMock that signals a benign skip."""
-    from app.services.credentials.model_discovery_service import ProbeResult
-    return AsyncMock(return_value=ProbeResult(ok=True, models=[], reason=reason))
-
-
-def _probe_invalid_key():
-    """Return a probe_models AsyncMock that signals a rejected key."""
-    from app.services.credentials.model_discovery_service import ProbeResult
-    return AsyncMock(
-        return_value=ProbeResult(
-            ok=False, models=[], reason="invalid_key"
-        )
-    )
-
 
 def _test_connection(client, headers, payload):
     """POST /ai-credentials/test-connection and return (status, body)."""
@@ -99,7 +92,7 @@ def test_test_connection_add_form_success(
     models_returned = ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4"]
 
     # ── Phase 1: test-connection with api_key, no credential_id ──────────
-    with patch(_PROBE_TARGET, _probe_success(models_returned)):
+    with stub_all_providers(probe_success(models_returned)) as provider:
         status, body = _test_connection(
             client, superuser_token_headers,
             {
@@ -107,6 +100,7 @@ def test_test_connection_add_form_success(
                 "api_key": "sk-ant-api03-test-fresh-key",
             },
         )
+    provider.assert_probed()
 
     assert status == 200, f"Expected 200, got {status}: {body}"
 
@@ -164,7 +158,7 @@ def test_test_connection_edit_form_persists_models(
     # ── Phase 2: test-connection with credential_id ───────────────────────
     models_returned = ["claude-sonnet-4-6", "claude-haiku-4-5"]
 
-    with patch(_PROBE_TARGET, _probe_success(models_returned)):
+    with stub_all_providers(probe_success(models_returned)) as provider:
         status, body = _test_connection(
             client, superuser_token_headers,
             {
@@ -173,6 +167,7 @@ def test_test_connection_edit_form_persists_models(
                 # no api_key — uses the stored key
             },
         )
+    provider.assert_probed()
 
     assert status == 200, f"Expected 200, got {status}: {body}"
 
@@ -206,7 +201,7 @@ def test_test_connection_oauth_token_skip(
     OAuth token (sk-ant-oat*) skip:
       - success=True, models=[], skip_reason="oauth_token_unsupported", error=None
     """
-    with patch(_PROBE_TARGET, _probe_skip("oauth_token_unsupported")):
+    with stub_all_providers(probe_skip("oauth_token_unsupported")) as provider:
         status, body = _test_connection(
             client, superuser_token_headers,
             {
@@ -214,6 +209,7 @@ def test_test_connection_oauth_token_skip(
                 "api_key": "sk-ant-oat01-oauth-token",
             },
         )
+    provider.assert_probed()
 
     assert status == 200
     assert body["success"] is True
@@ -231,7 +227,7 @@ def test_test_connection_minimax_skip(
     MiniMax has no list endpoint → skip:
       - success=True, models=[], skip_reason="no_list_endpoint", error=None
     """
-    with patch(_PROBE_TARGET, _probe_skip("no_list_endpoint")):
+    with stub_all_providers(probe_skip("no_list_endpoint")) as provider:
         status, body = _test_connection(
             client, superuser_token_headers,
             {
@@ -239,6 +235,7 @@ def test_test_connection_minimax_skip(
                 "api_key": "mm-test-key-123",
             },
         )
+    provider.assert_probed()
 
     assert status == 200
     assert body["success"] is True
@@ -256,7 +253,7 @@ def test_test_connection_openai_compatible_no_base_url_skip(
     openai_compatible without base_url → no_base_url skip:
       - success=True, models=[], skip_reason="no_base_url", error=None
     """
-    with patch(_PROBE_TARGET, _probe_skip("no_base_url")):
+    with stub_all_providers(probe_skip("no_base_url")) as provider:
         status, body = _test_connection(
             client, superuser_token_headers,
             {
@@ -265,6 +262,7 @@ def test_test_connection_openai_compatible_no_base_url_skip(
                 # no base_url supplied
             },
         )
+    provider.assert_probed()
 
     assert status == 200
     assert body["success"] is True
@@ -284,7 +282,7 @@ def test_test_connection_invalid_key(
     Provider rejects the key (401/403):
       - success=False, error="invalid_key", skip_reason=None, models=[]
     """
-    with patch(_PROBE_TARGET, _probe_invalid_key()):
+    with stub_all_providers(probe_invalid_key()) as provider:
         status, body = _test_connection(
             client, superuser_token_headers,
             {
@@ -292,6 +290,7 @@ def test_test_connection_invalid_key(
                 "api_key": "sk-ant-api03-bad-key",
             },
         )
+    provider.assert_probed()
 
     assert status == 200
     assert body["success"] is False
@@ -310,16 +309,19 @@ def test_test_connection_no_key_422(
     superuser_token_headers: dict[str, str],
 ) -> None:
     """
-    When neither api_key nor credential_id is supplied, the service raises HTTP 422.
+    When neither api_key nor credential_id is supplied, the service raises HTTP 422
+    — and no provider is contacted, because there is nothing to contact it with.
     """
-    r = client.post(
-        f"{_BASE}/test-connection",
-        headers=superuser_token_headers,
-        json={"type": "anthropic"},
-    )
+    with stub_all_providers() as provider:
+        r = client.post(
+            f"{_BASE}/test-connection",
+            headers=superuser_token_headers,
+            json={"type": "anthropic"},
+        )
     assert r.status_code == 422, (
         f"Expected 422 when no key or credential_id supplied, got {r.status_code}: {r.text}"
     )
+    provider.assert_not_probed()
 
 
 # ---------------------------------------------------------------------------
@@ -327,12 +329,18 @@ def test_test_connection_no_key_422(
 # ---------------------------------------------------------------------------
 
 def test_test_connection_unauthenticated(client: TestClient) -> None:
-    """Unauthenticated request must be rejected."""
-    r = client.post(
-        f"{_BASE}/test-connection",
-        json={"type": "anthropic", "api_key": "sk-ant-api03-any"},
-    )
+    """Unauthenticated request must be rejected before any provider call.
+
+    The payload carries a usable-looking key, so "no provider was probed" is a
+    real assertion about where the auth guard sits, not a tautology.
+    """
+    with stub_all_providers() as provider:
+        r = client.post(
+            f"{_BASE}/test-connection",
+            json={"type": "anthropic", "api_key": "sk-ant-api03-any"},
+        )
     assert r.status_code in (401, 403)
+    provider.assert_not_probed()
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +356,9 @@ def test_test_connection_credential_ownership_and_not_found(
       1. Create credential owned by superuser
       2. Another user attempts test-connection with that credential_id → 403
       3. Nonexistent credential_id → 404
+
+    Both refusals must land before any provider call: the ownership guard is
+    what stops one user spending another user's key on a probe.
     """
     # ── Phase 1: Create credential ────────────────────────────────────────
     cred = create_random_ai_credential(
@@ -363,30 +374,33 @@ def test_test_connection_credential_ownership_and_not_found(
         client=client, email=other["email"], password=other["_password"]
     )
 
-    r_cross = client.post(
-        f"{_BASE}/test-connection",
-        headers=other_headers,
-        json={
-            "type": "anthropic",
-            "credential_id": cred_id,
-        },
-    )
+    with stub_all_providers() as provider:
+        r_cross = client.post(
+            f"{_BASE}/test-connection",
+            headers=other_headers,
+            json={
+                "type": "anthropic",
+                "credential_id": cred_id,
+            },
+        )
+
+        # ── Phase 3: Nonexistent credential_id → 404 ──────────────────────
+        r_missing = client.post(
+            f"{_BASE}/test-connection",
+            headers=superuser_token_headers,
+            json={
+                "type": "anthropic",
+                "credential_id": str(uuid.uuid4()),
+            },
+        )
+
     assert r_cross.status_code == 403, (
         f"Cross-user credential_id should return 403, got {r_cross.status_code}: {r_cross.text}"
-    )
-
-    # ── Phase 3: Nonexistent credential_id → 404 ──────────────────────────
-    r_missing = client.post(
-        f"{_BASE}/test-connection",
-        headers=superuser_token_headers,
-        json={
-            "type": "anthropic",
-            "credential_id": str(uuid.uuid4()),
-        },
     )
     assert r_missing.status_code == 404, (
         f"Nonexistent credential_id should return 404, got {r_missing.status_code}: {r_missing.text}"
     )
+    provider.assert_not_probed()
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +427,7 @@ def test_test_connection_edit_invalid_key_persists_error(
     cred_id = cred["id"]
 
     # ── Phase 2: test-connection → invalid_key ────────────────────────────
-    with patch(_PROBE_TARGET, _probe_invalid_key()):
+    with stub_all_providers(probe_invalid_key()) as provider:
         status, body = _test_connection(
             client, superuser_token_headers,
             {
@@ -421,6 +435,7 @@ def test_test_connection_edit_invalid_key_persists_error(
                 "credential_id": cred_id,
             },
         )
+    provider.assert_probed()
 
     assert status == 200
     assert body["success"] is False
@@ -459,7 +474,7 @@ def test_test_connection_edit_skip_persists_skip_reason(
     cred_id = cred["id"]
 
     # ── Phase 2: test-connection → oauth skip ─────────────────────────────
-    with patch(_PROBE_TARGET, _probe_skip("oauth_token_unsupported")):
+    with stub_all_providers(probe_skip("oauth_token_unsupported")) as provider:
         status, body = _test_connection(
             client, superuser_token_headers,
             {
@@ -467,6 +482,7 @@ def test_test_connection_edit_skip_persists_skip_reason(
                 "credential_id": cred_id,
             },
         )
+    provider.assert_probed()
 
     assert status == 200
     assert body["success"] is True
@@ -492,29 +508,32 @@ def test_test_connection_model_count_invariant(
     """
     # Success with list
     models_list = ["m1", "m2", "m3", "m4", "m5"]
-    with patch(_PROBE_TARGET, _probe_success(models_list)):
+    with stub_all_providers(probe_success(models_list)) as provider:
         _, body = _test_connection(
             client, superuser_token_headers,
             {"type": "openai", "api_key": "sk-openai-count-test"},
         )
+    provider.assert_probed()
     assert body["model_count"] == len(body["models"])
     assert body["model_count"] == 5
 
     # Skip (empty list)
-    with patch(_PROBE_TARGET, _probe_skip("no_list_endpoint")):
+    with stub_all_providers(probe_skip("no_list_endpoint")) as provider:
         _, body = _test_connection(
             client, superuser_token_headers,
             {"type": "minimax", "api_key": "mm-count-test"},
         )
+    provider.assert_probed()
     assert body["model_count"] == len(body["models"])
     assert body["model_count"] == 0
 
     # invalid_key (empty list)
-    with patch(_PROBE_TARGET, _probe_invalid_key()):
+    with stub_all_providers(probe_invalid_key()) as provider:
         _, body = _test_connection(
             client, superuser_token_headers,
             {"type": "anthropic", "api_key": "sk-ant-api03-bad"},
         )
+    provider.assert_probed()
     assert body["model_count"] == len(body["models"])
     assert body["model_count"] == 0
 
@@ -545,7 +564,7 @@ def test_test_connection_add_form_does_not_touch_other_credentials(
     )
 
     # ── Phase 2: test-connection with unrelated api_key ───────────────────
-    with patch(_PROBE_TARGET, _probe_success(["some-model"])):
+    with stub_all_providers(probe_success(["some-model"])) as provider:
         _test_connection(
             client, superuser_token_headers,
             {
@@ -553,6 +572,7 @@ def test_test_connection_add_form_does_not_touch_other_credentials(
                 "api_key": "sk-ant-api03-fresh-probe-key",
             },
         )
+    provider.assert_probed()
 
     # ── Phase 3: Both stored credentials are unchanged ────────────────────
     after_a = get_ai_credential(client, superuser_token_headers, cred_a["id"])

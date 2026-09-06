@@ -52,10 +52,12 @@ CREATE_SESSION_TARGETS_BASE = [
     # untouched test transaction: a green test proving nothing. Drive B or C
     # from a domain that uses AGENT + FULL.
     #
-    # The sweep opens its own session (``repair_leader_session`` — under
-    # settings.TESTING it routes through create_session precisely so it lands on
-    # the test transaction instead of a real pooled connection).
-    "app.services.system.status_repair_scheduler.create_session",
+    # NOTE: the sweep's own leader session is no longer listed here. Every
+    # scheduler leader session now goes through ``app.core.db.leader_session``,
+    # which under settings.TESTING calls ``create_session`` resolved from
+    # ``app.core.db``'s own globals — covered by the base target above. That is
+    # structurally safer than a per-scheduler entry: a new scheduler cannot
+    # forget to add itself.
     # Pass B hands ``create_session`` to ``SessionService.initiate_stream`` when
     # it re-enters the drain for a session whose environment came back up.
     "app.services.system.status_repair_sessions.create_session",
@@ -63,6 +65,12 @@ CREATE_SESSION_TARGETS_BASE = [
     # its own, rather than holding the sweep's pinned leader connection open
     # across minutes of container round-trips.
     "app.services.system.status_repair_environments.create_session",
+    # The minted-key revoke runs fire-and-forget with a session of its own,
+    # because the caller's may be committed or closed long before it runs. BASE
+    # rather than AGENT: it is scheduled from the user-deletion routes, so a
+    # domain that only patches BASE would otherwise let a real provider call
+    # escape onto the real engine from ``tests/api/users/``.
+    "app.services.credentials.key_provisioning_service.create_session",
 ]
 
 CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
@@ -77,11 +85,10 @@ CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
     # CLIService.ensure_environment_running activates a suspended env via a fresh
     # session (CLI workspace/manifest auto-activation path).
     "app.services.cli.cli_service.create_session",
-    # Publish fires a bundle-scoped auto-update sweep as a detached background
-    # task, which opens its own session (``sweep_leader_session`` — under
-    # settings.TESTING it routes through create_session precisely so it lands on
-    # the test transaction instead of a real pooled connection).
-    "app.services.bundles.install_service.create_session",
+    # NOTE: the bundle auto-update sweep's leader session is no longer listed
+    # here — see the note in CREATE_SESSION_TARGETS_BASE. It routes through
+    # ``app.core.db.leader_session``, which the base ``app.core.db.create_session``
+    # target already covers.
     # RoutingTraceService.persist deliberately opens its OWN short-lived session
     # rather than borrowing the caller's (a diagnostic write must never commit or
     # roll back the routing transaction it observes). Under tests that own session
@@ -104,6 +111,14 @@ BACKGROUND_TASK_TARGETS_BASE = [
     # BACKGROUND_TASK_TARGETS_FULL. Driving Pass C under BASE alone leaks a real
     # background task.
     "app.services.system.status_repair_sessions.create_task_with_error_logging",
+    # Reconcile, deactivation and the user-deletion routes are synchronous and
+    # hand their provider revocations to the background loop. BASE, not FULL,
+    # for the same cross-domain reason as the ``create_session`` target above and
+    # for a sharper one: the sites that schedule a revocation are the *user*
+    # routes, so a users-domain test running under BASE would otherwise let a
+    # real revocation coroutine escape onto the loop — which is exactly what the
+    # justification comment claimed was already handled.
+    "app.services.credentials.key_provisioning_service.create_task_with_error_logging",
 ]
 
 BACKGROUND_TASK_TARGETS_FULL = BACKGROUND_TASK_TARGETS_BASE + [
@@ -278,6 +293,45 @@ def patched_background_tasks(targets=None):
         yield
         collector.cleanup()
     set_collector(None)
+
+
+@contextmanager
+def dropped_background_tasks(targets=None):
+    """Reproduce ``create_task_with_error_logging``'s **drop** path.
+
+    The collector above is the "it ran" fixture: it captures the coroutine so a
+    test can drain it. This is the other outcome, and nothing could reach it
+    before. When the helper is called from a sync worker thread and the
+    cross-thread hand-off to the event loop fails, it logs, closes the
+    coroutine and calls ``on_drop`` — the work never happens. Most callers pass
+    no ``on_drop`` because losing the work is tolerable; at least one caller's
+    whole reason for passing one is that it is not, and that branch was
+    unreachable from the suite, so deleting the ``on_drop=`` argument left every
+    test green while the durable record it exists to write stopped being
+    written.
+
+    Faithful to the real helper rather than approximating it: close first, then
+    call ``on_drop`` — the same order and the same "must not raise" contract.
+
+    Yields the list of dropped task names, so a test can assert the drop
+    happened rather than inferring it from its consequences.
+    """
+    if targets is None:
+        targets = BACKGROUND_TASK_TARGETS_BASE
+
+    dropped: list[str] = []
+
+    def _drop(coro, task_name="background_task", on_drop=None):
+        coro.close()
+        dropped.append(task_name)
+        if on_drop is not None:
+            on_drop()
+        return None
+
+    with ExitStack() as stack:
+        for target in targets:
+            stack.enter_context(patch(target, _drop))
+        yield dropped
 
 
 @contextmanager

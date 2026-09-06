@@ -20,7 +20,16 @@ class BackgroundTaskCollector:
     def __init__(self):
         self.pending: list[tuple] = []
 
-    def __call__(self, coro, task_name="background_task"):
+    def __call__(self, coro, task_name="background_task", on_drop=None):
+        """Collect the coroutine. ``on_drop`` is accepted and never called.
+
+        The signature must track ``create_task_with_error_logging``'s or the
+        substitution breaks at the call site rather than at the seam. Not
+        calling it is correct and not a shortcut: ``on_drop`` fires only when
+        the coroutine could not be scheduled and was closed, and a collected
+        coroutine is neither — ``run_all`` will run it. A collector that fired
+        it would make every test look like the drop path.
+        """
         self.pending.append((coro, task_name))
 
     def run_all(self, max_rounds: int = 10):

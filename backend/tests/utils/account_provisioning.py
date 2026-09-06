@@ -78,7 +78,14 @@ BROKEN_SQL = "SELECT 1 FROM cinna_no_such_table_used_only_by_tests"
 # Statement fragments worth injecting against, named so test files read as
 # intent rather than as SQL trivia.
 CHILD_CREDENTIAL_INSERT = "INSERT INTO ai_credential"
-MEMBERSHIP_LOOKUP = "WHERE ai_credential.managed_credential_id ="
+# ``add_members``' prologue — the "who is already a member" query that runs
+# before any per-owner ``try``, which is why aborting it escapes ``add_members``
+# entirely and lands in ``AccountProvisioningService``'s own net. It reads the
+# **membership table** now; it used to derive membership from
+# ``ai_credential.managed_credential_id``, and the fragment moved with it.
+MEMBERSHIP_LOOKUP = (
+    "WHERE managed_ai_credential_membership.managed_credential_id ="
+)
 # The audit row's own INSERT. Aimed at to break the *recovery* code rather
 # than the work it reports on — see :func:`emit_audit_event`.
 SECURITY_EVENT_INSERT = "INSERT INTO security_event"

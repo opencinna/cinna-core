@@ -117,7 +117,6 @@ ALLOWED_UNPATCHED_SESSION_TARGETS = {
     # under the test app lifespan, so no test transaction is involved.
     "app.services.bundles.app_data_gc_scheduler.create_session",
     "app.services.bundles.app_data_orphan_scheduler.create_session",
-    "app.services.credentials.model_discovery_scheduler.create_session",
     "app.services.environments.environment_status_scheduler.create_session",
     # Admin-only env service: its module-level create_session is used only inside
     # _rebuild_env_background, a Docker-backed admin bulk-rebuild background job

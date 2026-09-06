@@ -1,8 +1,15 @@
 """Unit tests for model_discovery_service.py — service logic with mocked HTTP.
 
-No real HTTP calls are made. Provider lister functions are patched to return
-fixed lists or raise exceptions, so the logic in discover_models_for_credential
+No real HTTP calls are made. Each provider adapter's blocking lister is patched
+to return a fixed list or raise, so the logic in discover_models_for_credential
 and refresh_all_credentials is tested in isolation.
+
+The listers live in ``app/services/ai_providers/<provider>.py`` — the module
+under test dispatches through the adapter registry and owns only the DB half.
+Every test here asserts on a value that could only have come from its stub (the
+exact model list, the mapped error code), so a patch that stopped intercepting
+fails rather than quietly reaching the real provider. Where a scenario has no
+stub to reach — the skips — no network call is possible at all.
 
 Coverage:
   1. Anthropic happy path  — discovered_models, models_discovered_at set; error cleared
@@ -137,7 +144,7 @@ class TestDiscoverModelsHappyPath:
         with (
             _decrypt_returning("sk-ant-api03-legit"),
             patch(
-                "app.services.credentials.model_discovery_service._list_anthropic_models",
+                "app.services.ai_providers.anthropic._list_models_blocking",
                 return_value=model_list,
             ),
             patch("anyio.to_thread.run_sync", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a))),
@@ -159,7 +166,7 @@ class TestDiscoverModelsHappyPath:
         with (
             _decrypt_returning("sk-openai-test"),
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_models",
+                "app.services.ai_providers.openai._list_models_blocking",
                 return_value=model_list,
             ),
             patch("anyio.to_thread.run_sync", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a))),
@@ -181,7 +188,7 @@ class TestDiscoverModelsHappyPath:
         with (
             _decrypt_returning("AIza-google-key"),
             patch(
-                "app.services.credentials.model_discovery_service._list_google_models",
+                "app.services.ai_providers.google._list_models_blocking",
                 return_value=model_list,
             ),
             patch("anyio.to_thread.run_sync", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a))),
@@ -205,7 +212,7 @@ class TestDiscoverModelsHappyPath:
         with (
             _decrypt_returning("sk-compat-key", base_url="https://api.mymodel.com/v1"),
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_compatible_models",
+                "app.services.ai_providers.openai_compatible._list_models_blocking",
                 return_value=model_list,
             ),
             patch("anyio.to_thread.run_sync", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a))),
@@ -300,7 +307,7 @@ class TestDiscoverModelsHttpErrors:
         with (
             _decrypt_returning("sk-ant-api03-bad-key"),
             patch(
-                "app.services.credentials.model_discovery_service._list_anthropic_models",
+                "app.services.ai_providers.anthropic._list_models_blocking",
                 side_effect=exc,
             ),
             patch("anyio.to_thread.run_sync", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a))),
@@ -320,7 +327,7 @@ class TestDiscoverModelsHttpErrors:
         with (
             _decrypt_returning("sk-openai-forbidden"),
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_models",
+                "app.services.ai_providers.openai._list_models_blocking",
                 side_effect=exc,
             ),
             patch("anyio.to_thread.run_sync", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a))),
@@ -338,7 +345,7 @@ class TestDiscoverModelsHttpErrors:
         with (
             _decrypt_returning("sk-ant-api03-server-error"),
             patch(
-                "app.services.credentials.model_discovery_service._list_anthropic_models",
+                "app.services.ai_providers.anthropic._list_models_blocking",
                 side_effect=exc,
             ),
             patch("anyio.to_thread.run_sync", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a))),
@@ -362,7 +369,7 @@ class TestDiscoverModelsDedup:
         with (
             _decrypt_returning("sk-ant-api03-test"),
             patch(
-                "app.services.credentials.model_discovery_service._list_anthropic_models",
+                "app.services.ai_providers.anthropic._list_models_blocking",
                 return_value=raw_list,
             ),
             patch("anyio.to_thread.run_sync", new=AsyncMock(side_effect=lambda fn, *a, **kw: fn(*a))),
@@ -423,11 +430,11 @@ class TestRefreshAllCredentials:
                 side_effect=_decrypt,
             ),
             patch(
-                "app.services.credentials.model_discovery_service._list_anthropic_models",
+                "app.services.ai_providers.anthropic._list_models_blocking",
                 side_effect=_lister_anthropic,
             ),
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_models",
+                "app.services.ai_providers.openai._list_models_blocking",
                 side_effect=_lister_openai,
             ),
             patch(
@@ -476,7 +483,7 @@ class TestRefreshAllCredentials:
                 side_effect=_decrypt,
             ),
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_models",
+                "app.services.ai_providers.openai._list_models_blocking",
                 return_value=["gpt-5"],
             ),
             patch(
@@ -673,7 +680,7 @@ class TestProbeModels:
         raw = ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-sonnet-4-6"]  # dup
         with (
             patch(
-                "app.services.credentials.model_discovery_service._list_anthropic_models",
+                "app.services.ai_providers.anthropic._list_models_blocking",
                 return_value=raw,
             ),
             self._anyio_sync(),
@@ -689,7 +696,7 @@ class TestProbeModels:
         """OpenAI probe: ok=True, models returned."""
         with (
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_models",
+                "app.services.ai_providers.openai._list_models_blocking",
                 return_value=["gpt-5.4-nano", "gpt-5.4-mini"],
             ),
             self._anyio_sync(),
@@ -704,7 +711,7 @@ class TestProbeModels:
         """Google probe: ok=True, models returned (prefix stripping is in the lister)."""
         with (
             patch(
-                "app.services.credentials.model_discovery_service._list_google_models",
+                "app.services.ai_providers.google._list_models_blocking",
                 return_value=["gemini-2.5-flash", "gemini-2.5-pro"],
             ),
             self._anyio_sync(),
@@ -718,7 +725,7 @@ class TestProbeModels:
         """openai_compatible probe with base_url: ok=True."""
         with (
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_compatible_models",
+                "app.services.ai_providers.openai_compatible._list_models_blocking",
                 return_value=["custom-model-v1"],
             ),
             self._anyio_sync(),
@@ -779,7 +786,7 @@ class TestProbeModels:
         exc = self._make_http_status_error(401)
         with (
             patch(
-                "app.services.credentials.model_discovery_service._list_anthropic_models",
+                "app.services.ai_providers.anthropic._list_models_blocking",
                 side_effect=exc,
             ),
             self._anyio_sync(),
@@ -796,7 +803,7 @@ class TestProbeModels:
         exc = self._make_http_status_error(403)
         with (
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_models",
+                "app.services.ai_providers.openai._list_models_blocking",
                 side_effect=exc,
             ),
             self._anyio_sync(),
@@ -811,7 +818,7 @@ class TestProbeModels:
         exc = self._make_http_status_error(500)
         with (
             patch(
-                "app.services.credentials.model_discovery_service._list_openai_models",
+                "app.services.ai_providers.openai._list_models_blocking",
                 side_effect=exc,
             ),
             self._anyio_sync(),

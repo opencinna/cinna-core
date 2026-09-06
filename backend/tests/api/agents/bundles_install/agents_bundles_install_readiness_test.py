@@ -23,6 +23,14 @@ which surfaces the same gate verdict that the runtime gate uses):
   M. Chat short-circuit — placeholder install: system message persisted, LLM not engaged.
   N. MCP short-circuit — handle_send_message returns gate shape, not LLM.
   O. Chat gate-block still generates session title from user message.
+  P. setup-status — an existing AICredentialShare for an admin-managed
+     publisher AI credential must mask the unshareable policy: the item is
+     not reported at all (share-first reordering in ``_scan_ai_credentials``).
+  Q. setup-status — the same shape of admin-managed credential with NO share
+     reports publisher_credential_unshareable (paired with P).
+  R. setup-status — a plain shareable publisher AI credential with no share
+     reports publisher_credential_unshared, not publisher_credential_unshareable
+     (regression guard for the P/Q reordering; sibling to scenario F).
 
 A2A and webhook short-circuit tests are deferred (deep transport mocking needed).
 Gate logic already validates the A2A/webhook channels — see scenarios A–G.
@@ -37,6 +45,7 @@ import uuid
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -59,7 +68,9 @@ from tests.utils.bundle import (
     make_user_and_headers as _make_user_and_headers,
     publish_bundle as _publish,
 )
+from tests.utils.ai_provider import stub_minting_providers
 from tests.utils.credential import set_credential_sharing
+from tests.utils.key_provisioning import converge_keys
 from tests.utils.message import list_messages, send_message
 from tests.utils.session import create_session_via_api, get_session
 
@@ -332,6 +343,155 @@ def test_gate_publisher_broken_when_ai_share_deleted(
     assert len(ai_missing) >= 1
     assert ai_missing[0]["reason"] == "publisher_credential_unshared"
     assert ai_missing[0]["is_ai"] is True
+
+
+# ── Scenario F2 — Gate: publisher AI credential cannot be shared at all ──────
+#
+# The guard that refuses to share a platform-provisioned credential had no test
+# of any kind. It is not reachable from a route — ``AICredentialShare`` rows are
+# materialised only by bundle publisher wiring — so the only honest exercise of
+# it is bundle-shaped, which is what these two are.
+
+
+def _publisher_managed_child(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    *,
+    minted: bool,
+) -> uuid.UUID:
+    """Give the publisher a child credential of a managed record, and return it.
+
+    ``minted`` picks the provisioning mode. Both modes matter here: the guard
+    used to refuse only minted children, while a shared-mode child is deleted by
+    the same reconcile when its holder is removed from the record — so the
+    sharees lose access in exactly the same way, with the same absence of any
+    event telling them why.
+    """
+    admin_base = f"{API}/admin/provider-admin-credentials"
+    managed_base = f"{API}/admin/llm-providers"
+    publisher = client.get(f"{API}/users/me", headers=superuser_token_headers).json()
+
+    if minted:
+        admin_credential = client.post(
+            f"{admin_base}/",
+            headers=superuser_token_headers,
+            json={
+                "name": f"Readiness-{uuid.uuid4().hex[:8]}",
+                "provider_type": "openai",
+                "secret": "sk-admin-readiness",
+                "config": {"project_id": "proj_readiness", "spend_limit_cents": 5000},
+            },
+        )
+        assert admin_credential.status_code == 200, admin_credential.text
+        with stub_minting_providers():
+            created = client.post(
+                f"{managed_base}/",
+                headers=superuser_token_headers,
+                json={
+                    "name": f"Minted-{uuid.uuid4().hex[:8]}",
+                    "type": "openai",
+                    "provisioning_mode": "minted",
+                    "provider_admin_credential_id": admin_credential.json()["id"],
+                    "target_user_ids": [publisher["id"]],
+                },
+            )
+            assert created.status_code == 200, created.text
+            converge_keys(db)
+    else:
+        created = client.post(
+            f"{managed_base}/",
+            headers=superuser_token_headers,
+            json={
+                "name": f"Shared-{uuid.uuid4().hex[:8]}",
+                "type": "anthropic",
+                "api_key": "sk-ant-api03-readiness",
+                "target_user_ids": [publisher["id"]],
+            },
+        )
+        assert created.status_code == 200, created.text
+
+    db.expire_all()
+    record = client.get(
+        f"{managed_base}/{created.json()['record']['id']}",
+        headers=superuser_token_headers,
+    ).json()
+    member = next(m for m in record["members"] if m["user_id"] == publisher["id"])
+    assert member["child_credential_id"] is not None, member
+    return uuid.UUID(member["child_credential_id"])
+
+
+@pytest.mark.parametrize("minted", [True, False], ids=["minted", "shared"])
+def test_gate_reports_a_publisher_credential_that_can_never_be_shared(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    minted: bool,
+) -> None:
+    """F2. The install must not create a share, and must say why honestly.
+
+    Two failures used to compound here. The share was refused correctly, but the
+    refusal was caught by the install's broad ``except HTTPException`` and logged
+    as a transient hiccup — so at the seam it was a silent skip. The gate then
+    reported ``publisher_credential_unshared``, which tells the publisher to
+    share a credential the server will always refuse to share. A reason nobody
+    can act on is worse than no reason.
+    """
+    publisher_agent = create_agent_via_api(
+        client, superuser_token_headers, name=f"IR-F2-{uuid.uuid4().hex[:6]}"
+    )
+    ai_cred_id = _publisher_managed_child(
+        client, superuser_token_headers, db, minted=minted
+    )
+
+    fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
+    _make_public(client, superuser_token_headers, fresh_pub["bundle_uuid"])
+
+    bundle = db.get(AgentBundle, uuid.UUID(fresh_pub["bundle_uuid"]))
+    assert bundle is not None
+    bundle.publisher_ai_credential_conversation_id = ai_cred_id
+    db.add(bundle)
+    db.commit()
+
+    installer, installer_headers = _make_user_and_headers(client)
+    install_dict = _install(client, installer_headers, fresh_pub["bundle_id"])
+    install_id = uuid.UUID(install_dict["id"])
+    installer_id = uuid.UUID(installer["id"])
+    db.expire_all()
+
+    # No share was created — the policy held at the seam.
+    share = db.exec(
+        select(AICredentialShare).where(
+            AICredentialShare.ai_credential_id == ai_cred_id,
+            AICredentialShare.shared_with_user_id == installer_id,
+        )
+    ).first()
+    assert share is None, (
+        "A credential provisioned for one person must never be shared with an "
+        "installer; the share row proves the guard was bypassed."
+    )
+
+    r = client.get(
+        f"{API}/agents/{install_id}/setup-status", headers=installer_headers
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert body["status"] == "publisher_broken"
+    ai_missing = [m for m in body["missing"] if m["is_ai"]]
+    assert len(ai_missing) == 1, ai_missing
+    assert ai_missing[0]["reason"] == "publisher_credential_unshareable", (
+        "The gate must name the state that is true — this credential cannot be "
+        "shared — rather than 'unshared', which reads as a missing action."
+    )
+    # The chat-level copy is not on this response model (the frontend renders
+    # its own from ``missing``), so it is asserted where it is produced.
+    from app.services.bundles.install_readiness_gate import InstallReadinessGate
+
+    install_row = db.get(Agent, install_id)
+    assert install_row is not None
+    verdict = InstallReadinessGate.check(db, install_row)
+    assert "cannot be shared" in verdict.user_message
 
 
 # ── Scenario G — Gate: publisher installs own bundle, no share needed ─────────
@@ -783,3 +943,206 @@ def test_mcp_short_circuit_returns_gate_shape_without_llm(
     gate_meta = system_messages[0].get("message_metadata") or {}
     assert gate_meta.get("install_setup_required") is True
     assert gate_meta.get("setup_url") is not None
+
+
+# ── Scenario P — Gate: existing share masks the unshareable policy ──────────
+#
+# ``_scan_ai_credentials`` used to ask ``ai_credentials_service.is_shareable``
+# BEFORE looking for an ``AICredentialShare`` row, so an admin-managed
+# credential was reported as ``publisher_credential_unshareable`` even when a
+# live share already existed and the install was working. The fix checks the
+# share first: an existing share means the item isn't reported at all.
+#
+# There is no route that creates an ``AICredentialShare`` for a credential
+# that ``is_shareable`` returns False for (the share-creation path enforces
+# that predicate) — that's the guard scenario F2 covers. The only way to
+# reach "a share already exists for an unshareable credential" is the legacy
+# state the gate's own comment describes: a share created before the
+# credential became admin-managed. Since no API path can produce that state
+# today, it's written directly via ``db``, mirroring how this file already
+# uses ``db`` to mutate credential state that setup can't otherwise reach.
+
+
+def test_gate_skips_admin_managed_credential_when_legacy_share_exists(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """P. Live AICredentialShare for an admin-managed credential → not reported.
+
+    Before the fix, this setup-status call would have returned
+    ``publisher_broken`` / ``publisher_credential_unshareable`` for a install
+    that is actually working — the share is real and live. That would be the
+    gate lying about a working setup.
+    """
+    publisher_agent = create_agent_via_api(
+        client, superuser_token_headers, name=f"IR-P-{uuid.uuid4().hex[:6]}"
+    )
+    ai_cred_id = _publisher_managed_child(
+        client, superuser_token_headers, db, minted=False
+    )
+
+    fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
+    _make_public(client, superuser_token_headers, fresh_pub["bundle_uuid"])
+
+    bundle = db.get(AgentBundle, uuid.UUID(fresh_pub["bundle_uuid"]))
+    assert bundle is not None
+    bundle.publisher_ai_credential_conversation_id = ai_cred_id
+    db.add(bundle)
+    db.commit()
+
+    installer, installer_headers = _make_user_and_headers(client)
+    install_dict = _install(client, installer_headers, fresh_pub["bundle_id"])
+    install_id = uuid.UUID(install_dict["id"])
+    installer_id = uuid.UUID(installer["id"])
+    db.expire_all()
+
+    # Confirm install did NOT auto-create a share (same guard as F2) — this
+    # test's precondition is the legacy state where one exists regardless.
+    auto_share = db.exec(
+        select(AICredentialShare).where(
+            AICredentialShare.ai_credential_id == ai_cred_id,
+            AICredentialShare.shared_with_user_id == installer_id,
+        )
+    ).first()
+    assert auto_share is None, (
+        "Install must not auto-create a share for an unshareable credential; "
+        "this test simulates a share that predates that guard."
+    )
+
+    superuser = client.get(f"{API}/users/me", headers=superuser_token_headers).json()
+    legacy_share = AICredentialShare(
+        id=uuid.uuid4(),
+        ai_credential_id=ai_cred_id,
+        shared_with_user_id=installer_id,
+        shared_by_user_id=uuid.UUID(superuser["id"]),
+    )
+    db.add(legacy_share)
+    db.commit()
+    db.expire_all()
+
+    r = client.get(
+        f"{API}/agents/{install_id}/setup-status", headers=installer_headers
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert body["status"] == "ready", (
+        f"An existing share must mask the unshareable policy; got "
+        f"{body['status']} missing={body['missing']}"
+    )
+    assert body["missing"] == []
+
+
+# ── Scenario Q — Gate: same shape, no share → unshareable (paired with P) ───
+
+
+def test_gate_reports_unshareable_admin_managed_credential_without_share(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """Q. Same admin-managed credential shape as P, but with no share at all.
+
+    Twin of P: proves the reordering doesn't just always skip admin-managed
+    credentials — it only skips the ones with a live share. Without one, the
+    gate must still name the state honestly as
+    ``publisher_credential_unshareable``.
+    """
+    publisher_agent = create_agent_via_api(
+        client, superuser_token_headers, name=f"IR-Q-{uuid.uuid4().hex[:6]}"
+    )
+    ai_cred_id = _publisher_managed_child(
+        client, superuser_token_headers, db, minted=False
+    )
+
+    fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
+    _make_public(client, superuser_token_headers, fresh_pub["bundle_uuid"])
+
+    bundle = db.get(AgentBundle, uuid.UUID(fresh_pub["bundle_uuid"]))
+    assert bundle is not None
+    bundle.publisher_ai_credential_conversation_id = ai_cred_id
+    db.add(bundle)
+    db.commit()
+
+    installer, installer_headers = _make_user_and_headers(client)
+    install_dict = _install(client, installer_headers, fresh_pub["bundle_id"])
+    install_id = uuid.UUID(install_dict["id"])
+    db.expire_all()
+
+    r = client.get(
+        f"{API}/agents/{install_id}/setup-status", headers=installer_headers
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert body["status"] == "publisher_broken"
+    ai_missing = [m for m in body["missing"] if m["is_ai"]]
+    assert len(ai_missing) == 1, ai_missing
+    assert ai_missing[0]["reason"] == "publisher_credential_unshareable"
+
+
+# ── Scenario R — Gate: plain shareable credential, no share → unshared ──────
+
+
+def test_gate_reports_unshared_for_shareable_credential_without_share(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """R. A non-admin-managed publisher AI credential with no share → unshared.
+
+    Sibling regression guard to P/Q: proves the reordering distinguishes the
+    two reasons correctly rather than collapsing them — a credential that
+    *could* be shared (policy allows it) but currently isn't must still say
+    ``publisher_credential_unshared``, never ``publisher_credential_unshareable``.
+    Same shape as scenario F, kept here so P/Q/R read as one deliberate
+    before/after triplet for the reordering fix.
+    """
+    publisher_agent = create_agent_via_api(
+        client, superuser_token_headers, name=f"IR-R-{uuid.uuid4().hex[:6]}"
+    )
+    ai_cred_data = create_random_ai_credential(
+        client, superuser_token_headers, set_default=True
+    )
+    ai_cred_id = uuid.UUID(ai_cred_data["id"])
+
+    fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
+    _make_public(client, superuser_token_headers, fresh_pub["bundle_uuid"])
+
+    bundle = db.get(AgentBundle, uuid.UUID(fresh_pub["bundle_uuid"]))
+    assert bundle is not None
+    bundle.publisher_ai_credential_conversation_id = ai_cred_id
+    db.add(bundle)
+    db.commit()
+
+    installer, installer_headers = _make_user_and_headers(client)
+    install_dict = _install(client, installer_headers, fresh_pub["bundle_id"])
+    install_id = uuid.UUID(install_dict["id"])
+    installer_id = uuid.UUID(installer["id"])
+    db.expire_all()
+
+    share = db.exec(
+        select(AICredentialShare).where(
+            AICredentialShare.ai_credential_id == ai_cred_id,
+            AICredentialShare.shared_with_user_id == installer_id,
+        )
+    ).first()
+    assert share is not None, "Install must auto-create a share for a shareable credential"
+    db.delete(share)
+    db.commit()
+    db.expire_all()
+
+    r = client.get(
+        f"{API}/agents/{install_id}/setup-status", headers=installer_headers
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert body["status"] == "publisher_broken"
+    ai_missing = [m for m in body["missing"] if m["is_ai"]]
+    assert len(ai_missing) == 1, ai_missing
+    assert ai_missing[0]["reason"] == "publisher_credential_unshared", (
+        "A credential the policy still allows sharing must say 'unshared', "
+        "not 'unshareable' — the two reasons must not collapse."
+    )

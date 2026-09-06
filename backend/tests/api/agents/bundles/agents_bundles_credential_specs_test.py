@@ -24,6 +24,10 @@ Scenarios:
      hand-built as ``provided_by="publisher"`` but the underlying credential
      is not shareable.
   J. Smoke: on-disk ``manifest.json`` mirrors the new spec shape after publish.
+  K. ``POST /agents/{id}/publish`` returns ``publish_notices == []`` when the
+     publisher AI credential is a plain, shareable, user-owned row.
+  L. ``POST /agents/{id}/publish`` returns exactly one notice naming the mode
+     when the publisher AI credential is admin-managed (unshareable).
 
 Notes:
   - All tests operate via the API layer only.
@@ -40,6 +44,7 @@ Notes:
     service method directly for this one scenario and call it out clearly.
 """
 import json
+import uuid
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -658,3 +663,173 @@ def test_manifest_on_disk_contains_new_spec_fields(
     assert spec["provided_by"] == "publisher"
     assert spec["publisher_credential_id"] == shareable_cred["id"]
     assert spec["allow_sharing"] is True
+
+
+# ── Helper: admin-managed (shared-mode) AI credential ────────────────────────
+
+
+def _create_admin_managed_ai_credential(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    *,
+    credential_type: str = "anthropic",
+) -> str:
+    """Create a shared-mode managed AI credential; return the caller's child id.
+
+    Fully API-driven: ``POST /admin/llm-providers/`` with
+    ``provisioning_mode="shared"`` stamps ``is_admin_managed=True`` on each
+    member's own child ``AICredential`` row synchronously (no key-provisioning
+    scheduler involved, unlike ``provisioning_mode="minted"``). The superuser
+    is both the admin creating the record and its only member, matching how
+    ``tests/api/agents/bundles_install/agents_bundles_install_readiness_test.py``
+    (``_publisher_managed_child``) sets up the same shape.
+    """
+    publisher = client.get(f"{API}/users/me", headers=superuser_token_headers).json()
+    created = client.post(
+        f"{API}/admin/llm-providers/",
+        headers=superuser_token_headers,
+        json={
+            "name": f"Managed-{uuid.uuid4().hex[:8]}",
+            "type": credential_type,
+            "provisioning_mode": "shared",
+            "api_key": "sk-ant-api03-managed-notice",
+            "target_user_ids": [publisher["id"]],
+        },
+    )
+    assert created.status_code == 200, created.text
+    record = client.get(
+        f"{API}/admin/llm-providers/{created.json()['record']['id']}",
+        headers=superuser_token_headers,
+    ).json()
+    member = next(m for m in record["members"] if m["user_id"] == publisher["id"])
+    assert member["child_credential_id"] is not None, member
+    return member["child_credential_id"]
+
+
+# ── Scenario K: publish_notices — plain credential emits no notices ─────────
+
+
+def test_publish_notices_empty_for_plain_publisher_ai_credential(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """K. ``publish_notices`` is empty when the publisher AI credential is a
+    normal, shareable, user-owned row.
+
+    ``publish_notices`` is a REQUIRED field on ``AgentBundleRevisionPublic``
+    (empty list is the normal case) — this guards against the field silently
+    disappearing as much as it guards the "no notice for a fine credential"
+    behaviour.
+    """
+    agent = create_agent_via_api(
+        client, superuser_token_headers, name="CredSpec-K-Agent"
+    )
+    drain_tasks()
+
+    first = client.post(
+        f"{API}/agents/{agent['id']}/publish",
+        headers=superuser_token_headers,
+        json={},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["publish_notices"] == []
+    drain_tasks()
+
+    fresh = client.get(
+        f"{API}/agents/{agent['id']}", headers=superuser_token_headers
+    ).json()
+    bundle_uuid = fresh["bundle_uuid"]
+    assert bundle_uuid is not None
+
+    ai_cred = create_random_ai_credential(client, superuser_token_headers)
+    r = client.patch(
+        f"{API}/bundles/{bundle_uuid}",
+        headers=superuser_token_headers,
+        json={"publisher_ai_credential_conversation_id": ai_cred["id"]},
+    )
+    assert r.status_code == 200, r.text
+
+    second = client.post(
+        f"{API}/agents/{agent['id']}/publish",
+        headers=superuser_token_headers,
+        json={},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["publish_notices"] == [], (
+        f"Expected no notices for a plain shareable AI credential; got "
+        f"{second.json()['publish_notices']}"
+    )
+    drain_tasks()
+
+
+# ── Scenario L: publish_notices — admin-managed credential ───────────────────
+
+
+def test_publish_notices_flags_admin_managed_publisher_ai_credential(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """L. Publish names the mode and warns installers will supply their own
+    key when the publisher AI credential is admin-managed.
+
+    Regression guard for ``PublishService.publisher_ai_credential_notices``:
+    before it existed, this fact only ever reached the *installer*, on their
+    setup screen, after installing something that silently falls back to
+    their own key. The publisher who wired the credential never saw it.
+
+    Wiring order matters: ``publisher_ai_credential_conversation_id`` is set
+    via ``PATCH /bundles/{uuid}`` *after* the first publish (the SDK-match
+    check in ``BundleService.update_bundle`` needs the publisher install's
+    active environment to exist), so this publishes once to create the
+    bundle + env, PATCHes the wiring, then republishes to observe the notice
+    on the second revision.
+    """
+    agent = create_agent_via_api(
+        client, superuser_token_headers, name="CredSpec-L-Agent"
+    )
+    drain_tasks()
+
+    first = client.post(
+        f"{API}/agents/{agent['id']}/publish",
+        headers=superuser_token_headers,
+        json={},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["publish_notices"] == []
+    drain_tasks()
+
+    fresh = client.get(
+        f"{API}/agents/{agent['id']}", headers=superuser_token_headers
+    ).json()
+    bundle_uuid = fresh["bundle_uuid"]
+    assert bundle_uuid is not None
+
+    managed_cred_id = _create_admin_managed_ai_credential(
+        client, superuser_token_headers
+    )
+    managed_cred = client.get(
+        f"{API}/ai-credentials/{managed_cred_id}", headers=superuser_token_headers
+    ).json()
+    r = client.patch(
+        f"{API}/bundles/{bundle_uuid}",
+        headers=superuser_token_headers,
+        json={"publisher_ai_credential_conversation_id": managed_cred_id},
+    )
+    assert r.status_code == 200, r.text
+
+    second = client.post(
+        f"{API}/agents/{agent['id']}/publish",
+        headers=superuser_token_headers,
+        json={},
+    )
+    assert second.status_code == 200, second.text
+    notices = second.json()["publish_notices"]
+    assert len(notices) == 1, f"Expected exactly one notice; got {notices}"
+    notice = notices[0]
+    # Asserted loosely on content, not exact wording — the copy is free to
+    # change (and did, mid-review) as long as it still names the mode, names
+    # the credential, and says installers fall back to their own key.
+    assert "Conversation" in notice, notice
+    assert managed_cred["name"] in notice, notice
+    assert "their own key" in notice, notice
+    drain_tasks()
