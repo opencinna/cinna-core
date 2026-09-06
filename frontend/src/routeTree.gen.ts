@@ -16,8 +16,10 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as DesktopRouteImport } from './routes/desktop'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
+import { Route as AcceptInviteRouteImport } from './routes/accept-invite'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LoginIndexRouteImport } from './routes/login/index'
+import { Route as AcceptInviteIndexRouteImport } from './routes/accept-invite/index'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as WebappWebappTokenRouteImport } from './routes/webapp/$webappToken'
 import { Route as OauthMcpConsentRouteImport } from './routes/oauth/mcp-consent'
@@ -28,6 +30,7 @@ import { Route as DesktopAuthConsentRouteImport } from './routes/desktop-auth/co
 import { Route as DashboardFullscreenDashboardIdRouteImport } from './routes/dashboard-fullscreen/$dashboardId'
 import { Route as AppAuthConsentRouteImport } from './routes/app-auth/consent'
 import { Route as AgentApiSpecAgentIdRouteImport } from './routes/agent-api-spec/$agentId'
+import { Route as AcceptInviteDoneRouteImport } from './routes/accept-invite/done'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutSessionsRouteImport } from './routes/_layout/sessions'
 import { Route as LayoutKnowledgeSourcesRouteImport } from './routes/_layout/knowledge-sources'
@@ -103,6 +106,11 @@ const ConfirmEmailRoute = ConfirmEmailRouteImport.update({
   path: '/confirm-email',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AcceptInviteRoute = AcceptInviteRouteImport.update({
+  id: '/accept-invite',
+  path: '/accept-invite',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LayoutRoute = LayoutRouteImport.update({
   id: '/_layout',
   getParentRoute: () => rootRouteImport,
@@ -111,6 +119,11 @@ const LoginIndexRoute = LoginIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => LoginRoute,
+} as any)
+const AcceptInviteIndexRoute = AcceptInviteIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AcceptInviteRoute,
 } as any)
 const LayoutIndexRoute = LayoutIndexRouteImport.update({
   id: '/',
@@ -162,6 +175,11 @@ const AgentApiSpecAgentIdRoute = AgentApiSpecAgentIdRouteImport.update({
   id: '/agent-api-spec/$agentId',
   path: '/agent-api-spec/$agentId',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AcceptInviteDoneRoute = AcceptInviteDoneRouteImport.update({
+  id: '/done',
+  path: '/done',
+  getParentRoute: () => AcceptInviteRoute,
 } as any)
 const LayoutSettingsRoute = LayoutSettingsRouteImport.update({
   id: '/settings',
@@ -376,6 +394,7 @@ const LayoutAdminMarketplacePluginPluginIdRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
+  '/accept-invite': typeof AcceptInviteRouteWithChildren
   '/confirm-email': typeof ConfirmEmailRoute
   '/desktop': typeof DesktopRoute
   '/device': typeof DeviceRoute
@@ -391,6 +410,7 @@ export interface FileRoutesByFullPath {
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/sessions': typeof LayoutSessionsRouteWithChildren
   '/settings': typeof LayoutSettingsRoute
+  '/accept-invite/done': typeof AcceptInviteDoneRoute
   '/agent-api-spec/$agentId': typeof AgentApiSpecAgentIdRoute
   '/app-auth/consent': typeof AppAuthConsentRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
@@ -401,6 +421,7 @@ export interface FileRoutesByFullPath {
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
+  '/accept-invite/': typeof AcceptInviteIndexRoute
   '/login/': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
@@ -447,6 +468,7 @@ export interface FileRoutesByTo {
   '/credentials': typeof LayoutCredentialsRoute
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/settings': typeof LayoutSettingsRoute
+  '/accept-invite/done': typeof AcceptInviteDoneRoute
   '/agent-api-spec/$agentId': typeof AgentApiSpecAgentIdRoute
   '/app-auth/consent': typeof AppAuthConsentRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
@@ -457,6 +479,7 @@ export interface FileRoutesByTo {
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
+  '/accept-invite': typeof AcceptInviteIndexRoute
   '/login': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
@@ -493,6 +516,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_layout': typeof LayoutRouteWithChildren
+  '/accept-invite': typeof AcceptInviteRouteWithChildren
   '/confirm-email': typeof ConfirmEmailRoute
   '/desktop': typeof DesktopRoute
   '/device': typeof DeviceRoute
@@ -508,6 +532,7 @@ export interface FileRoutesById {
   '/_layout/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/_layout/sessions': typeof LayoutSessionsRouteWithChildren
   '/_layout/settings': typeof LayoutSettingsRoute
+  '/accept-invite/done': typeof AcceptInviteDoneRoute
   '/agent-api-spec/$agentId': typeof AgentApiSpecAgentIdRoute
   '/app-auth/consent': typeof AppAuthConsentRoute
   '/dashboard-fullscreen/$dashboardId': typeof DashboardFullscreenDashboardIdRoute
@@ -518,6 +543,7 @@ export interface FileRoutesById {
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/_layout/': typeof LayoutIndexRoute
+  '/accept-invite/': typeof AcceptInviteIndexRoute
   '/login/': typeof LoginIndexRoute
   '/_layout/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/_layout/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
@@ -554,6 +580,7 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/accept-invite'
     | '/confirm-email'
     | '/desktop'
     | '/device'
@@ -569,6 +596,7 @@ export interface FileRouteTypes {
     | '/knowledge-sources'
     | '/sessions'
     | '/settings'
+    | '/accept-invite/done'
     | '/agent-api-spec/$agentId'
     | '/app-auth/consent'
     | '/dashboard-fullscreen/$dashboardId'
@@ -579,6 +607,7 @@ export interface FileRouteTypes {
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/'
+    | '/accept-invite/'
     | '/login/'
     | '/admin/agent-envs'
     | '/admin/llm-providers'
@@ -625,6 +654,7 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/knowledge-sources'
     | '/settings'
+    | '/accept-invite/done'
     | '/agent-api-spec/$agentId'
     | '/app-auth/consent'
     | '/dashboard-fullscreen/$dashboardId'
@@ -635,6 +665,7 @@ export interface FileRouteTypes {
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/'
+    | '/accept-invite'
     | '/login'
     | '/admin/agent-envs'
     | '/admin/llm-providers'
@@ -670,6 +701,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_layout'
+    | '/accept-invite'
     | '/confirm-email'
     | '/desktop'
     | '/device'
@@ -685,6 +717,7 @@ export interface FileRouteTypes {
     | '/_layout/knowledge-sources'
     | '/_layout/sessions'
     | '/_layout/settings'
+    | '/accept-invite/done'
     | '/agent-api-spec/$agentId'
     | '/app-auth/consent'
     | '/dashboard-fullscreen/$dashboardId'
@@ -695,6 +728,7 @@ export interface FileRouteTypes {
     | '/oauth/mcp-consent'
     | '/webapp/$webappToken'
     | '/_layout/'
+    | '/accept-invite/'
     | '/login/'
     | '/_layout/admin/agent-envs'
     | '/_layout/admin/llm-providers'
@@ -731,6 +765,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   LayoutRoute: typeof LayoutRouteWithChildren
+  AcceptInviteRoute: typeof AcceptInviteRouteWithChildren
   ConfirmEmailRoute: typeof ConfirmEmailRoute
   DesktopRoute: typeof DesktopRoute
   DeviceRoute: typeof DeviceRoute
@@ -801,6 +836,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConfirmEmailRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/accept-invite': {
+      id: '/accept-invite'
+      path: '/accept-invite'
+      fullPath: '/accept-invite'
+      preLoaderRoute: typeof AcceptInviteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_layout': {
       id: '/_layout'
       path: ''
@@ -814,6 +856,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/login/'
       preLoaderRoute: typeof LoginIndexRouteImport
       parentRoute: typeof LoginRoute
+    }
+    '/accept-invite/': {
+      id: '/accept-invite/'
+      path: '/'
+      fullPath: '/accept-invite/'
+      preLoaderRoute: typeof AcceptInviteIndexRouteImport
+      parentRoute: typeof AcceptInviteRoute
     }
     '/_layout/': {
       id: '/_layout/'
@@ -884,6 +933,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/agent-api-spec/$agentId'
       preLoaderRoute: typeof AgentApiSpecAgentIdRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/accept-invite/done': {
+      id: '/accept-invite/done'
+      path: '/done'
+      fullPath: '/accept-invite/done'
+      preLoaderRoute: typeof AcceptInviteDoneRouteImport
+      parentRoute: typeof AcceptInviteRoute
     }
     '/_layout/settings': {
       id: '/_layout/settings'
@@ -1299,6 +1355,20 @@ const LayoutRouteChildren: LayoutRouteChildren = {
 const LayoutRouteWithChildren =
   LayoutRoute._addFileChildren(LayoutRouteChildren)
 
+interface AcceptInviteRouteChildren {
+  AcceptInviteDoneRoute: typeof AcceptInviteDoneRoute
+  AcceptInviteIndexRoute: typeof AcceptInviteIndexRoute
+}
+
+const AcceptInviteRouteChildren: AcceptInviteRouteChildren = {
+  AcceptInviteDoneRoute: AcceptInviteDoneRoute,
+  AcceptInviteIndexRoute: AcceptInviteIndexRoute,
+}
+
+const AcceptInviteRouteWithChildren = AcceptInviteRoute._addFileChildren(
+  AcceptInviteRouteChildren,
+)
+
 interface LoginRouteChildren {
   LoginMfaRoute: typeof LoginMfaRoute
   LoginIndexRoute: typeof LoginIndexRoute
@@ -1313,6 +1383,7 @@ const LoginRouteWithChildren = LoginRoute._addFileChildren(LoginRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   LayoutRoute: LayoutRouteWithChildren,
+  AcceptInviteRoute: AcceptInviteRouteWithChildren,
   ConfirmEmailRoute: ConfirmEmailRoute,
   DesktopRoute: DesktopRoute,
   DeviceRoute: DeviceRoute,

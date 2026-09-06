@@ -66,9 +66,19 @@ function RecoverPassword() {
   const mutation = useMutation({
     mutationFn: recoverPassword,
     onSuccess: () => {
-      showSuccessToast("Password recovery email sent successfully")
+      // Non-committal on purpose. The endpoint answers identically for a known
+      // and an unknown address — it was changed to stop being an account
+      // enumeration oracle — so the UI must not assert that mail went out to
+      // an address that may not exist. Saying "sent successfully" here would
+      // hand back exactly the confirmation the backend refuses to give.
+      showSuccessToast(
+        "If an account exists for that email, a recovery link has been sent.",
+      )
       form.reset()
     },
+    // Effectively dead for the unknown-address case since that path now
+    // returns the same 200 as a known one. Kept for genuine failures —
+    // validation, rate limiting, an unreachable server.
     onError: handleError.bind(showErrorToast),
   })
 

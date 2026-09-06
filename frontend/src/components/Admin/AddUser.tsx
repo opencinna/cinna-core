@@ -52,7 +52,22 @@ const formSchema = z
 
 type FormData = z.infer<typeof formSchema>
 
-const AddUser = () => {
+interface AddUserProps {
+  /**
+   * Replaces the default trigger button.
+   *
+   * The users page presents this dialog as the *secondary* way to add someone
+   * — inviting is the primary one — so it supplies its own, quieter button
+   * rather than the page reaching in to restyle this component's.
+   *
+   * A single element, not `ReactNode`: it goes straight into
+   * `DialogTrigger asChild`, and Radix's `Slot` throws on a string or a
+   * fragment.
+   */
+  trigger?: React.ReactElement
+}
+
+const AddUser = ({ trigger }: AddUserProps) => {
   const [isOpen, setIsOpen] = useState(false)
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -92,10 +107,12 @@ const AddUser = () => {
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
-        <Button className="my-4">
-          <Plus className="mr-2" />
-          Add User
-        </Button>
+        {trigger ?? (
+          <Button className="my-4">
+            <Plus className="mr-2" />
+            Add User
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>

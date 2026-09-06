@@ -11,6 +11,7 @@ import {
 import useAuth from "@/hooks/useAuth"
 import DeleteUser from "./DeleteUser"
 import EditUser from "./EditUser"
+import { InvitationActions } from "./InvitationActions"
 
 interface UserActionsMenuProps {
   user: UserPublic
@@ -30,6 +31,10 @@ export const UserActionsMenu = ({ user }: UserActionsMenuProps) => {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {/* Renders nothing unless this account has an outstanding invitation.
+            Placed first: for an invited account the invitation actions are the
+            reason the admin opened this menu. */}
+        <InvitationActions user={user} onSuccess={() => setOpen(false)} />
         <EditUser user={user} onSuccess={() => setOpen(false)} />
         {!isSelf && (
           <DeleteUser id={user.id} onSuccess={() => setOpen(false)} />

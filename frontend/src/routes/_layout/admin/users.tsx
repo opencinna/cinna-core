@@ -5,8 +5,10 @@ import { Suspense, useEffect } from "react"
 import { type UserPublic, UsersService } from "@/client"
 import AddUser from "@/components/Admin/AddUser"
 import { columns, type UserTableData } from "@/components/Admin/columns"
+import InviteUserDialog from "@/components/Admin/InviteUserDialog"
 import { DataTable } from "@/components/Common/DataTable"
 import PendingUsers from "@/components/Pending/PendingUsers"
+import { Button } from "@/components/ui/button"
 import useAuth from "@/hooks/useAuth"
 import { usePageHeader } from "@/routes/_layout"
 import { APP_NAME } from "@/utils"
@@ -35,7 +37,8 @@ function UsersTableContent() {
 
   const tableData: UserTableData[] = users.data.map((user: UserPublic) => ({
     ...user,
-    isCurrentUser: currentUser && 'id' in currentUser ? currentUser.id === user.id : false,
+    isCurrentUser:
+      currentUser && "id" in currentUser ? currentUser.id === user.id : false,
   }))
 
   return <DataTable columns={columns} data={tableData} />
@@ -57,10 +60,25 @@ function AdminUsers() {
       <>
         <div className="min-w-0">
           <h1 className="text-lg font-semibold truncate">Users</h1>
-          <p className="text-xs text-muted-foreground">Manage user accounts, roles, and permissions</p>
+          <p className="text-xs text-muted-foreground">
+            Manage user accounts, roles, and permissions
+          </p>
         </div>
-        <AddUser />
-      </>
+        {/* Inviting is the primary path: it creates the account without a
+            password and lets its owner choose how to sign in. Creating one
+            with a password the admin picks and then has to transmit stays
+            available, one step back. */}
+        <div className="flex items-center gap-2">
+          <AddUser
+            trigger={
+              <Button variant="outline" className="my-4">
+                Create with password
+              </Button>
+            }
+          />
+          <InviteUserDialog />
+        </div>
+      </>,
     )
     return () => setHeaderContent(null)
   }, [setHeaderContent])
