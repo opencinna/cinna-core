@@ -13,6 +13,7 @@ from app.core.config import settings
 
 SERVER_CONFIG_URL = f"{settings.API_V1_STR}/admin/server-config"
 ACCESS_POLICY_URL = f"{settings.API_V1_STR}/server-config/access-policy"
+LANDING_URL = f"{settings.API_V1_STR}/server-config/landing"
 
 
 def get_server_config(
@@ -43,5 +44,12 @@ def set_access_policy(
 def get_public_access_policy(client: TestClient) -> dict:
     """Read the anonymous access-policy projection (no auth header)."""
     response = client.get(ACCESS_POLICY_URL)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def get_landing_page(client: TestClient) -> dict:
+    """Read the anonymous `/start` landing-page projection (no auth header)."""
+    response = client.get(LANDING_URL)
     assert response.status_code == 200, response.text
     return response.json()

@@ -34,6 +34,7 @@ from tests.utils.server_config import (
     get_server_config,
     set_access_policy,
 )
+from tests.utils.utils import random_email, random_lower_string
 
 # The documented shape of the public projection. Asserted as an exact set:
 # a field added here without a deliberate decision is a leak, and the two
@@ -45,6 +46,16 @@ PUBLIC_POLICY_FIELDS = {
     "google_auto_register",
     "desktop_enabled",
     "project_name",
+    # Added deliberately in phase 4: the *answer* to "may someone self-register
+    # with a password here?", so /login, /signup and /start stop recombining
+    # ``registration_open`` and ``password_auth_enabled`` for themselves (they
+    # had already drifted to two different answers). Derived from two fields
+    # already projected here, so it discloses nothing new.
+    #
+    # ``landing_markdown`` is deliberately NOT here: it is content, not
+    # front-door policy, and it is served by ``GET /server-config/landing`` so
+    # every login page load does not download a landing page it never renders.
+    "password_signup_available",
 }
 
 
@@ -137,13 +148,94 @@ def test_public_projection_tracks_the_policy_and_withholds_the_private_fields(
     assert admin_view["registration_mode"] == "invite_only"
 
 
+def test_password_signup_available_matches_the_real_signup_outcome_across_the_matrix(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    ``password_signup_available`` is the single answer `/login`, `/signup` and
+    `/start` are meant to render on, instead of each recombining
+    ``registration_open`` and ``password_auth_enabled`` for itself (the two
+    pages had already drifted to different answers — see the field's own
+    docstring on ``AccessPolicyPublic``). Proven against the one thing that
+    cannot lie about it: whether ``POST /users/signup`` actually lets someone
+    in, across the full (``registration_mode``, ``password_auth_enabled``)
+    matrix.
+
+    Row 3 is the live bug a reviewer caught: an invite-only instance that
+    still accepts passwords. ``password_signup_available`` is False there for
+    the same reason it is False when password auth itself is off (self-serve
+    registration is closed either way) — but those are not the same instance,
+    and must stay distinguishable. They are: through ``password_auth_enabled``
+    itself, which stays True on the invite-only row (an invited user can still
+    set a password) and is False only when the switch is actually off. A
+    ``/start`` or `/login` that only read ``password_signup_available`` would
+    correctly hide the signup button in both rows without conflating them,
+    because it never has to ask the question the collapsed field would
+    answer wrong.
+    """
+    # A Google-linked administrator, established once, so every row below
+    # that turns password auth off satisfies the lockout precondition.
+    _link_google_to_the_superuser(client)
+
+    # (registration_mode, password_auth_enabled, password_signup_available)
+    matrix = [
+        ("open", True, True),
+        ("open", False, False),
+        ("invite_only", True, False),
+        ("invite_only", False, False),
+    ]
+
+    for registration_mode, password_auth_enabled, expected_available in matrix:
+        if password_auth_enabled:
+            set_access_policy(
+                client,
+                superuser_token_headers,
+                registration_mode=registration_mode,
+                password_auth_enabled=True,
+            )
+        else:
+            # Disabling password auth is refused unless Google OAuth is
+            # configured for the request that flips the switch.
+            with (
+                patch.object(settings, "GOOGLE_CLIENT_ID", "test-client-id"),
+                patch.object(settings, "GOOGLE_CLIENT_SECRET", "test-client-secret"),
+            ):
+                set_access_policy(
+                    client,
+                    superuser_token_headers,
+                    registration_mode=registration_mode,
+                    password_auth_enabled=False,
+                )
+
+        policy = get_public_access_policy(client)
+        case = (registration_mode, password_auth_enabled)
+        assert policy["password_signup_available"] is expected_available, case
+        # The two rows where the derived field agrees (both False) are still
+        # told apart by the field it is derived from.
+        assert policy["password_auth_enabled"] is password_auth_enabled, case
+
+        signup = client.post(
+            f"{settings.API_V1_STR}/users/signup",
+            json={"email": random_email(), "password": random_lower_string()},
+        )
+        if expected_available:
+            assert signup.status_code == 200, (case, signup.text)
+        else:
+            assert signup.status_code == 403, (case, signup.text)
+            assert signup.json()["detail"] in (
+                "registration_closed",
+                "password_auth_disabled",
+            ), (case, signup.text)
+
+
 def test_access_policy_reads_are_rate_limited_per_caller(
     client: TestClient, monkeypatch
 ) -> None:
-    """The one anonymous, database-touching endpoint here has a backstop.
+    """The anonymous, database-touching reads here have a backstop.
 
-    The budget is lowered rather than the default 120 exhausted: the assertion
-    is about the boundary existing, not about its size.
+    The budget is lowered rather than the configured default exhausted: the
+    assertion is about the boundary existing, not about its size — and the
+    default moves whenever another public endpoint joins the shared limiter.
     """
     monkeypatch.setattr(settings, "ACCESS_POLICY_RATE_LIMIT_PER_MIN", 3)
 

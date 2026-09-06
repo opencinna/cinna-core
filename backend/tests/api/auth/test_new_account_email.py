@@ -118,7 +118,7 @@ def test_new_account_email_leads_with_the_desktop_landing_page(
       1. Superuser creates a user → a new-account mail is rendered and sent
       2. The button links to {FRONTEND_HOST}/desktop, labelled "Get Cinna Desktop"
       3. The retired "Go to Dashboard" label is gone
-      4. The secondary web-login row survives and points at the bare origin
+      4. The secondary web-login row survives and points at the /start hub
       5. The two URLs are distinct — link and web_link cannot collapse into one
     """
     # ── Phase 1: Create the user and capture the mail ─────────────────────
@@ -152,15 +152,22 @@ def test_new_account_email_leads_with_the_desktop_landing_page(
         'web-login row was dropped from the template or the build is stale.'
     )
     web_href = web.group(1)
-    assert web_href == _HOST_A, web_href
+    assert web_href == f"{_HOST_A}/start", web_href
 
     # ── Phase 5: The two URLs are distinct ────────────────────────────────
     # A refactor that collapses `link` and `web_link` back into one value makes
     # the button and the web row point at the same place; that must fail here.
+    #
+    # Asserted as "two different paths under the same origin", not as one
+    # prefixing the other: the prefix form only ever held because `web_link`
+    # used to be the bare host, and it would silently stop testing anything
+    # the moment `web_link` grew a path of its own — which is exactly what
+    # happened when it moved to `/start`.
     assert button_href != web_href, (
         f"link and web_link collapsed onto the same URL: {button_href}"
     )
-    assert button_href.startswith(web_href)
+    assert button_href.startswith(f"{_HOST_A}/")
+    assert web_href.startswith(f"{_HOST_A}/")
 
 
 def test_new_account_email_urls_track_frontend_host(
@@ -182,7 +189,7 @@ def test_new_account_email_urls_track_frontend_host(
         web = _WEB_LINK_RE.search(html)
         assert button is not None and web is not None, host
         assert button.group(1) == f"{host}/desktop"
-        assert web.group(1) == host
+        assert web.group(1) == f"{host}/start"
 
         # The other origin appears nowhere — nothing is baked in.
         assert other not in html
@@ -224,4 +231,4 @@ def test_new_account_email_has_no_unrendered_placeholders(
     assert mail["email"] in html                  # username / email
     assert mail["password"] in html               # password (temp credential)
     assert f"{_HOST_A}/desktop" in html           # link
-    assert f'href="{_HOST_A}"' in html            # web_link
+    assert f'href="{_HOST_A}/start"' in html      # web_link
