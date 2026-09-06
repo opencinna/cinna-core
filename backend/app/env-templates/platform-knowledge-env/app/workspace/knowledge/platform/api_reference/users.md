@@ -42,6 +42,63 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ---
 
+## POST `/api/v1/users/invite`
+**Invite User**
+
+**Request body** (`InviteUserRequest`):
+  - `email`: string (required)
+  - `full_name`: string | null
+  - `role`: string (required)
+  - `include_desktop`: boolean | null
+  - `auth_hint`: string
+  - `managed_credential_ids`: array | null
+  - `send_email`: boolean
+  - `is_active`: boolean | null
+
+**Response:** `InviteUserResponse`
+
+---
+
+## GET `/api/v1/users/{user_id}/invitation`
+**Read User Invitation**
+
+**Path parameters:**
+- `user_id`: uuid
+
+**Response:** `UserInvitationPublic`
+
+---
+
+## POST `/api/v1/users/{user_id}/invitation/resend`
+**Resend User Invitation**
+
+**Path parameters:**
+- `user_id`: uuid
+
+**Response:** `ResendInvitationResponse`
+
+---
+
+## POST `/api/v1/users/{user_id}/invitation/revoke`
+**Revoke User Invitation**
+
+**Path parameters:**
+- `user_id`: uuid
+
+**Response:** `UserInvitationPublic`
+
+---
+
+## GET `/api/v1/users/{user_id}/invitation/link`
+**Read User Invitation Link**
+
+**Path parameters:**
+- `user_id`: uuid
+
+**Response:** `InvitationLinkPublic`
+
+---
+
 ## GET `/api/v1/users/me`
 **Read User Me**
 

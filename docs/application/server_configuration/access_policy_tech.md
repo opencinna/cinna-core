@@ -51,7 +51,7 @@ Added to the existing singleton row (see [Disclaimer — tech](disclaimer_tech.m
 | `password_auth_enabled` | `bool` | `True` | When false, non-superusers cannot use any password path |
 | `google_auto_register` | `bool` | `True` | Whether a Google sign-in on an unknown email creates an account. Ignored in `invite_only` |
 | `default_user_role` | `str` (varchar 32) | `"agent-user"` | `agent-user` or `agent-developer`. `admin` rejected at validation |
-| `invite_include_desktop_default` | `bool` | `True` | Pre-ticks the invitation wizard's desktop checkbox. Presentation default only |
+| `invite_include_desktop_default` | `bool` | `True` | Pre-ticks the invitation wizard's desktop checkbox, and is the fallback the invite route applies when `InviteUserRequest.include_desktop` is `None`. The wizard reads it from the admin server-config endpoint; it is deliberately **absent** from the public `AccessPolicyPublic` projection. The value the admin actually submitted is then stored on the invitation row — the public accept page reads `include_desktop` off the invitation, never off the policy, because whether desktop was offered is a property of that invitation |
 
 None of these participate in the `disclaimer_version` bump.
 
@@ -219,8 +219,9 @@ A bare `acme.com` is therefore refused: it looks like it should work and never m
 | `POST /api/v1/users/signup` | `can_register(origin="signup")` in `UserService.register_user`, **before** the duplicate-email check | 403 + reason code |
 | `POST /api/v1/login/access-token` | `require_password_auth` **after** `authenticate` and the `is_active` check | 403 `password_auth_disabled` |
 | `POST /api/v1/auth/google/callback` | `can_register(origin="google")` in `AuthService.create_user_from_google` | 403 + reason code |
-| `POST /api/v1/password-recovery/{email}` | `is_password_auth_allowed` in `UserService.recover_password` — **silent skip**, no error | 200 generic "Password recovery email sent" |
-| `POST /api/v1/reset-password/` | `require_password_auth` in `UserService.reset_password`, after the token resolves its owner | 403 `password_auth_disabled` |
+| `POST /api/v1/password-recovery/{email}` | `is_password_auth_allowed` in `UserService.recover_password` — **silent skip**, no error | 200 generic "If an account exists for that email, a password recovery email has been sent" — the same status and body an unknown address gets (the former 404 is gone), and every other reason not to send is a silent no-op too |
+| `POST /api/v1/reset-password/` | `require_password_auth` in `UserService.reset_password`, after the token resolves its owner *and* after the never-claimed-invited-account refusal | 403 `password_auth_disabled` (the invitation refusal is a 400 `"Invalid token"` instead — the reason is the account's state, not the token's) |
+| `POST /api/v1/invitations/accept` | `is_password_auth_allowed` via `InvitationService.password_accepted` — the same predicate the lookup surfaces as `password_accepted` | The generic 400, identical to every other failure. **No 403 branch**: a distinct status for a real-but-unusable token would answer "is this token genuine" |
 | `PATCH /api/v1/users/me/password` | `_require_password_auth(session, current_user)` in the route | 403 `password_auth_disabled` |
 | `POST /api/v1/users/me/set-password` | same | 403 `password_auth_disabled` |
 | `PATCH /api/v1/users/me` (email change) | `can_change_email(session)` | 403 `"Email changes are not allowed"` |
@@ -234,7 +235,7 @@ Ordering matters on signup too: the policy refusal is raised **before** the dupl
 | Consumer | Call |
 |----------|------|
 | `RoleService.derive_default_role(*, session, is_superuser)` | `AccessPolicyService.default_role(session)` for non-superusers; superusers always `admin` |
-| `user_to_public(session, user, *, can_change_email=None)` | `can_change_email` resolved once and passed in when projecting a list (`GET /users/` resolves it once for the whole page) |
+| `user_to_public(session, user, *, can_change_email=None, invitation_status=None)` | `can_change_email` resolved once and passed in when projecting a list (`GET /users/` resolves it once for the whole page). `invitation_status` is per row and is deliberately *not* resolved inside the builder — `read_users` batches it with `InvitationService.status_map` |
 | `GET /users/me/ai-credentials/status` | builds `UserPublicWithAICredentials` with `can_change_email=AccessPolicyService.can_change_email(session)` |
 | `deps.get_current_user` | `is_account_valid(user)` |
 

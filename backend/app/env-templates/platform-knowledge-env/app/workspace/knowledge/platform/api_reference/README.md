@@ -41,6 +41,7 @@ Each file below documents one API domain.
 | Identity Contacts | [identity_contacts.md](./identity_contacts.md) | 2 |
 | Improvement Requests | [improvement_requests.md](./improvement_requests.md) | 8 |
 | Installs | [installs.md](./installs.md) | 12 |
+| Invitations | [invitations.md](./invitations.md) | 2 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
 | Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 13 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |
@@ -58,7 +59,7 @@ Each file below documents one API domain.
 | Tasks | [tasks.md](./tasks.md) | 25 |
 | User Channels | [user_channels.md](./user_channels.md) | 3 |
 | User Workspaces | [user_workspaces.md](./user_workspaces.md) | 5 |
-| Users | [users.md](./users.md) | 22 |
+| Users | [users.md](./users.md) | 27 |
 | Webapp | [webapp.md](./webapp.md) | 4 |
 | Webapp Chat | [webapp_chat.md](./webapp_chat.md) | 6 |
 | Webapp Interface Config | [webapp_interface_config.md](./webapp_interface_config.md) | 2 |

@@ -17,6 +17,10 @@ Provides user identity and session management for the platform. Users authentica
 | **Reason Code** | The machine-readable `detail` string a policy refusal returns (`registration_closed`, `email_not_allowed`, `password_auth_disabled`, `google_auto_register_disabled`) |
 | **Account-Creation Chokepoint** | `UserService.create_account` — the one and only place a `User` row is built, whatever the arrival path. Owns address normalisation, the `is_superuser ⇒ admin` invariant, the policy-derived default role, and auto-provisioning of company AI credentials |
 | **Account Origin** | `AccountOrigin` — which arrival path an account came from: `signup`, `google`, `invite`, `admin`, `external`, `seed`. Required by the chokepoint; decides whether the registration gate applies, and is stamped on the provisioning audit event |
+| **Invitation** | An administrator's offer of a pre-created, passwordless account. Exactly one `user_invitation` row per account, re-armed in place rather than duplicated. Its status is **derived, never stored** — `accepted` → `revoked` → `expired` → `pending`, in that precedence order |
+| **Invitation Token** | The HS256 JWT the invite link carries: `purpose="invite"`, `sub` = the invited address, `jti` = the row's `token_jti`, `exp` = the row's `expires_at`. Verification resolves the invitation **by `jti`**, so resending rotates the live link and every link issued before it stops working |
+| **`password_accepted`** | The single server-side answer to "may this invitee set a password" — `AccessPolicyService.is_password_auth_allowed(policy, user)`, the same predicate login uses. Surfaced as one derived boolean on the invitation lookup; the accept page renders its password form on that boolean and on nothing else |
+| **Auth Hint** | `any` / `password` / `google` on an invitation. **Presentational only**: it decides which method the email and the accept page *lead with*. It never enables a method the policy forbids and never hides one it allows |
 | **Access Token** | The JWT stored in frontend `localStorage` and auto-included in API requests |
 | **Guest Token** | Special JWT with `role=chat-guest` for unauthenticated agent chat access via guest share links |
 
@@ -43,14 +47,39 @@ Provides user identity and session management for the platform. Users authentica
 7. Confirmation email sent (if SMTP configured)
 8. User redirected to login page
 
+### Inviting a User (Admin)
+
+1. A superuser opens **Admin → Users** and clicks **Invite user**. (Creating an account with an admin-chosen password is still there, one step back, as **Create with password**.)
+2. Step 1 collects the address, an optional full name, the role, the sign-in method to lead with, and whether to send the email at all
+3. Step 2 shows the AI credentials the new account will start with — pre-ticked from exactly the same `auto_provision_roles` predicate a self-registering account of that role would have been granted by — plus an "Also invite to Cinna Desktop" checkbox defaulting to the instance's `invite_include_desktop_default`
+4. On submit the backend creates the account through the [chokepoint](#the-account-creation-chokepoint) with `origin=invite`, **no password**, and `is_superuser` derived from the role; grants the chosen credentials through `AccountProvisioningService`; writes the `user_invitation` row; mints the token from the committed row; and attempts the email
+5. The success screen shows the accept link (always — SMTP is not required), whether the email went out, and what was provisioned. Neither a provisioning failure nor a mail failure can fail the invite: the account exists either way
+6. The row appears in the users table with a **Status** of *Invited*. Its action menu carries **Resend invitation**, **Copy invite link** and **Revoke invitation**
+
+### Accepting an Invitation
+
+**By password.**
+
+1. The invitee opens `/accept-invite?token=…`
+2. The page posts the token to `POST /invitations/lookup` (body, not URL) and gets back the masked address, the name to pre-fill, which method to lead with, and `password_accepted`
+3. The password form is rendered **iff `password_accepted`**; the Google button is rendered iff the instance and this frontend build both have Google configured
+4. Setting a password calls `POST /invitations/accept`, which sets the hash, stamps `accepted_at`, **confirms the email address** (clicking a link only the invitee received proves control of it), and returns the same `LoginResponse` shape `POST /login/access-token` does
+5. The browser stores the token and lands on `/accept-invite/done`, which offers the dashboard and — when the invitation included it — a link to Cinna Desktop
+
+**By Google.** The accept page's Google button routes through the ordinary `/login?redirect=/accept-invite/done` flow. The pre-existing auto-link-by-address inside `AuthService.authenticate_with_google` claims the account; the callback route then settles the invitation. The account keeps `hashed_password = None` and is nonetheless *claimed*.
+
+**By password reset.** An invitee who used "forgot password" instead of their invite link has still proved control of the address, so completing `POST /reset-password/` settles the invitation too.
+
+In both of those last two cases the bookkeeping is a **side record**: if it fails, the person is still signed in and the invitation simply stays `pending` for the admin to see and resend. It can never cost someone an authentication they already completed.
+
 ### Password Recovery
 
 1. User enters email on recovery page
-2. If password sign-in is off and the user is not a superuser, the send is skipped **silently** and the generic success message is still returned — saying otherwise would identify which addresses belong to superusers
+2. The response is always the same 200 and the same body — "If an account exists for that email, a password recovery email has been sent" — whether or not the address has an account. **Every** reason not to send is a silent no-op: unknown address, deactivated account, password sign-in off for this user (saying otherwise would identify which addresses belong to superusers), an unclaimed invited account whose invitation is no longer pending, the 300 s cooldown, outbound mail unconfigured, and a delivery or template failure
 3. Backend generates time-limited reset token
 4. Backend sends email with reset link containing token
 5. User clicks link, enters new password
-6. Backend validates the token, re-checks the same policy gate for the token's owner (403 `password_auth_disabled` for a gated non-superuser), then hashes and saves the new password
+6. Backend validates the token, refuses a never-claimed invited account whose invitation is not `pending` (as "Invalid token"), re-checks the same policy gate for the token's owner (403 `password_auth_disabled` for a gated non-superuser), then hashes and saves the new password
 7. User redirected to login page
 
 ### Set Password (OAuth Users)
@@ -117,6 +146,47 @@ Origins and their gates are owned by the [Access Policy](../server_configuration
 - The switch cannot be turned off unless Google OAuth is configured, some administrator can sign in with Google, **and** some administrator actually has a password (an admin provisioned only through Google has none, so the break-glass would open onto nothing) — all validated server-side on `PUT /admin/server-config`
 - The login page keeps the password form visible whenever Google is not actually usable in the browser (the frontend build also needs `VITE_GOOGLE_CLIENT_ID`, which the backend's lockout rule cannot see)
 
+### Invitations
+
+**One row, one live link.**
+
+- Exactly one `user_invitation` row per account, enforced by a unique index on `user_id`. Resend re-arms it in place: new `token_jti`, new expiry, `revoked_at` cleared. It never inserts a second row
+- The invitation is resolved **by `jti`**, never by address. That is what makes rotation mean something: the link the previous email carried verifies its signature and then finds nothing. The address on the token is compared against the account's own afterwards, as an independent second check — so an admin who changes the address after inviting invalidates the outstanding link
+- Acceptance is **single-use**: the password write and `accepted_at` land in one transaction, so a second attempt with the same link is refused exactly like a forgery
+- Invitations expire after `INVITATION_EXPIRE_DAYS` (7 by default). The token's `exp` **is** the row's `expires_at`, so a link can never outlive the invitation or vice versa
+
+**Status is derived in one place.** `accepted` outranks `revoked` outranks `expired` outranks `pending`. Nothing stores a status string; the admin badge, the public lookup and the accept check all ask the same function.
+
+**Validate the transition, not the state.** Every lifecycle guard refuses only what the request actually changes:
+
+- **Resend** is the repair action for *every* non-accepted state. Expiry is what it fixes, and a revoked invitation is reactivated by design (the menu labels it "Send new invitation" there). Only acceptance refuses, with 409
+- **Revoke** is idempotent, and revoking an already-*expired* invitation succeeds — expiry is not a state that request transitions. Only acceptance refuses. The row and its `token_jti` are kept rather than deleted, so a revoked token cannot be replayed if the row is later re-armed
+- **Copy invite link** reads the outstanding link out *without* rotating it — deliberately not resend, or an admin copying a link for a chat message would silently kill the email the person is about to click. It is refused for anything but a `pending` invitation, because the link for a revoked, expired or accepted one is a dud, and it is audited because handing it over signs the recipient in as that account
+- **Inviting** never refuses over `auth_hint`. The hint is presentational and is re-resolved at every send, so it is not this request's business what the policy will be later
+
+**A pre-created account cannot be used before it is claimed.**
+
+- The row is real and active from the moment of the invite, but it has no password: `POST /login/access-token` answers the ordinary "Incorrect email or password"
+- Revocation means the account cannot be claimed, not merely that one link stopped working — and that is only true if **every** door asks. Three doors can hand a never-claimed account a way in, and all three refuse one whose invitation is not `pending`: password recovery, password reset, and **signing in with Google** (the auto-link by address). Otherwise the person the admin just un-invited types their address into "forgot password", or simply presses "Sign in with Google", and takes the account while the admin's list still reads *revoked*
+- **Expired is the worse half.** Nothing deactivates an account when an offer merely lapses — there is no sweeper — so an expired invitation leaves the account claimable indefinitely unless the doors check. An expired `admin` invitation left a *superuser* account standing open. The same rule covers it, because the doors ask about the invitation's status, not about the account's activation
+- "Never claimed" means **neither a password hash nor a linked Google identity**. A Google-accepted invitee is *claimed* — their invitation reads `accepted` forever, and they keep emailed password recovery like anyone else
+- Inviting an account with `is_active=false` is supported at the API level (`InviteUserRequest.is_active`, for pre-create-now/activate-later; the wizard does not expose it). The field is `bool | null` and `null` — which is what the wizard sends — means *the submission did not state one*: a brand-new account still defaults to active, while an invite that **adopts** an account that already exists keeps whatever activation state it already had. That is the point of the nullability: re-inviting an account an administrator had deliberately deactivated must not silently reactivate it, and provisioning then reports one `user_inactive` skip per credential the admin ticked so the wizard can say so rather than showing an empty report. No mail is sent to a deactivated account — a link that can only answer "no longer valid" is worse than none, and the recipient cannot tell that from a forgery — but the invite still succeeds, and the returned link works as soon as the account is activated. A suppressed send deliberately does not stamp `last_sent_at`, so it does not arm the resend cooldown for a mail that never left
+
+**Non-enumeration.** Both public invitation endpoints are anonymous and take an attacker-chosen token, so any difference between the answer to a forged token and a real one would answer "does this account exist and is it invited":
+
+- `POST /invitations/lookup` answers `200 {"valid": false}` — and *nothing else*, every other field absent rather than null — for a malformed token, a bad signature, a cross-purpose token, a rotated-away `jti`, an expired / revoked / already-accepted invitation, a deleted or deactivated account, an account someone has since claimed, and an address the admin has changed
+- `POST /invitations/accept` answers `400` with one fixed detail for every one of those **and** for "password auth is not available to you". There is no 403 branch on that route at all. Nobody is surprised by it, because the page they came from asked `lookup` first, got `password_accepted=false` from the same predicate, and did not render a form
+- Both are rate-limited per caller IP (`INVITATION_RATE_LIMIT_PER_MIN`, 30/min), and **neither ever sends email** — an anonymous endpoint that mails an attacker-chosen address is both a timing oracle and an outbound-mail amplifier. Resend is superuser-only
+- The superuser routes can afford to be specific (404 for no invitation, 409 for already accepted, 429 with the cooldown deadline) because `get_current_active_superuser` refuses before any lookup runs — a non-admin gets the same 403 for a user id that exists and one that does not
+
+**Known limitations, recorded rather than hidden:**
+
+- **A residual timing signal remains on password recovery and confirmation-resend.** Status and body carry nothing, but the send is synchronous, so the first probe of a registered address is measurably slower than one of an unregistered address (later probes are fast either way — the cooldown short-circuits them). Closing it means moving the send off the request path; an artificial delay was deliberately *not* added, because it would trade a real signal for a fabricated one
+- **Login timing was closed, volume was not.** A failed login now burns the same bcrypt work whether the address is unknown, passwordless or wrong-password — which matters because every unaccepted invitation *is* a passwordless account. `POST /login/access-token` still has no rate limiter; that is recorded, not fixed here
+- **The Users table Status column shows "Invited" with no day count.** `UserPublic` carries `invitation_status` but not the expiry, and fetching the expiry per row would be an N+1. The countdown ("Invitation expires in 3 days") lives in the row's action menu, which fetches that one invitation only while the menu is open
+- **The resend cooldown is only discoverable by attempting it.** The 429 carries `resend_available_at` and the toast turns it into a local time; the menu item cannot be pre-disabled, because the list projection does not carry `last_sent_at`
+- **Inviting an address outside `allowed_email_patterns` is not pre-validated in the browser.** Deliberately: matching that policy client-side would be a second implementation of a policy question. The invite origin is ungated by design, so the server accepts it — see [Access Policy](../server_configuration/access_policy.md)
+
 ### Account Protection
 - Cannot unlink Google OAuth if no password is set (prevents lockout)
 - Cannot delete superuser account via self-service
@@ -174,4 +244,7 @@ Frontend (localStorage) ──→ Authorization Header ──→ deps.get_curren
 - **[AI Credentials](../ai_credentials/ai_credentials.md)** - User model stores encrypted AI credentials
 - **[Admin-Provisioned AI Credentials](../ai_credentials/admin_ai_credential_provisioning.md)** - `AccountProvisioningService.on_account_created` runs at the chokepoint and grants the company AI credentials configured for the new account's role
 - **[User Roles](../user_roles/user_roles.md)** - the chokepoint resolves the new account's role from the access policy (or an explicit value for admin-intent origins) and pins `admin` for superusers
+- **[Email Confirmation](email_confirmation.md)** - The invite email is one of the outbound-email gate's exceptions (admin-initiated), and accepting an invitation confirms the address
+- **[Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding.md)** - An invitation optionally carries the Cinna Desktop block, in the email and again on `/accept-invite/done`; the choice is stored on the invitation row, not re-read from the policy
+- **[User Roles](../user_roles/user_roles.md)** - The invite wizard picks the new account's role; `role="admin"` implies `is_superuser` (and auto-confirmation), derived server-side rather than accepted as a separate field
 - **Route Protection** - All `/_layout/*` frontend routes require valid authentication

@@ -49,7 +49,7 @@
 - `authenticate_with_google(session, code, state)` - Full OAuth flow: state validation -> code exchange -> token verification -> user resolution -> JWT. The claim's `email` is stripped + lowercased **before** the auto-link lookup: Google may return a mixed-case address for a Workspace account whose platform row was stored lowercase, and `get_user_by_email` is an exact match — without normalising here the link would miss, `create_user_from_google` would run, and the creation chokepoint's duplicate check would refuse a legitimate login
 - `link_google_account_for_user(session, user, code, state)` - Link flow with duplicate check
 - `unlink_google_account_for_user(session, user)` - Unlink with password-exists validation
-- `link_google_account(session, user, google_id)` - Sets `google_id` on user
+- `link_google_account(session, user, google_id)` - Sets `google_id` on user. **The third claim door, and gated as one**: for an account nobody has ever signed in as, this write *is* the claim, so it asks `InvitationService.claim_refused` first and raises `RegistrationNotAllowedError(registration_closed)` when the answer is yes. That is deliberately the *registration* refusal — the exact status and body a stranger's address gets on an invite-only instance — because a refusal shape of its own would answer "this address has an account whose invitation is not pending". It is also typed, so the callback route catches it above its blanket `except Exception -> 400 "OAuth error"`. A claimed account (a password hash or an existing `google_id`) fails `is_unclaimed` and is unaffected, which is every account `/auth/google/link` can be called for
 - `unlink_google_account(session, user)` - Clears `google_id` from user
 
 ### Security (`backend/app/core/security.py`)

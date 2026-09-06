@@ -142,10 +142,42 @@ A managed credential can be handed out **by role**, so a company key is already 
 **Rules worth stating outright:**
 
 - **Creation-time only.** A role change on an existing account does **not** re-run provisioning. Promoting someone to `agent-developer` must not silently hand them a company API key as a side effect; "Apply to existing users" is the explicit path for that.
-- **Deactivated accounts are skipped silently.** An admin creating an inactive account is a normal act, not a failure: no child is created and no failure event is written. "Apply to existing users" covers the account once it is activated.
+- **Deactivated accounts are skipped without an event.** An admin creating an inactive account is a normal act, not a failure: no child is created and **no failure event is written** — a medium-severity row per credential, in the feed of an account that has done nothing, is noise about an outcome that was never in doubt. The *report* is not silent: on the explicit (invitation) path it carries one `user_inactive` skip per credential the admin ticked, so the wizard can tell that apart from an admin who ticked none. "Apply to existing users" covers the account once it is activated.
 - **`admin` is a valid auto-provision role.** An instance where every employee is an administrator is a normal small-team shape.
 - **Auto-provisioning without SDK defaults is allowed.** A record with `auto_provision_roles` but `set_user_sdk_defaults=false` simply adds the credential and touches no default.
 - **The grant is system-initiated.** The child is stamped with the *parent's* managing admin; the audit event is scoped to the **new owner** (it is their feed the grant belongs in) with `details.actor = "system"` alongside the origin and the parent id. No key material is ever recorded.
+
+### Provisioning an Invited Account
+
+An invitation grants the credentials **the administrator ticked in the wizard**, and it does so through the *same* service, the same body, and the same failure semantics as every automatic arrival — not through a second path.
+
+`AccountProvisioningService` has two entry points and one body. `on_account_created` is the automatic one (every managed credential whose `auto_provision_roles` contains the new account's role); `provision_explicit(session, user, origin, *, managed_credential_ids, actor)` is the invitation wizard's. They share `_provision` and the outer never-fail net, deliberately, because the moment they are two implementations an invited `agent-user` and a Google-arriving `agent-user` can end up with different key sets, different audit events and different failure semantics — and nothing reports the difference.
+
+What routing through the service (rather than looping `add_members` in the invite route) inherits, all four of which a hand-rolled loop would reimplement badly and silently:
+
+- the never-fail net — an invitation must not fail because an admin pasted an expired key last month;
+- `restore_session` before any post-failure logging, which is what stops a `PendingRollbackError` escaping past every net;
+- the `ProvisioningReport` skip list and the per-credential `SecurityEvent` written into the **invited** account's feed;
+- the `not user.is_active` short-circuit, so inviting a deactivated account grants nothing and writes no skip events.
+
+Two details specific to the explicit list:
+
+- **`None` is not `[]`.** `managed_credential_ids=None` means *grant exactly what this role would have been granted automatically*, evaluated by the same predicate `_provision` uses; `[]` means the admin deliberately unticked everything. The wizard sends `None` when its credential list failed to load or is still in flight, because "not stated" is the honest answer there and sending `[]` would silently grant nothing.
+- **A ticked id that no longer names a record is reported, not dropped.** The wizard's list can go stale against a concurrent deletion, and "you asked for four keys and got three" is only visible if the fourth says why. That produces the one skip reason the automatic path can never emit: `managed_credential_not_found`.
+
+`actor` is the acting superuser and is **required** here — unlike the automatic path, there is an admin in this story, and the grant is attributed to them in both `add_members` and the audit event's `details.actor`. That also keeps the architecture test's "one attributable grant" rule green: `actor=None` remains sanctioned in exactly one place, inside this service.
+
+The wizard's pre-ticked set is derived from `auto_provision_roles` — the same field `_provision` filters on — so what an invited account starts with matches what a self-registering account of the same role would have got.
+
+### Why the invite wizard has no "add a key for this user" step
+
+**It does not have one by design.** A future reader who notices the gap should recognise it as decided, not file it as an omission.
+
+The reason is an ordering constraint, not an oversight: the wizard's provisioning step runs *before* the account exists. The account row is created when the wizard is **submitted**, so at the step where such a control would live there is no user id to attach a key to and no `target_user_ids` to send. A version bolted onto the success screen — after the account exists — was considered and cut rather than deferred: it is a second, differently-shaped credential-creation surface for a case the AI Credentials page already covers.
+
+Meanwhile, an administrator who needs to hand one person their own key adds it from **Admin → LLM Providers** after the invitation is sent, exactly as they would for any existing account.
+
+Where that fallback ultimately lands is owned by phase 5 (provider adapters and per-user key minting): if per-user minting proves unusable for a provider, phase 5 decides where the "paste a key for this person" affordance goes. This step is not it.
 
 ### One Owner per Default Slot (the 409 conflict)
 
@@ -363,6 +395,8 @@ The `suggested_models` field on the native response returns `credential.availabl
 - **One auto-provisioning owner per `(role, mode)` default slot**, validated on create and PATCH (`409`), scoped to the slots the request newly claims.
 - **`auto_provision_roles` is validated; `sdk_default_modes` is not.** An unknown role is a `400`. An unknown mode string saves with a `200` and then wires nothing, forever — see [Known Gaps](#known-gaps).
 - **Emptying `auto_provision_roles` is not a revoke.** Existing members keep their credential; the record simply stops being granted to new accounts.
+- **An invited account provisions through the same service.** The wizard's explicit list goes to `AccountProvisioningService.provision_explicit`, not to a route-level `add_members` loop, so it inherits the never-fail net, the session-repair discipline, the skip reporting into the invited account's own feed, and the deactivated-account short-circuit. Its pre-ticked set is derived from the *same* `auto_provision_roles` predicate the automatic path uses, so an invited account and a self-registered one of the same role start with the same keys.
+- **The invite wizard deliberately has no "add a key for this user" step**, because the account does not exist at the step where such a control would live — see [Why the invite wizard has no "add a key for this user" step](#why-the-invite-wizard-has-no-add-a-key-for-this-user-step).
 
 ### Native account-config
 

@@ -65,6 +65,7 @@ Give a superuser one place to decide **who may get an account on this instance a
 1. Visitor opens `/signup` and sees a panel titled "This server is invite-only" telling them to ask their administrator for an invitation
 2. The Google button is still shown when Google is configured — in invite-only mode it is how an already-existing account signs in, not a way to create one
 3. A Google sign-in from an unknown address is refused with `registration_closed`
+4. The way in is an administrator inviting them from **Admin → Users → Invite user**, which pre-creates a passwordless account through the chokepoint with `origin=invite` and mails them a link. See [Invitations](../auth/auth.md#inviting-a-user-admin)
 
 ### Signing in on a Google-only instance
 
@@ -75,7 +76,7 @@ Give a superuser one place to decide **who may get an account on this instance a
 ### Requesting password recovery when password auth is off
 
 1. User submits their address on `/recover-password`
-2. The server answers with the same generic "Password recovery email sent" message regardless of outcome, and silently skips the send for non-superusers. Saying "recovery is not available for you" would identify which addresses belong to superusers
+2. The server answers with the same generic message regardless of outcome — "If an account exists for that email, a password recovery email has been sent" — and silently skips the send for non-superusers. Saying "recovery is not available for you" would identify which addresses belong to superusers. The same 200 and the same body are returned for an address with no account at all: the route used to 404 there, which was a direct account-existence oracle
 
 ## Business Rules
 
@@ -85,7 +86,8 @@ Give a superuser one place to decide **who may get an account on this instance a
 - **Superusers keep the password path.** Password login, recovery and reset stay available to `is_superuser` accounts when password auth is off. This break-glass is exactly why the server can afford to be strict about requiring a Google-linked administrator before the switch is thrown
 - **Lockout prevention is server-side.** Turning password sign-in off is rejected unless all three hold: Google OAuth is configured; an administrator can sign in with Google (the acting admin has a `google_id`, or some active superuser does); and some active superuser has a password hash, so the break-glass is not vacuous. The UI's disabled switch is a courtesy on top of this, not the control
 - **Validation is scoped to what was submitted.** Only fields present in the update body are shape-checked, so a value that has drifted out of range on the row cannot block an unrelated edit (e.g. a disclaimer change). The lockout check runs only on the *transition* into Google-only mode, so an instance already in that state stays editable
-- **Some origins are never gated.** Admin-created accounts, invitation acceptances, externally-arriving channel senders, and the first-superuser bootstrap all bypass the registration policy. Admin intent outranks self-service policy; an invitation *is* the admission decision; an inbound integration's own sender allowlist is its registration gate; and the bootstrap must work on an instance with no policy row yet
+- **Some origins are never gated.** Admin-created accounts, invitations, externally-arriving channel senders, and the first-superuser bootstrap all bypass the registration policy. Admin intent outranks self-service policy; an invitation *is* the admission decision; an inbound integration's own sender allowlist is its registration gate; and the bootstrap must work on an instance with no policy row yet
+- **An invitation therefore bypasses `allowed_email_patterns` too.** `AccountOrigin.INVITE` is in the ungated set, so `can_register` returns allowed unconditionally: an administrator can invite an address outside the pattern list, and can invite in `invite_only` mode. That is the intended semantic — the pattern list bounds *self-service* registration, not what an administrator may deliberately do. The invite wizard does **not** pre-validate the address against the pattern list in the browser, deliberately: matching that policy client-side would be a second implementation of a policy question
 - **Refusals never enumerate.** Signup answers 403 with the reason code *before* the duplicate-email check, so a closed instance answers identically for a known and an unknown address. The Google callback uses the same status and body
 - **Email changes are disabled while a pattern list exists.** `UserPublic.can_change_email` is false whenever `allowed_email_patterns` is non-empty; the profile form renders a read-only address, and `PATCH /users/me` refuses an email change with 403
 - **Access-policy edits never bump `disclaimer_version`.** Changing who may register must not force every user to re-acknowledge an unchanged disclaimer

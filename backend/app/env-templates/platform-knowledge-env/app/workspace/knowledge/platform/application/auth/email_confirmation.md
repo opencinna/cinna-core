@@ -85,6 +85,7 @@ Catalog cards and the install detail header show the publisher's email address. 
   - Password recovery emails — an unconfirmed user must always be able to recover their account
   - Admin test-email (superuser diagnostic to an arbitrary address)
   - Welcome/new-account email sent at admin-created user creation (carries a temporary password and is admin-initiated)
+  - **Invitation emails** (`POST /users/invite` and the resend route) — same reasoning as the new-account email: admin-initiated, superuser-only, and sent to an account that by construction has never had a chance to confirm anything. The bypass is by construction rather than by a flag — `InvitationService.send` calls `app.utils.send_email` directly. It must therefore never be routed through `NotificationService`, which *does* gate
 - **Gated surfaces (exhaustive list):**
   1. System notifications — single choke point in `SystemNotificationService.notify()` covers all current and future notification types
   2. Agent email replies on an email Server Channel — blocked at send time in `EmailSendingService._send_single_email()`, which marks the queue entry `BLOCKED_UNCONFIRMED`
@@ -113,6 +114,8 @@ Catalog cards and the install detail header show the publisher's email address. 
 - Superuser creation (by admin or initial-data seeding): confirmed immediately
 - Email-integration-created users: start unconfirmed; a confirmation email is sent if SMTP is configured
 - Admin-created non-superusers: start unconfirmed; both the welcome email (which carries the temporary password) and a confirmation email are sent
+- **Invited users: accepting the invitation confirms the address.** Clicking a link only the invitee received proves control of the address, which is the same reasoning the Google path already relies on. `InvitationService.accept_with_password` calls `EmailConfirmationService.mark_confirmed` after the password and `accepted_at` have committed, inside its own guard: a failure there costs an unconfirmed address, never a 500 for someone whose password is already set and whose invitation is already terminal. Accepting through Google or through a password reset confirms by the pre-existing rules for those paths
+- Invited superusers: confirmed immediately, because the chokepoint auto-confirms every superuser and the invite wizard's `role="admin"` implies `is_superuser`
 
 ### Token Security
 
@@ -127,7 +130,13 @@ Existing users at migration time are backfilled to `email_confirmed=True`. This 
 
 ### Non-Enumeration
 
-The public resend-confirmation endpoint (`POST /resend-confirmation/{email}`) never reveals whether an address is registered, already confirmed, or in cooldown. It always returns a generic success message. The password-recovery endpoint has always raised 404 for unknown email addresses — that behavior is unchanged by this feature.
+The public resend-confirmation endpoint (`POST /resend-confirmation/{email}`) never reveals whether an address is registered, already confirmed, or in cooldown. It always returns a generic success message.
+
+**`POST /password-recovery/{email}` no longer 404s for an unknown address.** It used to, and that 404-versus-200 split was a direct account-existence oracle. It now returns the same `200` and the same body — "If an account exists for that email, a password recovery email has been sent" — for a known and an unknown address alike, with no `detail` key, and every reason not to send (unknown address, deactivated account, password auth off for this user, an unclaimed invited account whose invitation is no longer pending, cooldown, mail unconfigured, delivery failure) is a silent no-op. See [Authentication — tech](auth_tech.md#login-and-recovery-timing).
+
+The two anonymous invitation endpoints answer under the same rule: `POST /invitations/lookup` returns `200 {"valid": false}` and nothing else for every unusable token, and `POST /invitations/accept` returns one fixed `400` for every failure including "password auth is not available to you".
+
+**Known residual — timing.** Status and body carry no signal on any of these, but response *time* still does: a real send does a synchronous SMTP round-trip inside the request, so the first probe of a registered address is measurably slower on both `/password-recovery/{email}` and `/resend-confirmation/{email}` (the cooldown then makes the *second* probe fast for a known address too). No artificial delay was added — it would trade a real signal for a fabricated one — and closing it properly means moving the send off the request path.
 
 ## Architecture Overview
 
@@ -149,7 +158,7 @@ Outbound email path ──→ EmailConfirmationService.is_outbound_email_allowed
 
 ## Integration Points
 
-- **[Authentication](auth.md)** — reuses the JWT token pattern from password recovery; confirmation and resend routes live alongside the existing recovery routes in `login.py`
+- **[Authentication](auth.md)** — reuses the JWT token pattern from password recovery; confirmation and resend routes live alongside the existing recovery routes in `login.py`. Invitations reuse the confirmation token's `purpose`-claim shape (plus a `jti`), the invite email is a gate exception, and accepting an invitation confirms the address
 - **[Google OAuth](google_oauth.md)** — Google-authenticated users are auto-confirmed at create time and at login time
 - **[Email Integration](../email_integration/email_integration.md)** — agent email replies (auto-session and manual) are gated by the outbound-email gate applied to the agent owner
 - **[System Notifications](../system_notifications/system_notifications.md)** — the central `notify()` choke point checks confirmation status before dispatching any notification type
