@@ -4173,6 +4173,44 @@ export type MailServerConfigUpdate = {
 export type MailServerType = 'imap' | 'smtp';
 
 /**
+ * A user who *would* receive this credential on "apply to existing".
+ *
+ * Not a :class:`ManagedAICredentialMember`: a member is identified by the
+ * child credential it owns, and on a dry run no child exists. Inventing a
+ * placeholder id for one would be a lie the frontend could not distinguish
+ * from a real member, so the preview gets its own shape.
+ */
+export type ManagedAICredentialApplyCandidate = {
+    user_id: string;
+    email: string;
+    full_name?: (string | null);
+    role: string;
+};
+
+/**
+ * Result of ``POST /{id}/apply-to-existing``.
+ *
+ * A reconcile result plus the preview fields. On a real run ``dry_run`` is
+ * False, ``added`` carries the new members and ``candidates`` is empty; on a
+ * dry run nothing is written, ``added`` is empty and ``candidates`` lists who
+ * would be added. ``candidate_count`` is populated in both cases so the
+ * confirm dialog and the result toast quote the same number.
+ */
+export type ManagedAICredentialApplyResult = {
+    record: ManagedAICredentialPublic;
+    added?: Array<ManagedAICredentialMember>;
+    removed?: Array<(string)>;
+    updated?: Array<ManagedAICredentialMember>;
+    updated_count?: number;
+    skipped?: Array<ManagedReconcileSkip>;
+    blocked?: Array<ManagedReconcileBlock>;
+    dry_run?: boolean;
+    candidate_count?: number;
+    candidates?: Array<ManagedAICredentialApplyCandidate>;
+    defaults_overwrite_count?: number;
+};
+
+/**
  * Admin request to create a managed AI credential record.
  *
  * Creates the parent row + reconciles to create one ``AICredential`` child per
@@ -4187,10 +4225,13 @@ export type ManagedAICredentialCreate = {
     default_model?: (string | null);
     available_models?: (Array<(string)> | null);
     expiry_notification_date?: (string | null);
-    target_user_ids: Array<(string)>;
+    target_user_ids?: Array<(string)>;
     set_as_default?: boolean;
     set_user_sdk_defaults?: boolean;
     sdk_default_modes?: Array<(string)>;
+    auto_provision_roles?: Array<(string)>;
+    model_override_conversation?: (string | null);
+    model_override_building?: (string | null);
 };
 
 /**
@@ -4221,6 +4262,9 @@ export type ManagedAICredentialPublic = {
     set_as_default?: boolean;
     set_user_sdk_defaults?: boolean;
     sdk_default_modes?: Array<(string)>;
+    auto_provision_roles?: Array<(string)>;
+    model_override_conversation?: (string | null);
+    model_override_building?: (string | null);
     expiry_notification_date?: (string | null);
     managed_by_id?: (string | null);
     has_api_key?: boolean;
@@ -4262,6 +4306,9 @@ export type ManagedAICredentialUpdate = {
     set_as_default?: (boolean | null);
     set_user_sdk_defaults?: (boolean | null);
     sdk_default_modes?: (Array<(string)> | null);
+    auto_provision_roles?: (Array<(string)> | null);
+    model_override_conversation?: (string | null);
+    model_override_building?: (string | null);
 };
 
 /**
@@ -6565,6 +6612,16 @@ export type AdminLlmProvidersDeleteManagedAiCredentialData = {
 };
 
 export type AdminLlmProvidersDeleteManagedAiCredentialResponse = (Message);
+
+export type AdminLlmProvidersApplyManagedAiCredentialToExistingData = {
+    /**
+     * Return who would receive the credential without granting it. Backs the confirm dialog's preview count.
+     */
+    dryRun?: boolean;
+    managedCredentialId: string;
+};
+
+export type AdminLlmProvidersApplyManagedAiCredentialToExistingResponse = (ManagedAICredentialApplyResult);
 
 export type AdminLlmProvidersSetManagedAiCredentialDefaultData = {
     managedCredentialId: string;

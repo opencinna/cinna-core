@@ -18800,6 +18800,125 @@ export const MailServerTypeSchema = {
     title: 'MailServerType'
 } as const;
 
+export const ManagedAICredentialApplyCandidateSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        },
+        role: {
+            type: 'string',
+            title: 'Role'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'email', 'role'],
+    title: 'ManagedAICredentialApplyCandidate',
+    description: `A user who *would* receive this credential on "apply to existing".
+
+Not a :class:\`ManagedAICredentialMember\`: a member is identified by the
+child credential it owns, and on a dry run no child exists. Inventing a
+placeholder id for one would be a lie the frontend could not distinguish
+from a real member, so the preview gets its own shape.`
+} as const;
+
+export const ManagedAICredentialApplyResultSchema = {
+    properties: {
+        record: {
+            '$ref': '#/components/schemas/ManagedAICredentialPublic'
+        },
+        added: {
+            items: {
+                '$ref': '#/components/schemas/ManagedAICredentialMember'
+            },
+            type: 'array',
+            title: 'Added'
+        },
+        removed: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Removed'
+        },
+        updated: {
+            items: {
+                '$ref': '#/components/schemas/ManagedAICredentialMember'
+            },
+            type: 'array',
+            title: 'Updated'
+        },
+        updated_count: {
+            type: 'integer',
+            title: 'Updated Count',
+            default: 0
+        },
+        skipped: {
+            items: {
+                '$ref': '#/components/schemas/ManagedReconcileSkip'
+            },
+            type: 'array',
+            title: 'Skipped'
+        },
+        blocked: {
+            items: {
+                '$ref': '#/components/schemas/ManagedReconcileBlock'
+            },
+            type: 'array',
+            title: 'Blocked'
+        },
+        dry_run: {
+            type: 'boolean',
+            title: 'Dry Run',
+            default: false
+        },
+        candidate_count: {
+            type: 'integer',
+            title: 'Candidate Count',
+            default: 0
+        },
+        candidates: {
+            items: {
+                '$ref': '#/components/schemas/ManagedAICredentialApplyCandidate'
+            },
+            type: 'array',
+            title: 'Candidates'
+        },
+        defaults_overwrite_count: {
+            type: 'integer',
+            title: 'Defaults Overwrite Count',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['record'],
+    title: 'ManagedAICredentialApplyResult',
+    description: `Result of \`\`POST /{id}/apply-to-existing\`\`.
+
+A reconcile result plus the preview fields. On a real run \`\`dry_run\`\` is
+False, \`\`added\`\` carries the new members and \`\`candidates\`\` is empty; on a
+dry run nothing is written, \`\`added\`\` is empty and \`\`candidates\`\` lists who
+would be added. \`\`candidate_count\`\` is populated in both cases so the
+confirm dialog and the result toast quote the same number.`
+} as const;
+
 export const ManagedAICredentialCreateSchema = {
     properties: {
         name: {
@@ -18884,7 +19003,6 @@ export const ManagedAICredentialCreateSchema = {
                 format: 'uuid'
             },
             type: 'array',
-            minItems: 1,
             title: 'Target User Ids'
         },
         set_as_default: {
@@ -18903,10 +19021,41 @@ export const ManagedAICredentialCreateSchema = {
             },
             type: 'array',
             title: 'Sdk Default Modes'
+        },
+        auto_provision_roles: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Auto Provision Roles'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
         }
     },
     type: 'object',
-    required: ['name', 'type', 'api_key', 'target_user_ids'],
+    required: ['name', 'type', 'api_key'],
     title: 'ManagedAICredentialCreate',
     description: `Admin request to create a managed AI credential record.
 
@@ -19031,6 +19180,35 @@ export const ManagedAICredentialPublicSchema = {
             },
             type: 'array',
             title: 'Sdk Default Modes'
+        },
+        auto_provision_roles: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Auto Provision Roles'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
         },
         expiry_notification_date: {
             anyOf: [
@@ -19289,6 +19467,44 @@ export const ManagedAICredentialUpdateSchema = {
                 }
             ],
             title: 'Sdk Default Modes'
+        },
+        auto_provision_roles: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Auto Provision Roles'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
         }
     },
     type: 'object',
