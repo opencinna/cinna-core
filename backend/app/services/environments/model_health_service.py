@@ -36,12 +36,13 @@ import uuid
 from sqlmodel import Session
 
 from app.models.agents.agent import Agent
-from app.models.credentials.ai_credential import AICredential, AICredentialType
+from app.models.credentials.ai_credential import AICredential
 from app.models.environments.environment import (
     AgentEnvironment,
     ModelHealthMode,
     ModelHealthPublic,
 )
+from app.services.ai_providers import registry
 from app.services.credentials.ai_credentials_service import ai_credentials_service
 from app.services.environments.model_catalog import (
     is_known_word,
@@ -266,9 +267,17 @@ def _evaluate_mode(
     # 4. No discovery data and not in the retired set. If the credential exists
     # but discovery failed/never ran, we cannot confirm availability → quiet
     # "unverified" (no alarm). Otherwise treat as ok.
-    if credential is not None and (
-        credential.discovered_models is None
-    ) and credential.type != AICredentialType.MINIMAX:
+    #
+    # A provider whose adapter publishes no model-list endpoint is excluded: an
+    # empty discovery cache is its normal, expected state, not a failure to
+    # verify. That used to be spelled "!= MINIMAX" here, independently of the
+    # adapter that decides it.
+    adapter = registry.find_adapter(credential.type) if credential is not None else None
+    if (
+        credential is not None
+        and credential.discovered_models is None
+        and (adapter is None or adapter.supports_model_listing)
+    ):
         return ModelHealthMode(
             mode=mode, model=effective_model, status=STATUS_UNVERIFIED
         )

@@ -9,9 +9,15 @@ per-credential rather than per-provider.
 Design notes:
 - Decryption reuses the existing ``ai_credentials_service.decrypt_credential``
   helper (Fernet) — this module never touches Fernet directly.
-- All blocking network I/O runs via ``anyio.to_thread.run_sync`` so it does not
-  block the event loop (sync DB I/O on the loop is fine; blocking network is
-  offloaded — per the event-handler concurrency convention).
+- **Provider I/O lives in ``app/services/ai_providers/``, not here.** This module
+  owns the DB half — which rows to probe and what to persist onto them — and
+  delegates every per-provider decision to ``registry.get_adapter(...)``.
+  ``probe_models``, ``ProbeResult`` and the reason codes are re-exported so the
+  existing import paths keep working; the delegation is genuine, so replacing an
+  adapter through ``ai_providers.registry.override_for_tests`` intercepts every
+  provider call this module can make.
+- All blocking network I/O runs via ``anyio.to_thread.run_sync`` (inside the
+  adapters) so it does not block the event loop.
 - ``refresh_all_credentials`` is failure-isolated: a per-credential try/except
   ensures one bad key never aborts the batch (mirrors the notification
   dispatcher).
@@ -20,11 +26,8 @@ Design notes:
 """
 import logging
 import uuid
-from dataclasses import dataclass
 from datetime import UTC, datetime
 
-import anyio
-import httpx
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
@@ -35,116 +38,33 @@ from app.models.credentials.ai_credential import (
     AICredentialTestResult,
     AICredentialType,
 )
+from app.services.ai_providers import registry
+from app.services.ai_providers.base import (
+    ERROR_INVALID_KEY,
+    OAUTH_TOKEN_UNSUPPORTED,
+    SKIP_REASONS,
+    UNSUPPORTED_TYPE,
+    ProbeResult,
+)
 from app.services.credentials.ai_credentials_service import ai_credentials_service
 
 logger = logging.getLogger(__name__)
 
-# Sentinel reason code recorded when an Anthropic OAuth token is encountered.
-OAUTH_TOKEN_UNSUPPORTED = "oauth_token_unsupported"
-
-# Network timeout for native /models calls (cheap GETs).
-_HTTP_TIMEOUT_SECONDS = 20.0
-
-# Default OpenAI-compatible model endpoint suffix.
-_OPENAI_COMPATIBLE_MODELS_PATH = "/models"
-
-# Coarse reason codes recorded as models_discovery_error / surfaced to the UI.
-# A "skip" means the credential is valid/usable but model listing isn't
-# applicable; "invalid_key" is a real auth rejection.
-SKIP_REASONS = frozenset(
-    {OAUTH_TOKEN_UNSUPPORTED, "no_list_endpoint", "no_base_url", "unsupported_type"}
-)
-ERROR_INVALID_KEY = "invalid_key"
-
-
-@dataclass
-class ProbeResult:
-    """Outcome of probing a provider's model list with a raw (decrypted) key.
-
-    DB-free — usable both by the cron (which then persists onto the credential
-    row) and by the synchronous "Test Connection" endpoint (which may not have
-    a row yet).
-
-    - ``ok``        — the probe completed without a hard auth failure. True for
-                      both a successful listing AND a benign skip (OAuth /
-                      minimax / openai_compatible-without-base-url). False only
-                      on a real auth rejection (``invalid_key``).
-    - ``models``    — discovered model ids (empty on skip).
-    - ``reason``    — a coarse skip/error code when applicable (one of
-                      ``SKIP_REASONS`` or ``invalid_key``), else ``None``.
-                      ``None`` reason with ``ok`` and a non-empty list means a
-                      clean successful listing.
-    """
-
-    ok: bool
-    models: list[str]
-    reason: str | None = None
-
-    @property
-    def is_skip(self) -> bool:
-        return self.ok and self.reason in SKIP_REASONS
-
-
-# ---------------------------------------------------------------------------
-# Per-provider blocking listers (run inside anyio worker threads)
-# ---------------------------------------------------------------------------
-
-def _list_anthropic_models(api_key: str) -> list[str]:
-    """List Anthropic models via GET /v1/models (httpx — the anthropic SDK is
-    not a project dependency)."""
-    resp = httpx.get(
-        "https://api.anthropic.com/v1/models",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
-        timeout=_HTTP_TIMEOUT_SECONDS,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    return [m["id"] for m in payload.get("data", []) if m.get("id")]
-
-
-def _list_openai_models(api_key: str) -> list[str]:
-    """List OpenAI models via GET /v1/models (httpx — avoids depending on the
-    openai SDK, which is only present transitively today; consistent with the
-    Anthropic / openai_compatible listers)."""
-    resp = httpx.get(
-        "https://api.openai.com/v1/models",
-        headers={"Authorization": f"Bearer {api_key}"},
-        timeout=_HTTP_TIMEOUT_SECONDS,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    return [m["id"] for m in payload.get("data", []) if m.get("id")]
-
-
-def _list_google_models(api_key: str) -> list[str]:
-    """List Google models via the google-genai client (ListModels)."""
-    from google import genai
-
-    client = genai.Client(api_key=api_key)
-    ids: list[str] = []
-    for m in client.models.list():
-        name = getattr(m, "name", None)
-        if name:
-            # Names come back as "models/gemini-2.5-pro"; strip the prefix.
-            ids.append(name.split("/", 1)[1] if "/" in name else name)
-    return ids
-
-
-def _list_openai_compatible_models(api_key: str, base_url: str) -> list[str]:
-    """List models for an OpenAI-compatible endpoint via GET {base_url}/models.
-
-    Assumes the OpenAI response shape ({"data": [{"id": ...}]}). Endpoints that
-    differ or are unreachable raise, and the caller records an error + skips."""
-    url = base_url.rstrip("/") + _OPENAI_COMPATIBLE_MODELS_PATH
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    resp = httpx.get(url, headers=headers, timeout=_HTTP_TIMEOUT_SECONDS)
-    resp.raise_for_status()
-    payload = resp.json()
-    data = payload.get("data", payload if isinstance(payload, list) else [])
-    return [m["id"] for m in data if isinstance(m, dict) and m.get("id")]
+# Re-exported for the modules and tests that have always imported these from
+# here. They are DECLARED in ``ai_providers.base`` because the adapters need
+# them and this module imports ``ai_credentials_service`` — an adapter reaching
+# back here for ``ProbeResult`` would close an import cycle.
+__all__ = [
+    "ERROR_INVALID_KEY",
+    "OAUTH_TOKEN_UNSUPPORTED",
+    "SKIP_REASONS",
+    "ProbeResult",
+    "discover_models_for_credential",
+    "dispatch_model_deprecation_notifications",
+    "probe_models",
+    "refresh_all_credentials",
+    "test_connection",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -158,58 +78,21 @@ async def probe_models(
 ) -> ProbeResult:
     """Probe a provider's native model list with a raw (already-decrypted) key.
 
-    This is the single dispatch path used by BOTH the discovery cron (which
-    persists the result onto the credential row) and the synchronous "Test
-    Connection" endpoint (which may have no row yet). Pure I/O — no DB access.
+    The single dispatch path used by BOTH the discovery cron (which persists the
+    result onto the credential row) and the synchronous "Test Connection"
+    endpoint (which may have no row yet). Pure I/O — no DB access.
 
-    Dispatch by ``cred_type``:
-      - anthropic → GET /v1/models (OAuth ``sk-ant-oat*`` → skip
-        ``oauth_token_unsupported``).
-      - openai → GET /v1/models.
-      - google → genai ListModels.
-      - openai_compatible → GET ``{base_url}/models`` (no base_url → skip
-        ``no_base_url``).
-      - minimax → skip ``no_list_endpoint`` (catalog-only).
-    Blocking HTTP runs via ``anyio.to_thread``. A 401/403 anywhere maps to a
-    non-ok ``invalid_key`` result; other HTTP/transport errors propagate.
+    Dispatch is one registry lookup; what each provider does lives in its
+    adapter (``app/services/ai_providers/<provider>.py``). A ``cred_type`` no
+    adapter serves is a benign skip, not an error, because the column can hold
+    a value the enum no longer has.
 
     Returns a :class:`ProbeResult`. Never logs the key.
     """
-    api_key = api_key or ""
-    try:
-        if cred_type == AICredentialType.ANTHROPIC:
-            if api_key.startswith("sk-ant-oat"):
-                return ProbeResult(ok=True, models=[], reason=OAUTH_TOKEN_UNSUPPORTED)
-            models = await anyio.to_thread.run_sync(_list_anthropic_models, api_key)
-
-        elif cred_type == AICredentialType.OPENAI:
-            models = await anyio.to_thread.run_sync(_list_openai_models, api_key)
-
-        elif cred_type == AICredentialType.GOOGLE:
-            models = await anyio.to_thread.run_sync(_list_google_models, api_key)
-
-        elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
-            if not base_url:
-                return ProbeResult(ok=True, models=[], reason="no_base_url")
-            models = await anyio.to_thread.run_sync(
-                _list_openai_compatible_models, api_key, base_url
-            )
-
-        elif cred_type == AICredentialType.MINIMAX:
-            return ProbeResult(ok=True, models=[], reason="no_list_endpoint")
-
-        else:
-            return ProbeResult(ok=True, models=[], reason="unsupported_type")
-
-    except httpx.HTTPStatusError as http_err:
-        if http_err.response.status_code in (401, 403):
-            return ProbeResult(ok=False, models=[], reason=ERROR_INVALID_KEY)
-        raise
-
-    # Dedupe while preserving order.
-    seen: set[str] = set()
-    unique_models = [m for m in models if not (m in seen or seen.add(m))]
-    return ProbeResult(ok=True, models=unique_models, reason=None)
+    adapter = registry.find_adapter(cred_type)
+    if adapter is None:
+        return ProbeResult(ok=True, models=[], reason=UNSUPPORTED_TYPE)
+    return await adapter.list_models(api_key or "", base_url)
 
 
 # ---------------------------------------------------------------------------

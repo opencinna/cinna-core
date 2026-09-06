@@ -26,6 +26,7 @@ from app.models.external.account_config import (
     AccountConfigResponse,
 )
 from app.models.users.user import User
+from app.services.ai_providers import registry
 from app.services.credentials.ai_credentials_service import (
     ai_credentials_service,
 )
@@ -36,28 +37,6 @@ from app.services.environments.model_catalog import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# Provider → (display_name, descriptor_slug). For openai_compatible the display
-# name comes from the credential's own free-form name.
-_PROVIDER_DISPLAY: dict[AICredentialType, tuple[str, str]] = {
-    AICredentialType.ANTHROPIC: ("Claude", "claude"),
-    AICredentialType.OPENAI: ("OpenAI", "openai"),
-    AICredentialType.GOOGLE: ("Gemini", "gemini"),
-    AICredentialType.OPENAI_COMPATIBLE: ("", "openai-compatible"),
-    AICredentialType.MINIMAX: ("MiniMax", "minimax"),
-}
-
-# Credential type → (engine, provider) for catalog default-model lookup.
-# Mirrors the AddEnvironment SDK composition (claude-code for anthropic/minimax,
-# opencode for the rest).
-_TYPE_TO_ENGINE_PROVIDER: dict[AICredentialType, tuple[str, str]] = {
-    AICredentialType.ANTHROPIC: ("claude-code", "anthropic"),
-    AICredentialType.MINIMAX: ("claude-code", "minimax"),
-    AICredentialType.OPENAI: ("opencode", "openai"),
-    AICredentialType.GOOGLE: ("opencode", "google"),
-    AICredentialType.OPENAI_COMPATIBLE: ("opencode", "openai_compatible"),
-}
 
 
 class ExternalAccountConfigService:
@@ -115,10 +94,19 @@ class ExternalAccountConfigService:
             else AICredentialType(credential.type)
         )
 
-        display_name, slug = _PROVIDER_DISPLAY.get(
-            cred_type, (credential.name, "provider")
-        )
-        if not display_name:  # openai_compatible → use the credential's name
+        # Display name / descriptor slug come from the provider adapter. The
+        # adapter's empty-string display name is a deliberate sentinel meaning
+        # "use the credential's own free-form name" — openai_compatible is a
+        # shape, not a vendor, so its own name is the only accurate label.
+        adapter = registry.find_adapter(cred_type)
+        if adapter is None:
+            display_name, slug = credential.name, "provider"
+        else:
+            display_name, slug = (
+                adapter.account_config_display_name,
+                adapter.account_config_slug,
+            )
+        if not display_name:
             display_name = credential.name
 
         model = self._resolve_model(
@@ -193,10 +181,10 @@ class ExternalAccountConfigService:
         if discovered_models:
             return _strip_provider_prefix(discovered_models[0])
 
-        engine_provider = _TYPE_TO_ENGINE_PROVIDER.get(cred_type)
-        if engine_provider is None:
+        adapter = registry.find_adapter(cred_type)
+        if adapter is None:
             return None
-        engine, provider = engine_provider
+        engine, provider = adapter.catalog_engine_provider
         catalog_default = resolve_model(
             engine=engine,
             provider=provider,

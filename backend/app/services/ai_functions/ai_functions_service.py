@@ -172,8 +172,16 @@ class AIFunctionsService:
                     "Anthropic credential is configured. Please add one in AI Credentials settings."
                 )
 
-        # Validate: OAuth tokens cannot be used with the Anthropic Messages API
-        if api_key.startswith("sk-ant-oat"):
+        # Validate: OAuth tokens cannot be used with the Anthropic Messages API.
+        # Asked of the Anthropic adapter, which is the single implementation of
+        # the key-prefix rule (this branch only ever holds an Anthropic key —
+        # the OpenAI branch above returns before reaching here).
+        from app.models.credentials.ai_credential import AICredentialType
+        from app.services.ai_providers import registry
+
+        if registry.get_adapter(AICredentialType.ANTHROPIC).classify_key(
+            api_key
+        ).is_oauth_token:
             raise ValueError(
                 "OAuth tokens cannot be used with the Anthropic API for AI functions. "
                 "Please select a credential with an API key (sk-ant-api*)."

@@ -6,13 +6,14 @@ Handles CRUD operations for named AI credentials and syncing defaults to User pr
 import json
 import logging
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.security import encrypt_field, decrypt_field
-from app.utils import detect_anthropic_credential_type
+from app.services.ai_providers import registry
 from app.models.credentials.ai_credential import (
     AICredential,
     AICredentialCreate,
@@ -32,6 +33,27 @@ from app.models.credentials.ai_credential_share import (
 from app.models.users.user import User, AIServiceCredentials, AIServiceCredentialsUpdate
 
 logger = logging.getLogger(__name__)
+
+
+class AICredentialNotShareableError(HTTPException):
+    """Raised when a credential the platform provisioned is asked to be shared.
+
+    A **policy** refusal, permanent, and typed so that its one caller can tell it
+    apart from the transient failures it deliberately swallows. It stays an
+    ``HTTPException`` subclass so any future route path still answers 400 without
+    a mapping layer, and carries the credential id so a log line can name the row
+    that cannot be shared rather than only the bundle that wanted it.
+    """
+
+    def __init__(self, credential_id: uuid.UUID) -> None:
+        self.credential_id = credential_id
+        super().__init__(
+            status_code=400,
+            detail=(
+                "This key was provisioned for one person and is withdrawn with "
+                "their account, so it cannot be shared."
+            ),
+        )
 
 
 class AICredentialInUseError(Exception):
@@ -95,14 +117,14 @@ class AICredentialsService:
         )
         encrypted_data = encrypt_field(json.dumps(credential_data.model_dump()))
 
-        # Auto-set expiry notification date for OAuth tokens (11 months from now)
+        # Auto-set expiry notification date for OAuth tokens (11 months from now).
+        # No provider type guard: the adapter answers is_oauth_token=False for
+        # every provider that issues only API keys.
         expiry_date = data.expiry_notification_date
-        if data.type == AICredentialType.ANTHROPIC and not expiry_date:
-            env_var_name, key_type = detect_anthropic_credential_type(data.api_key)
-            if env_var_name == "CLAUDE_CODE_OAUTH_TOKEN":
-                # OAuth token - set expiry to 11 months from now
-                expiry_date = datetime.now(timezone.utc) + timedelta(days=335)  # ~11 months
-                logger.info(f"Auto-set OAuth token expiry notification to {expiry_date.date()}")
+        if not expiry_date and self._is_oauth_token(data.type, data.api_key):
+            # OAuth token - set expiry to 11 months from now
+            expiry_date = datetime.now(timezone.utc) + timedelta(days=335)  # ~11 months
+            logger.info(f"Auto-set OAuth token expiry notification to {expiry_date.date()}")
 
         # Create credential
         now = datetime.now(timezone.utc)
@@ -167,12 +189,14 @@ class AICredentialsService:
         new_model = data.model if data.model is not None else existing_data.model
 
         # Auto-set expiry notification date when API key is updated to an OAuth token
-        if data.api_key is not None and credential.type == AICredentialType.ANTHROPIC and data.expiry_notification_date is None:
-            env_var_name, key_type = detect_anthropic_credential_type(new_api_key)
-            if env_var_name == "CLAUDE_CODE_OAUTH_TOKEN":
-                # OAuth token - set expiry to 11 months from now
-                credential.expiry_notification_date = datetime.now(timezone.utc) + timedelta(days=335)
-                logger.info(f"Auto-set OAuth token expiry notification to {credential.expiry_notification_date.date()} (key updated)")
+        if (
+            data.api_key is not None
+            and data.expiry_notification_date is None
+            and self._is_oauth_token(credential.type, new_api_key)
+        ):
+            # OAuth token - set expiry to 11 months from now
+            credential.expiry_notification_date = datetime.now(timezone.utc) + timedelta(days=335)
+            logger.info(f"Auto-set OAuth token expiry notification to {credential.expiry_notification_date.date()} (key updated)")
 
         # Validate updated data
         self._validate_credential_data(
@@ -471,6 +495,44 @@ class AICredentialsService:
         )
         return session.exec(statement).first()
 
+    def owner_ids_with_a_default(
+        self, session: Session, user_ids: Iterable[uuid.UUID]
+    ) -> set[uuid.UUID]:
+        """Which of ``user_ids`` hold at least one default AI credential.
+
+        **The one implementation of "can this person's account do anything".**
+        Set-shaped rather than a per-user boolean because every caller asks it
+        for a list — the admin member projection asks it once per reconcile, not
+        once per member — and an N+1 there is how a cheap predicate becomes a
+        reason not to use it. There is deliberately no single-user convenience
+        wrapper: one shipped, nothing ever called it, and the shape it offered is
+        precisely the one that reintroduces the N+1 inside a loop.
+
+        *A default*, not *a credential*: every path that resolves a credential
+        for an environment ends at ``get_default_for_type``, so a row that is not
+        anybody's default is a row no environment will pick up on its own.
+
+        *Any provider*, not Anthropic. An environment requires a default of the
+        type **its SDK expects**, and every credential type is served by an SDK
+        the user can choose (``claude-code`` for anthropic/minimax,
+        ``opencode/<provider>`` for the rest — see
+        ``sdk_constants.SDK_CREDENTIAL_COMPATIBILITY``). Nothing in the
+        environment code requires Anthropic specifically, so scoping this to
+        Anthropic asserted a requirement the platform does not have — and made
+        a person who had just been minted an OpenAI key look, forever, like a
+        person with no key at all.
+        """
+        ids = list(user_ids)
+        if not ids:
+            return set()
+        rows = session.exec(
+            select(AICredential.owner_id).where(
+                col(AICredential.owner_id).in_(ids),
+                AICredential.is_default == True,  # noqa: E712
+            )
+        ).all()
+        return set(rows)
+
     def resolve_default_credential_for_sdk(
         self, session: Session, user_id: uuid.UUID, sdk_engine: str
     ) -> AICredential | None:
@@ -528,15 +590,28 @@ class AICredentialsService:
         data_dict = json.loads(decrypted_json)
         return AICredentialData(**data_dict)
 
+    @staticmethod
+    def _is_oauth_token(cred_type, api_key: str | None) -> bool:
+        """Whether ``api_key`` is a delegated OAuth token rather than an API key.
+
+        Delegates to the provider adapter, which is the single implementation of
+        every provider's key-prefix rule. Safe to call for any provider: those
+        that issue only API keys always answer False, which is what lets the
+        callers drop their ``type == ANTHROPIC`` guards.
+        """
+        if not api_key:
+            return False
+        adapter = registry.find_adapter(cred_type)
+        return adapter is not None and adapter.classify_key(api_key).is_oauth_token
+
     def _to_public(self, credential: AICredential, session: Session) -> AICredentialPublic:
         """Convert credential to public representation"""
         # Decrypt to get non-sensitive fields
         data = self.decrypt_credential(credential)
 
-        # Detect OAuth token for Anthropic credentials
-        is_oauth = False
-        if credential.type == AICredentialType.ANTHROPIC and data.api_key:
-            is_oauth = data.api_key.startswith("sk-ant-oat")
+        # Detect OAuth token. The adapter owns the prefix rule and answers
+        # False for providers that issue only API keys, so no type guard here.
+        is_oauth = self._is_oauth_token(credential.type, data.api_key)
 
         return AICredentialPublic(
             id=credential.id,
@@ -571,17 +646,21 @@ class AICredentialsService:
         if not api_key:
             raise HTTPException(status_code=400, detail="API key is required")
 
-        if cred_type == AICredentialType.OPENAI_COMPATIBLE:
-            if not base_url:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Base URL is required for OpenAI Compatible credentials",
-                )
-            if not model:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Model is required for OpenAI Compatible credentials",
-                )
+        # Which extra fields a provider needs is the adapter's answer — the one
+        # server-side authority behind these 400s.
+        adapter = registry.find_adapter(cred_type)
+        if adapter is None:
+            return
+        if adapter.requires_base_url and not base_url:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Base URL is required for {adapter.label} credentials",
+            )
+        if adapter.requires_model and not model:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model is required for {adapter.label} credentials",
+            )
 
     # ============= User Profile AI Credentials (legacy encrypted field) =============
 
@@ -814,6 +893,34 @@ class AICredentialsService:
         )
         return session.exec(statement).first() is not None
 
+    @staticmethod
+    def is_shareable(credential: AICredential) -> bool:
+        """Whether this credential's owner may hand it to somebody else.
+
+        **A child of a managed record is never shareable, minted or shared.**
+        The predicate is ``is_admin_managed`` — a plain column on the row, with
+        no lookup — and both halves of that are deliberate.
+
+        *Never*, not "not if minted". A minted child is revoked at the provider
+        when its holder is deactivated or removed from the record; a
+        ``shared``-mode child is deleted by the same reconcile when its holder is
+        removed. Either way the ``AICredentialShare`` rows cascade with it and
+        the sharees lose access with no event in their feed and no way to see
+        why. The distinction that used to be drawn here — minted refused, shared
+        allowed — described a difference in *how* the row dies, not in whether it
+        does.
+
+        *The column*, not the parent record. ``managed_credential_id`` is
+        ``ON DELETE SET NULL`` and an orphaned child is a documented tolerated
+        state, so a guard that started with ``if managed_credential_id is None:
+        return False`` answered "shareable" for exactly the rows whose parent had
+        been force-deleted — the ones most likely to be in a strange state. The
+        tolerated orphan of one component must not be the silent assumption of
+        another; ``is_admin_managed`` survives the orphaning, so it is what this
+        asks.
+        """
+        return not credential.is_admin_managed
+
     def share_credential(
         self,
         session: Session,
@@ -835,6 +942,24 @@ class AICredentialsService:
         # Can't share with yourself
         if owner_id == recipient_id:
             raise HTTPException(status_code=400, detail="Cannot share credential with yourself")
+
+        # A credential the platform provisioned for one person cannot be shared.
+        # "Provisioned for you" and "shareable" are contradictory claims, and the
+        # contradiction is not abstract: the row is destroyed when its holder is
+        # deactivated or removed from the record, and the share rows go with it
+        # (``ON DELETE CASCADE``). Refused here rather than papered over in the
+        # revoke path, because the revoke is right and the share is the thing
+        # that should not exist.
+        #
+        # Its own exception type, not a bare ``HTTPException``. The only caller
+        # is bundle publisher wiring, which catches ``HTTPException`` broadly to
+        # keep a transient hiccup from aborting an install — so a plain 400 here
+        # was indistinguishable from "the row vanished", and a permanent policy
+        # refusal was being logged as a transient warning and then reported to
+        # the publisher as ``publisher_credential_unshared``: fix a thing that
+        # policy will never let you fix.
+        if not self.is_shareable(credential):
+            raise AICredentialNotShareableError(credential.id)
 
         # Check if share already exists
         statement = select(AICredentialShare).where(

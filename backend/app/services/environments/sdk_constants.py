@@ -5,6 +5,7 @@ This module breaks the circular import between the two modules by providing
 a single source of truth for SDK-related mappings and validation helpers.
 """
 from app.models.credentials.ai_credential import AICredentialType
+from app.services.ai_providers import registry
 
 
 # SDK Provider Constants (full SDK IDs for legacy/backward compat)
@@ -37,13 +38,13 @@ SDK_CREDENTIAL_COMPATIBILITY: dict[str, list[str]] = {
     "opencode": ["anthropic", "openai", "openai_compatible", "google"],
 }
 
-# Credential type to credential bag key mapping
+# Credential type → the bag slot holding that provider's API key.
+#
+# DERIVED from the provider adapters, not declared here. It used to be a
+# five-entry table stated independently of ``apply_credential_to_bag`` below,
+# which meant this module named the same mapping twice and the two could drift.
 CREDENTIAL_TYPE_TO_BAG_KEY: dict[AICredentialType, str] = {
-    AICredentialType.ANTHROPIC: "anthropic_api_key",
-    AICredentialType.MINIMAX: "minimax_api_key",
-    AICredentialType.OPENAI_COMPATIBLE: "openai_compatible_api_key",
-    AICredentialType.OPENAI: "openai_api_key",
-    AICredentialType.GOOGLE: "google_api_key",
+    adapter.type: adapter.bag_key_api_key for adapter in registry.all_adapters()
 }
 
 
@@ -96,23 +97,27 @@ def is_credential_compatible_with_sdk(
     return expected_value == cred_value
 
 
+# Bag slots that are not a provider's: the per-mode admin-curated default model
+# carried alongside the keys (see admin_curated_model_list). Set by the resolver
+# sites that know which mode a credential serves; consumed as the resolve_model
+# override fallback (env per-mode override → credential default → catalog).
+MODE_DEFAULT_MODEL_BAG_KEYS = ("model_default_conversation", "model_default_building")
+
+
 def make_empty_credential_bag() -> dict[str, str | None]:
-    """Create a fresh credential bag with all keys set to None."""
-    return {
-        "anthropic_api_key": None,
-        "minimax_api_key": None,
-        "openai_compatible_api_key": None,
-        "openai_compatible_base_url": None,
-        "openai_compatible_model": None,
-        "openai_api_key": None,
-        "google_api_key": None,
-        # Per-mode admin-curated default model carried alongside the keys (see
-        # admin_curated_model_list). Set by the resolver sites that know which
-        # mode a credential serves; consumed as the resolve_model override
-        # fallback (env per-mode override → credential default → catalog).
-        "model_default_conversation": None,
-        "model_default_building": None,
-    }
+    """Create a fresh credential bag with all keys set to None.
+
+    The provider slots come from the adapters that fill them, so a new provider
+    cannot ship a bag key that the empty bag does not declare (which would make
+    ``bag[key]`` a silent insert on one path and a KeyError on another).
+    """
+    bag: dict[str, str | None] = {}
+    for adapter in registry.all_adapters():
+        for key in adapter.bag_keys:
+            bag[key] = None
+    for key in MODE_DEFAULT_MODEL_BAG_KEYS:
+        bag[key] = None
+    return bag
 
 
 def apply_credential_to_bag(
@@ -123,21 +128,17 @@ def apply_credential_to_bag(
     """
     Apply decrypted credential data into the credential bag based on type.
 
+    One registry lookup; which slots a provider fills is the adapter's answer.
+    A ``cred_type`` no adapter serves is left alone, exactly as the previous
+    if/elif chain's absent else-branch did.
+
     Args:
         bag: Credential bag dict (mutated in place).
         cred_type: The AICredentialType of the credential.
         cred_data: Decrypted credential data (AICredentialData or similar with
                    api_key, base_url, model attributes).
     """
-    if cred_type == AICredentialType.ANTHROPIC:
-        bag["anthropic_api_key"] = cred_data.api_key
-    elif cred_type == AICredentialType.MINIMAX:
-        bag["minimax_api_key"] = cred_data.api_key
-    elif cred_type == AICredentialType.OPENAI_COMPATIBLE:
-        bag["openai_compatible_api_key"] = cred_data.api_key
-        bag["openai_compatible_base_url"] = cred_data.base_url
-        bag["openai_compatible_model"] = cred_data.model
-    elif cred_type == AICredentialType.OPENAI:
-        bag["openai_api_key"] = cred_data.api_key
-    elif cred_type == AICredentialType.GOOGLE:
-        bag["google_api_key"] = cred_data.api_key
+    adapter = registry.find_adapter(cred_type)
+    if adapter is None:
+        return
+    adapter.apply_to_bag(bag, cred_data)
