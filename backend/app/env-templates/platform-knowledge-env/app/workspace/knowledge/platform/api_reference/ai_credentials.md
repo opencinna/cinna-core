@@ -24,6 +24,11 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 
 ---
 
+## GET `/api/v1/ai-credentials/provisioning`
+**List My Key Provisionings**
+
+---
+
 ## GET `/api/v1/ai-credentials/resolve-default/{sdk_engine}`
 **Resolve Default Credential**
 

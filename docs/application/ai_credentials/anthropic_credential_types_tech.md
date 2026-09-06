@@ -5,7 +5,8 @@
 ### Backend
 
 **Detection Utility:**
-- `backend/app/utils.py:163` - `detect_anthropic_credential_type()` - Returns `(env_var_name, key_type_description)` tuple
+- `backend/app/services/ai_providers/anthropic.py` - `AnthropicAdapter.classify_key()` - the single declaration of the `sk-ant-oat` / `sk-ant-api` prefix rule. Returns a `KeyClassification(is_oauth_token, env_var_name, label)`
+- `backend/app/utils.py` - `detect_anthropic_credential_type()` - thin facade over `classify_key`, kept so its long-standing callers do not churn. Returns the same `(env_var_name, key_type_description)` tuple it always did
 
 **Service Logic:**
 - `backend/app/services/credentials/ai_credentials_service.py:76-83` - Auto-set expiry on credential creation (OAuth tokens)
@@ -36,17 +37,22 @@
 
 ## Detection Logic
 
-`detect_anthropic_credential_type(api_key)` at `backend/app/utils.py:163`:
-- `sk-ant-oat*` → `("CLAUDE_CODE_OAUTH_TOKEN", "OAuth Token")`
-- `sk-ant-api*` → `("ANTHROPIC_API_KEY", "API Key")`
-- Other → `("ANTHROPIC_API_KEY", "API Key (Unknown Format)")`
+`AnthropicAdapter.classify_key(api_key)` in `backend/app/services/ai_providers/anthropic.py`:
+- `sk-ant-oat*` → OAuth token, `CLAUDE_CODE_OAUTH_TOKEN`, `"OAuth Token"`
+- `sk-ant-api*` → API key, `ANTHROPIC_API_KEY`, `"API Key"`
+- Empty → API key, `ANTHROPIC_API_KEY`, `"API Key (Empty)"`
+- Other → API key, `ANTHROPIC_API_KEY`, `"API Key (Unknown Format)"`
+
+`detect_anthropic_credential_type(api_key)` in `backend/app/utils.py` returns `(env_var_name, label)` from that classification, unchanged.
+
+**Why it lives on the adapter.** The `sk-ant-oat` prefix test was previously written out independently in six places — `utils.py`, the AI-functions credential guard in `routes/users.py`, `ai_functions_service`, the model-discovery probe, the managed-credential projection and the AI-credential projection — each deciding for itself what an OAuth token is. Every non-Anthropic adapter answers `is_oauth_token=False`, which is what allows callers to ask the adapter without first checking `cred.type == ANTHROPIC`; that property is pinned by a test.
 
 ## Environment Variable Generation
 
 `environment_lifecycle.py:1293-1344` - `_generate_env_file()`:
 
 1. Checks if Anthropic SDK is used (`uses_anthropic`)
-2. If credential exists, calls `detect_anthropic_credential_type()`
+2. If credential exists, calls `detect_anthropic_credential_type()` (which asks the Anthropic adapter)
 3. Sets the appropriate variable, leaves the other empty with a comment
 4. Both variables always present in `.env` for template compatibility
 

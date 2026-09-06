@@ -11,7 +11,9 @@ Each file below documents one API domain.
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
 | Activities | [activities.md](./activities.md) | 8 |
 | Admin Environments | [admin_environments.md](./admin_environments.md) | 3 |
-| Admin Llm Providers | [admin_llm_providers.md](./admin_llm_providers.md) | 8 |
+| Admin Llm Providers | [admin_llm_providers.md](./admin_llm_providers.md) | 9 |
+| Admin Provider Adapters | [admin_provider_adapters.md](./admin_provider_adapters.md) | 1 |
+| Admin Provider Credentials | [admin_provider_credentials.md](./admin_provider_credentials.md) | 7 |
 | Admin Routing | [admin_routing.md](./admin_routing.md) | 6 |
 | Agent Api | [agent_api.md](./agent_api.md) | 14 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
@@ -21,7 +23,7 @@ Each file below documents one API domain.
 | Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 9 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
 | Agents | [agents.md](./agents.md) | 36 |
-| Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 10 |
+| Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 11 |
 | App Auth | [app_auth.md](./app_auth.md) | 9 |
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |

@@ -15,16 +15,17 @@
 
 **Services:**
 - `backend/app/services/credentials/ai_credentials_service.py` - `AICredentialsService` (singleton: `ai_credentials_service`)
-- `backend/app/services/credentials/model_discovery_service.py` - `probe_models` (DB-free shared dispatch), `discover_models_for_credential`, `test_connection`, `refresh_all_credentials`, `dispatch_model_deprecation_notifications`
+- `backend/app/services/credentials/model_discovery_service.py` - `probe_models` (DB-free shared dispatch — one `registry.find_adapter` lookup; the per-provider listers live in the adapters), `discover_models_for_credential`, `test_connection`, `refresh_all_credentials`, `dispatch_model_deprecation_notifications`. Re-exports `ProbeResult` / `SKIP_REASONS` / `ERROR_INVALID_KEY` / `OAUTH_TOKEN_UNSUPPORTED` from `ai_providers.base`, which is where they are declared (an adapter importing them from here would close a cycle)
 - `backend/app/services/credentials/model_discovery_scheduler.py` - APScheduler daily cron with Postgres advisory-lock single-leader guard
-- `backend/app/services/environments/environment_service.py` - `SDK_API_KEY_MAP`, strict `_validate_sdk_credential_compatibility`
-- `backend/app/services/environments/sdk_constants.py` - `SDK_TO_CREDENTIAL_TYPE`, `SDK_CREDENTIAL_COMPATIBILITY`, `sdk_expected_credential_type`, `is_credential_compatible_with_sdk`
+- `backend/app/services/environments/environment_service.py` - strict `_validate_sdk_credential_compatibility`; re-exports `SDK_CREDENTIAL_COMPATIBILITY` / `CREDENTIAL_TYPE_TO_BAG_KEY` / `apply_credential_to_bag` / `make_empty_credential_bag` from `sdk_constants` (`ai_credentials_service.resolve_default_credential_for_sdk` imports the first of those from *here*, not from where it is declared)
+- `backend/app/services/environments/sdk_constants.py` - `SDK_TO_CREDENTIAL_TYPE`, `SDK_CREDENTIAL_COMPATIBILITY`, `sdk_expected_credential_type`, `is_credential_compatible_with_sdk` (the SDK-engine axis, which stays here), plus `CREDENTIAL_TYPE_TO_BAG_KEY` / `make_empty_credential_bag` / `apply_credential_to_bag` — all three now **derived from the provider adapters** rather than declaring the provider axis a second time
 - `backend/app/services/bundles/install_service.py` - AI credential provision handling in installs/shares
 - `backend/app/services/credentials/credential_share_service.py` - Clone/install AI credential setup
 - `backend/app/services/environments/environment_lifecycle.py` - Credential type detection and `.env` generation
 
 **Utilities:**
-- `backend/app/utils.py:163` - `detect_anthropic_credential_type()` function
+- `backend/app/services/ai_providers/` - provider adapter package: `base.py` (the `AIProviderAdapter` contract, `ProbeResult`, the probe reason codes, and the optional `KeyProvisioner` capability), `registry.py` (`get_adapter` / `find_adapter` / `all_adapters` and the `override_for_tests` seam), and one module per `AICredentialType`. **`OpenAIAdapter` is the one adapter that declares a `key_provisioner`**; every other is `None`. Full contract in [provider_adapters_tech](provider_adapters_tech.md)
+- `backend/app/utils.py` - `detect_anthropic_credential_type()` - facade over `AnthropicAdapter.classify_key()`
 - `backend/app/core/security.py` - `encrypt_field()`, `decrypt_field()` (Fernet encryption)
 - `backend/app/services/credentials/ai_credentials_service.py` - `_sync_default_to_user_profile()` for profile sync
 
@@ -165,7 +166,10 @@ Indexes: `ix_ai_credential_shares_credential` (ai_credential_id), `ix_ai_credent
 - `resolve_default_credential_for_sdk(session, user_id, sdk_engine)` - Find best default credential for an SDK engine using prioritized resolution (Anthropic > Google > OpenAI > other compatible types by created_at ASC)
 
 **Sharing:**
-- `share_credential(session, credential_id, owner_id, recipient_id)` - Create share link
+- `is_shareable(credential) -> bool` — the predicate: **`not credential.is_admin_managed`**. A child of a managed record is never shareable, in *either* provisioning mode. Two deliberate choices in that one line:
+  - ***Never*, not "not if minted".** A minted child is revoked at the provider when its holder is deactivated or removed; a `shared`-mode child is deleted by the same reconcile pass when its holder is removed. Either way the `AICredentialShare` rows cascade with it and the sharees lose access with no event in their feed and no way to see why. The distinction the old guard drew — minted refused, shared allowed — described a difference in *how the row dies*, not in whether it does.
+  - **The column, not the parent link.** `managed_credential_id` is `ON DELETE SET NULL` and an orphaned child is a documented tolerated state, so a guard that began `if managed_credential_id is None: return False` answered "shareable" for exactly the rows whose parent had been force-deleted — the ones most likely to be in a strange state. `is_admin_managed` survives the orphaning, so it is what the predicate asks. One component's tolerated orphan must not become another's silent assumption.
+- `share_credential(session, credential_id, owner_id, recipient_id)` - Create share link. Raises **`AICredentialNotShareableError`** when `is_shareable` is False — an `HTTPException` subclass carrying `credential_id`, so any future route path still answers `400` without a mapping layer while its one caller can tell a *permanent policy refusal* apart from the transient failures it deliberately swallows. Detail: *"This key was provisioned for one person and is withdrawn with their account, so it cannot be shared."* Its own type matters: the only caller (`InstallService._link_publisher_ai_credential`) catches `HTTPException` broadly so a hiccup cannot abort an install, so a bare `400` here was logged as a transient warning and then reported to the publisher as `publisher_credential_unshared` — telling them to fix something policy will never let them fix. There is **no user-facing route into this method**; the only caller is bundle publisher wiring
 - `can_access_credential(session, credential_id, user_id)` - Check ownership or share access
 - `get_credential_for_use(session, credential_id, user_id)` - Return decrypted data if accessible
 - `revoke_share(session, credential_id, recipient_id)` - Remove share link
@@ -215,9 +219,14 @@ Cron batch entry point. Iterates all `AICredential` rows using `discover_models_
 
 ### Model Discovery Scheduler (`model_discovery_scheduler.py`)
 
-Daily APScheduler cron (`BackgroundScheduler`, `interval` trigger). A Postgres session-level
-advisory lock (`pg_try_advisory_lock`) enforces single-leader execution across gunicorn/uvicorn
-workers: the first worker to acquire the lock runs the batch; others skip.
+Daily APScheduler cron (`BackgroundScheduler`, `interval` trigger). A Postgres advisory lock
+(`pg_try_advisory_lock`) enforces single-leader execution across gunicorn/uvicorn workers: the
+first worker to acquire the lock runs the batch; others skip. The lock is taken through
+`app.core.db.leader_session`, the one implementation of that pattern — it pins the lock to an
+explicit `engine.connect()`, which matters here because `refresh_all_credentials` commits once
+per credential. This scheduler previously took the lock on an engine-bound `Session` and leaked
+it: the connection went back to the pool at the first commit, `pg_advisory_unlock` then ran on a
+different connection and returned false, and every subsequent discovery run skipped forever.
 
 After each discovery batch, the scheduler calls `dispatch_model_deprecation_notifications`
 which evaluates model health for every environment and sends `model_deprecated` system
@@ -237,7 +246,7 @@ Configured via `MODEL_DISCOVERY_ENABLED` (default `True`) and
 
 ### Environment Service (`backend/app/services/environments/environment_service.py`)
 
-- `SDK_API_KEY_MAP` - Maps legacy SDK IDs to API key field names
+- Re-exports `sdk_constants`' credential-bag helpers (`CREDENTIAL_TYPE_TO_BAG_KEY`, `make_empty_credential_bag`, `apply_credential_to_bag`) and `SDK_CREDENTIAL_COMPATIBILITY`, which several callers import from here rather than from the declaring module
 - `_validate_sdk_credential_compatibility(sdk_id, credential)` - Strict full-SDK provider match (e.g. `opencode/anthropic` only accepts `anthropic`-typed credentials). Raises `EnvironmentCredentialError` (400) on mismatch. Re-exports its lookup via `sdk_constants.sdk_expected_credential_type`
 - `create_environment()` - Resolves default or validates linked credentials per SDK type
 
@@ -397,4 +406,19 @@ them bare). The backend is the single point responsible for adding the prefix.
 
 ---
 
-*Last updated: 2026-06-15 — added ListModelsButton component; documented bare model override → provider prefix re-qualification in environment_lifecycle.py*
+## The `AICredential` invariant
+
+> **Every `AICredential` row that exists is usable.**
+
+There is no placeholder row, no empty key, and no "preparing" state on a credential. It matters because every consumer of this table reads it without a filter and is *correct* to: `model_discovery_service.refresh_all_credentials` probes every row on a cron, `ExternalAccountConfigService` hands every row a user owns — decrypted — to the desktop client, and the environment credential bag fills fixed slots from it.
+
+Per-user key minting therefore keeps its pre-key state **somewhere else**: on `managed_ai_credential_membership`, not here. Nothing in the credentials table changed shape for it, no new filter was added, and none can grow by accident. The owner-facing "a key is being made for you" list is its own endpoint (`GET /ai-credentials/provisioning`) for exactly that reason.
+
+Two consequences worth knowing when reading this table:
+
+- A child credential of a **minted** managed record holds a key created for its owner alone. It is revoked at the provider when the owner is removed from the record, deactivated or deleted. **No child of a managed record can be shared, in either mode** (`is_shareable`, above) — the `shared`-mode child is deleted by reconcile on member removal just as surely as the minted one is revoked.
+- An **administration** secret (the power to create and destroy keys for a whole provider organisation) is deliberately **not** in this table. It lives in `provider_admin_credential`, and the isolation is structural: sharing, environment linking, bundle publisher wiring and the blast-radius counts are all foreign keys pinned to `ai_credential.id`. See [admin_ai_credential_provisioning_tech](admin_ai_credential_provisioning_tech.md#provider_admin_credential-table-new--migration-ed8d6a23f13c).
+
+---
+
+*Last updated: 2026-09-06 — zero-touch onboarding phase 5: the provider adapter registry absorbed the per-provider probe/bag/SDK tables, `leader_session` fixed the discovery scheduler's leaked advisory lock, `share_credential` gained the admin-managed refusal (`is_shareable`, widened from minted-only to every managed child and now raising the typed `AICredentialNotShareableError`), and the `AICredential` invariant is stated here. Previously: 2026-06-15 — ListModelsButton; bare model override → provider prefix re-qualification in environment_lifecycle.py*

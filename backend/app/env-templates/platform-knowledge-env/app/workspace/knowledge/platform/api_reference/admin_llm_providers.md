@@ -8,7 +8,9 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 **Request body** (`ManagedAICredentialCreate`):
   - `name`: string (required)
   - `type`: AICredentialType (required)
-  - `api_key`: string (required)
+  - `api_key`: string | null
+  - `provisioning_mode`: ProvisioningMode
+  - `provider_admin_credential_id`: string | null
   - `base_url`: string | null
   - `model`: string | null
   - `default_model`: string | null
@@ -105,6 +107,17 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 
 **Path parameters:**
 - `managed_credential_id`: uuid
+
+**Response:** `ManagedAICredentialPublic`
+
+---
+
+## POST `/api/v1/admin/llm-providers/{managed_credential_id}/members/{user_id}/retry`
+**Retry Member Key Provisioning**
+
+**Path parameters:**
+- `managed_credential_id`: uuid
+- `user_id`: uuid
 
 **Response:** `ManagedAICredentialPublic`
 
