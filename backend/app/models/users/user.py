@@ -255,6 +255,21 @@ class UserPublic(UserBase):
     language: str | None = None
     locale: str | None = None
     conversation_style: str = ConversationStyle.AI_DEFAULT.value
+    # Derived invitation status for the admin users list: one of
+    # ``VALID_INVITATION_STATUSES`` (see ``models/users/user_invitation.py``),
+    # or ``None`` for an account that was never invited — which is most of
+    # them, and every account on an instance that predates invitations.
+    #
+    # Optional WITH a default, unlike ``can_change_email`` above, and the
+    # difference is deliberate: ``can_change_email`` is an instance-wide
+    # policy fact every producer can answer, so a missing value there is a bug
+    # worth a 500. ``invitation_status`` is per-row information that ten of
+    # the eleven ``UserPublic`` producers legitimately do not have and should
+    # not go looking for — ``/users/me`` and ``/login/test-token`` among them.
+    # A required field here would 500 all of them the day it shipped, which is
+    # exactly what ``tests/architecture/user_public_builder_test.py`` records
+    # having happened once already.
+    invitation_status: str | None = None
 
 
 class UsersPublic(SQLModel):
