@@ -25,6 +25,20 @@ export type _CredentialOverride = {
 };
 
 /**
+ * Body of ``POST /invitations/accept``.
+ *
+ * The 8–128 bound is the same one ``UserRegister`` uses, and it is enforced
+ * here so a too-short password is a 422 about the password rather than being
+ * folded into the deliberately detail-free 400 that every *token* failure
+ * returns.
+ */
+export type AcceptInvitationRequest = {
+    token: string;
+    password: string;
+    full_name?: (string | null);
+};
+
+/**
  * What an anonymous visitor is told about this instance's front door.
  *
  * Deliberately excludes ``allowed_email_patterns`` and
@@ -3945,6 +3959,179 @@ export type InstallRequest = {
     ai_credential_selections?: (AICredentialSelections | null);
 };
 
+/**
+ * The live accept link, read out without rotating anything.
+ *
+ * Distinct from resend by design: resend rotates ``token_jti`` and sends
+ * mail, this one reads out the link that is already outstanding, so an admin
+ * reading it to a person over the phone does not invalidate the email that
+ * person may be about to click. It is audited all the same — handing the
+ * link over signs the recipient in as that account.
+ */
+export type InvitationLinkPublic = {
+    accept_url: string;
+    expires_at: string;
+};
+
+/**
+ * What an anonymous caller learns from a token. Read the invariant.
+ *
+ * **Every field except ``valid`` is optional and must be omitted — not sent
+ * as null — when the token does not resolve.** The route serialises with
+ * ``response_model_exclude_none=True`` and the contract is that an invalid
+ * token answers ``200 {"valid": false}`` and nothing else, byte for byte, for
+ * a forged token, a cross-purpose token, a rotated-away jti, an expired,
+ * revoked or already-accepted invitation, a deleted or deactivated user, and
+ * an address the admin has since changed.
+ *
+ * ``password_accepted`` in particular must be **absent** rather than
+ * ``false``. A field that is always present is a channel: on an instance
+ * that allows password auth, ``true`` versus absent would separate a real
+ * token from a forged one, which is the enumeration this endpoint exists to
+ * avoid.
+ *
+ * ``password_accepted`` is the *single* server-side answer to "may this
+ * person set a password", computed by
+ * ``AccessPolicyService.is_password_auth_allowed(policy, user)`` — the same
+ * call ``accept`` enforces. The client renders the password form on this
+ * boolean and on nothing else; it must not recombine
+ * ``password_auth_enabled`` with ``auth_hint`` or with anything else, and
+ * ``password_auth_enabled`` is deliberately not on this projection so it
+ * cannot try.
+ */
+export type InvitationLookupPublic = {
+    valid: boolean;
+    email_masked?: (string | null);
+    full_name?: (string | null);
+    auth_hint?: (string | null);
+    password_accepted?: (boolean | null);
+    google_auth_enabled?: (boolean | null);
+    include_desktop?: (boolean | null);
+    project_name?: (string | null);
+    expires_at?: (string | null);
+};
+
+/**
+ * Body of ``POST /invitations/lookup``.
+ *
+ * The token travels in the body, not the path: a JWT in a URL is written to
+ * every proxy access log, kept in browser history and leaked through
+ * ``Referer``. Same reasoning, same shape as ``NewPassword.token``.
+ */
+export type InvitationLookupRequest = {
+    token: string;
+};
+
+/**
+ * One managed AI credential the invited account did *not* receive.
+ *
+ * ``reason`` is the machine-readable string ``AccountProvisioningService``
+ * already produces. The full vocabulary, because the wizard renders copy per
+ * reason and a value it has never heard of falls through to a blank line:
+ *
+ * * ``user_not_found`` / ``user_inactive`` — from the shared reconcile path;
+ * * ``managed_credential_not_found`` — an id the admin ticked no longer
+ * exists, or is not a managed credential. Reachable **only** from the
+ * explicit invite path (``provision_explicit``), which is exactly this
+ * model's path, so it is the one reason the automatic path never emits and
+ * the one most likely to be missing from the frontend's map;
+ * * ``provision_failed`` — the per-parent guard caught something;
+ * * ``add_members_failed`` — the grant itself failed for this credential.
+ */
+export type InviteProvisioningSkip = {
+    managed_credential_id: string;
+    reason: string;
+};
+
+/**
+ * What the invited account was granted, for the wizard's success screen.
+ *
+ * Deliberately not ``ManagedAICredentialReconcileResult``: that shape carries
+ * ``removed``/``blocked``/``updated``, which an add-only grant can never
+ * populate, and a ``record`` projection whose construction costs a per-member
+ * user lookup and a key decrypt. None of it is read here.
+ */
+export type InviteProvisioningSummary = {
+    added_count?: number;
+    skipped?: Array<InviteProvisioningSkip>;
+    provisioning_failed?: boolean;
+};
+
+/**
+ * The invite wizard's submission.
+ *
+ * ONE RULE: ``None`` MEANS "THE ADMIN DID NOT SAY"
+ * ------------------------------------------------
+ * Every field here that describes *persistent state of the account* is
+ * optional and nullable, and ``None`` on it means the submission was silent
+ * about that state — never "set it to the default". The distinction is only
+ * visible on the adoption path (``InvitationService._resume_interrupted``,
+ * which re-invites an account that already exists), and there it is the
+ * whole ballgame: a field that cannot represent its own absence overwrites
+ * whatever the row already held, every time, and does it silently.
+ *
+ * That is not hypothetical here. ``is_active`` was ``bool = True``, so
+ * re-inviting an account an administrator had *deliberately deactivated*
+ * reactivated it — from a wizard that does not even show an active toggle,
+ * because the field's only real purpose is the pre-create-then-activate
+ * flow. ``full_name`` had the same shape one step further along: it is
+ * nullable, but a blank string is not ``None``, so an admin who typed only
+ * an address erased the name an adopted row already carried. Both are the
+ * same bug, and this class is where it is fixed once: omission is
+ * *representable*, and ``_resume_interrupted`` writes a field if and only if
+ * it is not ``None``. There is no per-field special case at the write site,
+ * because a rule that lives at one write site is a rule the next write site
+ * does not have.
+ *
+ * The normaliser below is what makes ``full_name`` obey it: a blank or
+ * whitespace-only name is an omission spelled differently, so it becomes
+ * ``None`` at the edge rather than being tested for at the point of use.
+ * Clearing a name is a real thing to want and the user edit form is where
+ * it belongs; the invite wizard does not offer it.
+ *
+ * ``managed_credential_ids`` is the same rule with a third state, and it
+ * already had it: ``None`` means *grant whatever this role would have been
+ * auto-provisioned anyway*, which is the same predicate every other arrival
+ * path runs, while ``[]`` means the admin deliberately unticked everything.
+ */
+export type InviteUserRequest = {
+    email: string;
+    full_name?: (string | null);
+    role: string;
+    include_desktop?: (boolean | null);
+    auth_hint?: string;
+    managed_credential_ids?: (Array<(string)> | null);
+    send_email?: boolean;
+    is_active?: (boolean | null);
+};
+
+/**
+ * What the wizard gets back.
+ *
+ * ``accept_url`` is returned whether or not the email went out: an instance
+ * with no SMTP configured is the default, and the admin handing the link over
+ * in chat is the supported fallback. The admin already controls the account,
+ * so the link grants nothing they did not already have — it is audited all
+ * the same.
+ *
+ * ``adopted_existing_account`` is disclosure, not bookkeeping. An invite
+ * that re-used a row which already existed — an interrupted earlier attempt,
+ * or the passwordless account a server channel created for an inbound sender
+ * — is otherwise indistinguishable from a fresh creation, so the wizard
+ * would tell the admin "X now has an account waiting to be claimed" about an
+ * account that has been there for weeks. It was audit-only while the
+ * generated client lagged the schema; the field is the better home and this
+ * is it.
+ */
+export type InviteUserResponse = {
+    user: UserPublic;
+    invitation: UserInvitationPublic;
+    accept_url: string;
+    email_sent: boolean;
+    provisioning: InviteProvisioningSummary;
+    adopted_existing_account?: boolean;
+};
+
 export type KeyEnvelopeInput = {
     wrap_method: 'device' | 'recovery' | 'passphrase';
     umk_version?: number;
@@ -4991,6 +5178,20 @@ export type ResendConfirmationResponse = {
     message: string;
     sent?: boolean;
     resend_available_at?: (string | null);
+};
+
+/**
+ * What the admin gets back from a resend.
+ *
+ * Carries ``accept_url`` for the same reason :class:`InviteUserResponse`
+ * does: the link is the supported fallback on an instance with no SMTP, and
+ * a resend that only reported ``email_sent=False`` would leave the admin
+ * holding a rotated — therefore newly useless — old link.
+ */
+export type ResendInvitationResponse = {
+    invitation: UserInvitationPublic;
+    accept_url: string;
+    email_sent: boolean;
 };
 
 /**
@@ -6144,6 +6345,27 @@ export type UserInfoResponse = {
 };
 
 /**
+ * The invitation as an administrator sees it.
+ *
+ * Superuser-only, so ``invited_by_email`` is not a disclosure. It is not a
+ * relationship traversal — there is no ``Relationship`` on the table — so the
+ * service resolves it, and a list endpoint must batch that lookup rather than
+ * doing one per row.
+ */
+export type UserInvitationPublic = {
+    user_id: string;
+    status: string;
+    auth_hint: string;
+    include_desktop: boolean;
+    expires_at: string;
+    accepted_at?: (string | null);
+    revoked_at?: (string | null);
+    last_sent_at?: (string | null);
+    send_count?: number;
+    invited_by_email?: (string | null);
+};
+
+/**
  * Browser-detected locale defaults; server fills only still-NULL fields.
  *
  * Used by ``PATCH /users/me/locale-defaults``. ``conversation_style`` is
@@ -6216,6 +6438,7 @@ export type UserPublic = {
     language?: (string | null);
     locale?: (string | null);
     conversation_style?: string;
+    invitation_status?: (string | null);
 };
 
 /**
@@ -6251,6 +6474,7 @@ export type UserPublicWithAICredentials = {
     language?: (string | null);
     locale?: (string | null);
     conversation_style?: string;
+    invitation_status?: (string | null);
     has_anthropic_api_key?: boolean;
     has_openai_api_key?: boolean;
     has_google_ai_api_key?: boolean;
@@ -8857,6 +9081,18 @@ export type InstallsUpdateSetupCredentialData = {
 
 export type InstallsUpdateSetupCredentialResponse = (CredentialPublic);
 
+export type InvitationsLookupInvitationData = {
+    requestBody: InvitationLookupRequest;
+};
+
+export type InvitationsLookupInvitationResponse = (InvitationLookupPublic);
+
+export type InvitationsAcceptInvitationData = {
+    requestBody: AcceptInvitationRequest;
+};
+
+export type InvitationsAcceptInvitationResponse = ((LoginToken | MfaChallenge));
+
 export type KnowledgeQueryKnowledgeData = {
     requestBody: KnowledgeQueryRequest;
     xAgentEnvId?: (string | null);
@@ -9935,6 +10171,36 @@ export type UsersSearchUsersData = {
 };
 
 export type UsersSearchUsersResponse = (UsersSearchPublic);
+
+export type UsersInviteUserData = {
+    requestBody: InviteUserRequest;
+};
+
+export type UsersInviteUserResponse = (InviteUserResponse);
+
+export type UsersReadUserInvitationData = {
+    userId: string;
+};
+
+export type UsersReadUserInvitationResponse = (UserInvitationPublic);
+
+export type UsersResendUserInvitationData = {
+    userId: string;
+};
+
+export type UsersResendUserInvitationResponse = (ResendInvitationResponse);
+
+export type UsersRevokeUserInvitationData = {
+    userId: string;
+};
+
+export type UsersRevokeUserInvitationResponse = (UserInvitationPublic);
+
+export type UsersReadUserInvitationLinkData = {
+    userId: string;
+};
+
+export type UsersReadUserInvitationLinkResponse = (InvitationLinkPublic);
 
 export type UsersReadUserMeResponse = (UserPublic);
 
