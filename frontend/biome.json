@@ -25,7 +25,15 @@
         "noNonNullAssertion": "off",
         "noParameterAssign": "error",
         "useSelfClosingElements": "error",
-        "noUselessElse": "error"
+        "noUselessElse": "error",
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "rehype-raw": "Turns HTML source in Markdown into live elements. The public /start page is NOT at risk: it renders through components/Landing/LandingMarkdown.tsx, which has its own plugin list and runs rehype-sanitize. The risk here is chat — agent output, tool transcripts and other users' messages rendered to signed-in users. If you genuinely need this, add rehype-sanitize in the same commit, and do not point /start back at the chat renderer. A signpost only, not enforcement: this repo has no CI. The boundary is the render path in LandingMarkdown.tsx."
+            }
+          }
+        }
       }
     }
   },
