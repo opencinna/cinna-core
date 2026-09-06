@@ -40,6 +40,7 @@ from app.api.routes import (
     files,
     guest_shares,
     input_tasks,
+    invitations,
     knowledge,
     knowledge_sources,
     llm_plugins,
@@ -80,6 +81,10 @@ api_router = APIRouter()
 api_router.include_router(login.router)
 api_router.include_router(oauth.router)
 api_router.include_router(users.router)
+# Anonymous invitation lookup/accept. Its own module and its own tag so the
+# generated client keeps the public surface separate from the superuser one
+# on /users/*, and so the non-enumeration rules stay in one file.
+api_router.include_router(invitations.router)
 # MFA enrollment / management routes — must register before app_data so
 # the more-specific /users/me/mfa/* prefix wins over /users/me/* wildcards.
 api_router.include_router(mfa.router)
