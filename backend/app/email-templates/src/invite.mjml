@@ -1,0 +1,18 @@
+<mjml>
+  <mj-body background-color="#fafbfc">
+    <mj-section background-color="#fff" padding="40px 20px">
+      <mj-column vertical-align="middle" width="100%">
+        <mj-text align="center" padding="35px" font-size="20px" color="#333">{{ project_name }} - You have been invited</mj-text>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555">{% if invited_by_name %}<span>{{ invited_by_name }} has invited you to {{ project_name }}.</span>{% else %}<span>You have been invited to {{ project_name }}.</span>{% endif %}</mj-text>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555">Your account is ready for {{ email }}.{% if auth_hint == 'google' %} Accept the invitation and sign in with Google to get started.{% elif auth_hint == 'password' %} Accept the invitation and choose a password to get started.{% else %} Accept the invitation and choose a password, or sign in with Google.{% endif %}</mj-text>
+        <mj-button align="center" font-size="18px" background-color="#009688" border-radius="8px" color="#fff" href="{{ link }}" padding="15px 30px">Accept the invitation</mj-button>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555">This invitation expires in {{ valid_days }} days.</mj-text>
+        <mj-raw>{% if desktop_link %}</mj-raw>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555">Prefer a desktop app? <a href="{{ desktop_link }}">Get Cinna Desktop</a> once you have accepted.</mj-text>
+        <mj-raw>{% endif %}</mj-raw>
+        <mj-text align="center" font-size="16px" padding-left="25px" padding-right="25px" font-family="Arial, Helvetica, sans-serif" color="#555">Or open it in the browser: <a href="{{ web_link }}">{{ web_link }}</a></mj-text>
+        <mj-divider border-color="#ccc" border-width="2px"></mj-divider>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
