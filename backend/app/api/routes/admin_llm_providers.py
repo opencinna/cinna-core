@@ -12,7 +12,11 @@ emit ``SecurityEvent`` records with NO key material:
 - per child mutation → keyed to the child owner
   (``admin.ai_credential.provision|update|delete|set_default``)
 - per parent batch → keyed to the admin
-  (``admin.managed_ai_credential.create|update|delete``)
+  (``admin.managed_ai_credential.create|update|delete|apply_to_existing``)
+
+Grants made automatically at account creation are NOT emitted here — they have
+no acting admin. ``AccountProvisioningService`` writes those as
+``admin.ai_credential.auto_provision`` against the receiving user.
 """
 import logging
 import uuid
@@ -28,6 +32,7 @@ from app.models.credentials.ai_credential import (
     AICredentialTestResult,
 )
 from app.models.credentials.managed_ai_credential import (
+    ManagedAICredentialApplyResult,
     ManagedAICredentialCreate,
     ManagedAICredentialPublic,
     ManagedAICredentialReconcileResult,
@@ -36,6 +41,7 @@ from app.models.credentials.managed_ai_credential import (
 from app.models.events.security_event import SecurityEventCreate
 from app.services.credentials import model_discovery_service
 from app.services.credentials.managed_ai_credentials_service import (
+    ManagedCredentialConflictError,
     managed_ai_credentials_service,
 )
 from app.services.events.security_event_service import SecurityEventService
@@ -129,6 +135,26 @@ async def _emit_reconcile_events(
     )
 
 
+def _conflict_409(exc: ManagedCredentialConflictError) -> HTTPException:
+    """Turn a ``(role, mode)`` collision into a 409 the dialog can render.
+
+    Structured rather than a prose string: the frontend highlights the
+    offending role/mode cell and links to the other record, and it cannot do
+    either from a sentence.
+    """
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "auto_provision_conflict",
+            "message": str(exc),
+            "conflicting_credential_id": str(exc.conflicting_id),
+            "conflicting_credential_name": exc.conflicting_name,
+            "role": exc.role,
+            "mode": exc.mode,
+        },
+    )
+
+
 @router.post("/", response_model=ManagedAICredentialReconcileResult)
 async def create_managed_ai_credential(
     *,
@@ -143,9 +169,12 @@ async def create_managed_ai_credential(
     call. A bad per-type payload (e.g. ``openai_compatible`` without
     base_url/model) fails the whole call with 400.
     """
-    result = managed_ai_credentials_service.create(
-        session, current_user, data
-    )
+    try:
+        result = managed_ai_credentials_service.create(
+            session, current_user, data
+        )
+    except ManagedCredentialConflictError as exc:
+        raise _conflict_409(exc)
     await _emit_reconcile_events(
         session, current_user, result, "admin.managed_ai_credential.create"
     )
@@ -200,9 +229,12 @@ async def update_managed_ai_credential(
     leaves membership unchanged. ``force`` overrides the Tier-2 blast-radius
     gate on removed members.
     """
-    result = managed_ai_credentials_service.update(
-        session, current_user, managed_credential_id, data, force=force
-    )
+    try:
+        result = managed_ai_credentials_service.update(
+            session, current_user, managed_credential_id, data, force=force
+        )
+    except ManagedCredentialConflictError as exc:
+        raise _conflict_409(exc)
     await _emit_reconcile_events(
         session, current_user, result, "admin.managed_ai_credential.update"
     )
@@ -242,6 +274,44 @@ async def delete_managed_ai_credential(
         session, current_user, result, "admin.managed_ai_credential.delete"
     )
     return Message(message="Managed AI credential deleted successfully")
+
+
+@router.post(
+    "/{managed_credential_id}/apply-to-existing",
+    response_model=ManagedAICredentialApplyResult,
+)
+async def apply_managed_ai_credential_to_existing(
+    session: SessionDep,
+    current_user: SuperUser,
+    managed_credential_id: uuid.UUID,
+    dry_run: bool = Query(
+        default=False,
+        description=(
+            "Return who would receive the credential without granting it. "
+            "Backs the confirm dialog's preview count."
+        ),
+    ),
+) -> Any:
+    """Grant this credential to every active account whose role it covers.
+
+    ``auto_provision_roles`` only fires when an account is created, so this is
+    how the people already on the instance are brought in. Add-only: nobody
+    loses a credential, and existing members are left alone.
+
+    A dry run writes nothing and emits no audit events — there is nothing to
+    audit about a question.
+    """
+    result = managed_ai_credentials_service.apply_to_existing(
+        session, current_user, managed_credential_id, dry_run=dry_run
+    )
+    if not dry_run:
+        await _emit_reconcile_events(
+            session,
+            current_user,
+            result,
+            "admin.managed_ai_credential.apply_to_existing",
+        )
+    return result
 
 
 @router.post(
