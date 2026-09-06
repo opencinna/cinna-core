@@ -1,10 +1,9 @@
 import logging
 import asyncio
 from apscheduler.schedulers.background import BackgroundScheduler
-from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.db import create_session
+from app.core.db import leader_session
 from app.services.credentials.model_discovery_service import (
     dispatch_model_deprecation_notifications,
     refresh_all_credentials,
@@ -14,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 scheduler = BackgroundScheduler()
 
-# Stable, arbitrary 64-bit key for the session-level Postgres advisory lock that
-# makes the discovery batch single-leader across processes. Under N gunicorn/
+# Stable, arbitrary 64-bit key for the Postgres advisory lock that makes the
+# discovery batch single-leader across processes. Under N gunicorn/
 # uvicorn workers each runs its own BackgroundScheduler, so without this guard
 # every worker would run the batch and emit up to N deprecation emails per
 # transition (the 30-min notification dedup TTL is shorter than the daily cron,
@@ -40,34 +39,27 @@ def run_model_discovery():
 async def _refresh_all_credentials():
     """Async implementation of the model discovery batch.
 
-    Single-leader across workers via a session-level Postgres advisory lock: if
-    another worker already holds it, this run skips. The lock is acquired on the
-    same session/connection used for the batch and released in ``finally``
-    (``pg_advisory_unlock`` is session-scoped, so it must run on that
-    connection; closing the session would also drop it).
+    Single-leader across workers via :func:`app.core.db.leader_session`, which
+    holds the Postgres advisory lock on a pinned connection for the batch's whole
+    life. That pinning is not cosmetic here: ``refresh_all_credentials`` commits
+    once per credential, and this function used to take the lock on an
+    engine-bound session — which returns its connection to the pool at every
+    commit. The unlock then ran on a different connection and returned false, the
+    lock stayed held on a connection sitting in the pool, and **every subsequent
+    discovery run skipped forever**. Do not re-inline the lock here.
 
     When leader: refreshes the per-credential discovered-model cache, then
     evaluates env model health and emails owners whose environments newly
     transitioned into a deprecated-model warning state.
     """
-    with create_session() as session:
-        acquired = session.execute(
-            text("SELECT pg_try_advisory_lock(:k)"),
-            {"k": _MODEL_DISCOVERY_LOCK_KEY},
-        ).scalar_one()
-        if not acquired:
+    with leader_session(_MODEL_DISCOVERY_LOCK_KEY) as session:
+        if session is None:
             logger.info(
                 "Model discovery skipped: another worker holds the leader lock"
             )
             return
-        try:
-            await refresh_all_credentials(session)
-            await dispatch_model_deprecation_notifications(session)
-        finally:
-            session.execute(
-                text("SELECT pg_advisory_unlock(:k)"),
-                {"k": _MODEL_DISCOVERY_LOCK_KEY},
-            )
+        await refresh_all_credentials(session)
+        await dispatch_model_deprecation_notifications(session)
 
 
 def start_scheduler():

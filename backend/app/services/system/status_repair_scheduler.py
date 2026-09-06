@@ -38,11 +38,10 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from sqlalchemy import text
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.core.db import create_session, engine
+from app.core.db import leader_session
 from app.services.system.status_repair_channels import repair_channel_deliveries
 from app.services.system.status_repair_context import RepairContext
 from app.services.system.status_repair_environments import repair_environments
@@ -74,53 +73,15 @@ _main_loop: asyncio.AbstractEventLoop | None = None
 
 @contextmanager
 def repair_leader_session() -> Iterator[Session | None]:
-    """Yield a session holding the repair sweep's leader lock, or ``None``.
+    """Yield a session holding the repair sweep's leader lock, or ``None`` to skip.
 
-    ``None`` means another process already holds the lock and this tick should
-    skip.
-
-    Copied from ``install_service.sweep_leader_session``, including the reason
-    it looks like this: ``pg_try_advisory_lock`` is *connection*-scoped, while a
-    ``Session`` bound to an **engine** returns its connection to the pool at
-    every ``commit()``. The sweep commits once per repaired row, so an
-    engine-bound session would strand the lock on a pooled connection — the
-    matching ``pg_advisory_unlock`` then runs on a different connection and
-    returns false, the lock is never released, and every later run is locked out
-    permanently. Binding the ``Session`` to an explicit ``engine.connect()``
-    pins it for the lock's whole life.
-
-    Do **not** re-derive this from ``model_discovery_scheduler``: that one takes
-    the lock on a pooled session and leaks it exactly as described above (a live
-    bug, already cited as "the pattern" by two other schedulers — this is not
-    the fourth).
+    Thin wrapper over :func:`app.core.db.leader_session`, which owns the
+    connection-pinning rule this needs: the sweep commits once per repaired row,
+    and an engine-bound session would strand the advisory lock on a pooled
+    connection and lock every later tick out permanently.
     """
-    if settings.TESTING:
-        # Under test there is no cross-process concurrency to guard against, and
-        # the harness patches ``create_session`` to hand back the rolled-back
-        # test transaction. Checking out a real pooled connection here would
-        # escape that isolation and write to the live database.
-        with create_session() as session:
-            yield session
-        return
-
-    with engine.connect() as connection:
-        acquired = connection.execute(
-            text("SELECT pg_try_advisory_lock(:k)"),
-            {"k": STATUS_REPAIR_LOCK_KEY},
-        ).scalar_one()
-        connection.commit()
-        if not acquired:
-            yield None
-            return
-        try:
-            with Session(bind=connection) as session:
-                yield session
-        finally:
-            connection.execute(
-                text("SELECT pg_advisory_unlock(:k)"),
-                {"k": STATUS_REPAIR_LOCK_KEY},
-            )
-            connection.commit()
+    with leader_session(STATUS_REPAIR_LOCK_KEY) as session:
+        yield session
 
 
 # ── Repair passes ──────────────────────────────────────────────────────

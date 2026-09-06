@@ -71,7 +71,9 @@ def as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
-def create_task_with_error_logging(coro, task_name: str = "background_task"):
+def create_task_with_error_logging(
+    coro, task_name: str = "background_task", on_drop=None
+):
     """
     Create an asyncio task with proper exception logging.
 
@@ -81,9 +83,20 @@ def create_task_with_error_logging(coro, task_name: str = "background_task"):
     If called from a sync worker thread (no running event loop), the coroutine
     is scheduled on the main event loop via anyio.from_thread.
 
+    ``on_drop`` is the one path this helper cannot decide for its caller. When
+    cross-thread scheduling fails the coroutine is closed and **the work never
+    happens**, which for most callers is an acceptable best-effort loss and for
+    at least one is not: a revocation batch that is dropped leaves keys live at
+    a provider with nothing naming them. Callers that must know pass a
+    zero-argument callback; omitting it keeps the historical silent-drop
+    behaviour, so absence means "a drop is tolerable here" rather than "nobody
+    thought about it".
+
     Args:
         coro: Coroutine to run as a task
         task_name: Name for logging purposes
+        on_drop: Optional callback invoked when the coroutine could not be
+            scheduled and was closed. Must not raise.
 
     Returns:
         asyncio.Task or None: The created task, or None if scheduled cross-thread
@@ -112,6 +125,13 @@ def create_task_with_error_logging(coro, task_name: str = "background_task"):
         except Exception as e:
             logger.warning(f"Failed to schedule {task_name} from sync context: {e}")
             coro.close()
+            if on_drop is not None:
+                try:
+                    on_drop()
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception(
+                        f"on_drop handler for {task_name} raised"
+                    )
         return None
 
     task = asyncio.create_task(coro)
@@ -474,6 +494,11 @@ def detect_anthropic_credential_type(api_key: str) -> tuple[str, str]:
     """
     Detect the type of Anthropic credential based on its prefix.
 
+    Thin facade over the Anthropic provider adapter's ``classify_key``, which is
+    the one place the ``sk-ant-oat`` / ``sk-ant-api`` prefix rule is stated. Kept
+    at this import path so the callers that have always used it do not churn;
+    new code should ask the adapter.
+
     Args:
         api_key: The Anthropic API key or OAuth token
 
@@ -490,16 +515,19 @@ def detect_anthropic_credential_type(api_key: str) -> tuple[str, str]:
         >>> detect_anthropic_credential_type("sk-ant-api03-xyz789")
         ("ANTHROPIC_API_KEY", "API Key")
     """
-    if not api_key:
-        return ("ANTHROPIC_API_KEY", "API Key (Empty)")
+    # Imported here rather than at module level: ``app.utils`` sits low in the
+    # import graph and is pulled in by nearly everything, so a module-level
+    # import of a service package would be a cycle waiting to happen.
+    from app.models.credentials.ai_credential import AICredentialType
+    from app.services.ai_providers import registry
 
-    # OAuth tokens start with sk-ant-oat
-    if api_key.startswith("sk-ant-oat"):
-        return ("CLAUDE_CODE_OAUTH_TOKEN", "OAuth Token")
-
-    # API keys start with sk-ant-api
-    if api_key.startswith("sk-ant-api"):
-        return ("ANTHROPIC_API_KEY", "API Key")
-
-    # Unknown format defaults to API key
-    return ("ANTHROPIC_API_KEY", "API Key (Unknown Format)")
+    # ``find_adapter``, not ``get_adapter``: this function had no raise path
+    # before the adapters existed, and its caller in ``environment_lifecycle``
+    # does not catch one. An adapter that cannot be resolved is not a reason to
+    # fail an environment build over a *label*, so the fallback is the same pair
+    # the function has always returned for an unrecognised key.
+    adapter = registry.find_adapter(AICredentialType.ANTHROPIC)
+    if adapter is None:  # pragma: no cover - the registry always serves it
+        return ("ANTHROPIC_API_KEY", "API Key (Unknown Format)")
+    classification = adapter.classify_key(api_key)
+    return (classification.env_var_name or "ANTHROPIC_API_KEY", classification.label)
