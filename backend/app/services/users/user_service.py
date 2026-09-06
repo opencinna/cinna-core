@@ -16,6 +16,7 @@ from sqlmodel import Session, col, delete, func, select
 from app.core.config import settings
 from app.core.security import get_password_hash, verify_password
 from app.models import (
+    AccountOrigin,
     SecurityEvent,
     SecurityEventCreate,
     User,
@@ -28,8 +29,8 @@ from app.models import (
     UserUpdate,
 )
 from app.models.events import security_event as security_event_constants
+from app.models.users.user import VALID_USER_ROLES, UserRole
 from app.services.users.access_policy_service import (
-    ORIGIN_SIGNUP,
     AccessPolicyService,
     RegistrationNotAllowedError,
 )
@@ -56,43 +57,225 @@ class UserService:
     Routes translate ValueError to HTTPException.
     """
 
+    # ── The account-creation chokepoint ────────────────────────────────
+
     @staticmethod
-    def create_user(*, session: Session, user_create: UserCreate) -> User:
-        """Create a new user with hashed password.
+    def create_account(
+        session: Session,
+        *,
+        email: str,
+        origin: AccountOrigin,
+        password: str | None = None,
+        full_name: str | None = None,
+        username: str | None = None,
+        google_id: str | None = None,
+        role: str | None = None,
+        is_superuser: bool = False,
+        is_active: bool = True,
+        email_confirmed: bool = False,
+        skip_auto_provision: bool = False,
+    ) -> User:
+        """Build the one and only ``User`` row, from any arrival path.
 
-        Superusers are upgraded to ``admin`` so the
-        ``role ⇔ is_superuser`` invariant holds for freshly created rows.
-        Non-superusers default to the admin-configured access-policy
-        role, resolved via ``RoleService.derive_default_role`` — the
-        single source of truth for the creation-time default.
+        WHY THIS EXISTS
+        ---------------
+        Before this, three call sites each constructed a ``User`` and each
+        re-derived the creation-time rules from memory: the signup path, the
+        Google path, and the passwordless branch of ``create_external_user``.
+        They already disagreed — only one of them normalised the address, only
+        two of them set the default role through ``RoleService``, none of them
+        agreed about ``email_confirmed``. Every rule that must hold for *an
+        account*, as opposed to for one way of getting one, therefore lives
+        here: address normalisation, the ``is_superuser ⇒ admin`` invariant,
+        the policy-derived default role, and — the reason phase 2 exists at
+        all — auto-provisioning of the company's managed AI credentials.
+
+        A new arrival path (invitations, SCIM, an identity provider) that goes
+        through this function inherits all of it and cannot forget any of it.
+        That is the whole design; ``origin`` is what makes it expressible.
+
+        NORMALISATION IS PART OF IDENTITY
+        ---------------------------------
+        The address is stripped + lowercased and validated with the same
+        adapter the external path already used, because ``Alice@x.com`` and
+        ``alice@x.com`` are one human and Postgres' unique index is
+        case-sensitive. The duplicate check below runs on the *normalised*
+        address for the same reason: a caller that checked the raw string
+        would otherwise hand us a collision and get an ``IntegrityError`` 500
+        instead of a 400.
+
+        THE POLICY GATE IS RE-ASSERTED, NOT MOVED
+        -----------------------------------------
+        ``register_user`` and ``create_user_from_google`` still call
+        ``can_register`` *before* their duplicate check — that ordering is
+        what keeps a closed instance from answering differently for a known
+        and an unknown address. The second call here is not that check
+        repeated for its answer; it is the structural guarantee that a future
+        path which forgets the gate is refused anyway. It is a pure read of an
+        already-materialised row, and it is idempotent.
+
+        Args:
+            email: The address. Normalised here.
+            origin: Which arrival path this is. See :class:`AccountOrigin`.
+            password: Plaintext to hash, or ``None`` for a passwordless
+                account (Google, invited-but-not-yet-accepted, passwordless
+                external senders). Length is validated by the request schema
+                at the edge, not here.
+            role: Explicit role, for the origins that carry admin intent.
+                ``None`` derives it from the access policy.
+            is_superuser: Forces ``role='admin'`` and auto-confirmation.
+            email_confirmed: True when the arrival path itself verified the
+                address (Google). Superusers are confirmed regardless.
+            skip_auto_provision: Suppress
+                ``AccountProvisioningService.on_account_created``. For paths
+                that apply their own explicit credential list (phase 3's
+                invite wizard).
+
+        Raises:
+            ValueError: invalid address, or the address already exists.
+            RegistrationNotAllowedError: the access policy refuses this
+                origin for this address.
         """
-        # Honour caller-provided role if present (e.g., admin creating
-        # a developer); otherwise derive from is_superuser + config.
-        provided = user_create.model_dump(exclude_unset=True)
-        if "role" not in provided:
-            provided_role = RoleService.derive_default_role(
-                session=session, is_superuser=user_create.is_superuser
+        try:
+            email = _EMAIL_ADAPTER.validate_python(email.strip().lower())
+        except PydanticValidationError as exc:
+            raise ValueError(f"Invalid email address: {email!r}") from exc
+
+        decision = AccessPolicyService.can_register(
+            session, email=email, origin=origin
+        )
+        if not decision.allowed:
+            assert decision.reason is not None
+            raise RegistrationNotAllowedError(decision.reason)
+
+        if UserService.get_user_by_email(session=session, email=email):
+            raise ValueError(
+                "The user with this email already exists in the system"
             )
+
+        if role is not None and role not in VALID_USER_ROLES:
+            # Checked here because this is now the only door. ``POST /users/``
+            # validates a role on PATCH but not on create, and phase 3's invite
+            # wizard will pass one straight through — one check at the
+            # chokepoint retires the whole class rather than adding a third
+            # place to forget it.
+            raise ValueError(
+                f"Invalid role '{role}'. Must be one of "
+                f"{', '.join(VALID_USER_ROLES)}."
+            )
+
+        # Superusers are trusted/admin-bootstrapped: ``role`` is pinned to
+        # ``admin`` so the ``role ⇔ is_superuser`` invariant holds for fresh
+        # rows even when a caller passes something else, and they are
+        # auto-confirmed — an unconfirmed superuser would have its own
+        # notifications gated and agent limit clamped, which defeats the
+        # purpose. The anti-abuse gate targets ordinary public signups.
+        if is_superuser:
+            resolved_role = UserRole.ADMIN.value
+            email_confirmed = True
+        elif role is not None:
+            resolved_role = role
         else:
-            provided_role = user_create.role
+            resolved_role = RoleService.derive_default_role(
+                session=session, is_superuser=False
+            )
 
-        update: dict[str, Any] = {
-            "hashed_password": get_password_hash(user_create.password),
-            "role": provided_role,
-        }
-        # Superusers are trusted/admin-bootstrapped and are auto-confirmed —
-        # an unconfirmed superuser would have its own notifications/email
-        # gated and agent limit clamped, which defeats the purpose. The
-        # anti-abuse gate targets ordinary public signups.
-        if user_create.is_superuser:
-            update["email_confirmed"] = True
-            update["email_confirmed_at"] = datetime.now(timezone.utc)
-
-        db_obj = User.model_validate(user_create, update=update)
-        session.add(db_obj)
+        user = User(
+            email=email,
+            hashed_password=(
+                get_password_hash(password) if password is not None else None
+            ),
+            google_id=google_id,
+            full_name=full_name,
+            username=username,
+            is_active=is_active,
+            is_superuser=is_superuser,
+            role=resolved_role,
+            email_confirmed=email_confirmed,
+            email_confirmed_at=(
+                datetime.now(timezone.utc) if email_confirmed else None
+            ),
+        )
+        session.add(user)
         session.commit()
-        session.refresh(db_obj)
-        return db_obj
+        session.refresh(user)
+
+        if not skip_auto_provision:
+            # ``on_account_created`` already promises never to raise. The
+            # ``try`` is here anyway, and deliberately: this is the line that
+            # makes "an account is never lost to a provisioning failure" a
+            # property of the *account* code rather than a promise borrowed
+            # from another module. The account row is committed above; nothing
+            # after this point may take it away.
+            # Snapshotted while the session is certainly good: on an aborted
+            # transaction even ``user.id`` is a query, so a handler that logs
+            # before it repairs throws from inside itself. Same rule the
+            # provisioning service documents under ERROR HANDLING.
+            new_user_id = user.id
+            origin_value = origin.value
+            try:
+                from app.services.users.account_provisioning_service import (
+                    AccountProvisioningService,
+                )
+
+                AccountProvisioningService.on_account_created(
+                    session, user, origin
+                )
+            except Exception:  # pragma: no cover - the callee already guards
+                # Unconditional, for the reason given in
+                # ``AccountProvisioningService._restore_session``: a statement
+                # -level failure aborts the transaction without clearing
+                # ``session.is_active``, so a guard on that flag skips the
+                # case the caller's next commit will die on.
+                try:
+                    session.rollback()
+                except Exception:
+                    logger.exception(
+                        "Could not restore the session after a provisioning "
+                        "failure for user %s.", new_user_id
+                    )
+                logger.warning(
+                    "Auto-provisioning raised for new user %s (origin=%s) "
+                    "despite guaranteeing it would not; the account stands.",
+                    new_user_id,
+                    origin_value,
+                    exc_info=True,
+                )
+
+        return user
+
+    @staticmethod
+    def create_user(
+        *,
+        session: Session,
+        user_create: UserCreate,
+        origin: AccountOrigin = AccountOrigin.ADMIN,
+    ) -> User:
+        """Create a user from an admin-shaped ``UserCreate`` payload.
+
+        A thin adapter over :meth:`create_account`: it exists because the
+        admin route, the first-superuser seed and a good deal of test code
+        already speak ``UserCreate``. ``origin`` defaults to ``admin`` — the
+        seed in ``core.db.init_db`` overrides it with ``seed``.
+
+        ``UserBase.role`` carries a column default, so "the caller did not
+        say" and "the caller said ``agent-user``" look identical on the
+        parsed model. Only the first should pick up the admin-configured
+        policy default, so the distinction is read off ``exclude_unset``
+        rather than off the value.
+        """
+        explicitly_set = user_create.model_dump(exclude_unset=True)
+        return UserService.create_account(
+            session,
+            email=user_create.email,
+            origin=origin,
+            password=user_create.password,
+            full_name=user_create.full_name,
+            username=user_create.username,
+            role=user_create.role if "role" in explicitly_set else None,
+            is_superuser=user_create.is_superuser,
+            is_active=user_create.is_active,
+        )
 
     @staticmethod
     def update_user(*, session: Session, db_user: User, user_in: UserUpdate) -> Any:
@@ -187,7 +370,7 @@ class UserService:
             ValueError: If the email already exists.
         """
         decision = AccessPolicyService.can_register(
-            session, email=email, origin=ORIGIN_SIGNUP
+            session, email=email, origin=AccountOrigin.SIGNUP
         )
         if not decision.allowed:
             assert decision.reason is not None
@@ -199,8 +382,13 @@ class UserService:
                 "The user with this email already exists in the system"
             )
 
-        user_create = UserCreate(email=email, password=password, full_name=full_name)
-        user = UserService.create_user(session=session, user_create=user_create)
+        user = UserService.create_account(
+            session,
+            email=email,
+            origin=AccountOrigin.SIGNUP,
+            password=password,
+            full_name=full_name,
+        )
         # First confirmation email at signup (force=True bypasses cooldown).
         # Self-service signups start unconfirmed; this lets them confirm.
         from app.services.users.email_confirmation_service import (
@@ -265,10 +453,11 @@ class UserService:
         Raises:
             ValueError: If ``email`` is not a valid address.
         """
-        # Validate before the lookup. The `passwordless` branch below builds a
-        # `User` (table=True) directly, and SQLModel skips validation on table
-        # models — without this, the two branches would disagree on what a
-        # valid address is.
+        # Validate + normalise before the lookup, so the idempotency check
+        # below asks about the same address ``create_account`` will store.
+        # (``create_account`` normalises again; this is not redundant — the
+        # get-or-create contract needs the canonical form *here*, before it
+        # decides whether to create at all.)
         try:
             email = _EMAIL_ADAPTER.validate_python(email.strip().lower())
         except PydanticValidationError as exc:
@@ -278,27 +467,16 @@ class UserService:
         if existing:
             return existing
 
-        if passwordless:
-            user = User(
-                email=email,
-                hashed_password=None,
-                is_active=True,
-                is_superuser=False,
-                role=RoleService.derive_default_role(
-                    session=session, is_superuser=False
-                ),
-            )
-            session.add(user)
-            session.commit()
-            session.refresh(user)
-        else:
-            random_password = secrets.token_urlsafe(32)
-            user_create = UserCreate(
-                email=email,
-                password=random_password,
-                is_active=True,
-            )
-            user = UserService.create_user(session=session, user_create=user_create)
+        # Both branches differ only in whether a password hash exists at all;
+        # everything else about the account is identical, which is why they
+        # go through the one chokepoint instead of one of them building a row.
+        user = UserService.create_account(
+            session,
+            email=email,
+            origin=AccountOrigin.EXTERNAL,
+            password=None if passwordless else secrets.token_urlsafe(32),
+            is_active=True,
+        )
 
         from app.services.users.email_confirmation_service import (
             EmailConfirmationService,

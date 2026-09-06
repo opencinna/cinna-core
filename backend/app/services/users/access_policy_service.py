@@ -74,7 +74,7 @@ from app.models.server_config.server_config import (
     ServerConfig,
     ServerConfigUpdate,
 )
-from app.models.users.user import User, UserRole
+from app.models.users.user import AccountOrigin, User, UserRole
 from app.services.common.email_patterns import match_email_pattern
 
 logger = logging.getLogger(__name__)
@@ -109,16 +109,10 @@ REASON_INVALID_EMAIL_PATTERN = "invalid_email_pattern"
 
 # ── Origins ────────────────────────────────────────────────────────────
 #
-# Where an account-creation attempt came from. Strings for now; phase 2 of
-# zero-touch-onboarding replaces them with an ``AccountOrigin`` enum carried
-# through one creation chokepoint.
-ORIGIN_SIGNUP = "signup"
-ORIGIN_GOOGLE = "google"
-ORIGIN_ADMIN = "admin"
-ORIGIN_INVITE = "invite"
-ORIGIN_EXTERNAL = "external"
-ORIGIN_SEED = "seed"
-
+# Where an account-creation attempt came from. The enum itself lives on
+# ``app.models.users.user`` next to ``UserRole`` — see its comment for why.
+# What lives here is the *policy* reading of it: which origins are gated.
+#
 # Origins that carry their own authority and are never gated here:
 #
 # - ``admin``    — a superuser deliberately creating an account. Admin intent
@@ -133,7 +127,12 @@ ORIGIN_SEED = "seed"
 # - ``seed``     — first-superuser bootstrap, which must work on an instance
 #                  that has no policy row yet.
 _UNGATED_ORIGINS = frozenset(
-    {ORIGIN_ADMIN, ORIGIN_INVITE, ORIGIN_EXTERNAL, ORIGIN_SEED}
+    {
+        AccountOrigin.ADMIN,
+        AccountOrigin.INVITE,
+        AccountOrigin.EXTERNAL,
+        AccountOrigin.SEED,
+    }
 )
 
 # Roles a new non-superuser account may be given. ``admin`` is absent by
@@ -291,7 +290,7 @@ class AccessPolicyService:
 
     @staticmethod
     def can_register(
-        session: Session, *, email: str, origin: str
+        session: Session, *, email: str, origin: AccountOrigin
     ) -> RegistrationDecision:
         """Whether an account may be created for ``email`` from ``origin``.
 
@@ -304,7 +303,7 @@ class AccessPolicyService:
         """
         if origin in _UNGATED_ORIGINS:
             return RegistrationDecision(allowed=True)
-        if origin not in (ORIGIN_SIGNUP, ORIGIN_GOOGLE):
+        if origin not in (AccountOrigin.SIGNUP, AccountOrigin.GOOGLE):
             # A caller passing an origin nobody has reasoned about is a bug,
             # and guessing which gate it wanted is how a new path silently
             # skips the policy. Fail loudly instead.
@@ -317,11 +316,11 @@ class AccessPolicyService:
                 allowed=False, reason=REASON_REGISTRATION_CLOSED
             )
 
-        if origin == ORIGIN_SIGNUP and not policy.password_auth_enabled:
+        if origin == AccountOrigin.SIGNUP and not policy.password_auth_enabled:
             return RegistrationDecision(
                 allowed=False, reason=REASON_PASSWORD_AUTH_DISABLED
             )
-        if origin == ORIGIN_GOOGLE and not policy.google_auto_register:
+        if origin == AccountOrigin.GOOGLE and not policy.google_auto_register:
             return RegistrationDecision(
                 allowed=False, reason=REASON_GOOGLE_AUTO_REGISTER_DISABLED
             )
@@ -594,12 +593,6 @@ __all__ = [
     "PasswordAuthDisabledError",
     "RegistrationDecision",
     "RegistrationNotAllowedError",
-    "ORIGIN_ADMIN",
-    "ORIGIN_EXTERNAL",
-    "ORIGIN_GOOGLE",
-    "ORIGIN_INVITE",
-    "ORIGIN_SEED",
-    "ORIGIN_SIGNUP",
     "REASON_EMAIL_NOT_ALLOWED",
     "REASON_GOOGLE_AUTO_REGISTER_DISABLED",
     "REASON_GOOGLE_OAUTH_NOT_CONFIGURED",

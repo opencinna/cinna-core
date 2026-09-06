@@ -179,7 +179,15 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
             detail="The user with this email already exists in the system.",
         )
 
-    user = UserService.create_user(session=session, user_create=user_in)
+    try:
+        user = UserService.create_user(session=session, user_create=user_in)
+    except ValueError as e:
+        # The check above compares the address as typed; ``create_account``
+        # normalises before it stores. "Foo@Bar.com" against an existing
+        # "foo@bar.com" therefore gets past the first check and is caught by
+        # the second — a 400 the admin can act on rather than an
+        # IntegrityError 500.
+        raise HTTPException(status_code=400, detail=str(e))
     if settings.emails_enabled and user_in.email:
         # The new-account email carries the temp password and is
         # admin-initiated/trusted, so it is sent regardless of the

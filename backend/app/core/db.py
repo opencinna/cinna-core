@@ -1,7 +1,7 @@
 from sqlmodel import Session, create_engine, select
 
 from app.core.config import settings
-from app.models import User, UserCreate
+from app.models import AccountOrigin, User, UserCreate
 from app.services.users.user_service import UserService
 
 engine = create_engine(str(settings.SQLALCHEMY_DATABASE_URI))
@@ -35,7 +35,11 @@ def init_db(session: Session) -> None:
             password=settings.FIRST_SUPERUSER_PASSWORD,
             is_superuser=True,
         )
-        user = UserService.create_user(session=session, user_create=user_in)
+        # ``seed`` is an ungated origin: the first superuser has to be
+        # creatable on an instance whose access policy does not exist yet.
+        user = UserService.create_user(
+            session=session, user_create=user_in, origin=AccountOrigin.SEED
+        )
     else:
         # Phase 3 — enforce the ``role ⇔ is_superuser`` invariant on the
         # bootstrapped superuser.  This catches DBs seeded before the

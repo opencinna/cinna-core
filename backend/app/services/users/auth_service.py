@@ -11,13 +11,12 @@ from sqlmodel import Session, select
 
 from app.core import security
 from app.core.config import settings
-from app.models import User, UserMfaChallenge
+from app.models import AccountOrigin, User, UserMfaChallenge
 from app.services.users.access_policy_service import (
-    ORIGIN_GOOGLE,
     AccessPolicyService,
     RegistrationNotAllowedError,
 )
-from app.services.users.role_service import RoleService
+from app.services.users.user_service import UserService
 
 
 @dataclass
@@ -204,36 +203,28 @@ class AuthService:
         # ``google_auto_register``, and the email pattern list. In
         # invite-only mode Google never creates an account, whatever
         # ``google_auto_register`` says.
+        #
+        # Checked here as well as inside ``create_account`` on purpose: this
+        # call is the one whose refusal the OAuth callback route turns into a
+        # 403, and it must happen before anything is written.
         decision = AccessPolicyService.can_register(
-            session, email=email, origin=ORIGIN_GOOGLE
+            session, email=email, origin=AccountOrigin.GOOGLE
         )
         if not decision.allowed:
             assert decision.reason is not None
             raise RegistrationNotAllowedError(decision.reason)
 
-        db_obj = User(
+        # Google first-login users are always non-superuser (so they pick up
+        # the admin-configured default role) and always confirmed (Google
+        # verified the address, so the outbound-email gate never blocks them).
+        return UserService.create_account(
+            session,
             email=email,
+            origin=AccountOrigin.GOOGLE,
             google_id=google_id,
             full_name=full_name,
-            hashed_password=None,
-            is_active=True,
-            is_superuser=False,
-            # Google first-login users are always non-superuser, so they
-            # pick up the admin-configured default role via the
-            # single-source-of-truth helper instead of the column default.
-            role=RoleService.derive_default_role(
-                session=session, is_superuser=False
-            ),
-            # Google verified the email — auto-confirm so the outbound-email
-            # gate never blocks a Google user.
             email_confirmed=True,
-            email_confirmed_at=datetime.now(timezone.utc),
         )
-        session.add(db_obj)
-        session.commit()
-        session.refresh(db_obj)
-
-        return db_obj
 
     @classmethod
     def link_google_account(
@@ -326,7 +317,14 @@ class AuthService:
             raise ValueError("Invalid Google token")
 
         google_id = claims["sub"]
-        email = claims["email"]
+        # Normalised before the auto-link lookup, not after. Google may return
+        # a mixed-case address for a Workspace account whose platform row was
+        # stored lowercase; ``get_user_by_email`` is an exact match, so the
+        # link would miss, ``create_user_from_google`` would run, and the
+        # chokepoint's duplicate check would refuse a perfectly legitimate
+        # login. Same rule ``create_account`` applies, applied one step
+        # earlier so the lookup and the write agree on who this is.
+        email = (claims["email"] or "").strip().lower()
         full_name = claims.get("name")
 
         # Find or create user
