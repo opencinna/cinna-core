@@ -189,7 +189,7 @@ export const safeRedirectPath = (input: string | null | undefined): string => {
  * mirrors exactly how the generated client prepends `OpenAPI.BASE` to every
  * path it calls, so a URL built this way reaches the same place the client
  * does. Its only consumer today is the desktop download resolver
- * (`components/Desktop/DesktopLandingPage.tsx`).
+ * (`components/Desktop/DesktopDownloadSection.tsx`).
  *
  * This returns a **base, which may carry a path** — it is not an origin. With
  * `VITE_API_URL=/api` it resolves to `https://app.example.com/api`. Anything

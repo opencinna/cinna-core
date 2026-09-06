@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, Copy, RefreshCw, Send } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { RefreshCw, Send } from "lucide-react"
+import { useState } from "react"
 
 import {
   type ChannelTestOutboundRequest,
@@ -19,6 +19,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { CopyableValue } from "@/components/Common/CopyableValue"
 import {
   Dialog,
   DialogContent,
@@ -53,58 +54,6 @@ interface Props {
    *  branches on this rather than on a stored value that merely correlates
    *  with it — see `isWebhook` and the test-outbound section. */
   transport: ChannelTransportShape
-}
-
-/** Read-only value with a copy button. The webhook URL is long and must be
- *  pasted verbatim into a Google console field, so copying beats selecting. */
-function CopyableValue({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false)
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const { showErrorToast } = useCustomToast()
-
-  useEffect(
-    () => () => {
-      if (resetTimer.current) clearTimeout(resetTimer.current)
-    },
-    [],
-  )
-
-  const copy = async () => {
-    // `navigator.clipboard` is undefined outside a secure context and
-    // `writeText` rejects when permission is denied. Unhandled, both leave a
-    // button that visibly does nothing.
-    try {
-      await navigator.clipboard.writeText(value)
-      setCopied(true)
-      resetTimer.current = setTimeout(() => setCopied(false), 2000)
-    } catch {
-      showErrorToast(`Failed to copy ${label.toLowerCase()}`)
-    }
-  }
-
-  return (
-    <div className="space-y-1">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <div className="flex items-center gap-2">
-        <code className="flex-1 rounded border bg-background px-2 py-1.5 font-mono text-xs break-all">
-          {value}
-        </code>
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          onClick={copy}
-          aria-label={`Copy ${label}`}
-        >
-          {copied ? (
-            <Check className="h-3 w-3 text-green-500" />
-          ) : (
-            <Copy className="h-3 w-3" />
-          )}
-        </Button>
-      </div>
-    </div>
-  )
 }
 
 export function ChannelSetupInstructionsPanel({

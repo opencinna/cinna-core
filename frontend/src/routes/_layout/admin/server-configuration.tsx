@@ -3,6 +3,7 @@ import { useEffect } from "react"
 
 import { AccessPolicyCard } from "@/components/Admin/AccessPolicyCard"
 import { DisclaimerCard } from "@/components/Admin/DisclaimerCard"
+import { LandingPageCard } from "@/components/Admin/LandingPageCard"
 import { LocalAgentKitCard } from "@/components/Admin/LocalAgentKitCard"
 import { MailServersCard } from "@/components/Admin/MailServersCard"
 import { AutoInstallAgentsCard } from "@/components/Admin/ServerChannels/AutoInstallAgentsCard"
@@ -78,8 +79,12 @@ function AdminServerConfiguration() {
       value: "access",
       title: "Access",
       content: (
-        <div className="max-w-3xl">
+        // Stacked in the tab's existing narrow column rather than switched to
+        // the two-column grid the other tabs use: `AccessPolicyCard` is
+        // written for a wide single column and reads badly at half width.
+        <div className="max-w-3xl space-y-6">
           <AccessPolicyCard />
+          <LandingPageCard />
         </div>
       ),
     },

@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { googleSignInAvailable } from "@/hooks/useAccessPolicy"
 import { isMfaChallengeResponse } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import {
@@ -212,15 +213,18 @@ function AcceptInvite() {
   // `auth_hint` or with the public access policy. Two implementations of one
   // policy question is precisely the drift this shape exists to prevent.
   const passwordAccepted = lookup.password_accepted === true
-  // Two independently configured facts, exactly as `login/index.tsx` derives
-  // it: the backend's Google client id/secret (which the lookup reports) and
-  // this frontend build's own `VITE_GOOGLE_CLIENT_ID`, without which
-  // `GoogleLoginButton` renders nothing. Reading only the first is how this
-  // page offers "Continue with Google" and hands the invitee a login screen
-  // with no Google button and an account that has no password.
-  const googleAvailable =
-    Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID) &&
-    lookup.google_auth_enabled === true
+  // Two independently configured facts — the backend's Google client id and
+  // secret (which the lookup reports) and this frontend build's own
+  // `VITE_GOOGLE_CLIENT_ID`, without which `GoogleLoginButton` renders
+  // nothing. Reading only the first is how this page offers "Continue with
+  // Google" and hands the invitee a login screen with no Google button and an
+  // account that has no password.
+  //
+  // Resolved by the one shared helper, the same one `/login`, `/signup` and
+  // `/start` use — the fact arrives on a different projection here, which is
+  // why the helper is structurally typed. `=== true` because a lookup for an
+  // invalid token omits the field entirely.
+  const googleAvailable = googleSignInAvailable(lookup) === true
 
   // `auth_hint` is presentational: it decides which method is presented first
   // and nothing else. It never hides an available method and never enables an

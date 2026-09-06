@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StartRouteImport } from './routes/start'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as RecoverPasswordRouteImport } from './routes/recover-password'
@@ -61,6 +62,7 @@ import { Route as LayoutAdminServerConfigurationRouteImport } from './routes/_la
 import { Route as LayoutAdminRoutingTuningRouteImport } from './routes/_layout/admin/routing-tuning'
 import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
 import { Route as LayoutAdminLlmProvidersRouteImport } from './routes/_layout/admin/llm-providers'
+import { Route as LayoutAdminAiCredentialsRouteImport } from './routes/_layout/admin/ai-credentials'
 import { Route as LayoutAdminAgentEnvsRouteImport } from './routes/_layout/admin/agent-envs'
 import { Route as LayoutSessionsAgentAgentIdRouteImport } from './routes/_layout/sessions/agent/$agentId'
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
@@ -71,6 +73,11 @@ import { Route as LayoutAdminMarketplaceMarketplaceIdRouteImport } from './route
 import { Route as LayoutCatalogAgentsInstallBundleIdRouteImport } from './routes/_layout/catalog/agents/install/$bundleId'
 import { Route as LayoutAdminMarketplacePluginPluginIdRouteImport } from './routes/_layout/admin/marketplace/plugin/$pluginId'
 
+const StartRoute = StartRouteImport.update({
+  id: '/start',
+  path: '/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
   path: '/signup',
@@ -339,6 +346,12 @@ const LayoutAdminLlmProvidersRoute = LayoutAdminLlmProvidersRouteImport.update({
   path: '/admin/llm-providers',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutAdminAiCredentialsRoute =
+  LayoutAdminAiCredentialsRouteImport.update({
+    id: '/admin/ai-credentials',
+    path: '/admin/ai-credentials',
+    getParentRoute: () => LayoutRoute,
+  } as any)
 const LayoutAdminAgentEnvsRoute = LayoutAdminAgentEnvsRouteImport.update({
   id: '/admin/agent-envs',
   path: '/admin/agent-envs',
@@ -402,6 +415,7 @@ export interface FileRoutesByFullPath {
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
+  '/start': typeof StartRoute
   '/activities': typeof LayoutActivitiesRoute
   '/activities-all': typeof LayoutActivitiesAllRoute
   '/agents': typeof LayoutAgentsRoute
@@ -424,6 +438,7 @@ export interface FileRoutesByFullPath {
   '/accept-invite/': typeof AcceptInviteIndexRoute
   '/login/': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
+  '/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
@@ -462,6 +477,7 @@ export interface FileRoutesByTo {
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
+  '/start': typeof StartRoute
   '/activities': typeof LayoutActivitiesRoute
   '/activities-all': typeof LayoutActivitiesAllRoute
   '/agents': typeof LayoutAgentsRoute
@@ -482,6 +498,7 @@ export interface FileRoutesByTo {
   '/accept-invite': typeof AcceptInviteIndexRoute
   '/login': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
+  '/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
@@ -524,6 +541,7 @@ export interface FileRoutesById {
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
+  '/start': typeof StartRoute
   '/_layout/activities': typeof LayoutActivitiesRoute
   '/_layout/activities-all': typeof LayoutActivitiesAllRoute
   '/_layout/agents': typeof LayoutAgentsRoute
@@ -546,6 +564,7 @@ export interface FileRoutesById {
   '/accept-invite/': typeof AcceptInviteIndexRoute
   '/login/': typeof LoginIndexRoute
   '/_layout/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
+  '/_layout/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
   '/_layout/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/_layout/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
@@ -588,6 +607,7 @@ export interface FileRouteTypes {
     | '/recover-password'
     | '/reset-password'
     | '/signup'
+    | '/start'
     | '/activities'
     | '/activities-all'
     | '/agents'
@@ -610,6 +630,7 @@ export interface FileRouteTypes {
     | '/accept-invite/'
     | '/login/'
     | '/admin/agent-envs'
+    | '/admin/ai-credentials'
     | '/admin/llm-providers'
     | '/admin/marketplaces'
     | '/admin/routing-tuning'
@@ -648,6 +669,7 @@ export interface FileRouteTypes {
     | '/recover-password'
     | '/reset-password'
     | '/signup'
+    | '/start'
     | '/activities'
     | '/activities-all'
     | '/agents'
@@ -668,6 +690,7 @@ export interface FileRouteTypes {
     | '/accept-invite'
     | '/login'
     | '/admin/agent-envs'
+    | '/admin/ai-credentials'
     | '/admin/llm-providers'
     | '/admin/marketplaces'
     | '/admin/routing-tuning'
@@ -709,6 +732,7 @@ export interface FileRouteTypes {
     | '/recover-password'
     | '/reset-password'
     | '/signup'
+    | '/start'
     | '/_layout/activities'
     | '/_layout/activities-all'
     | '/_layout/agents'
@@ -731,6 +755,7 @@ export interface FileRouteTypes {
     | '/accept-invite/'
     | '/login/'
     | '/_layout/admin/agent-envs'
+    | '/_layout/admin/ai-credentials'
     | '/_layout/admin/llm-providers'
     | '/_layout/admin/marketplaces'
     | '/_layout/admin/routing-tuning'
@@ -773,6 +798,7 @@ export interface RootRouteChildren {
   RecoverPasswordRoute: typeof RecoverPasswordRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignupRoute: typeof SignupRoute
+  StartRoute: typeof StartRoute
   AgentApiSpecAgentIdRoute: typeof AgentApiSpecAgentIdRoute
   AppAuthConsentRoute: typeof AppAuthConsentRoute
   DashboardFullscreenDashboardIdRoute: typeof DashboardFullscreenDashboardIdRoute
@@ -787,6 +813,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/start': {
+      id: '/start'
+      path: '/start'
+      fullPath: '/start'
+      preLoaderRoute: typeof StartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/signup': {
       id: '/signup'
       path: '/signup'
@@ -1151,6 +1184,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminLlmProvidersRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/admin/ai-credentials': {
+      id: '/_layout/admin/ai-credentials'
+      path: '/admin/ai-credentials'
+      fullPath: '/admin/ai-credentials'
+      preLoaderRoute: typeof LayoutAdminAiCredentialsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/admin/agent-envs': {
       id: '/_layout/admin/agent-envs'
       path: '/admin/agent-envs'
@@ -1293,6 +1333,7 @@ interface LayoutRouteChildren {
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutAdminAgentEnvsRoute: typeof LayoutAdminAgentEnvsRoute
+  LayoutAdminAiCredentialsRoute: typeof LayoutAdminAiCredentialsRoute
   LayoutAdminLlmProvidersRoute: typeof LayoutAdminLlmProvidersRoute
   LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
   LayoutAdminRoutingTuningRoute: typeof LayoutAdminRoutingTuningRoute
@@ -1327,6 +1368,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutAdminAgentEnvsRoute: LayoutAdminAgentEnvsRoute,
+  LayoutAdminAiCredentialsRoute: LayoutAdminAiCredentialsRoute,
   LayoutAdminLlmProvidersRoute: LayoutAdminLlmProvidersRoute,
   LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
   LayoutAdminRoutingTuningRoute: LayoutAdminRoutingTuningRoute,
@@ -1391,6 +1433,7 @@ const rootRouteChildren: RootRouteChildren = {
   RecoverPasswordRoute: RecoverPasswordRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   SignupRoute: SignupRoute,
+  StartRoute: StartRoute,
   AgentApiSpecAgentIdRoute: AgentApiSpecAgentIdRoute,
   AppAuthConsentRoute: AppAuthConsentRoute,
   DashboardFullscreenDashboardIdRoute: DashboardFullscreenDashboardIdRoute,

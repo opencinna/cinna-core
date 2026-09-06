@@ -168,7 +168,7 @@ const InviteUserDialog = () => {
 
   const role = form.watch("role")
 
-  // Same key the LLM Providers page and the auto-provision matrix use, so the
+  // Same key the AI Credentials page and the auto-provision matrix use, so the
   // wizard reads whatever those surfaces last wrote.
   const {
     data: credentials,
@@ -739,8 +739,8 @@ function InviteSuccess({
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               <p>
                 AI credential provisioning failed — the grant did not complete.
-                The invitation is unaffected; check the LLM Providers page and
-                grant them there.
+                The invitation is unaffected; check the AI Credentials page
+                and grant them there.
               </p>
             </div>
           ) : accountInactive ? (
@@ -769,7 +769,7 @@ function InviteSuccess({
                     ? "the AI credential you selected was not granted"
                     : `the ${inactiveSkips.length} AI credentials you selected were not granted`}
                 . Activate the account, then use “Apply to existing users” on
-                the LLM Providers page.
+                the AI Credentials page.
               </p>
             </div>
           ) : (

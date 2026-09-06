@@ -74,7 +74,7 @@ export function LocalAgentKitCard() {
             <CardTitle className="flex items-center gap-2">
               <Laptop className="h-5 w-5" />
               Public local-agent starter (
-              <code className="text-sm">/start</code>)
+              <code className="text-sm">/agent-start</code>)
             </CardTitle>
             <CardDescription>
               Serves a read-only starter kit to anyone&rsquo;s coding assistant

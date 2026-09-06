@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAccessPolicy } from "@/hooks/useAccessPolicy"
+import { googleSignInAvailable, useAccessPolicy } from "@/hooks/useAccessPolicy"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalAgentKitAvailable } from "@/hooks/useLocalAgentKit"
 import { APP_NAME, safeRedirectPath } from "@/utils"
@@ -76,17 +76,16 @@ function Login() {
   // the password grant either way; showing the form is a worse guess than
   // hiding the only way in.
   const passwordAuthEnabled = policy?.password_auth_enabled ?? true
-  const registrationOpen = policy?.registration_open ?? true
+  // The projection's own answer to "may someone self-register with a password
+  // here?", not this page's recombination of two facts. It used to check
+  // `registration_open` alone and offer a Sign up link that `/signup` — which
+  // required both — then refused to render a form for.
+  const passwordSignupAvailable = policy?.password_signup_available ?? true
 
-  // Two independently configured facts, and both have to be true for a Google
-  // button to appear: the backend's client id/secret (which the projection
-  // reports) and the frontend build's own `VITE_GOOGLE_CLIENT_ID`, which
-  // `GoogleLoginButton` returns null without. Reading only one of them is how
-  // this page ends up hiding the password form in favour of a button that was
-  // never rendered.
-  const googleAvailable =
-    Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID) &&
-    (policy?.google_auth_enabled ?? true)
+  // Both the backend's client id/secret and this build's own
+  // `VITE_GOOGLE_CLIENT_ID` have to hold for a Google button to appear; the
+  // pair is resolved in `googleSignInAvailable`. Permissive fallback, as above.
+  const googleAvailable = googleSignInAvailable(policy) ?? true
 
   // The break-glass disclosure: administrators keep password sign-in even on a
   // Google-only server, so the form is hidden rather than removed.
@@ -226,7 +225,7 @@ function Login() {
             </>
           )}
 
-          {!policyPending && registrationOpen && (
+          {!policyPending && passwordSignupAvailable && (
             <div className="text-center text-sm">
               Don't have an account yet?{" "}
               <RouterLink

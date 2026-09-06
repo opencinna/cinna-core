@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAccessPolicy } from "@/hooks/useAccessPolicy"
+import { googleSignInAvailable, useAccessPolicy } from "@/hooks/useAccessPolicy"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import { APP_NAME, safeRedirectPath } from "@/utils"
 
@@ -78,18 +78,20 @@ function SignUp() {
   // Permissive fallbacks when the policy read fails: the signup endpoint
   // refuses with the same reason codes either way, so a wrong guess here costs
   // one rejected request, not an unreachable server.
+  // Kept for the *copy* only: `panelExplanation` below picks one of four
+  // sentences from it, which is presentation. The decision itself is the
+  // projection's, resolved server-side once for every surface that asks —
+  // this page must not re-derive it from the ingredients.
   const registrationOpen = policy?.registration_open ?? true
-  const passwordAuthEnabled = policy?.password_auth_enabled ?? true
-  const selfServeSignupAllowed = registrationOpen && passwordAuthEnabled
+  const selfServeSignupAllowed = policy?.password_signup_available ?? true
 
-  // One gate for the one button, in both branches of this file. The backend's
+  // One gate for the one button, in both branches of this file: the backend's
   // client id/secret (reported by the projection) and the frontend build's own
   // `VITE_GOOGLE_CLIENT_ID` are configured independently, and
   // `GoogleLoginButton` renders nothing without the latter — so a divider or a
-  // sentence keyed to only one of them can point at a button that is not there.
-  const googleAvailable =
-    Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID) &&
-    (policy?.google_auth_enabled ?? true)
+  // sentence keyed to only one of them can point at a button that is not
+  // there. Both are resolved in `googleSignInAvailable`.
+  const googleAvailable = googleSignInAvailable(policy) ?? true
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -156,9 +158,20 @@ function SignUp() {
           </div>
 
           <Alert>
+            {/*
+              The title has to consult `googleAvailable` for the same reason
+              `panelExplanation` does. Reaching this branch only pins
+              `password_signup_available === false`; with registration open
+              that pins password auth off, but says nothing about Google —
+              and open + no password + no Google is a legal state, since the
+              lockout rule only protects the superuser break-glass path. The
+              old wording asserted a button that may not be rendered below.
+            */}
             <AlertTitle>
               {registrationOpen
-                ? "Accounts are created with Google here"
+                ? googleAvailable
+                  ? "Accounts are created with Google here"
+                  : "Ask your administrator for an account"
                 : "This server is invite-only"}
             </AlertTitle>
             <AlertDescription>{panelExplanation}</AlertDescription>

@@ -31,6 +31,12 @@ export function getProviderTypeLabel(type: AICredentialType): string {
 // Shared React Query key prefix for all managed-credential queries. Mutations
 // invalidate by this prefix so the centralized list query (and any scoped
 // variant) refetch together.
+//
+// The `"llm-providers"` segment is NOT the route path and does not follow the
+// page's rename to `/admin/ai-credentials`: it is a cache key, and three
+// surfaces (the page, the auto-provision matrix and the invite wizard) depend
+// on producing the *same* string. Renaming it splits the cache silently — no
+// error, just two lists that stop agreeing with each other.
 export const MANAGED_CREDENTIALS_QUERY_PREFIX = ["admin", "llm-providers"] as const
 
 // React Query key for the fleet-wide managed-credential list, optionally

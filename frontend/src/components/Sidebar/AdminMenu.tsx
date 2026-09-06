@@ -67,9 +67,9 @@ export function AdminMenu() {
             </RouterLink>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <RouterLink to="/admin/llm-providers" onClick={handleMenuClick}>
+            <RouterLink to="/admin/ai-credentials" onClick={handleMenuClick}>
               <Sparkles className="mr-2 h-4 w-4" />
-              LLM Providers
+              AI Credentials
             </RouterLink>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>

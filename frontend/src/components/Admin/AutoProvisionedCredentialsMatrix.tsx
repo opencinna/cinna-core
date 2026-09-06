@@ -53,7 +53,7 @@ function cellKey(recordId: string, role: string): string {
  * Which company AI keys a new account receives, as credentials × roles.
  *
  * The flag itself lives on `ManagedAICredential.auto_provision_roles` and is
- * edited on the LLM Providers page alongside everything else about a
+ * edited on the AI Credentials page alongside everything else about a
  * credential. This is the same flag seen from the other end: an admin setting
  * up the front door is asking "what does a new Agent Developer get?", and
  * answering that from a list of credentials means opening each one in turn.
@@ -77,7 +77,7 @@ export function AutoProvisionedCredentialsMatrix() {
     isLoading,
     isError,
   } = useQuery({
-    // The same key the LLM Providers page uses, so a change made there is
+    // The same key the AI Credentials page uses, so a change made there is
     // already reflected here (and vice versa) without a second source of
     // truth.
     queryKey: managedCredentialsQueryKey(),
@@ -161,12 +161,12 @@ export function AutoProvisionedCredentialsMatrix() {
         <Label className="text-sm font-medium">Company AI credentials</Label>
         <p className="text-xs text-muted-foreground">
           Granted when an account is created. Changing a role later never grants
-          or revokes a key — use "Apply to existing users" on the LLM Providers
-          page for accounts that already exist.
+          or revokes a key — use "Apply to existing users" on the AI
+          Credentials page for accounts that already exist.
         </p>
       </div>
       <Link
-        to="/admin/llm-providers"
+        to="/admin/ai-credentials"
         className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
       >
         Manage AI credentials
@@ -204,7 +204,7 @@ export function AutoProvisionedCredentialsMatrix() {
         <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
           No managed AI credentials yet —{" "}
           <Link
-            to="/admin/llm-providers"
+            to="/admin/ai-credentials"
             className="text-primary hover:underline"
           >
             create one
