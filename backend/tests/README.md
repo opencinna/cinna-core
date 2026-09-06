@@ -195,6 +195,8 @@ tests/
     managed_ai_credential.py # /admin/llm-providers CRUD + apply-to-existing wrappers
     network_guard.py       # no_outbound_http() tripwire for "no provider was contacted" claims
     platform_token.py      # mint_platform_token() — raw/expired/scoped JWTs (documented app.core.security exemption)
+    query_counter.py       # count_queries() — counts the SQL a block issues (N+1 guards; observes, never injects)
+    security_event.py      # events_of_type() — reads a user's own (self-scoped) security feed
     session.py             # get_agent_session(), get_session(), list_sessions()
     message.py             # get_messages_by_role(), list_messages()
     knowledge_source.py    # create/get/list/update/delete/enable/disable_knowledge_source()
@@ -417,12 +419,45 @@ from unittest.mock import patch
 
 def test_password_recovery(client: TestClient) -> None:
     with (
-        patch("app.core.config.settings.SMTP_HOST", "smtp.example.com"),
-        patch("app.core.config.settings.SMTP_USER", "admin@example.com"),
+        # emails_enabled is SMTP_HOST and EMAILS_FROM_EMAIL; SMTP_HOST is
+        # empty in the test container, so without this the send short-circuits
+        # before it ever reaches the patched symbol.
+        patch.object(settings, "SMTP_HOST", "smtp.example.com"),
+        patch.object(settings, "EMAILS_FROM_EMAIL", "info@example.com"),
+        # Patched at the BINDING SITE, not at app.utils — see below.
+        patch("app.services.users.user_service.send_email") as send_email,
     ):
         r = client.post(f"{settings.API_V1_STR}/password-recovery/{email}")
         assert r.status_code == 200
+        # Prove the patch intercepted. The response is deliberately generic
+        # whether or not mail went out, so it proves nothing on its own.
+        send_email.assert_called_once()
 ```
+
+**Patch `send_email` at the binding site, and assert the mock was called.**
+The container runs mailcatcher, so a real SMTP connection is absorbed silently
+and a live 500 in the mail path passes as green. And every consumer does
+`from app.utils import send_email` at import time, which binds the name in
+*that* module — so `patch("app.utils.send_email")` rebinds a symbol nobody
+looks at and the test passes while proving nothing. The current binding sites:
+
+| Module | Patch target |
+|---|---|
+| `app/api/routes/users.py` | `app.api.routes.users.send_email` |
+| `app/api/routes/utils.py` | `app.api.routes.utils.send_email` |
+| `app/services/users/email_confirmation_service.py` | `app.services.users.email_confirmation_service.send_email` |
+| `app/services/users/user_service.py` | `app.services.users.user_service.send_email` |
+| `app/services/users/invitation_service.py` | `app.services.users.invitation_service.send_email` |
+| `app/services/notifications/notification_service.py` | `app.services.notifications.notification_service.send_email` |
+
+A route that sends two different mails through two different bindings needs
+both patched — `tests/api/auth/test_new_account_email.py` is the worked
+example. Ready-made context managers for the two most-used bindings live in
+`tests/utils/invitation.py` (`invitation_email_patched`,
+`recovery_email_patched`); both also turn `emails_enabled` on.
+
+A call-count assertion alone still passes when the template renders an empty
+body, so where the *content* matters, assert on `html_content` too.
 
 ## Rules
 

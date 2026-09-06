@@ -54,6 +54,15 @@ def test_create_user_new_email(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
     with (
+        # KNOWN-VACUOUS PATCH — do not trust it. ``app/api/routes/users.py``
+        # did ``from app.utils import send_email`` at import time, so the name
+        # the route resolves is ``app.api.routes.users.send_email`` and this
+        # rebinds a symbol nobody looks at. The request below therefore opens
+        # a REAL SMTP connection on every run, which the container's
+        # mailcatcher absorbs silently. Nothing here asserts on the mock, so
+        # the test still measures what it claims to; left in place
+        # deliberately. See "Mocking External Services" in tests/README.md for
+        # the binding-site table.
         patch("app.utils.send_email", return_value=None),
         patch("app.core.config.settings.SMTP_HOST", "smtp.example.com"),
         patch("app.core.config.settings.SMTP_USER", "admin@example.com"),

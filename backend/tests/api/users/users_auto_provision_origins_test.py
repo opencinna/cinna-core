@@ -508,6 +508,64 @@ def test_auto_provisioning_an_existing_member_adds_nothing(
     assert len(managed) == 1, managed
 
 
+# ── The control: an inactive account, on the path with no list ─────────
+
+
+def test_an_inactive_account_on_the_automatic_path_reports_nothing_at_all(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """The automatic half of the inactive short-circuit, which has no skips.
+
+    The explicit path reports **one skip per requested credential** on an
+    inactive account, so that an admin who ticked three boxes does not see the
+    screen of an admin who ticked none (asserted in
+    ``users_invitation_lifecycle_test.py``). This is the guard on the other
+    side of that change: the automatic path is handed no ids at all, the
+    candidate set is precisely the query the short-circuit exists to skip, and
+    an empty report is the honest answer there.
+
+    It is a regression guard rather than a feature: the skip list was added to
+    the shared ``_provision``, so a version that names the automatic set would
+    have to run the query on every deactivated signup and would report
+    credentials nobody asked for.
+
+      1. A managed credential auto-provisions to ``agent-user``
+      2. An admin creates a **deactivated** account through ``POST /users/``,
+         which is the real automatic path for it
+      3. Nothing was granted — the record has no members
+      4. ``on_account_created`` on that row reports empty ``added``, empty
+         ``skipped``, and is not ``failed``
+    """
+    parent = _company_credential(client, superuser_token_headers)
+
+    email = random_email()
+    with _admin_email_kept_off_the_wire():
+        created = client.post(
+            f"{API}/users/",
+            headers=superuser_token_headers,
+            json={
+                "email": email,
+                "password": random_lower_string(),
+                "is_active": False,
+            },
+        )
+    assert created.status_code == 200, created.text
+    assert created.json()["is_active"] is False
+    user_id = created.json()["id"]
+
+    record = get_managed_credential(client, superuser_token_headers, parent["id"])
+    assert record["members"] == []
+    assert record["member_count"] == 0
+
+    report = provision_account(db, get_user_row(db, user_id))
+    assert report.added == [], report
+    assert report.skipped == [], (
+        "the automatic path named credentials it was never handed — the "
+        "inactive skip list belongs to the explicit path, which has one"
+    )
+    assert report.failed is False, report
+
+
 # ── The control: a role the record does not cover gets nothing ─────────
 
 

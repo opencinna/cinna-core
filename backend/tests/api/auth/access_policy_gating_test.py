@@ -254,7 +254,6 @@ def test_password_auth_off_blocks_every_password_path_except_for_admins(
     ):
         recovery = client.post(f"{API}/password-recovery/{email}")
         assert recovery.status_code == 200, recovery.text
-        assert recovery.json() == {"message": "Password recovery email sent"}
         send_email.assert_not_called()
 
         admin_recovery = client.post(
@@ -262,6 +261,17 @@ def test_password_auth_off_blocks_every_password_path_except_for_admins(
         )
         assert admin_recovery.status_code == 200, admin_recovery.text
         assert send_email.call_count == 1
+
+        # The two answers are byte-identical — compared to each other, not to
+        # a literal message, so a re-wording cannot split them while both
+        # halves keep matching their own copy of the string. The body used to
+        # be asserted here as ``"Password recovery email sent"``; recovery is
+        # now uniformly generic and the full contract lives in
+        # ``password_recovery_enumeration_test.py``.
+        assert (recovery.status_code, recovery.content) == (
+            admin_recovery.status_code,
+            admin_recovery.content,
+        )
 
     # ── Phase 6: Reset with a genuinely valid token ───────────────────
     reset = client.post(

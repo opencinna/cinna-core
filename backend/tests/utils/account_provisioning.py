@@ -57,8 +57,10 @@ __all__ = [
     "BROKEN_SQL",
     "CHILD_CREDENTIAL_INSERT",
     "MEMBERSHIP_LOOKUP",
+    "SECURITY_EVENT_INSERT",
     "abort_transaction",
     "create_account_via_service",
+    "emit_audit_event",
     "failing_sql_statement",
     "get_user_row",
     "provision_account",
@@ -77,6 +79,9 @@ BROKEN_SQL = "SELECT 1 FROM cinna_no_such_table_used_only_by_tests"
 # intent rather than as SQL trivia.
 CHILD_CREDENTIAL_INSERT = "INSERT INTO ai_credential"
 MEMBERSHIP_LOOKUP = "WHERE ai_credential.managed_credential_id ="
+# The audit row's own INSERT. Aimed at to break the *recovery* code rather
+# than the work it reports on — see :func:`emit_audit_event`.
+SECURITY_EVENT_INSERT = "INSERT INTO security_event"
 
 
 @contextmanager
@@ -190,6 +195,42 @@ def provision_account(
     all — this is the only way to present it.
     """
     return AccountProvisioningService.on_account_created(db, user, origin)
+
+
+def emit_audit_event(
+    db: Session,
+    user: User,
+    *,
+    event_type: str = "admin.ai_credential.auto_provision",
+    severity: str = "low",
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Call ``AccountProvisioningService._emit`` directly.
+
+    ``_emit`` is the audit writer both provisioning entry points use, and its
+    contract is two-part: it never raises, **and** it leaves the session the
+    caller is still using in a state where the caller's next ``commit()``
+    works. The second half is the one that matters, and it is the one no HTTP
+    request can present: reaching ``_emit``'s handler needs the ``SecurityEvent``
+    insert *itself* to fail, on a session someone else goes on to commit. Every
+    route reaches this function through a healthy session and a successful
+    insert.
+
+    So the failure is injected at the database with
+    :func:`failing_sql_statement` (``SECURITY_EVENT_INSERT``), which is what
+    aborts the transaction for real — the state where the *recovery* code is
+    the thing that throws, and the only state in which a missing
+    ``_restore_session`` is visible. A patched collaborator raising
+    ``ValueError`` exercises the ``try`` and proves nothing, for the same
+    reason spelled out at the top of this module.
+    """
+    AccountProvisioningService._emit(
+        db,
+        user_id=user.id,
+        event_type=event_type,
+        severity=severity,
+        details=details if details is not None else {"origin": "test"},
+    )
 
 
 def create_account_via_service(

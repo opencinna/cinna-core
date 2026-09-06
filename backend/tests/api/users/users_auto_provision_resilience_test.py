@@ -29,10 +29,11 @@ raises. In that state the *recovery code* is what throws: a
 ``logger.warning("... %s", user.id)`` whose argument is a lazily-loaded ORM
 attribute is a query; so is the audit ``session.commit()``; so is the caller's
 next commit. A test that injects a ``ValueError`` exercises the ``try`` and
-learns nothing. So the two cases below abort the transaction for real — one
-with a failing SQL statement mid-``add_members``, one by handing over a session
-that is already aborted — through the documented Rule-1 exemption in
-``tests/utils/account_provisioning.py``.
+learns nothing. So the cases below abort the transaction for real — one with a
+failing SQL statement mid-``add_members``, one by handing over a session that
+is already aborted, and one by breaking the audit row's own INSERT so that the
+*recovery* path is what runs on a broken session — through the documented
+Rule-1 exemption in ``tests/utils/account_provisioning.py``.
 
 **Two parents, not one.** With a single auto-provisioned parent the failure
 lands while ``user`` is still fresh from ``create_account``'s ``refresh``:
@@ -52,7 +53,9 @@ from app.core.config import settings
 from tests.utils.account_provisioning import (
     CHILD_CREDENTIAL_INSERT,
     MEMBERSHIP_LOOKUP,
+    SECURITY_EVENT_INSERT,
     abort_transaction,
+    emit_audit_event,
     failing_sql_statement,
     get_user_row,
     provision_account,
@@ -415,6 +418,81 @@ def test_provisioning_survives_being_handed_an_already_aborted_session(
     )
 
     # ── Phase 7 ────────────────────────────────────────────────────────
+    headers = user_authentication_headers(
+        client=client, email=email, password=password
+    )
+    me = client.get(f"{API}/users/me", headers=headers)
+    assert me.status_code == 200, me.text
+    assert me.json()["id"] == user_id
+
+
+# ── Invariant 2c: the audit write is the thing that fails ──────────────
+
+
+def test_a_failing_audit_write_is_swallowed_and_the_caller_can_still_commit(
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    ``_emit`` is the audit writer both provisioning entry points use, and its
+    contract has two halves — only one of which a "does it raise?" test sees:
+
+      1. An account exists, and its row is loaded while the session is healthy
+      2. The ``SecurityEvent`` INSERT is broken **at the database**, so the
+         ``commit`` inside ``_emit`` is the statement that fails and the
+         transaction is left in Postgres' aborted state
+      3. ``_emit`` returns instead of raising — the cheap half
+      4. The session is usable again
+      5. **The caller's next commit succeeds.** This is the half the fix is
+         for. ``_emit``'s failure handler repairs the session *before* it
+         logs; a handler that repairs second, or not at all, hands the caller
+         a session whose next ``commit()`` dies of a ``PendingRollbackError``
+         somewhere entirely unrelated — an invite that already committed its
+         account row, a signup on its way to commit a confirmation email.
+
+    Step 5 is asserted with a real request rather than a bare ``db.commit()``:
+    a rollback with nothing pending commits happily on a broken session, so
+    the assertion has to be a write that actually goes through the app.
+
+    A ``caplog`` assertion would prove nothing here — ``setup_db``'s
+    ``fileConfig`` disables the application loggers for the whole session, so
+    the handler's ``logger.exception`` is compared against an empty string
+    (see the README). The observable behaviour is the only honest evidence.
+    """
+    # ── Phase 1 ────────────────────────────────────────────────────────
+    email = random_email()
+    password = random_lower_string()
+    created = client.post(
+        f"{API}/users/signup", json={"email": email, "password": password}
+    )
+    assert created.status_code == 200, created.text
+    user_id = created.json()["id"]
+    user_row = get_user_row(db, user_id)
+
+    # ── Phase 2 + 3 ────────────────────────────────────────────────────
+    with failing_sql_statement(
+        db, when_statement_contains=SECURITY_EVENT_INSERT
+    ) as injected:
+        # No ``pytest.raises``: not raising *is* the assertion.
+        emit_audit_event(db, user_row)
+    assert injected["fired"], "the injection never fired — nothing was proved"
+
+    # ── Phase 4 ────────────────────────────────────────────────────────
+    assert session_is_usable(db), (
+        "the session was left aborted, so the failed audit row has become "
+        "everyone else's failure"
+    )
+
+    # ── Phase 5 ────────────────────────────────────────────────────────
+    renamed = client.patch(
+        f"{API}/users/{user_id}",
+        headers=superuser_token_headers,
+        json={"full_name": "Committed After The Audit Failure"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["full_name"] == "Committed After The Audit Failure"
+
+    # And the account is intact — the repair rolled back to the savepoint, not
+    # over the row that was committed before any of this.
     headers = user_authentication_headers(
         client=client, email=email, password=password
     )

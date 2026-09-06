@@ -1,4 +1,3 @@
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -41,36 +40,70 @@ def test_use_access_token(
     assert "email" in result
 
 
-def test_recovery_password(
-    client: TestClient, normal_user_token_headers: dict[str, str]
-) -> None:
-    with (
-        patch("app.core.config.settings.SMTP_HOST", "smtp.example.com"),
-        patch("app.core.config.settings.SMTP_USER", "admin@example.com"),
-        # Patch send_email at its import site so the test never opens a real
-        # SMTP connection to smtp.example.com (hangs offline; only "passes"
-        # online because the emails lib swallows the failure).
-        patch("app.services.users.user_service.send_email") as mock_send_email,
-    ):
-        email = "test@example.com"
-        r = client.post(
-            f"{settings.API_V1_STR}/password-recovery/{email}",
-            headers=normal_user_token_headers,
-        )
-        assert r.status_code == 200
-        assert r.json() == {"message": "Password recovery email sent"}
-        mock_send_email.assert_called_once()
+# ``test_recovery_password`` and ``test_recovery_password_user_not_exits`` used
+# to live here. Both pinned the pre-fix contract — a ``404`` for an unknown
+# address and the old ``"Password recovery email sent"`` body — which was an
+# account-existence oracle on an unauthenticated, unrate-limited route. The
+# whole surface, including the reversal of the "D7 decision: keep 404" that
+# put it there, is now covered in
+# ``tests/api/auth/password_recovery_enumeration_test.py``.
 
 
-def test_recovery_password_user_not_exits(
-    client: TestClient, normal_user_token_headers: dict[str, str]
+def test_over_long_passwords_fail_login_identically_for_any_address(
+    client: TestClient,
 ) -> None:
-    email = "jVgQr@example.com"
-    r = client.post(
-        f"{settings.API_V1_STR}/password-recovery/{email}",
-        headers=normal_user_token_headers,
+    """A malformed candidate is an ordinary failed login, whoever it is for.
+
+    passlib raises ``PasswordSizeError`` once a candidate exceeds
+    ``MAX_PASSWORD_SIZE`` (4096 bytes — bcrypt's 72-byte truncation is not the
+    raising threshold). Uncaught, that raise lands on exactly *one* of the two
+    login branches: a registered address reaches the real comparison and 500s,
+    while an unknown address is refused with 400 before any hashing. Either way
+    round, the status code answers "does this address have an account".
+
+    That is what this asserts, and it asserts it at the boundary as well as
+    over it. 4096 is the largest accepted candidate and 5000 is clearly past
+    it, so a refactor that reintroduces the raise — or that moves the guard to
+    only one of the two branches — splits the four responses into groups and
+    fails here. The comparison is between the responses themselves rather than
+    against a literal, so a re-worded refusal cannot repair it by being edited
+    once.
+    """
+    known_email = random_email()
+    known_password = random_lower_string()
+    signup = client.post(
+        f"{settings.API_V1_STR}/users/signup",
+        json={"email": known_email, "password": known_password},
     )
-    assert r.status_code == 404
+    assert signup.status_code == 200, signup.text
+    unknown_email = random_email()
+
+    boundary = "a" * 4096
+    clearly_over = "a" * 5000
+
+    responses = [
+        client.post(
+            f"{settings.API_V1_STR}/login/access-token",
+            data={"username": email, "password": password},
+        )
+        for email in (known_email, unknown_email)
+        for password in (boundary, clearly_over)
+    ]
+
+    distinct = {(r.status_code, r.content) for r in responses}
+    assert len(distinct) == 1, [
+        (r.status_code, r.text[:200]) for r in responses
+    ]
+    for response in responses:
+        assert response.status_code == 400, response.text
+        assert response.json() == {"detail": "Incorrect email or password"}
+
+    # Not a vacuous pass: the account is real and its real password works.
+    ok = client.post(
+        f"{settings.API_V1_STR}/login/access-token",
+        data={"username": known_email, "password": known_password},
+    )
+    assert ok.status_code == 200, ok.text
 
 
 def test_reset_password(client: TestClient) -> None:

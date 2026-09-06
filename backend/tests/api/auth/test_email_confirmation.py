@@ -13,8 +13,10 @@ Coverage:
        - Already-confirmed user returns generic "already confirmed" success.
        - Unconfirmed user gets resend_available_at in response.
        - Second call within cooldown is silently accepted (no error, no new email).
-  6. Password-recovery cooldown — second POST /password-recovery/{email} within 300 s
-     silently skips the send but returns the same success; unknown email still 404.
+  6. Password recovery — moved out entirely. See
+     ``tests/api/auth/password_recovery_enumeration_test.py``; the endpoint no
+     longer 404s on an unknown address, so the tests that lived here were
+     encoding a contract that has been deliberately reversed.
   7. Superuser (seeded) has email_confirmed=True (backfill invariant).
   8. Newly signup-created user has email_confirmed=False.
 """
@@ -309,67 +311,17 @@ def test_authenticated_resend_requires_auth(client: TestClient) -> None:
     assert r.status_code in (401, 403)
 
 
-# ── Scenario 6: Password-recovery cooldown ────────────────────────────────────
+# ── Scenario 6: Password recovery — moved out ─────────────────────────────────
 
 
-def test_password_recovery_cooldown_silent(client: TestClient) -> None:
-    """Second POST /password-recovery/{email} within 300 s skips the send silently.
-
-    Both calls return 200 with the same success message. The caller cannot tell
-    whether an email was actually sent.
-    """
-    user = _signup(client)
-    email = user["email"]
-
-    mock_send = MagicMock(return_value=None)
-    with (
-        patch("app.core.config.settings.SMTP_HOST", "smtp.example.com"),
-        patch("app.core.config.settings.SMTP_USER", "admin@example.com"),
-        patch("app.services.users.user_service.send_email", mock_send),
-    ):
-        r1 = client.post(f"{_BASE}/password-recovery/{email}")
-        assert r1.status_code == 200, r1.text
-        assert r1.json() == {"message": "Password recovery email sent"}
-
-        # Second call immediately (still in cooldown)
-        r2 = client.post(f"{_BASE}/password-recovery/{email}")
-        assert r2.status_code == 200, r2.text
-        assert r2.json() == {"message": "Password recovery email sent"}
-
-    # Only one actual send
-    assert mock_send.call_count == 1, (
-        f"Expected 1 send; cooldown should suppress second. Got {mock_send.call_count}"
-    )
-
-
-def test_password_recovery_unknown_email_still_404(client: TestClient) -> None:
-    """POST /password-recovery/{email} for an unknown email still returns 404.
-
-    This preserves the pre-existing behavior (D7 decision: keep 404 for unknown
-    emails on the recovery endpoint; only the new resend-confirmation endpoint is
-    non-enumerating).
-    """
-    unknown = f"ghost-{random_lower_string()}@nowhere-test.example.com"
-    r = client.post(f"{_BASE}/password-recovery/{unknown}")
-    assert r.status_code == 404, r.text
-
-
-def test_password_recovery_works_for_unconfirmed_user(client: TestClient) -> None:
-    """An unconfirmed user can still trigger password recovery (gate bypass).
-
-    Recovery must never be blocked by email_confirmed=False.
-    """
-    user = _signup(client)
-    assert user["email_confirmed"] is False
-
-    mock_send = MagicMock(return_value=None)
-    with (
-        patch("app.core.config.settings.SMTP_HOST", "smtp.example.com"),
-        patch("app.core.config.settings.SMTP_USER", "admin@example.com"),
-        patch("app.services.users.user_service.send_email", mock_send),
-    ):
-        r = client.post(f"{_BASE}/password-recovery/{user['email']}")
-
-    assert r.status_code == 200, r.text
-    assert r.json() == {"message": "Password recovery email sent"}
-    assert mock_send.call_count == 1
+# Three password-recovery tests used to live here:
+# ``test_password_recovery_cooldown_silent``,
+# ``test_password_recovery_unknown_email_still_404`` and
+# ``test_password_recovery_works_for_unconfirmed_user``. All three encoded the
+# pre-fix contract — the ``404`` for an unknown address, and the old
+# ``"Password recovery email sent"`` body. The endpoint is now uniformly
+# ``200`` with one generic message for every address and every outcome, and
+# the whole surface (cooldown, unknown address, unconfirmed and inactive
+# accounts, the invited population, and the reversal of the "D7 decision:
+# keep 404") is covered in
+# ``tests/api/auth/password_recovery_enumeration_test.py``.
