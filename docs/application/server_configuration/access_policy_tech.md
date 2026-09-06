@@ -129,7 +129,9 @@ Frozen dataclasses rather than the ORM row: the policy is read on the login path
 
 ### Origins
 
-Module constants: `ORIGIN_SIGNUP`, `ORIGIN_GOOGLE`, `ORIGIN_ADMIN`, `ORIGIN_INVITE`, `ORIGIN_EXTERNAL`, `ORIGIN_SEED`. Strings for now; phase 2 of zero-touch-onboarding replaces them with an `AccountOrigin` enum carried through one creation chokepoint.
+`AccountOrigin`, a `str` enum on `backend/app/models/users/user.py` next to `UserRole`: `SIGNUP`, `GOOGLE`, `INVITE`, `ADMIN`, `EXTERNAL`, `SEED`. (It lives on the model rather than here because both this service and `UserService.create_account` need it, and a constant owned by one of two peers is how an import cycle starts.) The phase-1 `ORIGIN_*` string constants are gone. `can_register` takes the enum and is reached from the one creation chokepoint, `UserService.create_account` — see [Auth — tech](../auth/auth_tech.md#the-account-creation-chokepoint).
+
+`_UNGATED_ORIGINS = {ADMIN, INVITE, EXTERNAL, SEED}`. An origin that is in neither set raises rather than guessing which gate it wanted.
 
 | Origin | Gate |
 |--------|------|
@@ -289,6 +291,7 @@ Three sections separated by `<Separator />`:
 | How they sign in | Switch "Create accounts on Google sign-in" | `google_auto_register` |
 | New users | Select "Default role" — Agent User / Agent Developer | `default_user_role` |
 | New users | Switch "Offer Cinna Desktop in invitations" | `invite_include_desktop_default` |
+| New users | `AutoProvisionedCredentialsMatrix` — credentials × roles checkboxes | **Not a `ServerConfig` column.** Each toggle is a `PATCH /admin/llm-providers/{id}` carrying only `auto_provision_roles`; the matrix shares the LLM Providers page's query key and renders the `409 auto_provision_conflict` inline |
 
 **Saving.** Every control except the textarea mutates immediately on change. The patterns textarea is the one explicit-save control: a **Save patterns** / **Cancel** pair appears while the draft is dirty, and sends `{ allowed_email_patterns: patternsValue.trim() }` — never `null`, since the backend reads a null field as "not being changed", so clearing the list has to travel as an empty string.
 

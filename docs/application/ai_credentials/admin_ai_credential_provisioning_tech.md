@@ -10,12 +10,14 @@
 - `backend/app/models/external/account_config.py` — `AccountConfigProviderPublic`, `AccountConfigResponse` (native-config response models)
 
 **Routes:**
-- `backend/app/api/routes/admin_llm_providers.py` — parent-oriented `POST/GET/PATCH/DELETE /admin/llm-providers/`, `POST /admin/llm-providers/{id}/set-default`, `POST /admin/llm-providers/test-connection`; superuser-gated
+- `backend/app/api/routes/admin_llm_providers.py` — parent-oriented `POST/GET/PATCH/DELETE /admin/llm-providers/`, `POST /admin/llm-providers/{id}/set-default`, `POST /admin/llm-providers/{id}/apply-to-existing`, `POST /admin/llm-providers/test-connection`; superuser-gated. `_conflict_409(exc)` maps `ManagedCredentialConflictError` to a structured `409`
 - `backend/app/api/routes/external_account_config.py` — `GET /external/account-config`; native-token-gated
 - `backend/app/api/main.py` — both routers registered (`admin_llm_providers.router`, `external_account_config.router`)
 
 **Services:**
-- `backend/app/services/credentials/managed_ai_credentials_service.py` — `ManagedAICredentialsService` (singleton: `managed_ai_credentials_service`); owns parent CRUD + reconcile
+- `backend/app/services/credentials/managed_ai_credentials_service.py` — `ManagedAICredentialsService` (singleton: `managed_ai_credentials_service`); owns parent CRUD + reconcile + `add_members` + `apply_to_existing`; defines `ManagedCredentialConflictError` and the `MemberAddition` dataclass
+- `backend/app/services/users/account_provisioning_service.py` — **new.** `AccountProvisioningService.on_account_created` / `on_account_deactivated`; `ProvisioningReport`, `ProvisionedCredential`, `ProvisioningSkip` dataclasses; `EVENT_AUTO_PROVISION` / `EVENT_AUTO_PROVISION_FAILED` constants
+- `backend/app/services/users/user_service.py` — `UserService.create_account`, the single place a `User` row is built; calls `on_account_created` after the commit. See [Auth — tech](../auth/auth_tech.md#the-account-creation-chokepoint)
 - `backend/app/services/credentials/admin_ai_credentials_service.py` — `AdminAICredentialService` (legacy singleton: `admin_ai_credentials_service`); **no longer wired to any route**; retained but superseded
 - `backend/app/services/external/external_account_config_service.py` — `ExternalAccountConfigService` (singleton: `external_account_config_service`)
 - `backend/app/services/credentials/ai_credentials_service.py` — `update_credential` and `delete_credential` extended with `admin_override: bool = False` kwarg; `_to_public` projects `is_admin_managed`; `_clear_user_profile_for_type` used by `_clear_child_default`
@@ -23,6 +25,7 @@
 **Migrations:**
 - `backend/app/alembic/versions/d3782dd039a5_add_managed_ai_credential.py` — creates `managed_ai_credential` table; adds `ai_credential.managed_credential_id` FK (ON DELETE SET NULL); `down_revision = '2f2d8e49501d'`; schema-only (no data backfill)
 - `backend/app/alembic/versions/2f2d8e49501d_add_admin_managed_ai_credential.py` — earlier migration that added `is_admin_managed` and `managed_by_id` to `ai_credential`
+- `backend/app/alembic/versions/b71863b32aa1_add_auto_provision_to_managed_ai_.py` — adds `auto_provision_roles`, `model_override_conversation`, `model_override_building` to `managed_ai_credential`; `down_revision = '1d737d7ef0a0'`; schema-only. Autogenerate also proposed three `cli_device_login_request` timestamp alterations — unrelated pre-existing model-vs-DB drift, deliberately excluded (applying it would drop the timezone from live rows)
 
 ### Frontend
 
@@ -33,13 +36,16 @@
 - `frontend/src/components/Sidebar/AdminMenu.tsx` — "LLM Providers" item with `KeyRound` icon in the Admin dropdown
 
 **Components under `frontend/src/components/Admin/LlmProviders/`:**
-- `ManagedCredentialDialog.tsx` — unified create + edit dialog. In `create` mode it provides its own trigger button and manages open state internally; in `edit` mode it is fully controlled by the actions menu. Provider type is immutable after creation (`disabled` on the Select). API key field is blank in edit mode (blank = keep stored key for all members). Member add/remove via `UserAllowlistPicker` pre-seeded from `record.members`. Test Connection probes via `POST /test-connection` (resolves stored parent key when `api_key` is blank and `record.has_api_key` is true). Reconcile result surfaced as per-user skip/blocked toasts + summary toast.
-- `LlmProvidersTable.tsx` — renders `ManagedAICredentialPublic[]`; columns: Name | Provider (badge) | Default provider (Yes/No badge) | Default SDK (Yes/No badge) | Shared with (member chips: `full_name <email>` or `email`) | Created; no per-member default badge; member labels resolved inline from `record.members` (members carry their own `email`/`full_name` — no separate user-fetch needed)
-- `LlmProviderActionsMenu.tsx` — three-dot menu per parent row: Edit (opens `ManagedCredentialDialog` in `edit` mode), Set default for all (calls `/set-default`), Delete (with two-stage `AlertDialog`: first confirm, then if `409` escalates to a force-delete confirmation listing blocked members by name)
-- `providerTypes.ts` — `PROVIDER_TYPE_OPTIONS` array (Anthropic/OpenAI/OpenAI Compatible/Google — MiniMax omitted); `getProviderTypeLabel` helper; `MANAGED_CREDENTIALS_QUERY_PREFIX = ["admin", "llm-providers"]`; `managedCredentialsQueryKey(targetUserId?)` factory
+- `ManagedCredentialDialog.tsx` — unified create + edit dialog. In `create` mode it provides its own trigger button and manages open state internally; in `edit` mode it is fully controlled by the actions menu. Provider type is immutable after creation (`disabled` on the Select). API key field is blank in edit mode (blank = keep stored key for all members). Member add/remove via `UserAllowlistPicker` pre-seeded from `record.members`. Test Connection probes via `POST /test-connection` (resolves stored parent key when `api_key` is blank and `record.has_api_key` is true). Reconcile result surfaced as per-user skip/blocked toasts + summary toast. **Phase 2:** an `openedWithRef` snapshot of the seeded form values, against which every PATCH field is diffed — only changed fields travel, because the payload is absolute and resubmitting an untouched field asserts a value the admin never chose (for the auto-provision fields that is how a rename comes back as a 409 for a slot conflict the admin did not introduce). `membershipDirty` does the same for `target_user_ids`. New controls: **Modes to wire** + per-mode **model override** inputs (with `ListModelsButton`) inside the `set_user_sdk_defaults` block, and an **Auto-provision for new users** role checkbox group with the inline 409 alert. The create-time "at least one target user" guard became "at least one target user *or* auto-provision role".
+- `LlmProvidersTable.tsx` — renders `ManagedAICredentialPublic[]`; columns: Name | Provider (badge) | Default provider (Yes/No badge) | Default SDK (Yes/No badge) | Auto (`AutoProvisionCell` — role chips via `userRoleLabel`, or an outline "Off" badge when the list is empty) | Shared with (member chips: `full_name <email>` or `email`) | Created; no per-member default badge; member labels resolved inline from `record.members` (members carry their own `email`/`full_name` — no separate user-fetch needed)
+- `LlmProviderActionsMenu.tsx` — three-dot menu per parent row: Edit (opens `ManagedCredentialDialog` in `edit` mode), Set default for all (calls `/set-default`), **Apply to existing users** (two separate mutations — `previewMutation` with `dryRun: true`, fired unconditionally on open, and `applyMutation` — rather than one with a flag, so the preview stays on screen while the commit is in flight), Delete (with two-stage `AlertDialog`: first confirm, then if `409` escalates to a force-delete confirmation listing blocked members by name)
+- `providerTypes.ts` — `PROVIDER_TYPE_OPTIONS` array (Anthropic/OpenAI/OpenAI Compatible/Google — MiniMax omitted); `getProviderTypeLabel` helper; `MANAGED_CREDENTIALS_QUERY_PREFIX = ["admin", "llm-providers"]`; `managedCredentialsQueryKey(targetUserId?)` factory. Phase 2 adds `SDK_MODE_OPTIONS` / `sdkModeLabel`, the `AutoProvisionConflict` interface, `parseAutoProvisionConflict(error)` (checks every field, not just `code`, so a future 409 shape cannot render a sentence containing `undefined`), `describeAutoProvisionConflict(conflict)` (recomposes the message with display labels), and `findAutoProvisionConflict(records, record, role)` — the advisory client-side mirror of the backend rule
+- `frontend/src/components/Admin/AutoProvisionedCredentialsMatrix.tsx` — **new.** Credentials × roles checkbox matrix rendered at the foot of the Access Policy card's *New users* section. Reads `managedCredentialsQueryKey()` (the same key the LLM Providers page uses, `staleTime` 30s); each toggle is a `PATCH` carrying only `auto_provision_roles`; the whole grid disables while a toggle is in flight (a second click would be a second full reconcile and a second audit event for one intended change); the 409 renders as a destructive `Alert` under the table
+- `frontend/src/utils/userRoles.ts` — **new.** `USER_ROLE_OPTIONS` (capability order: agent-user → agent-developer → admin) and `userRoleLabel(role)`. Takes a bare `string`, not `UserRoleValue`, so a server that learns a fourth role renders its identifier instead of crashing. `AccessPolicyCard`, `LlmProvidersTable`, `LlmProviderActionsMenu`, the dialog and the matrix all read from here
+- `frontend/src/components/Common/ListModelsButton.tsx` — gains an optional `probeModels?: () => Promise<AICredentialTestResult>` prop. When given, `credentialId` / `credentialType` are unused and the caller gates the button with `disabled`. Needed because the admin dialog holds a *parent record on a different endpoint*, or a key typed into the form and never persisted — neither is an `AICredential` id. The dialog passes a probe that does **not** go through the shared Test Connection mutation, so opening the picker never repaints the Test Connection banner and the picker's own Retry cannot re-enter a pending mutation
 
 **Generated client services used:**
-- `AdminLlmProvidersService` — `createManagedAiCredential`, `listManagedAiCredentials`, `getManagedAiCredential`, `updateManagedAiCredential`, `deleteManagedAiCredential`, `setManagedAiCredentialDefault`, `testManagedAiCredentialConnection`
+- `AdminLlmProvidersService` — `createManagedAiCredential`, `listManagedAiCredentials`, `getManagedAiCredential`, `updateManagedAiCredential`, `deleteManagedAiCredential`, `setManagedAiCredentialDefault`, `applyManagedAiCredentialToExisting`, `testManagedAiCredentialConnection`
 
 **Also implemented (admin-curated model list):**
 - `ManagedCredentialDialog.tsx` — "Default model" text input (with a "View available models ↗" external link next to the label, pointing to the provider's official models docs — `PROVIDER_MODELS_DOC_URL` map; omitted for `openai_compatible`) + "Available models" multi-line textarea; **"Fill top 10 models"** button (replaces the old "Use models from test" label): auto-runs Test Connection if no fresh successful result is cached, then fills "Available models" with the top 10 discovered models and auto-sets "Default model" via `pickDefaultModel` (Google → `GOOGLE_DEFAULT_MODEL = "gemini-flash-latest"`; Anthropic → `pickHighestSonnet` highest version Sonnet from the list; OpenAI/OpenAI Compatible → first model); edit-mode seeding; `None` vs `[]` clear semantics on submit; `stripProviderPrefix` + `parseAvailableModels` client-side normalization for display
@@ -68,6 +74,9 @@
 | `set_as_default` | `BOOLEAN` | NOT NULL, server_default false | Whether each child is set as its owner's default |
 | `set_user_sdk_defaults` | `BOOLEAN` | NOT NULL, server_default false | Whether each owner's SDK-default pointers are wired |
 | `sdk_default_modes` | `JSON` | NOT NULL, server_default `["conversation","building"]` | Modes to wire |
+| `auto_provision_roles` | `JSON` | NOT NULL, server_default `'[]'::json` | Roles whose newly created accounts receive this credential. Added by migration `b71863b32aa1`. The empty backfill is the only safe one — a permissive default would hand a company key to the next person who signs up. |
+| `model_override_conversation` | `VARCHAR(255)` | nullable | Model pinned on each member's `User.default_model_override_conversation` for the conversation mode. Added by `b71863b32aa1`. |
+| `model_override_building` | `VARCHAR(255)` | nullable | Same for building. Added by `b71863b32aa1`. |
 | `expiry_notification_date` | `TIMESTAMP` | nullable | Informational expiry reminder |
 | `managed_by_id` | `UUID` | nullable, FK → `user.id` ON DELETE SET NULL, index `ix_managed_ai_credential_managed_by` | Which admin owns/manages this record; NULL when the admin account is deleted |
 | `created_at` | `TIMESTAMP` | NOT NULL | Creation time (UTC) |
@@ -96,6 +105,8 @@ Downgrade for `d3782dd039a5`: drops FK `fk_ai_credential_managed_credential`, dr
 
 Downgrade for `c1a4b2d3e5f6`: drops `ai_credential.available_models`, `ai_credential.default_model`, `managed_ai_credential.available_models`, `managed_ai_credential.default_model` (in that order).
 
+Downgrade for `b71863b32aa1`: drops `model_override_building`, `model_override_conversation`, `auto_provision_roles` (in that order).
+
 ---
 
 ## Parent DTOs
@@ -112,10 +123,13 @@ Downgrade for `c1a4b2d3e5f6`: drops `ai_credential.available_models`, `ai_creden
 | `default_model` | `str \| None` | Admin-curated default model (bare concrete id, max 255); normalized server-side (strip `provider/` prefix, trim) |
 | `available_models` | `list[str] \| None` | Admin-curated selectable model list; normalized server-side; `None` = no curation |
 | `expiry_notification_date` | `datetime \| None` | Informational expiry reminder |
-| `target_user_ids` | `list[uuid.UUID]` | Min 1; deduplicated preserving order |
+| `target_user_ids` | `list[uuid.UUID]` | **May be empty** (phase 2 dropped the `min_length=1`): an auto-provision-only credential legitimately starts with no members. Deduplicated preserving order |
 | `set_as_default` | `bool` | Default `False` |
 | `set_user_sdk_defaults` | `bool` | Default `False` |
-| `sdk_default_modes` | `list[str]` | Default `["conversation", "building"]` |
+| `sdk_default_modes` | `list[str]` | Default `["conversation", "building"]`. **Not validated** — see Known Gaps in the [business doc](admin_ai_credential_provisioning.md#known-gaps) |
+| `auto_provision_roles` | `list[str]` | Default `[]`. Normalized + validated against `VALID_AUTO_PROVISION_ROLES` (`= tuple(VALID_USER_ROLES)`); an unknown entry is a `400` |
+| `model_override_conversation` | `str \| None` | Max 255; normalized through `_normalize_default_model` (trim, strip `provider/`, blank → `None`) |
+| `model_override_building` | `str \| None` | Same |
 
 ### `ManagedAICredentialUpdate`
 
@@ -134,6 +148,9 @@ All fields optional (partial update). Omitting `api_key` keeps the stored key. O
 | `set_as_default` | `bool \| None` | |
 | `set_user_sdk_defaults` | `bool \| None` | |
 | `sdk_default_modes` | `list[str] \| None` | |
+| `auto_provision_roles` | `list[str] \| None` | `None` = no change; `[]` = stop auto-provisioning (**not** a revoke — existing members keep their credential) |
+| `model_override_conversation` | `str \| None` | Three-valued: omitted/`null` = unchanged; `""` = clear to NULL **and** retract the pin from members still carrying the dropped value; a model id = set + write through. This is why the field is not `str \| None` with `min_length=1` — the empty string is meaningful here, not malformed |
+| `model_override_building` | `str \| None` | Same |
 
 ### `ManagedAICredentialPublic`
 
@@ -151,6 +168,9 @@ Never includes `encrypted_data` or key material.
 | `set_as_default` | `bool` | |
 | `set_user_sdk_defaults` | `bool` | |
 | `sdk_default_modes` | `list[str]` | |
+| `auto_provision_roles` | `list[str]` | Roles whose new accounts receive this credential |
+| `model_override_conversation` | `str \| None` | |
+| `model_override_building` | `str \| None` | |
 | `expiry_notification_date` | `datetime \| None` | |
 | `managed_by_id` | `uuid.UUID \| None` | Which admin manages this; NULL when that admin was deleted |
 | `has_api_key` | `bool` | Always `True` — a parent always holds a key |
@@ -197,6 +217,44 @@ Never includes `encrypted_data` or key material.
 | `reason` | `str` | `"in_use_bundle"` / `"remove_failed"` |
 | `impact` | `dict \| None` | Deletion-impact payload from `AICredentialInUseError.impact` |
 
+### `ManagedAICredentialApplyCandidate`
+
+A user who *would* receive the credential on apply-to-existing. Deliberately **not** a `ManagedAICredentialMember`: a member is identified by the child credential it owns, and on a dry run no child exists — inventing a placeholder id would be a lie the frontend could not distinguish from a real member.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `user_id` | `uuid.UUID` | |
+| `email` | `str` | |
+| `full_name` | `str \| None` | |
+| `role` | `str` | The role that matched `auto_provision_roles` |
+
+### `ManagedAICredentialApplyResult`
+
+Subclasses `ManagedAICredentialReconcileResult` (so `record` / `added` / `skipped` mean exactly what they do elsewhere) and adds:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `dry_run` | `bool` | `True` when nothing was written |
+| `candidate_count` | `int` | Populated on **both** paths so the confirm dialog and the result toast quote the same number |
+| `candidates` | `list[ManagedAICredentialApplyCandidate]` | Populated on a dry run only; empty on a real run |
+| `defaults_overwrite_count` | `int` | Candidates who lose *something* to this grant, counted **once** per candidate however many slots they lose. Covers **both** default axes: `set_user_sdk_defaults` (a claimed mode whose credential pointer **or** model override is non-NULL) **and** `set_as_default` (the candidate already holds a default `AICredential` of the parent's type). `0` only when the record wires no defaults at all — **not** whenever `set_user_sdk_defaults` is false |
+
+### `MemberAddition` (dataclass, service-internal)
+
+What `add_members` returns: `added: list[ManagedAICredentialMember]` + `skipped: list[ManagedReconcileSkip]`. Deliberately **not** a `ManagedAICredentialReconcileResult` — that shape carries `removed`/`blocked`/`updated`, which an add-only operation can never populate, and a `record` projection all three callers throw away. Building it would have put `_to_public`'s per-member user lookup and its parent-key decrypt on the signup request path, for a value nobody reads.
+
+### `ManagedCredentialConflictError` (exception)
+
+Raised by `_validate_auto_provision_uniqueness`. Carries `conflicting_name`, `conflicting_id`, `role`, `mode`; `_conflict_409` in the route turns it into:
+
+```json
+{"code": "auto_provision_conflict", "message": "…",
+ "conflicting_credential_id": "…", "conflicting_credential_name": "…",
+ "role": "agent-developer", "mode": "building"}
+```
+
+Structured rather than prose because the frontend highlights the offending role/mode cell and links to the other record, and it cannot do either from a sentence.
+
 ---
 
 ## API Endpoints
@@ -214,7 +272,10 @@ Never includes `encrypted_data` or key material.
 | `PATCH` | `/admin/llm-providers/{id}?force=` | `ManagedAICredentialUpdate` | `ManagedAICredentialReconcileResult` | Update parent + re-reconcile; `force` overrides Tier-2 block on removed members |
 | `DELETE` | `/admin/llm-providers/{id}?force=` | — | `Message` | `409` with `blocked` list when any child is in use and `force` is absent |
 | `POST` | `/admin/llm-providers/{id}/set-default` | — | `ManagedAICredentialPublic` | Sets every current member's child as their default; stamps `set_as_default=True` on parent |
+| `POST` | `/admin/llm-providers/{id}/apply-to-existing?dry_run=` | — | `ManagedAICredentialApplyResult` | Add-only grant to every active account whose role is in `auto_provision_roles`, minus current members. `dry_run=true` writes nothing and emits no audit events |
 | `POST` | `/admin/llm-providers/test-connection?managed_credential_id=` | `AICredentialTestRequest` | `AICredentialTestResult` | When `api_key` blank and `managed_credential_id` given, probes via stored parent key |
+
+`POST /` and `PATCH /{id}` additionally answer `409` with the `auto_provision_conflict` body above when the request **newly** claims a `(role, mode)` default slot another record already owns.
 
 ### Native Account-Config (`/api/v1/external/account-config`)
 
@@ -247,13 +308,15 @@ Singleton: `managed_ai_credentials_service`
 | `list(session, admin, managed_by_id, target_user_id)` | Fleet-wide list, optional filters. |
 | `get(session, admin, id)` | Single parent record; `404` if not found. |
 | `resolve_test_key(session, id)` | Decrypt parent key for the Test Connection blank-api_key case. `404` if not found. |
+| `add_members(session, *, parent, user_ids, actor)` | The Add pass on its own → `MemberAddition`. Idempotent (existing members are neither re-added nor reported). `actor` is **keyword-only with no default**: `None` means a system-initiated grant, and a route reaching it would be writing an unattributed grant, so "who did this" must be a decision at every call site. Does not affect what is written to the child — children are stamped with the parent's managing admin either way. Three callers: `reconcile`, `apply_to_existing`, `AccountProvisioningService`. |
+| `apply_to_existing(session, admin, id, *, dry_run)` | → `ManagedAICredentialApplyResult`. Desired set = active users with `role ∈ auto_provision_roles`, minus current members. `dry_run` returns candidates and writes nothing. |
 
 ### `reconcile()` — the heart
 
 ```
 reconcile(
     session, admin, parent, desired_user_ids,
-    *, apply_fields, force, key_rotated
+    *, apply_fields, force, key_rotated, cleared_overrides=None
 ) -> ManagedAICredentialReconcileResult
 ```
 
@@ -261,6 +324,24 @@ reconcile(
 - `apply_fields=False` — skip the Update pass (used on create, since there are no pre-existing members to update)
 - `key_rotated=True` — forces key write-through in the Update pass even when other scalars are unchanged
 - `force=True` — passes `force` to `delete_credential`; blocked members do not block the Remove pass
+- `cleared_overrides` — `mode → the model override this request dropped`. Only `update()` can know it: once the parent row is written, a stored `None` cannot say whether it was never set or has just been retracted, so the *request* carries the transition down
+- The Add pass is **delegated to `add_members`**, not duplicated, so a change to how a member is created cannot land in one of three places
+- The Remove pass captures `_modes_pointing_at(owner, child.id)` **before** the delete and calls `_release_model_overrides` after it — afterwards the pointer is already NULL (`ondelete="SET NULL"`) and which slots the child owned is unrecoverable
+
+### Session repair on per-member failures (`add_members`, both reconcile passes, `_add_child`)
+
+Four handlers in this service catch a per-member failure, record it, and carry on. Every one of them calls `restore_session(session)` (`backend/app/utils.py`) **first**, then logs from pre-snapshotted locals, then appends its entry:
+
+| Handler | Records | Why the rollback is required |
+|---------|---------|------------------------------|
+| `add_members` per-user `except` | `skipped(reason="provision_failed")` | A statement-level failure leaves the transaction aborted; the log call is itself a query, so a handler that logs first throws from inside itself and the exception escapes every net written to catch it |
+| reconcile **Remove** pass `except` (after the `AICredentialInUseError` arm) | `blocked(reason="remove_failed")` | `reconcile` ends at `_to_public`, which queries. Recording a block and continuing on an aborted transaction turned a per-member problem into a `500` out of `PATCH /admin/llm-providers/{id}` |
+| reconcile **Update** pass `except` | `skipped(reason="update_failed")` | Same |
+| `_add_child` post-commit wiring `except` | Nothing — the member is **retained** | `_stamp_child` has already committed the child. Without the rollback the exception escaped into `add_members`, which reported the user `provision_failed` while their child row sat committed and they were a member by every definition this service uses — and on the auto-provision path wrote an `auto_provision_failed` security event into the feed of someone who *had* received the credential |
+
+`HTTPException` is re-raised in each of these, unrolled-back: type-validation errors are the caller's problem, not a per-member skip.
+
+Rolling back is safe in all four: the child is committed by `_stamp_child`, and `set_default`, `_apply_sdk_defaults`, `delete_credential`, `_release_model_overrides` and `_update_child_fields` each commit their own work, so nothing pending belongs to anyone but the failed attempt.
 
 ### `_update_child_fields()` — Update pass detail
 
@@ -278,6 +359,62 @@ Default flag logic:
 
 After `create_credential` creates the child, `_stamp_child` also writes `default_model` and `available_models` from the parent directly onto the child row (same pattern as the structural markers). This ensures newly-added members inherit the current curation immediately without a separate reconcile.
 
+### Auto-provision uniqueness (`_claimed_slots` / `_validate_auto_provision_uniqueness`)
+
+`_claimed_slots(roles, modes, set_user_sdk_defaults) -> set[tuple[str, str]]` — the `(role, mode)` default slots a configuration lays claim to. Empty unless the record does all three things: auto-provisions to a role, wires SDK defaults, and claims a mode. Modes outside `{"conversation", "building"}` are filtered out, because a mode that wires nothing cannot be fought over (which is also the only reason an unvalidated `sdk_default_modes` typo does not produce a phantom collision).
+
+```
+_validate_auto_provision_uniqueness(
+    session, parent_id, roles, modes, set_user_sdk_defaults,
+    *, previously_claimed=None
+) -> None                      # raises ManagedCredentialConflictError
+```
+
+- **Scoped to the transition, not the state.** Only `claimed - previously_claimed` can raise. Renaming a record already sitting in a conflicting configuration must not 409 on a collision the admin did not introduce.
+- Validating the effective *end state* reads as safer and is not: it makes a stale absolute payload indistinguishable from a deliberate edit, so a client rebuilding its request from an open-time snapshot gets refused for someone else's change — and a validator taught to tolerate that would also have masked the membership clobber `target_user_ids` had.
+- `parent_id` is the record being written (excluded from the search), or `None` on create, where `previously_claimed` is empty and every slot is new.
+- `create()` validates **before** the row is inserted, so a conflict never leaves a half-configured parent behind.
+- `update()` reads `previously_claimed` and `previous_overrides` off the parent **before writing a single field** — both are transitions, and neither is recoverable once the new values are in. It then validates against the *effective* values (submitted where given, stored otherwise), so a PATCH that introduces a conflict cannot half-apply.
+
+### Model-override write paths
+
+Three functions write `User.default_model_override_<mode>`, and the differences between them are the contract:
+
+| Function | Runs when | Behaviour |
+|---|---|---|
+| `_apply_sdk_defaults` | A member is **added** (from `_add_child` only) — the credential pointer is moving onto a different credential | Writes the override **unconditionally** for every mode the parent claims, including back to `NULL` when the parent has none. A reset, not a wipe: whatever sat in the slot described another credential and may name a model this provider does not serve |
+| `_sync_model_overrides` | **Every** update against a slot the child already occupies | Writes only while the pointer still names this child, and only when the parent has an opinion. A stored `None` means "no opinion", not "clear theirs". `cleared_overrides[mode]` is the third case: retract the member's pin, but **only when it still equals the dropped value** — a member who picked their own model keeps it. Returns `True` iff the owner row was written |
+| `_clear_child_default` / `_release_model_overrides` | The child's default is cleared, or the child is deleted | Tear the override down with the pointer it belongs to. `_clear_child_default` clears pointer + `default_sdk_<mode>` + override; `_release_model_overrides` (the reconcile Remove path, and therefore `DELETE /{id}`) clears the override only — the two knowingly disagree about `default_sdk_<mode>`, see Known Gaps |
+
+Asymmetry worth restating: *setting* an override overwrites a model the member picked; *clearing* one only retracts this record's own value. So a member's own pick, once overwritten by a set, is not restored by the later clear. A mode dropped from `sdk_default_modes` is not visited at all — neither its override nor its pointer is torn down.
+
+Shared constants: `_MODE_POINTER_ATTR` and `_MODE_OVERRIDE_ATTR` map `mode → User` attribute name; membership of these dicts is also the validity test for a mode string coming off the JSON column. `_modes_pointing_at(owner, child_id)` is the one place "does this slot belong to this child" is answered.
+
+### `_count_default_overwrites(session, parent, candidates)`
+
+Backs `defaults_overwrite_count` so the confirm dialog can say what the action costs, not only what it gives. Counts a candidate **once** however many things they lose — the admin's question is "how many people does this disturb", not "how many columns move".
+
+It must look at **both** of the axes `_add_child` writes, because they are independent flags applied independently:
+
+| Axis | What is counted | Why |
+|------|-----------------|-----|
+| `set_user_sdk_defaults` | For each claimed mode, `default_ai_credential_<mode>_id` **or** `default_model_override_<mode>` is non-NULL | `_apply_sdk_defaults` resets the slot wholesale on a claim, so a member with no pointer but a model they picked for that mode still loses something. Skipped entirely when `_TYPE_TO_SDK_ENGINE` has no entry for the parent's type — `_apply_sdk_defaults` returns immediately for such a type, so counting it would promise a change that will not happen |
+| `set_as_default` | The candidate owns an `AICredential` of the parent's type with `is_default=True` | `ai_credentials_service.set_default` unsets whatever the owner's current default of that type is and rewrites the legacy per-type profile blob. Mirrors that service's own unset query |
+
+The `set_as_default` axis is resolved by a **single `in_()` query** over the whole candidate list, not one query per candidate — this runs inside a dry run the admin is waiting on. The SDK axis is evaluated from the already-loaded `User` rows.
+
+Returns `0` only when the record wires no defaults at all — the genuinely harmless configuration, and the only one the dialog is entitled to describe as free.
+
+**The bug this shape exists to prevent.** The first version opened with `if not parent.set_user_sdk_defaults: return 0`. A record whose only default-writing flag was `set_as_default` therefore previewed as `candidate_count=N, defaults_overwrite_count=0`, the dialog's cost paragraph was gated on the same flag and said nothing at all, and confirming it silently stripped every candidate's own default credential.
+
+**Not counted, on purpose: `default_sdk_<mode>`.** The engine string is never NULL, so including it would make the count equal `candidate_count` for every record that claims a mode. This is why the zero-copy in the dialog is worded as "nobody has picked a credential or a model for these slots yet" rather than the broader "no existing choice is replaced" — an OpenAI record claiming the conversation slot does move everyone's engine, and the broader sentence would be an overclaim. Do not widen it.
+
+**Distinct from the `(role, mode)` uniqueness rule.** `_claimed_slots` / `_validate_auto_provision_uniqueness` still ignore `set_as_default` (Known Gap 5, accepted debt): two records may both claim to be their members' default-for-type and neither `409`s. That the *preview* counts the axis does not change what the *validator* refuses. The two questions are separate — the admin is told what the second record costs, and then allowed to confirm it — and collapsing them into one is the same reasoning error the counter's original bug was made of.
+
+### `_normalize_auto_provision_roles(value)`
+
+`None` passes through as "no change". Otherwise trimmed, de-duplicated order-preservingly, and checked against `VALID_AUTO_PROVISION_ROLES` — an unknown role raises `400` rather than being silently dropped, because a mistyped role would otherwise save successfully and then do nothing at the next signup with no clue why. There is deliberately **no** counterpart for `sdk_default_modes`.
+
 ### `_TYPE_TO_SDK_ENGINE` map
 
 | `AICredentialType` | Composed SDK engine |
@@ -289,6 +426,28 @@ After `create_credential` creates the child, `_stamp_child` also writes `default
 | `OPENAI_COMPATIBLE` | `"opencode/openai_compatible"` |
 
 ---
+
+---
+
+## `AccountProvisioningService` (`services/users/account_provisioning_service.py`)
+
+Static-method service. Called by `UserService.create_account` after the account row is committed.
+
+| Method | Description |
+|--------|-------------|
+| `on_account_created(session, user, origin) -> ProvisioningReport` | Grants every managed credential whose `auto_provision_roles` contains `user.role`. **Never raises**, unconditionally — including when handed a session whose transaction is already aborted. Returns a value, never an error; the one production caller ignores it, which is what lets tests assert on failures without the production path branching on one |
+| `on_account_deactivated(session, user) -> None` | Intentional no-op in phase 2, wired and named now. Shared managed credentials are one key held by many people, so deactivating one holder must not revoke it — there is nothing to undo. Phase 5 (per-user minting) is where a deactivated user's own key gains a provider-side revoke |
+
+Result dataclasses: `ProvisioningReport(added, skipped)`, `ProvisionedCredential(managed_credential_id, child_credential_id)`, `ProvisioningSkip(managed_credential_id, reason)`. `reason` is a stable machine string — the reconcile skip reasons (`user_not_found`, `user_inactive`, `provision_failed`) or `add_members_failed` when the call itself raised.
+
+**Two error-handling rules, both non-obvious enough to state:**
+
+- **Repair the session before touching it.** A failed attempt can leave the transaction aborted, and in that state *every* session operation raises — including the lazy attribute load behind an innocent-looking `logger.warning("… %s", user.id)`. So identifiers are snapshotted into locals while the session is known good, `_restore_session` runs first, and only then does anything get logged. The first parent in the loop hides this (`user` is still fresh from `create_account`'s refresh); it is the second, after a child credential has committed and expired everything, that bites.
+- **Roll back unconditionally.** `AccountProvisioningService._restore_session` is a thin wrapper over the shared `restore_session(session)` in `backend/app/utils.py` (shared with `ManagedAICredentialsService`, the other end of this same path); it deliberately does **not** guard on `session.is_active`. That predicate detects only half the problem: a *flush* failure deactivates the `SessionTransaction`, but a *statement* failure (a `select` that errors, a lock timeout, a serialization failure, a dropped connection) leaves Postgres' transaction aborted while `is_active` stays `True` — so the guard would skip exactly the case that needs the rollback, and the caller's next commit (`register_user` commits again to send its confirmation email) dies with "current transaction is aborted". The rollback is safe by construction: the account row is committed before the call and `add_members` commits each child individually, so anything still pending belongs to the failed attempt. The helper lives in `app.utils` rather than on either service precisely because it is a pure session-lifecycle concern with no domain knowledge, and two copies is how one of them ends up guarded on `is_active` again. Whether rolling back is *safe* is left to each caller — `restore_session` never decides that, and never raises.
+
+Other structural choices: the outer `try` in `on_account_created` wraps the prologue (deferred import, parents query, role filter) that the per-parent guards do not cover; `user_id` is pre-bound to `None` and snapshotted *inside* the `try` because reading `user.id` is itself a session operation. Parents are filtered in Python (the table holds a handful of rows, and a portable JSON-containment predicate over a `json` — not `jsonb` — column is more machinery than the saving is worth), with an `isinstance(…, list)` guard so a hand-edited non-list row cannot raise on the signup path. Inactive accounts return an empty report before any parent is looked at — no children, no skips, no medium-severity events in the feed of an account nobody can sign into.
+
+Security events are constructed and committed **directly** here rather than through `SecurityEventService.create_event`: that method is `async` (its body awaits nothing, but the signature is), and this path is synchronous and called from inside both sync and async routes, so there is no loop to schedule it on. `_emit` is best-effort and never raises — an audit row that cannot be written must not break an account creation the caller was told could not fail.
 
 ---
 
@@ -501,11 +660,16 @@ All audit events contain counts/IDs but **never** key bytes.
 | `admin.managed_ai_credential.create` | Admin | `medium` | `POST /` — one per call |
 | `admin.managed_ai_credential.update` | Admin | `medium` | `PATCH /{id}` — one per call |
 | `admin.managed_ai_credential.delete` | Admin | `medium` | `DELETE /{id}` — one per call |
+| `admin.managed_ai_credential.apply_to_existing` | Admin | `medium` | `POST /{id}/apply-to-existing` — real run only; a dry run emits nothing |
+| `admin.ai_credential.auto_provision` | **New owner** | `low` | `AccountProvisioningService`, per child granted at account creation. `details = {managed_credential_id, child_credential_id, target_user_id, origin, role, managed_by_id, actor: "system"}` |
+| `admin.ai_credential.auto_provision_failed` | **New owner** | `medium` | `AccountProvisioningService`, per parent that could not be granted. `details = {managed_credential_id, target_user_id, origin, role, reason, actor: "system"}` |
 | `external.account_config.read` | Calling user | `high` | `GET /external/account-config` (successful call only) |
 
 `external.account_config.read` details: `{client_kind, external_client_id, provider_count, credential_ids}`.
 
 The old `admin.ai_credential.provision_batch` event type from the previous per-row model is gone.
+
+Automatic grants are **not** emitted by the admin route — they have no acting admin. They are siblings of `admin.ai_credential.provision` in the same namespace (different actor) so a reader of the security feed can tell an automatic grant from an admin's deliberate one without decoding the details blob. No key material is recorded in either.
 
 ---
 
@@ -531,4 +695,4 @@ The old `admin.ai_credential.provision_batch` event type from the previous per-r
 
 ---
 
-*Last updated: 2026-06-14 — admin-curated model list (`default_model` + `available_models`) added via migration `c1a4b2d3e5f6`; SDK resolution, model-health, and native config updated accordingly*
+*Last updated: 2026-09-06 — zero-touch onboarding phase 2: `auto_provision_roles` + per-mode model overrides (migration `b71863b32aa1`), `add_members` / `apply_to_existing`, `(role, mode)` slot-conflict validation, `AccountProvisioningService`*

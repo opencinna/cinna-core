@@ -43,10 +43,10 @@
 **User Resolution Methods:**
 - `get_user_by_google_id(session, google_id)` - Database lookup by Google ID
 - `get_user_by_email(session, email)` - Database lookup by email
-- `create_user_from_google(session, email, google_id, full_name)` - Calls `AccessPolicyService.can_register(session, email=..., origin=ORIGIN_GOOGLE)` first and raises `RegistrationNotAllowedError(reason)` on refusal. Creates the user with no password, `email_confirmed=True` (Google verified it), and `RoleService.derive_default_role(session=..., is_superuser=False)`
+- `create_user_from_google(session, email, google_id, full_name)` - Calls `AccessPolicyService.can_register(session, email=..., origin=AccountOrigin.GOOGLE)` first and raises `RegistrationNotAllowedError(reason)` on refusal, then delegates to `UserService.create_account(origin=AccountOrigin.GOOGLE, google_id=..., email_confirmed=True)` — the one place a `User` row is built. No password; the role comes from the access policy via `RoleService.derive_default_role`; any company AI credentials configured for that role are granted before the function returns
 
 **Account Management Methods:**
-- `authenticate_with_google(session, code, state)` - Full OAuth flow: state validation -> code exchange -> token verification -> user resolution -> JWT
+- `authenticate_with_google(session, code, state)` - Full OAuth flow: state validation -> code exchange -> token verification -> user resolution -> JWT. The claim's `email` is stripped + lowercased **before** the auto-link lookup: Google may return a mixed-case address for a Workspace account whose platform row was stored lowercase, and `get_user_by_email` is an exact match — without normalising here the link would miss, `create_user_from_google` would run, and the creation chokepoint's duplicate check would refuse a legitimate login
 - `link_google_account_for_user(session, user, code, state)` - Link flow with duplicate check
 - `unlink_google_account_for_user(session, user)` - Unlink with password-exists validation
 - `link_google_account(session, user, google_id)` - Sets `google_id` on user

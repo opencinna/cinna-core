@@ -42,7 +42,7 @@ Give a superuser one place to decide **who may get an account on this instance a
 
 ### Choosing what new accounts become
 
-1. In **New users**, the superuser picks **Default role** — Agent User or Agent Developer
+1. In **New users**, the superuser picks **Default role** — Agent User or Agent Developer — and, at the foot of the section, ticks which **Company AI credentials** each role's new accounts receive (a credentials × roles matrix; see [Admin-Provisioned AI Credentials](../ai_credentials/admin_ai_credential_provisioning.md#auto-provisioning-at-account-creation)). The matrix is a view over `ManagedAICredential.auto_provision_roles` — it stores nothing of its own, and one toggle is one `PATCH /admin/llm-providers/{id}`
 2. Every subsequently created non-superuser account (password signup, Google first login, externally-arriving channel sender) picks up that role. Existing users are untouched
 3. **Offer Cinna Desktop in invitations** pre-ticks a checkbox in the invitation wizard. It is a presentation default only and has no security meaning
 

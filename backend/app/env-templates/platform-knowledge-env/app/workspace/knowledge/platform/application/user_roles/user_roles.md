@@ -18,9 +18,10 @@ Introduce a three-value role system (`agent-user`, `agent-developer`, `admin`) t
 
 1. User completes registration (email/password or Google OAuth)
 2. `User.role` is set to `ServerConfig.default_user_role` (default: `agent-user`; a superuser can switch it to `agent-developer` on **Admin → Server Configuration → Access → New users**)
-3. User sees the unified sidebar: Dashboard, Tasks, Agents, Sessions, Credentials in the main nav and Activities + Catalog + User menu in the footer. The User Settings link lives inside the user-icon dropdown at the bottom of the sidebar (shared by every role)
-4. Agent creation, building-mode sessions, bundle management, and the workspace switcher are not visible (workspace switcher is gated by the `workspacesEnabled` toggle, which defaults to off for new users — see [user_workspaces.md](../user_workspaces/user_workspaces.md))
-5. On first login after the role system is introduced, an `AgentUserWelcomeBanner` appears explaining the role split (dismissible, shown once)
+3. If a superuser has marked any **Managed AI Credential** with that role under `auto_provision_roles`, the new account already holds it — set as their default and, when the record wires SDK defaults, pinned to the admin's chosen model. Nothing is asked of the user. See [Admin-Provisioned AI Credentials](../ai_credentials/admin_ai_credential_provisioning.md#auto-provisioning-at-account-creation)
+4. User sees the unified sidebar: Dashboard, Tasks, Agents, Sessions, Credentials in the main nav and Activities + Catalog + User menu in the footer. The User Settings link lives inside the user-icon dropdown at the bottom of the sidebar (shared by every role)
+5. Agent creation, building-mode sessions, bundle management, and the workspace switcher are not visible (workspace switcher is gated by the `workspacesEnabled` toggle, which defaults to off for new users — see [user_workspaces.md](../user_workspaces/user_workspaces.md))
+6. On first login after the role system is introduced, an `AgentUserWelcomeBanner` appears explaining the role split (dismissible, shown once)
 
 ### Admin Promotes a User to Developer
 
@@ -50,6 +51,9 @@ Introduce a three-value role system (`agent-user`, `agent-developer`, `admin`) t
 - **Cannot change own role via `/role` endpoint** — `set_role` raises ValueError if `target_user.id == changed_by.id`. The general user-edit form does not block self-edit, so a superuser can adjust their own `role` (e.g., to keep it in sync after toggling `is_superuser`)
 - **Role changes are admin-only** — both `PATCH /users/{user_id}/role` and `PATCH /users/{user_id}` are gated on `get_current_active_superuser`
 - **Downgrade does not delete agents** — demoting a developer to user leaves their existing agents intact; they simply cannot create new ones or start building-mode sessions
+- **The role selects which company AI credentials a new account receives.** `AccountProvisioningService.on_account_created` grants every `ManagedAICredential` whose `auto_provision_roles` contains the new account's role. `admin` is a valid choice there — an instance where every employee is an administrator is a normal small-team shape.
+- **A role change never re-provisions.** Promotion and demotion are pure permission changes: they grant no key and revoke none. An admin who wants existing accounts to receive a credential uses **Apply to existing users** on the LLM Providers page. This is deliberate — a promotion silently handing out a company API key would be a surprise grant.
+- **Only one auto-provisioning credential may own a role's default slot per mode.** A second record that would also wire `default_ai_credential_<mode>_id` for the same role is refused with a `409`, because the column holds exactly one credential.
 - **Superusers always pass `require_developer`** — even if a superuser's stored `role` value is stale, `is_superuser` is checked as a defense-in-depth fallback in `RoleService.is_developer`
 
 ## Developer-Only Features
@@ -143,5 +147,6 @@ User.role (string column, "agent-user" | "agent-developer" | "admin")
 |---------|-------------|
 | [Agent Bundles & Installs](../../agents/agent_bundles/agent_bundles.md) | Publish, bundle-id edit, and bundle CRUD require `agent-developer` |
 | [Agent Management](../agent_management/agent_management.md) | Agent create/update/delete require `agent-developer`; the Bundle tab is only rendered for developers |
-| [Auth](../auth/auth.md) | `User.role` is stored on the `User` model; exposed in `UserPublic` response and `GET /users/me/role`; default set at signup via `RoleService.derive_default_role` (applies to password signup, Google OAuth first login, and externally-arriving channel senders) |
+| [Auth](../auth/auth.md) | `User.role` is stored on the `User` model; exposed in `UserPublic` response and `GET /users/me/role`. The role is resolved once, at the account-creation chokepoint `UserService.create_account`: an explicit value for admin-intent origins, `RoleService.derive_default_role` otherwise, and `admin` forced for superusers even against an explicit value. This covers password signup, Google OAuth first login, admin-created users, externally-arriving channel senders and the first-superuser seed alike |
 | [Access Policy](../server_configuration/access_policy.md) | Owns `ServerConfig.default_user_role`, the source of truth for the role a new non-superuser account receives. Superusers edit it on the Access tab of Server Configuration |
+| [Admin-Provisioned AI Credentials](../ai_credentials/admin_ai_credential_provisioning.md) | `ManagedAICredential.auto_provision_roles` selects on `User.role` at account creation. The credentials × roles matrix on **Admin → Server Configuration → Access & New Users** edits the same flag; the LLM Providers table shows it as an **Auto** column of role chips |

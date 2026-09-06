@@ -15,6 +15,8 @@ Provides user identity and session management for the platform. Users authentica
 | **Allowed Email Patterns** | Comma-separated globs (`*@acme.com`) restricting who may register. Empty means no restriction. Gates registration only — never login |
 | **Superuser Break-Glass** | Superusers keep password login, recovery and reset even when password sign-in is switched off for everyone else |
 | **Reason Code** | The machine-readable `detail` string a policy refusal returns (`registration_closed`, `email_not_allowed`, `password_auth_disabled`, `google_auto_register_disabled`) |
+| **Account-Creation Chokepoint** | `UserService.create_account` — the one and only place a `User` row is built, whatever the arrival path. Owns address normalisation, the `is_superuser ⇒ admin` invariant, the policy-derived default role, and auto-provisioning of company AI credentials |
+| **Account Origin** | `AccountOrigin` — which arrival path an account came from: `signup`, `google`, `invite`, `admin`, `external`, `seed`. Required by the chokepoint; decides whether the registration gate applies, and is stamped on the provisioning audit event |
 | **Access Token** | The JWT stored in frontend `localStorage` and auto-included in API requests |
 | **Guest Token** | Special JWT with `role=chat-guest` for unauthenticated agent chat access via guest share links |
 
@@ -37,7 +39,7 @@ Provides user identity and session management for the platform. Users authentica
 3. Frontend validates locally (email format, password >= 8 chars, passwords match)
 4. Backend checks the access policy: open registration, password auth on, and a match against the allowed email patterns. Any refusal is a 403 carrying the reason code — raised **before** the uniqueness check, so a closed instance answers identically for known and unknown addresses
 5. Backend checks email uniqueness
-6. Backend creates user with hashed password and the policy's default role
+6. Backend creates the user through the [account-creation chokepoint](#the-account-creation-chokepoint) with hashed password and the policy's default role, and grants any company AI credentials configured for that role
 7. Confirmation email sent (if SMTP configured)
 8. User redirected to login page
 
@@ -62,6 +64,35 @@ Provides user identity and session management for the platform. Users authentica
 1. User clicks logout
 2. Frontend removes `access_token` from localStorage
 3. Frontend redirects to login page
+
+### The Account-Creation Chokepoint
+
+Every arrival path ends in the same function, `UserService.create_account`:
+
+```
+signup | google | invite | admin | external | seed
+                    │
+                    ▼
+UserService.create_account(session, *, email, origin, password, full_name,
+                           username, google_id, role, is_superuser, is_active,
+                           email_confirmed, skip_auto_provision) -> User
+                    │  normalise address → policy gate → duplicate check →
+                    │  resolve role → INSERT → commit
+                    ▼
+AccountProvisioningService.on_account_created(session, user, origin)
+```
+
+Before this there were **four** places that built a `User` row — the signup path, the Google path, the passwordless branch of `create_external_user`, and the local-dev `/private/users/` helper — and they already disagreed: only one normalised the address, only two derived the default role through `RoleService`, none agreed about `email_confirmed`. An architecture test now pins that `User(` is constructed in exactly one function, that no code path builds the row by validating another model into it, and that every call into the chokepoint names an origin.
+
+What the chokepoint owns:
+
+- **Address normalisation is part of identity.** The address is stripped, lowercased and validated, and the duplicate check runs on the *normalised* form — `Alice@x.com` and `alice@x.com` are one human, and Postgres' unique index is case-sensitive. A caller that checked the raw string would otherwise produce an `IntegrityError` 500 instead of a 400. `POST /users/` and `/private/users/` both translate the resulting `ValueError` into a `400`.
+- **The policy gate is re-asserted, not moved.** `register_user` and `create_user_from_google` still call `can_register` *before* their own duplicate check — that ordering is what keeps a closed instance answering identically for known and unknown addresses. The second call inside the chokepoint is the structural guarantee that a future path which forgets the gate is refused anyway.
+- **`is_superuser` forces `role = "admin"`** even against an explicitly passed role, and auto-confirms the address. Note the asymmetry: `update_user` does **not** re-apply this invariant — creation is stricter than update, and superusers editing the general user form are trusted to keep the two fields consistent.
+- **Role validation.** An unknown `role` is a `ValueError`, checked here because this is now the only door.
+- **Auto-provisioning**, unless `skip_auto_provision=True` (reserved for a path that applies its own explicit credential list). Provisioning can never cost the person their account — see [Admin-Provisioned AI Credentials](../ai_credentials/admin_ai_credential_provisioning.md#auto-provisioning-at-account-creation).
+
+Origins and their gates are owned by the [Access Policy](../server_configuration/access_policy.md): `signup` and `google` are gated; `admin`, `invite`, `external` and `seed` carry their own admission decision and always pass. An origin that is neither raises — a new arrival path cannot silently inherit "no policy applies".
 
 ## Business Rules
 
@@ -122,10 +153,13 @@ Login Page ──→ POST /login/access-token ──→ UserService.authenticate
                                               └─► AccessPolicyService.require_password_auth ──→ JWT Token
                                                                               │
 Signup Page ──→ POST /users/signup ──→ UserService.register_user()
-                                          └─► AccessPolicyService.can_register(origin="signup") ──→ User Created
-                                                                              │
-Google Button ──→ OAuth Flow ──→ AuthService.authenticate_with_google()
-                                    └─► can_register(origin="google") on first login ──→ JWT Token
+                                          └─► can_register(AccountOrigin.SIGNUP) ──┐
+                                                                                   │
+Google Button ──→ OAuth Flow ──→ AuthService.authenticate_with_google()            │
+                                    └─► can_register(AccountOrigin.GOOGLE) ────────┤
+                                                                                   ▼
+                                        UserService.create_account(origin=…)  ← the only User(...) 
+                                              └─► AccountProvisioningService.on_account_created()
                                                                               │
                                                                               ▼
 Frontend (localStorage) ──→ Authorization Header ──→ deps.get_current_user() ──→ CurrentUser
@@ -138,4 +172,6 @@ Frontend (localStorage) ──→ Authorization Header ──→ deps.get_curren
 - **[Guest Sharing](../../agents/guest_sharing/guest_sharing.md)** - Special guest JWT tokens (`role=chat-guest`) for unauthenticated access to agent chat via guest share links
 - **[User Workspaces](../user_workspaces/user_workspaces.md)** - Workspace context applied after authentication
 - **[AI Credentials](../ai_credentials/ai_credentials.md)** - User model stores encrypted AI credentials
+- **[Admin-Provisioned AI Credentials](../ai_credentials/admin_ai_credential_provisioning.md)** - `AccountProvisioningService.on_account_created` runs at the chokepoint and grants the company AI credentials configured for the new account's role
+- **[User Roles](../user_roles/user_roles.md)** - the chokepoint resolves the new account's role from the access policy (or an explicit value for admin-intent origins) and pins `admin` for superusers
 - **Route Protection** - All `/_layout/*` frontend routes require valid authentication

@@ -3,17 +3,20 @@
 ## File Locations
 
 ### Backend - Models
-- `backend/app/models/users/user.py` - User model (table), UserBase, UserCreate, UserRegister, UserUpdate, UserUpdateMe, UserPublic, Token, TokenPayload, OAuthConfig, SetPassword, NewPassword, UpdatePassword
+- `backend/app/models/users/user.py` - User model (table), UserBase, UserCreate, UserRegister, UserUpdate, UserUpdateMe, UserPublic, Token, TokenPayload, OAuthConfig, SetPassword, NewPassword, UpdatePassword; `UserRole` / `VALID_USER_ROLES` and the `AccountOrigin` enum (it lives next to `UserRole` rather than in the access-policy service because both that service and the creation chokepoint need it, and a constant owned by one of two peers is how an import cycle starts)
 
 ### Backend - Routes
 - `backend/app/api/routes/login.py` - Password login, test token, password recovery, password reset
 - `backend/app/api/routes/oauth.py` - OAuth config, Google authorize/callback/link/unlink
-- `backend/app/api/routes/users.py` - Signup, profile, password management, admin user CRUD
-- `backend/app/api/routes/_user_public.py` - `user_to_public()`, the single builder for `UserPublic` (populates `can_change_email` and the derived `has_*` flags). Shared by `users.py` and `login.py` so the two cannot drift into disagreeing projections
+- `backend/app/api/routes/users.py` - Signup, profile, password management, admin user CRUD. `POST /users/` wraps `create_user` in a `try/except ValueError → 400`: its own duplicate check compares the address as typed, while the chokepoint normalises before storing, so `Foo@Bar.com` against an existing `foo@bar.com` gets past the first check and is caught by the second
+- `backend/app/api/routes/private.py` - Local-development `POST /private/users/` helper; goes through `UserService.create_account(origin=AccountOrigin.ADMIN)` like every other path, so a dev-seeded account is indistinguishable from a real one
+- `backend/app/api/routes/_user_public.py` - `user_to_public()`, the single builder for `UserPublic` (populates `can_change_email` and the derived `has_*` flags). Shared by `users.py` and `login.py` so the two cannot drift into disagreeing projections. Also `_load_missing_columns()` — see [The `model_dump()` expiry trap](#the-model_dump-expiry-trap)
 
 ### Backend - Services
 - `backend/app/services/users/auth_service.py` - OAuth flows, state management, Google account creation
-- `backend/app/services/users/user_service.py` - User CRUD, password hashing, registration, password recovery
+- `backend/app/services/users/user_service.py` - `create_account` (the chokepoint), user CRUD, password hashing, registration, password recovery
+- `backend/app/services/users/account_provisioning_service.py` - `AccountProvisioningService.on_account_created` / `on_account_deactivated`. See [Admin-Provisioned AI Credentials — tech](../ai_credentials/admin_ai_credential_provisioning_tech.md#accountprovisioningservice-servicesusersaccount_provisioning_servicepy)
+- `backend/app/core/db.py` - `init_db` seeds the first superuser through `create_user(..., origin=AccountOrigin.SEED)`; `seed` is ungated because the first superuser has to be creatable on an instance whose access policy does not exist yet
 - `backend/app/services/users/access_policy_service.py` - The single resolver for registration and sign-in policy. See [Access Policy — tech](../server_configuration/access_policy_tech.md)
 
 ### Backend - Core
@@ -85,25 +88,65 @@ Auth-relevant fields:
 
 ## Services & Key Methods
 
+### The account-creation chokepoint
+
+```python
+UserService.create_account(
+    session,
+    *,
+    email: str,
+    origin: AccountOrigin,
+    password: str | None = None,
+    full_name: str | None = None,
+    username: str | None = None,
+    google_id: str | None = None,
+    role: str | None = None,
+    is_superuser: bool = False,
+    is_active: bool = True,
+    email_confirmed: bool = False,
+    skip_auto_provision: bool = False,
+) -> User
+```
+
+The only place in the backend a `User` row is constructed. Sequence: normalise + validate the address (`_EMAIL_ADAPTER` on `email.strip().lower()`) → `AccessPolicyService.can_register(origin=…)` → duplicate check on the normalised address → validate `role` against `VALID_USER_ROLES` → resolve the role → `INSERT` → `commit` + `refresh` → `AccountProvisioningService.on_account_created` unless `skip_auto_provision`.
+
+Role resolution, in order: `is_superuser` pins `admin` (and sets `email_confirmed=True` + `email_confirmed_at`) even against an explicitly passed role; otherwise an explicit `role`; otherwise `RoleService.derive_default_role(session=…, is_superuser=False)`. `update_user` applies no such invariant — **create is stricter than update**.
+
+`is_active` is in the signature although the phase spec did not list it: `UserCreate` carries it, so `create_user` needs somewhere to put it, and `create_external_user` passes it explicitly.
+
+Raises `ValueError` (invalid address, duplicate, invalid role) and `RegistrationNotAllowedError` (policy refusal). It does **not** raise for a provisioning failure: `on_account_created` already guarantees that, and the `try` around it here is deliberate belt-and-braces — it makes "an account is never lost to a provisioning failure" a property of the account code rather than a promise borrowed from another module. Its handler rolls back unconditionally and logs from pre-snapshotted locals, for the reason documented on `AccountProvisioningService._restore_session`.
+
+Callers:
+
+| Caller | Origin | Notes |
+|---|---|---|
+| `UserService.create_user(session, user_create, origin=AccountOrigin.ADMIN)` | `admin` (default) | Thin adapter over the chokepoint for the `UserCreate`-shaped callers. Reads `exclude_unset` to tell "the caller did not say" from "the caller said `agent-user`" — `UserBase.role` carries a column default, so only the first should pick up the policy default |
+| `core.db.init_db` | `seed` | Overrides the `create_user` default |
+| `UserService.register_user` | `signup` | After its own `can_register` |
+| `AuthService.create_user_from_google` | `google` | `google_id`, `email_confirmed=True`, after its own `can_register` |
+| `UserService.create_external_user` | `external` | Both branches; the non-passwordless one passes `secrets.token_urlsafe(32)` |
+| `POST /private/users/` | `admin` | Local-dev helper |
+
 ### UserService (`backend/app/services/users/user_service.py`)
 - `authenticate(session, email, password)` - Validate credentials, return User or None
-- `register_user(session, email, password, full_name)` - Public signup; calls `AccessPolicyService.can_register(origin="signup")` before the duplicate check and raises `RegistrationNotAllowedError` on refusal
-- `create_user(session, user_create)` - Admin user creation with password hashing
+- `register_user(session, email, password, full_name)` - Public signup; calls `AccessPolicyService.can_register(origin=AccountOrigin.SIGNUP)` before the duplicate check and raises `RegistrationNotAllowedError` on refusal, then delegates to `create_account`
+- `create_user(session, user_create, origin=AccountOrigin.ADMIN)` - `UserCreate`-shaped adapter over `create_account`
 - `update_password(session, user, current_password, new_password)` - Password change with validation
 - `set_password(session, user, new_password)` - Set password for OAuth-only users
 - `reset_password(session, token, new_password)` - Token-based password reset; calls `AccessPolicyService.require_password_auth` once the token resolves its owner
 - `recover_password(session, email)` - Generate reset token and send email; **silently skips** the send when `is_password_auth_allowed` is false, exactly like the cooldown skip
-- `create_external_user(session, email, confirmed, provenance, passwordless=False)` - Get-or-create a user from an externally-arriving sender address (email integration, server channels). Uses the `external` origin, so the registration policy does not apply — the integration's own sender allowlist is the gate. Still picks up the policy's default role
+- `create_external_user(session, email, confirmed, provenance, passwordless=False)` - Get-or-create a user from an externally-arriving sender address (email integration, server channels). Uses the `external` origin, so the registration policy does not apply — the integration's own sender allowlist is the gate. Still picks up the policy's default role. Normalises the address *before* the get-or-create lookup so the idempotency check asks about the same address the chokepoint will store; the two branches now differ only in whether a password hash exists at all
 
 ### AuthService (`backend/app/services/users/auth_service.py`)
 - `create_access_token(user_id)` - Generate JWT via `security.create_access_token()`
-- `create_user_from_google(...)` - Calls `AccessPolicyService.can_register(origin="google")` first
+- `create_user_from_google(...)` - Calls `AccessPolicyService.can_register(origin=AccountOrigin.GOOGLE)` first — kept here as well as inside the chokepoint because this is the refusal the OAuth callback route turns into a 403, and it must happen before anything is written. Then delegates to `create_account(origin=google, email_confirmed=True)`
+- `authenticate_with_google(...)` - The Google-claim email is now lowercased + stripped **before** the auto-link lookup. Google may return a mixed-case address for a Workspace account whose platform row was stored lowercase; `get_user_by_email` is an exact match, so the link would miss, `create_user_from_google` would run, and the chokepoint's duplicate check would refuse a perfectly legitimate login
 - See [Google OAuth Tech](google_oauth_tech.md) for OAuth-specific methods
 - `is_email_domain_allowed(email)` was **removed** — subsumed by `AccessPolicyService.can_register`
 
 ### AccessPolicyService (`backend/app/services/users/access_policy_service.py`)
 The single resolver for the front-door policy. Auth-relevant entry points:
-- `can_register(session, *, email, origin)` - Registration gate for `signup` / `google`; `admin`, `invite`, `external` and `seed` always pass
+- `can_register(session, *, email, origin: AccountOrigin)` - Registration gate for `signup` / `google`; `admin`, `invite`, `external` and `seed` always pass. Takes the `AccountOrigin` enum (the phase-1 `ORIGIN_*` string constants are gone). An origin that is neither ungated nor explicitly gated raises, so a new arrival path cannot silently inherit "no policy applies"
 - `require_password_auth(session, user)` - Raises `PasswordAuthDisabledError` unless `password_auth_enabled or user.is_superuser`. Used by login, reset, set-password and change-password. Password **recovery** uses the predicate directly so it can skip silently
 - `can_change_email(session)` - Drives `UserPublic.can_change_email` and the `PATCH /users/me` email branch
 - `is_account_valid(user)` - Today `user.is_active`; called by `deps.get_current_user` only
@@ -120,6 +163,33 @@ Full contract in [Access Policy — tech](../server_configuration/access_policy_
 - `CurrentUser` - Annotated dependency for authenticated user
 - `get_current_active_superuser(current_user)` - Admin-only guard (403 if not superuser)
 - `get_current_user_or_guest(session, token)` - Resolves both regular user and guest JWT types
+
+## The `model_dump()` Expiry Trap
+
+`user_to_public()` calls `_load_missing_columns(user)` before its `model_dump()`, and the reason is a real 500 that phase 2 armed.
+
+`model_dump()` is the one way of reading a SQLModel row that does **not** go through SQLAlchemy's instrumented descriptors — it reads `__dict__`. Ordinary attribute access on an expired instance silently emits a `SELECT`; `model_dump()` just returns whatever keys happen to still be in `__dict__`, which right after a `commit()` is none of them. `id` and `email` are then simply absent from the payload and `UserPublic` fails validation.
+
+`create_account` refreshes the new row and then runs auto-provisioning, which commits a child credential and an audit row; the account-creating routes hand the now-expired instance straight to the builder. It stayed invisible because with outbound email configured the routes call `send_confirmation_email(user=user)` in between, which touches an attribute and un-expires the instance. Turn SMTP off — the default for a fresh install — and creating an account 500s *after* the row is committed: the person exists and is told they do not.
+
+Implementation notes:
+
+- The condition is "a mapped column key is missing from `__dict__`", **not** "the instance is expired": a `load_only()` / deferred load produces the same absence without ever setting the expired flag.
+- Restricted to `mapper.column_attrs`. `state.unloaded` is the tempting shortcut and the wrong one — it always contains relationship keys, which `model_dump()` never reads, so it would force a full-row `SELECT` for every row of the users list. As written, list rows come straight off a `select` with every column loaded, the missing set is empty, and no SQL is emitted.
+- Reloads through the instance's own `state.session` (a refresh through a foreign session raises), and only when `state.persistent` — a *pending* row has no database row to refresh and its `__dict__` is already authoritative, a *transient* row has neither, and a *detached* expired row cannot be repaired at all (the builder's contract is a live row belonging to `session`).
+- The repair lives at the single builder rather than at the one call site, because the trap belongs to `model_dump()`, not to account creation: any commit anywhere upstream arms the same failure.
+
+## Architecture Test
+
+`backend/tests/architecture/account_creation_chokepoint_test.py` walks the backend AST (excluding `env-templates/` and `alembic/`) and pins:
+
+1. `User(...)` is constructed in exactly one place — `services/users/user_service.py::create_account`.
+2. No code path builds the row the other way, by validating another model into it.
+3. Every call into the chokepoint names an `origin`, and `core.db.init_db` is the only caller carrying `AccountOrigin.SEED`.
+4. `add_members` keeps `actor` keyword-only with no default, and no route module calls it with `actor=None` — `actor=None` means *the system*, and a route is never the system.
+5. Neither file phase 2 owns imports a provider client (a cheap static echo of the "no third-party provider on the login path" invariant).
+
+An anchor test asserts that every hand-written name the walk depends on still exists, so a rename cannot quietly empty the checks.
 
 ## Frontend Components
 
