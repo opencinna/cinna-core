@@ -248,13 +248,38 @@ def generate_password_reset_token(email: str) -> str:
 
 
 def verify_password_reset_token(token: str) -> str | None:
+    """The address a password-reset token names, or ``None``.
+
+    THE PURPOSE CHECK IS A REJECTION, NOT A REQUIREMENT
+    ---------------------------------------------------
+    A reset token carries no ``purpose`` claim and — for backward
+    compatibility with links already in people's inboxes — never will, so this
+    cannot require one the way ``verify_email_confirmation_token`` does. What
+    it can do is refuse every token that carries one, because a ``purpose``
+    claim means the token was minted for a *different* flow and that flow's
+    own verifier is the only one entitled to accept it.
+
+    Without that refusal this function accepts any HS256 token signed with
+    ``SECRET_KEY`` that has a ``sub``, which includes the invitation token.
+    The consequences are not theoretical: an invitee could replay their invite
+    link at ``POST /reset-password/`` and set a password there, so revoking
+    the invitation would stop nothing, resend's ``jti`` rotation would
+    invalidate nothing, and the single-use property that makes an accepted
+    invitation terminal would be lost — a leaked invite link would be a
+    week-long account-takeover primitive.
+    """
     try:
         decoded_token = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
         )
-        return str(decoded_token["sub"])
     except InvalidTokenError:
         return None
+    if "purpose" in decoded_token:
+        return None
+    sub = decoded_token.get("sub")
+    if not sub:
+        return None
+    return str(sub)
 
 
 # ── Email confirmation tokens ───────────────────────────────────────────
@@ -290,6 +315,123 @@ def verify_email_confirmation_token(token: str) -> str | None:
     if decoded_token.get("purpose") != _EMAIL_CONFIRM_PURPOSE:
         return None
     return str(decoded_token["sub"])
+
+
+def generate_invitation_email(
+    *,
+    email_to: str,
+    full_name: str | None,
+    accept_link: str,
+    web_link: str,
+    desktop_link: str | None,
+    auth_hint: str,
+    invited_by_name: str | None,
+    expires_in_days: int,
+) -> EmailData:
+    """Render the invitation email.
+
+    ``auth_hint`` here is the **effective** hint — the one
+    ``InvitationService`` resolves against the access policy at send time, not
+    the one stored on the row. That matters on resend: an instance that has
+    since been switched to Google-only must not send a fresh email telling the
+    person to choose a password they will not be allowed to set.
+
+    ``desktop_link`` is ``None`` when the invitation does not include the
+    desktop block, so the template branches on presence rather than on a second
+    boolean that could disagree with it.
+    """
+    project_name = settings.PROJECT_NAME
+    subject = f"{project_name} - You have been invited"
+    html_content = render_email_template(
+        template_name="invite.html",
+        context={
+            "project_name": project_name,
+            "email": email_to,
+            "username": full_name or email_to,
+            "link": accept_link,
+            "web_link": web_link,
+            "desktop_link": desktop_link,
+            "auth_hint": auth_hint,
+            "invited_by_name": invited_by_name,
+            "valid_days": expires_in_days,
+        },
+    )
+    return EmailData(html_content=html_content, subject=subject)
+
+
+# ── Invitation tokens ───────────────────────────────────────────────────
+# The confirmation-token pattern, not the reset-token one, and the choice is
+# load-bearing. ``generate_password_reset_token`` emits no ``purpose`` claim at
+# all, so *any* purposeless HS256 token signed with ``SECRET_KEY`` validates as
+# a reset token. An invitation grants an account, so it is stamped and the
+# stamp is checked before anything else.
+#
+# The addition over the confirmation token is ``jti``: the invitation is loaded
+# **by that claim**, never by ``sub``. Resending rotates ``token_jti`` on the
+# row, which is what makes a previously emailed link stop working — resolving
+# by address instead would leave every old link live and make revocation
+# decorative.
+_INVITE_PURPOSE = "invite"
+
+
+def generate_invitation_token(*, email: str, jti: str, expires_at: datetime) -> str:
+    """Mint the token an invitation email carries.
+
+    ``expires_at`` is the invitation row's own column, so the link and the row
+    expire at the same instant by construction rather than by two settings
+    agreeing.
+
+    ``jti`` must come from the **committed** row. A token minted from a jti
+    that is never persisted (or is superseded before the commit lands) passes
+    signature and purpose verification and then fails the row lookup — which
+    is indistinguishable, by design, from a forgery. The recipient is told the
+    invitation is no longer valid and no log says why.
+    """
+    now = datetime.now(timezone.utc)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    encoded_jwt = jwt.encode(
+        {
+            "exp": expires_at.timestamp(),
+            "nbf": now,
+            "sub": email,
+            "jti": jti,
+            "purpose": _INVITE_PURPOSE,
+        },
+        settings.SECRET_KEY,
+        algorithm=security.ALGORITHM,
+    )
+    return encoded_jwt
+
+
+def verify_invitation_token(token: str) -> tuple[str, str] | None:
+    """``(email, jti)`` for a well-formed, unexpired invitation token.
+
+    Returns ``None`` — never raises, never distinguishes — for a malformed
+    token, a bad signature, an expired one, and a token of any other purpose.
+    The caller turns every one of those into the same answer it gives for a
+    jti that is not in the table.
+
+    Both halves are returned because both are used, for different things: the
+    ``jti`` *resolves* the invitation, and the address is then compared against
+    the resolved user's own as an independent second check, so an admin who
+    changed the address after inviting invalidates the outstanding link.
+    """
+    try:
+        decoded_token = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
+        )
+    except InvalidTokenError:
+        return None
+    # Purpose first: a purposeless password-reset token would otherwise
+    # validate here, and it is signed with the same key.
+    if decoded_token.get("purpose") != _INVITE_PURPOSE:
+        return None
+    email = decoded_token.get("sub")
+    jti = decoded_token.get("jti")
+    if not email or not jti:
+        return None
+    return str(email), str(jti)
 
 
 def get_base_url(request) -> str:
