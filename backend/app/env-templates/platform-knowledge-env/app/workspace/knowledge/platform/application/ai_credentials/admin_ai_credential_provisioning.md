@@ -7,7 +7,7 @@ Two related backend capabilities that together deliver a "ready on login" experi
 - **Part A — Admin-provisioned AI credentials.** A superuser creates a single **Managed AI Credential** parent record and assigns it to one or more target users — by hand, and/or **automatically to every account created with a chosen role** (see [Auto-Provisioning at Account Creation](#auto-provisioning-at-account-creation)). The parent record is the canonical source of truth (name, type, encrypted key, default flags). The service reconciles the desired target-user set into per-user `AICredential` child rows, which participate automatically in all existing per-user plumbing. Users can use their child credential and set it as their default, but cannot edit, delete, or re-key it — those operations return `403`.
 - **Part B — Native account-config endpoint.** A native-token-gated endpoint (`GET /api/v1/external/account-config`) returns the caller's own usable AI credentials with the *decrypted* API key, so Cinna Desktop and Cinna Mobile can auto-create local "LLM providers" and a suggested chat mode per credential on login, without the user having to copy-paste keys into the native app.
 
-> **Frontend status:** The admin "LLM Providers" section is **implemented** — superusers can provision, list, filter, edit, set-default, delete, and set an admin-curated model list (default model + available models) from the web UI. The user-facing AI Credentials card renders admin-managed child credentials with a **"Managed" badge** and a read-only **Default model** line when a curated default is set. The native-app side (Part B) backend is complete; Cinna Desktop/Mobile provider auto-creation is not yet built.
+> **Frontend status:** The admin **AI Credentials** section (`/admin/ai-credentials`; called "LLM Providers" at `/admin/llm-providers` until zero-touch-onboarding phase 4, which renamed the **UI only** and left a redirect stub) is **implemented** — superusers can provision, list, filter, edit, set-default, delete, and set an admin-curated model list (default model + available models) from the web UI. The user-facing AI Credentials card renders admin-managed child credentials with a **"Managed" badge** and a read-only **Default model** line when a curated default is set. The native-app side (Part B) backend is complete; Cinna Desktop/Mobile provider auto-creation is not yet built.
 
 ---
 
@@ -175,7 +175,7 @@ The wizard's pre-ticked set is derived from `auto_provision_roles` — the same 
 
 The reason is an ordering constraint, not an oversight: the wizard's provisioning step runs *before* the account exists. The account row is created when the wizard is **submitted**, so at the step where such a control would live there is no user id to attach a key to and no `target_user_ids` to send. A version bolted onto the success screen — after the account exists — was considered and cut rather than deferred: it is a second, differently-shaped credential-creation surface for a case the AI Credentials page already covers.
 
-Meanwhile, an administrator who needs to hand one person their own key adds it from **Admin → LLM Providers** after the invitation is sent, exactly as they would for any existing account.
+Meanwhile, an administrator who needs to hand one person their own key adds it from **Admin → AI Credentials** after the invitation is sent, exactly as they would for any existing account.
 
 Where that fallback ultimately lands is owned by phase 5 (provider adapters and per-user key minting): if per-user minting proves unusable for a provider, phase 5 decides where the "paste a key for this person" affordance goes. This step is not it.
 
@@ -245,9 +245,11 @@ Through the `/admin/llm-providers/` surface, superusers can:
 - **Set default for all** — calls `set_default` on every current member's child and stamps `set_as_default=True` on the parent
 - **Apply to existing users** — grant the record to every active account its `auto_provision_roles` cover (`?dry_run=true` previews without writing)
 
-### Admin UI — "LLM Providers" section
+### Admin UI — "AI Credentials" section
 
-The admin UI is accessed via **Admin menu → LLM Providers** (`/admin/llm-providers`) in the sidebar. The route is superuser-gated: non-superusers are redirected to `/` by `beforeLoad`.
+The admin UI is accessed via **Admin menu → AI Credentials** (`/admin/ai-credentials`) in the sidebar. The route is superuser-gated: non-superusers are redirected to `/` by `beforeLoad`.
+
+The page was called **LLM Providers** and lived at `/admin/llm-providers` until zero-touch-onboarding phase 4. That was a **UI rename only** — the backend prefix `/api/v1/admin/llm-providers`, its OpenAPI tag, the generated `AdminLlmProvidersService`, the `MANAGED_CREDENTIALS_QUERY_PREFIX` cache key and the `components/Admin/LlmProviders/` directory are all unchanged, and the old route survives as a `beforeLoad` redirect stub so bookmarks and older documentation keep working. Every `/admin/llm-providers/...` **HTTP path** in this document is a backend call and is current.
 
 **User flow:**
 
@@ -283,9 +285,9 @@ The admin UI is accessed via **Admin menu → LLM Providers** (`/admin/llm-provi
 
 The same flag seen from the other end. An admin setting up the front door asks "what does a new Agent Developer get?", and answering that from a list of credentials means opening each one in turn. So the *New users* block of the [Access Policy](../server_configuration/access_policy.md) card ends with a **Company AI credentials** matrix (`AutoProvisionedCredentialsMatrix`): managed credentials down the rows, the three roles across the columns, one checkbox per cell.
 
-- A toggle is one `PATCH /admin/llm-providers/{id}` carrying `auto_provision_roles` and nothing else; the matrix never invents state of its own and shares the LLM Providers page's query key, so a change made on either surface shows on both.
+- A toggle is one `PATCH /admin/llm-providers/{id}` carrying `auto_provision_roles` and nothing else; the matrix never invents state of its own and shares the AI Credentials page's query key, so a change made on either surface shows on both.
 - A cell whose tick would be refused carries an advisory **Conflict** badge, computed client-side from the loaded list. It is a hint, not a gate — the list can be stale, the click still goes to the server, and a real `409` renders as an alert under the table.
-- Empty state: "No managed AI credentials yet — create one", linking to `/admin/llm-providers`. A "Manage AI credentials" link sits in the block header.
+- Empty state: "No managed AI credentials yet — create one", linking to `/admin/ai-credentials`. A "Manage AI credentials" link sits in the block header.
 - The block's own helper text states the creation-time rule: "Changing a role later never grants or revokes a key."
 
 ### Security audit
@@ -525,4 +527,4 @@ Deliberate, each carrying a docstring at the code that owns it. Recorded here so
 
 ---
 
-*Last updated: 2026-09-06 — zero-touch onboarding phase 2: auto-provision roles, per-mode model overrides, apply-to-existing, `(role, mode)` slot conflicts; migration `b71863b32aa1`*
+*Last updated: 2026-09-06 — zero-touch onboarding phase 4 renamed the admin page to **AI Credentials** (`/admin/ai-credentials`), UI only. Phase 2: auto-provision roles, per-mode model overrides, apply-to-existing, `(role, mode)` slot conflicts; migration `b71863b32aa1`*

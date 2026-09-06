@@ -9,6 +9,13 @@ Auto-generated from OpenAPI spec. Tag: `server-config`
 
 ---
 
+## GET `/api/v1/server-config/landing`
+**Get Landing Page**
+
+**Response:** `LandingPagePublic`
+
+---
+
 ## GET `/api/v1/server-config/disclaimer`
 **Get Disclaimer**
 
@@ -31,6 +38,7 @@ Auto-generated from OpenAPI spec. Tag: `server-config`
   - `disclaimer_markdown`: string | null
   - `disclaimer_display_mode`: string | null
   - `local_agent_kit_enabled`: boolean | null
+  - `landing_markdown`: string | null
   - `registration_mode`: string | null
   - `allowed_email_patterns`: string | null
   - `password_auth_enabled`: boolean | null

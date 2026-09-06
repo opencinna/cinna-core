@@ -113,7 +113,7 @@ Non-dismissible user-facing dialog.
 
 - Route path: `/admin/server-configuration`
 - `beforeLoad` guard: redirects to `/login` if not authenticated; redirects to `/` if not `is_superuser`
-- Renders `HashTabs` with a tab `interface` → a two-column grid holding `<DisclaimerCard />` and `<LocalAgentKitCard />` (see [Local Agent Kit — tech](../local_agent_kit/local_agent_kit_tech.md))
+- Renders `HashTabs` with four tabs: `interface` → a two-column grid holding `<DisclaimerCard />` and `<LocalAgentKitCard />` (see [Local Agent Kit — tech](../local_agent_kit/local_agent_kit_tech.md)); `access` → `<AccessPolicyCard />` and `<LandingPageCard />` stacked in a `max-w-3xl space-y-6` column (see [Access Policy — tech](access_policy_tech.md) and [Public Landing Page — tech](landing_page_tech.md)); `channels`; `mail-servers`
 - Page header: "Server Configuration" / "Configure server-wide settings"
 
 ### `AdminMenu` (`frontend/src/components/Sidebar/AdminMenu.tsx`)
@@ -158,4 +158,4 @@ Operation: Creates the `server_config` table with all columns described above. N
 
 ---
 
-*Last updated: 2026-09-02*
+*Last updated: 2026-09-06*

@@ -12,7 +12,8 @@ Give a superuser one place to decide **who may get an account on this instance a
 - **Password auth switch** — when off, non-superusers cannot use password login, signup, recovery, reset or set-password. The instance becomes Google-only for everyone except administrators
 - **Superuser break-glass** — superusers keep password login, recovery and reset even when password auth is off, so a broken or unreachable Google configuration can never lock every administrator out of their own instance
 - **Google auto-register** — whether a Google sign-in from an unknown address creates an account. Ignored in invite-only mode, where Google never registers anyone
-- **Public access-policy projection** — an unauthenticated, rate-limited read that says what the **instance offers** (may anyone register, which sign-in methods exist, is desktop enabled, what the instance is called). It deliberately carries no patterns and no default role: those describe who gets in and what they become, which is not for anonymous readers
+- **Public access-policy projection** — an unauthenticated, rate-limited read that says what the **instance offers** (may anyone register, which sign-in methods exist, is desktop enabled, what the instance is called). It deliberately carries no patterns and no default role: those describe who gets in and what they become, which is not for anonymous readers. It also carries no landing copy — see [Public Landing Page](landing_page.md)
+- **`password_signup_available`** — the projection's single *answer* to "may someone self-register with a password here?", instead of the two ingredients (`registration_open`, `password_auth_enabled`) that `/login`, `/signup` and `/start` each used to recombine. They had already drifted: `/login` checked only the first and offered a Sign up link that `/signup`, which required both, then refused to render a form for. Derived server-side from the same `signup_refusal_reason()` that backs `can_register`'s signup branch, so the button and the API can never disagree
 - **Reason code** — every policy refusal answers with a stable machine-readable string (`registration_closed`, `email_not_allowed`, …) as the HTTP `detail`, so the UI renders its own wording instead of pattern-matching English
 
 ## Admin User Stories / Flows
@@ -21,7 +22,7 @@ Give a superuser one place to decide **who may get an account on this instance a
 
 1. Superuser opens **Admin → Server Configuration → Access** (`/admin/server-configuration#access`)
 2. In **Who can join**, changes **Registration** from "Anyone with an allowed email" to "Invite only". The change saves immediately
-3. New visitors to `/signup` now see an explanatory panel instead of the form; `/login` no longer shows the "Sign up" link
+3. New visitors to `/signup` now see an explanatory panel instead of the form; `/login` no longer shows the "Sign up" link, and `/start` no longer offers **Create account** — all three read the same `password_signup_available`
 4. Existing users are unaffected — they keep signing in exactly as before
 
 ### Restricting registration to company domains
@@ -92,7 +93,9 @@ Give a superuser one place to decide **who may get an account on this instance a
 - **Email changes are disabled while a pattern list exists.** `UserPublic.can_change_email` is false whenever `allowed_email_patterns` is non-empty; the profile form renders a read-only address, and `PATCH /users/me` refuses an email change with 403
 - **Access-policy edits never bump `disclaimer_version`.** Changing who may register must not force every user to re-acknowledge an unchanged disclaimer
 - **Pattern values are never logged.** Config-update logs name the changed *fields* only — a pattern list names customer domains and these lines reach shared log aggregators
-- **Superuser only.** Reading or writing the full `ServerConfig` requires `is_superuser`. The access-policy projection is the only part any anonymous caller can see, and it is rate-limited per IP
+- **Superuser only.** Reading or writing the full `ServerConfig` requires `is_superuser`. The access-policy projection is one of only two parts any anonymous caller can see (the other is the landing copy), and both share **one** per-IP budget
+- **Derived facts are derived once, server-side.** `password_signup_available` is not a second copy of the gates: it asks `AccessPolicyService.signup_refusal_reason`, which is the same function `can_register`'s signup branch asks. A gate added there reaches both at once. It is still "the door exists", never "you may walk through it" — the per-address pattern check stays a server-side check at signup, because a projection with no viewer has no address to test
+- **The anonymous budget is module-wide, not per route.** `ACCESS_POLICY_RATE_LIMIT_PER_MIN` (raised 120 → 240 in phase 4) is shared by every public endpoint in `api/routes/server_config.py`, so it is spent in *requests*, not page views: a `/login` view costs one, a `/start` view costs two. `anonymous_caller_key` buckets on source IP, so a NAT'd office shares one. Exhaustion is quiet by design — the pages degrade rather than error
 
 ### Why the pattern list is canonicalised
 
@@ -116,7 +119,10 @@ Admin → Server Configuration → Access
         ├──► AccessPolicyService.resolve() ──► AccessPolicy (frozen dataclass)
         │        │
         │        ├──► to_public()  ──► GET /server-config/access-policy  (public, rate-limited)
-        │        │                          └──► /login, /signup render themselves
+        │        │                          └──► /login, /signup, /start render themselves
+        │        │                              (incl. password_signup_available)
+        │        │      sibling on the SAME limiter:
+        │        │        GET /server-config/landing  ──► /start welcome copy
         │        ├──► can_register(email, origin) ──► signup, Google callback
         │        ├──► is_password_auth_allowed(user) ──► login, recovery, reset, set/change password
         │        ├──► default_role() ──► RoleService.derive_default_role
@@ -130,6 +136,7 @@ Admin → Server Configuration → Access
 - **[Authentication](../auth/auth.md)** — the policy is the gate on signup, password login, password recovery/reset, and set/change password. The superuser break-glass and the non-enumerating refusal shape are described there in flow terms
 - **[Google OAuth](../auth/google_oauth.md)** — `google_auto_register` decides whether a Google first login creates an account; `registration_mode = invite_only` overrides it. `google_auth_enabled` in the public projection reports whether the *backend* has a client id and secret configured
 - **[User Roles](../user_roles/user_roles.md)** — `default_user_role` is the source of truth for the role a new non-superuser account receives, replacing the `DEFAULT_USER_ROLE` env setting
+- **[Public Landing Page](landing_page.md)** — sits on the same **Access** tab, shares the singleton row and the `PUT /admin/server-config` endpoint, and reads this projection on `/start`. Its welcome copy is deliberately *not* a field here: it is content, served by its own public endpoint on the same rate-limit bucket
 - **[Disclaimer](disclaimer.md)** — shares the same `ServerConfig` singleton row, the same `PUT /admin/server-config` endpoint and the same `["serverConfig"]` query key, on a sibling tab. The two are otherwise independent: access-policy edits never touch `disclaimer_version`, and disclaimer edits never touch the policy
 - **[Local Agent Kit](../local_agent_kit/local_agent_kit.md)** — the third occupant of the `ServerConfig` row (`local_agent_kit_enabled`), and the source of the shared anonymous rate-limiter helper the public projection reuses
 - **[Server Channels](../server_channels/server_channels.md)** and **[Email Integration](../email_integration/email_integration.md)** — accounts auto-created for externally-arriving senders use the `external` origin and bypass the registration policy; the channel's own sender allowlist is the gate. They still pick up the policy's default role
@@ -137,4 +144,4 @@ Admin → Server Configuration → Access
 
 ---
 
-*Last updated: 2026-09-05*
+*Last updated: 2026-09-06*

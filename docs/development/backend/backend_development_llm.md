@@ -50,12 +50,31 @@ alembic revision --autogenerate -m "add ui_color_preset to agent"
 ### Review & edit migration file:
 - Located in `backend/app/alembic/versions/`
 - Add data migrations if needed (e.g., set defaults for existing rows)
+- **Drop anything the diff did not ask for** — see the standing false positive below
 ```python
 def upgrade():
     op.add_column('agent', sa.Column('ui_color_preset', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
     # Set default for existing rows
     op.execute("UPDATE agent SET ui_color_preset = 'slate' WHERE ui_color_preset IS NULL")
 ```
+
+### Standing autogenerate false positive: `cli_device_login_request`
+
+**Every** `--autogenerate` run, whatever you changed, re-proposes three
+`alter_column` statements on `cli_device_login_request` (`created_at`,
+`expires_at`, `consumed_at`) that strip `timezone=True`. **Delete them from
+the generated file, every time.**
+
+They are pre-existing model/DB drift in which the **model is wrong and the
+database is right**: `backend/app/models/cli/cli_device_login.py` declares
+bare `datetime`, which SQLModel maps to `DateTime()` without a timezone,
+while migration `c70a14722869` created the columns as
+`sa.DateTime(timezone=True)`. Carrying the proposal would silently strip
+tz-awareness from live device-login timestamps — a data change, dressed up as
+noise in an unrelated diff.
+
+Do not "fix" it by editing the model in passing either: that needs its own
+migration and its own review, on a change that is about those columns.
 
 ### Apply migration:
 ```bash

@@ -6,7 +6,7 @@
 - `backend/app/models/server_config/server_config.py` — six access-policy columns on `ServerConfig`, the same fields on `ServerConfigUpdate`, the `AccessPolicyPublic` projection, and the `REGISTRATION_MODE_*` / `VALID_REGISTRATION_MODES` constants
 - `backend/app/services/users/access_policy_service.py` — `AccessPolicyService`, the `AccessPolicy` / `RegistrationDecision` frozen dataclasses, the reason-code and origin constants, and the three domain exceptions
 - `backend/app/services/server_config/server_config_service.py` — `get_or_create` (with the first-boot env seed) and `update` (calls `validate_update` before applying)
-- `backend/app/api/routes/server_config.py` — the public `access-policy` route and its rate-limit dependency; the superuser get/put
+- `backend/app/api/routes/server_config.py` — the public `access-policy` route and its rate-limit dependency; the superuser get/put. The sibling public `landing` route shares the **same** `_access_policy_limiter` object (see [Public Landing Page — tech](landing_page_tech.md))
 - `backend/app/api/routes/_user_public.py` — `user_to_public`, the single builder for `UserPublic` (populates `can_change_email`)
 - `backend/app/api/routes/users.py` — signup, `PATCH /users/me` email branch, `_require_password_auth` helper for the password endpoints, list-users projection
 - `backend/app/api/routes/login.py` — password login gate, recovery, reset
@@ -17,7 +17,7 @@
 - `backend/app/services/common/email_patterns.py` — `match_email_pattern` (shared, fail-closed)
 - `backend/app/services/common/rate_limiter.py` — `RateLimiter`, `anonymous_caller_key`, `is_private_peer`
 - `backend/app/api/deps.py` — `get_current_user` calls `AccessPolicyService.is_account_valid`
-- `backend/app/core/config.py` — `ACCESS_POLICY_RATE_LIMIT_PER_MIN`; `AUTH_WHITELIST_USER_DOMAINS` and `DEFAULT_USER_ROLE` kept as seed-only
+- `backend/app/core/config.py` — `ACCESS_POLICY_RATE_LIMIT_PER_MIN` (raised 120 → 240 in phase 4 and re-documented as the **module-wide** anonymous budget); `AUTH_WHITELIST_USER_DOMAINS` and `DEFAULT_USER_ROLE` kept as seed-only
 - `backend/app/core/db.py` — `init_db` materialises the `ServerConfig` singleton at prestart
 - `backend/app/main.py` — startup calls `AccessPolicyService.warn_if_env_overrides_present()`
 - `backend/app/alembic/versions/1d737d7ef0a0_add_access_policy_to_server_config.py` — migration (down_revision: `68aab27946e5`)
@@ -71,8 +71,11 @@ All optional, all `| None`: `registration_mode`, `allowed_email_patterns`, `pass
 | `google_auto_register` | `bool` | column |
 | `desktop_enabled` | `bool` | `settings.DESKTOP_AUTH_ENABLED` |
 | `project_name` | `str` | `settings.PROJECT_NAME` |
+| `password_signup_available` | `bool` | `AccessPolicyService.signup_refusal_reason(policy) is None` |
 
-Deliberately excludes `allowed_email_patterns` and `default_user_role`.
+Deliberately excludes `allowed_email_patterns` and `default_user_role` — and, since phase 4, `landing_markdown`: the welcome copy is content rather than front-door policy and gets its own endpoint, because this projection is fetched under one shared cache key by every `/login` and `/signup` load. See [Public Landing Page — tech](landing_page_tech.md).
+
+`password_signup_available` is derived from two fields already projected here, so it discloses nothing new. It is deliberately **not** `can_register`, which also consults the pattern list and therefore needs an address: this is "the door exists", which is what a projection with no viewer may say.
 
 ### `UserPublic.can_change_email`
 
@@ -113,10 +116,11 @@ Frozen dataclasses rather than the ORM row: the policy is read on the login path
 | Method | Notes |
 |--------|-------|
 | `resolve(session) -> AccessPolicy` | Reads `ServerConfigService.get_or_create` and merges in `settings.google_oauth_enabled` |
-| `to_public(policy) -> AccessPolicyPublic` | Adds `desktop_enabled` / `project_name` from settings |
+| `to_public(policy) -> AccessPolicyPublic` | Adds `desktop_enabled` / `project_name` from settings, and `password_signup_available` from the policy |
+| `signup_refusal_reason(policy) -> str \| None` | The **sole** encoding of the door-level signup gates — `registration_open`, then `password_auth_enabled`. Two readers consume it and neither re-encodes it: `can_register`'s `SIGNUP` branch (which then adds the per-address pattern check) and `AccessPolicy.password_signup_available` (which is this returning `None`). A gate added here reaches both at once |
 | `normalize_email_patterns(patterns) -> str` | Canonical form: drop blank entries, strip the rest, rejoin with `", "`. Applied on write (`ServerConfigService.update`) **and** on read (`resolve`), so "is this list empty?" has exactly one answer |
 | `is_email_allowed(policy, email) -> bool` | Empty/whitespace pattern string → `True`; otherwise delegates to `match_email_pattern`. The **only** place the shared matcher's fail-closed default is inverted |
-| `can_register(session, *, email, origin) -> RegistrationDecision` | See the origin table below. Raises `ValueError` on an origin nobody has reasoned about, rather than guessing a gate |
+| `can_register(session, *, email, origin) -> RegistrationDecision` | See the origin table below. Raises `ValueError` on an origin nobody has reasoned about, rather than guessing a gate. The `SIGNUP` branch delegates its door-level gates to `signup_refusal_reason`; the non-signup branch keeps its own `registration_open` + `google_auto_register` checks |
 | `is_password_auth_allowed(policy, user) -> bool` | `policy.password_auth_enabled or user.is_superuser` |
 | `require_password_auth(session, user) -> None` | Raises `PasswordAuthDisabledError` unless allowed. The one gate, so the break-glass cannot drift between login, set-password, change-password and reset. Password **recovery** deliberately does not use it — a refusal there must be silent |
 | `default_role(session) -> str` | Clamps an out-of-range stored value to `agent-user` |
@@ -200,7 +204,7 @@ A bare `acme.com` is therefore refused: it looks like it should work and never m
 ### `GET /api/v1/server-config/access-policy`
 - **Auth**: none — the login and signup pages must render the right front door before anyone has a token
 - **Response**: `AccessPolicyPublic`
-- **Rate limit**: per-IP via `_access_policy_rate_limit`, a `Depends` declared **before** `SessionDep` resolves so a throttled request costs no pool connection and no query. Budget: `settings.ACCESS_POLICY_RATE_LIMIT_PER_MIN` (default 120/min). Over budget → 429 with a `Retry-After` header
+- **Rate limit**: per-IP via `_access_policy_rate_limit`, a `Depends` declared **before** `SessionDep` resolves so a throttled request costs no pool connection and no query. Budget: `settings.ACCESS_POLICY_RATE_LIMIT_PER_MIN` (default **240**/min since phase 4). Over budget → 429 with a `Retry-After` header. **One `RateLimiter` object serves every anonymous endpoint in the module** — today this route and `GET /server-config/landing` — so the budget is spent in requests, not page views: a `/login` view costs one, a `/start` view two. A per-route limiter would hand one caller a fresh budget for each new public read added there
 - **Caller key**: `anonymous_caller_key(request)` from `backend/app/services/common/rate_limiter.py` — the socket peer, or the **last** `X-Forwarded-For` hop when the peer is private/loopback (see [Local Agent Kit — tech](../local_agent_kit/local_agent_kit_tech.md#rate-limiting-anonymous_caller_key))
 - **Query key (frontend)**: `["accessPolicy"]`
 
@@ -276,7 +280,9 @@ useQuery<AccessPolicyPublic>({
 })
 ```
 
-`retry: false` because the endpoint is IP rate-limited. One shared key means login, signup and the admin card cost one request per minute between them. **Every caller must degrade gracefully when `data` is `undefined`.**
+`retry: false` because the endpoint is IP rate-limited. One shared key means login, signup and the admin card cost one request per minute between them. **Every caller must degrade gracefully when `data` is `undefined`.** `/start` reads the same key, and additionally reads `["landingPage"]` — two requests from one shared anonymous bucket.
+
+The module also exports **`googleSignInAvailable(source)`**, the one place the two independently configured Google facts are combined (the backend's client id/secret, reported by a projection, and this build's `VITE_GOOGLE_CLIENT_ID`, without which `GoogleLoginButton` renders nothing). It is structurally typed — `{ google_auth_enabled?: boolean | null }` — because the same fact reaches `/accept-invite` on `InvitationLookupPublic` rather than on `AccessPolicyPublic`; narrowing it to one response model is what left that page with a fourth hand-rolled copy. It returns `undefined` when the source has not answered, deliberately, because the callers do not share a degradation: `/login` and `/signup` apply `?? true`, `/start` and `/accept-invite` require `=== true`.
 
 ### `AccessPolicyCard` (`frontend/src/components/Admin/AccessPolicyCard.tsx`)
 
@@ -292,7 +298,7 @@ Three sections separated by `<Separator />`:
 | How they sign in | Switch "Create accounts on Google sign-in" | `google_auto_register` |
 | New users | Select "Default role" — Agent User / Agent Developer | `default_user_role` |
 | New users | Switch "Offer Cinna Desktop in invitations" | `invite_include_desktop_default` |
-| New users | `AutoProvisionedCredentialsMatrix` — credentials × roles checkboxes | **Not a `ServerConfig` column.** Each toggle is a `PATCH /admin/llm-providers/{id}` carrying only `auto_provision_roles`; the matrix shares the LLM Providers page's query key and renders the `409 auto_provision_conflict` inline |
+| New users | `AutoProvisionedCredentialsMatrix` — credentials × roles checkboxes | **Not a `ServerConfig` column.** Each toggle is a `PATCH /admin/llm-providers/{id}` carrying only `auto_provision_roles`; the matrix shares the AI Credentials page's query key (`MANAGED_CREDENTIALS_QUERY_PREFIX`, which is **not** renamed — a cache key is not a route path) and renders the `409 auto_provision_conflict` inline |
 
 **Saving.** Every control except the textarea mutates immediately on change. The patterns textarea is the one explicit-save control: a **Save patterns** / **Cancel** pair appears while the draft is dirty, and sends `{ allowed_email_patterns: patternsValue.trim() }` — never `null`, since the backend reads a null field as "not being changed", so clearing the list has to travel as an empty string.
 
@@ -319,39 +325,46 @@ Fallbacks when the config row has not loaded: `open`, `true`, `true`, `agent-use
 
 ### Admin route (`frontend/src/routes/_layout/admin/server-configuration.tsx`)
 
-`HashTabs` order: `interface` ("Interface"), **`access` ("Access")**, `channels` ("Channels"), `mail-servers` ("Mail Servers"). `access` is deliberately second — `HashTabs` lands on `tabs[0]` when there is no hash, and Interface has been that landing tab; the card is addressed directly as `/admin/server-configuration#access` from the startup warning. Card wrapped in `max-w-3xl`.
+`HashTabs` order: `interface` ("Interface"), **`access` ("Access")**, `channels` ("Channels"), `mail-servers` ("Mail Servers"). `access` is deliberately second — `HashTabs` lands on `tabs[0]` when there is no hash, and Interface has been that landing tab; the card is addressed directly as `/admin/server-configuration#access` from the startup warning.
+
+The Access tab holds **two** cards since phase 4: `<AccessPolicyCard />` then `<LandingPageCard />`, stacked in a `max-w-3xl space-y-6` column rather than switched to the two-column grid the other tabs use — `AccessPolicyCard` is written for a wide single column and reads badly at half width. See [Public Landing Page — tech](landing_page_tech.md).
 
 ### Login page (`frontend/src/routes/login/index.tsx`)
 
 ```ts
-const googleAvailable =
-  Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID) &&
-  (policy?.google_auth_enabled ?? true)
+const passwordSignupAvailable = policy?.password_signup_available ?? true
+const googleAvailable = googleSignInAvailable(policy) ?? true
 
 const showPasswordForm =
   passwordAuthEnabled || passwordFormRevealed || !googleAvailable
 ```
 
-**Two independently configured facts.** Google sign-in needs the *backend*'s client id and secret (reported as `google_auth_enabled`) **and** the *frontend build*'s `VITE_GOOGLE_CLIENT_ID` — `GoogleLoginButton` returns `null` without it. Reading only one of them is how this page ends up hiding the password form in favour of a button that was never rendered.
+**Two independently configured facts.** Google sign-in needs the *backend*'s client id and secret (reported as `google_auth_enabled`) **and** the *frontend build*'s `VITE_GOOGLE_CLIENT_ID` — `GoogleLoginButton` returns `null` without it. Reading only one of them is how this page ends up hiding the password form in favour of a button that was never rendered. Both are resolved by the shared `googleSignInAvailable` helper.
+
+**The sign-up link reads the projection's answer, not this page's recombination.** It used to check `registration_open` alone and offer a Sign up link that `/signup` — which required both facts — then refused to render a form for.
 
 `!googleAvailable` is the **floor**: a policy that turns off password sign-in on a build that cannot show Google would otherwise leave the page with no way in. The backend's lockout rule only sees its own settings, so it cannot catch that combination — the UI has to.
 
-- Failed/absent policy read degrades permissively: `password_auth_enabled ?? true`, `registration_open ?? true`
+- Failed/absent policy read degrades permissively: `password_auth_enabled ?? true`, `password_signup_available ?? true`
 - While the query is pending the credential block renders two `<Skeleton className="h-10 w-full" />` rather than the form, so a Google-only instance never flashes a password form. The Google button is not gated on pending
 - Break-glass disclosure when the form is hidden: a centered `<button type="button" aria-expanded={passwordFormRevealed}>` labelled **"Sign in with password (administrators)"**. Revealing it unmounts the focused button, so a `useEffect` calls `form.setFocus("username")`
 - The "Forgot your password?" link lives inside the password form, so it is hidden with it
 - The "Or continue with email" divider renders only when `googleAvailable && showPasswordForm`
-- The sign-up link block renders only when `!policyPending && registrationOpen`, preserving the `redirect` search param
+- The sign-up link block renders only when `!policyPending && passwordSignupAvailable`, preserving the `redirect` search param
 
 ### Signup page (`frontend/src/routes/signup.tsx`)
 
 ```ts
-const selfServeSignupAllowed = registrationOpen && passwordAuthEnabled
+const selfServeSignupAllowed = policy?.password_signup_available ?? true
+// `registration_open` is still read, but for the *copy* only
+const registrationOpen = policy?.registration_open ?? true
 ```
 
-Same permissive fallbacks and the same `googleAvailable` expression. While pending, three skeletons. When not allowed, the form is replaced by an `<Alert>`:
+Same permissive fallbacks and the same shared `googleSignInAvailable` helper. `registration_open` survives on this page **only to pick one of four explanatory sentences** — that is presentation. The decision itself is the projection's.
 
-- Title: `registrationOpen ? "Accounts are created with Google here" : "This server is invite-only"`
+While pending, three skeletons. When not allowed, the form is replaced by an `<Alert>`:
+
+- Title: `registrationOpen ? (googleAvailable ? "Accounts are created with Google here" : "Ask your administrator for an account") : "This server is invite-only"`. The title has to consult `googleAvailable` for the same reason the description does: reaching this branch only pins `password_signup_available === false`, and with registration open that pins password auth off but says nothing about Google — open + no password + no Google is a legal state, since the lockout rule only protects the superuser break-glass path. The old wording asserted a button that may not be rendered below
 - Description, four variants: open+google → "Password sign-up is turned off on this server. Continue with Google below, or ask your administrator for access."; open+no-google → same without the Google clause; invite-only+google → "Ask your administrator for an invitation. If you already have an account, sign in with Google below."; invite-only+no-google → "…sign in from the login page."
 
 The Google button is **kept** in the closed branch whenever Google is configured — in invite-only mode it is how an invited, pre-created account gets in. The "Already have an account? Log in" link renders in both branches.
@@ -362,23 +375,23 @@ The Google button is **kept** in the closed branch whenever Google is configured
 
 ### Generated client
 
-- `ServerConfigService.getAccessPolicy()` — `GET /api/v1/server-config/access-policy`, no arguments
-- Type `AccessPolicyPublic`; `ServerConfigUpdate` carries the six new optional fields; `UserPublic.can_change_email` is required
+- `ServerConfigService.getAccessPolicy()` — `GET /api/v1/server-config/access-policy`, no arguments; `ServerConfigService.getLandingPage()` — `GET /api/v1/server-config/landing`
+- Types `AccessPolicyPublic` (now with `password_signup_available`) and `LandingPagePublic`; `ServerConfigUpdate` carries the six access-policy fields plus `landing_markdown`; `UserPublic.can_change_email` is required
 
 ## Configuration
 
 | Setting | Location | Purpose |
 |---------|----------|---------|
-| `ACCESS_POLICY_RATE_LIMIT_PER_MIN` | `config.py` (default `120`) | Per-IP budget for the public projection |
+| `ACCESS_POLICY_RATE_LIMIT_PER_MIN` | `config.py` (default **`240`**) | Per-IP budget shared by **every** anonymous endpoint in `api/routes/server_config.py` — this projection and the landing read. Raised from 120 when the landing read joined the same limiter, to keep the effective visitor capacity |
 | `AUTH_WHITELIST_USER_DOMAINS` | `.env` / `config.py` | **Seed only.** Comma-separated domains, converted to `*@domain` globs on first boot and by the migration. No live decision reads it |
 | `DEFAULT_USER_ROLE` | `.env` / `config.py` | **Seed only.** `Literal["agent-user", "agent-developer"]`; a present-but-invalid value still fails loudly at startup |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | `.env` / `config.py` | Both required for `google_oauth_enabled` → `AccessPolicyPublic.google_auth_enabled` |
 | `VITE_GOOGLE_CLIENT_ID` | `frontend/.env` (build time) | Required for the Google button to render at all; independent of the backend setting |
-| `DESKTOP_AUTH_ENABLED` | `config.py` | Surfaced as `AccessPolicyPublic.desktop_enabled` |
+| `DESKTOP_AUTH_ENABLED` | `config.py` | Surfaced as `AccessPolicyPublic.desktop_enabled`. Gates the **advertisement** of the desktop client only: `/start` hides its download card, while `/desktop` renders unconditionally and `GET /desktop/download` stays ungated, so links in already-sent new-account emails keep working |
 | `PROJECT_NAME` | `config.py` | Surfaced as `AccessPolicyPublic.project_name` |
 
 Removed by this change: `settings.auth_whitelist_domains` and `settings.allow_user_email_change` (the computed properties), `AuthService.is_email_domain_allowed`, and `OAuthConfig.allow_email_change`.
 
 ---
 
-*Last updated: 2026-09-05*
+*Last updated: 2026-09-06*

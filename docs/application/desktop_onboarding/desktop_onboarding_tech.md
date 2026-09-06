@@ -14,7 +14,7 @@
 
 ### Backend — Email
 
-- `backend/app/utils.py` — `generate_new_account_email()` builds `link = f"{settings.FRONTEND_HOST}/desktop"` and `web_link = settings.FRONTEND_HOST`
+- `backend/app/utils.py` — `generate_new_account_email()` builds `link = f"{settings.FRONTEND_HOST}/desktop"` and `web_link = f"{settings.FRONTEND_HOST}/start"` (the bare host until zero-touch-onboarding phase 4). The **invitation** mail's `web_link`, built in `invitation_service.py`, deliberately stays the bare host
 - `backend/app/email-templates/src/new_account.mjml` — MJML source; button label is "Get Cinna Desktop", followed by a "Prefer the browser? Log in on the web" text row bound to `{{ web_link }}`
 - `backend/app/email-templates/build/new_account.html` — the compiled template actually read at runtime
 
@@ -26,12 +26,14 @@
 
 - `backend/tests/api/desktop_auth/test_desktop_discovery_local_dev.py` — 4 tests: block present when both gates are on, omitted when `DESKTOP_LOCAL_DEV_ENABLED` is off, omitted when `DESKTOP_AUTH_ENABLED` is off, and `local_dev.cinna_cli_version` matches what `/sync-runtime` reports
 - `backend/tests/api/desktop_auth/test_desktop_download.py` — 10 tests: per-platform asset selection, cache isolation, alternate Linux spellings, resolution-failure fallback, draft/pre-release and bad-upstream refusal, out-of-prefix asset refusal, unsupported combinations without calling GitHub, enum rejection (422), public/no-auth, mirror mode by shape
-- `backend/tests/api/auth/test_new_account_email.py` — 3 tests: the mail leads with the desktop landing page, both URLs track `FRONTEND_HOST`, and the rendered HTML has no unrendered placeholders
+- `backend/tests/api/auth/test_new_account_email.py` — 3 tests: the mail leads with the desktop landing page, both URLs track `FRONTEND_HOST`, and the rendered HTML has no unrendered placeholders. The distinctness assertion is now "two different paths under the same origin", not "one prefixes the other" — the prefix form only held while `web_link` was the bare host, and would have stopped testing anything the moment it grew a path
+- `backend/tests/api/auth/invitation_email_web_link_test.py` — 1 test: the invitation mail's `web_link` stays the bare host and `/start` appears nowhere in the rendered mail
 
 ### Frontend
 
 - `frontend/src/routes/desktop.tsx` — public route; deliberately no `beforeLoad` guard (contrast the sibling `desktop-auth/consent` route)
-- `frontend/src/components/Desktop/DesktopLandingPage.tsx` — the page itself
+- `frontend/src/components/Desktop/DesktopLandingPage.tsx` — the `/desktop` page **shell** only: full-viewport centring, the `Monitor` header card, and `<DesktopDownloadSection />` inside it
+- `frontend/src/components/Desktop/DesktopDownloadSection.tsx` — the download offer itself, extracted so `/start` can embed it without inheriting the page shell. Also rendered by `frontend/src/routes/start.tsx` (see [Public Landing Page — tech](../server_configuration/landing_page_tech.md))
 - `frontend/src/utils.ts` — `resolveApiBase()`, `resolveServerOrigin()`, `cinnaConnectDeepLink()`
 - `frontend/src/components/Auth/NativeAuthConsentPage.tsx` — success state gained a "Return to {appLabel}" button, rendered only when `!isMobile`
 - `frontend/src/routeTree.gen.ts` — regenerated for the new route
@@ -97,7 +99,7 @@ Constants worth knowing:
 | linux | x64 | appimage | `-x86_64.AppImage` | `x86_64`, `x64`, `amd64` |
 | linux | x64 | deb | `-amd64.deb` | `amd64`, `x64`, `x86_64` |
 
-**The plan was wrong here.** `docs/plans/desktop_one_click_onboarding_plan.md` predicted `-x64.AppImage` and `-x64.deb`. electron-builder spells Linux architectures the way each packaging world does, not the way Node does. The shipped code accepts all three spellings per Linux kind so a rename in the desktop's build config cannot silently break the download button; patterns are tried outer-loop so a release carrying two accepted spellings resolves to the preferred one rather than to whichever GitHub listed first.
+**The plan was wrong here.** The implementation plan predicted `-x64.AppImage` and `-x64.deb`. electron-builder spells Linux architectures the way each packaging world does, not the way Node does. The shipped code accepts all three spellings per Linux kind so a rename in the desktop's build config cannot silently break the download button; patterns are tried outer-loop so a release carrying two accepted spellings resolves to the preferred one rather than to whichever GitHub listed first.
 
 `linux/arm64` is **absent from the map on purpose** — there is no published asset, and serving an x64 binary instead would be worse than the releases-page fallback. Same for `darwin/*/deb`, `darwin/*/appimage`, `linux/*/dmg`.
 
@@ -115,12 +117,16 @@ Three helpers, and the distinction between the first two is the whole point:
 - `resolveServerOrigin()` — a true origin, `scheme://host[:port]`, no path. This is what a native client gets. `/.well-known/cinna-desktop` is mounted at the **app root**, so handing over the API base with `VITE_API_URL=/api` would make the desktop discover against `…/api/.well-known/cinna-desktop` and 404 while downloads on the same page kept working — nothing would look wrong. Deliberately not `window.location.origin` either: on a split-host deployment the SPA origin has no backend at all.
 - `cinnaConnectDeepLink()` — `cinna://connect?${new URLSearchParams({ server: resolveServerOrigin() })}`. `URLSearchParams` **percent-encodes** the `:` and `//`, so the desktop's custom-scheme handler must percent-decode the `server` value. Cross-repo contract with cinna-desktop; change it in both repos together.
 
-### `frontend/src/components/Desktop/DesktopLandingPage.tsx`
+### `frontend/src/components/Desktop/DesktopDownloadSection.tsx`
+
+The extracted `CardContent` body. `DesktopLandingPage` is now a ~35-line shell around it, and `/desktop`'s rendered output is unchanged. Everything below describes this component — it lived in `DesktopLandingPage.tsx` before zero-touch-onboarding phase 4, and older notes may still name that file.
+
+It keeps its **own** inline copy-to-clipboard control rather than using the shared `Common/CopyableValue`: a different affordance (full-width bordered address block, ghost icon button, success toast) on a page an anonymous visitor reads. Any *new* label-plus-value control should use the shared one.
 
 - `detectPlatform()` — returns `"darwin" | "linux" | null`. Rules out Android (its UA contains "Linux"), iPhone/iPod, iPadOS 13+ (identifies as "Macintosh"; disambiguated by `navigator.maxTouchPoints > 1`), and ChromeOS (matches "X11 Linux", no build) **before** the positive matches. `null` is a real answer — the page then offers both platforms rather than rendering a button that installs the wrong thing.
 - Architecture detection uses `navigator.userAgentData.getHighEntropyValues(["architecture"])` (Chromium-only, async, and rejectable by Permissions-Policy). The page renders the arm64 default first and corrects itself if an answer arrives; `chosenMacArch ?? detectedArch ?? "arm64"` means an explicit click always wins over a late result. The effect is cancellation-guarded.
 - `apiBase`, `serverOrigin`, and `deepLink` are each `useMemo`'d once — all three derive from build-time config and the page URL, neither of which changes while the page is open.
-- `downloadUrl()` takes the **API base**, not the origin, because it builds a backend route.
+- `downloadUrl()` takes the **API base**, not the origin, because it builds a backend route. It is `resolveApiBase()`'s only consumer.
 - The copy-to-clipboard tick reverts on a timer cleared on unmount.
 - Both toggling labels sit in an `aria-live="polite"` span, since the toggle rewrites the button text in place.
 
