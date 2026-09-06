@@ -121,10 +121,17 @@ _LABEL_INVITE = "Invitation provisioning"
 
 @dataclass(frozen=True)
 class ProvisionedCredential:
-    """One managed credential successfully granted to the new account."""
+    """One managed credential successfully granted to the new account.
+
+    ``child_credential_id`` is ``None`` when the grant is a **membership of a
+    minted record**: the person is a member from this moment, and their key is
+    created out of band a little later. "Granted" and "holds a key" used to be the
+    same fact and are not any more, so a reader of this value must not assume the
+    id is there.
+    """
 
     managed_credential_id: uuid.UUID
-    child_credential_id: uuid.UUID
+    child_credential_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -529,20 +536,29 @@ class AccountProvisioningService:
                         child_credential_id=member.child_credential_id,
                     )
                 )
+                # A minted record grants membership now and a key later, so a
+                # new member may legitimately have no credential yet. The event
+                # says which happened rather than stringifying a ``None`` into a
+                # field that every other row of the feed reads as an id.
+                details = {
+                    "managed_credential_id": str(parent_id),
+                    "target_user_id": str(user_id),
+                    "origin": origin_value,
+                    "role": user_role,
+                    "managed_by_id": managed_by_id,
+                    "actor": actor_detail,
+                    "provisioning_status": member.provisioning_status.value,
+                }
+                if member.child_credential_id is not None:
+                    details["child_credential_id"] = str(
+                        member.child_credential_id
+                    )
                 AccountProvisioningService._emit(
                     session,
                     user_id=user_id,
                     event_type=EVENT_AUTO_PROVISION,
                     severity="low",
-                    details={
-                        "managed_credential_id": str(parent_id),
-                        "child_credential_id": str(member.child_credential_id),
-                        "target_user_id": str(user_id),
-                        "origin": origin_value,
-                        "role": user_role,
-                        "managed_by_id": managed_by_id,
-                        "actor": actor_detail,
-                    },
+                    details=details,
                 )
 
             for skip in addition.skipped:
@@ -578,20 +594,147 @@ class AccountProvisioningService:
 
     @staticmethod
     def on_account_deactivated(session: Session, user: User) -> None:
-        """Placeholder for the deactivation side of provisioning.
+        """Take back what deactivation should take back. Wired at two sites.
 
-        Intentionally a no-op in phase 2. Shared managed credentials are one
-        key held by many people, so deactivating one holder must NOT revoke it
-        — their child row simply stops being reachable with the account. There
-        is nothing to undo.
+        Callers, both of them, and the list is worth keeping accurate because the
+        last audit of it found one missing:
 
-        Phase 5 changes that: once a key can be *minted per user*, that user's
-        key has no other holder and deactivation should revoke it at the
-        provider. This function is the declared place for that, named and
-        wired now so the phase-5 change is a body and not a hunt for every
-        caller that deactivates an account.
+        * ``api/routes/users.py::update_user`` — when ``is_active`` transitions;
+        * ``InvitationService._apply_reinvite_updates`` — the re-invite path,
+          which flips ``is_active`` on an *existing* account and is the caller a
+          reader would not think to look for.
+
+        Deletion is **not** a third site: ``delete_user`` and ``delete_user_me``
+        call :meth:`on_account_deleted` instead, because a deleted account's rows
+        are gone by the time anything could read them.
+
+        **Shared credentials are untouched, and that is not an oversight.** One
+        key held by many people must not be destroyed because one holder left;
+        their child row simply stops being reachable with the account. Only
+        *minted* keys are revoked, because a minted key has exactly one holder.
+
+        Synchronous, like every one of its callers. The database work happens
+        inline — the child credential is deleted and the membership row moves to
+        ``suspended`` — and only the provider call is handed to the background
+        loop. That ordering is the point: the row state is committed by the time
+        this returns, so nothing downstream can observe an account that is
+        deactivated but still holds a live key row.
         """
-        return None
+        from app.services.credentials.key_provisioning_service import (
+            key_provisioning_service,
+        )
+
+        user_id = user.id
+        # The sink is ours, and the ``finally`` is the point of it. Suspension
+        # commits per member and erases the provider handles as it goes, so a
+        # failure part-way through leaves earlier members with their refs gone
+        # and their keys live. This net must not be what discards them: whatever
+        # was collected before the failure is scheduled anyway.
+        revocations: list = []
+        try:
+            key_provisioning_service.suspend_user_memberships(
+                session, user_id, revocations
+            )
+        except Exception:
+            # Invariant 1's sibling: deactivating an account must not fail
+            # because a provider record could not be tidied. Repair first, log
+            # second — the caller commits again after this returns.
+            AccountProvisioningService._restore_session(session)
+            logger.warning(
+                "Suspending minted credentials for user %s failed part-way; the "
+                "account was still deactivated and the %d key(s) already taken "
+                "off their rows are still being revoked.",
+                user_id, len(revocations), exc_info=True,
+            )
+        finally:
+            # Inside its own net, like everything else in this method. The
+            # scheduler swallows broadly so a raise here is unlikely, but this
+            # is the only statement in a method whose whole premise is that
+            # deactivating an account cannot fail because a provider record
+            # could not be tidied — and "unlikely" is not the standard the rest
+            # of the method is held to.
+            try:
+                key_provisioning_service.schedule_revocations(revocations)
+            except Exception:  # pragma: no cover - defensive
+                AccountProvisioningService._restore_session(session)
+                logger.warning(
+                    "Could not schedule the revocation of %d minted key(s) for "
+                    "user %s; they may still be live at the provider.",
+                    len(revocations), user_id, exc_info=True,
+                )
+
+    @staticmethod
+    def on_account_reactivated(session: Session, user: User) -> None:
+        """Put a reactivated account's suspended memberships back in the queue.
+
+        The mirror of :meth:`on_account_deactivated`, and it exists because the
+        membership survived the deactivation. Without it a reactivated employee
+        would be a member of a minted credential with a ``suspended`` row that
+        nothing ever picks up — a member with no key and no path to one.
+        """
+        from app.services.credentials.key_provisioning_service import (
+            key_provisioning_service,
+        )
+
+        user_id = user.id
+        try:
+            key_provisioning_service.resume_user_memberships(session, user_id)
+        except Exception:
+            AccountProvisioningService._restore_session(session)
+            logger.warning(
+                "Resuming minted credentials for user %s failed; the account "
+                "was still reactivated.", user_id, exc_info=True,
+            )
+
+    @staticmethod
+    def on_account_deleted(session: Session, user: User, *, actor_id) -> list:
+        """Snapshot the provider keys a to-be-deleted account holds.
+
+        **Call before the delete, schedule after it.** Both deletion routes are a
+        bare ``session.delete(user)`` and rely on database-level ``ON DELETE``, so
+        the membership rows — and with them the provider handles — are gone the
+        moment the delete commits. Reading them afterwards is not possible, and a
+        key nobody can name is a key nobody can destroy.
+
+        **Returns them, where the deactivation path takes a caller-owned sink.**
+        The asymmetry is deliberate, not drift. ``suspend_user_memberships``
+        commits per member and erases each row's handles as it goes, so a
+        failure part-way leaves committed rows whose only record is in a local
+        list — hence the sink. This is a single read that commits nothing and
+        erases nothing, so a raise leaves every handle exactly where it was and
+        there is no partial result to salvage.
+
+        Returns the revocation requests rather than scheduling them, so the
+        provider is only contacted if the deletion actually commits. The caller
+        passes them to ``key_provisioning_service.schedule_revocations`` after its
+        commit; a deletion that fails therefore leaves the keys alone.
+
+        ``actor_id`` is whose security feed the revoke is recorded in, and it is
+        deliberately not the key holder: their ``user`` row is about to be gone,
+        and ``security_event.user_id`` is NOT NULL with a foreign key to it. An
+        administrator deleting somebody else's account gets the record. A person
+        deleting their own account leaves ``None`` — subject and actor are the
+        same and both are being removed, so there is genuinely no feed, and the
+        revoke is logged instead of audited. Inventing an owner for it would be
+        worse than saying so.
+        """
+        from app.services.credentials.key_provisioning_service import (
+            key_provisioning_service,
+        )
+
+        user_id = user.id
+        try:
+            return key_provisioning_service.collect_user_revocations(
+                session, user_id, audit_user_id=actor_id
+            )
+        except Exception:
+            AccountProvisioningService._restore_session(session)
+            logger.warning(
+                "Could not read minted credentials for user %s before deletion; "
+                "their provider keys may need revoking by hand.",
+                user_id, exc_info=True,
+            )
+            return []
 
     # ── Internals ──────────────────────────────────────────────────────
 

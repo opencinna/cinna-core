@@ -67,6 +67,12 @@ from app.services.environments.sdk_constants import is_valid_sdk
 from app.services.users.mfa_service import MfaService
 from app.models.credentials.ai_credential import AICredentialType
 from app.services.credentials.ai_credentials_service import ai_credentials_service
+from app.services.credentials.key_provisioning_service import (
+    key_provisioning_service,
+)
+from app.services.users.account_provisioning_service import (
+    AccountProvisioningService,
+)
 from app.utils import generate_new_account_email, send_email
 
 logger = logging.getLogger(__name__)
@@ -515,11 +521,17 @@ async def update_user_me(
                 status_code=400,
                 detail=f"Only {expected_type.value} credentials can be used for AI functions when using {sdk}",
             )
-        # OAuth token check — only applicable for Anthropic credentials
-        if expected_type == AICredentialType.ANTHROPIC:
-            from app.services.credentials.ai_credentials_service import ai_credentials_service
+        # OAuth tokens cannot drive the AI-functions path. Which providers can
+        # even hold one is the adapter's answer, not a hardcoded type check here
+        # — and it is consulted BEFORE the decrypt, so a provider that issues
+        # only API keys is not decrypted just to be told so.
+        from app.services.ai_providers import registry
+        from app.services.credentials.ai_credentials_service import ai_credentials_service
+
+        adapter = registry.find_adapter(expected_type)
+        if adapter is not None and adapter.issues_oauth_tokens:
             data = ai_credentials_service.decrypt_credential(cred)
-            if data.api_key and data.api_key.startswith("sk-ant-oat"):
+            if data.api_key and adapter.classify_key(data.api_key).is_oauth_token:
                 raise HTTPException(
                     status_code=400,
                     detail="OAuth tokens cannot be used with the Anthropic API for AI functions. "
@@ -796,8 +808,19 @@ def delete_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
         raise HTTPException(
             status_code=403, detail="Super users are not allowed to delete themselves"
         )
+    # Read the provider handles while the rows still exist: the delete below is a
+    # bare cascade and takes the membership rows with it.
+    # ``actor_id=None``: the person deleting the account is the account. There
+    # is no feed left to record the revoke in, so it is logged instead.
+    revocations = AccountProvisioningService.on_account_deleted(
+        session, current_user, actor_id=None
+    )
     session.delete(current_user)
     session.commit()
+    # Only after the delete commits. A synchronous handler cannot await a
+    # provider call, and must not destroy a key for a deletion that did not
+    # happen.
+    key_provisioning_service.schedule_revocations(revocations)
     return Message(message="User deleted successfully")
 
 
@@ -872,15 +895,33 @@ async def update_user(
                 status_code=409, detail="User with this email already exists"
             )
 
-    role_provided = "role" in user_in.model_dump(exclude_unset=True)
+    provided = user_in.model_dump(exclude_unset=True)
+    role_provided = "role" in provided
     if role_provided and user_in.role not in VALID_USER_ROLES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid role. Must be one of: {VALID_USER_ROLES}",
         )
 
+    # ``is_active`` is a plain ``bool`` with a default of True, so a truthiness
+    # check would read every PATCH that says nothing about it as "activate".
+    # ``exclude_unset`` plus a before-snapshot is the same shape the role
+    # transition eleven lines up uses, and for the same reason: what matters is
+    # the transition, not the value.
+    is_active_provided = "is_active" in provided
+    previous_is_active = db_user.is_active
+
     previous_role = db_user.role
     db_user = UserService.update_user(session=session, db_user=db_user, user_in=user_in)
+
+    if is_active_provided and db_user.is_active != previous_is_active:
+        # Minted per-user keys are the user's alone, so deactivation revokes
+        # them and reactivation mints fresh ones. Shared credentials are
+        # untouched either way — see ``on_account_deactivated``.
+        if db_user.is_active:
+            AccountProvisioningService.on_account_reactivated(session, db_user)
+        else:
+            AccountProvisioningService.on_account_deactivated(session, db_user)
 
     if role_provided and db_user.role != previous_role:
         await RoleService._emit_role_changed(
@@ -907,8 +948,15 @@ def delete_user(
         raise HTTPException(
             status_code=403, detail="Super users are not allowed to delete themselves"
         )
+    # Same two-step as ``delete_user_me``: snapshot the handles before the
+    # cascade removes them, schedule the provider calls only once the deletion
+    # has actually committed.
+    revocations = AccountProvisioningService.on_account_deleted(
+        session, user, actor_id=current_user.id
+    )
     session.delete(user)
     session.commit()
+    key_provisioning_service.schedule_revocations(revocations)
     return Message(message="User deleted successfully")
 
 
@@ -951,6 +999,15 @@ def get_ai_credentials_status(
         has_google_ai_api_key=google_default is not None,
         has_minimax_api_key=minimax_default is not None,
         has_openai_compatible_api_key=openai_compat_default is not None,
+        # The onboarding decision, not its ingredients. The dashboard used to
+        # take it from ``has_anthropic_api_key`` alone, which cannot express
+        # "a key is being minted for this person right now" and so put the
+        # paste-a-key wall in front of someone about to be handed one. The
+        # repair is a third state stated once, here — never a client that
+        # fetches the memberships and folds them into the boolean itself.
+        api_key_onboarding_state=key_provisioning_service.api_key_onboarding_state(
+            session, current_user.id
+        ),
     )
 
 

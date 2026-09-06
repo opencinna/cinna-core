@@ -20,11 +20,17 @@ from app.models.credentials.ai_credential import (
     AICredentialTestResult,
     AffectedEnvironmentsPublic,
 )
+from app.models.credentials.managed_ai_credential_membership import (
+    UserKeyProvisioningPublic,
+)
 from app.services.credentials.ai_credentials_service import (
     ai_credentials_service,
     AICredentialInUseError,
 )
 from app.services.credentials import model_discovery_service
+from app.services.credentials.key_provisioning_service import (
+    key_provisioning_service,
+)
 
 router = APIRouter(prefix="/ai-credentials", tags=["ai-credentials"])
 
@@ -38,6 +44,25 @@ def list_ai_credentials(
     """
     credentials = ai_credentials_service.list_credentials(session, current_user.id)
     return AICredentialsPublic(data=credentials, count=len(credentials))
+
+
+@router.get("/provisioning", response_model=list[UserKeyProvisioningPublic])
+def list_my_key_provisionings(
+    session: SessionDep, current_user: CurrentUser
+) -> Any:
+    """Keys an administrator is having created for this user, and the failures.
+
+    Deliberately a **separate** list from ``GET /ai-credentials/``: that one is
+    credentials, and every credential in it is usable. A member of a minted
+    record holds no credential until the mint lands, so their state has nowhere
+    to live there and lives here instead.
+
+    Placed above ``/{credential_id}`` so the literal path is matched before the
+    UUID route claims it.
+    """
+    return key_provisioning_service.list_user_provisionings(
+        session, current_user.id
+    )
 
 
 @router.get("/resolve-default/{sdk_engine}", response_model=AICredentialPublic | None)

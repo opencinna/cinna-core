@@ -40,6 +40,9 @@ from app.models.credentials.managed_ai_credential import (
 )
 from app.models.events.security_event import SecurityEventCreate
 from app.services.credentials import model_discovery_service
+from app.services.credentials.key_provisioning_service import (
+    key_provisioning_service,
+)
 from app.services.credentials.managed_ai_credentials_service import (
     ManagedCredentialConflictError,
     managed_ai_credentials_service,
@@ -65,18 +68,31 @@ async def _emit_reconcile_events(
     record = result.record
 
     for member in result.added:
+        # ``provision`` when the member holds a key, ``mint_requested`` when they
+        # are a member of a minted record and the key is still to come. Two event
+        # types rather than one with a null id: a feed entry that says a
+        # credential was provisioned, naming no credential, is worse than one
+        # that says a mint was asked for.
+        minted_pending = member.child_credential_id is None
+        details: dict[str, Any] = {
+            "managed_credential_id": str(record.id),
+            "target_user_id": str(member.user_id),
+            "managed_by_id": str(admin.id),
+            "provisioning_status": member.provisioning_status.value,
+        }
+        if not minted_pending:
+            details["child_credential_id"] = str(member.child_credential_id)
         await SecurityEventService.create_event(
             session=session,
             user_id=member.user_id,
             data=SecurityEventCreate(
-                event_type="admin.ai_credential.provision",
+                event_type=(
+                    "admin.ai_credential.mint_requested"
+                    if minted_pending
+                    else "admin.ai_credential.provision"
+                ),
                 severity="medium",
-                details={
-                    "managed_credential_id": str(record.id),
-                    "child_credential_id": str(member.child_credential_id),
-                    "target_user_id": str(member.user_id),
-                    "managed_by_id": str(admin.id),
-                },
+                details=details,
             ),
         )
 
@@ -97,7 +113,9 @@ async def _emit_reconcile_events(
 
     for member in result.updated:
         # Only members whose child row was actually mutated this reconcile —
-        # a no-op PATCH emits zero update events.
+        # a no-op PATCH emits zero update events. A member with no child row is
+        # never in this list: there is nothing to write the parent's fields
+        # through to.
         await SecurityEventService.create_event(
             session=session,
             user_id=member.user_id,
@@ -259,12 +277,19 @@ async def delete_managed_ai_credential(
     )
 
     if result.blocked and not force:
+        # The message is assembled from the blocks' own ``message`` fields, not
+        # substituted here. This handler used to state "in use by a published
+        # bundle" for all three reasons, which told an administrator blocked by
+        # an in-flight mint that they had a bundle conflict — whose obvious
+        # remedy is ``force=true``, the one action that must not be taken while
+        # a key is being minted. The server states the reason once
+        # (``MANAGED_RECONCILE_BLOCK_MESSAGES``); this renders it.
+        distinct = list(dict.fromkeys(b.message for b in result.blocked))
         raise HTTPException(
             status_code=409,
             detail={
-                "message": (
-                    "One or more members could not be removed because their "
-                    "credential is in use by a published bundle."
+                "message": " ".join(
+                    ["One or more members could not be removed."] + distinct
                 ),
                 "blocked": [b.model_dump(mode="json") for b in result.blocked],
             },
@@ -329,6 +354,10 @@ async def set_managed_ai_credential_default(
     )
 
     for member in record.members:
+        # Members with no key yet have nothing to make default; the parent flag
+        # is set and applies when their key arrives.
+        if member.child_credential_id is None:
+            continue
         await SecurityEventService.create_event(
             session=session,
             user_id=member.user_id,
@@ -345,6 +374,49 @@ async def set_managed_ai_credential_default(
         )
 
     return record
+
+
+@router.post(
+    "/{managed_credential_id}/members/{user_id}/retry",
+    response_model=ManagedAICredentialPublic,
+)
+async def retry_member_key_provisioning(
+    session: SessionDep,
+    current_user: SuperUser,
+    managed_credential_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Any:
+    """Put a member whose key provisioning failed back in the mint queue.
+
+    ``failed`` is terminal on purpose — bounded retries that converge are what
+    makes the status mean "somebody has to look at this" — but terminal must not
+    mean unreachable. This is the "look at it, fix the configuration, try again"
+    action, and it is deliberately explicit: re-adding the member instead would
+    make every unrelated PATCH quietly reset failures it never mentioned.
+
+    The next converge pass picks the member up. 400 if their provisioning has not
+    failed; 404 if they are not a member.
+    """
+    membership = key_provisioning_service.requeue_failed_member(
+        session, parent_id=managed_credential_id, user_id=user_id
+    )
+    await SecurityEventService.create_event(
+        session=session,
+        user_id=user_id,
+        data=SecurityEventCreate(
+            event_type="admin.ai_credential.mint_requested",
+            severity="medium",
+            details={
+                "managed_credential_id": str(managed_credential_id),
+                "target_user_id": str(user_id),
+                "managed_by_id": str(current_user.id),
+                "retry_of": membership.last_error,
+            },
+        ),
+    )
+    return managed_ai_credentials_service.get(
+        session, current_user, managed_credential_id
+    )
 
 
 @router.post("/test-connection", response_model=AICredentialTestResult)

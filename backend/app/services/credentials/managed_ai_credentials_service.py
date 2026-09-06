@@ -1,9 +1,9 @@
 """
 Managed AI Credentials Service.
 
-Owns the **parent** ``ManagedAICredential`` record and the **reconcile** routine
-that diffs a desired target-user set against the actual child ``AICredential``
-rows (those whose ``managed_credential_id`` points at the parent).
+Owns the **parent** ``ManagedAICredential`` record, the **membership** rows that
+say who holds it, and the **reconcile** routine that diffs a desired target-user
+set against those rows.
 
 Children remain ordinary per-user ``AICredential`` rows that look EXACTLY like
 today's admin-managed credentials to the rest of the system. This service does
@@ -12,11 +12,29 @@ auto-sync, or blast-radius logic — every per-child create/update/delete/
 set-default is delegated to :data:`ai_credentials_service`. After delegating to
 ``create_credential`` the new child is stamped with ``is_admin_managed=True``,
 ``managed_by_id=parent.managed_by_id`` and ``managed_credential_id=parent.id`` so
-it is structurally linked back to the parent (and reachable as a member).
+it is structurally linked back to the parent.
 
-Membership is **derived** from the children — there is no ``target_user_ids``
-column on the parent. A failed add simply isn't a member (self-healing on the
-next reconcile).
+MEMBERSHIP IS A ROW
+-------------------
+``managed_ai_credential_membership`` holds one row per (parent, user), and it is
+the **only** definition of "who is a member". It used to be derived from the
+children; that derivation is gone rather than kept alongside, because two
+definitions of membership is the duplication this whole phase exists to remove.
+The child credential is now a *consequence* of membership — present when a key
+exists, absent while one is being minted or after a mint has failed — and
+``membership.status`` is what says which.
+
+WHO WRITES THE MEMBERSHIP ROW
+-----------------------------
+Split by question, so the two writers cannot disagree:
+
+- **This service owns membership existence** — a row appears when an admin adds
+  someone, and disappears when they are removed. It also sets the *initial*
+  status, because "what does adding this person mean" is a property of the parent
+  record it is adding them to.
+- **``KeyProvisioningService`` owns the provisioning lifecycle** — every
+  ``pending → minting → provisioned | failed`` transition, plus ``suspended`` on
+  deactivation. It never creates or deletes a membership.
 """
 import json
 import logging
@@ -47,32 +65,37 @@ from app.models.credentials.managed_ai_credential import (
     ManagedAICredentialUpdate,
     ManagedReconcileBlock,
     ManagedReconcileSkip,
+    ProvisioningMode,
 )
-from app.models.users.user import User
+from app.models.credentials.managed_ai_credential_membership import (
+    ManagedAICredentialMembership,
+    MembershipProvisioningStatus,
+)
+from app.models.users.user import AIKeyOnboardingState, User
 from app.services.credentials.ai_credentials_service import (
     AICredentialInUseError,
     ai_credentials_service,
 )
+from app.services.credentials.key_provisioning_types import RevocationRequest
 from app.services.environments.model_catalog import _strip_provider_prefix
 from app.services.environments.sdk_constants import (
     is_credential_compatible_with_sdk,
 )
+from app.services.ai_providers import registry
 from app.utils import restore_session
 
 logger = logging.getLogger(__name__)
 
 
-# Which SDK engine string to compose for a credential type, per mode (mirrors
-# admin_ai_credentials_service._TYPE_TO_SDK_ENGINE / the AddEnvironment SDK
-# composition): claude-code for anthropic/minimax, opencode/<provider> for the
-# OpenCode-only providers.
-_TYPE_TO_SDK_ENGINE: dict[AICredentialType, str] = {
-    AICredentialType.ANTHROPIC: "claude-code/anthropic",
-    AICredentialType.MINIMAX: "claude-code/minimax",
-    AICredentialType.OPENAI: "opencode/openai",
-    AICredentialType.GOOGLE: "opencode/google",
-    AICredentialType.OPENAI_COMPATIBLE: "opencode/openai_compatible",
-}
+def _sdk_engine_for(cred_type: AICredentialType | str | None) -> str | None:
+    """The ``<engine>/<provider>`` SDK string to compose for a credential type.
+
+    One registry lookup. This used to be a five-entry table declared here and
+    byte-identically in a second module, both mirroring the AddEnvironment SDK
+    composition; the adapter is now the single declaration.
+    """
+    adapter = registry.find_adapter(cred_type)
+    return adapter.sdk_engine if adapter is not None else None
 
 
 class ManagedCredentialConflictError(Exception):
@@ -106,6 +129,21 @@ class ManagedCredentialConflictError(Exception):
 
 
 @dataclass(frozen=True)
+class MemberRow:
+    """One member: the membership row, plus the child credential it names.
+
+    The child is ``None`` whenever the membership's status says no key exists
+    right now (``pending``, ``minting``, ``failed``, ``suspended``). Callers read
+    ``membership.status`` for that fact and never re-derive it from ``child is
+    None`` — the two can disagree while a reconcile is mid-flight, and the row is
+    the one that is right.
+    """
+
+    membership: "ManagedAICredentialMembership"
+    child: AICredential | None = None
+
+
+@dataclass(frozen=True)
 class MemberAddition:
     """What one add-only membership grant did.
 
@@ -135,10 +173,30 @@ class ManagedAICredentialsService:
             )
         return parent
 
+    @staticmethod
+    def is_minted(parent: ManagedAICredential) -> bool:
+        """Whether this record mints a separate key per member."""
+        return parent.provisioning_mode == ProvisioningMode.MINTED.value
+
     def _decrypt_parent(self, parent: ManagedAICredential) -> AICredentialData:
-        """Decrypt the parent's canonical key (same codec as a child row)."""
+        """Decrypt the parent's canonical key (same codec as a child row).
+
+        **Refuses a minted parent**, which has no key at all. Every one of this
+        service's five decrypt sites reaches here, so the guard is stated once:
+        the alternative is five ``if parent.encrypted_data`` checks, four of
+        which would eventually be written as ``or ""`` and hand an empty key to
+        something that stores it.
+        """
         from app.core.security import decrypt_field
 
+        if not parent.encrypted_data:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This managed AI credential mints a separate key for each "
+                    "member and holds no key of its own."
+                ),
+            )
         data_dict = json.loads(decrypt_field(parent.encrypted_data))
         return AICredentialData(**data_dict)
 
@@ -165,14 +223,142 @@ class ManagedAICredentialsService:
 
     def _current_members(
         self, session: Session, parent: ManagedAICredential
-    ) -> dict[uuid.UUID, AICredential]:
-        """Map ``owner_id -> child credential`` for the parent's children."""
-        rows = session.exec(
-            select(AICredential).where(
-                AICredential.managed_credential_id == parent.id
+    ) -> dict[uuid.UUID, MemberRow]:
+        """Map ``owner_id -> `` :class:`MemberRow` for this parent's members.
+
+        **Two queries, whatever the membership size** — the memberships, then the
+        children they name — because every caller wants both and the alternative
+        is a ``session.get`` per member inside a loop that already runs per
+        parent on the fleet-wide list.
+
+        This is THE definition of membership. It reads
+        ``managed_ai_credential_membership`` and nothing else; a child credential
+        is a *consequence* of membership, no longer the evidence for it. Anything
+        still deriving membership from ``AICredential.managed_credential_id``
+        would be a second answer to a question that now has one.
+        """
+        memberships = session.exec(
+            select(ManagedAICredentialMembership).where(
+                ManagedAICredentialMembership.managed_credential_id == parent.id
             )
         ).all()
-        return {row.owner_id: row for row in rows}
+        child_ids = [m.ai_credential_id for m in memberships if m.ai_credential_id]
+        children: dict[uuid.UUID, AICredential] = {}
+        if child_ids:
+            children = {
+                row.id: row
+                for row in session.exec(
+                    select(AICredential).where(col(AICredential.id).in_(child_ids))
+                ).all()
+            }
+        return {
+            m.user_id: MemberRow(
+                membership=m,
+                child=children.get(m.ai_credential_id) if m.ai_credential_id else None,
+            )
+            for m in memberships
+        }
+
+    def _member_dto(
+        self,
+        member: MemberRow,
+        owner: User | None,
+        *,
+        key_state: AIKeyOnboardingState,
+    ) -> ManagedAICredentialMember:
+        """Project one member row for the API.
+
+        The status is read straight off the membership row. It is never inferred
+        from whether ``child_credential_id`` came out null — that inference is
+        exactly the client-side policy re-derivation this phase exists to
+        prevent, and it would be wrong in both directions the moment a shared
+        member's child is missing.
+
+        ``key_state`` is passed in rather than computed here, and it is
+        deliberately a required keyword: it is an account-wide question, the
+        member list asks it for everybody at once (see :meth:`_owner_key_states`),
+        and a default would let a caller silently ship a wrong answer.
+        """
+        membership = member.membership
+        return ManagedAICredentialMember(
+            user_id=membership.user_id,
+            email=owner.email if owner else "",
+            full_name=owner.full_name if owner else None,
+            child_credential_id=membership.ai_credential_id,
+            is_default=member.child.is_default if member.child else False,
+            provisioning_status=MembershipProvisioningStatus(membership.status),
+            provision_error=membership.last_error,
+            provision_attempts=membership.provision_attempts,
+            api_key_onboarding_state=key_state,
+        )
+
+    def _project_members(
+        self, session: Session, rows: list[MemberRow]
+    ) -> list[ManagedAICredentialMember]:
+        """Project a batch of members in a **fixed** number of queries.
+
+        The batched entry point for :meth:`_member_dto`, and the reason it
+        exists is that ``_member_dto`` takes ``key_state`` as a required keyword
+        — which correctly refuses a wrong default, and just as correctly does
+        nothing to stop a caller satisfying it inside a per-member loop. Three
+        of them did: ``add_members``' two branches and ``reconcile``'s update
+        pass each called ``_owner_key_states(session, [owner_id])``, two queries
+        apiece, so a PATCH adding two hundred members issued four hundred extra
+        queries on a request path. ``_to_public`` was batched and the writers
+        were not, which is the shape the predicate's own docstring warns about:
+        an N+1 is how a cheap question becomes a reason not to ask it.
+
+        It takes the owner lookup too, rather than a caller-supplied ``User``.
+        Half a batching is how the other half comes back: a signature that
+        accepts the owner leaves every caller free to fetch it per member, which
+        is what ``reconcile``'s update pass did. ``_to_public`` resolves owners
+        the same way and for the same reason.
+
+        Call it **after** the writes it projects. The states it reads are the
+        ones those writes just changed.
+        """
+        if not rows:
+            return []
+        owner_ids = {member.membership.user_id for member in rows}
+        owners = {
+            row.id: row
+            for row in session.exec(
+                select(User).where(col(User.id).in_(owner_ids))
+            ).all()
+        }
+        # ``owners.get`` may miss, and ``_member_dto`` tolerates ``None`` for
+        # the same reason it does in ``_to_public``: a user row that has gone
+        # while its membership survived still has to project.
+        key_states = self._owner_key_states(session, owner_ids)
+        return [
+            self._member_dto(
+                member,
+                owners.get(member.membership.user_id),
+                key_state=key_states.get(
+                    member.membership.user_id, AIKeyOnboardingState.NEEDS_KEY
+                ),
+            )
+            for member in rows
+        ]
+
+    @staticmethod
+    def _owner_key_states(
+        session: Session, user_ids
+    ) -> dict[uuid.UUID, AIKeyOnboardingState]:
+        """Every named user's onboarding state, in a fixed number of queries.
+
+        Imported locally because ``KeyProvisioningService`` imports this module —
+        the same shape ``delete`` already uses for the same reason. The answer is
+        that service's to give: this one must not grow a second opinion about
+        whether somebody has a usable key.
+        """
+        from app.services.credentials.key_provisioning_service import (
+            key_provisioning_service,
+        )
+
+        return key_provisioning_service.api_key_onboarding_states(
+            session, list(user_ids)
+        )
 
     @staticmethod
     def _dedup(ids: list[uuid.UUID]) -> list[uuid.UUID]:
@@ -406,7 +592,7 @@ class ManagedAICredentialsService:
         The update path is the opposite case and behaves the opposite way —
         see :meth:`_sync_model_overrides`.
         """
-        sdk_engine = _TYPE_TO_SDK_ENGINE.get(child.type)
+        sdk_engine = _sdk_engine_for(child.type)
         if not sdk_engine:
             return
 
@@ -605,6 +791,31 @@ class ManagedAICredentialsService:
             )
 
         return child
+
+    def materialise_minted_child(
+        self,
+        session: Session,
+        parent: ManagedAICredential,
+        owner: User,
+        api_key: str,
+    ) -> AICredential:
+        """Create the child credential for a member whose key has just been minted.
+
+        Goes through exactly the same ``_add_child`` as a shared member, with the
+        key coming from the provider instead of from the parent row. That is the
+        point: "how does a member's credential get created, stamped and wired
+        into their defaults" has one implementation, so a minted member cannot
+        quietly end up with different defaults, a different admin-managed marker
+        or a different SDK wiring than a shared one.
+
+        The three model-level guards that refuse an empty key are left exactly as
+        they are, and this path does not need relaxing them: it is called only
+        once a real key exists.
+        """
+        key = AICredentialData(
+            api_key=api_key, base_url=parent.base_url, model=parent.model
+        )
+        return self._add_child(session, parent, owner, key)
 
     def _update_child_fields(
         self,
@@ -873,7 +1084,19 @@ class ManagedAICredentialsService:
         sequence lives, and the one that quietly falls behind.
 
         Idempotent: ids that are already members are not re-added and are not
-        reported — being a member is the outcome the caller asked for.
+        reported — being a member is the outcome the caller asked for. The one
+        exception is a **repair**, not an add: a shared member whose child
+        credential has gone missing gets a new one, because a membership row with
+        no key is the state this method exists to prevent. Minted members are
+        never repaired here; their key is the provisioning pass's business.
+
+        **What "added" means depends on the parent's mode**, and that is the
+        whole point of the mode. For a shared record, a member is added *and*
+        holds a key by the time this returns. For a minted record, a member is
+        added with status ``pending`` and holds nothing yet — the key is created
+        by ``KeyProvisioningService``, out of band. Callers that assume
+        ``added`` implies a usable credential must read ``provisioning_status``
+        instead; ``child_credential_id`` is ``None`` in the minted case.
 
         Returns :class:`MemberAddition`, not a
         ``ManagedAICredentialReconcileResult``. The reconcile shape carries
@@ -918,13 +1141,36 @@ class ManagedAICredentialsService:
         # Snapshotted while the session is known good — see the docstring.
         parent_id = parent.id
         actor_id = actor.id if actor else None
-        current_ids = set(self._current_members(session, parent).keys())
+        minted = self.is_minted(parent)
+        current = self._current_members(session, parent)
 
-        added: list[ManagedAICredentialMember] = []
+        # Projected *after* the loop, in one batched key-state lookup — see
+        # :meth:`_project_members`. Not before it either: adding a minted member
+        # writes the pending membership that moves them from ``needs_key`` to
+        # ``preparing``, so a state read ahead of the writes would ship the
+        # answer the change was about to invalidate.
+        added_rows: list[MemberRow] = []
         skipped: list[ManagedReconcileSkip] = []
         key: AICredentialData | None = None
 
-        for owner_id in [uid for uid in desired if uid not in current_ids]:
+        for owner_id in desired:
+            existing = current.get(owner_id)
+            if existing is not None:
+                # Already a member — the outcome the caller asked for. One
+                # exception, and it is a repair rather than an add: a shared
+                # member whose child row went missing (an out-of-band delete, a
+                # create that committed the membership and then failed) has no
+                # key, and leaving them a keyless member forever is the failure
+                # this branch exists to prevent. A *minted* member is never
+                # repaired here — their key is the provisioning pass's business,
+                # and re-adding them would restart a state machine mid-flight.
+                if minted or existing.child is not None:
+                    continue
+                if existing.membership.status != (
+                    MembershipProvisioningStatus.NOT_APPLICABLE.value
+                ):
+                    continue
+
             owner = session.get(User, owner_id)
             if owner is None:
                 skipped.append(
@@ -940,10 +1186,50 @@ class ManagedAICredentialsService:
                     )
                 )
                 continue
+
+            if minted:
+                # No provider call here, ever. This runs inline on the signup
+                # and OAuth-callback request paths (see
+                # ``AccountProvisioningService``), where a provider timeout would
+                # become a failed login. All that happens is that the intent is
+                # recorded; the converge pass mints against it.
+                try:
+                    membership = self._upsert_membership(
+                        session,
+                        parent_id=parent_id,
+                        user_id=owner_id,
+                        status=MembershipProvisioningStatus.PENDING,
+                        existing=existing.membership if existing else None,
+                    )
+                except Exception:
+                    restore_session(session)
+                    logger.exception(
+                        "Failed to record minted membership for user %s under "
+                        "parent %s (actor=%s)",
+                        owner_id, parent_id, actor_id or "system",
+                    )
+                    skipped.append(
+                        ManagedReconcileSkip(
+                            user_id=owner_id, reason="provision_failed"
+                        )
+                    )
+                    continue
+                added_rows.append(MemberRow(membership=membership))
+                continue
+
             if key is None:
                 key = self._decrypt_parent(parent)
+            child = None
             try:
                 child = self._add_child(session, parent, owner, key)
+                membership = self._upsert_membership(
+                    session,
+                    parent_id=parent_id,
+                    user_id=owner_id,
+                    status=MembershipProvisioningStatus.NOT_APPLICABLE,
+                    existing=existing.membership if existing else None,
+                    ai_credential_id=child.id,
+                )
             except HTTPException:
                 # Type-validation errors etc. would have failed before
                 # reconcile; re-raise so they are not silently swallowed.
@@ -959,6 +1245,14 @@ class ManagedAICredentialsService:
                     "(actor=%s)",
                     owner_id, parent_id, actor_id or "system",
                 )
+                # A child that committed before the membership row failed is a
+                # real credential nothing can now see: not a member (so no
+                # reconcile will ever touch it), but usable by its owner. Undo it
+                # so "skipped" means what it says. Best-effort — if the cleanup
+                # also fails the row degrades to a plain admin-managed orphan,
+                # which is the documented fallback for a parentless child.
+                if child is not None:
+                    self._discard_orphan_child(session, child.id, owner_id)
                 skipped.append(
                     ManagedReconcileSkip(
                         user_id=owner_id, reason="provision_failed"
@@ -968,17 +1262,147 @@ class ManagedAICredentialsService:
                 # survives the rollback and the remaining owners are still
                 # attempted.
                 continue
-            added.append(
-                ManagedAICredentialMember(
-                    user_id=owner.id,
-                    email=owner.email,
-                    full_name=owner.full_name,
-                    child_credential_id=child.id,
-                    is_default=child.is_default,
+            added_rows.append(MemberRow(membership=membership, child=child))
+
+        return MemberAddition(
+            added=self._project_members(session, added_rows), skipped=skipped
+        )
+
+    def _validate_provisioning_shape(
+        self, session: Session, data: ManagedAICredentialCreate
+    ) -> None:
+        """Refuse a record that cannot do what its mode promises.
+
+        Stated **server-side**, once, and not in the dialog that happens to be
+        the only current caller: "may this record be created" is a policy, and a
+        policy answered only in a browser is answered nowhere. Four ways a
+        request can be incoherent, each with its own message, because "invalid
+        configuration" sends an admin hunting:
+
+        1. shared without a key — there is nothing to give anyone;
+        2. minted with a key — the key would be stored and never used, which
+           reads as "rotated" to whoever pasted it;
+        3. minted for a provider whose API cannot create keys (Anthropic today);
+        4. minted with no provider admin credential to mint through.
+        """
+        from app.models.credentials.provider_admin_credential import (
+            ProviderAdminCredential,
+        )
+
+        if data.provisioning_mode == ProvisioningMode.SHARED:
+            if not data.api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="An API key is required for a shared credential.",
                 )
+            return
+
+        if data.api_key:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A minted credential creates a separate key for each member "
+                    "and must not be given one."
+                ),
             )
 
-        return MemberAddition(added=added, skipped=skipped)
+        adapter = registry.find_adapter(data.type)
+        if adapter is None or not adapter.supports_minting:
+            label = adapter.label if adapter is not None else str(data.type)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{label} cannot create API keys through its administration "
+                    "API, so per-user keys must be added by hand for this "
+                    "provider."
+                ),
+            )
+
+        if data.provider_admin_credential_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A minted credential needs a provider admin credential to "
+                    "mint keys with."
+                ),
+            )
+        admin_credential = session.get(
+            ProviderAdminCredential, data.provider_admin_credential_id
+        )
+        if admin_credential is None:
+            raise HTTPException(
+                status_code=404, detail="Provider admin credential not found"
+            )
+        if admin_credential.provider_type != data.type:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The selected provider admin credential is for a different "
+                    "provider."
+                ),
+            )
+
+    def _delete_membership(
+        self, session: Session, membership: ManagedAICredentialMembership
+    ) -> None:
+        """Remove one membership row. The person stops being a member here.
+
+        Deleting the row is what "no longer a member" means — there is no
+        tombstone status for it, because absence of a row already says exactly
+        that and a second encoding of the same fact is a second answer. The
+        durable states (``failed``, ``suspended``) describe members, not
+        ex-members.
+        """
+        session.delete(membership)
+        session.commit()
+
+    def _discard_orphan_child(
+        self, session: Session, child_id: uuid.UUID, owner_id: uuid.UUID
+    ) -> None:
+        """Best-effort removal of a child whose membership row never landed."""
+        try:
+            ai_credentials_service.delete_credential(
+                session, child_id, owner_id, force=True, admin_override=True
+            )
+        except Exception:  # pragma: no cover - defensive
+            restore_session(session)
+            logger.exception(
+                "Orphan child credential %s (owner %s) could not be removed "
+                "after its membership row failed to write.",
+                child_id, owner_id,
+            )
+
+    def _upsert_membership(
+        self,
+        session: Session,
+        *,
+        parent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        status: MembershipProvisioningStatus,
+        existing: ManagedAICredentialMembership | None = None,
+        ai_credential_id: uuid.UUID | None = None,
+    ) -> ManagedAICredentialMembership:
+        """Create (or repair) one membership row and commit it.
+
+        Committed here rather than left pending because ``_add_child`` has
+        already committed the child: a membership that only exists in the
+        caller's session would be rolled back by the next per-owner failure and
+        leave a real, invisible member behind.
+        """
+        now = datetime.now(timezone.utc)
+        membership = existing or ManagedAICredentialMembership(
+            managed_credential_id=parent_id,
+            user_id=user_id,
+            status=status.value,
+            created_at=now,
+        )
+        membership.status = status.value
+        membership.ai_credential_id = ai_credential_id
+        membership.updated_at = now
+        session.add(membership)
+        session.commit()
+        session.refresh(membership)
+        return membership
 
     # ------------------------------------------------------------------ #
     # Reconcile — the heart
@@ -1029,10 +1453,19 @@ class ManagedAICredentialsService:
         # per child, so from their second iteration ``parent`` is expired and
         # ``parent.id`` is a query — one their failure handlers must not make.
         parent_id = parent.id
+        parent_type = (
+            parent.type.value
+            if isinstance(parent.type, AICredentialType)
+            else str(parent.type)
+        )
+        parent_admin_credential_id = parent.provider_admin_credential_id
 
         removed: list[uuid.UUID] = []
-        updated: list[ManagedAICredentialMember] = []
+        # Collected here and projected once at the end — see
+        # :meth:`_project_members` for why the projection is not done inline.
+        updated_rows: list[MemberRow] = []
         blocked: list[ManagedReconcileBlock] = []
+        revocations: list[RevocationRequest] = []
 
         key: AICredentialData | None = None
 
@@ -1047,29 +1480,60 @@ class ManagedAICredentialsService:
         skipped = list(addition.skipped)
 
         # ----- Remove (current − desired) -----
-        to_remove = [uid for uid in current_ids if uid not in desired_set]
+        # Sorted, so the order in which members are removed — and therefore the
+        # order their keys are revoked in — is the same on every run. ``set``
+        # iteration order is not, which makes a failure report read differently
+        # each time it is produced.
+        to_remove = sorted(
+            (uid for uid in current_ids if uid not in desired_set), key=str
+        )
         for owner_id in to_remove:
-            child = current[owner_id]
-            # Which of the owner's default slots this child holds, read while
-            # the row still exists. After the delete the pointers are already
-            # NULL (``ondelete="SET NULL"``) and the answer is unrecoverable.
-            # See :meth:`_release_model_overrides`.
-            child_id = child.id
+            member = current[owner_id]
+            child = member.child
+            if (
+                member.membership.status
+                == MembershipProvisioningStatus.MINTING.value
+            ):
+                # A converge pass has claimed this row and is inside a provider
+                # call right now, in another session. Deleting the row here means
+                # its ``external_key_ref`` — which that call is about to write —
+                # lands nowhere: the service account exists at the provider, no
+                # row names it, and no revocation can ever be scheduled for it.
+                # So the removal is refused for as long as the mint is in flight,
+                # which is at most one converge tick. The admin sees it in
+                # ``blocked`` and retries; that is a far better outcome than a key
+                # nobody can find.
+                blocked.append(
+                    ManagedReconcileBlock.of(
+                        user_id=owner_id, reason="mint_in_flight"
+                    )
+                )
+                continue
+            # Read while the rows still exist, for two reasons that both make
+            # the answer unrecoverable afterwards: the owner's default pointers
+            # are NULLed by ``ondelete="SET NULL"``, and the membership row
+            # (which carries the provider handles needed to revoke a minted key)
+            # is about to be deleted.
+            child_id = child.id if child else None
+            revoke_ref = member.membership.external_key_ref
             owner = session.get(User, owner_id)
             held_modes = (
-                self._modes_pointing_at(owner, child_id) if owner else []
+                self._modes_pointing_at(owner, child_id)
+                if owner and child_id
+                else []
             )
             try:
-                ai_credentials_service.delete_credential(
-                    session,
-                    child.id,
-                    child.owner_id,
-                    force=force,
-                    admin_override=True,
-                )
+                if child is not None:
+                    ai_credentials_service.delete_credential(
+                        session,
+                        child.id,
+                        child.owner_id,
+                        force=force,
+                        admin_override=True,
+                    )
             except AICredentialInUseError as in_use:
                 blocked.append(
-                    ManagedReconcileBlock(
+                    ManagedReconcileBlock.of(
                         user_id=owner_id,
                         reason="in_use_bundle",
                         impact=in_use.impact.model_dump(mode="json"),
@@ -1093,21 +1557,46 @@ class ManagedAICredentialsService:
                     owner_id, parent_id,
                 )
                 blocked.append(
-                    ManagedReconcileBlock(
-                        user_id=owner_id, reason="remove_failed", impact=None
+                    ManagedReconcileBlock.of(
+                        user_id=owner_id, reason="remove_failed"
                     )
                 )
                 continue
             # Only on the success path: a blocked member keeps their child and
             # must keep their wiring with it.
             self._release_model_overrides(session, owner_id, held_modes)
+            self._delete_membership(session, member.membership)
+            # **Delete first, revoke second**, and this is the reason: the delete
+            # above can be refused by the Tier-2 blast-radius gate, and a revoke
+            # that ran first would leave a dead key on a surviving row that reads
+            # as healthy everywhere and fails at first use. A blocked member
+            # keeps a working key instead, which is recoverable.
+            if revoke_ref:
+                revocations.append(RevocationRequest(
+                    user_id=owner_id,
+                    parent_id=parent_id,
+                    provider_admin_credential_id=parent_admin_credential_id,
+                    provider_type=parent_type,
+                    external_key_ref=revoke_ref,
+                    # The holder's own feed: they still exist, and "your
+                    # administrator removed you from this credential and the key
+                    # was destroyed" is exactly the entry that belongs there.
+                    audit_user_id=owner_id,
+                ))
             removed.append(owner_id)
 
         # ----- Update (current ∩ desired) -----
         if apply_fields:
             to_update = [uid for uid in desired if uid in current_ids]
             for owner_id in to_update:
-                child = current[owner_id]
+                member = current[owner_id]
+                child = member.child
+                if child is None:
+                    # A member with no key yet (or none any more): there is no
+                    # child row to write the parent's fields through to. Skipping
+                    # is not a loss — when the key is minted the child is created
+                    # from the parent as it stands *then*, so it cannot be stale.
+                    continue
                 if key_rotated and key is None:
                     key = self._decrypt_parent(parent)
                 try:
@@ -1134,18 +1623,22 @@ class ManagedAICredentialsService:
                     )
                     continue
                 if child_changed:
-                    owner = session.get(User, owner_id)
-                    updated.append(
-                        ManagedAICredentialMember(
-                            user_id=owner_id,
-                            email=owner.email if owner else "",
-                            full_name=owner.full_name if owner else None,
-                            child_credential_id=child.id,
-                            is_default=child.is_default,
-                        )
-                    )
+                    updated_rows.append(member)
+
+        # After every row change, and never before one: a revoke destroys a key
+        # at the provider, and doing that for a removal the database then refuses
+        # is not recoverable. Handed off rather than awaited — reconcile is
+        # synchronous and runs on request paths, and a provider that is slow must
+        # not make an admin's PATCH slow. A revoke that fails records
+        # ``admin.ai_credential.revoke_failed`` against the owner, carrying the
+        # external ref, so a leaked key has a name in the audit trail.
+        if revocations:
+            from app.services.credentials import key_provisioning_service
+
+            key_provisioning_service.schedule_revocations(revocations)
 
         record = self._to_public(session, parent)
+        updated = self._project_members(session, updated_rows)
         return ManagedAICredentialReconcileResult(
             record=record,
             added=added,
@@ -1166,10 +1659,20 @@ class ManagedAICredentialsService:
         admin: User,
         data: ManagedAICredentialCreate,
     ) -> ManagedAICredentialReconcileResult:
-        """Create the parent row (validate + encrypt the canonical key) then
-        reconcile to create one child per valid target user."""
-        encrypted = self._encrypt_key(
-            data.type, data.api_key, data.base_url, data.model
+        """Create the parent row then reconcile to add one member per valid
+        target user.
+
+        In ``shared`` mode that means one child credential per member, created
+        here. In ``minted`` mode it means one ``pending`` membership per member
+        and no provider call — the keys are minted out of band.
+        """
+        self._validate_provisioning_shape(session, data)
+        encrypted = (
+            self._encrypt_key(
+                data.type, data.api_key, data.base_url, data.model
+            )
+            if data.provisioning_mode == ProvisioningMode.SHARED
+            else None
         )
         auto_roles = (
             self._normalize_auto_provision_roles(data.auto_provision_roles)
@@ -1207,6 +1710,8 @@ class ManagedAICredentialsService:
             ),
             expiry_notification_date=data.expiry_notification_date,
             managed_by_id=admin.id,
+            provisioning_mode=data.provisioning_mode.value,
+            provider_admin_credential_id=data.provider_admin_credential_id,
             created_at=now,
             updated_at=now,
         )
@@ -1231,6 +1736,19 @@ class ManagedAICredentialsService:
         then reconcile. Omitting ``target_user_ids`` leaves membership unchanged.
         """
         parent = self._get_parent_or_404(session, managed_credential_id)
+
+        if data.api_key is not None and self.is_minted(parent):
+            # Refused, not ignored. There is no stored key here to replace, so
+            # accepting this would store one nothing reads and leave the admin
+            # believing they had rolled a key. Rotating a minted member's key is
+            # a per-member mint, not a parent edit.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This credential mints a separate key for each member and "
+                    "holds no key of its own, so there is nothing to rotate."
+                ),
+            )
 
         # What this record claimed and pinned *before* the request, read
         # before a single field is written. Both are transitions rather than
@@ -1361,6 +1879,13 @@ class ManagedAICredentialsService:
         When any member is blocked and ``force`` is False the parent row is left
         in place (delete is aborted)."""
         parent = self._get_parent_or_404(session, managed_credential_id)
+        parent_id = parent.id
+        parent_type = (
+            parent.type.value
+            if isinstance(parent.type, AICredentialType)
+            else str(parent.type)
+        )
+        parent_admin_credential_id = parent.provider_admin_credential_id
 
         result = self.reconcile(
             session, admin, parent, [],
@@ -1371,8 +1896,33 @@ class ManagedAICredentialsService:
             # Abort: leave the parent + remaining children intact.
             return result
 
+        # ``force`` gets past the blast-radius gate but not past every failure:
+        # the Remove pass records ``remove_failed`` for a lock timeout or a
+        # constraint trip too, and those members still have their membership row
+        # — with the provider handles on it. ``session.delete(parent)`` cascades
+        # those rows away, so this is the last moment their keys can be named.
+        # Read them here, revoke after the delete commits: the same ordering the
+        # Remove pass uses, for the same reason.
+        stranded = [
+            RevocationRequest(
+                user_id=member.membership.user_id,
+                parent_id=parent_id,
+                provider_admin_credential_id=parent_admin_credential_id,
+                provider_type=parent_type,
+                external_key_ref=dict(member.membership.external_key_ref),
+                audit_user_id=member.membership.user_id,
+            )
+            for member in self._current_members(session, parent).values()
+            if member.membership.external_key_ref
+        ]
+
         session.delete(parent)
         session.commit()
+
+        if stranded:
+            from app.services.credentials import key_provisioning_service
+
+            key_provisioning_service.schedule_revocations(stranded)
         return result
 
     def apply_to_existing(
@@ -1500,7 +2050,7 @@ class ManagedAICredentialsService:
         # returns immediately — so counting one would promise a change that
         # will not happen.
         modes: list[str] = []
-        if parent.set_user_sdk_defaults and _TYPE_TO_SDK_ENGINE.get(parent.type):
+        if parent.set_user_sdk_defaults and _sdk_engine_for(parent.type):
             modes = [
                 mode
                 for mode in parent.sdk_default_modes
@@ -1549,12 +2099,19 @@ class ManagedAICredentialsService:
         admin: User,
         managed_credential_id: uuid.UUID,
     ) -> ManagedAICredentialPublic:
-        """Set every child as its owner's default for the type + flag the parent
-        ``set_as_default=True``."""
+        """Set every member's child as its owner's default for the type + flag the
+        parent ``set_as_default=True``.
+
+        Members who hold no key yet are skipped rather than failed: there is
+        nothing to make default. The parent flag is still set, so the wiring
+        happens for them when their key arrives — that is what the flag is for.
+        """
         parent = self._get_parent_or_404(session, managed_credential_id)
         members = self._current_members(session, parent)
-        for owner_id, child in members.items():
-            ai_credentials_service.set_default(session, child.id, owner_id)
+        for owner_id, member in members.items():
+            if member.child is None:
+                continue
+            ai_credentials_service.set_default(session, member.child.id, owner_id)
 
         parent.set_as_default = True
         parent.updated_at = datetime.now(timezone.utc)
@@ -1585,13 +2142,17 @@ class ManagedAICredentialsService:
         parents = session.exec(statement).all()
 
         if target_user_id is not None:
-            # Keep only parents that have this user as a member.
+            # Keep only parents that have this user as a member — read from the
+            # membership rows, not from their credentials. The difference is
+            # visible: someone whose minted key has not arrived yet, or has
+            # failed, is a member and must appear here. Deriving this from
+            # ``AICredential`` again would answer "who holds a key", which is a
+            # different question that happens to have had the same answer.
             parent_ids = {
                 row.managed_credential_id
                 for row in session.exec(
-                    select(AICredential).where(
-                        AICredential.owner_id == target_user_id,
-                        AICredential.managed_credential_id.is_not(None),
+                    select(ManagedAICredentialMembership).where(
+                        ManagedAICredentialMembership.user_id == target_user_id
                     )
                 ).all()
             }
@@ -1611,18 +2172,29 @@ class ManagedAICredentialsService:
     def _to_public(
         self, session: Session, parent: ManagedAICredential
     ) -> ManagedAICredentialPublic:
-        """Load children + owners and build the member projection."""
-        children = session.exec(
-            select(AICredential).where(
-                AICredential.managed_credential_id == parent.id
-            )
-        ).all()
+        """Load memberships + children + owners and build the member projection.
 
-        # One query for every owner rather than ``session.get`` per child.
-        # The list endpoint calls this once per parent, so the per-child
-        # lookup was already an N+1 across the whole page; it matters more now
-        # that the auto-provisioning path can reach a projection too.
-        owner_ids = {child.owner_id for child in children}
+        **A fixed five queries, whatever the membership size** — memberships,
+        their children, their owners, and the two behind the batched
+        onboarding-state lookup — so the admin list page's cost grows with the
+        number of *records*, as it always has, and not with how many people hold
+        them. The number is stated because it is the thing that regresses: it
+        was three before the onboarding state joined the projection, and the
+        query-count test is what keeps it from becoming five-plus-two-per-member.
+        That matters more than it used to: a minted record's members appear
+        the moment they are added, before any key exists, so a projection with a
+        per-member lookup in it would get slower exactly when an admin is
+        watching a batch provision.
+
+        The projection is also the **only** thing that reads provisioning state.
+        The client is handed one member list with a status on each entry; it
+        never sees that a status lives on one row and a key on another, and it
+        therefore cannot invent a rule for combining them.
+        """
+        members_by_owner = self._current_members(session, parent)
+
+        # One query for every owner rather than ``session.get`` per member.
+        owner_ids = set(members_by_owner.keys())
         owners: dict[uuid.UUID, User] = {}
         if owner_ids:
             owners = {
@@ -1632,27 +2204,53 @@ class ManagedAICredentialsService:
                 ).all()
             }
 
+        # One batched lookup for the whole list. The member projection has a
+        # query-count test precisely because a per-member question here is how a
+        # cheap predicate turns into a reason not to use it.
+        key_states = self._owner_key_states(session, owner_ids)
+
         members: list[ManagedAICredentialMember] = []
-        for child in children:
-            owner = owners.get(child.owner_id)
+        for owner_id, member in members_by_owner.items():
+            owner = owners.get(owner_id)
             if owner is None:
+                # The user row is gone but the membership survived — impossible
+                # through the FK (``ON DELETE CASCADE``), so this is defensive.
+                # Logged rather than skipped in silence: ``member_count`` is
+                # ``len(members)``, so a dropped row makes the admin's member
+                # count quietly wrong, and a count that disagrees with reality
+                # for a reason nobody recorded is the hardest kind to chase.
+                logger.warning(
+                    "Membership %s of parent %s names user %s, which does not "
+                    "exist; omitted from the member list.",
+                    member.membership.id, parent.id, owner_id,
+                )
                 continue
             members.append(
-                ManagedAICredentialMember(
-                    user_id=owner.id,
-                    email=owner.email,
-                    full_name=owner.full_name,
-                    child_credential_id=child.id,
-                    is_default=child.is_default,
+                self._member_dto(
+                    member,
+                    owner,
+                    key_state=key_states.get(
+                        owner_id, AIKeyOnboardingState.NEEDS_KEY
+                    ),
                 )
             )
 
-        # Derive is_oauth_token from the parent's stored key (anthropic OAuth).
+        # Derive is_oauth_token from the parent's stored key. The adapter owns
+        # both halves: whether this provider can hold an OAuth token at all, and
+        # what one looks like. The first half is checked before the decrypt —
+        # this runs once per parent on every fleet-table list, so decrypting a
+        # provider that cannot hold one would be pure cost. A minted parent has
+        # no key to classify and is skipped for the same reason.
         is_oauth = False
-        if parent.type == AICredentialType.ANTHROPIC:
+        adapter = registry.find_adapter(parent.type)
+        if (
+            adapter is not None
+            and adapter.issues_oauth_tokens
+            and parent.encrypted_data
+        ):
             try:
                 api_key = self._decrypt_parent(parent).api_key or ""
-                is_oauth = api_key.startswith("sk-ant-oat")
+                is_oauth = adapter.classify_key(api_key).is_oauth_token
             except Exception:  # pragma: no cover - defensive
                 is_oauth = False
 
@@ -1672,7 +2270,9 @@ class ManagedAICredentialsService:
             model_override_building=parent.model_override_building,
             expiry_notification_date=parent.expiry_notification_date,
             managed_by_id=parent.managed_by_id,
-            has_api_key=True,
+            provisioning_mode=ProvisioningMode(parent.provisioning_mode),
+            provider_admin_credential_id=parent.provider_admin_credential_id,
+            has_api_key=bool(parent.encrypted_data),
             is_oauth_token=is_oauth,
             members=members,
             member_count=len(members),
@@ -1695,5 +2295,5 @@ class ManagedAICredentialsService:
         return self._decrypt_parent(parent)
 
 
-# Singleton instance (matches ai_credentials_service / admin_ai_credentials_service).
+# Singleton instance (matches ai_credentials_service).
 managed_ai_credentials_service = ManagedAICredentialsService()

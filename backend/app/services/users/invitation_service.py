@@ -855,6 +855,7 @@ class InvitationService:
             user.full_name = data.full_name
         user.role = role
         user.is_superuser = role == UserRole.ADMIN.value
+        was_active = user.is_active
         if data.is_active is not None:
             user.is_active = data.is_active
         if user.is_superuser and not user.email_confirmed:
@@ -863,6 +864,24 @@ class InvitationService:
         session.add(user)
         session.commit()
         session.refresh(user)
+
+        # This is a **third** place an existing account's ``is_active`` flips,
+        # next to ``update_user`` and the two delete routes, and it is the one a
+        # reader of ``on_account_deactivated``'s docstring would not think to
+        # look for: re-inviting somebody is not obviously an account-state
+        # change. Without this, re-inviting an existing account with
+        # ``is_active: false`` would leave their minted key live at the provider
+        # and their credential row in the table — the account disabled and its
+        # access intact.
+        if user.is_active != was_active:
+            from app.services.users.account_provisioning_service import (
+                AccountProvisioningService,
+            )
+
+            if user.is_active:
+                AccountProvisioningService.on_account_reactivated(session, user)
+            else:
+                AccountProvisioningService.on_account_deactivated(session, user)
         return user
 
     @staticmethod
