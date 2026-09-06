@@ -212,6 +212,19 @@ class CheckUpdatesResponse(BaseModel):
 # ─── Phase 4 — install setup gate ──────────────────────────────────────
 
 
+#: Why one credential is blocking an install. **Declared here and imported by
+#: the gate**, rather than restated in both places: it used to be spelled out in
+#: the service and again in the response model below, and adding a fourth reason
+#: made the gate produce a value the response model rejected with a 500 — a
+#: validation error at the boundary between two copies of one list.
+GateMissingReason = Literal[
+    "placeholder_empty",
+    "publisher_credential_missing",
+    "publisher_credential_unshared",
+    "publisher_credential_unshareable",
+]
+
+
 class SetupStatusMissingItem(BaseModel):
     """One credential item the install is currently missing.
 
@@ -221,11 +234,7 @@ class SetupStatusMissingItem(BaseModel):
     """
     spec_name: str
     spec_type: str
-    reason: Literal[
-        "placeholder_empty",
-        "publisher_credential_missing",
-        "publisher_credential_unshared",
-    ]
+    reason: GateMissingReason
     is_ai: bool = False
 
 

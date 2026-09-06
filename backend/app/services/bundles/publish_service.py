@@ -1127,6 +1127,93 @@ class PublishService:
         return template_data, private_fields
 
     @staticmethod
+    def publisher_ai_credential_notices(
+        session: Session, bundle: AgentBundle
+    ) -> list[str]:
+        """What this bundle's AI credential wiring will do to its installers.
+
+        **The publisher is the audience, and publish is the moment.** The
+        readiness gate already reports an unshareable publisher credential —
+        but it reports it to the *installer*, on their setup screen, after they
+        have installed something that does not work the way its publisher
+        believed. The person who wired the credential and the person who is
+        told about it were different people at different times, so the one who
+        could act on it never saw it. This is the same fact said to the other
+        half of that pair, at the only moment they are looking.
+
+        Says what *will happen* rather than naming a policy: an installer
+        supplying their own key is a supportable outcome, and a publisher who
+        knows it is what happens can put it in their release notes instead of
+        finding out from a support request.
+
+        **Every notice names an action.** A surface that only states a fact is a
+        slower version of doing nothing, and that is the named weakness of the
+        decision to leave existing shares alone: if nobody acts, the share sits
+        there indefinitely. So each sentence ends with the two things a
+        publisher can actually do — have installers supply their own key, or ask
+        an administrator to provision the credential to those installers
+        directly, which keeps the administrator's member list authoritative
+        instead of routing an admin key around it.
+
+        Reads the same ``is_shareable`` predicate the share path enforces —
+        never a second opinion about which credentials are redistributable —
+        and, like the gate, distinguishes "cannot be shared again" from "is not
+        reaching anybody". A publisher who already has live shares is told that
+        those keep working *and* are no longer sanctioned, because the useful
+        moment to act is before something breaks rather than after.
+        """
+        from app.models.credentials.ai_credential import AICredential
+        from app.models.credentials.ai_credential_share import AICredentialShare
+        from app.services.credentials.ai_credentials_service import (
+            ai_credentials_service,
+        )
+
+        notices: list[str] = []
+        for cred_id, mode_label in (
+            (bundle.publisher_ai_credential_conversation_id, "Conversation"),
+            (bundle.publisher_ai_credential_building_id, "Building"),
+        ):
+            if cred_id is None:
+                continue
+            ai_cred = session.get(AICredential, cred_id)
+            if ai_cred is None:
+                notices.append(
+                    f"{mode_label} mode names an AI credential that no longer "
+                    f"exists, so people who install this bundle will supply "
+                    f"their own key for that mode. Pick a credential you own, "
+                    f"or tell installers to add their own."
+                )
+                continue
+            if ai_credentials_service.is_shareable(ai_cred):
+                continue
+            # Somebody may already hold it. Saying "cannot be shared" full stop
+            # would misdescribe the installs that are working today, and saying
+            # nothing would leave a live-but-unsanctioned share sitting there
+            # until it breaks.
+            already_shared = session.exec(
+                select(AICredentialShare.id).where(
+                    AICredentialShare.ai_credential_id == ai_cred.id
+                )
+            ).first()
+            existing = (
+                " People it was already shared with keep using it, but that "
+                "share is no longer sanctioned and will not be recreated — act "
+                "before it matters."
+                if already_shared is not None
+                else ""
+            )
+            notices.append(
+                f"{mode_label} mode uses \"{ai_cred.name}\", which your "
+                f"administrator provisioned for you and which cannot be handed "
+                f"to anyone else. People who install this bundle will supply "
+                f"their own key for that mode.{existing} Either tell installers "
+                f"to add their own key, or ask your administrator to provision "
+                f"this credential to them directly — that keeps their member "
+                f"list the authority on who holds the key."
+            )
+        return notices
+
+    @staticmethod
     def _validate_publisher_ai_credentials_sdk(
         session: Session,
         install: Agent,

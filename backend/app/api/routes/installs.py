@@ -17,6 +17,7 @@ from app.models.bundles.agent_bundle_revision import (
     AgentBundleRevisionPublic,
     PublishRequest,
 )
+from app.models.bundles.agent_bundle import AgentBundle
 from app.models.bundles.bundle_permissions import BundlePermissionsOverview
 from app.models.bundles.catalog import (
     BundleCredentialDrift,
@@ -109,7 +110,16 @@ async def publish_agent(
     from app.services.bundles.bundle_service import BundleService
 
     install_count = BundleService.revision_install_count(session, revision.id)
-    return _revision_to_public(revision, install_count)
+    # What this publish means for the people who will install it, told to the
+    # person who just published rather than to whoever installs later. See
+    # ``PublishService.publisher_ai_credential_notices``.
+    bundle = session.get(AgentBundle, revision.bundle_id)
+    notices = (
+        PublishService.publisher_ai_credential_notices(session, bundle)
+        if bundle is not None
+        else []
+    )
+    return _revision_to_public(revision, install_count, publish_notices=notices)
 
 
 # ── Uninstall ─────────────────────────────────────────────────

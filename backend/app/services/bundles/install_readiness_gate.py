@@ -34,21 +34,18 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
+from app.models.bundles.catalog import GateMissingReason
 from app.models.credentials.ai_credential import AICredential
 from app.models.credentials.ai_credential_share import AICredentialShare
 from app.models.credentials.credential import Credential
 from app.models.credentials.credential_share import CredentialShare
 from app.models.credentials.link_models import AgentCredentialLink
+from app.services.credentials.ai_credentials_service import ai_credentials_service
 
 logger = logging.getLogger(__name__)
 
 
 GateStatus = Literal["ready", "needs_setup", "publisher_broken"]
-GateMissingReason = Literal[
-    "placeholder_empty",
-    "publisher_credential_missing",
-    "publisher_credential_unshared",
-]
 
 
 @dataclass
@@ -91,7 +88,11 @@ class InstallReadinessGate:
         # the publisher side the user can't fix it from the setup page,
         # so we want the chat-level message to call that out specifically.
         is_publisher_broken = any(
-            m.reason in ("publisher_credential_missing", "publisher_credential_unshared")
+            m.reason in (
+                "publisher_credential_missing",
+                "publisher_credential_unshared",
+                "publisher_credential_unshareable",
+            )
             for m in missing
         )
         status: GateStatus = "publisher_broken" if is_publisher_broken else "needs_setup"
@@ -250,7 +251,49 @@ class InstallReadinessGate:
                     AICredentialShare.shared_with_user_id == install.owner_id,
                 )
             ).first()
-            if share is None:
+            if share is not None:
+                # **An existing share is checked before the policy, and the
+                # order is the point.** ``is_shareable`` answers "may a share be
+                # *created* now". It does not answer "does one exist". Three
+                # separate facts live here and the previous ordering collapsed
+                # them into one false sentence:
+                #
+                #   1. the share exists;
+                #   2. it still works — this installer can use the credential;
+                #   3. it will not be created again, for this or any other
+                #      installer, because the credential is admin-managed.
+                #
+                # Only (3) is about policy, and reporting it as
+                # ``publisher_credential_unshareable`` told an installer whose
+                # install was working that their publisher's credential "cannot
+                # be shared". This list is "what the install is *missing*", and
+                # a credential the installer can already use is not missing, so
+                # the honest answer here is nothing at all. Fact (3) belongs to
+                # the publisher, at publish time, where somebody can act on it —
+                # see ``PublishService.publisher_ai_credential_notices``.
+                #
+                # **Accepted consequence, recorded as accepted.** Existing share
+                # rows are left in place: revoking or migrating them would break
+                # installs that work today, and that trade was taken
+                # deliberately. It means a publisher who never opens the publish
+                # flow again leaves such a share live indefinitely. That is the
+                # cost of not breaking working installs, not an oversight to be
+                # tidied up later.
+                continue
+
+            # No share, so the question is whether one could be made. Answered
+            # by the same predicate the share path enforces rather than inferred
+            # from the absence of a row: a credential the platform provisioned
+            # for one person can never be shared, and telling the publisher to
+            # share it is telling them to do something the server will refuse.
+            if not ai_credentials_service.is_shareable(ai_cred):
+                items.append(GateMissingItem(
+                    spec_name=ai_cred.name or f"AI ({slot})",
+                    spec_type="ai_credential",
+                    reason="publisher_credential_unshareable",
+                    is_ai=True,
+                ))
+            else:
                 items.append(GateMissingItem(
                     spec_name=ai_cred.name or f"AI ({slot})",
                     spec_type="ai_credential",
@@ -339,7 +382,19 @@ class InstallReadinessGate:
             f"- {m.spec_name} ({m.spec_type})" for m in missing
         )
 
-        if status == "publisher_broken":
+        if any(m.reason == "publisher_credential_unshareable" for m in missing):
+            # Said separately because the generic publisher-broken copy tells the
+            # publisher to fix it, and this one cannot be fixed by them: the
+            # credential is provisioned per-user by policy. The installer's own
+            # route out is the same, so the second sentence is the actionable
+            # one.
+            lead = (
+                "This bundle is wired to an AI credential that was provisioned "
+                "for one person and cannot be shared. The publisher needs to "
+                "point the bundle at a shareable credential; in the meantime "
+                "you can supply your own from the agent's Credentials tab."
+            )
+        elif status == "publisher_broken":
             lead = (
                 "This bundle's publisher-provided credentials are unavailable. "
                 "The publisher needs to fix this, or you can supply your own "

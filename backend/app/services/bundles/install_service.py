@@ -33,12 +33,11 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
-from sqlalchemy import text
 from sqlmodel import Session, select
 from fastapi import HTTPException
 
 from app.core.config import settings
-from app.core.db import create_session, engine
+from app.core.db import leader_session
 from app.core.security import encrypt_field
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle, BundleInstallMode
@@ -50,6 +49,7 @@ from app.models.bundles.catalog import (
 )
 from app.models.bundles.catalog import SetupCredentialSummary
 from app.models.credentials.ai_credential import AICredential, AICredentialType
+from app.models.credentials.ai_credential_share import AICredentialShare
 from app.models.credentials.credential import Credential
 from app.models.credentials.link_models import AgentCredentialLink
 from app.models.environments.environment import (
@@ -89,48 +89,15 @@ BUNDLE_AUTO_UPDATE_LOCK_KEY = 0x42554E444C4155  # "BUNDLAU"
 
 @contextmanager
 def sweep_leader_session():
-    """Yield a session that holds the sweep's leader lock, or ``None``.
+    """Yield a session that holds the sweep's leader lock, or ``None`` to skip.
 
-    ``None`` means another process already holds the lock and this run should
-    skip.
-
-    The lock has to live on the *same physical connection* for its whole life:
-    ``pg_try_advisory_lock`` is connection-scoped, while a ``Session`` bound to
-    an **engine** hands its connection back to the pool at every ``commit()``.
-    Since the sweep commits once per install, an engine-bound session would
-    strand the lock on a pooled connection — the ``pg_advisory_unlock`` then
-    returns false, the lock is never released, and every subsequent run is
-    locked out forever (i.e. the feature would silently disable itself after
-    its first productive run). Binding the ``Session`` to an explicit
-    ``engine.connect()`` pins it.
+    Thin wrapper over :func:`app.core.db.leader_session`, which owns the
+    connection-pinning rule this needs: the sweep commits once per install, and
+    an engine-bound session would strand the advisory lock on a pooled
+    connection and lock every later run out permanently.
     """
-    if settings.TESTING:
-        # Under test there is no cross-process concurrency to guard against,
-        # and the harness patches ``create_session`` to hand back the
-        # rolled-back test transaction. Checking out a real pooled connection
-        # here would escape that isolation and write to the live database.
-        with create_session() as session:
-            yield session
-        return
-
-    with engine.connect() as connection:
-        acquired = connection.execute(
-            text("SELECT pg_try_advisory_lock(:k)"),
-            {"k": BUNDLE_AUTO_UPDATE_LOCK_KEY},
-        ).scalar_one()
-        connection.commit()
-        if not acquired:
-            yield None
-            return
-        try:
-            with Session(bind=connection) as session:
-                yield session
-        finally:
-            connection.execute(
-                text("SELECT pg_advisory_unlock(:k)"),
-                {"k": BUNDLE_AUTO_UPDATE_LOCK_KEY},
-            )
-            connection.commit()
+    with leader_session(BUNDLE_AUTO_UPDATE_LOCK_KEY) as session:
+        yield session
 
 
 class InstallError(Exception):
@@ -406,15 +373,25 @@ class InstallService:
             user=user,
             bundle=bundle,
         )
+        # A publisher credential that cannot reach this installer must not be
+        # linked. ``_link_publisher_ai_credential`` above has always claimed
+        # that a refused share "lets the bundle fall back to user provides", and
+        # that claim was false: the id was linked regardless, and the env-side
+        # resolver then rejected a credential the installer cannot access —
+        # failing the whole install with "Cannot access the specified
+        # conversation AI credential", which names neither the bundle nor the
+        # reason. Falling back is what the comment always said happens.
         conversation_ai_credential_id = (
-            bundle.publisher_ai_credential_conversation_id
-            if bundle.publisher_ai_credential_conversation_id is not None
-            else request_conv_id
+            InstallService._linkable_publisher_ai_credential(
+                session, bundle.publisher_ai_credential_conversation_id, user
+            )
+            or request_conv_id
         )
         building_ai_credential_id = (
-            bundle.publisher_ai_credential_building_id
-            if bundle.publisher_ai_credential_building_id is not None
-            else request_build_id
+            InstallService._linkable_publisher_ai_credential(
+                session, bundle.publisher_ai_credential_building_id, user
+            )
+            or request_build_id
         )
 
         # 2b. Decide which of the revision's per-mode model overrides may be
@@ -1123,6 +1100,7 @@ class InstallService:
         post-publish gets shares created on the next install / reinstall.
         """
         from app.services.credentials.ai_credentials_service import (
+            AICredentialNotShareableError,
             ai_credentials_service,
         )
 
@@ -1142,6 +1120,23 @@ class InstallService:
                     owner_id=bundle.publisher_user_id,
                     recipient_id=user.id,
                 )
+            except AICredentialNotShareableError:
+                # Not a hiccup: the publisher wired this bundle to a credential
+                # the platform provisioned for one person, and no retry, no
+                # reinstall and no admin action will ever make it shareable.
+                # Swallowing it in the same breath as a transient failure is how
+                # the readiness gate came to tell publishers their credential was
+                # merely "unshared" — a state they would try, and fail, to fix.
+                # The gate has its own reason for this; see
+                # ``InstallReadinessGate._scan_ai_credentials``, which reads the
+                # same ``is_shareable`` predicate rather than inferring anything
+                # from this install's outcome.
+                logger.info(
+                    "Bundle %s is wired to AI credential %s, which is "
+                    "provisioned per-user and cannot be shared; install %s "
+                    "falls back to user-provided credentials.",
+                    bundle.id, credential_id, user.id,
+                )
             except HTTPException as exc:
                 # Most likely: credential row vanished (FK is SET NULL on
                 # the bundle but a small race remains) or some other
@@ -1158,6 +1153,74 @@ class InstallService:
                     "Unexpected error sharing AI credential %s for bundle %s: %s",
                     credential_id, bundle.id, exc,
                 )
+
+    @staticmethod
+    def _linkable_publisher_ai_credential(
+        session: Session, credential_id, user
+    ) -> "uuid.UUID | None":
+        """The bundle's AI credential id, or ``None`` if it cannot be linked.
+
+        Four questions, asked in the order the code asks them, and the position
+        of the third is what the last pass got wrong.
+
+        1. **Does the row still exist?** A vanished credential is not linkable.
+        2. **Is it the installer's own row?** Always linkable, and asked before
+           anything that costs a query; the publisher installing their own
+           bundle needs no share.
+        3. **Does the installer already hold a share?** Then link it: it is
+           working right now. ``is_shareable`` answers whether a share may be
+           *created*, and the widening that made every admin-managed child
+           unshareable deleted no existing rows — so asking the policy first
+           silently dropped a credential that a live ``AICredentialShare`` was
+           still serving, on the next reinstall of a bundle that had been
+           installing fine. Leaving those rows alone is a deliberate, accepted
+           trade: revoking them would break working installs, and the price is
+           that such a share can stay live indefinitely if its publisher never
+           publishes again. The publisher is told, with the action to take, at
+           publish time (``PublishService.publisher_ai_credential_notices``).
+        4. **Could a share be made?** Answered by the same predicate the share
+           path enforces rather than by inferring from the absence of a row:
+           "no share exists" is a symptom shared by a transient failure and by a
+           permanent policy refusal, and only one of those should stop the
+           credential being linked on a later reinstall.
+        """
+        if credential_id is None:
+            return None
+        from app.services.credentials.ai_credentials_service import (
+            ai_credentials_service,
+        )
+
+        credential = session.get(AICredential, credential_id)
+        if credential is None:
+            # A vanished row is not linkable, and the comment this replaces said
+            # the opposite: it claimed linking a dangling id "lets the env-side
+            # resolver produce the existing 'no credential' path". There is no
+            # such path — ``agent_environment.conversation_ai_credential_id`` is
+            # a foreign key, so the dangling id is an ``IntegrityError`` on the
+            # environment insert, i.e. a failed install rather than a fallback.
+            logger.info(
+                "Bundle AI credential %s no longer exists; install for %s falls "
+                "back to their own credentials.", credential_id, user.id,
+            )
+            return None
+        if credential.owner_id == user.id:
+            return credential_id
+        existing_share = session.exec(
+            select(AICredentialShare).where(
+                AICredentialShare.ai_credential_id == credential.id,
+                AICredentialShare.shared_with_user_id == user.id,
+            )
+        ).first()
+        if existing_share is not None:
+            return credential_id
+        if not ai_credentials_service.is_shareable(credential):
+            logger.info(
+                "Bundle AI credential %s is provisioned per-user and cannot "
+                "reach installer %s; falling back to their own credentials.",
+                credential_id, user.id,
+            )
+            return None
+        return credential_id
 
     # ── Apply update ───────────────────────────────────────────────
 

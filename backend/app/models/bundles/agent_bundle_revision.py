@@ -205,6 +205,21 @@ class AgentBundleRevisionPublic(SQLModel):
     published_at: datetime
     release_notes: str | None = None
     install_count: int = 0
+    #: Things the **publisher** needs to know about the revision they just
+    #: published, stated as finished sentences by the server.
+    #:
+    #: **Required, no default**, so a second construction site cannot quietly
+    #: ship a revision with none. It does not oblige the marshaller's callers to
+    #: pass any: ``_revision_to_public`` takes an optional keyword and defaults
+    #: to empty, which is correct — a notice is about the act of publishing, not
+    #: a property of the row, so a listing legitimately has none. Empty is the
+    #: normal answer and means what it says.
+    #:
+    #: The audience is the point. A publisher wiring a bundle to a credential
+    #: that installers will not receive learns it here, at the moment they ship
+    #: — not from the readiness gate, which tells the *installer*, at a moment
+    #: the publisher never sees and cannot act on.
+    publish_notices: list[str]
 
 
 class AgentBundleRevisionsPublic(SQLModel):

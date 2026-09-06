@@ -98,8 +98,17 @@ def _bundle_to_public(session, bundle: AgentBundle) -> AgentBundlePublic:
 
 
 def _revision_to_public(
-    revision: AgentBundleRevision, install_count: int
+    revision: AgentBundleRevision,
+    install_count: int,
+    *,
+    publish_notices: list[str] | None = None,
 ) -> AgentBundleRevisionPublic:
+    """The one marshaller for a revision.
+
+    ``publish_notices`` is keyword-only and defaults to nothing because it is
+    not a property of the row: it is what the server has to say to the person
+    who *just published*. A listing has no such moment and passes none.
+    """
     return AgentBundleRevisionPublic(
         id=revision.id,
         bundle_id=revision.bundle_id,
@@ -121,6 +130,7 @@ def _revision_to_public(
         published_at=revision.published_at,
         release_notes=revision.release_notes,
         install_count=install_count,
+        publish_notices=list(publish_notices or []),
     )
 
 
