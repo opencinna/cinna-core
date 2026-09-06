@@ -10,11 +10,47 @@ import jwt
 from jinja2 import Template
 from jwt.exceptions import InvalidTokenError
 
+from sqlmodel import Session
+
 from app.core import security
 from app.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def restore_session(session: Session) -> None:
+    """Make ``session`` usable again after a failed database operation.
+
+    Unconditional, and the unconditionality is the whole content of this
+    function. The obvious guard — ``if not session.is_active`` — detects only
+    half the problem. A *flush* failure (an ``IntegrityError`` out of
+    ``commit``) does deactivate the ``SessionTransaction``, so ``is_active``
+    goes False. A *statement* failure (a ``select`` that errors, a lock
+    timeout, a serialization failure, a connection dropped mid-statement)
+    leaves Postgres' transaction aborted while SQLAlchemy's
+    ``SessionTransaction`` is still nominally active, so ``is_active`` stays
+    True and the guard skips exactly the case that most needs the rollback.
+    The next ``commit`` on that session then dies with "current transaction is
+    aborted" — inside whatever unrelated code happens to run next.
+
+    Whether rolling back is *safe* is the caller's judgement, not this
+    function's: it discards everything not yet committed. Callers use it where
+    the only pending work belongs to the operation that just failed.
+
+    Lives here rather than in either service that needs it because it is a
+    pure session-lifecycle helper with no domain knowledge, and having two
+    copies is how one of them ends up guarded on ``is_active`` again — see
+    ``AccountProvisioningService`` and ``ManagedAICredentialsService.add_members``,
+    which are the two ends of the same account-creation path.
+
+    Never raises: it is called from failure handlers that have already been
+    promised not to throw.
+    """
+    try:
+        session.rollback()
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("Failed to roll back the session after a failure.")
 
 
 def as_utc(value: datetime) -> datetime:
