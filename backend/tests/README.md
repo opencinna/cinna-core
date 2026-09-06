@@ -181,6 +181,7 @@ tests/
   utils/
     utils.py               # random_lower_string(), random_email(), get_superuser_token_headers()
     user.py                # create_random_user(), user_authentication_headers()
+    account_provisioning.py# on_account_created seam + SQL fault injection (documented Rule-1 exemption)
     agent.py               # create_agent_via_api(), get_agent(), enable_a2a()
     ai_credential.py       # create_random_ai_credential(), set/update/delete/get helpers
     a2a.py                 # setup_a2a_agent(), a2a_headers(), extract_parts_from_sse_event(), extract_task_id(), etc.
@@ -191,6 +192,8 @@ tests/
     environment.py         # set_environment_status(), link_ai_credential_to_environment() (documented DB-seam helpers)
     fixtures.py            # shared stub fixtures, CREATE_SESSION_TARGETS_*, BACKGROUND_TASK_TARGETS_* patch lists
     mail_server.py         # create_imap_server(), create_smtp_server() — superuser-only route
+    managed_ai_credential.py # /admin/llm-providers CRUD + apply-to-existing wrappers
+    network_guard.py       # no_outbound_http() tripwire for "no provider was contacted" claims
     platform_token.py      # mint_platform_token() — raw/expired/scoped JWTs (documented app.core.security exemption)
     session.py             # get_agent_session(), get_session(), list_sessions()
     message.py             # get_messages_by_role(), list_messages()
