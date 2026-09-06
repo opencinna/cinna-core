@@ -5,6 +5,7 @@ from app.api.deps import CurrentUser, SessionDep
 from app.models import LoginResponse, LoginToken, Message, MfaChallenge, OAuthConfig
 from app.services.users.access_policy_service import RegistrationNotAllowedError
 from app.services.users.auth_service import AuthService
+from app.services.users.invitation_service import InvitationService
 from app.services.users.mfa_service import MfaService
 
 router = APIRouter(prefix="/auth", tags=["oauth"])
@@ -54,6 +55,10 @@ async def google_callback(
     - :class:`LoginToken` (``kind="token"``) for users without 2FA.
     - :class:`MfaChallenge` (``kind="mfa_challenge"``) when the user has
       2FA enabled — the frontend completes via ``/login/mfa/verify``.
+
+    A Google login on a pre-created invited account also settles that
+    invitation. The hook is deliberately below the error handlers rather than
+    inside the ``try`` — see the comment there.
     """
     if not AuthService.is_google_oauth_enabled():
         raise HTTPException(
@@ -61,6 +66,7 @@ async def google_callback(
             detail="Google OAuth is not configured",
         )
 
+    response: LoginToken | MfaChallenge
     try:
         result = await AuthService.authenticate_with_google(
             session=session, code=body.code, state=body.state
@@ -76,21 +82,23 @@ async def google_callback(
                 user=result.user,
                 token=body.trusted_device_token,
             ):
-                return LoginToken(
+                response = LoginToken(
                     access_token=AuthService.create_access_token(result.user.id)
                 )
-            challenge = result.mfa_challenge
-            assert challenge is not None  # for mypy; guarded by requires_mfa
-            return MfaChallenge(
-                challenge_token=challenge.challenge_token,
-                expires_at=challenge.expires_at,
-                allowed_methods=MfaService.allowed_methods_for_user(
-                    session=session, user=result.user
-                ),
-            )
-
-        assert result.access_token is not None
-        return LoginToken(access_token=result.access_token)
+            else:
+                challenge = result.mfa_challenge
+                assert challenge is not None  # for mypy; guarded by requires_mfa
+                response = MfaChallenge(
+                    challenge_token=challenge.challenge_token,
+                    expires_at=challenge.expires_at,
+                    allowed_methods=MfaService.allowed_methods_for_user(
+                        session=session, user=result.user
+                    ),
+                )
+        else:
+            assert result.access_token is not None
+            response = LoginToken(access_token=result.access_token)
+        authenticated_user = result.user
 
     except RegistrationNotAllowedError as e:
         # Same status and body as the signup route: one refusal shape for
@@ -101,6 +109,27 @@ async def google_callback(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth error: {str(e)}")
+
+    # ── Outside every net above, and that placement is the whole point ──
+    #
+    # The blanket ``except Exception`` a few lines up turns anything raised
+    # inside the ``try`` into ``400 "OAuth error"``. A failure to tick an
+    # invitation as accepted would therefore become a **failed login for an
+    # account that just successfully authenticated with Google**. Marking an
+    # invitation accepted is a side record; if it fails, the correct outcome
+    # is a signed-in person and a stale ``pending`` row the admin can see and
+    # resend. ``mark_accepted_if_pending`` is also non-raising by contract and
+    # leaves the session usable — belt and braces, because the cost of getting
+    # this wrong is someone locked out of their own new account.
+    #
+    # Only on the token arm: an MFA challenge means the person has *not*
+    # finished authenticating yet, and settling their invitation there would
+    # record an acceptance that never happened.
+    if isinstance(response, LoginToken):
+        await InvitationService.mark_accepted_if_pending(
+            session, authenticated_user, method="google"
+        )
+    return response
 
 
 @router.post("/google/link", response_model=Message)
@@ -114,6 +143,20 @@ async def link_google_account_endpoint(
         )
         return Message(message="Google account linked successfully")
 
+    except RegistrationNotAllowedError as e:
+        # Listed above the ``ValueError`` arm, which would otherwise swallow it
+        # — ``RegistrationNotAllowedError`` is a ``ValueError`` subclass, and
+        # the first matching arm wins. Same status and body the callback gives
+        # the same refusal, so the two routes cannot disagree about what a
+        # policy refusal looks like.
+        #
+        # Not reachable today: ``link_google_account_for_user`` refuses anyone
+        # who already has a ``google_id``, so everyone who reaches the claim
+        # gate inside ``link_google_account`` authenticated with a password and
+        # is therefore claimed. Kept because the *only* thing standing between
+        # here and a mislabelled 400 is that reachability argument, and a
+        # handler is cheaper than re-deriving it after the next change.
+        raise HTTPException(status_code=403, detail=e.reason)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

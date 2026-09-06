@@ -1,9 +1,10 @@
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, col, delete, func, select
+from sqlmodel import Session, delete, func, select
 
 from app.api.deps import (
     CurrentUser,
@@ -13,14 +14,19 @@ from app.api.deps import (
 from app.core.config import settings
 from app.services.users.user_service import UserService
 from app.models import (
+    InvitationLinkPublic,
+    InviteUserRequest,
+    InviteUserResponse,
     Message,
     ResendConfirmationResponse,
+    ResendInvitationResponse,
     SetPassword,
     UpdatePassword,
     User,
     UserCreate,
     UserPublic,
     UserRegister,
+    UserInvitationPublic,
     UserRolePublic,
     UserRoleUpdate,
     UserDetailsUpdate,
@@ -39,6 +45,13 @@ from app.services.users.access_policy_service import (
     RegistrationNotAllowedError,
 )
 from app.services.users.email_confirmation_service import EmailConfirmationService
+from app.services.users.invitation_service import (
+    InvitationAlreadyAcceptedError,
+    InvitationCooldownError,
+    InvitationNotFoundError,
+    InvitationNotPendingError,
+    InvitationService,
+)
 from app.models.users.user import (
     AIServiceCredentials,
     AIServiceCredentialsUpdate,
@@ -117,9 +130,22 @@ def read_users(
     # One policy read for the whole page — it is the same answer for every
     # row, and resolving per row would be a query per user.
     can_change_email = AccessPolicyService.can_change_email(session)
+    # Same reasoning, one step further: the invitation status is per row, so
+    # it cannot be hoisted to a single value — but the *query* can.
+    # ``status_map`` is one ``IN`` over the page's user ids, not a lookup per
+    # row inside the builder; accounts with no invitation are absent from the
+    # result, which is the correct ``None``.
+    invitation_status_by_user = InvitationService.status_map(
+        session, [u.id for u in users]
+    )
     return UsersPublic(
         data=[
-            _user_to_public(session, u, can_change_email=can_change_email)
+            _user_to_public(
+                session,
+                u,
+                can_change_email=can_change_email,
+                invitation_status=invitation_status_by_user.get(u.id),
+            )
             for u in users
         ],
         count=count,
@@ -207,6 +233,213 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
             session=session, user=user, force=True
         )
     return _user_to_public(session, user)
+
+
+# ── Invitations ─────────────────────────────────────────────────────────
+#
+# The administrator's half of the invitation lifecycle. Every route here is
+# superuser-only, which is what lets them answer specifically: 404 for an
+# account with no invitation, 409 for one already accepted, 429 with the
+# cooldown deadline. The *public* half — lookup and accept — lives in
+# ``routes/invitations.py`` and answers one generic 400 for everything,
+# because there the caller is anonymous and any distinction is an oracle.
+#
+# ``get_current_active_superuser`` refuses before any lookup runs, so a
+# non-admin gets the same 403 for a user id that exists and one that does
+# not; the invitation surface is not an account enumerator.
+
+
+@router.post(
+    "/invite",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_model=InviteUserResponse,
+)
+async def invite_user(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    data: InviteUserRequest,
+) -> Any:
+    """Create a passwordless account and offer it to its owner.
+
+    The account is created through the one chokepoint, the managed AI
+    credentials the admin chose are granted through
+    ``AccountProvisioningService``, and the invitation row is written and
+    mailed. Provisioning and mail cannot fail the invite — the response
+    reports what happened through ``provisioning`` and ``email_sent``, and
+    ``accept_url`` is returned either way so an instance with no SMTP (the
+    default) is still usable: the admin hands the link over.
+
+    ``is_superuser`` is not a request field. It is derived from the role
+    inside the service, because ``create_account`` will accept
+    ``role="admin", is_superuser=False`` and produce a row that breaks the
+    role ⇔ superuser invariant.
+    """
+    # For the wizard's "resend instead?" hint only. ``create_account`` stays
+    # the authority — it normalises the address before its own duplicate
+    # check, so a case-differing address gets past this one and is caught
+    # below. Same two-step, and same reason, as ``create_user`` above.
+    #
+    # The one account this refusal must NOT catch is an interrupted invite:
+    # a row an earlier attempt committed before failing to write its
+    # invitation. Re-submitting the wizard is the admin's repair for that, and
+    # the service adopts the row. The predicate is narrow — no password, no
+    # Google identity, no invitation row — so a real duplicate, invited or
+    # otherwise, is still refused here.
+    existing = UserService.get_user_by_email(session=session, email=data.email)
+    if existing is not None and not InvitationService.is_interrupted_invite(
+        session, existing
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="The user with this email already exists in the system.",
+        )
+    try:
+        result = await InvitationService.invite(
+            session, admin=current_user, data=data
+        )
+    except ValueError as e:
+        # One handler for all three of ``create_account``'s refusals:
+        # malformed address, duplicate address, invalid role. Superuser
+        # context, so the specific reason is safe to return.
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Through the builder, never ``UserPublic.model_validate``: by this point
+    # the account row, its provisioned children, the invitation and the audit
+    # events have each committed, so the instance is expired and
+    # ``model_dump()`` — which reads ``__dict__`` and emits no SELECT — would
+    # hand back a projection missing ``id`` and ``email``.
+    return InviteUserResponse(
+        user=_user_to_public(session, result.user),
+        invitation=result.invitation,
+        accept_url=result.accept_url,
+        email_sent=result.email_sent,
+        provisioning=result.provisioning,
+        adopted_existing_account=result.adopted_existing_account,
+    )
+
+
+@router.get(
+    "/{user_id}/invitation",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_model=UserInvitationPublic,
+)
+def read_user_invitation(session: SessionDep, user_id: uuid.UUID) -> Any:
+    """The invitation for one account, as an administrator sees it."""
+    invitation = InvitationService.get_for_user(session, user_id)
+    if invitation is None:
+        raise HTTPException(
+            status_code=404, detail="No invitation exists for this account"
+        )
+    return InvitationService.to_public(session, invitation)
+
+
+@router.post(
+    "/{user_id}/invitation/resend",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_model=ResendInvitationResponse,
+)
+async def resend_user_invitation(
+    session: SessionDep, current_user: CurrentUser, user_id: uuid.UUID
+) -> Any:
+    """Issue and mail a fresh link, invalidating the previous one.
+
+    The repair action for every non-accepted state: expiry is exactly what
+    resend fixes, and a revoked invitation is reactivated by design. Only
+    acceptance refuses, because there is nothing left to offer.
+    """
+    try:
+        result = await InvitationService.resend(
+            session, admin=current_user, user_id=user_id
+        )
+    except InvitationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except InvitationAlreadyAcceptedError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except InvitationCooldownError as e:
+        # Per-row cooldown, so the deadline is specific to this invitation and
+        # the UI can count down against it. ``Retry-After`` mirrors it for
+        # anything that reads headers rather than bodies.
+        # Floored at one second, matching ``RateLimiter.check`` — a
+        # ``Retry-After: 0`` invites an immediate retry that would be refused
+        # again.
+        retry_after = max(
+            1,
+            int((e.available_at - datetime.now(UTC)).total_seconds()),
+        )
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "invitation_resend_cooldown",
+                "message": str(e),
+                "resend_available_at": e.available_at.isoformat(),
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
+    return ResendInvitationResponse(
+        invitation=result.invitation,
+        accept_url=result.accept_url,
+        email_sent=result.email_sent,
+    )
+
+
+@router.post(
+    "/{user_id}/invitation/revoke",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_model=UserInvitationPublic,
+)
+async def revoke_user_invitation(
+    session: SessionDep, current_user: CurrentUser, user_id: uuid.UUID
+) -> Any:
+    """Withdraw an outstanding invitation.
+
+    Idempotent, and revoking an already-expired invitation succeeds — neither
+    is a state this request transitions. Only acceptance refuses.
+    """
+    try:
+        return await InvitationService.revoke(
+            session, admin=current_user, user_id=user_id
+        )
+    except InvitationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except InvitationAlreadyAcceptedError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.get(
+    "/{user_id}/invitation/link",
+    dependencies=[Depends(get_current_active_superuser)],
+    response_model=InvitationLinkPublic,
+)
+async def read_user_invitation_link(
+    session: SessionDep, current_user: CurrentUser, user_id: uuid.UUID
+) -> Any:
+    """Read out the live accept link without rotating it.
+
+    Deliberately not resend: rotating ``token_jti`` here would invalidate the
+    email the person may be about to click, purely because an admin wanted to
+    read the link out. So the token is minted from the ``jti`` already stored
+    on the row, which keeps the outstanding link the only live one.
+
+    Refused for anything but a pending invitation: the link for a revoked,
+    expired or accepted one would verify its signature and then be rejected by
+    the accept endpoint as indistinguishable from a forgery, so handing it
+    over would be handing over a dud. Resend is the action for those.
+
+    Audited, because handing the link to someone signs them in as that
+    account. It grants the admin nothing they did not already have.
+    """
+    try:
+        accept_url, expires_at = await InvitationService.issue_link(
+            session, admin=current_user, user_id=user_id
+        )
+    except InvitationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except InvitationNotPendingError as e:
+        # 409 with the status named: superuser context, where the specific
+        # reason is what tells the admin to send a new invitation instead.
+        raise HTTPException(status_code=409, detail=str(e))
+    return InvitationLinkPublic(accept_url=accept_url, expires_at=expires_at)
 
 
 @router.patch("/me", response_model=UserPublic)

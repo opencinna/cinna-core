@@ -296,6 +296,22 @@ class Settings(BaseSettings):
     AGENT_LIMIT_UNCONFIRMED: int = 5
     AGENT_LIMIT_CONFIRMED: int = 50
 
+    # ── Invitations (zero-touch onboarding phase 3) ──────────────────────
+    # Lifetime of an invitation, and of the JWT that carries it — the two are
+    # the same number by construction: the token's ``exp`` is the row's
+    # ``expires_at``, so a link can never outlive the invitation it points at
+    # or vice versa. Resending extends both together.
+    INVITATION_EXPIRE_DAYS: int = 7
+    # Minimum seconds between resends of the same invitation. Per row, off
+    # ``user_invitation.last_sent_at`` — not a global throttle, because the
+    # thing being protected is one person's inbox, not the server.
+    INVITATION_RESEND_COOLDOWN_SECONDS: int = 300  # 5 min between resends
+    # Per-IP budget for the two anonymous invitation endpoints (lookup and
+    # accept). Lower than the access-policy projection's because these take an
+    # attacker-chosen token as input and each one costs an indexed SELECT,
+    # while that projection is one cached row identical for every caller.
+    INVITATION_RATE_LIMIT_PER_MIN: int = 30
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def emails_enabled(self) -> bool:

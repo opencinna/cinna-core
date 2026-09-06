@@ -32,6 +32,7 @@ from app.services.users.access_policy_service import (
     PasswordAuthDisabledError,
 )
 from app.services.users.email_confirmation_service import EmailConfirmationService
+from app.services.users.invitation_service import InvitationService
 from app.services.users.mfa_service import FIRST_FACTOR_PASSWORD, MfaService
 from app.services.users.user_service import UserService
 from app.utils import (
@@ -252,27 +253,48 @@ def test_token(session: SessionDep, current_user: CurrentUser) -> Any:
 @router.post("/password-recovery/{email}")
 def recover_password(email: str, session: SessionDep) -> Message:
     """
-    Password Recovery
+    Public, by-email password recovery.
 
-    When password auth is off the service skips the send silently and this
-    still answers with the generic success message — telling the caller that
-    recovery was refused would identify which addresses belong to superusers,
-    who keep the break-glass path.
+    Non-enumerating: always the same 200 and the same body whether or not
+    the address has an account. Every reason not to send — unknown address,
+    inactive account, password auth off for this user (superusers keep the
+    break-glass path, so a refusal would identify them), cooldown, or a mail
+    failure — is a silent no-op inside the service. The return value of
+    ``recover_password`` is deliberately not projected into the response.
+
+    Status and body carry no signal; response *time* still does, because a
+    real send does its SMTP round-trip inside the request. See
+    ``UserService.recover_password`` for why that residual is left open.
     """
-    try:
-        UserService.recover_password(session=session, email=email)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return Message(message="Password recovery email sent")
+    UserService.recover_password(session=session, email=email)
+    return Message(
+        message="If an account exists for that email, a password recovery email has been sent"
+    )
 
 
 @router.post("/reset-password/")
-def reset_password(session: SessionDep, body: NewPassword) -> Message:
+async def reset_password(session: SessionDep, body: NewPassword) -> Message:
     """
-    Reset password
+    Reset password.
+
+    Completing a reset proves control of the address, so it also settles an
+    outstanding invitation for that account — an invited person who used
+    "forgot password" instead of their invite link has still accepted.
+
+    ``async def`` only because that bookkeeping emits a security event and
+    ``SecurityEventService.create_event`` is a coroutine. The route's
+    behaviour, status codes and body are unchanged.
+
+    The hook is placed **after** the ``except`` block, outside the
+    ``ValueError`` net above, and this is not stylistic: that net maps any
+    unrecognised ``ValueError`` to a **404**, so a bookkeeping failure raised
+    inside it would answer a successful password reset with "the user does not
+    exist". ``mark_accepted_if_pending`` is non-raising by contract as well —
+    two independent reasons, because invitation bookkeeping must never cost
+    someone an authentication they already completed.
     """
     try:
-        UserService.reset_password(
+        user = UserService.reset_password(
             session=session, token=body.token, new_password=body.new_password
         )
     except ValueError as e:
@@ -285,6 +307,9 @@ def reset_password(session: SessionDep, body: NewPassword) -> Message:
             raise HTTPException(status_code=403, detail=detail)
         else:
             raise HTTPException(status_code=404, detail=detail)
+    await InvitationService.mark_accepted_if_pending(
+        session, user, method="reset_password"
+    )
     return Message(message="Password updated successfully")
 
 

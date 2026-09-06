@@ -1,6 +1,7 @@
 """
 Auth Service - Business logic for authentication and OAuth operations.
 """
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -13,10 +14,13 @@ from app.core import security
 from app.core.config import settings
 from app.models import AccountOrigin, User, UserMfaChallenge
 from app.services.users.access_policy_service import (
+    REASON_REGISTRATION_CLOSED,
     AccessPolicyService,
     RegistrationNotAllowedError,
 )
 from app.services.users.user_service import UserService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -233,6 +237,56 @@ class AuthService:
         """
         Link a Google account to an existing user.
 
+        THE THIRD CLAIM DOOR
+        --------------------
+        This write is how an account acquires a Google identity, and for an
+        account that has never been claimed it *is* the claim: afterwards the
+        person is signed in and ``is_unclaimed`` is false forever. So it asks
+        the same question the two password doors ask —
+        ``InvitationService.claim_refused`` — and refuses for the same reason.
+
+        Without it, revocation was decorative against Google. The invite link
+        was gated by ``_resolve``, password recovery by ``claim_refused``, and
+        this path by nothing: a revoked invitee pressed "Sign in with Google"
+        on the same address and was in, with the invitation still reading
+        ``revoked``; an *expired* ``admin`` invitation let them in as a
+        superuser, and stayed claimable forever because nothing deactivates an
+        account when an offer merely lapses.
+
+        The gate is here, on the write, rather than at the branch in
+        :meth:`authenticate_with_google` that reaches it, for the same reason
+        ``create_user_from_google`` checks the policy inside itself: a caller
+        that forgets is refused anyway. A *claimed* account — anything with a
+        password or an existing ``google_id``, i.e. every account the
+        ``/google/link`` route can be called for — fails ``is_unclaimed`` and
+        is unaffected, permanently.
+
+        THE REFUSAL IS DELIBERATELY SOMEONE ELSE'S REFUSAL
+        --------------------------------------------------
+        ``RegistrationNotAllowedError(REASON_REGISTRATION_CLOSED)`` — the exact
+        error, status and body the OAuth callback already returns for a
+        *stranger's* address on an invite-only instance. A refusal shape of its
+        own would be an enumeration oracle: it would say "this address has an
+        account whose invitation is not pending", which is precisely what every
+        other invitation surface goes to lengths not to say. Reusing the
+        registration refusal says only "not here", the same thing an address
+        with no account at all is told.
+
+        That last sentence holds exactly on an ``invite_only`` instance, which
+        is the configuration invitations are for. On an *open* one the answers
+        do diverge — a stranger's address is registered and signed in, this one
+        is refused — and the reason code is then literally untrue as well. It
+        is deliberately left that way rather than made policy-dependent: the
+        divergence is not observable by anyone but the address's owner, since
+        reaching this code at all requires a Google-signed ``id_token`` for it,
+        and a gate whose *answer* depended on the registration mode would be a
+        second implementation of the registration policy living here.
+
+        It is also a *typed* refusal, which matters: the callback route catches
+        ``RegistrationNotAllowedError`` above its blanket
+        ``except Exception → 400 "OAuth error"``, so this arrives as the
+        deliberate 403 it is rather than as a mislabelled server hiccup.
+
         Args:
             session: Database session
             user: User to link
@@ -240,7 +294,34 @@ class AuthService:
 
         Returns:
             Updated User
+
+        Raises:
+            RegistrationNotAllowedError: If this never-claimed account may no
+                longer be claimed. ``str(exc)`` is the reason code.
         """
+        # Deferred import: ``InvitationService`` reaches back into this
+        # package (``UserService``, ``AccessPolicyService``), so the edge is
+        # kept out of module import time — the same shape the
+        # ``EmailConfirmationService`` and ``MfaService`` imports below use.
+        from app.services.users.invitation_service import InvitationService
+
+        # Snapshotted *before* the predicate runs, while the session is known
+        # good. ``claim_refused`` fails closed by rolling back and repairing
+        # the session, after which ``user`` is expired and ``user.id`` is a
+        # fresh SELECT — so reading it in the log line below would be the one
+        # statement able to throw out of a branch whose whole job is to
+        # refuse cleanly.
+        user_id = user.id
+
+        if InvitationService.claim_refused(session, user):
+            logger.info(
+                "Refusing to link a Google identity to user %s: the account "
+                "was invited, has never been claimed, and the invitation is "
+                "no longer pending.",
+                user_id,
+            )
+            raise RegistrationNotAllowedError(REASON_REGISTRATION_CLOSED)
+
         user.google_id = google_id
         session.add(user)
         session.commit()
@@ -334,7 +415,11 @@ class AuthService:
             # Check if user exists by email (auto-link)
             user = cls.get_user_by_email(session=session, email=email)
             if user:
-                # Auto-link Google account to existing email user
+                # Auto-link Google account to existing email user. Gated
+                # inside ``link_google_account``: for a never-claimed invited
+                # account this call *is* the claim, so it asks the same
+                # question the password doors ask and raises the same generic
+                # registration refusal when the answer is no.
                 user = cls.link_google_account(
                     session=session, user=user, google_id=google_id
                 )

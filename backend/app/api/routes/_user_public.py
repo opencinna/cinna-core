@@ -95,13 +95,27 @@ def _load_missing_columns(user: User) -> None:
 
 
 def user_to_public(
-    session: Session, user: User, *, can_change_email: bool | None = None
+    session: Session,
+    user: User,
+    *,
+    can_change_email: bool | None = None,
+    invitation_status: str | None = None,
 ) -> UserPublic:
     """Build :class:`UserPublic` for ``user``, populating the derived fields.
 
     ``can_change_email`` is an instance-wide policy fact, identical for every
     user in a response. Pass it in when projecting a list so the policy is
     resolved once instead of once per row.
+
+    ``invitation_status`` is per-row and is **not** resolved here when it is
+    omitted, unlike ``can_change_email``. That asymmetry is deliberate: a
+    lookup inside the builder would be one query per user on the admin list
+    and one query per request on ``/users/me``, ``/login/test-token`` and the
+    eight other single-row producers that have no use for it. The one caller
+    that wants it — ``read_users`` — fetches the whole page's statuses in a
+    single ``IN`` query and passes the answer in. Everywhere else the field
+    stays ``None``, which is also the honest answer for an account that was
+    never invited.
     """
     if can_change_email is None:
         can_change_email = AccessPolicyService.can_change_email(session)
@@ -111,6 +125,7 @@ def user_to_public(
     return UserPublic(
         **user.model_dump(),
         can_change_email=can_change_email,
+        invitation_status=invitation_status,
         has_google_account=bool(user.google_id),
         has_password=bool(user.hashed_password),
         has_passkey=MfaService.has_passkey(session=session, user_id=user.id),

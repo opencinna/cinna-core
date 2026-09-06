@@ -38,11 +38,60 @@ from app.services.users.role_service import RoleService
 from app.utils import (
     generate_password_reset_token,
     generate_reset_password_email,
+    restore_session,
     send_email,
     verify_password_reset_token,
 )
 
 logger = logging.getLogger(__name__)
+
+# Fixed dummy hash used to equalise the cost of a failed login against a
+# successful one. Computed lazily so importing this module never pays a bcrypt
+# round, and cached so the cost is identical on every call after the first.
+_dummy_password_hash: str | None = None
+
+
+def _safe_verify_password(password: str, hashed_password: str) -> bool:
+    """bcrypt comparison that reports a mismatch instead of raising.
+
+    passlib raises ``PasswordSizeError`` once a candidate exceeds
+    ``MAX_PASSWORD_SIZE`` (4096 bytes — bcrypt's 72-byte limit is only a
+    silent truncation, not the raising threshold). Uncaught, that is a 500 on
+    exactly one of the two login branches while the other still answers 400,
+    which is an enumeration oracle whichever branch it lands on. Both branches
+    go through this helper, so a malformed candidate is an ordinary failed
+    login either way.
+    """
+    try:
+        return verify_password(password, hashed_password)
+    except Exception:  # noqa: BLE001 — a malformed candidate is a failed login.
+        logger.debug("password verification failed", exc_info=True)
+        return False
+
+
+def _burn_password_verification(password: str) -> None:
+    """Spend one bcrypt verification against a throwaway hash.
+
+    Called on the login paths that have no stored hash to compare against, so
+    that "no such user" and "wrong password" take the same time. The result is
+    discarded — this exists purely for its cost.
+
+    Exact only while every stored hash uses the current bcrypt cost factor:
+    ``pwd_context`` is single-scheme today, so the dummy hash is generated at
+    the same rounds users' hashes were. Raising the cost later would leave
+    legacy hashes verifying more cheaply than this dummy.
+    """
+    global _dummy_password_hash
+    try:
+        if _dummy_password_hash is None:
+            _dummy_password_hash = get_password_hash(secrets.token_urlsafe(32))
+    except Exception:  # noqa: BLE001 — this call exists only for its cost.
+        # Leaving the cache unset means the next miss retries the hash, so the
+        # failure mode is a *slower* miss, never a faster one.
+        logger.debug("dummy password hash generation failed", exc_info=True)
+        return
+    _safe_verify_password(password, _dummy_password_hash)
+
 
 # Single validator for externally-supplied addresses (see
 # ``UserService.create_external_user``). Mirrors ``UserBase.email``.
@@ -341,13 +390,22 @@ class UserService:
 
     @staticmethod
     def authenticate(*, session: Session, email: str, password: str) -> User | None:
-        """Authenticate a user by email and password. Returns None on failure."""
+        """Authenticate a user by email and password. Returns None on failure.
+
+        The status code and body are already identical for every failure, but
+        *timing* was not: returning early on an unknown address (or a
+        Google-only account with no password) skipped the bcrypt comparison
+        entirely, so an unknown address answered in single-digit milliseconds
+        while a known one paid the full hash cost. Both misses now burn the
+        same work via :func:`_burn_password_verification`, so the response
+        time carries no signal either. This costs nothing on the success
+        path, which always paid for a real comparison.
+        """
         db_user = UserService.get_user_by_email(session=session, email=email)
-        if not db_user:
+        if not db_user or not db_user.hashed_password:
+            _burn_password_verification(password)
             return None
-        if not db_user.hashed_password:
-            return None
-        if not verify_password(password, db_user.hashed_password):
+        if not _safe_verify_password(password, db_user.hashed_password):
             return None
         return db_user
 
@@ -540,9 +598,18 @@ class UserService:
         session.commit()
 
     @staticmethod
-    def reset_password(*, session: Session, token: str, new_password: str) -> None:
+    def reset_password(
+        *, session: Session, token: str, new_password: str
+    ) -> User:
         """
         Reset password using a password-reset token.
+
+        Returns the user whose password was reset. It used to return ``None``,
+        which left the route with no identity to act on — and the route needs
+        one: completing a reset proves control of the address, so an
+        outstanding invitation for that account is thereby accepted. Returning
+        the row this method already holds is one line; the alternative was the
+        route decoding the same token a second time to look the user up again.
 
         Raises:
             ValueError: If token invalid, user not found, user inactive, or
@@ -559,6 +626,30 @@ class UserService:
             )
         if not user.is_active:
             raise ValueError("Inactive user")
+        # A never-claimed invited account whose invitation is no longer
+        # pending cannot be claimed through this door either — otherwise a
+        # reset link mailed while the invitation was still open outlives the
+        # admin's revocation. Answered as "Invalid token" rather than with a
+        # branch of its own: the reason is the account's state, not the
+        # token's, and a distinct status here would report it to whoever holds
+        # the link. See ``InvitationService.claim_refused``.
+        #
+        # The id is snapshotted *before* the predicate runs, while the session
+        # is known good: ``claim_refused`` fails closed by rolling back and
+        # repairing the session, after which ``user`` is expired and
+        # ``user.id`` is a fresh SELECT. Reading it in the log line below
+        # would be the one statement able to throw out of the refusal branch,
+        # turning this deliberate 400 into a 500 for an address that has an
+        # account — beside the 400 a forged token gets, which is the oracle
+        # the whole non-raising contract exists to avoid.
+        user_id = user.id
+        if UserService._claim_refused(session, user):
+            logger.info(
+                "Refusing a password reset for user %s: the account was "
+                "invited and the invitation is no longer pending.",
+                user_id,
+            )
+            raise ValueError("Invalid token")
         # Gated here rather than in the route because this is the only place
         # the token's owner is resolved; the route maps the reason code to a
         # 403. Superusers keep the break-glass path.
@@ -566,6 +657,7 @@ class UserService:
         user.hashed_password = get_password_hash(password=new_password)
         session.add(user)
         session.commit()
+        return user
 
     @staticmethod
     def disable_all_factors(
@@ -628,31 +720,79 @@ class UserService:
         session.refresh(user)
 
     @staticmethod
-    def recover_password(*, session: Session, email: str) -> None:
+    def _claim_refused(session: Session, user: User) -> bool:
+        """Deferred-import shim over ``InvitationService.claim_refused``.
+
+        Deferred, not a module-level import: ``InvitationService`` imports
+        this module for ``create_account``, so the edge only goes one way at
+        import time. Same shape as ``create_account``'s deferred import of
+        ``AccountProvisioningService``, and for the same reason.
+
+        Nothing else lives here. The predicate is one function serving three
+        doors — the two password ones below and the Google auto-link — and it
+        owns its own fail-closed net, so a ``try`` here would be a second
+        implementation of that policy in the one file most likely to drift
+        from it.
         """
-        Send a password recovery email.
+        from app.services.users.invitation_service import InvitationService
+
+        return InvitationService.claim_refused(session, user)
+
+    @staticmethod
+    def recover_password(*, session: Session, email: str) -> bool:
+        """
+        Send a password recovery email. Always silent (no enumeration oracle).
+
+        Every reason not to send — unknown address, inactive account, password
+        auth off for this user, cooldown still running, email delivery
+        unconfigured or failing — is a silent no-op, so the *response* is
+        identical for an address that has an account and one that does not.
+        The mirror of :meth:`EmailConfirmationService.resend_confirmation`.
+
+        Identical in status and body, but NOT in wall-clock time: a real send
+        does a synchronous SMTP round-trip inside the request, so the first
+        probe of a registered address is measurably slower than one of an
+        unregistered address (later probes are fast either way — the cooldown
+        short-circuits them). Closing that residual means moving the send off
+        the request path, which is deliberately left out of this change; an
+        artificial delay would only trade one signal for a worse one.
 
         Password recovery is NEVER gated by ``email_confirmed`` — an
-        unconfirmed user must still be able to recover their password.
-        A per-user cooldown (``last_password_recovery_email_sent_at``)
-        rate-limits repeated sends; while cooling down the send is skipped
-        SILENTLY so the public response stays a generic "email sent".
+        unconfirmed user must still be able to recover their password. It IS
+        skipped for a deactivated account, which previously received a reset
+        link that ``reset_password`` then refused with "Inactive user".
 
-        Raises:
-            ValueError: If user not found.
+        Returns True if an email was actually sent, False if suppressed. The
+        return value is for internal callers and tests only; the public route
+        must never project it into the response.
         """
+        if not settings.emails_enabled:
+            return False
         user = UserService.get_user_by_email(session=session, email=email)
-        if not user:
-            raise ValueError(
-                "The user with this email does not exist in the system."
-            )
+        if not user or not user.is_active or not user.email:
+            return False
         # Password auth off — skip the send SILENTLY, exactly like the
         # cooldown below. Raising here would turn recovery into an oracle for
         # "this address belongs to a superuser", since superusers keep the
-        # break-glass path.
-        policy = AccessPolicyService.resolve(session)
+        # break-glass path. Guarded because ``resolve`` can insert and commit
+        # the ServerConfig singleton on first boot, and this branch is reached
+        # only for an address that exists.
+        try:
+            policy = AccessPolicyService.resolve(session)
+        except Exception as e:  # noqa: BLE001 — a policy read failure must not
+            # answer differently for a known address than for an unknown one.
+            restore_session(session)
+            logger.error(f"Password recovery policy read failed: {e}", exc_info=True)
+            return False
         if not AccessPolicyService.is_password_auth_allowed(policy, user):
-            return
+            return False
+        # A revoked or expired invitation for an account that never set a
+        # password — skip the send SILENTLY, like every other reason above.
+        # Without this, revocation is decorative: the un-invited person types
+        # their address here, gets a genuine reset link, and takes the account
+        # while the admin's list still reads "revoked".
+        if UserService._claim_refused(session, user):
+            return False
         # Cooldown — skip the send silently if still cooling down (preserve
         # the generic success message; never raise here).
         last_sent = user.last_password_recovery_email_sent_at
@@ -663,17 +803,36 @@ class UserService:
                 seconds=settings.PASSWORD_RECOVERY_EMAIL_COOLDOWN_SECONDS
             )
             if datetime.now(timezone.utc) - last_sent < interval:
-                return
+                return False
 
-        password_reset_token = generate_password_reset_token(email=email)
-        email_data = generate_reset_password_email(
-            email_to=user.email, email=email, token=password_reset_token
-        )
-        send_email(
-            email_to=user.email,
-            subject=email_data.subject,
-            html_content=email_data.html_content,
-        )
-        user.last_password_recovery_email_sent_at = datetime.now(timezone.utc)
-        session.add(user)
-        session.commit()
+        # Everything from here on runs ONLY for an address that has an
+        # account, so every step of it is inside the handler: a raise on any
+        # of them is a 500 for a known address next to a 200 for an unknown
+        # one, which is exactly the leak this method exists to close. That
+        # covers the template render (a missing email-templates build
+        # artefact) and the cooldown commit, not just the SMTP call.
+        try:
+            password_reset_token = generate_password_reset_token(email=email)
+            email_data = generate_reset_password_email(
+                email_to=user.email, email=email, token=password_reset_token
+            )
+            send_email(
+                email_to=user.email,
+                subject=email_data.subject,
+                html_content=email_data.html_content,
+            )
+            user.last_password_recovery_email_sent_at = datetime.now(timezone.utc)
+            session.add(user)
+            session.commit()
+        except Exception as e:  # noqa: BLE001 — see the comment above.
+            # The commit is inside the try, so a statement failure can leave
+            # the transaction aborted with ``Session.is_active`` still True.
+            # Roll it back before returning or the next commit on this session
+            # dies inside unrelated code.
+            restore_session(session)
+            logger.error(
+                f"Failed to send password recovery email to {email}: {e}",
+                exc_info=True,
+            )
+            return False
+        return True
