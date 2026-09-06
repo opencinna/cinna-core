@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { userRoleLabel } from "@/utils/userRoles"
 import { LlmProviderActionsMenu } from "./LlmProviderActionsMenu"
 import { getProviderTypeLabel } from "./providerTypes"
 
@@ -28,6 +29,28 @@ function BooleanBadge({ value }: { value: boolean }) {
     <Badge variant="outline" className="text-muted-foreground">
       No
     </Badge>
+  )
+}
+
+// Roles whose new accounts receive this credential automatically. "Off" rather
+// than a blank cell: an empty column reads as missing data, and the difference
+// between "no roles" and "not loaded" is the whole point of the column.
+function AutoProvisionCell({ roles }: { roles: string[] }) {
+  if (roles.length === 0) {
+    return (
+      <Badge variant="outline" className="text-muted-foreground">
+        Off
+      </Badge>
+    )
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {roles.map((role) => (
+        <Badge key={role} variant="secondary" className="whitespace-nowrap">
+          {userRoleLabel(role)}
+        </Badge>
+      ))}
+    </div>
   )
 }
 
@@ -58,12 +81,13 @@ export function LlmProvidersTable({ records }: LlmProvidersTableProps) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[18%]">Name</TableHead>
-            <TableHead className="w-[12%]">Provider</TableHead>
-            <TableHead className="w-[12%]">Default provider</TableHead>
-            <TableHead className="w-[10%]">Default SDK</TableHead>
+            <TableHead className="w-[16%]">Name</TableHead>
+            <TableHead className="w-[11%]">Provider</TableHead>
+            <TableHead className="w-[11%]">Default provider</TableHead>
+            <TableHead className="w-[9%]">Default SDK</TableHead>
+            <TableHead className="w-[14%]">Auto</TableHead>
             <TableHead>Shared with</TableHead>
-            <TableHead className="w-[12%]">Created</TableHead>
+            <TableHead className="w-[11%]">Created</TableHead>
             <TableHead className="w-[48px]" />
           </TableRow>
         </TableHeader>
@@ -79,6 +103,9 @@ export function LlmProvidersTable({ records }: LlmProvidersTableProps) {
               </TableCell>
               <TableCell>
                 <BooleanBadge value={Boolean(record.set_user_sdk_defaults)} />
+              </TableCell>
+              <TableCell>
+                <AutoProvisionCell roles={record.auto_provision_roles ?? []} />
               </TableCell>
               <TableCell>
                 <div className="flex flex-wrap gap-2">

@@ -32,6 +32,22 @@ interface ListModelsButtonProps {
   onSelect: (modelId: string) => void
   /** Optional external disable (e.g. while the surrounding form is saving). */
   disabled?: boolean
+  /**
+   * How to fetch the list, when the default — probe the *user's* stored
+   * credential — is not what the caller has.
+   *
+   * The admin managed-credential dialog is the case: what it holds is a parent
+   * record on a different endpoint, or, before the record exists, a key typed
+   * into the form and never persisted. Neither is an `AICredential` id, so
+   * `credential_id` cannot address it. Everything the button is actually worth
+   * reusing for — the dialog, the filter, the pending / error / skip / empty
+   * states, and handing back a bare model id — is independent of where the
+   * list came from, so the fetch is the parameter and the rest is shared.
+   *
+   * When given, `credentialId` / `credentialType` are unused; gate the button
+   * with `disabled` instead.
+   */
+  probeModels?: () => Promise<AICredentialTestResult>
 }
 
 // Human-readable copy for the skip reasons the backend may return alongside
@@ -58,8 +74,8 @@ function describeError(error: string | null | undefined): string {
 }
 
 interface ProbeArgs {
-  credentialId: string
-  credentialType: AICredentialType
+  /** The request this result belongs to, captured when it was issued. */
+  run: () => Promise<AICredentialTestResult>
 }
 
 export function ListModelsButton({
@@ -67,30 +83,37 @@ export function ListModelsButton({
   credentialType,
   onSelect,
   disabled,
+  probeModels,
 }: ListModelsButtonProps) {
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState("")
 
   const mutation = useMutation<AICredentialTestResult, Error, ProbeArgs>({
-    mutationFn: (args) =>
-      AiCredentialsService.testAiCredentialConnection({
-        requestBody: {
-          // `type` is required by the request schema; the backend resolves the
-          // actual key from the stored credential via `credential_id`.
-          type: args.credentialType,
-          credential_id: args.credentialId,
-        },
-      }),
+    mutationFn: (args) => args.run(),
   })
 
   const noCredential = !credentialId || !credentialType
-  const isDisabled = disabled || noCredential
+  const isDisabled = disabled || (!probeModels && noCredential)
 
-  // Bind the probed credential into the mutation variables so the rendered
-  // result (and Retry) is unambiguously tied to what was requested.
+  // Bind the probe into the mutation variables so the rendered result (and
+  // Retry) is unambiguously tied to what was requested.
   const probe = () => {
+    if (probeModels) {
+      mutation.mutate({ run: probeModels })
+      return
+    }
     if (!credentialId || !credentialType) return
-    mutation.mutate({ credentialId, credentialType })
+    mutation.mutate({
+      run: () =>
+        AiCredentialsService.testAiCredentialConnection({
+          requestBody: {
+            // `type` is required by the request schema; the backend resolves
+            // the actual key from the stored credential via `credential_id`.
+            type: credentialType,
+            credential_id: credentialId,
+          },
+        }),
+    })
   }
 
   const handleOpen = () => {
@@ -130,7 +153,12 @@ export function ListModelsButton({
         <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
           <AlertCircle className="h-5 w-5 text-destructive" />
           <p>Couldn't list models for this credential. Please try again.</p>
-          <Button variant="outline" size="sm" onClick={probe}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={probe}
+            disabled={isDisabled}
+          >
             Retry
           </Button>
         </div>
@@ -145,7 +173,12 @@ export function ListModelsButton({
         <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
           <AlertCircle className="h-5 w-5 text-destructive" />
           <p>{describeError(result.error)}</p>
-          <Button variant="outline" size="sm" onClick={probe}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={probe}
+            disabled={isDisabled}
+          >
             Retry
           </Button>
         </div>
@@ -228,7 +261,7 @@ export function ListModelsButton({
             </span>
           </TooltipTrigger>
           <TooltipContent side="top" className="text-xs">
-            {noCredential
+            {noCredential && !probeModels
               ? "Select a credential first"
               : "Fetch this credential's live model list"}
           </TooltipContent>

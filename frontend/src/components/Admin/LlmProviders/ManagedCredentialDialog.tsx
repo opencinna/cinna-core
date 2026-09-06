@@ -1,8 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { CheckCircle2, ExternalLink, Loader2, Plus } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
-import { useForm } from "react-hook-form"
+import { useEffect, useId, useRef, useState } from "react"
+import { useForm, type UseFormReturn } from "react-hook-form"
 import { z } from "zod"
 
 import {
@@ -14,12 +14,15 @@ import {
   type ManagedAICredentialUpdate,
   AdminLlmProvidersService,
 } from "@/client"
+import type { ApiError } from "@/client/core/ApiError"
+import { ListModelsButton } from "@/components/Common/ListModelsButton"
 import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogClose,
@@ -53,10 +56,17 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
+import { USER_ROLE_OPTIONS } from "@/utils/userRoles"
 import {
+  type AutoProvisionConflict,
+  describeAutoProvisionConflict,
   getProviderTypeLabel,
   MANAGED_CREDENTIALS_QUERY_PREFIX,
+  modelOverrideField,
+  parseAutoProvisionConflict,
   PROVIDER_TYPE_OPTIONS,
+  SDK_MODE_OPTIONS,
+  SDK_MODE_VALUES,
 } from "./providerTypes"
 
 // Default credential name suggested for a freshly-provisioned record,
@@ -109,6 +119,18 @@ const baseFormSchema = z.object({
   available_models: z.string().optional(),
   set_as_default: z.boolean(),
   set_user_sdk_defaults: z.boolean(),
+  // Which of the member's two default slots this record claims. Only read when
+  // `set_user_sdk_defaults` is on, but still seeded from (and shown as) the
+  // stored value, so turning the switch back on reveals what is actually
+  // saved. Like every other edit field it travels only when the admin changed
+  // it — see the diff in the submit handler.
+  sdk_default_modes: z.array(z.string()),
+  // Roles whose newly created accounts receive this credential.
+  auto_provision_roles: z.array(z.string()),
+  // Per-mode model pinned on the member's profile alongside the default
+  // credential. Blank = the record has no opinion.
+  model_override_conversation: z.string().optional(),
+  model_override_building: z.string().optional(),
 })
 
 type FormData = z.infer<typeof baseFormSchema>
@@ -236,6 +258,13 @@ function buildFormSchema(mode: "create" | "edit") {
   })
 }
 
+// Mirrors the backend's `_default_sdk_modes()` so a record created here and one
+// created by an API caller that omits the field start out the same — which is
+// every mode there is.
+// Copied, not aliased: this array is a form default and `SDK_MODE_VALUES` is
+// exported to several other surfaces.
+const DEFAULT_SDK_MODES = [...SDK_MODE_VALUES]
+
 const CREATE_DEFAULTS: FormData = {
   name: defaultCredentialName("anthropic"),
   type: "anthropic",
@@ -246,6 +275,10 @@ const CREATE_DEFAULTS: FormData = {
   available_models: "",
   set_as_default: false,
   set_user_sdk_defaults: false,
+  sdk_default_modes: DEFAULT_SDK_MODES,
+  auto_provision_roles: [],
+  model_override_conversation: "",
+  model_override_building: "",
 }
 
 // Build the initial picker selection from an edit record's members.
@@ -275,7 +308,92 @@ function recordToFormData(record: ManagedAICredentialPublic): FormData {
     available_models: (record.available_models ?? []).join("\n"),
     set_as_default: record.set_as_default ?? false,
     set_user_sdk_defaults: record.set_user_sdk_defaults ?? false,
+    sdk_default_modes: record.sdk_default_modes ?? DEFAULT_SDK_MODES,
+    auto_provision_roles: record.auto_provision_roles ?? [],
+    model_override_conversation: record.model_override_conversation ?? "",
+    model_override_building: record.model_override_building ?? "",
   }
+}
+
+interface ModelOverrideFieldProps {
+  form: UseFormReturn<FormData>
+  name: "model_override_conversation" | "model_override_building"
+  modeLabel: string
+  /** The value already stored on the record; `null` in create mode. */
+  storedValue: string | null
+  /** Fetch this credential's live model list for the picker. */
+  probeModels: () => Promise<AICredentialTestResult>
+  /** True while the form is saving or there is no key to probe with. */
+  probeDisabled: boolean
+}
+
+/**
+ * One mode's model override, with the shared model picker beside it.
+ *
+ * Its own component because the two modes differ only by field name, and the
+ * field name has to be a literal for `react-hook-form` to type the value.
+ */
+function ModelOverrideField({
+  form,
+  name,
+  modeLabel,
+  storedValue,
+  probeModels,
+  probeDisabled,
+}: ModelOverrideFieldProps) {
+  // Emptying the box is a real edit: the submit handler sends `""`, the
+  // backend stores NULL and unpins every member still carrying the value
+  // being dropped. Say what that costs while the box is empty, since the
+  // consequence lands on other people's profiles rather than on this screen.
+  const clearing = !!storedValue && (form.watch(name) ?? "").trim() === ""
+
+  return (
+    <FormField
+      control={form.control}
+      name={name}
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>{modeLabel} model override</FormLabel>
+          <div className="flex items-start gap-2">
+            <FormControl>
+              <Input
+                placeholder="Leave blank to use the credential's default model"
+                {...field}
+                value={field.value ?? ""}
+              />
+            </FormControl>
+            <ListModelsButton
+              credentialId={null}
+              credentialType={null}
+              probeModels={probeModels}
+              disabled={probeDisabled}
+              // The picker hands back the provider's id verbatim, and the
+              // backend stores `_normalize_default_model` of it. Stripping here
+              // rather than only on submit keeps the box showing the value that
+              // will actually be saved.
+              onSelect={(modelId) =>
+                form.setValue(name, stripProviderPrefix(modelId), {
+                  shouldDirty: true,
+                })
+              }
+            />
+          </div>
+          <FormDescription>
+            Pinned as each member's {modeLabel.toLowerCase()} model when this
+            credential becomes their default for that mode. Leave blank for no
+            opinion — members fall back to the credential's own default model.
+          </FormDescription>
+          {clearing && (
+            <p className="text-xs text-amber-600 dark:text-amber-500">
+              Saving unpins "{storedValue}" from members who still have it.
+              Anyone who picked their own model keeps it.
+            </p>
+          )}
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  )
 }
 
 interface ManagedCredentialDialogProps {
@@ -303,9 +421,25 @@ export function ManagedCredentialDialog({
     else setInternalOpen(open)
   }
 
+  // Every row of the providers table mounts one of these dialogs, so the
+  // checkbox ids below have to be unique per instance even though Radix only
+  // keeps the open one's content in the DOM.
+  const fieldId = useId()
+
   const [targets, setTargets] = useState<UserAllowlistSelectedItem[]>(() =>
     membersToTargets(record),
   )
+  // Whether the admin actually touched the membership picker.
+  //
+  // `target_user_ids` is an *absolute* desired set: whatever is not in it gets
+  // removed. `targets` is a snapshot taken when the dialog opened, and the
+  // record behind it keeps moving — a signup auto-provisions, another admin
+  // runs Apply to existing users, a window-focus refetch lands. Submitting the
+  // snapshot unconditionally would delete every member acquired since the
+  // dialog opened, which is precisely the thing auto-provisioning does all day.
+  // `undefined` means "leave membership alone" to the backend, so the picker is
+  // only sent when it was actually used.
+  const [membershipDirty, setMembershipDirty] = useState(false)
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
@@ -315,11 +449,62 @@ export function ManagedCredentialDialog({
     defaultValues: mode === "edit" && record ? recordToFormData(record) : CREATE_DEFAULTS,
   })
 
+  // The values the form was last seeded with — i.e. what the record looked
+  // like when this dialog opened. Every PATCH field is diffed against this,
+  // for the same reason `membershipDirty` exists: the payload is *absolute*,
+  // the snapshot is stale the moment it is taken (a signup auto-provisions,
+  // another admin edits the record, a window-focus refetch lands), and
+  // resubmitting an untouched field asserts a value the admin never chose.
+  // For the auto-provision fields that is not merely redundant — it is how a
+  // rename comes back as a 409 for a slot conflict the admin did not
+  // introduce. Sending only what changed is the fix; the backend's
+  // transition-scoped validator is the backstop under it.
+  // Recomputed on every render and discarded after the first — cheap enough
+  // for a dialog, and it keeps the ref non-nullable so every read below is a
+  // real `FormData`. The spread matters: the ref outlives the render, and the
+  // module-level defaults must not become per-instance state.
+  const openedWithRef = useRef<FormData>(
+    mode === "edit" && record ? recordToFormData(record) : { ...CREATE_DEFAULTS },
+  )
+  const seedForm = (values: FormData) => {
+    openedWithRef.current = values
+    form.reset(values)
+  }
+
   const selectedType = form.watch("type") as AICredentialType
   const selectedApiKey = form.watch("api_key")
   const selectedBaseUrl = form.watch("base_url")
   const showBaseUrl = selectedType === "openai_compatible" || selectedType === "google"
   const showModel = selectedType === "openai_compatible"
+  const setUserSdkDefaults = form.watch("set_user_sdk_defaults")
+  const sdkModes = form.watch("sdk_default_modes")
+  const autoProvisionRoles = form.watch("auto_provision_roles")
+
+  // The 409 raised when another managed credential already owns a
+  // (role, mode) default slot this one is claiming. Rendered next to the
+  // controls that caused it rather than as a toast: the fix is to untick one
+  // of them, and a toast is gone by the time the admin looks for it.
+  const [conflict, setConflict] = useState<AutoProvisionConflict | null>(null)
+  useEffect(() => {
+    setConflict(null)
+    // Only the three inputs the rule reads. Keyed by value, not by array
+    // identity, so an unrelated re-render does not clear a live error.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setUserSdkDefaults, sdkModes.join(","), autoProvisionRoles.join(",")])
+
+  const toggleInArray = (
+    field: "sdk_default_modes" | "auto_provision_roles",
+    value: string,
+    checked: boolean,
+  ) => {
+    const current = form.getValues(field)
+    const next = checked
+      ? current.includes(value)
+        ? current
+        : [...current, value]
+      : current.filter((entry) => entry !== value)
+    form.setValue(field, next, { shouldDirty: true })
+  }
 
   // Test Connection result (inline alert). Cleared whenever the inputs that
   // feed the probe change, so a stale result never lingers.
@@ -348,23 +533,29 @@ export function ManagedCredentialDialog({
   // stale local edit from a previously-closed dialog never leaks in.
   useEffect(() => {
     if (mode === "edit" && isOpen && record) {
-      form.reset(recordToFormData(record))
+      seedForm(recordToFormData(record))
       setTargets(membersToTargets(record))
+      setMembershipDirty(false)
       setTestResult(null)
+      setConflict(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, record?.id])
 
   const resetDialog = () => {
     if (mode === "edit" && record) {
-      form.reset(recordToFormData(record))
+      seedForm(recordToFormData(record))
       setTargets(membersToTargets(record))
     } else {
-      form.reset(CREATE_DEFAULTS)
+      // A copy: the ref holds this object for the life of the dialog, and the
+      // module-level defaults must not become per-instance state.
+      seedForm({ ...CREATE_DEFAULTS })
       autoNameRef.current = CREATE_DEFAULTS.name
       setTargets([])
     }
+    setMembershipDirty(false)
     setTestResult(null)
+    setConflict(null)
   }
 
   // Test Connection mutation — validates the entered key without persisting
@@ -392,6 +583,27 @@ export function ManagedCredentialDialog({
         error: err.message || "Connection failed",
       }),
   })
+
+  // The same probe, minus the shared inline alert.
+  //
+  // The model picker needs exactly what Test Connection fetches, but it owns
+  // its own pending / error / empty rendering. Routing it through
+  // `testMutation` would make opening a picker repaint the red-or-green
+  // Test Connection banner at the foot of the dialog — a result the admin
+  // never asked for, reporting on a probe they did not run — and would let the
+  // picker's own Retry re-enter an already-pending mutation.
+  const probeModelsForOverride = () =>
+    AdminLlmProvidersService.testManagedAiCredentialConnection({
+      managedCredentialId:
+        mode === "edit" && record && !(selectedApiKey && selectedApiKey.trim() !== "")
+          ? record.id
+          : undefined,
+      requestBody: {
+        type: selectedType,
+        api_key: selectedApiKey?.trim() ? selectedApiKey : undefined,
+        base_url: showBaseUrl ? selectedBaseUrl || undefined : undefined,
+      },
+    })
 
   // Test Connection is allowed once there's a key to probe (entered key, or —
   // in edit mode — the stored parent key), plus a base URL for
@@ -494,6 +706,18 @@ export function ManagedCredentialDialog({
     }
   }
 
+  // A (role, mode) collision is the one failure the admin can fix without
+  // leaving the dialog, so it is kept on screen; everything else is a toast as
+  // before.
+  const handleSaveError = (error: unknown) => {
+    const detected = parseAutoProvisionConflict(error)
+    if (detected) {
+      setConflict(detected)
+      return
+    }
+    handleError.call(showErrorToast, error as ApiError)
+  }
+
   const createMutation = useMutation({
     mutationFn: (body: ManagedAICredentialCreate) =>
       AdminLlmProvidersService.createManagedAiCredential({ requestBody: body }),
@@ -502,7 +726,7 @@ export function ManagedCredentialDialog({
       resetDialog()
       setIsOpen(false)
     },
-    onError: handleError.bind(showErrorToast),
+    onError: handleSaveError,
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: MANAGED_CREDENTIALS_QUERY_PREFIX })
     },
@@ -518,7 +742,7 @@ export function ManagedCredentialDialog({
       surfaceReconcileResult(result, targets)
       setIsOpen(false)
     },
-    onError: handleError.bind(showErrorToast),
+    onError: handleSaveError,
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: MANAGED_CREDENTIALS_QUERY_PREFIX })
     },
@@ -526,9 +750,30 @@ export function ManagedCredentialDialog({
 
   const isPending = createMutation.isPending || updateMutation.isPending
 
+  // Members present on the record but no longer in the picker — i.e. what this
+  // save would delete.
+  const removedMemberCount =
+    mode === "edit"
+      ? (record?.members ?? []).filter(
+          (member) => !targets.some((t) => t.userId === member.user_id),
+        ).length
+      : 0
+
   const onSubmit = (data: FormData) => {
-    if (targets.length === 0) {
-      showErrorToast("Select at least one target user.")
+    // Create only. A brand-new record with neither members nor auto-provision
+    // roles would do nothing at all, so it is refused; an auto-provision-only
+    // record is the new legitimate case, starting empty and filling up as
+    // accounts are created. On edit there is nothing to guard: membership is
+    // only sent when the picker was touched, and unticking the last role on an
+    // as-yet-empty record is a state the backend accepts.
+    if (
+      mode === "create" &&
+      targets.length === 0 &&
+      data.auto_provision_roles.length === 0
+    ) {
+      showErrorToast(
+        "Select at least one target user, or a role to auto-provision for.",
+      )
       return
     }
 
@@ -538,6 +783,17 @@ export function ManagedCredentialDialog({
 
     const defaultModel = stripProviderPrefix(data.default_model ?? "")
     const availableModels = parseAvailableModels(data.available_models)
+    // `""` is the documented clear on `ManagedAICredentialUpdate`: it stores
+    // NULL and unpins the members still carrying the value being dropped.
+    // "Leave alone" is expressed by omitting the field entirely, which is what
+    // the dirty check below does — so a blank box that the admin never touched
+    // is never sent as a clear.
+    const overrideConversation = stripProviderPrefix(
+      data.model_override_conversation ?? "",
+    )
+    const overrideBuilding = stripProviderPrefix(
+      data.model_override_building ?? "",
+    )
 
     if (mode === "create") {
       const body: ManagedAICredentialCreate = {
@@ -552,28 +808,79 @@ export function ManagedCredentialDialog({
         target_user_ids: targetUserIds,
         set_as_default: data.set_as_default,
         set_user_sdk_defaults: data.set_user_sdk_defaults,
+        sdk_default_modes: data.sdk_default_modes,
+        auto_provision_roles: data.auto_provision_roles,
+        // On create there is nothing to clear; blank means "not set".
+        model_override_conversation: overrideConversation || undefined,
+        model_override_building: overrideBuilding || undefined,
       }
       createMutation.mutate(body)
       return
     }
 
-    // Edit: PATCH with the picker selection as the desired membership. Omit
-    // api_key when blank so the stored key is kept for all members.
+    // Edit: PATCH, carrying only what this admin actually changed.
     //
-    // Curation clear-vs-no-change semantics mirror base_url/model:
-    //  - available_models: [] explicitly clears curation (the textarea is
-    //    seeded from the record, so a blank textarea on edit means "clear").
-    //  - default_model: the trimmed/stripped value (blank → undefined leaves it
-    //    unchanged, matching the backend's None=no-change for default_model).
+    // Every field on `ManagedAICredentialUpdate` reads an omitted value as
+    // "leave it alone", so the diff below is lossless — and it is what stops a
+    // rename from re-asserting a stale snapshot of the auto-provision fields
+    // (see `openedWithRef`). Membership follows the same rule through
+    // `membershipDirty`; api_key follows it by being blank unless typed.
+    //
+    // Values still carry their own clear-vs-set meaning once a field *is*
+    // dirty: `available_models: []` clears the curation, `model_override_*:
+    // ""` clears the pinned model.
+    const opened = openedWithRef.current
+    const sameSet = (a: string[], b: string[]) =>
+      a.length === b.length &&
+      [...a].sort().join("\u0000") === [...b].sort().join("\u0000")
+
     const body: ManagedAICredentialUpdate = {
-      name: data.name.trim(),
-      base_url: includesBaseUrl ? data.base_url?.trim() || null : null,
-      model: includesModel ? data.model?.trim() || null : null,
-      default_model: defaultModel || undefined,
-      available_models: availableModels,
-      target_user_ids: targetUserIds,
-      set_as_default: data.set_as_default,
-      set_user_sdk_defaults: data.set_user_sdk_defaults,
+      // `undefined` = leave membership exactly as it is. See `membershipDirty`.
+      target_user_ids: membershipDirty ? targetUserIds : undefined,
+    }
+    if (data.name.trim() !== opened.name.trim()) {
+      body.name = data.name.trim()
+    }
+    if (includesBaseUrl && (data.base_url ?? "") !== (opened.base_url ?? "")) {
+      body.base_url = data.base_url?.trim() || null
+    }
+    if (includesModel && (data.model ?? "") !== (opened.model ?? "")) {
+      body.model = data.model?.trim() || null
+    }
+    if ((data.default_model ?? "") !== (opened.default_model ?? "")) {
+      // Blank still leaves `default_model` alone — the backend has no clear for
+      // it, unlike the per-mode overrides.
+      body.default_model = defaultModel || undefined
+    }
+    if ((data.available_models ?? "") !== (opened.available_models ?? "")) {
+      body.available_models = availableModels
+    }
+    if (data.set_as_default !== opened.set_as_default) {
+      body.set_as_default = data.set_as_default
+    }
+    if (data.set_user_sdk_defaults !== opened.set_user_sdk_defaults) {
+      body.set_user_sdk_defaults = data.set_user_sdk_defaults
+    }
+    if (!sameSet(data.sdk_default_modes, opened.sdk_default_modes)) {
+      body.sdk_default_modes = data.sdk_default_modes
+    }
+    if (!sameSet(data.auto_provision_roles, opened.auto_provision_roles)) {
+      // `[]` is a real value here (stop auto-provisioning), not "no change" —
+      // the backend distinguishes it from an omitted field, and existing
+      // members keep their credential either way.
+      body.auto_provision_roles = data.auto_provision_roles
+    }
+    if (
+      overrideConversation !==
+      stripProviderPrefix(opened.model_override_conversation ?? "")
+    ) {
+      body.model_override_conversation = overrideConversation
+    }
+    if (
+      overrideBuilding !==
+      stripProviderPrefix(opened.model_override_building ?? "")
+    ) {
+      body.model_override_building = overrideBuilding
     }
     if (data.api_key && data.api_key.trim() !== "") {
       body.api_key = data.api_key
@@ -820,16 +1127,15 @@ export function ManagedCredentialDialog({
           />
 
           <div className="space-y-2">
-            <Label className="text-sm font-medium">
-              Target Users <span className="text-destructive">*</span>
-            </Label>
+            <Label className="text-sm font-medium">Target Users</Label>
             <UserAllowlistPicker
               label={null}
               enabled={isOpen}
               selected={targets}
               searchPlaceholder="Search users to provision for..."
-              emptyHint="Select one or more users to provision this credential for."
-              onAdd={(user) =>
+              emptyHint="Select the users to provision this credential for, or leave empty and pick roles under Auto-provision below."
+              onAdd={(user) => {
+                setMembershipDirty(true)
                 setTargets((prev) =>
                   prev.some((t) => t.userId === user.id)
                     ? prev
@@ -844,11 +1150,25 @@ export function ManagedCredentialDialog({
                         },
                       ],
                 )
-              }
-              onRemove={(item) =>
+              }}
+              onRemove={(item) => {
+                setMembershipDirty(true)
                 setTargets((prev) => prev.filter((t) => t.userId !== item.userId))
-              }
+              }}
             />
+            {/* Saving is what removes a member, and removing a member deletes
+                their credential. Previously the "at least one target" guard
+                made emptying the list impossible; now that an
+                auto-provision-only record may legitimately have none, the
+                consequence has to be visible before Save instead. */}
+            {membershipDirty && removedMemberCount > 0 && (
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                Saving removes this credential from {removedMemberCount}{" "}
+                {removedMemberCount === 1 ? "member" : "members"} and deletes{" "}
+                {removedMemberCount === 1 ? "their copy" : "their copies"} of
+                it.
+              </p>
+            )}
           </div>
 
           <FormField
@@ -887,6 +1207,103 @@ export function ManagedCredentialDialog({
               </FormItem>
             )}
           />
+
+          {/* Per-mode detail for the switch above. Hidden while it is off:
+              nothing in here has any effect then. */}
+          {setUserSdkDefaults && (
+            <div className="space-y-4 rounded-md border p-3">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Modes to wire</Label>
+                <div className="flex flex-wrap gap-x-6 gap-y-2">
+                  {SDK_MODE_OPTIONS.map((option) => (
+                    <div key={option.value} className="flex items-center gap-2">
+                      <Checkbox
+                        id={`${fieldId}-sdk-mode-${option.value}`}
+                        checked={sdkModes.includes(option.value)}
+                        onCheckedChange={(checked) =>
+                          toggleInArray(
+                            "sdk_default_modes",
+                            option.value,
+                            checked === true,
+                          )
+                        }
+                      />
+                      <Label
+                        htmlFor={`${fieldId}-sdk-mode-${option.value}`}
+                        className="text-sm font-normal"
+                      >
+                        {option.label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Only the ticked modes point at this credential. A mode
+                  unticked later keeps whatever it already set — it stops being
+                  managed here, it is not torn down.
+                </p>
+              </div>
+
+              {SDK_MODE_OPTIONS.filter((option) =>
+                sdkModes.includes(option.value),
+              ).map((option) => (
+                <ModelOverrideField
+                  key={option.value}
+                  form={form}
+                  name={modelOverrideField(option.value)}
+                  modeLabel={option.label}
+                  storedValue={
+                    record?.[modelOverrideField(option.value)] ?? null
+                  }
+                  probeModels={probeModelsForOverride}
+                  probeDisabled={!canTest() || isPending}
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-3 rounded-md border p-3">
+            <div className="space-y-0.5">
+              <Label className="text-sm font-medium">
+                Auto-provision for new users
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Applied when an account is created; use Apply to existing users
+                for current accounts.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              {USER_ROLE_OPTIONS.map((role) => (
+                <div key={role.value} className="flex items-center gap-2">
+                  <Checkbox
+                    id={`${fieldId}-auto-provision-${role.value}`}
+                    checked={autoProvisionRoles.includes(role.value)}
+                    onCheckedChange={(checked) =>
+                      toggleInArray(
+                        "auto_provision_roles",
+                        role.value,
+                        checked === true,
+                      )
+                    }
+                  />
+                  <Label
+                    htmlFor={`${fieldId}-auto-provision-${role.value}`}
+                    className="text-sm font-normal"
+                  >
+                    {role.label}
+                  </Label>
+                </div>
+              ))}
+            </div>
+            {conflict && (
+              <Alert variant="destructive">
+                <AlertTitle>Another credential owns that default</AlertTitle>
+                <AlertDescription>
+                  {describeAutoProvisionConflict(conflict)}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
 
           {testResult && (
             <Alert variant={testResult.success ? "default" : "destructive"}>

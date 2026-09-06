@@ -3,6 +3,7 @@ import { ShieldCheck } from "lucide-react"
 import { useState } from "react"
 
 import { ServerConfigService, type ServerConfigUpdate } from "@/client"
+import { AutoProvisionedCredentialsMatrix } from "@/components/Admin/AutoProvisionedCredentialsMatrix"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -33,17 +34,18 @@ import {
   accessPolicyReasonCopy,
   parseAccessPolicyReason,
 } from "@/utils/accessPolicyReasons"
+import {
+  ROLE_AGENT_DEVELOPER,
+  ROLE_AGENT_USER,
+  userRoleLabel,
+} from "@/utils/userRoles"
 
 const REGISTRATION_MODE_OPEN = "open"
 const REGISTRATION_MODE_INVITE_ONLY = "invite_only"
 
-const ROLE_AGENT_USER = "agent-user"
-const ROLE_AGENT_DEVELOPER = "agent-developer"
-
-const ROLE_LABELS: Record<string, string> = {
-  [ROLE_AGENT_USER]: "Agent User",
-  [ROLE_AGENT_DEVELOPER]: "Agent Developer",
-}
+// Only two of the three roles may be a default: `admin` is granted, never
+// defaulted into. Both the identifiers and the labels come from the shared
+// table so this card and the users page cannot drift apart.
 
 /**
  * Copy for a refused save. The reason codes and their prose live in
@@ -101,7 +103,7 @@ function summarize(args: {
     registration = "anyone can register"
   }
 
-  const role = ROLE_LABELS[args.defaultRole] ?? args.defaultRole
+  const role = userRoleLabel(args.defaultRole)
   return `${signIn}; ${registration}; new users become ${role}s.`
 }
 
@@ -476,10 +478,10 @@ export function AccessPolicyCard() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ROLE_AGENT_USER}>
-                  {ROLE_LABELS[ROLE_AGENT_USER]}
+                  {userRoleLabel(ROLE_AGENT_USER)}
                 </SelectItem>
                 <SelectItem value={ROLE_AGENT_DEVELOPER}>
-                  {ROLE_LABELS[ROLE_AGENT_DEVELOPER]}
+                  {userRoleLabel(ROLE_AGENT_DEVELOPER)}
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -512,6 +514,8 @@ export function AccessPolicyCard() {
               />
             </div>
           </div>
+
+          <AutoProvisionedCredentialsMatrix />
         </section>
       </CardContent>
     </Card>
