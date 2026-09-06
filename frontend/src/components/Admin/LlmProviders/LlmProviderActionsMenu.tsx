@@ -47,9 +47,16 @@ interface LlmProviderActionsMenuProps {
 }
 
 // One blocked member from a 409 delete response.
+//
+// `message` is the server's sentence for `reason`, and it is what gets
+// rendered. This menu used to state its own — "in use by a published bundle" —
+// for every block, including `mint_in_flight`, where the sentence is wrong and
+// the remedy it implies (force) is the one thing an admin must not reach for
+// while a key is being minted.
 interface BlockedMember {
   user_id: string
   reason: string
+  message: string
   impact?: unknown
 }
 
@@ -252,7 +259,7 @@ export function LlmProviderActionsMenu({ record }: LlmProviderActionsMenuProps) 
         // "force delete" confirmation (mirrors the AI-credential Tier-2 flow).
         setBlocked(blockedMembers)
         showErrorToast(
-          "One or more members are in use by a published bundle. Review below before forcing.",
+          "One or more members could not be removed. Review below before forcing.",
         )
         return
       }
@@ -436,14 +443,15 @@ export function LlmProviderActionsMenu({ record }: LlmProviderActionsMenuProps) 
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {isBlocked ? "Members in use by a bundle" : "Delete Managed Credential"}
+              {isBlocked ? "Some members could not be removed" : "Delete Managed Credential"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {isBlocked ? (
                 <>
-                  Some members couldn't be removed because their credential is in use
-                  by a published bundle. Forcing the delete will degrade those bundles
-                  back to "user provides". This action cannot be undone.
+                  Some members couldn't be removed — each reason is listed below.
+                  Forcing the delete removes the record anyway; where the cause is
+                  a published bundle, that bundle degrades back to "user
+                  provides". This action cannot be undone.
                 </>
               ) : (
                 <>
@@ -464,7 +472,8 @@ export function LlmProviderActionsMenu({ record }: LlmProviderActionsMenuProps) 
                   key={b.user_id}
                   className="rounded-md border bg-muted/30 px-3 py-1.5 text-muted-foreground"
                 >
-                  {labelFor(b.user_id)}
+                  <span className="text-foreground">{labelFor(b.user_id)}</span>
+                  {b.message ? ` — ${b.message}` : null}
                 </li>
               ))}
             </ul>

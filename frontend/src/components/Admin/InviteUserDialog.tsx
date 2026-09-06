@@ -1,18 +1,29 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, Check, Copy, Mail, MailX, UserPlus } from "lucide-react"
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Copy,
+  KeyRound,
+  Mail,
+  MailX,
+  UserPlus,
+} from "lucide-react"
 import { useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
 import {
   AdminLlmProvidersService,
+  type AIKeyOnboardingState,
   type InviteUserRequest,
   type InviteUserResponse,
   type ManagedAICredentialPublic,
   ServerConfigService,
   UsersService,
 } from "@/client"
+import { ManagedCredentialDialog } from "@/components/Admin/LlmProviders/ManagedCredentialDialog"
 import {
   MANAGED_CREDENTIALS_QUERY_PREFIX,
   managedCredentialsQueryKey,
@@ -731,6 +742,8 @@ function InviteSuccess({
           </p>
         </div>
 
+        <AddKeyStep result={result} />
+
         <div className="space-y-1 border-t pt-4 text-sm">
           {provisioningFailed ? (
             // Styled apart as well as worded apart: this line is scanned, not
@@ -805,6 +818,108 @@ function InviteSuccess({
         </Button>
       </DialogFooter>
     </>
+  )
+}
+
+/**
+ * Step 3 — give this person a key.
+ *
+ * The step the wizard could not have at step 2: `target_user_ids` needs a user
+ * id and no account existed yet. It exists by the time this renders, because
+ * this renders from the invite mutation's own response — `result.user` is a
+ * `UserPublic`, so the id is in hand.
+ *
+ * This is how an account gets a key for any provider whose administration API
+ * does not create keys, which includes the default provider on most instances.
+ * It is a normal way to finish an invitation, not a consolation for something
+ * that did not work — nothing in this copy frames it as one.
+ *
+ * It never blocks the invitation: the invite has already been sent by the time
+ * this is on screen, and a failure here is its own failure with its own
+ * message.
+ *
+ * It reuses `ManagedCredentialDialog` rather than growing a second paste form,
+ * which would be a second answer to "what does creating an AI credential for
+ * somebody involve" — per-provider field rules, Test Connection and the model
+ * picker included.
+ */
+function AddKeyStep({ result }: { result: InviteUserResponse }) {
+  const [isOpen, setIsOpen] = useState(false)
+  // The *server's* answer for this person after the key was added, not our
+  // inference from having created a row. `set_as_default` defaults to false, so
+  // an admin can create a perfectly good credential and leave the person on the
+  // paste-a-key wall with that exact credential listed in their settings —
+  // which is what this used to announce as "now has their own AI credential".
+  // Same field, same predicate, as the wall itself reads.
+  const [keyState, setKeyState] = useState<AIKeyOnboardingState | null>(null)
+  const added = keyState !== null
+
+  // Provisioning short-circuits on a deactivated account, so offering the step
+  // here would be offering something that silently does nothing. The screen
+  // already says to activate the account first.
+  if (result.user.is_active === false) return null
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <div className="flex items-start gap-2">
+        <KeyRound className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <div className="space-y-0.5">
+          <p className="text-sm font-medium">Add a key for this user</p>
+          <p className="text-xs text-muted-foreground">
+            {!added
+              ? `Give ${result.user.email} an API key of their own. They are already selected as its only member.`
+              : keyState === "has_key"
+                ? `${result.user.email} now has their own AI credential and can start working.`
+                : keyState === "preparing"
+                  ? `The key for ${result.user.email} is being created now. They will be able to work as soon as it lands — nothing further is needed from you.`
+                  : `The credential was created, but it is not ${result.user.email}'s default, so nothing will pick it up yet. Set it as their default from the LLM Providers page — or they can choose it themselves in Settings.`}
+          </p>
+        </div>
+      </div>
+      {added ? (
+        <p
+          className={
+            keyState === "needs_key"
+              ? "flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400"
+              : "flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400"
+          }
+        >
+          <CheckCircle2 className="size-3.5" />
+          {keyState === "needs_key" ? "Key added — not their default." : "Key added."}
+        </p>
+      ) : (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => setIsOpen(true)}
+        >
+          Add a key
+        </Button>
+      )}
+      <ManagedCredentialDialog
+        mode="create"
+        open={isOpen}
+        onOpenChange={setIsOpen}
+        initialTargets={[
+          {
+            id: result.user.id,
+            userId: result.user.id,
+            fallbackLabel: result.user.full_name
+              ? `${result.user.full_name} <${result.user.email}>`
+              : result.user.email,
+          },
+        ]}
+        nameSubject={result.user.email}
+        onCreated={(created) =>
+          setKeyState(
+            created.record.members?.find(
+              (m) => m.user_id === result.user.id,
+            )?.api_key_onboarding_state ?? "needs_key",
+          )
+        }
+      />
+    </div>
   )
 }
 

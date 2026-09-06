@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { CheckCircle2, ExternalLink, Loader2, Plus } from "lucide-react"
 import { useEffect, useId, useRef, useState } from "react"
 import { useForm, type UseFormReturn } from "react-hook-form"
@@ -13,6 +13,7 @@ import {
   type ManagedAICredentialReconcileResult,
   type ManagedAICredentialUpdate,
   AdminLlmProvidersService,
+  AdminProviderCredentialsService,
 } from "@/client"
 import type { ApiError } from "@/client/core/ApiError"
 import { ListModelsButton } from "@/components/Common/ListModelsButton"
@@ -52,6 +53,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -64,14 +66,20 @@ import {
   MANAGED_CREDENTIALS_QUERY_PREFIX,
   modelOverrideField,
   parseAutoProvisionConflict,
+  PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY,
   PROVIDER_TYPE_OPTIONS,
   SDK_MODE_OPTIONS,
   SDK_MODE_VALUES,
 } from "./providerTypes"
+import { useProviderAdapters } from "./useProviderAdapters"
 
 // Default credential name suggested for a freshly-provisioned record,
 // derived from the selected provider (e.g. "Anthropic Key").
-function defaultCredentialName(type: AICredentialType): string {
+function defaultCredentialName(
+  type: AICredentialType,
+  subject?: string,
+): string {
+  if (subject) return `${subject} — ${getProviderTypeLabel(type)}`
   return `${getProviderTypeLabel(type)} Key`
 }
 
@@ -110,6 +118,13 @@ const baseFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
   type: z.enum(["anthropic", "openai", "openai_compatible", "google"]),
   api_key: z.string(),
+  // How members get their key. Immutable after creation — the backend has no
+  // field for it on the update model, because switching a live record between
+  // one shared key and a key per person is a migration, not an edit.
+  provisioning_mode: z.enum(["shared", "minted"]),
+  // Which connected provider organisation the per-user keys are created in.
+  // Only read in `minted` mode.
+  provider_admin_credential_id: z.string(),
   base_url: z.string().optional(),
   model: z.string().optional(),
   // Admin-curated default model (single concrete id). Optional.
@@ -232,11 +247,27 @@ function parseAvailableModels(raw: string | undefined): string[] {
 // required check is applied conditionally in `superRefine` keyed off `mode`.
 function buildFormSchema(mode: "create" | "edit") {
   return baseFormSchema.superRefine((data, ctx) => {
-    if (mode === "create" && data.api_key.trim() === "") {
+    // Only a shared record has a key here to require. A minted one holds none
+    // at all — each member's key is created at the provider.
+    if (
+      mode === "create" &&
+      data.provisioning_mode === "shared" &&
+      data.api_key.trim() === ""
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["api_key"],
         message: "API key is required",
+      })
+    }
+    if (
+      data.provisioning_mode === "minted" &&
+      data.provider_admin_credential_id.trim() === ""
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider_admin_credential_id"],
+        message: "Choose the provider organisation the keys are created in",
       })
     }
     if (data.type === "openai_compatible") {
@@ -269,6 +300,8 @@ const CREATE_DEFAULTS: FormData = {
   name: defaultCredentialName("anthropic"),
   type: "anthropic",
   api_key: "",
+  provisioning_mode: "shared",
+  provider_admin_credential_id: "",
   base_url: "",
   model: "",
   default_model: "",
@@ -279,6 +312,19 @@ const CREATE_DEFAULTS: FormData = {
   auto_provision_roles: [],
   model_override_conversation: "",
   model_override_building: "",
+}
+
+/**
+ * Create-mode defaults, optionally named for the person the record is for.
+ *
+ * A fresh object every call: the ref below outlives the render, and the
+ * module-level defaults must not become per-instance state.
+ */
+function createDefaults(nameSubject?: string): FormData {
+  return {
+    ...CREATE_DEFAULTS,
+    name: defaultCredentialName(CREATE_DEFAULTS.type, nameSubject),
+  }
 }
 
 // Build the initial picker selection from an edit record's members.
@@ -302,6 +348,8 @@ function recordToFormData(record: ManagedAICredentialPublic): FormData {
     // (minimax is not exposed); narrow to the form's enum.
     type: record.type as FormData["type"],
     api_key: "",
+    provisioning_mode: record.provisioning_mode ?? "shared",
+    provider_admin_credential_id: record.provider_admin_credential_id ?? "",
     base_url: record.base_url ?? "",
     model: record.model ?? "",
     default_model: record.default_model ?? "",
@@ -400,10 +448,29 @@ interface ManagedCredentialDialogProps {
   mode: "create" | "edit"
   // The record being edited (required for mode === "edit").
   record?: ManagedAICredentialPublic
-  // Controlled open state — used by the actions menu in edit mode. In create
-  // mode the dialog supplies its own header trigger button and manages state.
+  // Controlled open state — used by the actions menu in edit mode, and by the
+  // invite wizard, which opens this dialog in create mode from its own button.
+  // Omitted in create mode, the dialog supplies its own trigger and state.
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  // Create mode: members the record starts with. The invite wizard seeds the
+  // person it has just invited, which is the whole reason its step 3 can exist
+  // — the account is created by then, so there is an id to put in the picker.
+  initialTargets?: UserAllowlistSelectedItem[]
+  // Create mode: who this record is for, used to suggest a name. A per-person
+  // key is a one-member record, and a fleet of them all called "Anthropic Key"
+  // is the actual unreadability — not the row count.
+  nameSubject?: string
+  // Create mode: fired after the record is created, so a host surface can
+  // record that the step is done.
+  //
+  // It is handed the reconcile result rather than nothing, because "the record
+  // was created" and "that person can now work" are different facts and the
+  // host has no business deriving the second from the first. The result's
+  // members carry `api_key_onboarding_state` — the server's own answer, the
+  // same field that decides whether that person's dashboard shows the
+  // paste-a-key wall.
+  onCreated?: (result: ManagedAICredentialReconcileResult) => void
 }
 
 export function ManagedCredentialDialog({
@@ -411,13 +478,18 @@ export function ManagedCredentialDialog({
   record,
   open: controlledOpen,
   onOpenChange,
+  initialTargets,
+  nameSubject,
+  onCreated,
 }: ManagedCredentialDialogProps) {
-  // Create mode manages its own open state (triggered by the header button);
-  // edit mode is fully controlled by the parent actions menu.
+  // Controlled whenever a parent passes `open` — the actions menu in edit
+  // mode, the invite wizard in create mode. Otherwise the dialog owns its own
+  // state and renders its own trigger button.
+  const isControlled = controlledOpen !== undefined
   const [internalOpen, setInternalOpen] = useState(false)
-  const isOpen = mode === "edit" ? (controlledOpen ?? false) : internalOpen
+  const isOpen = isControlled ? controlledOpen : internalOpen
   const setIsOpen = (open: boolean) => {
-    if (mode === "edit") onOpenChange?.(open)
+    if (isControlled) onOpenChange?.(open)
     else setInternalOpen(open)
   }
 
@@ -427,7 +499,7 @@ export function ManagedCredentialDialog({
   const fieldId = useId()
 
   const [targets, setTargets] = useState<UserAllowlistSelectedItem[]>(() =>
-    membersToTargets(record),
+    mode === "edit" ? membersToTargets(record) : (initialTargets ?? []),
   )
   // Whether the admin actually touched the membership picker.
   //
@@ -446,7 +518,10 @@ export function ManagedCredentialDialog({
   const form = useForm<FormData>({
     resolver: zodResolver(buildFormSchema(mode)),
     mode: "onBlur",
-    defaultValues: mode === "edit" && record ? recordToFormData(record) : CREATE_DEFAULTS,
+    defaultValues:
+      mode === "edit" && record
+        ? recordToFormData(record)
+        : createDefaults(nameSubject),
   })
 
   // The values the form was last seeded with — i.e. what the record looked
@@ -464,7 +539,7 @@ export function ManagedCredentialDialog({
   // real `FormData`. The spread matters: the ref outlives the render, and the
   // module-level defaults must not become per-instance state.
   const openedWithRef = useRef<FormData>(
-    mode === "edit" && record ? recordToFormData(record) : { ...CREATE_DEFAULTS },
+    mode === "edit" && record ? recordToFormData(record) : createDefaults(nameSubject),
   )
   const seedForm = (values: FormData) => {
     openedWithRef.current = values
@@ -479,6 +554,69 @@ export function ManagedCredentialDialog({
   const setUserSdkDefaults = form.watch("set_user_sdk_defaults")
   const sdkModes = form.watch("sdk_default_modes")
   const autoProvisionRoles = form.watch("auto_provision_roles")
+  const provisioningMode = form.watch("provisioning_mode")
+  const selectedProviderKeyId = form.watch("provider_admin_credential_id")
+  const isMinted = provisioningMode === "minted"
+
+  // Whether per-user minting may be chosen for this provider is the *server's*
+  // answer — `can_mint_now` on the adapter projection, which is the same rule
+  // `ManagedAICredentialsService._validate_provisioning` enforces on create.
+  // Rebuilding it here out of "the adapter supports minting" and "an
+  // organisation of that type is connected" would be a second implementation
+  // that stops agreeing the day a third condition is added.
+  //
+  // `supportsMinting` is still read, but only to say *why* the option is
+  // unavailable — that is a fact about the provider, not the policy.
+  const {
+    supportsMinting,
+    canMintNow,
+    isPending: adaptersPending,
+  } = useProviderAdapters(isOpen)
+
+  const { data: providerKeys } = useQuery({
+    queryKey: PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY,
+    queryFn: () => AdminProviderCredentialsService.listProviderAdminCredentials(),
+    enabled: isOpen,
+    staleTime: 30_000,
+  })
+  const eligibleProviderKeys = (providerKeys ?? []).filter(
+    (entry) => entry.provider_type === selectedType,
+  )
+  // Both queries have to have answered before "minting is not available" is an
+  // answer rather than a loading state — otherwise the radio would disable
+  // itself for a moment on every open and take an already-made choice with it.
+  // The organisation list is needed for the select below, not for the verdict.
+  const mintingKnown = !adaptersPending && providerKeys !== undefined
+  const mintingAvailable = mintingKnown && canMintNow(selectedType)
+
+  // Changing the provider can invalidate a minted choice: the new provider may
+  // not mint at all, and a connected organisation belongs to exactly one
+  // provider. Both are reset rather than left to fail server-side.
+  useEffect(() => {
+    if (mode !== "create" || !mintingKnown) return
+    if (isMinted && !mintingAvailable) {
+      form.setValue("provisioning_mode", "shared", { shouldDirty: true })
+      form.setValue("provider_admin_credential_id", "", { shouldDirty: true })
+      return
+    }
+    if (
+      selectedProviderKeyId &&
+      !eligibleProviderKeys.some((entry) => entry.id === selectedProviderKeyId)
+    ) {
+      form.setValue("provider_admin_credential_id", "", { shouldDirty: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `providerKeys` is in the list because the effect reads the organisations
+    // themselves: one being disconnected elsewhere leaves a selected id that no
+    // longer exists while the verdict and the id both stay put.
+  }, [
+    mintingKnown,
+    mintingAvailable,
+    isMinted,
+    selectedType,
+    selectedProviderKeyId,
+    providerKeys,
+  ])
 
   // The 409 raised when another managed credential already owns a
   // (role, mode) default slot this one is claiming. Rendered next to the
@@ -515,7 +653,7 @@ export function ManagedCredentialDialog({
 
   // Tracks the last auto-suggested name so we only overwrite it while the user
   // hasn't typed their own name. Only active in create mode.
-  const autoNameRef = useRef(CREATE_DEFAULTS.name)
+  const autoNameRef = useRef(defaultCredentialName(CREATE_DEFAULTS.type, nameSubject))
 
   // Keep the suggested name in sync with the selected provider until the user
   // types their own name. Disabled in edit mode (provider type is immutable).
@@ -523,11 +661,11 @@ export function ManagedCredentialDialog({
     if (mode === "edit") return
     const currentName = form.getValues("name")
     if (currentName === "" || currentName === autoNameRef.current) {
-      const suggested = defaultCredentialName(selectedType)
+      const suggested = defaultCredentialName(selectedType, nameSubject)
       autoNameRef.current = suggested
       form.setValue("name", suggested)
     }
-  }, [selectedType, form, mode])
+  }, [selectedType, form, mode, nameSubject])
 
   // Re-seed the form + picker whenever the edit dialog opens for a record, so a
   // stale local edit from a previously-closed dialog never leaks in.
@@ -547,11 +685,10 @@ export function ManagedCredentialDialog({
       seedForm(recordToFormData(record))
       setTargets(membersToTargets(record))
     } else {
-      // A copy: the ref holds this object for the life of the dialog, and the
-      // module-level defaults must not become per-instance state.
-      seedForm({ ...CREATE_DEFAULTS })
-      autoNameRef.current = CREATE_DEFAULTS.name
-      setTargets([])
+      const defaults = createDefaults(nameSubject)
+      seedForm(defaults)
+      autoNameRef.current = defaults.name
+      setTargets(initialTargets ?? [])
     }
     setMembershipDirty(false)
     setTestResult(null)
@@ -681,10 +818,17 @@ export function ManagedCredentialDialog({
     }
     const labelFor = (userId: string) => labelById.get(userId) ?? userId
 
-    // Per-user warnings: blocked (in use by a bundle) and skipped (unknown /
-    // inactive). One toast per entry so the admin sees each by name.
+    // Per-user warnings: blocked and skipped (unknown / inactive). One toast per
+    // entry so the admin sees each by name.
+    //
+    // `b.message` is the server's own sentence for `b.reason`. It used to be a
+    // constant here — "in use by a published bundle" — printed for all three
+    // reasons, so an admin blocked by a mint that was still in flight was told
+    // they had a bundle conflict, whose obvious remedy is the force delete that
+    // must not be used while a key is being minted. The server states the
+    // reason; this renders it.
     for (const b of blocked) {
-      showErrorToast(`${labelFor(b.user_id)} not removed — in use by a published bundle.`)
+      showErrorToast(`${labelFor(b.user_id)} was not removed. ${b.message}`)
     }
     for (const s of skipped) {
       showErrorToast(`${labelFor(s.user_id)} skipped (${s.reason}).`)
@@ -725,6 +869,7 @@ export function ManagedCredentialDialog({
       surfaceReconcileResult(result, targets)
       resetDialog()
       setIsOpen(false)
+      onCreated?.(result)
     },
     onError: handleSaveError,
     onSettled: () => {
@@ -796,10 +941,18 @@ export function ManagedCredentialDialog({
     )
 
     if (mode === "create") {
+      const minted = data.provisioning_mode === "minted"
       const body: ManagedAICredentialCreate = {
         name: data.name.trim(),
         type: data.type,
-        api_key: data.api_key,
+        provisioning_mode: data.provisioning_mode,
+        // A minted record holds no key of its own, and the backend refuses one
+        // rather than ignoring it. Omission is the representable "there is
+        // none" — not an empty string the server has to interpret.
+        api_key: minted ? undefined : data.api_key,
+        provider_admin_credential_id: minted
+          ? data.provider_admin_credential_id
+          : undefined,
         base_url: includesBaseUrl ? data.base_url?.trim() || undefined : undefined,
         model: includesModel ? data.model?.trim() || undefined : undefined,
         default_model: defaultModel || undefined,
@@ -882,7 +1035,11 @@ export function ManagedCredentialDialog({
     ) {
       body.model_override_building = overrideBuilding
     }
-    if (data.api_key && data.api_key.trim() !== "") {
+    // Never on a minted record: it stores no key, and the backend answers a
+    // rotation request there with a 400 rather than silently rotating nothing.
+    // The field is not on screen in that mode either — this is the guard for
+    // the value surviving a mode the admin then changed.
+    if (!isMinted && data.api_key && data.api_key.trim() !== "") {
       body.api_key = data.api_key
     }
     updateMutation.mutate(body)
@@ -957,6 +1114,138 @@ export function ManagedCredentialDialog({
             )}
           />
 
+          <div className="space-y-3 rounded-md border p-3">
+            <div className="space-y-0.5">
+              <Label className="text-sm font-medium">Key source</Label>
+              <p className="text-xs text-muted-foreground">
+                {mode === "edit"
+                  ? "Set when the record was created and fixed afterwards."
+                  : "How each member gets a key."}
+              </p>
+            </div>
+            <RadioGroup
+              value={provisioningMode}
+              onValueChange={(value) =>
+                form.setValue("provisioning_mode", value as FormData["provisioning_mode"], {
+                  shouldDirty: true,
+                })
+              }
+              disabled={mode === "edit"}
+              className="gap-3"
+            >
+              <div className="flex items-start gap-2">
+                <RadioGroupItem
+                  value="shared"
+                  id={`${fieldId}-mode-shared`}
+                  className="mt-1"
+                />
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor={`${fieldId}-mode-shared`}
+                    className="text-sm font-normal"
+                  >
+                    One key, shared by every member
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    You paste a key and each member gets their own copy of it.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <RadioGroupItem
+                  value="minted"
+                  id={`${fieldId}-mode-minted`}
+                  className="mt-1"
+                  disabled={mode === "edit" || !mintingAvailable}
+                />
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor={`${fieldId}-mode-minted`}
+                    className="text-sm font-normal"
+                  >
+                    A separate key for each member
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {mode === "create" && !mintingAvailable
+                      ? mintingKnown && !supportsMinting(selectedType)
+                        ? `${getProviderTypeLabel(selectedType)}'s administration API does not create keys, so a ${getProviderTypeLabel(selectedType)} key is pasted here and shared.`
+                        : "Connect a provider organisation on the Provider keys tab first."
+                      : "Cinna creates each member's key at the provider and destroys it when they lose the credential."}
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+
+            {isMinted && (
+              <>
+                <FormField
+                  control={form.control}
+                  name="provider_admin_credential_id"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        Provider organisation{" "}
+                        <span className="text-destructive">*</span>
+                      </FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value || undefined}
+                        disabled={mode === "edit"}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a connected organisation" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {eligibleProviderKeys.map((entry) => (
+                            <SelectItem key={entry.id} value={entry.id}>
+                              {entry.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        Keys are created in this organisation's configured
+                        project.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {/* What we enforce, stated as what we enforce. The provider
+                    offers no narrower key than this, and saying otherwise here
+                    would be a reassurance nothing backs. */}
+                <div className="space-y-1 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
+                  <p>What this record does with each member's key:</p>
+                  <ul className="list-disc space-y-1 pl-4">
+                    <li>
+                      Creates it inside the organisation's configured project,
+                      whose monthly spend limit is verified as enforcing before
+                      any key is created.
+                    </li>
+                    <li>
+                      Destroys it when the member loses the credential — on
+                      removal, on deactivation, and when the account is deleted.
+                      A removal that is refused because a published bundle still
+                      uses the credential leaves the key live until it goes
+                      through.
+                    </li>
+                    <li>
+                      Records the provider handles needed to destroy it, so a key
+                      is never left behind unnamed.
+                    </li>
+                  </ul>
+                  <p>
+                    The key carries write access to that project's API
+                    resources. The project and its spend limit are the boundary.
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+
+          {!isMinted && (
           <FormField
             control={form.control}
             name="api_key"
@@ -986,6 +1275,7 @@ export function ManagedCredentialDialog({
               </FormItem>
             )}
           />
+          )}
 
           {showBaseUrl && (
             <FormField
@@ -1350,7 +1640,11 @@ export function ManagedCredentialDialog({
         if (!open) resetDialog()
       }}
     >
-      {mode === "create" && (
+      {/* Only when this dialog owns its own open state. A controlled create —
+          the invite wizard's step 3 — brings its own button, and rendering this
+          one beside it was the sibling that kept assuming create ⇒ uncontrolled
+          after `isControlled` replaced that proxy. */}
+      {mode === "create" && !isControlled && (
         <DialogTrigger asChild>
           <Button>
             <Plus className="mr-2 h-4 w-4" />

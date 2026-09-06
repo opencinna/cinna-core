@@ -200,3 +200,14 @@ export function findAutoProvisionConflict(
     ) ?? null
   )
 }
+
+// ── Per-user key provisioning ──────────────────────────────────────────
+
+/**
+ * React Query key for the connected provider organisations
+ * (`/admin/provider-admin-credentials`). Mutations invalidate by this prefix.
+ */
+export const PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY = [
+  "admin",
+  "provider-admin-credentials",
+] as const

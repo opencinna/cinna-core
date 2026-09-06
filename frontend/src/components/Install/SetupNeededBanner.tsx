@@ -70,16 +70,40 @@ export function SetupNeededBanner({ agentId }: SetupNeededBannerProps) {
 
   if (status.status === "publisher_broken") {
     const missingDesc = formatMissingNames(status.missing)
+    // `unshareable` is not a missing share — it is a credential the server will
+    // never share, because the publisher wired the bundle to a key provisioned
+    // for one person. Telling this installer to ask the publisher to "restore
+    // access" points at a fix that does not exist; the publisher has to point
+    // the bundle somewhere else.
+    const unshareable = status.missing.some(
+      (m) => m.reason === "publisher_credential_unshareable",
+    )
     return (
       <Alert variant="destructive" className="mb-4">
         <ShieldAlert className="h-4 w-4" />
-        <AlertTitle>Publisher credentials unavailable</AlertTitle>
+        <AlertTitle>
+          {unshareable
+            ? "Publisher credentials cannot be shared"
+            : "Publisher credentials unavailable"}
+        </AlertTitle>
         <AlertDescription>
-          {missingDesc
-            ? `The publisher credentials for ${missingDesc} are no longer available for this install. `
-            : "Publisher credentials for this install are no longer available. "}
-          Contact the publisher to restore access, or replace them with your own
-          credentials.
+          {unshareable ? (
+            <>
+              {missingDesc
+                ? `The publisher provided ${missingDesc} as a key that belongs to one person, so it cannot be shared with this install. `
+                : "This bundle is wired to a credential that belongs to one person, so it cannot be shared with this install. "}
+              The publisher needs to point the bundle at a shareable credential;
+              in the meantime you can supply your own below.
+            </>
+          ) : (
+            <>
+              {missingDesc
+                ? `The publisher credentials for ${missingDesc} are no longer available for this install. `
+                : "Publisher credentials for this install are no longer available. "}
+              Contact the publisher to restore access, or replace them with your
+              own credentials.
+            </>
+          )}
         </AlertDescription>
       </Alert>
     )

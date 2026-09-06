@@ -1,5 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router"
-import { useEffect, useState, useMemo, KeyboardEvent, DragEvent } from "react"
+import { createFileRoute, Link } from "@tanstack/react-router"
+import { useEffect, useRef, useState, useMemo, KeyboardEvent, DragEvent } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 
@@ -122,12 +122,85 @@ function Dashboard() {
   const {
     data: credentialsStatus,
     isLoading: credentialsLoading,
+    isError: credentialsErrored,
   } = useQuery({
     queryKey: ["aiCredentialsStatus"],
     queryFn: () => UsersService.getAiCredentialsStatus(),
+    // Every state polls, `has_key` included. Stopping there was justified by
+    // the latch below — "a later change becomes the banner" — and the two
+    // cancelled each other out: the one change the latch exists to survive is
+    // an administrator revoking a credential, and a query that stops polling at
+    // `has_key` never observes it. A credential going away has to be visible
+    // for the non-destructive half of this gate to be worth anything.
+    refetchInterval: 10_000,
   })
 
-  const hasAnthropicKey = credentialsStatus?.has_anthropic_api_key ?? false
+  // The onboarding decision, as the server took it. Three states, not two:
+  // `preparing` is the person whose administrator has a key being created for
+  // them right now, and putting the paste-a-key wall in front of them would be
+  // asking for something they are about to be given.
+  //
+  // Deliberately NOT `has_anthropic_api_key` combined in the browser with a
+  // second query for the pending memberships. That would make this file the
+  // second implementation of a policy the server already owns, and the two
+  // would answer differently the first time either side changed. The server
+  // decides; this renders.
+  //
+  // No `?? "needs_key"`. The field is required on the server's response now, so
+  // `undefined` means one thing only — *the server has not answered* — and it
+  // stays distinguishable instead of being flattened into a state. A browser
+  // that supplies the default is the second implementation of a policy the
+  // server owns, and it is wrong in the direction that costs the most: pending,
+  // paused (offline) and errored all become a confident `needs_key`.
+  const onboardingState = credentialsStatus?.api_key_onboarding_state
+
+  // Whether the full-page wall may still be shown.
+  //
+  // **A full-page early return is a first-render decision only.** The state
+  // above polls, so without this a person who was working — mid-draft, files
+  // attached, an agent selected — could have the entire page replaced by the
+  // paste-a-key screen ten seconds later, losing all of it. That is a data-loss
+  // bug regardless of whether the state that flipped was computed correctly,
+  // and the correct state does not make it rare enough to leave in: an admin
+  // deleting a credential, or a minted key being revoked, both flip it.
+  //
+  // Latched on the first render that has a real answer: if the wall was not
+  // warranted then, it is never taken again for this mount, and a later
+  // `needs_key` becomes the inline banner below instead.
+  //
+  // **The latch condition is `credentialsStatus !== undefined`, and nothing
+  // else.** It was `!credentialsLoading`, which is not the same question:
+  // React Query's `isLoading` is `isPending && isFetching`, so it is false in
+  // three states that are not an answer, and the latch was wrong in both
+  // directions from there. Latching `false` — a `has_key` served from a
+  // five-minute cache on a fresh page entry, while the refetch that says
+  // `needs_key` is still in flight — leaves somebody who needs a key with only
+  // the banner, on exactly the entry where there is no draft to protect and the
+  // wall is what should show. Latching `true` — offline, where `fetchStatus`
+  // is "paused" and `isLoading` is therefore false — walled a person who *has*
+  // a key, behind a "Skip for now" that writes a permanent localStorage flag,
+  // with a paused query that never resolves to undo it.
+  const wallAllowedRef = useRef<boolean | null>(null)
+  if (wallAllowedRef.current === null && credentialsStatus !== undefined) {
+    wallAllowedRef.current = credentialsStatus.api_key_onboarding_state === "needs_key"
+  }
+  const showKeyWall =
+    wallAllowedRef.current === true &&
+    onboardingState === "needs_key" &&
+    !onboardingSkipped
+  // Everything the wall would have said, said without taking the page away.
+  //
+  // Deliberately NOT suppressed by `onboardingSkipped`. "Skip for now" is a
+  // permanent flag and it dismisses the *wall* — the thing that takes the page
+  // away. A nudge that a single click silences forever is not a nudge, and the
+  // account it silences it for is the one that cannot run an agent. It is still
+  // suppressed while the wall is up (they are the same message) and while the
+  // server has not answered (`onboardingState` is undefined then, and a banner
+  // about a state nobody has stated is a guess).
+  const showKeyBanner =
+    !showKeyWall &&
+    onboardingState !== undefined &&
+    onboardingState !== "has_key"
 
   // Server-wide disclaimer shown at login, before the Getting Started modal.
   // Dismissal is tracked purely in browser storage (no server-side per-user
@@ -578,6 +651,75 @@ function Dashboard() {
     }
   }
 
+  // The API-key gate's non-destructive half, built once and rendered by every
+  // branch that can return a page.
+  //
+  // `preparing` never gets the full-page wall at all — asking somebody to paste
+  // a key while their administrator is creating one for them is the failure the
+  // state exists to prevent — and it used to render nothing whatsoever, so that
+  // person saw a dashboard with no explanation of why nothing worked yet.
+  // `needs_key` lands here too once the page has loaded, rather than replacing
+  // it.
+  //
+  // A **variable, not JSX inline in the main return**, because the main return
+  // is not the only page this component renders: an account whose agents all
+  // have stopped environments takes the "No Active Environments" early return
+  // below, and every `preparing` / `needs_key` user in that state — which is
+  // most of them, since an agent with no key does not keep an environment up —
+  // saw the one explanation they needed suppressed by the one branch they were
+  // guaranteed to land on.
+  const keyStatusBanner = credentialsErrored ? (
+    <div className="flex items-start gap-3 rounded-md border bg-muted/40 px-4 py-3">
+      <AlertCircle className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <div className="space-y-1 text-sm">
+        {/* The one honest thing to say when the server did not answer. Silence
+            here reads as "everything is fine", which is the state we
+            specifically do not know we are in. */}
+        <p className="font-medium">Could not check your AI credentials</p>
+        <p className="text-muted-foreground">
+          Agents may not be able to run. This retries on its own; if it keeps
+          happening, check{" "}
+          <Link className="underline" to="/settings" hash="ai-credentials">
+            Settings
+          </Link>
+          .
+        </p>
+      </div>
+    </div>
+  ) : showKeyBanner ? (
+    <div className="flex items-start gap-3 rounded-md border bg-muted/40 px-4 py-3">
+      <AlertCircle className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <div className="space-y-1 text-sm">
+        {onboardingState === "preparing" ? (
+          <>
+            <p className="font-medium">Your AI access is being set up</p>
+            <p className="text-muted-foreground">
+              An administrator is creating an API key for your account. This
+              page updates on its own when it is ready — there is nothing for
+              you to do.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="font-medium">No AI credential yet</p>
+            <p className="text-muted-foreground">
+              Agents need an API key before they can run. Add one in{" "}
+              {/* A router `Link`, not `<a href>`. The bare anchor was a full
+                  document reload, which threw away the draft, the attached
+                  files and the agent selection this banner exists precisely to
+                  preserve — and landed on the default tab, not the one holding
+                  the control it is sending them to. */}
+              <Link className="underline" to="/settings" hash="ai-credentials">
+                Settings
+              </Link>
+              , or make an existing credential your default.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  ) : null
+
   if (agentsLoading || credentialsLoading) {
     return <PendingItems />
   }
@@ -600,8 +742,11 @@ function Dashboard() {
     )
   }
 
-  // Show onboarding if user doesn't have Anthropic API key and hasn't skipped
-  if (!hasAnthropicKey && !onboardingSkipped) {
+  // Show onboarding when the server says a key is needed and the user has not
+  // dismissed it. `onboardingSkipped` is a browser-local dismissal, which is
+  // the one fact the server does not hold. `showKeyWall` additionally requires
+  // that this was already true on first render — see its definition.
+  if (showKeyWall) {
     return (
       <ApiKeyOnboarding
         onComplete={() => {
@@ -624,15 +769,27 @@ function Dashboard() {
 
   if (agents.length > 0 && agentsWithActiveEnv.length === 0) {
     return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-4rem)]">
-        <div className="flex flex-col items-center justify-center text-center max-w-md">
-          <div className="rounded-full bg-muted p-6 mb-6">
-            <Bot className="h-12 w-12 text-muted-foreground" />
+      <div className="flex h-full flex-col">
+        {keyStatusBanner && (
+          <div className="px-6 pt-4">
+            <div className="mx-auto w-full max-w-3xl">{keyStatusBanner}</div>
           </div>
-          <h2 className="text-2xl font-semibold mb-2">No Active Environments</h2>
-          <p className="text-muted-foreground mb-6">
-            Please start an environment for your agent before you can start a conversation.
-          </p>
+        )}
+        {/* `flex-1 min-h-0` rather than a viewport-height minimum: the banner
+            above stacks on top of this block, and a near-full-viewport minimum
+            would push the page into a scrollbar for what is otherwise one
+            centred card. */}
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <div className="flex flex-col items-center justify-center text-center max-w-md">
+            <div className="rounded-full bg-muted p-6 mb-6">
+              <Bot className="h-12 w-12 text-muted-foreground" />
+            </div>
+            <h2 className="text-2xl font-semibold mb-2">No Active Environments</h2>
+            <p className="text-muted-foreground mb-6">
+              Please start an environment for your agent before you can start a
+              conversation.
+            </p>
+          </div>
         </div>
       </div>
     )
@@ -644,8 +801,9 @@ function Dashboard() {
           of inside the vertically-centered content block so it doesn't
           overlap with the agent selector. */}
       <div className="px-6 pt-4">
-        <div className="mx-auto w-full max-w-3xl">
+        <div className="mx-auto w-full max-w-3xl space-y-3">
           <EnableTwoFactorBanner />
+          {keyStatusBanner}
         </div>
       </div>
       {/* Main centered content area */}

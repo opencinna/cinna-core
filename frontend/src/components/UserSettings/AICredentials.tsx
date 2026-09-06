@@ -32,6 +32,7 @@ import { AICredentialDialog } from "./AICredentialDialog"
 import { AffectedEnvironmentsDialog } from "./AffectedEnvironmentsDialog"
 import { DeleteAICredentialDialog } from "./DeleteAICredentialDialog"
 import { ListModelsButton } from "@/components/Common/ListModelsButton"
+import { KeyProvisioningRows, useMyKeyProvisionings } from "./KeyProvisioningRows"
 
 // SDK Engine options
 const SDK_ENGINE_OPTIONS = [
@@ -396,7 +397,11 @@ export function AICredentialsSettings() {
   })
 
   // Get list of named credentials
-  const { data: credentialsList, isLoading: isLoadingCredentials } = useQuery({
+  const {
+    data: credentialsList,
+    isLoading: isLoadingCredentials,
+    isError: credentialsFailed,
+  } = useQuery({
     queryKey: ["aiCredentialsList"],
     queryFn: () => AiCredentialsService.listAiCredentials(),
   })
@@ -474,6 +479,11 @@ export function AICredentialsSettings() {
   })
 
   const credentials = credentialsList?.data || []
+  // Memberships with no key behind them yet — a server-stated list, kept apart
+  // from the credentials above rather than folded into them: every credential
+  // in that list is usable, and these are not credentials.
+  const { data: provisioningsData } = useMyKeyProvisionings()
+  const provisionings = provisioningsData ?? []
 
   // Save handler from the mode edit dialog
   const handleModeSave = (
@@ -578,7 +588,22 @@ export function AICredentialsSettings() {
           <CardContent>
             {isLoadingCredentials ? (
               <p className="text-sm text-muted-foreground">Loading credentials...</p>
-            ) : credentials.length === 0 ? (
+            ) : credentialsFailed ? (
+              /* Checked, because the alternative is a lie. A failed query
+                 leaves `credentials` empty, and without this branch that empty
+                 array renders as "No credentials yet" — telling somebody who
+                 may well have several that they have none, and inviting them to
+                 add a duplicate. "We could not load them" is the only thing we
+                 actually know. */
+              <div className="text-sm text-muted-foreground py-6 text-center">
+                <Key className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p>Could not load your credentials</p>
+                <p className="text-xs mt-1">
+                  This is a loading problem, not an empty list — reload the page
+                  to try again.
+                </p>
+              </div>
+            ) : credentials.length === 0 && provisionings.length === 0 ? (
               <div className="text-sm text-muted-foreground py-6 text-center">
                 <Key className="h-8 w-8 mx-auto mb-2 opacity-50" />
                 <p>No credentials yet</p>
@@ -586,6 +611,10 @@ export function AICredentialsSettings() {
               </div>
             ) : (
               <div className="space-y-1.5">
+                {/* "No credentials yet" would be wrong in front of someone
+                    whose key is being created for them right now, so the empty
+                    state is gated on both lists. */}
+                <KeyProvisioningRows rows={provisionings} />
                 {credentials.map((cred) => (
                   <div
                     key={cred.id}

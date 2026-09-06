@@ -106,6 +106,8 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
   const [versionDraft, setVersionDraft] = useState(DEFAULT_FIRST_VERSION)
   const [publishToPublicCatalog, setPublishToPublicCatalog] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
+  // Publisher-facing notices from the last publish in this session.
+  const [publishNotices, setPublishNotices] = useState<string[]>([])
   const [copiedBundleId, setCopiedBundleId] = useState(false)
   const [copiedHashId, setCopiedHashId] = useState<string | null>(null)
   const [deleteRevisionTarget, setDeleteRevisionTarget] = useState<{
@@ -202,6 +204,13 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
       } else {
         showSuccessToast(`Published ${label}`)
       }
+      // Server-stated, and kept on the page rather than folded into the toast.
+      // These say what this publish means for the people who will install it —
+      // e.g. that an admin-provisioned AI credential cannot travel with the
+      // bundle and installers will supply their own key. A toast that vanishes
+      // in four seconds is not where you tell somebody a fact they need to put
+      // in their release notes.
+      setPublishNotices(rev.publish_notices)
       setPublishOpen(false)
       queryClient.invalidateQueries({ queryKey: ["agent", agent.id] })
       queryClient.invalidateQueries({ queryKey: ["bundles"] })
@@ -422,6 +431,40 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
+            {/* What the publish that just happened means for installers.
+                The readiness gate says a related thing to the *installer*, on
+                their setup screen — a different person at a different moment,
+                and one who cannot act on it. This is the publisher's copy. */}
+            {publishNotices.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/30 px-3 py-2 space-y-1">
+                <div className="flex items-center justify-between gap-2 text-amber-800 dark:text-amber-300">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <span className="text-sm font-medium">
+                      What people who install this will get
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs underline shrink-0"
+                    onClick={() => setPublishNotices([])}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+                <ul className="space-y-0.5 pl-6 list-disc">
+                  {publishNotices.map((notice) => (
+                    <li
+                      key={notice}
+                      className="text-xs text-amber-700 dark:text-amber-300"
+                    >
+                      {notice}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* Credential-sharing drift — a republish nudge when the live
                 sharing model differs from the latest published snapshot. */}
             {showDriftWarning && (

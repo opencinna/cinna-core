@@ -1,4 +1,4 @@
-import type { ManagedAICredentialMember, ManagedAICredentialPublic } from "@/client"
+import type { ManagedAICredentialPublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import {
   Table,
@@ -10,15 +10,11 @@ import {
 } from "@/components/ui/table"
 import { userRoleLabel } from "@/utils/userRoles"
 import { LlmProviderActionsMenu } from "./LlmProviderActionsMenu"
+import { KeyStatusSummary, MemberChip } from "./MemberKeyStatus"
 import { getProviderTypeLabel } from "./providerTypes"
 
 interface LlmProvidersTableProps {
   records: ManagedAICredentialPublic[]
-}
-
-function memberBadgeLabel(member: ManagedAICredentialMember): string {
-  if (member.full_name) return `${member.full_name} <${member.email}>`
-  return member.email
 }
 
 function BooleanBadge({ value }: { value: boolean }) {
@@ -85,9 +81,10 @@ export function LlmProvidersTable({ records }: LlmProvidersTableProps) {
             <TableHead className="w-[11%]">Provider</TableHead>
             <TableHead className="w-[11%]">Default provider</TableHead>
             <TableHead className="w-[9%]">Default SDK</TableHead>
-            <TableHead className="w-[14%]">Auto</TableHead>
-            <TableHead>Shared with</TableHead>
-            <TableHead className="w-[11%]">Created</TableHead>
+            <TableHead className="w-[12%]">Auto</TableHead>
+            <TableHead className="w-[12%]">Keys</TableHead>
+            <TableHead>Members</TableHead>
+            <TableHead className="w-[10%]">Created</TableHead>
             <TableHead className="w-[48px]" />
           </TableRow>
         </TableHeader>
@@ -108,14 +105,16 @@ export function LlmProvidersTable({ records }: LlmProvidersTableProps) {
                 <AutoProvisionCell roles={record.auto_provision_roles ?? []} />
               </TableCell>
               <TableCell>
+                <KeyStatusSummary record={record} />
+              </TableCell>
+              <TableCell>
                 <div className="flex flex-wrap gap-2">
                   {(record.members ?? []).map((member) => (
-                    <div
+                    <MemberChip
                       key={member.user_id}
-                      className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-0.5 text-xs"
-                    >
-                      <span className="truncate">{memberBadgeLabel(member)}</span>
-                    </div>
+                      record={record}
+                      member={member}
+                    />
                   ))}
                   {(record.members ?? []).length === 0 && (
                     <span className="text-xs text-muted-foreground">No members</span>
