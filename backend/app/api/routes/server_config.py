@@ -1,17 +1,20 @@
 """
 Server configuration API.
 
-Exposes the singleton server-wide config in three tiers:
+Exposes the singleton server-wide config in tiers:
 
 * the **access policy** projection — public, unauthenticated, rate-limited;
-  it is what the login and signup pages render themselves from;
+  it is what the login, signup and landing pages render themselves from;
+* the **landing** projection — public, unauthenticated, rate-limited on the
+  same budget; the admin-authored welcome copy `/start` renders;
 * the **disclaimer** projection — any authenticated user;
 * the **full config** — superuser only, read and update.
 
-The access-policy projection is deliberately the narrowest of the three: it
-says what this instance offers (may anyone register, which sign-in methods
-exist), never who may do what. Patterns and the default role stay behind the
-superuser endpoint.
+The access-policy projection is deliberately the narrowest of these: it says
+what this instance offers (may anyone register, which sign-in methods exist),
+never who may do what. Patterns and the default role stay behind the superuser
+endpoint. The landing copy is split out rather than folded into it because it
+is *content*, and every login page load reads the policy.
 """
 import logging
 from typing import Annotated, Any
@@ -24,6 +27,7 @@ from app.models import User
 from app.models.server_config.server_config import (
     AccessPolicyPublic,
     DisclaimerPublic,
+    LandingPagePublic,
     ServerConfig,
     ServerConfigUpdate,
 )
@@ -41,13 +45,16 @@ router = APIRouter(tags=["server-config"])
 SuperUser = Annotated[User, Depends(get_current_active_superuser)]
 
 # Keyed by source IP — the caller is anonymous, so their address is the only
-# identity there is. The read is cheap, but it is one of the few endpoints an
-# unauthenticated caller can reach at all, and it touches the database.
+# identity there is. The reads are cheap, but they are among the few endpoints
+# an unauthenticated caller can reach at all, and they touch the database.
+#
+# One limiter object shared by every anonymous endpoint in this module, so a
+# caller gets one budget rather than one per route.
 _access_policy_limiter = RateLimiter()
 
 
 def _access_policy_rate_limit(request: Request) -> None:
-    """Per-caller backstop on the one anonymous, DB-touching endpoint here.
+    """Per-caller backstop on the anonymous, DB-touching endpoints here.
 
     Declared before ``SessionDep`` resolves so a throttled request costs no
     pool connection and no query.
@@ -77,6 +84,27 @@ def get_access_policy(session: SessionDep) -> Any:
     """
     policy = AccessPolicyService.resolve(session)
     return AccessPolicyService.to_public(policy)
+
+
+@router.get(
+    "/server-config/landing",
+    response_model=LandingPagePublic,
+    dependencies=[Depends(_access_policy_rate_limit)],
+)
+def get_landing_page(session: SessionDep) -> Any:
+    """Return the admin-authored welcome copy for the public `/start` page.
+
+    A separate endpoint from the access-policy projection on purpose. The
+    policy is a handful of small scalars, cached under one key that the login
+    and signup pages both read on every load; this is an admin-pasted document
+    that only `/start` renders. Folding it into that projection would put a
+    landing page on the wire for every login page view.
+
+    Shares the *same* limiter object as the policy read — a second
+    ``RateLimiter`` would hand one anonymous caller two budgets.
+    """
+    config = ServerConfigService.get_or_create(session)
+    return LandingPagePublic(landing_markdown=config.landing_markdown)
 
 
 @router.get("/server-config/disclaimer", response_model=DisclaimerPublic)

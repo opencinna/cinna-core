@@ -165,6 +165,32 @@ class AccessPolicy:
         """
         return self.registration_mode == REGISTRATION_MODE_OPEN
 
+    @property
+    def password_signup_available(self) -> bool:
+        """Whether this instance offers self-service password sign-up at all.
+
+        The single answer to a question three surfaces ask — the login page
+        (should it offer a "Sign up" link), the signup page (should it render
+        the form) and `/start` (should it show a "Create account" button).
+        Each of them used to recombine ``registration_open`` and
+        ``password_auth_enabled`` for itself, and they drifted: the login page
+        checked only the first, so a Google-only instance with open
+        registration advertised a signup page that then refused to render.
+
+        Deliberately **not** ``can_register``: that one also consults
+        ``is_email_allowed``, which needs an address. This is "the door
+        exists", which is what a projection with no viewer is allowed to say.
+        Whether a given address may walk through it stays a server-side check
+        at signup.
+
+        It does not restate the gates either — it asks the same function
+        ``can_register``'s SIGNUP branch asks. Removing the drift from the
+        browser only to reintroduce it one layer down, as two expressions in
+        this file with nothing keeping them in step, would be the same bug
+        wearing a server-side coat.
+        """
+        return AccessPolicyService.signup_refusal_reason(self) is None
+
 
 @dataclass(frozen=True)
 class RegistrationDecision:
@@ -249,8 +275,15 @@ class AccessPolicyService:
             password_auth_enabled=policy.password_auth_enabled,
             google_auth_enabled=policy.google_auth_enabled,
             google_auto_register=policy.google_auto_register,
+            # Gates the *advertisement* of the desktop client and nothing
+            # else: `/start` hides its download card on this, while `/desktop`
+            # renders unconditionally and `GET /desktop/download` is ungated,
+            # so links in already-sent new-account emails keep working. Turning
+            # `DESKTOP_AUTH_ENABLED` off therefore stops promoting the app; it
+            # does not stop serving it.
             desktop_enabled=settings.DESKTOP_AUTH_ENABLED,
             project_name=settings.PROJECT_NAME,
+            password_signup_available=policy.password_signup_available,
         )
 
     # ── Predicates ─────────────────────────────────────────────────────
@@ -289,6 +322,30 @@ class AccessPolicyService:
         return match_email_pattern(email, patterns)
 
     @staticmethod
+    def signup_refusal_reason(policy: AccessPolicy) -> str | None:
+        """Why password self-registration is closed on this instance, or None.
+
+        The **sole** encoding of the door-level SIGNUP gates: the ones that
+        depend on the instance alone and not on who is knocking. Two readers
+        need exactly this answer and must never encode it separately —
+        ``can_register``'s SIGNUP branch, which then adds the per-address
+        pattern check, and ``AccessPolicy.password_signup_available``, which is
+        this returning ``None`` and is what the login, signup and landing pages
+        render from.
+
+        Returns a ``REASON_*`` code so the caller that owes the API a reason
+        has one, and the caller that only needs a boolean can test for
+        ``None``. A gate added here reaches both at once, which is the whole
+        point: a third gate added to ``can_register`` alone would leave the
+        Create-account button advertising a door the API refuses.
+        """
+        if not policy.registration_open:
+            return REASON_REGISTRATION_CLOSED
+        if not policy.password_auth_enabled:
+            return REASON_PASSWORD_AUTH_DISABLED
+        return None
+
+    @staticmethod
     def can_register(
         session: Session, *, email: str, origin: AccountOrigin
     ) -> RegistrationDecision:
@@ -311,19 +368,23 @@ class AccessPolicyService:
 
         policy = AccessPolicyService.resolve(session)
 
-        if not policy.registration_open:
-            return RegistrationDecision(
-                allowed=False, reason=REASON_REGISTRATION_CLOSED
-            )
-
-        if origin == AccountOrigin.SIGNUP and not policy.password_auth_enabled:
-            return RegistrationDecision(
-                allowed=False, reason=REASON_PASSWORD_AUTH_DISABLED
-            )
-        if origin == AccountOrigin.GOOGLE and not policy.google_auto_register:
-            return RegistrationDecision(
-                allowed=False, reason=REASON_GOOGLE_AUTO_REGISTER_DISABLED
-            )
+        if origin == AccountOrigin.SIGNUP:
+            # The door-level gates live in one function, which
+            # ``AccessPolicy.password_signup_available`` also reads — so the
+            # button the browser renders and the answer this returns cannot
+            # disagree, and a gate added there is added to both at once.
+            refusal = AccessPolicyService.signup_refusal_reason(policy)
+            if refusal is not None:
+                return RegistrationDecision(allowed=False, reason=refusal)
+        else:
+            if not policy.registration_open:
+                return RegistrationDecision(
+                    allowed=False, reason=REASON_REGISTRATION_CLOSED
+                )
+            if not policy.google_auto_register:
+                return RegistrationDecision(
+                    allowed=False, reason=REASON_GOOGLE_AUTO_REGISTER_DISABLED
+                )
 
         if not AccessPolicyService.is_email_allowed(policy, email):
             return RegistrationDecision(

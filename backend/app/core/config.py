@@ -155,9 +155,23 @@ class Settings(BaseSettings):
     # per-IP backstop against tarball hammering, not a billing control.
     LOCAL_AGENT_KIT_RATE_LIMIT_PER_MIN: int = 120
 
-    # Per-IP budget for GET /server-config/access-policy — the anonymous
-    # projection the login and signup pages read before anyone has a token.
-    ACCESS_POLICY_RATE_LIMIT_PER_MIN: int = 120
+    # Module-wide per-caller budget for EVERY anonymous endpoint in
+    # `api/routes/server_config.py` — today the access-policy projection that
+    # the login and signup pages read before anyone has a token, and the
+    # landing copy that `/start` renders. One shared `RateLimiter()` on
+    # purpose (`server_config.py`): a per-route limiter would hand one caller
+    # a fresh budget for each new public read added there.
+    #
+    # So this is spent in *requests*, not page views, and the exchange rate is
+    # not 1:1 — a single `/start` view costs two (policy + landing). Budget
+    # accordingly when adding a public endpoint to that module.
+    #
+    # `anonymous_caller_key` keys on source IP, so a NAT'd office shares one
+    # bucket: 240 is ~120 first-time visitors per minute behind one address.
+    # Raised from 120 when the landing read joined the same limiter, to keep
+    # that effective capacity. Exhausting it is quiet by design — the pages
+    # degrade rather than error — so err generous.
+    ACCESS_POLICY_RATE_LIMIT_PER_MIN: int = 240
 
     # ── Environment console (web terminal + logs follow) ─────────────────
     # Idle timeout for an interactive PTY shell: the env-core /shell/pty

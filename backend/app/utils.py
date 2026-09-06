@@ -199,10 +199,14 @@ def generate_new_account_email(
     project_name = settings.PROJECT_NAME
     subject = f"{project_name} - New account for user {username}"
     # Primary call to action is the desktop landing page: it hands the user the
-    # right build in one click and the desktop then bootstraps itself. The bare
-    # SPA origin stays available as the secondary "just use the browser" link.
+    # right build in one click and the desktop then bootstraps itself. The
+    # secondary "just use the browser" link goes to `/start`, the public hub
+    # that renders whichever sign-in methods this instance actually offers —
+    # the bare SPA origin only ever redirected to `/login`, which is one of
+    # them. `/desktop` stays a real route, so this email's primary button and
+    # every older copy of it keep working.
     link = f"{settings.FRONTEND_HOST}/desktop"
-    web_link = settings.FRONTEND_HOST
+    web_link = f"{settings.FRONTEND_HOST}/start"
     html_content = render_email_template(
         template_name="new_account.html",
         context={
