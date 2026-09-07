@@ -22,7 +22,7 @@
 - `frontend/src/components/Chat/MarkdownRenderer.tsx` — unchanged behaviour; gained the contract comment recording that it now has **no anonymous consumer**
 - `frontend/src/hooks/useAccessPolicy.ts` — gained the shared `googleSignInAvailable(source)` helper
 - `frontend/src/routes/login/index.tsx`, `frontend/src/routes/signup.tsx`, `frontend/src/routes/accept-invite/index.tsx` — now read `password_signup_available` / `googleSignInAvailable` instead of recombining facts
-- `frontend/src/routes/_layout/admin/server-configuration.tsx` — mounts `LandingPageCard` under `AccessPolicyCard` on the `access` tab
+- `frontend/src/routes/_layout/admin/server-configuration.tsx` — mounts `LandingPageCard` alongside `RegistrationCard` / `SignInMethodsCard` / `NewUserDefaultsCard` / `CompanyAiCredentialsCard` in the `access` tab's two-column grid (see [Access Policy — tech](access_policy_tech.md))
 - `frontend/src/routes/_layout/admin/ai-credentials.tsx` — **new**, the renamed AI Credentials admin page
 - `frontend/src/routes/_layout/admin/llm-providers.tsx` — reduced to a `beforeLoad` redirect stub
 - `frontend/src/components/Sidebar/AdminMenu.tsx` — the menu item now reads "AI Credentials" → `/admin/ai-credentials` (icon unchanged: `Sparkles`)
@@ -302,4 +302,4 @@ Contained follow-up recorded above: conflict detection in the landing editor's d
 
 ---
 
-*Last updated: 2026-09-06*
+*Last updated: 2026-09-07*

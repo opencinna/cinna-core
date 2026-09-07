@@ -23,8 +23,14 @@
 - `backend/app/alembic/versions/1d737d7ef0a0_add_access_policy_to_server_config.py` — migration (down_revision: `68aab27946e5`)
 
 ### Frontend
-- `frontend/src/components/Admin/AccessPolicyCard.tsx` — the admin editor card
-- `frontend/src/routes/_layout/admin/server-configuration.tsx` — mounts the card on the `access` hash tab
+- `frontend/src/components/Admin/AccessPolicy/accessPolicy.ts` — shared `["serverConfig"]` query, the single-field `PATCH` mutation with its cache discipline, `pendingConfigField`, and the summary-sentence helpers (`describeRegistration`, `describeSignIn`, `describePatternCount`, `parsePatterns`) the cards below read
+- `frontend/src/components/Admin/AccessPolicy/RegistrationCard.tsx` — registration mode + the allowed-email-patterns summary row (opens `AllowedEmailPatternsDialog`)
+- `frontend/src/components/Admin/AccessPolicy/AllowedEmailPatternsDialog.tsx` — the patterns editor, the one explicit-save control on the tab
+- `frontend/src/components/Admin/AccessPolicy/SignInMethodsCard.tsx` — password/Google sign-in switches
+- `frontend/src/components/Admin/AccessPolicy/NewUserDefaultsCard.tsx` — default role + "Offer Cinna Desktop in invitations"
+- `frontend/src/components/Admin/AccessPolicy/CompanyAiCredentialsCard.tsx` — the credentials × roles auto-provisioning matrix, capped at 5 rows; see [Admin-Provisioned AI Credentials — tech](../ai_credentials/admin_ai_credential_provisioning_tech.md)
+- `frontend/src/components/Common/QueryErrorAlert.tsx` — shared error-with-Retry panel, extracted from `RoutingStateBlocks.tsx`; used by all four cards above
+- `frontend/src/routes/_layout/admin/server-configuration.tsx` — mounts the four cards plus `LandingPageCard` in a two-column grid on the `access` hash tab
 - `frontend/src/hooks/useAccessPolicy.ts` — the shared `["accessPolicy"]` query
 - `frontend/src/routes/login/index.tsx` — policy-driven login page
 - `frontend/src/routes/signup.tsx` — policy-driven signup page
@@ -284,50 +290,50 @@ useQuery<AccessPolicyPublic>({
 
 The module also exports **`googleSignInAvailable(source)`**, the one place the two independently configured Google facts are combined (the backend's client id/secret, reported by a projection, and this build's `VITE_GOOGLE_CLIENT_ID`, without which `GoogleLoginButton` renders nothing). It is structurally typed — `{ google_auth_enabled?: boolean | null }` — because the same fact reaches `/accept-invite` on `InvitationLookupPublic` rather than on `AccessPolicyPublic`; narrowing it to one response model is what left that page with a fourth hand-rolled copy. It returns `undefined` when the source has not answered, deliberately, because the callers do not share a degradation: `/login` and `/signup` apply `?? true`, `/start` and `/accept-invite` require `=== true`.
 
-### `AccessPolicyCard` (`frontend/src/components/Admin/AccessPolicyCard.tsx`)
+### The Access tab cards (`frontend/src/components/Admin/AccessPolicy/`)
 
-Named export. Title "Access & New Users", `ShieldCheck` icon. Reads `["serverConfig"]` (`ServerConfigService.getServerConfig`) for the row and `useAccessPolicy()` only for `google_auth_enabled` — whether Google sign-in is *configured* is a deployment fact, not a column.
+The tab is a two-column grid of five cards (`grid grid-cols-1 lg:grid-cols-2 gap-6 items-start`) rather than one wide card: `RegistrationCard` · `SignInMethodsCard` · `NewUserDefaultsCard` · `LandingPageCard` (existing, unchanged — see [Public Landing Page — tech](landing_page_tech.md)) · `CompanyAiCredentialsCard` spanning both columns (`lg:col-span-2`, a role matrix needs its columns). The single `AccessPolicyCard` and `AutoProvisionedCredentialsMatrix` this replaced are deleted; every helper they held now lives in `accessPolicy.ts` or on the individual card.
 
-Three sections separated by `<Separator />`:
+All four `ServerConfig`-backed cards share `accessPolicy.ts`: `useServerConfig()` (`["serverConfig"]`), `useServerConfigUpdate()` (the single-field `PATCH`, publishing the returned row into the cache **before** invalidating `["serverConfig"]` and `["accessPolicy"]` so a control does not visibly snap back under its own success toast), and `pendingConfigField(mutation)` (which key of the in-flight payload to disable — every write on this tab carries exactly one field). `CompanyAiCredentialsCard` is the exception: it does not touch `ServerConfig` at all, it patches `ManagedAICredential.auto_provision_roles` (see below).
 
-| Section | Control | Field |
-|---------|---------|-------|
-| Who can join | Select "Registration" — "Anyone with an allowed email" / "Invite only" | `registration_mode` |
-| Who can join | Textarea "Allowed email addresses" | `allowed_email_patterns` |
-| How they sign in | Switch "Password sign-in" | `password_auth_enabled` |
-| How they sign in | Switch "Create accounts on Google sign-in" | `google_auto_register` |
-| New users | Select "Default role" — Agent User / Agent Developer | `default_user_role` |
-| New users | Switch "Offer Cinna Desktop in invitations" | `invite_include_desktop_default` |
-| New users | `AutoProvisionedCredentialsMatrix` — credentials × roles checkboxes | **Not a `ServerConfig` column.** Each toggle is a `PATCH /admin/llm-providers/{id}` carrying only `auto_provision_roles`; the matrix shares the AI Credentials page's query key (`MANAGED_CREDENTIALS_QUERY_PREFIX`, which is **not** renamed — a cache key is not a route path) and renders the `409 auto_provision_conflict` inline |
+| Card | Control | Field |
+|------|---------|-------|
+| `RegistrationCard` | Select "Registration" — "Anyone with an allowed email" / "Invite only" | `registration_mode` |
+| `RegistrationCard` | Summary row "Allowed email addresses" (count + first two patterns), pencil opens `AllowedEmailPatternsDialog` | `allowed_email_patterns` |
+| `SignInMethodsCard` | Switch "Password sign-in" | `password_auth_enabled` |
+| `SignInMethodsCard` | Switch "Create accounts on Google sign-in" | `google_auto_register` |
+| `NewUserDefaultsCard` | Select "Default role" — Agent User / Agent Developer | `default_user_role` |
+| `NewUserDefaultsCard` | Switch "Offer Cinna Desktop in invitations" | `invite_include_desktop_default` |
+| `CompanyAiCredentialsCard` | Credentials × roles checkbox table, capped at 5 rows (granted-first then alphabetical), link to `/admin/ai-credentials` | **Not a `ServerConfig` column.** Each toggle is a `PATCH /admin/llm-providers/{id}` carrying only `auto_provision_roles`; the card shares the AI Credentials page's query key (`managedCredentialsQueryKey()` / `MANAGED_CREDENTIALS_QUERY_PREFIX`, which is **not** renamed — a cache key is not a route path) and renders the `409 auto_provision_conflict` inline |
 
-**Saving.** Every control except the textarea mutates immediately on change. The patterns textarea is the one explicit-save control: a **Save patterns** / **Cancel** pair appears while the draft is dirty, and sends `{ allowed_email_patterns: patternsValue.trim() }` — never `null`, since the backend reads a null field as "not being changed", so clearing the list has to travel as an empty string.
+**`AllowedEmailPatternsDialog`** (`frontend/src/components/Admin/AccessPolicy/AllowedEmailPatternsDialog.tsx`) is the one explicit-save control on the tab: opened from `RegistrationCard`'s pencil button, it holds its own draft state (seeded from the persisted value, `null` meaning "unedited"), a **Save** / **Cancel** footer, and sends `{ allowed_email_patterns: value.trim() }` — never `null`, since the backend reads a null field as "not being changed", so clearing the list has to travel as an empty string. A rejected save renders inline under the textarea (`role="alert"`, `aria-invalid`, `aria-describedby`) rather than a toast, via an `onError` override passed to `useServerConfigUpdate`; every other card's mutation uses the hook's default toast.
 
-`onSuccess` runs `queryClient.setQueryData(["serverConfig"], data)` (so controls do not snap back), then invalidates **both** `["serverConfig"]` and `["accessPolicy"]`, then toasts "Access policy updated". Draft/error reset is scoped with `if ("allowed_email_patterns" in variables)`.
+Every other control mutates immediately on change (`onValueChange` / `onCheckedChange` straight into `useServerConfigUpdate().mutate`).
 
-**Error rendering.** The reason-code map moved out of this component into a shared module, `frontend/src/utils/accessPolicyReasons.ts`, because the same codes are raised on four unrelated surfaces (this card, signup, password login, the Google button). `parseAccessPolicyReason(error)` reads `error.body.detail` and splits on the **first** colon only (an offending pattern entry may itself contain one); `accessPolicyReasonCopy(error)` maps every code in its `REASON_COPY` record — which includes `no_admin_password`, `no_admin_google_account`, `google_oauth_not_configured`, `invalid_registration_mode`, `invalid_default_user_role`, and the four registration/auth refusal codes (`registration_closed`, `email_not_allowed`, `password_auth_disabled`, `google_auto_register_disabled`) — to human copy. Locally, `reasonMessage(error)` calls `accessPolicyReasonCopy` and falls back to `Could not save the access policy (${code}).` only for a code no release of this frontend has heard of. A pattern failure renders inline under the textarea (`role="alert"`, `aria-invalid` on the textarea, `aria-describedby` pointing at the error id); every other code goes to an error toast.
+**Error rendering.** The reason-code map lives in a shared module, `frontend/src/utils/accessPolicyReasons.ts`, because the same codes are raised on four unrelated surfaces (this tab, signup, password login, the Google button). `parseAccessPolicyReason(error)` reads `error.body.detail` and splits on the **first** colon only (an offending pattern entry may itself contain one); `accessPolicyReasonCopy(error)` maps every code in its `REASON_COPY` record — which includes `no_admin_password`, `no_admin_google_account`, `google_oauth_not_configured`, `invalid_registration_mode`, `invalid_default_user_role`, and the four registration/auth refusal codes (`registration_closed`, `email_not_allowed`, `password_auth_disabled`, `google_auto_register_disabled`) — to human copy. `accessPolicy.ts`'s `reasonMessage(error)` calls `accessPolicyReasonCopy` and falls back to `Could not save the access policy (${code}).` only for a code no release of this frontend has heard of.
 
 A wrapper, `handlePolicyAwareError` in `frontend/src/utils.ts`, binds `accessPolicyReasonCopy` in front of the existing `handleError` for mutations that can be refused by the policy: both mutations in `hooks/useAuth.ts`, `routes/reset-password.tsx`, and `components/UserSettings/ChangePassword.tsx`. `components/Auth/GoogleLoginButton.tsx` and `components/UserSettings/SetPassword.tsx` call `accessPolicyReasonCopy` directly instead, since their error handling isn't a plain toast.
 
-**Summary line** (the `CardDescription`) — `"${signIn}; ${registration}; new users become ${role}s."`, e.g. "Employees sign in with Google only; registration is invite-only; new users become Agent Users." Reads `Reading the current policy…` while `policyKnown` is false, where `policyKnown = !isLoading && !publicPolicyPending` — `isPending`, not `data !== undefined`, because the projection is `retry: false` and a failed read must still release the summary.
+**Summary lines** (each card's `CardDescription`), from `accessPolicy.ts`: `describeRegistration({registrationOpen, patternCount})` → "Anyone can register." / "Anyone with a matching address can register (N patterns)." / "Only people you invite get an account."; `describeSignIn({passwordAuthEnabled, googleAuthEnabled})` → "Employees sign in with Google or a password." / "…with a password." / "…with Google only." Both are derived from the **persisted** row only, never a draft, and read `Reading the current policy…` / `"How employees get in."`-style placeholders while their query has no data yet.
 
-**Two pattern counts on purpose.** `draftPatternCount` (from the textarea draft) drives the label counter — "No restriction" at 0, else "N pattern(s)". `persistedPatternCount` (from the saved value) feeds the summary sentence, so unsaved edits are never narrated as in force.
+**Two pattern counts on purpose.** The dialog's own draft count drives its label counter — "No restriction" at 0, else "N pattern(s)". `RegistrationCard`'s `describeRegistration` reads the **persisted** count, so an open, unsaved dialog is never narrated as already in force.
 
-**Disabled states.**
+**Disabled states** (`SignInMethodsCard`).
 
 ```ts
 const passwordSwitchLocked =
   passwordAuthEnabled && publicPolicy !== undefined && !publicPolicy.google_auth_enabled
 ```
 
-Locked only in the direction that would fail (turning it off) and only after the projection has answered. The switch also gets `pointer-events-none` so hover reaches the wrapping `TooltipTrigger`; tooltip: "Configure Google OAuth first — otherwise nobody could sign in." The auto-register switch is `disabled={busy || inviteOnly}` and its label greys out in invite-only.
+Locked only in the direction that would fail (turning it off) and only after the projection has answered. The switch also gets `pointer-events-none` so hover reaches the wrapping `TooltipTrigger`; tooltip: "Configure Google OAuth first — otherwise nobody could sign in." The auto-register switch is `disabled={pendingField === "google_auto_register" || inviteOnly}` and its label greys out in invite-only.
 
 Fallbacks when the config row has not loaded: `open`, `true`, `true`, `agent-user`, `true`, and `google_auth_enabled` → **`false`** (the conservative direction for an admin control, unlike login/signup).
 
+**Error state, per card.** Each card gates its `QueryErrorAlert` on there being **no** data to show (`isError && config === undefined`, or for `SignInMethodsCard`, `(isError || policyError) && (!config || !publicPolicy)`) rather than on `isError` alone — a background refetch that fails while the last good value is still cached must not blank a live card.
+
 ### Admin route (`frontend/src/routes/_layout/admin/server-configuration.tsx`)
 
-`HashTabs` order: `interface` ("Interface"), **`access` ("Access")**, `channels` ("Channels"), `mail-servers` ("Mail Servers"). `access` is deliberately second — `HashTabs` lands on `tabs[0]` when there is no hash, and Interface has been that landing tab; the card is addressed directly as `/admin/server-configuration#access` from the startup warning.
-
-The Access tab holds **two** cards since phase 4: `<AccessPolicyCard />` then `<LandingPageCard />`, stacked in a `max-w-3xl space-y-6` column rather than switched to the two-column grid the other tabs use — `AccessPolicyCard` is written for a wide single column and reads badly at half width. See [Public Landing Page — tech](landing_page_tech.md).
+`HashTabs` order: `interface` ("Interface"), **`access` ("Access")**, `channels` ("Channels"), `mail-servers` ("Mail Servers"). `access` is deliberately second — `HashTabs` lands on `tabs[0]` when there is no hash, and Interface has been that landing tab; the tab is addressed directly as `/admin/server-configuration#access` from the startup warning.
 
 ### Login page (`frontend/src/routes/login/index.tsx`)
 
@@ -394,4 +400,4 @@ Removed by this change: `settings.auth_whitelist_domains` and `settings.allow_us
 
 ---
 
-*Last updated: 2026-09-06*
+*Last updated: 2026-09-07*

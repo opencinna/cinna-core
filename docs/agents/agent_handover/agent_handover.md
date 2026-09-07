@@ -35,13 +35,13 @@ Handovers can be toggled on/off. Disabled handovers are excluded from the agent'
 
 ### 1. Configure a Handover
 
-1. User opens the **Configuration** tab of the source agent
-2. Clicks **Add Agent Handover** — dropdown shows available agents (filters out self and already-configured targets)
-3. Selects a target agent and clicks **Add Handover** — an empty config record is created
-4. Clicks **Generate** (sparkles icon) — AI analyzes both agents' prompts and produces a draft handover prompt
-5. User reviews and edits the draft in the textarea
-6. Clicks **Apply Prompt** to save
-7. Toggle switch enables/disables the handover; trash icon removes it
+1. User opens the **Configuration** tab of the source agent. The **Handover to Agents** card shows up to 5 compact rows (target agent, an Enabled/Off badge, a one-line prompt preview), with a **Show all (N)** link opening a side Sheet when there are more
+2. Clicks **Add handover** — an agent picker dialog shows available agents (filters out self and already-configured targets)
+3. Selects a target agent — the picker closes and an empty config record is created; the prompt-edit dialog opens immediately on the new handover so it is never left half-configured
+4. In the prompt dialog, clicks **Generate with AI** (sparkles icon) — AI analyzes both agents' prompts and writes a draft into the textarea without saving it
+5. User reviews and edits the draft
+6. Clicks **Save** to persist the prompt
+7. Back on the card (or the Show-all Sheet), each row's **⋯** menu offers **Edit prompt** (reopens the same dialog), **Enable**/**Disable** (auto-saves immediately, no confirmation), and **Delete handover** (behind an `AlertDialog` confirm naming the target agent)
 
 ### 2. Runtime — Direct Handover
 

@@ -462,16 +462,18 @@ Two details specific to the explicit list:
 
 The wizard's pre-ticked set is derived from `auto_provision_roles` — the same field `_provision` filters on — so what an invited account starts with matches what a self-registering account of the same role would have got.
 
-### "Add a key for this user" — on the success screen, not in the wizard
+### Handing off to add a key — the success screen's onward link
 
 The wizard's *provisioning step* still has no key-entry control, and that remains an ordering fact rather than a preference: the account row is created when the wizard is **submitted**, so at that step there is no user id to attach a key to and no `target_user_ids` to send.
 
-What phase 5 added is the affordance **after** the account exists. The invite success screen shows a **Step 3 — "Add a key for this user"** card: *"Give `<email>` an API key of their own. They are already selected as its only member."* Pressing **Add a key** opens the ordinary `ManagedCredentialDialog` in create mode, pre-seeded with the new account as its only target and with a suggested name of `"<email> — <Provider>"`. When it succeeds the card flips to *"`<email>` now has their own AI credential."*
+What phase 5 added is the affordance **after** the account exists; a later redesign (the invite success screen's own guideline pass) moved it from a nested dialog into a plain onward link, per the "a success screen links onward" composition rule. The invite success panel (`InviteSuccessPanel`) shows one `Button variant="link"` reading **"Add an AI key for `<email>`"**, navigating to `/admin/ai-credentials?newCredentialFor=<user.id>&label=<display name>`. The AI Credentials route reads those two search params, opens the ordinary `ManagedCredentialDialog` in create mode **controlled**, pre-seeded with the new account as its only target and a suggested name from the label, then strips both params from the URL — the same `?new=1` latch idiom `credential/$credentialId.tsx` uses, so a refresh or a Back does not reopen it.
+
+On success the AI Credentials page derives a one-line result from the created record's own member row (`api_key_onboarding_state` — the same field the person's own paste-a-key wall reads), not from "a row was created": `has_key` → "Key added."; `preparing` → "The key is being created now."; `needs_key` → an amber alert, "Key added — not their default," since `set_as_default` defaults off and a perfectly good credential can still leave its owner walled.
 
 Two things this deliberately is not:
 
-- **Not a second credential-creation surface.** It is the same dialog, the same route, the same reconcile. The card supplies two props (`initialTargets`, `nameSubject`) and takes a callback; it re-implements nothing.
-- **Not shown for a deactivated account.** The card is hidden entirely when the newly-touched account is inactive — there would be nobody to give a key to.
+- **Not a second credential-creation surface.** It is the same dialog, the same route, the same reconcile. The AI Credentials page passes it `initialTargets` / `nameSubject` / `onCreated`; it re-implements nothing.
+- **Not shown for a deactivated account.** The link is hidden entirely when the newly-touched account is inactive — there would be nobody to give a key to.
 
 This is where the "paste a key for one person" path lands, and it is a first-class one: for every provider whose administration API does not create keys — which is every provider but OpenAI today — it is *the* way an administrator hands somebody their own key.
 
@@ -586,14 +588,15 @@ The page has **two tabs** on the one URL (local state, not a search param, so th
      It also tells the admin when the record auto-provisions for no role at all. Skips are surfaced one toast per user, by name, resolved from the preview's candidate list
    - **Delete** — opens an `AlertDialog`; on `409` (blocked members) escalates to a force-delete confirmation listing blocked users by name
 
-### Admin UI — Server Configuration → Access & New Users
+### Admin UI — Server Configuration → Access
 
-The same flag seen from the other end. An admin setting up the front door asks "what does a new Agent Developer get?", and answering that from a list of credentials means opening each one in turn. So the *New users* block of the [Access Policy](../server_configuration/access_policy.md) card ends with a **Company AI credentials** matrix (`AutoProvisionedCredentialsMatrix`): managed credentials down the rows, the three roles across the columns, one checkbox per cell.
+The same flag seen from the other end. An admin setting up the front door asks "what does a new Agent Developer get?", and answering that from a list of credentials means opening each one in turn. So the Access tab's own full-width **Company AI credentials** card (`CompanyAiCredentialsCard`, alongside the [Access Policy](../server_configuration/access_policy.md) cards, not nested inside any of them) holds a credentials × roles matrix: managed credentials down the rows, the three roles across the columns, one checkbox per cell.
 
-- A toggle is one `PATCH /admin/llm-providers/{id}` carrying `auto_provision_roles` and nothing else; the matrix never invents state of its own and shares the AI Credentials page's query key, so a change made on either surface shows on both.
+- A toggle is one `PATCH /admin/llm-providers/{id}` carrying `auto_provision_roles` and nothing else; the card never invents state of its own and shares the AI Credentials page's query key, so a change made on either surface shows on both.
+- Capped at **5 rows** (credentials that already grant something first, then alphabetical) with a footer link reading "Manage AI credentials" when everything fits, or "Show all (N) on AI Credentials" once it does not — one link to `/admin/ai-credentials`, not two.
 - A cell whose tick would be refused carries an advisory **Conflict** badge, computed client-side from the loaded list. It is a hint, not a gate — the list can be stale, the click still goes to the server, and a real `409` renders as an alert under the table.
-- Empty state: "No managed AI credentials yet — create one", linking to `/admin/ai-credentials`. A "Manage AI credentials" link sits in the block header.
-- The block's own helper text states the creation-time rule: "Changing a role later never grants or revokes a key."
+- Empty state: "No managed AI credentials yet — create one", linking to `/admin/ai-credentials`.
+- The card's own description states the creation-time rule: "Changing a role later never grants or revokes a key — use \"Apply to existing users\" on the AI Credentials page for accounts that already exist."
 
 ### Security audit
 
@@ -735,7 +738,7 @@ The `suggested_models` field on the native response returns `credential.availabl
 - **`auto_provision_roles` is validated; `sdk_default_modes` is not.** An unknown role is a `400`. An unknown mode string saves with a `200` and then wires nothing, forever — see [Known Gaps](#known-gaps).
 - **Emptying `auto_provision_roles` is not a revoke.** Existing members keep their credential; the record simply stops being granted to new accounts.
 - **An invited account provisions through the same service.** The wizard's explicit list goes to `AccountProvisioningService.provision_explicit`, not to a route-level `add_members` loop, so it inherits the never-fail net, the session-repair discipline, the skip reporting into the invited account's own feed, and the deactivated-account short-circuit. Its pre-ticked set is derived from the *same* `auto_provision_roles` predicate the automatic path uses, so an invited account and a self-registered one of the same role start with the same keys.
-- **The invite wizard's provisioning step still has no key-entry control**, because the account does not exist at that step; the affordance lives on the **success screen** instead and reuses the ordinary create dialog — see ["Add a key for this user"](#add-a-key-for-this-user--on-the-success-screen-not-in-the-wizard).
+- **The invite wizard's provisioning step still has no key-entry control**, because the account does not exist at that step; the affordance lives on the **success screen** instead, as a link onward that reuses the ordinary create dialog — see [Handing off to add a key](#handing-off-to-add-a-key--the-success-screens-onward-link).
 
 ### Native account-config
 

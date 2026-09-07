@@ -48,7 +48,10 @@
 ### Frontend
 
 **Components:**
-- `frontend/src/components/Agents/AgentHandovers.tsx` — handover configuration UI (add, generate, edit, toggle, delete)
+- `frontend/src/components/Agents/AgentHandovers.tsx` — the card: header + Add-handover button, ≤5 compact rows via `HandoverRow`, empty/loading/error states, Show-all link
+- `frontend/src/components/Agents/HandoverRow.tsx` — one compact row (target agent, Enabled/Off badge, prompt preview, `⋯` menu with Edit prompt / Enable-Disable / Delete), rendered by both the card and the Sheet so they cannot drift
+- `frontend/src/components/Agents/EditHandoverPromptModal.tsx` — the prompt editor dialog: textarea, Generate with AI, Save/Cancel with dirty tracking
+- `frontend/src/components/Agents/AllHandoversSheet.tsx` — the "Show all (N)" destination, a right-side `Sheet` listing every handover via `HandoverRow`
 - `frontend/src/components/Agents/AgentConfigTab.tsx` — integration point (renders `AgentHandovers`)
 - `frontend/src/components/Chat/MessageBubble.tsx` — renders task creation system messages with session/task links
 
@@ -130,18 +133,31 @@ All routes are in `backend/app/api/routes/agents.py`:
 
 ### AgentHandovers.tsx (`frontend/src/components/Agents/AgentHandovers.tsx`)
 
+A View card (guidelines §1): every mutation lives one level down, in `HandoverRow`'s `⋯` menu or `EditHandoverPromptModal`, so nothing on the card itself changes its height — the historical defect this redesign removed was the card growing ≈160px when a handover was enabled.
+
 **Local state:**
-- `editingPrompts` — map of handover ID → current textarea value (unsaved)
-- `dirtyPrompts` — set of handover IDs with unsaved changes
-- `selectedTargetAgent` — currently selected target in add dropdown
-- `isAddingHandover` — controls add-handover form visibility
+- `isPickerOpen` — the agent-picker dialog (`AgentSelectorDialog`)
+- `isSheetOpen` — the "Show all" `AllHandoversSheet`
+- `createdHandover` — the handover just created by the picker, so `EditHandoverPromptModal` can open on it immediately (create → prompt editor, never a half-configured row)
 
 **Server state (TanStack Query):**
-- `agentHandovers` query — list of configs for the current agent
-- `agents` query — all agents for dropdown population
-- Mutations: create, update (prompt/enabled), delete, generate prompt
+- `["agentHandovers", agent.id]` — list of configs for the current agent (`count` is the true total, used by "Show all (N)")
+- `["agents", workspaceFilter]` — all agents, for the picker's available list and to tint each row's icon tile (the handover projection carries no colour of its own)
+- Mutation: create (`target_agent_id`, empty `handover_prompt`) — enable/disable/delete/update-prompt/generate live in `HandoverRow` and `EditHandoverPromptModal` instead, scoped per row
 
-**Renders:** agent selector dropdown, handover cards with generate button, prompt textarea, apply/enable/delete controls
+**Renders:** header with title, description and an "Add handover" button (disabled + tooltipped when there is no other agent to hand work to); up to 5 rows sorted enabled-first then most-recently-updated (`.slice(0, 5)`); a "Show all (N)" link when `count > 5`; loading (3 row-shaped skeletons), error (`Alert` + Retry), and two distinct empty states (no handovers yet vs. no other agent exists to hand work to, the latter linking to `/agents`)
+
+### HandoverRow.tsx (`frontend/src/components/Agents/HandoverRow.tsx`)
+
+One compact row, shared by the card and `AllHandoversSheet` so the two hosts cannot drift. Left: colour-tinted icon tile, target agent name, exactly one `Badge` (`Enabled` / `Off`) and a one-line prompt preview (whitespace-collapsed `handover_prompt`, or "No prompt yet"). Right: a single `⋯` `DropdownMenu` — **Edit prompt** (opens `EditHandoverPromptModal`), **Enable**/**Disable** (`updateHandoverConfig({enabled})`, toasts, no confirmation), a separator, then **Delete handover** (opens an inline `AlertDialog` naming the target agent). Pending state is scoped to the row (`toggleMutation.isPending || deleteMutation.isPending`) so only the row being mutated loses its menu.
+
+### EditHandoverPromptModal.tsx (`frontend/src/components/Agents/EditHandoverPromptModal.tsx`)
+
+The only form in the feature — the card and its rows all auto-save. `react-hook-form` + zod around one `handover_prompt` textarea. **Generate with AI** calls `generateHandoverPromptEndpoint` and writes the result into the field with `{shouldDirty: true}` **without persisting**; the user still has to press **Save** (`updateHandoverConfig`). Mounted only while open — `currentPrompt` comes straight from the list query, so a resident-but-closed instance would re-seed the form from a background refetch and silently discard an in-progress edit.
+
+### AllHandoversSheet.tsx (`frontend/src/components/Agents/AllHandoversSheet.tsx`)
+
+The "Show all (N)" destination — a right-side `Sheet`, not a route (handovers have no route of their own and the full list needs no search/sort/pagination). Renders every handover via the same `HandoverRow` component and sort order as the card.
 
 ### MessageBubble.tsx (`frontend/src/components/Chat/MessageBubble.tsx`)
 
