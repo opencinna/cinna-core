@@ -23,7 +23,7 @@ Allows users to configure multiple automatic execution schedules per agent using
 ### Creating a Schedule
 
 1. User navigates to Agent Config Tab > "Schedules" card
-2. User clicks "New" button
+2. User clicks "New schedule" button
 3. **Type selector** appears with two cards: "Static Prompt" and "Script Trigger"
 4. User selects a schedule type by clicking the corresponding card
 5. Type-specific form opens (see below)
@@ -41,8 +41,8 @@ Allows users to configure multiple automatic execution schedules per agent using
 
 ### Editing a Schedule
 
-1. User clicks edit (pencil) button on a schedule row
-2. Edit dialog opens pre-populated with current values
+1. User opens the row's `⋯` menu and clicks "Edit schedule" (owner only — hidden for bundle consumers)
+2. Edit dialog opens pre-populated with current values; Save stays disabled until the form is dirty
 3. For `static_prompt`: shows name, timing, prompt fields
 4. For `script_trigger`: shows name, timing, command field (no prompt)
 5. Schedule type **cannot be changed** after creation
@@ -50,15 +50,15 @@ Allows users to configure multiple automatic execution schedules per agent using
 
 ### Viewing Execution Logs
 
-1. User clicks the history (clock) button on a schedule row
-2. Execution logs modal opens showing the last 50 executions
-3. Each row shows: type badge, execution timestamp, color-coded status, expandable details
-4. Expandable details include: command/prompt used, command output (monospace), exit code, session link (if any), error message (if any)
+1. User clicks the inline execution-logs button (`History` icon) on a schedule row — always visible, not behind the `⋯` menu
+2. Execution logs dialog opens showing the last 50 executions
+3. Each log row shows: execution timestamp, a color-coded status badge (OK/Session created, Session triggered, Skipped, or Error), and an expand toggle for rows with detail
+4. Expanded detail includes: command/prompt used, command output (monospace), exit code, session link (if any), error message (if any)
 
 ### Toggling and Deleting
 
-- **Toggle**: Click power button to enable/disable without deleting the schedule
-- **Delete**: Click trash button > confirmation dialog > schedule permanently removed
+- **Toggle**: Open the row's `⋯` menu and click Enable/Disable — takes effect immediately with a toast, no confirmation (reversible)
+- **Delete**: Open the row's `⋯` menu, click "Delete schedule" (owner only) > confirmation dialog naming the schedule > schedule permanently removed
 
 ### Manual Execution (Run Now)
 
@@ -205,11 +205,11 @@ Each static_prompt schedule can have its own prompt field:
 When an agent developer publishes a bundle, their `AgentSchedule` rows are snapshotted into the revision (see [Agent Bundles & Installs](../agent_bundles/agent_bundles.md)). When another user installs the bundle, those schedules are materialised on their install as ordinary `AgentSchedule` rows with the publisher's `enabled` state and a freshly computed `next_execution`. The background scheduler then runs them inside the consumer's own environment and sessions — no difference from the consumer's perspective.
 
 **Consumer read-only rule:** A foreign install (non-publisher consumer) cannot create, edit, or delete bundle schedules — the schedule definitions are publisher-authored. The consumer can:
-- Toggle enable/disable (Power button)
-- Run now (Play button)
-- View execution logs (Logs button)
+- Toggle enable/disable (`⋯` menu — the only menu item shown in read-only mode)
+- Run now (inline `Play` button)
+- View execution logs (inline `History` button)
 
-New/Edit/Delete controls are hidden in the UI and the routes enforce this server-side (see Tech details).
+The "New schedule" header button and the Edit/Delete menu items are hidden in the UI, and the routes enforce this server-side (see Tech details).
 
 **Apply-update merge (behavioral signature):** When the consumer applies a bundle update, schedules are reconciled using a **behavioral signature** = `(schedule_type, cron_string, command, prompt)`. Name and description are cosmetic and excluded from identity.
 
@@ -250,29 +250,34 @@ User → Frontend (AgentSchedulesCard)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ Schedules                                                  [New] │
-│ Schedule execution times for this agent with different           │
-│ prompts and cadences                                             │
+│ Schedules                                          [New schedule]│
+│ Timed runs for this agent — a prompt or a script, on a cadence   │
 ├──────────────────────────────────────────────────────────────────┤
 │ ┌──────────────────────────────────────────────────────────────┐ │
-│ │ Daily data collection  [Enabled] [Custom prompt]     L E T D │ │
-│ │ Every weekday at 7:00 AM, CET                                │ │
-│ │ Next: Monday, March 3, 2026 at 7:00 AM CET                  │ │
+│ │ Daily data collection                                 R  L ⋯ │ │
+│ │ Every weekday at 7:00 AM, CET · Next Mar 3, 07:00 AM         │ │
 │ └──────────────────────────────────────────────────────────────┘ │
 │ ┌──────────────────────────────────────────────────────────────┐ │
-│ │ Health check           [Enabled] [Script trigger]    L E T D │ │
-│ │ Every hour from 9 AM to 5 PM, Mon-Fri                        │ │
-│ │ bash scripts/health_check.sh                                 │ │
-│ │ Next: Monday, March 3, 2026 at 9:00 AM CET                  │ │
+│ │ Health check  [🖳 tooltip: Script trigger]            R  L ⋯ │ │
+│ │ Every hour from 9 AM to 5 PM, Mon-Fri · Next Mar 3, 09:00 AM  │ │
 │ └──────────────────────────────────────────────────────────────┘ │
 │ ┌──────────────────────────────────────────────────────────────┐ │
-│ │ Weekly summary         [Enabled]                     L E T D │ │
-│ │ Every Friday at 5:00 PM, CET                                 │ │
-│ │ Next: Friday, March 7, 2026 at 5:00 PM CET                  │ │
+│ │ Weekly summary  [Off]                                 R  L ⋯ │ │
+│ │ Every Friday at 5:00 PM, CET                                  │ │
 │ └──────────────────────────────────────────────────────────────┘ │
+│ Show all (8)                                                      │
 └──────────────────────────────────────────────────────────────────┘
 
-L = Logs, E = Edit, T = Toggle enabled/disabled, D = Delete with confirmation
+R = Run now, L = Execution logs (both inline). ⋯ opens a menu holding
+Edit schedule, Enable/Disable, and Delete schedule (owner only; a
+bundle-consumer install sees Enable/Disable alone). A schedule row
+carries an "Off" badge only when disabled, and a Terminal-icon badge
+(command shown in its tooltip) only for script_trigger schedules — a
+row shows at most one of each. Enabled rows always print one metadata
+line ("{description} · Next {short time}"); disabled rows print the
+description alone. The card previews up to 5 rows, most-relevant-first
+(enabled before disabled, soonest next run first); "Show all (N)"
+opens a full-height sheet with the rest.
 ```
 
 ## Common Use Cases

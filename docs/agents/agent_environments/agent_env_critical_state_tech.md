@@ -365,7 +365,7 @@ The tab also registers `ENVIRONMENT_CRITICAL_STATE_CHANGED` in its event subscri
 
 The `AgentScheduleLog` model uses a free-string `status` field. The `"skipped"` value is now a documented member of the set (alongside `"success"`, `"session_triggered"`, `"error"`). No migration required.
 
-The schedule execution-logs modal in `AgentSchedulesCard.tsx` renders `"skipped"` with neutral/gray styling (no icon that implies success or failure).
+The schedule execution-logs dialog (`ScheduleLogsDialog.tsx`, extracted from `AgentSchedulesCard.tsx`) renders `"skipped"` with neutral/gray styling (`MinusCircle` icon — no icon that implies success or failure).
 
 ---
 

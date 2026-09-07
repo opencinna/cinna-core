@@ -84,8 +84,8 @@ Desktop app silently refreshes the access token before it expires:
 ### Disconnecting from Settings
 
 1. User navigates to **Settings > Security > App Sessions**
-2. Sees a list of all connected desktop and mobile apps (device name, platform, last used time)
-3. Clicks the disconnect icon button on a device and confirms in the dialog
+2. Sees the 5 most recently used connected desktop and mobile apps (device name, platform, last used time), or opens "Show all (N)" for the full list
+3. Hovers the device row to reveal the disconnect icon button, clicks it, and confirms in the dialog naming the device
 4. Backend revokes the client and all its refresh tokens
 5. The next API call from that desktop app — even with a still-valid (unexpired) access token — is rejected with `401 Desktop session has been revoked`, because `get_current_user` checks `DesktopOAuthClient.is_revoked` on every request whose JWT carries `client_kind="desktop"`
 6. The refresh endpoint also rejects the refresh token with `invalid_grant`
@@ -212,10 +212,11 @@ The `/.well-known/cinna-desktop` (desktop) and `/.well-known/cinna-app` (mobile)
 
 ## Settings UI
 
-**Settings > Security > App Sessions card** shows:
-- List of connected **desktop and mobile** apps — both surfaces share the `DesktopOAuthClient` table, so the card lists every native client kind together — with device name, platform icon (macOS/Windows/Linux/iOS/Android, falling back to a generic device icon), app version badge, and last-used time
-- A **CLI link** badge on any session created by the CLI account-token exchange (`origin="cli_exchange"`). Browser-consent sessions are unbadged — the badge marks the exception, not the rule, so it is not buried
-- Disconnect icon button (ghost, turns destructive-red on hover, requires confirmation) to revoke a specific device
-- Empty state with a "Download Cinna Desktop or Cinna Mobile" prompt when no devices are connected
+**Settings > Security > App Sessions card** shows the **5 most recently used** connected apps (most recent `last_used_at` first, apps that have never run last), each row built from a device-icon tile, the device name, and one metadata line:
+- List of connected **desktop and mobile** apps — both surfaces share the `DesktopOAuthClient` table, so the card lists every native client kind together — with device name, a platform icon tile (macOS/Windows/Linux/iOS/Android, falling back to a generic device icon), and a metadata line of up to two facts joined by "·": the app version (`v{app_version}`, omitted when unknown) and either "Last used {relative time}" or, for a session that has never run, "Connected {relative time}"
+- A **CLI link** badge, with a tooltip explaining it, on any session created by the CLI account-token exchange (`origin="cli_exchange"`). Browser-consent sessions are unbadged — the badge marks the exception, not the rule, so it is not buried. The app version is a fact, not a state, so it lives in the metadata line rather than as a badge
+- A **"Show all (N)"** link beneath the five rows when more than 5 apps are connected, opening a full-height sheet with every session, using the identical row
+- A hover-revealed disconnect icon button on each row (ghost, turns destructive-red on hover) — the row's only action is its purpose, so it is shown inline rather than behind a menu — that opens an `AlertDialog` naming the device before revoking
+- Empty state: "No apps are connected to this account yet." with a link to the Cinna Desktop download page. A failed load renders as a distinct error state (with retry), never as the empty state
 
 Note: There is no separate "Register" button in the UI — clients are created automatically during the first consent flow from Cinna Desktop or Cinna Mobile.

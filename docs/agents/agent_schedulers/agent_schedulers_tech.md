@@ -41,11 +41,17 @@
 
 ### Frontend
 
-**Components:**
-- `frontend/src/components/Agents/AgentSchedulesCard.tsx` — Main schedule management card (type selector, create/edit dialogs, list, toggle, delete, execution logs modal)
+**Components** (split, one file per surface — mirrors the `AgentHandovers` skeleton so the two cards cannot drift):
+- `frontend/src/components/Agents/AgentSchedulesCard.tsx` — the card itself: list query, sort (enabled first, then soonest `next_execution`), the four `PreviewList` states, cap of 5, "Show all (N)", mounts the create dialog
+- `frontend/src/components/Agents/ScheduleRow.tsx` — one schedule as a compact row; owns the row's `runScheduleNow` / `updateSchedule({enabled})` / `deleteSchedule` mutations (so pending state and dialogs are per row, not per card) and mounts the edit dialog, logs dialog and delete confirm
+- `frontend/src/components/Agents/CreateScheduleDialog.tsx` — 2-step create dialog (type tiles, then the type-specific form)
+- `frontend/src/components/Agents/EditScheduleDialog.tsx` — edit dialog, mounted only while open so it never re-seeds from a background refetch
+- `frontend/src/components/Agents/ScheduleLogsDialog.tsx` — execution logs dialog, including `LogDetailRow` and `LogStatusBadge`; owns its own `["schedule-logs", scheduleId]` query, mounted only while open
+- `frontend/src/components/Agents/AllSchedulesSheet.tsx` — "Show all (N)" destination: a full-height Sheet rendering every schedule via `ScheduleRow`
+- `frontend/src/components/Agents/scheduleFormatting.ts` — `formatNextExecution` (long form, used in the dialogs), `formatNextExecutionShort` (row metadata line), `formatExecutedAt`, `nextExecutionSortKey`
 
 **Integration:**
-- `frontend/src/components/Agents/AgentConfigTab.tsx` — Renders `AgentSchedulesCard` alongside `AgentHandovers` in a 2-column grid
+- `frontend/src/components/Agents/AgentConfigTab.tsx` — Renders `AgentSchedulesCard` alongside `AgentHandovers` in a 2-column grid. Props (`agentId`, `readOnly`) are unchanged by the split, so this file is untouched by it
 
 ## Database Schema
 
@@ -191,48 +197,43 @@ Create endpoint validates schedule type + command combination:
 
 ## Frontend Components
 
+The card was rebuilt from a single 1230-line file into the six-file split above, one file per surface, following the same skeleton as `AgentHandovers`/`HandoverRow`/`AllHandoversSheet`. Run, toggle and delete are owned by `ScheduleRow`, not the card, so pending state (a disabled Run button while its mutation is in flight) is scoped to the one row being acted on rather than every row on the card.
+
 ### AgentSchedulesCard — `frontend/src/components/Agents/AgentSchedulesCard.tsx`
 
-- **Props:** `{ agentId: string, readOnly?: boolean }` — when `readOnly=true` (consumer bundle installs): New/Edit/Delete actions are hidden; Power toggle, Run now, and Logs remain. The card header shows an informational note "Managed by the bundle publisher — you can enable/disable, run, and view logs." The empty state message also adapts to distinguish "no publisher schedules" from "no schedules yet"
+- **Props:** `{ agentId: string, readOnly?: boolean }` (unchanged by the split) — when `readOnly=true` (consumer bundle installs), the header's "New schedule" button is not rendered and the `CardDescription` becomes the mode notice: "Managed by the bundle publisher — you can enable, run and view logs." The empty state also adapts ("no publisher schedules" vs. "no schedules yet")
 - **Query:** `useQuery` with key `["agent-schedules", agentId]`, calls `AgentsService.listSchedules()`
-- **Logs query:** `useQuery` with key `["schedule-logs", scheduleId]`, calls `AgentsService.listScheduleLogs()`, fetched on-demand when logs modal opens
-- **Mutations:** create, update, toggle (`{enabled: !current}`), delete — all invalidate query key; `runNowMutation` calls `POST /{id}/schedules/{schedule_id}/run` and surfaces `response.message` in the success toast (so the "starting" notification reaches the user directly)
+- **Sort:** enabled schedules first, then ascending `next_execution` within each group (`nextExecutionSortKey` treats disabled/undefined as unsortable-last)
+- **List rendering:** delegates to the shared `Common/PreviewList.tsx` primitive — cap of 5 rows, "Show all (N)" link (from `schedulesData.count`) opening `AllSchedulesSheet`, and all four states (loading `Skeleton` rows, `isError` rendered as `QueryErrorAlert` — gated on `!schedulesData` so a failed *background* refetch keeps showing stale rows, empty state, populated rows)
 
-**Type Selector (create dialog step 1):**
-- Two cards: Static Prompt (FileText icon) and Script Trigger (Terminal icon, amber)
-- Clicking a card transitions to the type-specific form
+**ScheduleRow — `frontend/src/components/Agents/ScheduleRow.tsx`:**
+- Left: schedule name, **up to 2 badges** (`Off` — `variant="secondary"` — shown only when `!schedule.enabled`; a `Terminal`-icon outline badge shown only for `schedule_type === "script_trigger"`, wrapped in a `Tooltip` that reveals the label "Script trigger" and the command), then **one** metadata line: `{description} · Next {short next run}` for enabled schedules, `{description}` alone for disabled ones (a disabled schedule's next run is never shown — it would be misinformation, not data)
+- Right: **two inline icon buttons** — Run now (`Play`, calls `runScheduleNow`) and Execution logs (`History`, opens `ScheduleLogsDialog`) — followed by a `⋯` (`EllipsisVertical`) `DropdownMenu` holding **Edit schedule** (`Pencil`, owner-only) → `EditScheduleDialog`, **Enable/Disable** (`Power`/`PowerOff`, toasts on toggle, no confirmation — reversible), a separator, and **Delete schedule** (`Trash2`, destructive, owner-only) → an `AlertDialog` confirm naming the schedule. In `readOnly` the menu holds only Enable/Disable (no separator, no Edit/Delete)
+- The dropped "Custom prompt" badge and the row's previous third metadata line (cron cadence spelled out) are gone — the AI-authored `description` already carries the cadence, and whether a static-prompt schedule overrides the entrypoint prompt is now only visible from the Edit dialog
+- `EditScheduleDialog`, `ScheduleLogsDialog` and the delete `AlertDialog` are all mounted by the row only while open, so a background refetch never re-seeds an in-progress edit
 
-**Create Dialog (step 2):**
-- Static Prompt form: name, timing/generate, prompt textarea
-- Script Trigger form: name, timing/generate, command input (single-line, monospace, max 2000 chars)
-- Back button to return to type selector
+**CreateScheduleDialog — `frontend/src/components/Agents/CreateScheduleDialog.tsx`:**
+- Step 1 ("1 Type" in a small stepper header): two tiles, Static Prompt (`FileText`) and Script Trigger (`Terminal`, amber)
+- Step 2 ("2 Details"): Name, Timing (input + Generate button, result read back with the long-form next run), then Prompt (`Textarea`, optional) or Command (`Input`, monospace, required, max 2000 chars) depending on the chosen type
+- `DialogFooter` holds Back (step 2 only) and Create/Cancel; a failed `generateSchedule` call renders an `Alert variant="destructive"` instead of a hand-rolled error block
+- Not mounted at all when `readOnly`
 
-**Edit Dialog:**
-- Conditionally shows prompt or command fields based on `schedule.schedule_type`
-- Schedule type is not changeable
+**EditScheduleDialog — `frontend/src/components/Agents/EditScheduleDialog.tsx`:**
+- One section: Name, Timing (current cadence read back, a new one generated below it, both in the long form), and Prompt or Command depending on `schedule.schedule_type` (immutable after creation)
+- Save is disabled until the form is dirty (diffed against the loaded schedule); only reachable from the owner-only Edit menu item
 
-**Schedule Row:**
-- Name (bold), description (muted), next execution time
-- Badges: enabled/disabled, "Custom prompt" (static_prompt with prompt), "Script trigger" (amber badge with Terminal icon)
-- For script_trigger: truncated command displayed below description
-- Action buttons: logs (History icon), edit (Pencil), toggle (Power), delete (Trash2)
+**ScheduleLogsDialog — `frontend/src/components/Agents/ScheduleLogsDialog.tsx`:**
+- Own `useQuery` keyed `["schedule-logs", scheduleId]`, calling `AgentsService.listScheduleLogs()`, fetched only while the dialog is open
+- `LogDetailRow` — collapsed to timestamp + `LogStatusBadge`, expandable (`ChevronDown`/`ChevronUp`) to command/prompt used, command output (monospace, max-height scroll), exit code, session link (`/session/{session_id}`), error message
+- `LogStatusBadge` — four tones, raw palette classes (no semantic token exists yet): green `Check` ("OK" / "Session created") for `success`, amber `Terminal` ("Session triggered") for `session_triggered`, gray `MinusCircle` ("Skipped") for `skipped`, red `AlertCircle` ("Error") for anything else. The per-log schedule-type badge from the old single-file version is dropped — every log of one schedule shares its type, which is already shown on the row that opened the dialog
+- Loading renders `Skeleton` rows, a failed fetch renders `QueryErrorAlert` (previously unread — a failed load rendered as "no execution logs yet")
 
-**Execution Logs Modal:**
-- `LogDetailRow` component with expandable accordion details
-- Color-coded status: green check (success), amber lightning (session_triggered), red X (error)
-- Details: command/prompt used, command output (monospace pre block), exit code, session link, error message
-- Session links navigate to `/session/{session_id}`
-
-**State management:**
-- `createStep: "type_select" | "form"` — tracks create dialog step
-- `createType: "static_prompt" | "script_trigger"` — selected type
-- `logsModalOpen: boolean` — logs modal visibility
-- `logsSchedule: AgentSchedulePublic | null` — which schedule's logs to show
-- All state reset on dialog close
+**AllSchedulesSheet — `frontend/src/components/Agents/AllSchedulesSheet.tsx`:**
+- Full-height `Sheet` opened from the card's "Show all (N)" link; renders every schedule (already sorted by the card) through the same `ScheduleRow`, so the card and the Sheet cannot drift. `readOnly` is passed through
 
 ### Integration in AgentConfigTab — `frontend/src/components/Agents/AgentConfigTab.tsx`
 
-Renders `AgentSchedulesCard` and `AgentHandovers` in a 2-column responsive grid (`grid-cols-1 lg:grid-cols-2`).
+Renders `AgentSchedulesCard` and `AgentHandovers` in a 2-column responsive grid (`grid-cols-1 lg:grid-cols-2`). Untouched by the split — the card's public props are unchanged.
 
 The card is rendered for foreign (bundle consumer) installs too: `AgentConfigTab` checks `showOperationalSettings || readOnly`, passing `readOnly={true}` when the agent is a non-publisher bundle install. `AgentHandovers` stays gated on `showOperationalSettings` only.
 
