@@ -1,3 +1,5 @@
+import { UserPlus } from "lucide-react"
+
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import {
   Card,
@@ -136,7 +138,10 @@ export function NewUserDefaultsCard() {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle>New user defaults</CardTitle>
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <UserPlus className="h-5 w-5" />
+          New user defaults
+        </CardTitle>
         <CardDescription>What every new account starts as.</CardDescription>
       </CardHeader>
       <CardContent>{body()}</CardContent>

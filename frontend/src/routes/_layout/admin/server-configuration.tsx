@@ -82,16 +82,15 @@ function AdminServerConfiguration() {
       value: "access",
       title: "Access",
       content: (
+        // Row-major, as the admin's own chain of questions: who may join, how
+        // they get in, what they become, what they receive — and last, the
+        // public page, the one concern here that is not an access rule.
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           <RegistrationCard />
           <SignInMethodsCard />
           <NewUserDefaultsCard />
+          <CompanyAiCredentialsCard />
           <LandingPageCard />
-          {/* A role matrix needs its columns — one name column plus one per
-              role — so it is the one card here that spans the grid. */}
-          <div className="lg:col-span-2">
-            <CompanyAiCredentialsCard />
-          </div>
         </div>
       ),
     },

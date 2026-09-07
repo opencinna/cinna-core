@@ -22,10 +22,30 @@ export const ROLE_AGENT_USER = "agent-user" satisfies UserRoleValue
 export const ROLE_AGENT_DEVELOPER = "agent-developer" satisfies UserRoleValue
 export const ROLE_ADMIN = "admin" satisfies UserRoleValue
 
-export const USER_ROLE_OPTIONS: { value: UserRoleValue; label: string }[] = [
-  { value: ROLE_AGENT_USER, label: "Agent User" },
-  { value: ROLE_AGENT_DEVELOPER, label: "Agent Developer" },
-  { value: ROLE_ADMIN, label: "Admin" },
+export const USER_ROLE_OPTIONS: {
+  value: UserRoleValue
+  label: string
+  /**
+   * One word, for a control too narrow for the full name — a segmented role
+   * toggle on a half-width card row has ~130px for all three.
+   *
+   * It lives here rather than in that component so a role renamed above is
+   * renamed in one place: an abbreviation spelled in a card is the seventh
+   * copy this table exists to prevent. The full name is never lost — the
+   * surfaces using it pair the short label with a tooltip and an aria-label
+   * carrying `label`.
+   *
+   * No `userRoleShortLabel` reader beside `userRoleLabel`: that one earns its
+   * keep because most callers hold a bare role string off the wire, while a
+   * control narrow enough to need an abbreviation is by construction built by
+   * mapping this table, so it holds the option itself. Add the reader with the
+   * first caller that does not.
+   */
+  short: string
+}[] = [
+  { value: ROLE_AGENT_USER, label: "Agent User", short: "User" },
+  { value: ROLE_AGENT_DEVELOPER, label: "Agent Developer", short: "Dev" },
+  { value: ROLE_ADMIN, label: "Admin", short: "Admin" },
 ]
 
 const USER_ROLE_LABELS: Record<string, string> = Object.fromEntries(

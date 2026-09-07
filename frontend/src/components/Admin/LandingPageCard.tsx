@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { FileText } from "lucide-react"
+import { FileText, Globe } from "lucide-react"
 import { useState } from "react"
 
 import { ServerConfigService, type ServerConfigUpdate } from "@/client"
@@ -166,7 +166,10 @@ export function LandingPageCard() {
     <>
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle>Public landing page</CardTitle>
+          <CardTitle className="flex items-center gap-2 min-w-0">
+            <Globe className="h-5 w-5" />
+            Public landing page
+          </CardTitle>
           <CardDescription>
             One stable address anyone can open without an account. It shows the
             sign-in methods this server allows, the desktop download, and the

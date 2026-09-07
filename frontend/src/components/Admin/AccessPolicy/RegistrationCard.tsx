@@ -170,7 +170,7 @@ export function RegistrationCard() {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2">
+        <CardTitle className="flex items-center gap-2 min-w-0">
           <ShieldCheck className="h-5 w-5" />
           Registration
         </CardTitle>

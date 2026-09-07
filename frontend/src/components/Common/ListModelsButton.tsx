@@ -1,17 +1,15 @@
-import { useState } from "react"
 import { useMutation } from "@tanstack/react-query"
-import { ListChecks, Search, Loader2, AlertCircle, Info } from "lucide-react"
+import { AlertCircle, Info, ListChecks, Loader2, Search } from "lucide-react"
+import { useState } from "react"
+import type { AICredentialTestResult, AICredentialType } from "@/client"
 import { AiCredentialsService } from "@/client"
-import type { AICredentialType, AICredentialTestResult } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog"
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   Tooltip,
   TooltipContent,
@@ -62,7 +60,8 @@ const SKIP_REASON_MESSAGES: Record<string, string> = {
 }
 
 function describeSkipReason(reason: string | null | undefined): string {
-  if (reason && SKIP_REASON_MESSAGES[reason]) return SKIP_REASON_MESSAGES[reason]
+  if (reason && SKIP_REASON_MESSAGES[reason])
+    return SKIP_REASON_MESSAGES[reason]
   return "Model listing isn't supported for this credential. You can still type a model id manually."
 }
 
@@ -116,13 +115,17 @@ export function ListModelsButton({
     })
   }
 
-  const handleOpen = () => {
+  // Opening re-probes; an outside click, Escape or a pick all close through
+  // the same handler, so a dismissed popover is exactly today's dismissed
+  // dialog.
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next)
+    if (!next) return
     setFilter("")
     // Clear the previous credential's result/error before re-probing so the
-    // dialog shows the loading state immediately rather than flashing stale
+    // popover shows the loading state immediately rather than flashing stale
     // data when re-opened after the selected credential changed.
     mutation.reset()
-    setOpen(true)
     probe()
   }
 
@@ -241,23 +244,24 @@ export function ListModelsButton({
   }
 
   return (
-    <>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
             {/* Span wrapper so the tooltip still works while the button is disabled. */}
             <span className="inline-flex">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-9 shrink-0"
-                onClick={handleOpen}
-                disabled={isDisabled}
-              >
-                <ListChecks className="h-3.5 w-3.5 mr-1.5" />
-                List models
-              </Button>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-9 shrink-0"
+                  disabled={isDisabled}
+                >
+                  <ListChecks className="h-3.5 w-3.5 mr-1.5" />
+                  List models
+                </Button>
+              </PopoverTrigger>
             </span>
           </TooltipTrigger>
           <TooltipContent side="top" className="text-xs">
@@ -268,17 +272,15 @@ export function ListModelsButton({
         </Tooltip>
       </TooltipProvider>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-[440px]">
-          <DialogHeader>
-            <DialogTitle>Available models</DialogTitle>
-            <DialogDescription>
-              Pick a model to use as the override for this mode.
-            </DialogDescription>
-          </DialogHeader>
-          {renderBody()}
-        </DialogContent>
-      </Dialog>
-    </>
+      {/* A value picker anchored to the field it fills, not a second Dialog:
+          this control is embedded in three form dialogs, and a Dialog of its
+          own put every one of them at disclosure depth 3 (guidelines §2).
+          The former DialogDescription is gone with it — a popover hanging off
+          the Model Override input does not need to say which field it fills. */}
+      <PopoverContent align="end" className="w-[320px] p-3">
+        <p className="mb-2 text-xs font-medium">Available models</p>
+        {renderBody()}
+      </PopoverContent>
+    </Popover>
   )
 }

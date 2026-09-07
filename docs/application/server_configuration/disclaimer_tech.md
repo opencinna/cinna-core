@@ -113,7 +113,7 @@ Non-dismissible user-facing dialog.
 
 - Route path: `/admin/server-configuration`
 - `beforeLoad` guard: redirects to `/login` if not authenticated; redirects to `/` if not `is_superuser`
-- Renders `HashTabs` with four tabs: `interface` → a two-column grid holding `<DisclaimerCard />` and `<LocalAgentKitCard />` (see [Local Agent Kit — tech](../local_agent_kit/local_agent_kit_tech.md)); `access` → a two-column grid holding `RegistrationCard` / `SignInMethodsCard` / `NewUserDefaultsCard` / `LandingPageCard` plus the full-width `CompanyAiCredentialsCard` (see [Access Policy — tech](access_policy_tech.md) and [Public Landing Page — tech](landing_page_tech.md)); `channels`; `mail-servers`
+- Renders `HashTabs` with four tabs: `interface` → a two-column grid holding `<DisclaimerCard />` and `<LocalAgentKitCard />` (see [Local Agent Kit — tech](../local_agent_kit/local_agent_kit_tech.md)); `access` → a two-column grid holding `RegistrationCard` / `SignInMethodsCard` / `NewUserDefaultsCard` / `CompanyAiCredentialsCard` / `LandingPageCard`, all half-width (see [Access Policy — tech](access_policy_tech.md) and [Public Landing Page — tech](landing_page_tech.md)); `channels`; `mail-servers`
 - Page header: "Server Configuration" / "Configure server-wide settings"
 
 ### `AdminMenu` (`frontend/src/components/Sidebar/AdminMenu.tsx`)

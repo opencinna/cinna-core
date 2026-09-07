@@ -74,7 +74,8 @@ and routes reporting a *third-party* auth failure. Backend routes must not use
 rejected deploy key logged the user out mid-connect.
 
 ## Component Libraries
-- UI: shadcn/ui components from `@/components/ui/`
+- UI: shadcn/ui components from `@/components/ui/`. Adding one: run `npx shadcn@latest add <name>` **from `frontend/`** (it is interactive). The generated file imports from the `radix-ui` umbrella package already in `package.json`, but the CLI has emitted `import { cn } from "cn"` and npm-installed a junk `cn` package — repoint to `@/lib/utils`, drop `"use client"`, and check `package.json` is unchanged before moving on.
+- Radix `Toggle` / `ToggleGroupItem` write `data-state` **before** spreading props, so a `<TooltipTrigger asChild>` wrapper overwrites it and every `data-[state=on]:` class goes dead. Style the on-state off `aria-pressed:` instead (see `Admin/AccessPolicy/CompanyAiCredentialRow.tsx`).
 - Forms: `react-hook-form` + `zod` validation
 - Icons: lucide-react
 

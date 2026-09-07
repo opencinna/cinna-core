@@ -1,3 +1,5 @@
+import { LogIn } from "lucide-react"
+
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import {
   Card,
@@ -184,7 +186,10 @@ export function SignInMethodsCard() {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle>Sign-in methods</CardTitle>
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <LogIn className="h-5 w-5" />
+          Sign-in methods
+        </CardTitle>
         <CardDescription>
           {config && publicPolicy
             ? describeSignIn({ passwordAuthEnabled, googleAuthEnabled })

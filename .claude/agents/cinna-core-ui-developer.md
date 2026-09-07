@@ -26,7 +26,7 @@ List the files you will create or modify, one line each, and which spec surface 
 
 ### 3. Build to the specification
 - Story, placement, pattern, density budget, interaction model and states come from the spec. If the spec is silent, the guideline decides; if both are silent, choose the *less dense* option and note it in your report.
-- Hard rules you never break, whatever the spec says: no `window.confirm` (use `AlertDialog`); no hand-rolled toggles/menus (use `Switch`, `DropdownMenu`); every icon-only button has a `Tooltip`; `isError` handled separately from empty; no `any`; types from `@/client` only; no edits under `src/client/`.
+- Hard rules you never break, whatever the spec says: no `window.confirm` (use `AlertDialog`); no hand-rolled toggles/menus (use `Switch`, `DropdownMenu`); every icon-only button has a `Tooltip`; every card header follows the shared card skeleton (guideline §3 preamble: one lucide icon `h-5 w-5` + noun title, description below) and matches its grid siblings; no card spans two grid columns; `isError` handled separately from empty; no `any`; types from `@/client` only; no edits under `src/client/`.
 - When you touch a file listed in guideline §4 (anti-patterns), fix the anti-pattern if the spec says so; otherwise leave it and mention it.
 - Keep components small: a surface's row, its menu, and its edit dialog are separate components. A file over ~400 lines is a signal to split.
 - Do not add features, controls, or "while I'm here" refactors the spec does not ask for.
