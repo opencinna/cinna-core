@@ -148,7 +148,9 @@ Inline editing in the row is allowed only for a **single-field** quick edit (ren
 - `frontend/src/components/UserSettings/AICredentials.tsx` — "Default SDK Preferences" summary rows + `SDKModeEditDialog` (guideline P2)
 - `frontend/src/components/Credentials/AddCredential.tsx` — type picker → detail route (guideline P4)
 
-Files that still implement the older always-visible-icons variant (`WebappShareCard.tsx`, `McpConnectorsCard.tsx`, `AgentSchedulesCard.tsx`, `AgentHandovers.tsx`) are listed as anti-patterns in the guidelines §4 and are migrated when touched.
+- `frontend/src/components/Agents/HandoverRow.tsx` / `ScheduleRow.tsx` — the two P3 rows (menu, off-only badge, `AlertDialog` confirm) over `Common/PreviewList.tsx`
+
+Files that still implement the older always-visible-icons variant (`WebappShareCard.tsx`, `McpConnectorsCard.tsx`) are migrated when touched.
 
 ## Environment Variables
 - Accessed via `import.meta.env.VITE_*`

@@ -134,11 +134,7 @@ export function HandoverRow({
           <span className="text-sm font-medium truncate min-w-0">
             {handover.target_agent_name}
           </span>
-          {handover.enabled ? (
-            <Badge className="text-xs shrink-0 bg-emerald-500 hover:bg-emerald-600">
-              Enabled
-            </Badge>
-          ) : (
+          {!handover.enabled && (
             <Badge variant="secondary" className="text-xs shrink-0">
               Off
             </Badge>
