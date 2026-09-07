@@ -5,7 +5,6 @@ import { type UserPublic, UsersService } from "@/client"
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import useCustomToast from "@/hooks/useCustomToast"
 import { getErrorMessage } from "@/utils"
@@ -20,6 +19,14 @@ import {
 interface InvitationActionsProps {
   user: UserPublic
   onSuccess: () => void
+}
+
+/** Revoking is only on the table while there is a live link to kill. */
+export function canRevokeInvitation(user: UserPublic): boolean {
+  return (
+    isOutstandingInvitation(user.invitation_status) &&
+    knownInvitationStatus(user.invitation_status) !== INVITATION_STATUS_REVOKED
+  )
 }
 
 /**
@@ -62,7 +69,9 @@ function cooldownCopy(cooldown: ResendCooldown): string {
 }
 
 /**
- * Invitation lifecycle entries for the users-table row menu.
+ * The non-destructive invitation entries for the users-table row menu — the
+ * expiry heading, Resend and Copy link. Revoke is `RevokeInvitationItem`
+ * below, because it belongs on the far side of the destructive separator.
  *
  * Rendered for every non-accepted invitation — `pending`, `expired` and
  * `revoked`. An accepted one has nothing left to offer, and a status this
@@ -74,7 +83,10 @@ function cooldownCopy(cooldown: ResendCooldown): string {
  * when the menu closes, so this component only exists — and the query only
  * runs — while one row's menu is open.
  */
-export function InvitationActions({ user, onSuccess }: InvitationActionsProps) {
+export function InvitationMenuItems({
+  user,
+  onSuccess,
+}: InvitationActionsProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
@@ -148,20 +160,6 @@ export function InvitationActions({ user, onSuccess }: InvitationActionsProps) {
     },
   })
 
-  const revokeMutation = useMutation({
-    mutationFn: () => UsersService.revokeUserInvitation({ userId: user.id }),
-    onSuccess: () => {
-      showSuccessToast(
-        `The invitation for ${user.email} was revoked. Its link no longer works.`,
-      )
-      onSuccess()
-    },
-    onError: (error) => {
-      showErrorToast(getErrorMessage(error, "Could not revoke the invitation."))
-    },
-    onSettled: invalidate,
-  })
-
   if (!outstanding) return null
 
   const expiry = formatDaysUntil(invitation?.expires_at)
@@ -169,6 +167,9 @@ export function InvitationActions({ user, onSuccess }: InvitationActionsProps) {
   return (
     <>
       <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+        {/* Degrades to "outstanding" rather than disappearing when the lookup
+            fails: the actions below still work, and a menu that silently drops
+            its own heading reads as a different menu. */}
         {isRevoked
           ? "Invitation revoked"
           : expiry
@@ -200,20 +201,57 @@ export function InvitationActions({ user, onSuccess }: InvitationActionsProps) {
           Copy invite link
         </DropdownMenuItem>
       )}
-
-      {!isRevoked && (
-        <DropdownMenuItem
-          variant="destructive"
-          onSelect={(e) => e.preventDefault()}
-          disabled={revokeMutation.isPending}
-          onClick={() => revokeMutation.mutate()}
-        >
-          <Ban />
-          Revoke invitation
-        </DropdownMenuItem>
-      )}
-
-      <DropdownMenuSeparator />
     </>
+  )
+}
+
+/**
+ * Revoke, alone, so the menu can put it where destructive items go.
+ *
+ * Its own component rather than a branch of the one above because the two
+ * groups are separated by Edit and by the destructive separator, and a
+ * fragment cannot be rendered in two places. The lookup is not repeated: this
+ * one holds only a mutation.
+ *
+ * Deliberately unconfirmed. The guidelines confirm destructive *and
+ * irreversible* actions; revoking is reversible by design — a resend clears
+ * `revoked_at` and re-arms the row, and this menu says so — so it reports its
+ * result in a toast instead of asking twice.
+ */
+export function RevokeInvitationItem({
+  user,
+  onSuccess,
+}: InvitationActionsProps) {
+  const queryClient = useQueryClient()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+
+  const revokeMutation = useMutation({
+    mutationFn: () => UsersService.revokeUserInvitation({ userId: user.id }),
+    onSuccess: () => {
+      showSuccessToast(
+        `The invitation for ${user.email} was revoked. Its link no longer works.`,
+      )
+      onSuccess()
+    },
+    onError: (error) => {
+      showErrorToast(getErrorMessage(error, "Could not revoke the invitation."))
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] })
+    },
+  })
+
+  if (!canRevokeInvitation(user)) return null
+
+  return (
+    <DropdownMenuItem
+      variant="destructive"
+      onSelect={(e) => e.preventDefault()}
+      disabled={revokeMutation.isPending}
+      onClick={() => revokeMutation.mutate()}
+    >
+      <Ban />
+      Revoke invitation
+    </DropdownMenuItem>
   )
 }
