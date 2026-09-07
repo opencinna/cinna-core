@@ -35,6 +35,8 @@ You coordinate these specialized agents (invoke them via the Agent tool referenc
 
 - **cinna-core-feature-planner** (`.claude/agents/cinna-core-feature-planner.md`) — Creates detailed implementation plans for features
 - **cinna-core-developer** (`.claude/agents/cinna-core-developer.md`) — Implements code changes
+- **cinna-core-ui-designer** (`.claude/agents/cinna-core-ui-designer.md`) — Design mode: writes the plan's UI Specification. Review mode: scores built surfaces (PASS / ITERATE / FAIL). Never writes code.
+- **cinna-core-ui-developer** (`.claude/agents/cinna-core-ui-developer.md`) — Implements frontend phases from the UI Specification
 - **cinna-core-code-reviewer** (`.claude/agents/cinna-core-code-reviewer.md`) — Reviews code quality, patterns, and correctness
 - **cinna-core-backend-test-writer** (`.claude/agents/cinna-core-backend-test-writer.md`) — Writes backend tests
 - **cinna-core-test-runner** (`.claude/agents/cinna-core-test-runner.md`) — Runs tests and reports results
@@ -50,7 +52,11 @@ When asked to develop a complete feature with a feature description:
 
 1. **Read Context**: Read `docs/README.md`, identify relevant feature docs, read only those.
 2. **Plan**: Invoke `cinna-core-feature-planner` with the feature description and relevant context. Wait for the plan.
-3. **Develop**: Invoke `cinna-core-developer` with the approved plan. The developer may coordinate with `cinna-core-code-reviewer` for code quality — let them handle that back-and-forth.
+   - **2b. UI design** — if the plan lists any frontend surface (page, tab, card, dialog, row), invoke `cinna-core-ui-designer` in **design mode** with the plan path. It appends a `## UI Specification` to the plan (story, placement, pattern, density budget, verification mode per surface). Skip for backend-only plans. The plan and its specification are approved together.
+3. **Develop**: split by layer.
+   - **Backend phases** → `cinna-core-developer` (models, routes, services, migrations, client regeneration). It may coordinate with `cinna-core-code-reviewer` — let them handle that back-and-forth.
+   - **Frontend phases** → `cinna-core-ui-developer` with the plan path (the specification is in it). Run after the backend phase it consumes, so the generated client exists. Do not send frontend phases to `cinna-core-developer`.
+   - **3b. Design QA** — the ui-developer requests `cinna-core-ui-designer` in **review mode** itself and iterates up to three rounds; if it escalates, forward the remaining findings and score to the user rather than declaring the phase done. Screenshots are taken only where the specification's verification mode says so (guideline §9) — do not ask for them on simple pattern instances.
 4. **Write Tests**: Once development is complete, invoke `cinna-core-backend-test-writer` to implement tests. The test writer may coordinate with `cinna-core-test-runner` to validate tests pass.
 5. **Handle Test Failures**: If tests reveal code issues, send the developer back to fix them (with code reviewer if needed), then re-run tests.
 6. **Regression Check**: Once all new tests pass, invoke `cinna-core-test-runner` to run the **narrowest scope that covers the change**. Large domains are split into topic group subdirectories, and the group is the default regression scope — for a change confined to `tests/api/agents/webapp/`, run that group, not all 610 tests in `tests/api/agents/`. Escalate to the whole domain directory only when the change is cross-cutting (the domain's `conftest.py`, `tests/utils/fixtures.py`, or a shared service every group exercises). For a domain that is not split, the group and the domain are the same directory. **Do NOT run the full backend test suite** — that is run manually by the user. Running the full suite takes several minutes and bottlenecks feature delivery.
@@ -67,6 +73,8 @@ Not every task requires the full pipeline. Assess what's needed and coordinate o
 - **Test writing only** → invoke `cinna-core-backend-test-writer` and `cinna-core-test-runner` (domain-scoped)
 - **Bug fix** → invoke `cinna-core-developer` (possibly with `cinna-core-code-reviewer`), then `cinna-core-test-runner` scoped to the affected feature's domain directory to verify the fix and no domain regressions. Add tests if the bug wasn't covered.
 - **Code review only** → invoke `cinna-core-code-reviewer`
+- **Bug fix or change touching a frontend surface** → the developer that fixes it (`cinna-core-ui-developer` for component/layout work, `cinna-core-developer` for a wiring one-liner) then `cinna-core-ui-designer` in review mode on **that surface only**. No design step.
+- **"Improve / redesign the UI of X"** → `cinna-core-ui-designer` review mode first (findings + target pattern), then design mode (spec to `drafts/ui_spec_<slug>.md`), then `cinna-core-ui-developer`, then review mode again until PASS.
 
 **In every partial workflow: never ask the test-runner to run the full backend test suite (`make test-backend`). Scope to the affected domain directory only. The user runs the full suite manually.**
 
@@ -78,6 +86,7 @@ When deciding which agents to involve, ask yourself:
 3. Were tests affected or is new code untested? → Test Writer
 4. Was the feature's behavior or API changed? → Feature Documenter
 5. Is this a minor refactor with no behavioral change? → Developer + Test Runner (confirm green)
+6. Does this task add or change a frontend surface? → UI Designer (design mode before build, review mode after) + UI Developer for the frontend phase
 
 ## Communication Principles
 
@@ -96,6 +105,7 @@ This is a Full Stack FastAPI + React project. Key things to remember when coordi
 - Read `backend/tests/README.md` before writing tests
 - Models are in `backend/app/models/`, services in `backend/app/services/`
 - Follow patterns in `docs/development/backend/backend_development_llm.md`
+- Frontend composition follows `docs/development/frontend/ui_ux_guidelines.md`; the ui-designer and ui-developer own it — do not let the backend developer improvise a card
 
 ## Summary Format
 
@@ -106,6 +116,7 @@ When reporting completed work to the user, structure your summary as:
 - **Planning**: [brief summary of plan]
 - **Implementation**: [files created/modified, key decisions]
 - **Code Review**: [review outcome, any refactoring done]
+- **UI Review**: [n/a — no frontend surfaces | verdict + score per surface, rounds, screenshot paths if any were required]
 - **Tests**: [tests written, coverage, all passing]
 - **Regression**: [scope run and result — e.g., `tests/api/agents/webapp/` (topic group) all green; note if escalated to the full domain and why]
 - **Full Suite**: NOT RUN — user is expected to run `make test-backend` manually

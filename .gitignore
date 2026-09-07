@@ -42,3 +42,6 @@ notes.txt
 # committed into a tree that is served, and asserted, as UTF-8 text only.
 docs/local_agent_kit/**/__pycache__/
 docs/local_agent_kit/**/*.pyc
+
+# UI review screenshots (frontend/scripts/ui-shot.mjs)
+frontend/.ui-shots/

@@ -184,25 +184,21 @@ Write a comprehensive markdown document to `OUTPUT_PATH` that includes ALL of th
    - Idempotency considerations
    - Error recovery strategies
 
-6. **Frontend Implementation**:
+6. **Frontend Surfaces** (inventory, not design):
 
-   **UI Components**:
-   - Page locations and routes (e.g., `frontend/src/routes/_layout/notifications.tsx`) <!-- nocheck -->
-   - Component structure and hierarchy
-   - Form fields and validation rules
-   - Modal dialogs and interactions
-   - Reference similar existing components (e.g., "similar to Settings page")
+   Composition — which user story a surface serves, whether it is a card, dialog, sheet or route, how dense it is, which house pattern it reuses — is decided later by `cinna-core.ui.design`, which appends a `## UI Specification` to this plan. Do **not** prescribe card layouts, section lists, or control placement here; a plan that says "one card with sections A, B, C" gets built exactly like that.
+
+   For each surface the feature adds or changes, list only:
+   - Name, host (which route / tab), and whether it exists today (file path)
+   - The user's intent in one sentence ("the admin wants to see who is invited and resend one")
+   - The data it shows and the actions it offers (as a list of verbs, not as buttons)
+   - The API it consumes (endpoints + generated service names) and any contract gap (e.g. a total count is needed for "Show all (N)")
+   - Files in `docs/development/frontend/ui_ux_guidelines.md` §4 (anti-patterns) that the feature will touch
 
    **State Management**:
    - React Query usage (query keys, mutations, cache invalidation)
    - Context providers if needed
    - localStorage or sessionStorage usage
-
-   **User Flows**:
-   - Step-by-step interaction descriptions
-   - Empty states and loading states
-   - Error states and user feedback
-   - Success confirmations
 
 7. **Database Migrations**:
    - Migration file naming convention (e.g., `add_notifications_table.py`)
@@ -225,11 +221,8 @@ Write a comprehensive markdown document to `OUTPUT_PATH` that includes ALL of th
    - User permission issues
 
 10. **UI/UX Considerations**:
-    - Status indicators and color schemes
-    - User guidance (tooltips, help text, empty states)
-    - Copy-to-clipboard features (if applicable)
-    - Onboarding flows (if needed)
-    - Accessibility considerations
+    - Only what the UI designer cannot infer from the data: status vocabulary and its colours, copy that carries business meaning, onboarding sequencing constraints, accessibility requirements specific to the feature
+    - Everything else (density, placement, disclosure, patterns) belongs to the `## UI Specification` produced by `cinna-core.ui.design`
 
 11. **Integration Points**:
     - How feature connects to existing systems
@@ -257,7 +250,7 @@ a. **Review against checklist**:
    - ✅ Data models have detailed field specifications
    - ✅ Security considerations addressed
    - ✅ API endpoints clearly defined
-   - ✅ UI components and flows described
+   - ✅ Frontend surfaces inventoried (intent, data, actions, API) — composition left to `cinna-core.ui.design`
    - ✅ Database migrations planned
    - ✅ Error handling covered
    - ✅ Implementation checklist is actionable
@@ -297,6 +290,7 @@ Report completion with:
 **Next Steps**:
 - Review the architectural plan at `[OUTPUT_PATH]`
 - Clarify any unclear requirements if needed
+- If the plan lists frontend surfaces, run `cinna-core.ui.design` on it before implementation
 - Use this plan as a blueprint for implementation
 - Remember to regenerate API client after backend changes: `bash scripts/generate-client.sh`
 

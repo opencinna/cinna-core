@@ -19,7 +19,7 @@ You are given a **phase** (or section) from an **implementation plan document** 
 - Read `docs/README.md` to understand feature context and business logic.
 - Read relevant feature documentation (business logic files first, then tech files only if needed).
 - Read `docs/development/backend/backend_development_llm.md` for backend patterns.
-- Read `docs/development/frontend/frontend_development_llm.md` for frontend patterns.
+- Frontend phases belong to `cinna-core-ui-developer`; if your phase includes them, report that split to the caller instead of building the UI. If you must touch a frontend file (client regeneration, a one-line wiring change), read `docs/development/frontend/frontend_development_llm.md` and `docs/development/frontend/ui_ux_guidelines.md` first and change nothing about composition.
 - If the phase involves tests, read `backend/tests/README.md` and any domain-specific test READMEs.
 
 ### 2. Plan Before Coding

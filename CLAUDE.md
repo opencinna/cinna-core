@@ -5,6 +5,7 @@ This document provides context and instructions for LLM assistants working on th
 **Quick References:**
 - Feature map & business context: `docs/README.md` ← start here when planning or exploring unfamiliar features
 - Detailed backend patterns: `docs/development/backend/backend_development_llm.md`
+- UI composition rules & house patterns: `docs/development/frontend/ui_ux_guidelines.md` ← required before adding or changing any card, dialog, list or page
 - Common operations: See `Makefile` in project root
 
 ## User Shortcuts
@@ -351,6 +352,7 @@ When working on this project:
 - [ ] Reference `Makefile` for common operations
 - [ ] See `docs/development/backend/backend_development_llm.md` for detailed patterns
 - [ ] See `docs/development/frontend/frontend_development_llm.md` for detailed frontend development patterns
+- [ ] UI surfaces follow `docs/development/frontend/ui_ux_guidelines.md` (one concern per card, ≤ 2 inline row actions, lists capped at 5 + Show all, edit in dialogs) and pass `cinna-core.ui.review`
 - [ ] See `backend/tests/README.md` for detailed backend test writing patterns and recommendations
 
 ---

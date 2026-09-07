@@ -89,71 +89,66 @@ rejected deploy key logged the user out mid-connect.
 - Always invalidate queries after mutations
 - Use `queryClient.invalidateQueries()` for cache updates
 
-## In-Card Editable List Pattern
+## Compact List Row Pattern
 
-A recurring UI pattern for managing a list of items within a Card or Dialog. Items are displayed as compact rows with inline action buttons; creating/editing opens either an inline form or a separate Dialog.
+The house pattern for a list of entities inside a Card or on a manage-list route. **Composition rules** (how many rows, which actions are visible, when to use a dialog vs a route) are defined in [ui_ux_guidelines.md](ui_ux_guidelines.md) — §2 "Row actions", "List inside a card", "Inline forms", and pattern P3. This section only records the wiring skeleton.
 
 ### Structure
 
-**Container**: Card (standalone) or Dialog (when opened from a menu)
-- `CardHeader` / `DialogHeader` with title + "New" / "Add" button
-- List of item rows in `CardContent` / dialog body
-- Empty state text when no items exist
-- Edit Dialog rendered at bottom (outside the list)
+**Container**: Card (in a tab grid) or a manage-list route (`DataTable`)
+- `CardHeader` with title, one-line description, and the primary "Add …" `Button size="sm"` (`Plus` icon)
+- Up to **5** rows in `CardContent` (`space-y-1.5`); more → "Show all (N)" link to a route or full-height `Sheet` (guideline P5)
+- Empty state: one sentence + the Add button
+- Edit / create `Dialog` rendered once at the bottom, controlled by `editingItem` state
 
-### Item Row Layout
+### Row layout
 
-Each item is a horizontal row: `flex items-center justify-between px-3 py-2 border rounded-lg`
+`flex items-center justify-between px-3 py-2 border rounded-lg` (add `group` when actions are hover-revealed)
 
-**Left side** (`min-w-0 flex-1`):
-- Primary text: `font-medium text-sm truncate`
-- Optional badges: `Badge` with status/type
-- Optional metadata: `text-xs text-muted-foreground`
+**Left** (`min-w-0 flex-1`):
+- Primary text `font-medium text-sm truncate`
+- ≤ 2 `Badge`s for **passive** state (Enabled, Default, Managed, type, expiry)
+- One metadata line `text-xs text-muted-foreground`
 
-**Right side** (`flex items-center gap-0.5 shrink-0`):
-- Action icon buttons: `variant="ghost" size="icon" className="h-6 w-6"` with `h-3.5 w-3.5` icons
-- Wrap each in `TooltipProvider > Tooltip > TooltipTrigger/Content` for labels
-- Optional separator between button groups: `<div className="h-4 w-px bg-border mx-1" />` or `border-l pl-2`
-- Delete button always last: `text-destructive hover:text-destructive`, wrapped in `AlertDialog` for confirmation
+**Right** (`flex items-center gap-0.5 shrink-0`):
+- At most **one** primary action as a ghost icon button (`variant="ghost" size="icon" className="h-7 w-7"`, icon `h-3.5 w-3.5`) wrapped in `Tooltip` — the thing the user comes to the row for (Run, Open, Copy)
+- A `DropdownMenu` triggered by `EllipsisVertical` (`Button variant="ghost" size="icon"`) holding everything else: Edit, Set default, Enable/Disable, then `DropdownMenuSeparator`, then Delete (`text-destructive`)
+- Delete confirms with `AlertDialog` (never `window.confirm`)
 
-**Inactive/disabled rows**: Add `opacity-50 bg-muted` to the row container.
+Inactive rows: `opacity-60` + an "Off" badge. Hover-reveal variant for dense or view-only lists: right cluster gets `opacity-0 group-hover:opacity-100 focus-within:opacity-100`.
 
 ### Actions
 
 | Action | UI | Pattern |
 |--------|-----|---------|
-| Create | "New"/"Add" `Button size="sm"` with `Plus` icon | Opens Dialog or inline form |
-| Edit | `Pencil` icon button in row | Opens Edit Dialog or expands inline edit form |
-| Delete | `Trash2` icon button in row | `AlertDialog` confirmation, then mutation |
-| Copy | `Copy`/`Check` icon toggle | `navigator.clipboard.writeText()`, `setCopiedId` state with `setTimeout` reset |
-| Toggle | Status icon or `Switch` | Direct mutation, no confirmation |
+| Create | "Add …" `Button size="sm"` in the header | Opens the create Dialog (type picker first when the form depends on a type — guideline P4/P6) |
+| Open / Run / Copy | The single inline ghost icon button | Direct action; Copy toggles `Copy`/`Check` with `setCopiedId` + `setTimeout` reset |
+| Edit | Menu item | Opens the edit Dialog populated from the row |
+| Enable / Disable, Set default | Menu item | Direct mutation, toast on result, no confirmation |
+| Delete | Last menu item, `text-destructive` | `AlertDialog` naming the entity, then mutation |
 
-### Edit Dialog Pattern
+### Edit Dialog
 
-Separate `Dialog` for editing, controlled by `editDialogOpen` + `editingConnector/editingShare` state:
-- `handleEditOpen(item)`: sets editing state + populates form fields from item
-- `handleEditSave()`: compares edited values to original, sends only changed fields
-- On success: close dialog, invalidate queries
+Separate `Dialog` controlled by `editingItem` state:
+- `handleEditOpen(item)`: sets `editingItem` + populates the form
+- `handleEditSave()`: sends only changed fields
+- On success: close, `invalidateQueries`, toast
 
-### Inline Edit Pattern (Alternative)
+Inline editing in the row is allowed only for a **single-field** quick edit (rename) and only one row at a time; a multi-field form is always a Dialog.
 
-For simpler items (e.g., prompt actions in `EditPromptActionsDialog.tsx`):
-- `editingActionId` state tracks which row is in edit mode
-- Row expands to show `Input`/`Textarea` fields with `Check`/`X` icon buttons
-- No separate Dialog needed — edit form replaces the row content
+### State management
 
-### State Management
+- `useState` for `editingItem`, dialog open flags, `copiedId`
+- `useMutation` per action with `onSuccess` → `queryClient.invalidateQueries`
+- `isError` rendered as an `Alert` with Retry — separately from the empty state
 
-- `useState` for dialog open/close, form fields, editing item reference
-- `useMutation` for create/update/delete with `onSuccess` → `queryClient.invalidateQueries`
-- Copy feedback: `copiedId` state + `setTimeout(() => setCopiedId(null), 2000)`
-- For new item form: toggle `showNewForm` boolean, reset form state on discard
+### Reference implementations
 
-### Reference Implementations
+- `frontend/src/components/Admin/UserActionsMenu.tsx` — the per-row overflow menu (invitation actions first, Edit, Delete)
+- `frontend/src/components/UserSettings/AICredentials.tsx` — "Default SDK Preferences" summary rows + `SDKModeEditDialog` (guideline P2)
+- `frontend/src/components/Credentials/AddCredential.tsx` — type picker → detail route (guideline P4)
 
-- `frontend/src/components/Agents/WebappShareCard.tsx` — share links with Copy/Embed/Edit/Delete
-- `frontend/src/components/Agents/McpConnectorsCard.tsx` — connectors with Copy URL/Edit/Toggle/Delete
-- `frontend/src/components/Dashboard/UserDashboards/EditPromptActionsDialog.tsx` — prompt actions with inline edit + Add form
+Files that still implement the older always-visible-icons variant (`WebappShareCard.tsx`, `McpConnectorsCard.tsx`, `AgentSchedulesCard.tsx`, `AgentHandovers.tsx`) are listed as anti-patterns in the guidelines §4 and are migrated when touched.
 
 ## Environment Variables
 - Accessed via `import.meta.env.VITE_*`

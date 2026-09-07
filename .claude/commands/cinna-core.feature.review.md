@@ -72,6 +72,7 @@ Assess what percentage of the feature is implemented across each layer:
 | Integration hooks | | |
 | Backend tests | | |
 | Frontend UI | | |
+| UI review (score / verdict per surface) | | |
 | Documentation | | |
 
 Flag any layers that are entirely missing vs. partially done vs. complete.
@@ -92,6 +93,7 @@ Flag any layers that are entirely missing vs. partially done vs. complete.
 - Are there monitoring/observability gaps? (logging, status visibility, error surfacing)
 - Can the feature be debugged when something goes wrong? (are states inspectable, are errors traceable?)
 - Is there a cancellation/rollback path for long-running operations?
+- **UI/UX design quality** — for every frontend surface, run `cinna-core.ui.review` (or apply its §8 checklist directly) and report the score and verdict per surface; an ITERATE/FAIL surface is a finding of this review
 
 ### 7. Documentation Consistency
 
