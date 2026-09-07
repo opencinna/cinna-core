@@ -5,6 +5,8 @@ import { HashTabs, type TabConfig } from "@/components/Common/HashTabs"
 import { AICredentialsSettings } from "@/components/UserSettings/AICredentials"
 import { AppDataTab } from "@/components/UserSettings/AppData/AppDataTab"
 import { AppMcpServerCard } from "@/components/UserSettings/AppMcpServerCard"
+import { IdentityContactsCard } from "@/components/UserSettings/Channels/IdentityContactsCard"
+import { UserChannelsCard } from "@/components/UserSettings/Channels/UserChannelsCard"
 import { DashboardSettings } from "@/components/UserSettings/DashboardSettings"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import { DesktopSessionsCard } from "@/components/UserSettings/DesktopSessionsCard"
@@ -16,7 +18,6 @@ import PasswordCard from "@/components/UserSettings/PasswordCard"
 import { SecurityTab } from "@/components/UserSettings/Security/SecurityTab"
 import { SSHKeys } from "@/components/UserSettings/SSHKeys"
 import { ThemeAndColors } from "@/components/UserSettings/ThemeAndColors"
-import { UserChannelsCard } from "@/components/UserSettings/UserChannelsCard"
 import { UserDetailsSettings } from "@/components/UserSettings/UserDetailsSettings"
 import UserInformation from "@/components/UserSettings/UserInformation"
 import UserPreferences from "@/components/UserSettings/UserPreferences"
@@ -103,23 +104,14 @@ function UserSettings() {
       value: "channels",
       title: "Channels",
       content: (
-        <div className="space-y-6">
-          {/* One place where every channel an administrator has connected is
-              listed with the user's own settings: the on/off switch, the agent
-              scope, and the per-person identity toggles. Mail Servers moved out
-              entirely — it is server-owned infrastructure now and lives under
-              Admin → Server Configuration.
-
-              The two cards below are NOT older versions of this list. They hold
-              what a per-channel row has no place for: the App MCP endpoint plus
-              its connect walkthrough, and the authoring side of identity
-              sharing (which of my agents, exposed to whom). Both would be
-              unreachable if this card were the only thing on the tab. */}
+        // Row 1 is the two surfaces about reach — what may reach me, whom I
+        // may reach; row 2 is the two endpoint/authoring surfaces. What each
+        // card owns is documented in its own file header.
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           <UserChannelsCard />
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <AppMcpServerCard />
-            <IdentityServerCard />
-          </div>
+          <IdentityContactsCard />
+          <AppMcpServerCard />
+          <IdentityServerCard />
         </div>
       ),
     },

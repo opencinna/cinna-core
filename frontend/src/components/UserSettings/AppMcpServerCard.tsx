@@ -19,8 +19,9 @@
  *
  * WHAT THIS CARD DELIBERATELY NO LONGER SHOWS
  * -------------------------------------------
- * Per-person identity toggles. They live on `UserChannelsCard`, on this same
- * tab, written through `IdentityContactsService`. This card used to render a
+ * Per-person identity toggles. They live on the People who shared with you
+ * card (`Channels/IdentityContactsCard`), on this same tab, written through
+ * `IdentityContactsService`. This card used to render a
  * second copy of them over a raw `fetch` and without the consent copy that
  * explains which way the switch points — two controls for one fact, stacked
  * on one screen, one of them silent about what it consents to.
