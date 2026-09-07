@@ -30,13 +30,21 @@
  *
  * Login: uses UI_SHOT_EMAIL / UI_SHOT_PASSWORD when set, otherwise
  * FIRST_SUPERUSER / FIRST_SUPERUSER_PASSWORD from the repo-root .env.
- * Credentials are never printed. Origins: UI_SHOT_APP (default
- * http://localhost:5173) and UI_SHOT_API (default http://localhost:8000).
+ * Credentials are never printed.
+ *
+ * App origin: the docker frontend on :5173 is nginx serving the *image's*
+ * build — it shows the tree as of the last image build, not the working
+ * tree, so it is never used by default. The tool reuses a Vite dev server
+ * on UI_SHOT_DEV_PORT (default 5199) if one is listening, otherwise starts
+ * one for the run and stops it afterwards. UI_SHOT_APP overrides all of
+ * that (use it only for a server you know serves the working tree).
+ * API origin: UI_SHOT_API (default http://localhost:8000).
  *
  * The script never creates or modifies data. Whatever the dev database holds
  * is what you see; review compositions, not content.
  */
 import { chromium } from "playwright"
+import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -141,13 +149,58 @@ async function expandScrollContainers(page) {
   await page.waitForTimeout(200)
 }
 
+async function isUp(origin) {
+  try {
+    const res = await fetch(origin, { signal: AbortSignal.timeout(1500) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolve the app origin: UI_SHOT_APP if set; else a Vite dev server on the
+ * dev port (reused when already listening, started otherwise). Returns the
+ * origin and a stop() that kills a server this run started.
+ */
+async function resolveApp() {
+  if (process.env.UI_SHOT_APP) return { app: process.env.UI_SHOT_APP.replace(/\/$/, ""), stop: () => {} }
+  const port = parseInt(process.env.UI_SHOT_DEV_PORT || "5199", 10)
+  const origin = `http://localhost:${port}`
+  if (await isUp(origin)) return { app: origin, stop: () => {} }
+  const child = spawn("npx", ["vite", "--port", String(port), "--strictPort", "--host", "127.0.0.1", "--clearScreen", "false"], {
+    cwd: frontendDir,
+    stdio: ["ignore", "ignore", "pipe"],
+  })
+  let stderr = ""
+  child.stderr.on("data", (d) => (stderr += d.toString()))
+  const deadline = Date.now() + 45000
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      // Another run may have won the port between our probe and our spawn; reuse it.
+      if (await isUp(origin)) return { app: origin, stop: () => {} }
+      throw new Error(`vite exited early: ${stderr.slice(-300)}`)
+    }
+    if (await isUp(origin)) break
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  if (!(await isUp(origin))) {
+    child.kill()
+    throw new Error(`vite did not come up on ${origin} within 45s: ${stderr.slice(-300)}`)
+  }
+  // First request compiles the module graph; give it a moment so the first capture is not blank.
+  await new Promise((r) => setTimeout(r, 1500))
+  console.error(`ui-shot: started vite dev server on ${origin} for this run`)
+  return { app: origin, stop: () => child.kill() }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help || !args.url) {
     console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("*/")[0].replace(/^\/\*\*?\s?/, ""))
     process.exit(args.help ? 0 : 1)
   }
-  const app = (process.env.UI_SHOT_APP || "http://localhost:5173").replace(/\/$/, "")
+  const { app, stop } = await resolveApp()
   const api = (process.env.UI_SHOT_API || "http://localhost:8000").replace(/\/$/, "")
   const widths = args.width.split(",").map((w) => parseInt(w.trim(), 10)).filter((w) => w > 0)
   const wait = parseInt(args.wait, 10)
@@ -197,6 +250,7 @@ async function main() {
     }
   } finally {
     await browser.close()
+    stop()
   }
   for (const f of written) console.log(f)
 }

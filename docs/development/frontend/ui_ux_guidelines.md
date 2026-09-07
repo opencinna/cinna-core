@@ -223,6 +223,7 @@ Screenshots **not required** (checklist review of the JSX suffices):
 - Backend-driven changes where the frontend only rebinds fields.
 
 Rules when screenshots *are* taken:
+- The docker frontend on `:5173` is nginx serving the **image's** build, not the working tree; a capture there shows yesterday's code and proves nothing. `ui-shot.mjs` therefore never uses it: it reuses a Vite dev server on `:5199` or starts one for the run.
 - Capture only the surfaces named in the spec's Verification line, at 1440 and 1024 (390 only for surfaces that claim mobile support). Dialogs and sheets are captured with `--element "[role=dialog]"`; pages with the default full-page mode (the tool expands the app's inner scroll region); themes with `--theme light|dark`.
 - If a state cannot be reached with the tool (a wizard step that needs typed input, a list the dev database cannot populate), report **"required but not capturable"** and review that state from the JSX. Do not fake it.
 - Do not create or modify data to make a screenshot look better; if the dev database lacks data for the state under review, say so and review the empty state instead.
