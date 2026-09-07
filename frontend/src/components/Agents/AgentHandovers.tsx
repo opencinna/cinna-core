@@ -7,7 +7,7 @@ import type { AgentPublic, HandoverConfigPublic } from "@/client"
 import { AgentsService } from "@/client"
 import type { AgentOption } from "@/components/Common/AgentSelectorDialog"
 import { AgentSelectorDialog } from "@/components/Common/AgentSelectorDialog"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { PreviewList } from "@/components/Common/PreviewList"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -16,7 +16,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
 import {
   Tooltip,
   TooltipContent,
@@ -85,6 +84,7 @@ export function AgentHandovers({ agent }: AgentHandoversProps) {
     data: handoversData,
     isLoading,
     isError,
+    error,
     refetch,
   } = useQuery({
     queryKey: ["agentHandovers", agent.id],
@@ -192,62 +192,44 @@ export function AgentHandovers({ agent }: AgentHandoversProps) {
       </CardHeader>
 
       <CardContent>
-        {isError ? (
-          <Alert variant="destructive">
-            <AlertTitle>Couldn&apos;t load handovers</AlertTitle>
-            <AlertDescription className="flex flex-col items-start gap-2">
-              <span>
-                The handover configuration for this agent could not be fetched.
-              </span>
-              <Button variant="outline" size="sm" onClick={() => refetch()}>
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : isLoading ? (
-          <div className="space-y-1.5">
-            <Skeleton className="h-[52px] w-full rounded-lg" />
-            <Skeleton className="h-[52px] w-full rounded-lg" />
-            <Skeleton className="h-[52px] w-full rounded-lg" />
-          </div>
-        ) : sortedHandovers.length === 0 ? (
-          agentsKnown && !hasOtherAgents ? (
-            <p className="text-sm text-muted-foreground">
-              There are no other agents to hand work to.{" "}
-              <Link to="/agents" className="text-primary hover:underline">
-                Create another agent
-              </Link>
-              .
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              This agent doesn&apos;t hand work to any other agent yet.
-            </p>
-          )
-        ) : (
-          <div className="space-y-1.5">
-            {sortedHandovers.slice(0, PREVIEW_COUNT).map((handover) => (
-              <HandoverRow
-                key={handover.id}
-                agentId={agent.id}
-                handover={handover}
-                targetColorPreset={
-                  colorPresetByAgentId[handover.target_agent_id]
-                }
-              />
-            ))}
-            {totalCount > PREVIEW_COUNT && (
-              <Button
-                variant="link"
-                size="sm"
-                className="px-0"
-                onClick={() => setIsSheetOpen(true)}
-              >
-                Show all ({totalCount})
-              </Button>
-            )}
-          </div>
-        )}
+        {/* The four states, the cap and the "Show all" link are the shared P5
+            primitive's job; the row and the copy stay here. The error branch
+            is `QueryErrorAlert` — the house error state — rather than this
+            card's former hand-rolled Alert. */}
+        <PreviewList
+          items={sortedHandovers}
+          total={totalCount}
+          previewCount={PREVIEW_COUNT}
+          getKey={(handover) => handover.id}
+          renderItem={(handover) => (
+            <HandoverRow
+              agentId={agent.id}
+              handover={handover}
+              targetColorPreset={colorPresetByAgentId[handover.target_agent_id]}
+            />
+          )}
+          isLoading={isLoading}
+          isError={isError}
+          error={error}
+          onRetry={() => refetch()}
+          errorFallback="Couldn't load handovers"
+          empty={
+            agentsKnown && !hasOtherAgents ? (
+              <p className="text-sm text-muted-foreground">
+                There are no other agents to hand work to.{" "}
+                <Link to="/agents" className="text-primary hover:underline">
+                  Create another agent
+                </Link>
+                .
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This agent doesn&apos;t hand work to any other agent yet.
+              </p>
+            )
+          }
+          onShowAll={() => setIsSheetOpen(true)}
+        />
       </CardContent>
 
       {/* S2 — the picker returns one agent and closes itself, then the prompt

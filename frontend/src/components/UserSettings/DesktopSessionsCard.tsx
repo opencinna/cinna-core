@@ -1,24 +1,30 @@
 /**
- * DesktopSessionsCard — Settings > Security tab
+ * DesktopSessionsCard — "App Sessions", Settings › Security tab.
  *
- * Shows all native app clients (Cinna Desktop and Cinna Mobile) connected to
- * the user's account and allows disconnecting (revoking) individual clients.
- * Both client kinds share the same `desktop_oauth_client` backing table, so
- * this single card lists them together.  Follows the same card layout as other
- * Settings sections.
+ * Which native app clients (Cinna Desktop and Cinna Mobile) are signed in to
+ * this account, when each last ran, and a way to cut one off. Both kinds share
+ * the same `desktop_oauth_client` backing table, so one card lists them.
+ *
+ * A View surface (guidelines §1): the only mutation is the revoke, and it is
+ * one confirm away. The card is a P5 preview — five rows and "Show all (N)" —
+ * which is what removes anti-pattern A4: the card's height used to *be* the
+ * session count, so an account with many devices ran the card past the viewport
+ * while its grid neighbour ended halfway down.
  *
  * This card is also the only surface on which a session created by
  * `POST /cli/account/desktop-token` — a desktop that linked itself from a CLI
  * `account.json` rather than through a browser consent — is visible to the
- * account owner, which is why such rows are badged.  See the backend's
+ * account owner, which is why such rows are badged. See the backend's
  * `AccountCLIService.exchange_for_desktop_token`.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Monitor, Apple, Chrome, Laptop, Smartphone, Unplug } from "lucide-react"
-import { formatDistanceToNow } from "date-fns"
+import { useMemo, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
+import { MonitorSmartphone } from "lucide-react"
 
+import type { DesktopOAuthClientPublic } from "@/client"
 import { DesktopAuthService } from "@/client"
-import useCustomToast from "@/hooks/useCustomToast"
+import { PREVIEW_COUNT, PreviewList } from "@/components/Common/PreviewList"
 import {
   Card,
   CardContent,
@@ -26,173 +32,102 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
+import { APP_SESSIONS_QUERY_KEY } from "@/utils/appSessions"
+import { AllAppSessionsSheet } from "./AllAppSessionsSheet"
+import { AppSessionRow } from "./AppSessionRow"
 
-// ── Platform icon helper ───────────────────────────────────────────────────
+/** Stable identity so the sort below memoises while the query loads. */
+const NO_CLIENTS: DesktopOAuthClientPublic[] = []
 
-function PlatformIcon({ platform }: { platform?: string | null }) {
-  const cls = "h-4 w-4 text-muted-foreground"
-  switch (platform?.toLowerCase()) {
-    case "macos":
-    case "darwin":
-      return <Apple className={cls} />
-    case "windows":
-    case "win32":
-      return <Monitor className={cls} />
-    case "linux":
-      return <Chrome className={cls} />
-    case "ios":
-    case "android":
-      return <Smartphone className={cls} />
-    default:
-      return <Laptop className={cls} />
-  }
+/** Sort key: last used, or nothing when the app has never run. */
+function lastUsedTime(client: DesktopOAuthClientPublic): number | null {
+  if (!client.last_used_at) return null
+  const t = new Date(client.last_used_at).getTime()
+  return Number.isNaN(t) ? null : t
 }
 
-// ── Relative time helper ───────────────────────────────────────────────────
-
-function RelativeTime({ iso }: { iso?: string | null }) {
-  if (!iso) return <span className="text-muted-foreground text-xs">Never</span>
-  try {
-    return (
-      <span className="text-muted-foreground text-xs">
-        {formatDistanceToNow(new Date(iso), { addSuffix: true })}
-      </span>
-    )
-  } catch {
-    return <span className="text-muted-foreground text-xs">Unknown</span>
-  }
+function createdTime(client: DesktopOAuthClientPublic): number {
+  const t = new Date(client.created_at).getTime()
+  return Number.isNaN(t) ? 0 : t
 }
-
-// ── Main component ─────────────────────────────────────────────────────────
 
 export function DesktopSessionsCard() {
-  const queryClient = useQueryClient()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const [isSheetOpen, setIsSheetOpen] = useState(false)
 
-  const { data: clients = [], isLoading } = useQuery({
-    queryKey: ["desktop-clients"],
+  const {
+    data: clientsData,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: APP_SESSIONS_QUERY_KEY,
     queryFn: () => DesktopAuthService.listDesktopClients(),
   })
 
-  const revokeMutation = useMutation({
-    mutationFn: (clientId: string) =>
-      DesktopAuthService.revokeDesktopClient({ clientId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["desktop-clients"] })
-      showSuccessToast("App disconnected.")
-    },
-    onError: () => {
-      showErrorToast("Failed to disconnect app.")
-    },
-  })
+  const clients = clientsData ?? NO_CLIENTS
+
+  // Most recently used first, apps that have never run last, ties broken by
+  // when they connected. The endpoint returns the whole list unpaginated, so
+  // this ordering — and the count on "Show all" — is the true one.
+  const sortedClients = useMemo(
+    () =>
+      [...clients].sort((a, b) => {
+        const aUsed = lastUsedTime(a)
+        const bUsed = lastUsedTime(b)
+        if (aUsed !== bUsed) {
+          if (aUsed === null) return 1
+          if (bUsed === null) return -1
+          return bUsed - aUsed
+        }
+        return createdTime(b) - createdTime(a)
+      }),
+    [clients],
+  )
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>App Sessions</CardTitle>
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <MonitorSmartphone className="h-5 w-5 shrink-0" />
+          App Sessions
+        </CardTitle>
         <CardDescription>
-          Manage Cinna Desktop and Cinna Mobile app connections to this account.
+          Cinna Desktop and Cinna Mobile apps signed in to this account.
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : clients.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-6 text-center">
-            <Laptop className="h-8 w-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">
-              No apps connected.
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Download Cinna Desktop or Cinna Mobile to get started.
-            </p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-border">
-            {clients.map((c) => (
-              <li
-                key={c.client_id}
-                className="flex items-center justify-between gap-3 py-3"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <PlatformIcon platform={c.platform} />
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">
-                      {c.device_name}
-                    </p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {c.app_version && (
-                        <Badge variant="outline" className="text-xs px-1 py-0">
-                          v{c.app_version}
-                        </Badge>
-                      )}
-                      {/* Only the CLI-exchanged origin is badged: a browser
-                          consent is the ordinary way to connect an app, and a
-                          badge on every row would bury the one that matters. */}
-                      {c.origin === "cli_exchange" && (
-                        <Badge
-                          variant="secondary"
-                          className="text-xs px-1 py-0"
-                          title="Linked from a CLI account token on this machine, without a browser sign-in."
-                        >
-                          CLI link
-                        </Badge>
-                      )}
-                      <RelativeTime iso={c.last_used_at ?? null} />
-                    </div>
-                  </div>
-                </div>
 
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0 text-muted-foreground hover:text-destructive"
-                      title="Disconnect"
-                      aria-label={`Disconnect ${c.device_name}`}
-                    >
-                      <Unplug className="h-4 w-4" />
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Disconnect app?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        This will revoke access for{" "}
-                        <strong>{c.device_name}</strong>. The app will need to
-                        log in again.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={() => revokeMutation.mutate(c.client_id)}
-                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      >
-                        Disconnect
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </li>
-            ))}
-          </ul>
-        )}
+      {/* No header button: an app connects from the app, never from here, so
+          there is no Create action for the P3 header slot to hold. */}
+      <CardContent>
+        <PreviewList
+          items={sortedClients}
+          previewCount={PREVIEW_COUNT}
+          getKey={(client) => client.client_id}
+          renderItem={(client) => <AppSessionRow client={client} />}
+          isLoading={isLoading}
+          isError={isError}
+          error={error}
+          onRetry={() => refetch()}
+          errorFallback="Couldn't load app sessions"
+          empty={
+            <p className="text-sm text-muted-foreground">
+              No apps are connected to this account yet.{" "}
+              <Link to="/desktop" className="text-primary hover:underline">
+                Get Cinna Desktop
+              </Link>
+              .
+            </p>
+          }
+          onShowAll={() => setIsSheetOpen(true)}
+        />
       </CardContent>
+
+      <AllAppSessionsSheet
+        clients={sortedClients}
+        open={isSheetOpen}
+        onOpenChange={setIsSheetOpen}
+      />
     </Card>
   )
 }
