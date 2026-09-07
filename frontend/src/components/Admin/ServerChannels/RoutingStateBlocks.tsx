@@ -1,8 +1,8 @@
-import { AlertCircle, Info, Timer } from "lucide-react"
+import { Info, Timer } from "lucide-react"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 
-import { Button } from "@/components/ui/button"
+import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { getErrorMessage } from "@/utils"
 import { isRateLimited, retryAfterSeconds } from "./routingRateLimit"
@@ -49,35 +49,20 @@ export function RoutingError({
   compact?: boolean
 }) {
   return (
-    <div
-      role="alert"
-      className={`flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/5 ${
-        compact ? "px-3 py-2" : "p-4"
-      }`}
+    <QueryErrorAlert
+      error={error}
+      fallback={fallback}
+      onRetry={onRetry}
+      compact={compact}
     >
-      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-      <div className="min-w-0 flex-1 space-y-1">
-        <p className="text-sm font-medium text-destructive">{fallback}</p>
-        <p className="text-xs break-words text-muted-foreground">
-          {getErrorMessage(error, "The request failed.")}
-        </p>
-        {/* Named explicitly so nobody reads a failed panel as a finding about
-            routing. This is the whole reason the error branch exists. */}
-        <p className="text-xs text-muted-foreground">
-          This is a failure to load — not a statement about what routing did.
-        </p>
-        {onRetry && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-1 h-7 text-xs"
-            onClick={onRetry}
-          >
-            Try again
-          </Button>
-        )}
-      </div>
-    </div>
+      {/* Named explicitly so nobody reads a failed panel as a finding about
+          routing. This is the whole reason the error branch exists — and the
+          only part of it that is specific to this card, which is why the rest
+          now lives in the shared alert. */}
+      <p className="text-xs">
+        This is a failure to load — not a statement about what routing did.
+      </p>
+    </QueryErrorAlert>
   )
 }
 
@@ -92,7 +77,9 @@ export function RoutingEmpty({
 }) {
   return (
     <div className="rounded-lg border border-dashed p-6 text-center">
-      {icon && <div className="mb-2 flex justify-center opacity-50">{icon}</div>}
+      {icon && (
+        <div className="mb-2 flex justify-center opacity-50">{icon}</div>
+      )}
       <p className="text-sm text-muted-foreground">{title}</p>
       {hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}
     </div>
@@ -148,11 +135,15 @@ export function RoutingMutationError({
   if (isRateLimited(error)) {
     return <RateLimited error={error} />
   }
-  return <RoutingError error={error} fallback={fallback} onRetry={onRetry} compact />
+  return (
+    <RoutingError error={error} fallback={fallback} onRetry={onRetry} compact />
+  )
 }
 
 function RateLimited({ error }: { error: unknown }) {
-  const [seconds, setSeconds] = useState<number | null>(() => retryAfterSeconds())
+  const [seconds, setSeconds] = useState<number | null>(() =>
+    retryAfterSeconds(),
+  )
   // Armed only while there is a number still counting down. Keying on
   // `seconds !== null` alone would leave a 1s interval ticking forever once it
   // reached zero, for as long as the error stayed mounted.

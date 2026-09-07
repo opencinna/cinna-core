@@ -1,7 +1,10 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useEffect } from "react"
 
-import { AccessPolicyCard } from "@/components/Admin/AccessPolicyCard"
+import { CompanyAiCredentialsCard } from "@/components/Admin/AccessPolicy/CompanyAiCredentialsCard"
+import { NewUserDefaultsCard } from "@/components/Admin/AccessPolicy/NewUserDefaultsCard"
+import { RegistrationCard } from "@/components/Admin/AccessPolicy/RegistrationCard"
+import { SignInMethodsCard } from "@/components/Admin/AccessPolicy/SignInMethodsCard"
 import { DisclaimerCard } from "@/components/Admin/DisclaimerCard"
 import { LandingPageCard } from "@/components/Admin/LandingPageCard"
 import { LocalAgentKitCard } from "@/components/Admin/LocalAgentKitCard"
@@ -79,12 +82,16 @@ function AdminServerConfiguration() {
       value: "access",
       title: "Access",
       content: (
-        // Stacked in the tab's existing narrow column rather than switched to
-        // the two-column grid the other tabs use: `AccessPolicyCard` is
-        // written for a wide single column and reads badly at half width.
-        <div className="max-w-3xl space-y-6">
-          <AccessPolicyCard />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <RegistrationCard />
+          <SignInMethodsCard />
+          <NewUserDefaultsCard />
           <LandingPageCard />
+          {/* A role matrix needs its columns — one name column plus one per
+              role — so it is the one card here that spans the grid. */}
+          <div className="lg:col-span-2">
+            <CompanyAiCredentialsCard />
+          </div>
         </div>
       ),
     },

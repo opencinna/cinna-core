@@ -2,6 +2,11 @@ import { Check, Copy } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
 
 /**
@@ -59,19 +64,28 @@ export function CopyableValue({
         <code className="flex-1 rounded border bg-background px-2 py-1.5 font-mono text-xs break-all">
           {value}
         </code>
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          onClick={copy}
-          aria-label={`Copy ${label}`}
-        >
-          {copied ? (
-            <Check className="h-3 w-3 text-green-500" />
-          ) : (
-            <Copy className="h-3 w-3" />
-          )}
-        </Button>
+        {/* Icon-only, so it carries a tooltip as well as its label — the
+            guidelines require one on every icon button, and this component is
+            the shared answer for label-plus-value controls, so fixing it here
+            fixes every caller. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={copy}
+              aria-label={`Copy ${label}`}
+            >
+              {copied ? (
+                <Check className="h-3 w-3 text-green-500" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{`Copy ${label}`}</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   )
