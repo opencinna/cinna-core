@@ -41,7 +41,6 @@ def create_admin_credential(
     provider_type: str = "openai",
     secret: str = SECRET,
     project_id: str = "proj_test",
-    spend_limit_cents: int = 5000,
     expected_status: int = 200,
 ) -> dict:
     response = client.post(
@@ -51,10 +50,7 @@ def create_admin_credential(
             "name": name or f"Org {random_lower_string()[:8]}",
             "provider_type": provider_type,
             "secret": secret,
-            "config": {
-                "project_id": project_id,
-                "spend_limit_cents": spend_limit_cents,
-            },
+            "config": {"project_id": project_id},
         },
     )
     assert response.status_code == expected_status, response.text
@@ -119,7 +115,7 @@ def test_only_superusers_can_reach_any_of_it(
                 "name": "nope",
                 "provider_type": "openai",
                 "secret": SECRET,
-                "config": {"project_id": "p", "spend_limit_cents": 100},
+                "config": {"project_id": "p"},
             },
         ).status_code
         == 403
@@ -318,14 +314,22 @@ def test_replacing_the_secret_clears_the_verification_stamp(
     assert renamed["has_secret"] is True
 
 
-def test_a_limit_that_is_not_enforced_is_not_a_cap(
+def test_a_capped_project_that_has_not_hit_its_limit_is_a_cap(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """The case a naive implementation passes.
+    """The case the first implementation got backwards, and the only live one.
 
-    The provider returns a spend limit with a real ``threshold_amount`` and an
-    enforcement status of ``inactive``. Anything checking the obvious field would
-    call that capped. It is not, and Verify must say so.
+    ``enforcement.status`` is the hard limit's **current** runtime state, not its
+    configuration — the provider's own generated types say "Whether the hard
+    spend limit is *currently* enforcing". A project capped at $50 and sitting at
+    $0 of it therefore reports ``inactive``, which is the state every healthy
+    capped project is in essentially all of the time. ``enforcing`` means the
+    threshold has been reached and the project is already refusing traffic.
+
+    The predicate used to be ``status == "enforcing"``, which refused every
+    healthy project and would have admitted only an exhausted one — where a
+    minted key is dead on arrival. It could not pass in the state it was written
+    to allow. This is that regression.
     """
     from tests.utils.ai_provider import stub_minting_providers
 
@@ -339,12 +343,34 @@ def test_a_limit_that_is_not_enforced_is_not_a_cap(
             headers=superuser_token_headers,
         ).json()
 
-    assert result["ok"] is False
-    assert result["error"] == "project_not_capped"
-    assert result["spend_limit_enforcing"] is False
-    # The threshold is reported precisely so the admin can see that the number
-    # they set is there and doing nothing.
+    assert result["ok"] is True
+    assert result["error"] is None
+    assert result["spend_limit_enforcing"] is True
     assert result["spend_limit_cents"] == 5000
+
+
+def test_a_project_already_over_its_limit_is_still_a_cap(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """``enforcing`` is a cap too — it is the same limit, currently biting.
+
+    Kept as its own case so neither runtime state can be quietly excluded by a
+    predicate that reaches for the status field again.
+    """
+    from tests.utils.ai_provider import stub_minting_providers
+
+    created = create_admin_credential(client, superuser_token_headers)
+
+    with stub_minting_providers(
+        enforcement_status="enforcing", threshold_cents=5000
+    ):
+        result = client.post(
+            f"{ADMIN_BASE}/{created['id']}/verify",
+            headers=superuser_token_headers,
+        ).json()
+
+    assert result["ok"] is True
+    assert result["spend_limit_enforcing"] is True
 
 
 def test_a_project_with_no_limit_at_all_is_not_a_cap(
@@ -362,26 +388,42 @@ def test_a_project_with_no_limit_at_all_is_not_a_cap(
     assert result["ok"] is False
     assert result["error"] == "project_not_capped"
 
+
+def test_cinna_never_writes_a_spend_limit(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The limit is the provider console's to own, and only ever read here.
+
+    There is no endpoint that sets one and no configured threshold to send, so
+    the strongest available statement is about the wire: across a verify of an
+    uncapped project — the exact situation that used to invite an "Apply spend
+    limit" press — not one write reaches the provider's spend-limit endpoint.
+
+    A locally stored threshold was removed rather than merely hidden. The same
+    organisation is reachable from the console and from any other tool pointed at
+    it, so a copy on this side goes stale the moment somebody edits the real one,
+    and a stale number displayed as the project's cap is worse than none.
+    """
+    from tests.utils.ai_provider import stub_minting_providers
+
+    created = create_admin_credential(client, superuser_token_headers)
+
     with stub_minting_providers(spend_limit_absent=True) as (_p, provisioning):
-        applied = client.post(
-            f"{ADMIN_BASE}/{created['id']}/apply-spend-limit",
+        client.post(
+            f"{ADMIN_BASE}/{created['id']}/verify",
             headers=superuser_token_headers,
-        ).json()
-    # Applying one sends integer cents on a monthly interval, and the value that
-    # goes over the wire is the configured one — an off-by-100 here is a
-    # hundred-fold cap.
-    post = [
+        )
+
+    writes = [
         call
         for call in provisioning.calls
-        if call.method == "POST" and call.path.endswith("/spend_limit")
+        if call.path.endswith("/spend_limit") and call.method != "GET"
     ]
-    assert len(post) == 1, provisioning.calls
-    assert post[0].json_body == {
-        "threshold_amount": 5000,
-        "currency": "USD",
-        "interval": "month",
-    }
-    assert applied["ok"] is True
+    assert writes == [], writes
+    assert any(
+        call.method == "GET" and call.path.endswith("/spend_limit")
+        for call in provisioning.calls
+    ), "the cap was never read at all"
 
 
 def test_a_bad_secret_is_reported_and_stamped(
@@ -498,7 +540,7 @@ def test_changing_the_project_clears_the_verification_stamp(
     moved = client.patch(
         f"{ADMIN_BASE}/{record_id}",
         headers=superuser_token_headers,
-        json={"config": {"project_id": "proj_other", "spend_limit_cents": 5000}},
+        json={"config": {"project_id": "proj_other"}},
     ).json()
     assert moved["config"]["project_id"] == "proj_other"
     assert moved["last_verified_at"] is None
@@ -510,7 +552,7 @@ def test_changing_the_project_clears_the_verification_stamp(
     unchanged = client.patch(
         f"{ADMIN_BASE}/{record_id}",
         headers=superuser_token_headers,
-        json={"config": {"project_id": "proj_other", "spend_limit_cents": 5000}},
+        json={"config": {"project_id": "proj_other"}},
     ).json()
     assert unchanged["last_verified_at"] is not None
 

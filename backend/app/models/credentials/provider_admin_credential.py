@@ -44,7 +44,7 @@ WHAT A MINTED KEY ACTUALLY CARRIES
 -----------------------------------
 A minted key carries write access to the project's API resources. Its blast
 radius is bounded by the project's monthly spend limit, which Cinna verifies is
-enforcing before minting into a project, and by revocation. No narrower claim is
+in place before minting into a project, and by revocation. No narrower claim is
 available to us: the provider documents default service-account permissions as
 read and write of the project's API resources, and we do not request key scopes
 in this phase.
@@ -62,19 +62,20 @@ from app.models.credentials.ai_credential import AICredentialType
 class ProviderAdminCredentialConfig(SQLModel):
     """Non-secret configuration for one provider organisation.
 
-    ``spend_limit_cents`` is **integer cents**, matching the provider's own
-    contract. An off-by-100 here is a hundred-fold cap, so the unit is in the
-    name at every layer rather than in a comment at one of them.
-
-    ``project_id`` may be supplied by the administrator (an existing project) or
-    left empty for the setup step to create one. Either way the project is
-    verified to have an *enforcing* spend limit before the first key is minted —
-    a limit is never applied after a key exists.
+    **The spend limit is not configured here, and deliberately cannot be.** It
+    is set on the provider's own console and is read back — never written — by
+    :meth:`verify_spend_limit`; the project is still verified to carry a hard
+    limit before the first key is minted. Cinna held an editable
+    ``spend_limit_cents`` and an "Apply spend limit" action until it was removed:
+    a locally stored threshold is a second copy of a number the provider owns,
+    it silently goes stale the moment anybody edits the real one in the console
+    or in any other tool pointed at the same organisation, and a stale copy
+    displayed as the project's cap is worse than no copy at all. There is no
+    fallback value and no local default.
     """
 
     organization_id: str | None = Field(default=None, max_length=255)
     project_id: str | None = Field(default=None, max_length=255)
-    spend_limit_cents: int = Field(ge=1)
 
 
 class ProviderAdminCredential(SQLModel, table=True):
@@ -192,8 +193,12 @@ class ProviderAdminCredentialVerifyResult(SQLModel):
     """Outcome of a Verify press.
 
     Two questions, one answer object, because they fail independently and an
-    admin who fixes one wants to see the other: is the secret good, and is the
-    project capped by an **enforcing** spend limit?
+    admin who fixes one wants to see the other: is the secret good, and does the
+    project carry a hard spend limit?
+
+    ``spend_limit_enforcing`` keeps its name for wire compatibility, but it
+    answers "is this project capped", not "is the cap currently biting" — see
+    :attr:`SpendLimitStatus.is_capped`.
     """
 
     ok: bool

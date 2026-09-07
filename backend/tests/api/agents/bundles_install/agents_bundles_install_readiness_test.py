@@ -381,7 +381,7 @@ def _publisher_managed_child(
                 "name": f"Readiness-{uuid.uuid4().hex[:8]}",
                 "provider_type": "openai",
                 "secret": "sk-admin-readiness",
-                "config": {"project_id": "proj_readiness", "spend_limit_cents": 5000},
+                "config": {"project_id": "proj_readiness"},
             },
         )
         assert admin_credential.status_code == 200, admin_credential.text

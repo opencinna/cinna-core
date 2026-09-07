@@ -99,7 +99,6 @@ async def create_provider_admin_credential(
             if hasattr(record.provider_type, "value")
             else str(record.provider_type),
             "project_id": record.config.project_id,
-            "spend_limit_cents": record.config.spend_limit_cents,
         },
     )
     return record
@@ -200,9 +199,10 @@ async def verify_provider_admin_credential(
 ) -> Any:
     """Check the secret and the project's spend cap in one press.
 
-    A project whose limit exists but is not being enforced is reported as not
-    capped, and minting into it is refused — the enforcement state is the
-    predicate, not the presence of a threshold.
+    A project carrying no spend limit at all is reported as not capped, and
+    minting into it is refused. A limit reporting ``inactive`` is a cap that has
+    not yet been hit, not a missing one — ``enforcement.status`` is a runtime
+    state and is deliberately not the predicate.
     """
     result = await provider_admin_credentials_service.verify(
         session, current_user, credential_id
@@ -215,40 +215,6 @@ async def verify_provider_admin_credential(
             "provider_admin_credential_id": str(credential_id),
             "ok": result.ok,
             "spend_limit_enforcing": result.spend_limit_enforcing,
-            "error": result.error,
-        },
-    )
-    return result
-
-
-@router.post(
-    "/{credential_id}/apply-spend-limit",
-    response_model=ProviderAdminCredentialVerifyResult,
-)
-async def apply_provider_spend_limit(
-    session: SessionDep, current_user: SuperUser, credential_id: uuid.UUID
-) -> Any:
-    """Set the configured monthly spend limit on the project.
-
-    A setup action, taken before any key exists. The limit is never applied after
-    minting has started: capping a project that already has live keys in it
-    leaves a window in which an uncapped key is in the world, and that window
-    does not need to exist.
-
-    Enforcement is not instantaneous at the provider — recorded spend can
-    slightly exceed the cap — so this promises a limit, not a hard stop.
-    """
-    result = await provider_admin_credentials_service.apply_spend_limit(
-        session, current_user, credential_id
-    )
-    await _audit(
-        session,
-        current_user,
-        "admin.provider_admin_credential.apply_spend_limit",
-        {
-            "provider_admin_credential_id": str(credential_id),
-            "ok": result.ok,
-            "spend_limit_cents": result.spend_limit_cents,
             "error": result.error,
         },
     )

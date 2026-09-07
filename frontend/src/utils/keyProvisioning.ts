@@ -83,7 +83,7 @@ const PROVISION_ERROR_COPY: Record<string, string> = {
   no_admin_credential:
     "No provider admin key is connected for this provider any more.",
   project_not_capped:
-    "The provider project has no enforcing monthly spend limit, so no key was created.",
+    "The provider project has no monthly spend limit. Set one in the provider's console — no key was created.",
   mint_failed: "The provider refused to create the key.",
   provider_error: "The provider returned an unexpected response.",
   invalid_admin_secret: "The provider rejected the admin key.",

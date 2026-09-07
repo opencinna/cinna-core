@@ -121,9 +121,8 @@ What the admin does with the record:
 
 | Action | Effect |
 |--------|--------|
-| **Connect provider** | Stores the name, provider, encrypted secret and config (project id, optional organisation id, monthly spend limit in **cents**). **No provider call is made** — so a provider outage cannot stop an admin from recording the configuration |
-| **Verify** | One press, two answers: *is the secret good* and *is the project capped by an enforcing spend limit*. They fail independently, and an admin who fixes one wants to see the other without a second round trip. The result is stamped on the record (`last_verified_at` / `last_verify_error`) and shown in the table |
-| **Apply spend limit** | Sets the configured monthly limit on the project. **A setup action** — see below |
+| **Connect provider** | Stores the name, provider, encrypted secret and config (project id, optional organisation id). **No provider call is made** — so a provider outage cannot stop an admin from recording the configuration |
+| **Verify** | One press, two answers: *is the secret good* and *does the project carry a hard spend limit* (read from the provider; Cinna cannot set one). They fail independently, and an admin who fixes one wants to see the other without a second round trip. The result is stamped on the record (`last_verified_at` / `last_verify_error`) and shown in the table |
 | **Edit / rotate key** | Omitting the secret keeps the stored one, so renaming a record never round-trips a secret |
 | **Disconnect** | Refused `409` while managed records still mint through it or keys minted with it are still live. `force` overrides, and the override is audited **with the counts it overrode** |
 
@@ -135,17 +134,21 @@ The secret is write-only: it is accepted on create and update, is never a field 
 
 ### The spend-limit precondition
 
-**The project's monthly spend limit is set or verified at setup, before any key exists.** It is never applied after minting has started: capping a project that already has live keys in it leaves a window in which an uncapped key is in the world, and under a single project that window does not need to exist at all.
+**The project's monthly spend limit is set on the provider's own console, and Cinna only ever reads it.** There is no editable threshold on this side, no "Apply spend limit" action, and no fallback value — the capability was removed rather than hidden. The limit belongs where it is authoritative: the same provider organisation is reachable from the console and from any number of other tools, so a threshold stored here is a second copy of somebody else's number that goes stale the moment the real one is edited, with nothing to notice. A stale figure presented as the project's cap is worse than showing none.
 
-The predicate is `enforcement.status == "enforcing"`, and it is defined in exactly one place (`SpendLimitStatus.is_capped`). A limit that exists but reports `inactive` **is not a cap** — reading the threshold alone, the obvious field, would call it one — and minting into such a project is refused with `project_not_capped`. Verify reports the same thing to the admin: *"The key works, but the project's monthly spend limit is not being enforced. Keys are not created in an uncapped project."*
+What remains is the check, and it runs before any key exists: an uncapped project is refused. Nothing caps a project *after* minting has started either, which was never something to give up — capping a project that already holds live keys leaves a window in which an uncapped key is in the world.
+
+The predicate is **the existence of a project spend limit with a threshold**, and it is defined in exactly one place (`SpendLimitStatus.is_capped`). A project with no limit object at all is refused with `project_not_capped`. Verify reports that to the admin, and the sentence points at the only place that can fix it: *"The key works, but the project has no monthly spend limit. Set one in the OpenAI console — keys are not created in an uncapped project."*
+
+**`enforcement.status` is deliberately not the predicate.** It is the limit's *current* runtime state, not its configuration — the provider's generated types read *"Whether the hard spend limit is **currently** enforcing"*. A correctly capped project sitting at $0 of $100 reports `inactive`, which is the state a healthy capped project is in essentially all of the time; `enforcing` means the threshold has been reached and traffic is already failing. Gating on `enforcing` inverts the check: it refuses every healthy project and admits only an exhausted one, where a minted key is dead on arrival. That is how this first shipped, and it is why the rule now reads the object's existence instead. Monitoring without enforcement is a separate object — a project *spend alert* — that this code never reads.
 
 Enforcement is documented as not instantaneous at the provider: recorded spend can slightly exceed the cap. Nothing here promises a hard stop; it promises a limit.
 
-Amounts are **integer cents** at every layer, with the unit in the field name (`spend_limit_cents`, `threshold_cents`), because an off-by-100 here is a hundred-fold cap.
+The one amount that crosses a boundary is the threshold read back from the provider, and it is **integer cents** with the unit in the field name (`threshold_cents`), because an off-by-100 here is a hundred-fold cap.
 
 ### What a minted key carries
 
-A minted key carries **write access to the project's API resources**. Its blast radius is bounded by the project's spend limit, which Cinna verifies is enforcing before minting into that project, and by revocation. That is the whole of the claim.
+A minted key carries **write access to the project's API resources**. Its blast radius is bounded by the project's spend limit, which Cinna verifies is in place before minting into that project, and by revocation. That is the whole of the claim.
 
 It is deliberately not softened. The provider documents default service-account permissions as read and write of all of the project's API resources; nothing documents a narrower guarantee we could inherit. Three things follow, and they are recorded as decisions rather than left to be rediscovered:
 
@@ -199,7 +202,7 @@ Retries are bounded: **5 attempts**, backing off 60s → 300s → 900s → 3600s
 
 #### Retrying a failed member
 
-`failed` is terminal on purpose, but terminal must not mean unreachable. **Admin → AI Credentials → Managed credentials** shows a failed member with the reason and a **Retry** button (`POST /admin/llm-providers/{id}/members/{user_id}/retry`), which puts the row back to `pending` at zero attempts. The likeliest first-run failure is a project whose spend limit is not enforcing; the admin fixes it in a minute and needs a way to say "try again" that does something.
+`failed` is terminal on purpose, but terminal must not mean unreachable. **Admin → AI Credentials → Managed credentials** shows a failed member with the reason and a **Retry** button (`POST /admin/llm-providers/{id}/members/{user_id}/retry`), which puts the row back to `pending` at zero attempts. The likeliest first-run failure is a project with no spend limit on it; the admin fixes it in a minute and needs a way to say "try again" that does something.
 
 It is deliberately **not** folded into "re-add the member": re-adding an existing member is a no-op, and making it a requeue instead would mean any PATCH that merely renames the record quietly resets every durable failure it touches (reconcile passes the current membership list as the desired one). `last_error` is deliberately kept across the requeue — until the retry succeeds, why it failed last time is still the most useful thing anyone can read there.
 
@@ -462,16 +465,18 @@ Two details specific to the explicit list:
 
 The wizard's pre-ticked set is derived from `auto_provision_roles` — the same field `_provision` filters on — so what an invited account starts with matches what a self-registering account of the same role would have got.
 
-### "Add a key for this user" — on the success screen, not in the wizard
+### Handing off to add a key — the success screen's onward link
 
 The wizard's *provisioning step* still has no key-entry control, and that remains an ordering fact rather than a preference: the account row is created when the wizard is **submitted**, so at that step there is no user id to attach a key to and no `target_user_ids` to send.
 
-What phase 5 added is the affordance **after** the account exists. The invite success screen shows a **Step 3 — "Add a key for this user"** card: *"Give `<email>` an API key of their own. They are already selected as its only member."* Pressing **Add a key** opens the ordinary `ManagedCredentialDialog` in create mode, pre-seeded with the new account as its only target and with a suggested name of `"<email> — <Provider>"`. When it succeeds the card flips to *"`<email>` now has their own AI credential."*
+What phase 5 added is the affordance **after** the account exists; a later redesign (the invite success screen's own guideline pass) moved it from a nested dialog into a plain onward link, per the "a success screen links onward" composition rule. The invite success panel (`InviteSuccessPanel`) shows one `Button variant="link"` reading **"Add an AI key for `<email>`"**, navigating to `/admin/ai-credentials?newCredentialFor=<user.id>&label=<display name>`. The AI Credentials route reads those two search params, opens the ordinary `ManagedCredentialDialog` in create mode **controlled**, pre-seeded with the new account as its only target and a suggested name from the label, then strips both params from the URL — the same `?new=1` latch idiom `credential/$credentialId.tsx` uses, so a refresh or a Back does not reopen it.
+
+On success the AI Credentials page derives a one-line result from the created record's own member row (`api_key_onboarding_state` — the same field the person's own paste-a-key wall reads), not from "a row was created": `has_key` → "Key added."; `preparing` → "The key is being created now."; `needs_key` → an amber alert, "Key added — not their default," since `set_as_default` defaults off and a perfectly good credential can still leave its owner walled.
 
 Two things this deliberately is not:
 
-- **Not a second credential-creation surface.** It is the same dialog, the same route, the same reconcile. The card supplies two props (`initialTargets`, `nameSubject`) and takes a callback; it re-implements nothing.
-- **Not shown for a deactivated account.** The card is hidden entirely when the newly-touched account is inactive — there would be nobody to give a key to.
+- **Not a second credential-creation surface.** It is the same dialog, the same route, the same reconcile. The AI Credentials page passes it `initialTargets` / `nameSubject` / `onCreated`; it re-implements nothing.
+- **Not shown for a deactivated account.** The link is hidden entirely when the newly-touched account is inactive — there would be nobody to give a key to.
 
 This is where the "paste a key for one person" path lands, and it is a first-class one: for every provider whose administration API does not create keys — which is every provider but OpenAI today — it is *the* way an administrator hands somebody their own key.
 
@@ -542,7 +547,7 @@ Through the `/admin/llm-providers/` surface, superusers can:
 - **Apply to existing users** — grant the record to every active account its `auto_provision_roles` cover (`?dry_run=true` previews without writing)
 - **Retry a member's key** — `POST /{id}/members/{user_id}/retry`, for a member whose minting has terminally failed (`400` if it has not failed, `404` if they are not a member)
 
-Through the `/admin/provider-admin-credentials/` surface (superuser-only, secret write-only): **create**, **list**, **get**, **update** (omitting `secret` keeps the stored one), **delete** (`409` unless `?force=true`), **verify**, and **apply-spend-limit**. `GET /admin/provider-adapters/` describes every provider the server supports, derived from the adapter registry — see [provider_adapters_tech](provider_adapters_tech.md).
+Through the `/admin/provider-admin-credentials/` surface (superuser-only, secret write-only): **create**, **list**, **get**, **update** (omitting `secret` keeps the stored one), **delete** (`409` unless `?force=true`) and **verify**. `GET /admin/provider-adapters/` describes every provider the server supports, derived from the adapter registry — see [provider_adapters_tech](provider_adapters_tech.md).
 
 ### Admin UI — "AI Credentials" section
 
@@ -586,14 +591,15 @@ The page has **two tabs** on the one URL (local state, not a search param, so th
      It also tells the admin when the record auto-provisions for no role at all. Skips are surfaced one toast per user, by name, resolved from the preview's candidate list
    - **Delete** — opens an `AlertDialog`; on `409` (blocked members) escalates to a force-delete confirmation listing blocked users by name
 
-### Admin UI — Server Configuration → Access & New Users
+### Admin UI — Server Configuration → Access
 
-The same flag seen from the other end. An admin setting up the front door asks "what does a new Agent Developer get?", and answering that from a list of credentials means opening each one in turn. So the *New users* block of the [Access Policy](../server_configuration/access_policy.md) card ends with a **Company AI credentials** matrix (`AutoProvisionedCredentialsMatrix`): managed credentials down the rows, the three roles across the columns, one checkbox per cell.
+The same flag seen from the other end. An admin setting up the front door asks "what does a new Agent Developer get?", and answering that from a list of credentials means opening each one in turn. So the Access tab's own **Company AI credentials** card (`CompanyAiCredentialsCard`, a half-width card alongside the [Access Policy](../server_configuration/access_policy.md) cards, not nested inside any of them) lists the managed credentials one per row, each with a **User · Dev · Admin** role toggle group; a segment on means new accounts of that role receive the key.
 
-- A toggle is one `PATCH /admin/llm-providers/{id}` carrying `auto_provision_roles` and nothing else; the matrix never invents state of its own and shares the AI Credentials page's query key, so a change made on either surface shows on both.
+- A toggle is one `PATCH /admin/llm-providers/{id}` carrying `auto_provision_roles` and nothing else; the card never invents state of its own and shares the AI Credentials page's query key, so a change made on either surface shows on both.
+- Capped at **5 rows** (credentials that already grant something first, then alphabetical) with a footer link reading "Manage AI credentials" when everything fits, or "Show all (N) on AI Credentials" once it does not — one link to `/admin/ai-credentials`, not two.
 - A cell whose tick would be refused carries an advisory **Conflict** badge, computed client-side from the loaded list. It is a hint, not a gate — the list can be stale, the click still goes to the server, and a real `409` renders as an alert under the table.
-- Empty state: "No managed AI credentials yet — create one", linking to `/admin/ai-credentials`. A "Manage AI credentials" link sits in the block header.
-- The block's own helper text states the creation-time rule: "Changing a role later never grants or revokes a key."
+- Empty state: "No managed AI credentials yet — create one", linking to `/admin/ai-credentials`.
+- The card's own description states the creation-time rule: "Changing a role later never grants or revokes a key — use \"Apply to existing users\" on the AI Credentials page for accounts that already exist."
 
 ### Security audit
 
@@ -638,7 +644,7 @@ External key refs **are** recorded in event details, deliberately — they are w
 | `admin.ai_credential.revoked` | medium | see below | A key was destroyed at the provider |
 | `admin.ai_credential.revoke_failed` | **high** | see below | A key we could not destroy. **This event is the durable record** — the membership row that carried the handles is gone by then, so without it the key would be live at the provider with nothing anywhere naming it |
 | `admin.ai_credential.revoke_blocked` | **high** | the member | A key deliberately left live because its child credential could not be deleted (`in_use_bundle`, `delete_failed`) |
-| `admin.provider_admin_credential.{create,update,delete,verify,apply_spend_limit}` | medium | the acting admin | Provider-organisation administration. `update` records `secret_rotated: bool`, never what it was rotated to; `delete` records `forced` **plus the two counts it overrode**, because that is the one action that permanently strands live provider keys and its audit row is the last place anyone can learn how many |
+| `admin.provider_admin_credential.{create,update,delete,verify}` | medium | the acting admin | Provider-organisation administration. `update` records `secret_rotated: bool`, never what it was rotated to; `delete` records `forced` **plus the two counts it overrode**, because that is the one action that permanently strands live provider keys and its audit row is the last place anyone can learn how many |
 
 **Whose feed a revoke lands in is not always the key holder's.** `security_event.user_id` is NOT NULL with a foreign key to `user`. On the account-deletion path the holder no longer exists by the time the provider is called, so the event goes to the administrator who deleted the account — which is also where it is useful. When a user deletes their **own** account, subject and actor are the same and both are gone: there is genuinely no feed, and the revoke is logged rather than audited. Inventing an owner for it would be worse than saying so.
 
@@ -715,7 +721,7 @@ The `suggested_models` field on the native response returns `credential.availabl
 - **A blocked removal states its own reason sentence.** `ManagedReconcileBlock.message` is server-authored, required, drawn from one table, and rendered verbatim everywhere — so a mint-in-flight block can never be reported as a bundle conflict, whose remedy (`force=true`) would strand a live key.
 - **A failure is durable.** A `failed` membership is never deleted to tidy up, and the only way out of it is an explicit Retry.
 - **No provider call on a request path.** Adding a member records an intent; a converge pass mints against it.
-- **Minting is refused into a project whose spend limit is not `enforcing`**, and the limit is set or verified at setup — never applied after a key exists.
+- **Minting is refused into a project with no spend limit at all**, and the limit is set or verified at setup — never applied after a key exists. An `inactive` enforcement status is a capped project that has not yet hit its threshold, not an uncapped one.
 - **No child of a managed record is ever shared, in either mode.** `share_credential` refuses when `ai_credentials_service.is_shareable(credential)` is false — the predicate is the plain `is_admin_managed` column, so an orphaned child (parent force-deleted, FK `SET NULL`) is refused too. The refusal is the typed `AICredentialNotShareableError`, a permanent policy answer its one caller can tell apart from the transient failures it swallows. A bundle wired to such a credential degrades to "user provides"; it does not fail the install, and it is not reported to the installer at all, because the environment resolves the installer's own AI credential in its place and nothing is missing. **Where a share already exists** both the install path and the gate look for an `AICredentialShare` to the installer before asking the policy, so an install running on a share made before the widening keeps working. Those rows are deliberately left alone — the accepted price is that such a share can stay live indefinitely if its publisher never publishes again, and the publisher is told so, with the action to take, at publish time.
 - **Only a provider whose administration API creates keys may be minted for**, and only while an organisation for it is connected. Both halves are enforced server-side in `_validate_provisioning_shape`; the browser reads the server's `can_mint_now` answer rather than recomputing the conjunction.
 - **Provisioning mode is fixed at creation.** `api_key` on a minted record is a `400`, not a silent no-op.
@@ -735,7 +741,7 @@ The `suggested_models` field on the native response returns `credential.availabl
 - **`auto_provision_roles` is validated; `sdk_default_modes` is not.** An unknown role is a `400`. An unknown mode string saves with a `200` and then wires nothing, forever — see [Known Gaps](#known-gaps).
 - **Emptying `auto_provision_roles` is not a revoke.** Existing members keep their credential; the record simply stops being granted to new accounts.
 - **An invited account provisions through the same service.** The wizard's explicit list goes to `AccountProvisioningService.provision_explicit`, not to a route-level `add_members` loop, so it inherits the never-fail net, the session-repair discipline, the skip reporting into the invited account's own feed, and the deactivated-account short-circuit. Its pre-ticked set is derived from the *same* `auto_provision_roles` predicate the automatic path uses, so an invited account and a self-registered one of the same role start with the same keys.
-- **The invite wizard's provisioning step still has no key-entry control**, because the account does not exist at that step; the affordance lives on the **success screen** instead and reuses the ordinary create dialog — see ["Add a key for this user"](#add-a-key-for-this-user--on-the-success-screen-not-in-the-wizard).
+- **The invite wizard's provisioning step still has no key-entry control**, because the account does not exist at that step; the affordance lives on the **success screen** instead, as a link onward that reuses the ordinary create dialog — see [Handing off to add a key](#handing-off-to-add-a-key--the-success-screens-onward-link).
 
 ### Native account-config
 
@@ -865,7 +871,7 @@ Deliberate, each carrying a docstring at the code that owns it. Recorded here so
 
 - **[Auth](../auth/auth.md)** — `UserService.create_account` is the chokepoint that triggers auto-provisioning, and `AccountOrigin` is what records which arrival path a grant came from.
 - **[User Roles](../user_roles/user_roles.md)** — `User.role` is the selector: a record is granted when the new account's role appears in its `auto_provision_roles`. The role itself comes from `ServerConfig.default_user_role` unless the caller passes one explicitly.
-- **[Access Policy](../server_configuration/access_policy.md)** — hosts the *Company AI credentials* matrix in its **New users** block, and gates which origins may create an account at all.
+- **[Access Policy](../server_configuration/access_policy.md)** — hosts the *Company AI credentials* card beside its **New user defaults** card, and gates which origins may create an account at all.
 - **[AI Credentials](ai_credentials.md)** — the reused core service: `create_credential`, `set_default`, `update_credential`, `delete_credential`, `decrypt_credential`, `resolve_default_credential_for_sdk`. `ManagedAICredentialsService` delegates every per-child operation with `user_id = owner_id` so all per-user invariants (one-default-per-type, profile auto-sync, SDK-default wiring) run for the target user.
 - **[AI Credentials Tech](ai_credentials_tech.md)** — `AICredential` model with three managed-credential columns (`is_admin_managed`, `managed_by_id`, `managed_credential_id`); `AICredentialsService.update_credential` / `delete_credential` `admin_override` kwarg; `AICredentialPublic.is_admin_managed` projection.
 - **[External Agent Access](../external_agent_access/external_agent_access.md)** — the `/external/` route namespace that the account-config endpoint extends. The same `ExternalAccountConfigService` sits under `services/external/`.

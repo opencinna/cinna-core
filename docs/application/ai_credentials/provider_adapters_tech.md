@@ -198,18 +198,25 @@ Two further notes worth keeping:
 | `revoke(secret, external_ref) -> None` | Destroy the key. A 404 is success — the thing we were asked to destroy is gone; treating it as a failure would make an already-revoked key retry forever |
 | `verify_admin_access(secret, config) -> str` | Read-only administration call. Returns the provider-side id it reached |
 | `verify_spend_limit(secret, config) -> SpendLimitStatus` | Read the project's cap |
-| `ensure_spend_limit(secret, config) -> SpendLimitStatus` | Set the configured cap if the project is not already capped. **Setup only**, never after a mint |
 | `config_schema() -> dict` | What an administrator must supply to connect an organisation. Published verbatim as `admin_config_schema` by `GET /admin/provider-adapters/` |
+
+**There is no `ensure_spend_limit`, and its absence is deliberate.** The protocol had one, along with an editable `spend_limit_cents` and an "Apply spend limit" action; all three were removed. The spend limit is the provider console's to own — the same organisation is reachable from the console and from any other tool pointed at it, so a threshold stored on this side is a second copy that goes stale unobserved, and a stale figure shown as the project's cap is worse than none. The cap is read, checked and never written. No fallback value exists anywhere.
 
 ### `SpendLimitStatus.is_capped` is the predicate, defined once
 
 ```python
 @property
 def is_capped(self) -> bool:
-    return self.enforcement_status == "enforcing"
+    return self.enforcement_status != "absent" and bool(self.threshold_cents)
 ```
 
-`enforcement_status` is one of `enforcing` / `inactive` / `absent` — an explicit value in every case, including "the project has no limit at all". A limit that exists but reports `inactive` **is not a cap**, and reading `threshold_amount` alone (the obvious field) would call it one. Every caller asks this object; none re-derives the rule. `threshold_cents` is **integer cents**, with the unit in the name at every layer because an off-by-100 here is a hundred-fold cap.
+**The cap is the limit's existence, not its `enforcement.status`.** `enforcement_status` is one of `enforcing` / `inactive` / `absent`, an explicit value in every case — but only `absent` is ours, synthesized from the provider's 404. The other two are the provider's own **runtime** states and are equally capped: the generated types describe the object as *"Represents a hard spend limit configured at the project level"* and its status as *"Whether the hard spend limit is **currently** enforcing"*. A project capped at $100 sitting at $0 reports `inactive`; it reports `enforcing` only once it has hit the threshold and is already 429-ing with `project_spend_limit_exceeded`.
+
+Monitoring a threshold *without* enforcing it is a different object entirely — a project **spend alert**, a separate endpoint carrying a `notification_channel`, which this code never reads. If a `project.spend_limit` came back, a hard limit is configured.
+
+> This predicate shipped as `enforcement_status == "enforcing"`, which inverted the gate: it refused every healthy capped project and would have admitted only an exhausted one, where a minted key is dead on arrival. It could not pass in the state it was written to allow. The reasoning that produced it was sound — `threshold_amount` alone really is the naive field — but the correct signal was one level up, in whether the object exists at all.
+
+Every caller asks this object; none re-derives the rule. `threshold_cents` is **integer cents**, with the unit in the name at every layer because an off-by-100 here is a hundred-fold cap.
 
 ### `ProviderAdminError` codes
 
@@ -223,7 +230,7 @@ Raised by `_http._admin_error` and by the provisioner itself. The provider's own
 | `rate_limited` | HTTP 429 otherwise |
 | `provider_error` | any other HTTP status, or an unexpected response shape |
 | `provider_unreachable` | an `httpx` transport failure (DNS, connect, read timeout) |
-| `no_project_configured` / `no_spend_limit_configured` | the configuration is incomplete |
+| `no_project_configured` | the configuration is incomplete |
 | `no_secret_returned` | the create response's `api_key` was null |
 | `incomplete_external_ref` | a revoke was asked for with handles it cannot use |
 | `project_not_capped` | `mint` refused because `is_capped` was False |
@@ -238,7 +245,6 @@ All calls go over plain `httpx` against `https://api.openai.com/v1/organization`
 |------|----------|
 | `verify_admin_access` | `GET /projects/{project_id}` |
 | `verify_spend_limit` | `GET /projects/{project_id}/spend_limit` (`absent_on_404=True`) |
-| `ensure_spend_limit` | `POST /projects/{project_id}/spend_limit` — `{threshold_amount: <int cents>, currency: "USD", interval: "month"}` |
 | `mint` | `POST /projects/{project_id}/service_accounts` — `{name: label}` |
 | `revoke` | `DELETE /projects/{project_id}/service_accounts/{service_account_id}` (`absent_on_404=True`) |
 

@@ -351,7 +351,6 @@ def test_a_declared_provisioner_implements_the_whole_contract() -> None:
             "revoke",
             "verify_admin_access",
             "verify_spend_limit",
-            "ensure_spend_limit",
             "config_schema",
         ):
             if not callable(getattr(provisioner, method, None)):

@@ -27,7 +27,7 @@
 - `backend/app/services/credentials/key_provisioning_service.py` — **new.** `KeyProvisioningService` (singleton: `key_provisioning_service`); owns the membership *provisioning lifecycle* — `converge`, `revoke_now`, `schedule_revocations`, `collect_user_revocations`, `suspend_user_memberships`, `resume_user_memberships`, `requeue_failed_member`, `list_user_provisionings`, `api_key_onboarding_state`; `ConvergeReport` dataclass; the `EVENT_MINTED` / `EVENT_MINT_FAILED` / `EVENT_REVOKED` / `EVENT_REVOKE_FAILED` / `EVENT_REVOKE_BLOCKED` constants
 - `backend/app/services/credentials/key_provisioning_types.py` — **new.** `RevocationRequest` only. Its own module so the one real dependency between the managed-credential service and the provisioning service points in a single direction: the import cycle is a function-local import in exactly one place rather than two modules importing each other at module level
 - `backend/app/services/credentials/key_provisioning_scheduler.py` — **new.** APScheduler `BackgroundScheduler`, 1-minute interval, `max_instances=1`, `coalesce=True`; `KEY_PROVISIONING_LOCK_KEY = 0x4B45594D494E54` ("KEYMINT"); submits each sweep to the main event loop via `asyncio.run_coroutine_threadsafe` with a fixed `SWEEP_WAIT_TIMEOUT_SECONDS = 180`
-- `backend/app/services/credentials/provider_admin_credentials_service.py` — **new.** `ProviderAdminCredentialsService` (singleton: `provider_admin_credentials_service`); `decrypt_secret`, `usage_counts`, CRUD, `verify`, `apply_spend_limit`, `to_public`; `ProviderAdminCredentialInUseError`
+- `backend/app/services/credentials/provider_admin_credentials_service.py` — **new.** `ProviderAdminCredentialsService` (singleton: `provider_admin_credentials_service`); `decrypt_secret`, `usage_counts`, CRUD, `verify`, `to_public`; `ProviderAdminCredentialInUseError`
 - `backend/app/services/ai_providers/` — **new package.** The adapter registry every provider call now goes through. See [provider_adapters_tech](provider_adapters_tech.md)
 - `admin_ai_credentials_service.py` (under `backend/app/services/credentials/`) — **deleted in phase 5.** The legacy `AdminAICredentialService` had been unwired from every route since the managed-credential model landed; it and its `AdminAICredential*` DTOs are gone
 - `backend/app/services/users/account_provisioning_service.py` — `AccountProvisioningService.on_account_created` / `provision_explicit` / `on_account_deactivated` / `on_account_reactivated` / `on_account_deleted`, plus the shared `_guarded` net and `_provision` body; `ProvisioningReport`, `ProvisionedCredential` (whose `child_credential_id` is now **optional**), `ProvisioningSkip` dataclasses; `EVENT_AUTO_PROVISION` / `EVENT_AUTO_PROVISION_FAILED` constants
@@ -194,7 +194,7 @@ Server-scoped, **no `owner_id`**. The shape is copied deliberately from `MailSer
 | `name` | `VARCHAR(255)` | NOT NULL | Human label |
 | `provider_type` | `VARCHAR(50)` | NOT NULL, index `ix_provider_admin_credential_type` | `AICredentialType` value |
 | `encrypted_secret` | `TEXT` | NOT NULL | Fernet-encrypted administration secret. **Never projected, never linked to an environment, never in `/external/account-config`** |
-| `config` | `JSON` | NOT NULL, server_default `'{}'::json` | `ProviderAdminCredentialConfig` — `organization_id?`, `project_id?`, `spend_limit_cents` |
+| `config` | `JSON` | NOT NULL, server_default `'{}'::json` | `ProviderAdminCredentialConfig` — `organization_id?`, `project_id?` |
 | `last_verified_at` | `TIMESTAMPTZ` | nullable | Last successful Verify |
 | `last_verify_error` | `TEXT` | nullable | Coarse reason code for the last failed Verify. Both are non-secret and both are shown to the admin |
 | `created_by_id` | `UUID` | nullable, FK → `user.id` ON DELETE **SET NULL** | Audit only. **Never CASCADE** — user deletion is a bare cascade, and deleting the superuser who pasted the key must not destroy the instance's ability to revoke every key it ever minted |
@@ -324,11 +324,11 @@ It has to be its own projection rather than an extra row in the credential list,
 
 | DTO | Notes |
 |-----|-------|
-| `ProviderAdminCredentialConfig` | `organization_id?`, `project_id?`, `spend_limit_cents` (`ge=1`, **integer cents**). `project_id` may be an existing project or left empty for setup to create one; either way the project is verified to have an *enforcing* limit before the first key is minted |
+| `ProviderAdminCredentialConfig` | `organization_id?`, `project_id?`. **No spend-limit field:** the limit is set on the provider's console and only ever read here, so there is no local copy to go stale. The project is still verified to carry a hard limit before the first key is minted |
 | `ProviderAdminCredentialCreate` | `name`, `provider_type`, `secret` (min length 1), `config` |
 | `ProviderAdminCredentialUpdate` | All optional; **omitting `secret` keeps the stored one**, so renaming a record never round-trips a secret |
 | `ProviderAdminCredentialPublic` | `id`, `name`, `provider_type`, `config`, `has_secret: bool` (never the value), `last_verified_at`, `last_verify_error`, `created_by_id`, `minting_credential_count`, `live_minted_key_count`, `delete_blocked`, timestamps. `delete_blocked` is the **answer**; the two counts are the explanation. A client computing `(a or b) > 0` itself would be re-deriving a server policy in the browser and would keep answering the old way the day the rule changes |
-| `ProviderAdminCredentialVerifyResult` | `ok`, `account_ref` (provider-side identity — never key material), `spend_limit_enforcing`, `spend_limit_cents`, `error`. Two questions in one answer object because they fail independently |
+| `ProviderAdminCredentialVerifyResult` | `ok`, `account_ref` (provider-side identity — never key material), `spend_limit_enforcing`, `spend_limit_cents`, `error`. Two questions in one answer object because they fail independently. Both spend fields are **read from the provider** — `spend_limit_cents` is the live threshold, the only place that number appears in this API |
 
 ### `ProviderAdapterPublic` / `ProviderAdaptersPublic`
 
@@ -458,8 +458,7 @@ Structured rather than prose because the frontend highlights the offending role/
 | `GET` | `/{credential_id}` | — | `ProviderAdminCredentialPublic` | `404` if not found |
 | `PATCH` | `/{credential_id}` | `ProviderAdminCredentialUpdate` | `ProviderAdminCredentialPublic` | Omitting `secret` keeps the stored one |
 | `DELETE` | `/{credential_id}?force=` | — | `Message` | `409 {code: "provider_admin_credential_in_use", message, minting_credential_count, live_minted_key_count}` while anything depends on it. `force` overrides, and the audit row records **the counts it overrode**, not merely that it was forced |
-| `POST` | `/{credential_id}/verify` | — | `ProviderAdminCredentialVerifyResult` | Checks the secret **and** the enforcing spend cap in one press; stamps `last_verified_at` / `last_verify_error` |
-| `POST` | `/{credential_id}/apply-spend-limit` | — | `ProviderAdminCredentialVerifyResult` | Setup action. Never applied after minting has started |
+| `POST` | `/{credential_id}/verify` | — | `ProviderAdminCredentialVerifyResult` | Checks the secret **and** the project's hard spend cap in one press; stamps `last_verified_at` / `last_verify_error` |
 
 ### Provider adapters (`/api/v1/admin/provider-adapters`)
 
@@ -786,8 +785,7 @@ Singleton: `provider_admin_credentials_service`. Superuser-only CRUD plus verifi
 | `usage_counts(session, credential_id) -> (int, int)` | `(managed records minting through it, live keys only it can revoke)`. The live count is `external_key_ref IS NOT NULL` — **not** a status list: a membership mid-mint holds a key the provider has already created, and a list naming only `provisioned` would undercount exactly the rows whose key is hardest to find again. The ref is the key's existence; the status is where the row is in its lifecycle |
 | `create` / `list` / `get` / `update` | `update` keeps the stored secret when `secret` is omitted |
 | `delete(session, admin, id, *, force=False) -> (int, int)` | Raises `ProviderAdminCredentialInUseError` unless `force`. Returns the counts **as they were at the moment of deletion**, so a forced disconnect is audited with what it overrode — `"forced: true"` on its own does not say how many |
-| `verify(session, admin, id)` | Two provider calls (`verify_admin_access`, `verify_spend_limit`), one result. The cap is **read**, not applied: applying one is a setup action and must be a decision, not a side effect of pressing Verify. A non-enforcing limit returns `ok=False, error="project_not_capped"` |
-| `apply_spend_limit(session, admin, id)` | Setup only |
+| `verify(session, admin, id)` | Two provider calls (`verify_admin_access`, `verify_spend_limit`), one result. The cap is **read**, not applied: applying one is a setup action and must be a decision, not a side effect of pressing Verify. A project with no limit returns `ok=False, error="project_not_capped"`; an `inactive` status is a cap that has not been hit, not a missing one |
 | `to_public(...)` | Fills `has_secret`, the two counts and `delete_blocked` |
 
 ---
@@ -1010,11 +1008,10 @@ All audit events contain counts/IDs but **never** key bytes.
 | `admin.ai_credential.revoked` | `audit_user_id` | `medium` | A key destroyed at the provider |
 | `admin.ai_credential.revoke_failed` | `audit_user_id` | **`high`** | A key we could **not** destroy. **This event is the durable record** — the membership row that carried the handles is gone by then (delete-then-revoke ordering), so without it the key is live at the provider with nothing naming it. The external ref goes in deliberately |
 | `admin.ai_credential.revoke_blocked` | Member | **`high`** | A key deliberately left live because its child could not be deleted (`in_use_bundle`, `delete_failed`). Written from synchronous code by constructing the row directly, for the same reason `AccountProvisioningService` does |
-| `admin.provider_admin_credential.create` | Admin | `medium` | `details = {provider_admin_credential_id, provider_type, project_id, spend_limit_cents}` |
+| `admin.provider_admin_credential.create` | Admin | `medium` | `details = {provider_admin_credential_id, provider_type, project_id}` |
 | `admin.provider_admin_credential.update` | Admin | `medium` | `details = {provider_admin_credential_id, secret_rotated: bool}` — **whether** the secret was replaced, never what with |
 | `admin.provider_admin_credential.delete` | Admin | `medium` | `details = {provider_admin_credential_id, forced, minting_credential_count, live_minted_key_count}` — what a force **overrode**, not merely that it was used. This is the one action that permanently strands live provider keys, and this row is the last place anyone can learn how many |
 | `admin.provider_admin_credential.verify` | Admin | `medium` | `details = {provider_admin_credential_id, ok, spend_limit_enforcing, error}` |
-| `admin.provider_admin_credential.apply_spend_limit` | Admin | `medium` | `details = {provider_admin_credential_id, ok, spend_limit_cents, error}` |
 | `external.account_config.read` | Calling user | `high` | `GET /external/account-config` (successful call only) |
 
 `external.account_config.read` details: `{client_kind, external_client_id, provider_count, credential_ids}`.
@@ -1058,7 +1055,7 @@ Automatic grants are **not** emitted by the admin route — they have no acting 
 | File | Covers |
 |------|--------|
 | `backend/tests/api/ai_credentials/minted_ai_credentials_test.py` | 31 tests — minted-record create/update validation, membership statuses, converge, retry, revocation, the account lifecycle cascade, the owner-facing list and `api_key_onboarding_state` |
-| `backend/tests/api/ai_credentials/provider_admin_credentials_test.py` | 14 tests — secret write-only-ness, verify, apply-spend-limit, the delete gate and its force override |
+| `backend/tests/api/ai_credentials/provider_admin_credentials_test.py` | Secret write-only-ness, verify (including that a cap not yet hit *is* a cap), that no write ever reaches the provider's spend-limit endpoint, the delete gate and its force override |
 | `backend/tests/architecture/provider_adapter_registry_test.py` | 11 tests — the per-provider-table property and the adapter contract |
 | `backend/tests/unit/ai_provider_adapters_test.py` | 31 tests — per-adapter behaviour |
 | `backend/tests/utils/key_provisioning.py` | `converge_keys(db, *, limit=None)`, `make_membership_due(db, user_id)`, `mark_membership_minting(db, user_id)` |

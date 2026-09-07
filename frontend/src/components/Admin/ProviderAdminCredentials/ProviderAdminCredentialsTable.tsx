@@ -2,7 +2,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   BadgeCheck,
   EllipsisVertical,
-  Gauge,
   Pencil,
   ShieldCheck,
   Trash,
@@ -64,23 +63,16 @@ function formatDateTime(value: string | null | undefined): string {
   })
 }
 
-/** Integer cents, as the provider counts them. */
-function formatSpendLimit(cents: number | null | undefined): string {
-  if (cents === null || cents === undefined) return "—"
-  return `${(cents / 100).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} / month`
-}
-
 function describeVerifyResult(result: ProviderAdminCredentialVerifyResult): string {
   if (!result.ok) {
     return `Verification failed${result.error ? ` — ${result.error}` : ""}.`
   }
   if (!result.spend_limit_enforcing) {
-    return "The key works, but the project's monthly spend limit is not being enforced. Keys are not created in an uncapped project."
+    // Actionable, because this is no longer something Cinna can fix from here:
+    // the limit lives on the provider's console and nowhere else.
+    return "The key works, but the project has no monthly spend limit. Set one in the OpenAI console — keys are not created in an uncapped project."
   }
-  return "The key works and the project's monthly spend limit is being enforced."
+  return "The key works and the project has a monthly spend limit."
 }
 
 export function ProviderAdminCredentialsTable({
@@ -106,10 +98,9 @@ export function ProviderAdminCredentialsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[22%]">Name</TableHead>
-            <TableHead className="w-[12%]">Provider</TableHead>
-            <TableHead className="w-[16%]">Project</TableHead>
-            <TableHead className="w-[14%]">Spend limit</TableHead>
+            <TableHead className="w-[26%]">Name</TableHead>
+            <TableHead className="w-[14%]">Provider</TableHead>
+            <TableHead className="w-[20%]">Project</TableHead>
             <TableHead className="w-[16%]">Verified</TableHead>
             <TableHead>Last error</TableHead>
             <TableHead className="w-[48px]" />
@@ -136,9 +127,6 @@ export function ProviderAdminCredentialsTable({
               </TableCell>
               <TableCell className="font-mono text-xs">
                 {record.config.project_id || "—"}
-              </TableCell>
-              <TableCell className="text-sm">
-                {formatSpendLimit(record.config.spend_limit_cents)}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
                 {formatDateTime(record.last_verified_at)}
@@ -194,29 +182,6 @@ function ProviderAdminCredentialActions({
     onSettled: invalidate,
   })
 
-  const spendLimitMutation = useMutation({
-    mutationFn: () =>
-      AdminProviderCredentialsService.applyProviderSpendLimit({
-        credentialId: record.id,
-      }),
-    onSuccess: (result) => {
-      if (result.ok) {
-        // Through the same formatter the table cell uses: two renderings of
-        // one number in one component is how "500.00" and "50000 cents" end
-        // up on screen a second apart.
-        showSuccessToast(
-          `Monthly spend limit applied to the project: ${formatSpendLimit(result.spend_limit_cents)}.`,
-        )
-      } else {
-        showErrorToast(
-          `Could not apply the spend limit${result.error ? ` — ${result.error}` : ""}.`,
-        )
-      }
-    },
-    onError: (error: ApiError) => handleError.call(showErrorToast, error),
-    onSettled: invalidate,
-  })
-
   const deleteMutation = useMutation({
     mutationFn: (force: boolean) =>
       AdminProviderCredentialsService.deleteProviderAdminCredential({
@@ -258,13 +223,6 @@ function ProviderAdminCredentialActions({
           >
             <BadgeCheck className="mr-2 h-4 w-4" />
             Verify
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => spendLimitMutation.mutate()}
-            disabled={spendLimitMutation.isPending}
-          >
-            <Gauge className="mr-2 h-4 w-4" />
-            Apply spend limit
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => setIsEditOpen(true)}>
             <Pencil className="mr-2 h-4 w-4" />

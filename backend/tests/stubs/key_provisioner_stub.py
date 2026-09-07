@@ -72,16 +72,24 @@ class StubOpenAIProvisioner(OpenAIKeyProvisioner):
     """The real OpenAI provisioner with a canned provider behind it.
 
     Everything is configured as *provider behaviour*, never as a short-circuit of
-    our own logic — ``enforcement_status="inactive"`` makes the provider report an
-    unenforced limit and lets the real refusal fire, rather than making the stub
-    refuse.
+    our own logic — ``spend_limit_absent=True`` makes the provider report a
+    project with no hard limit at all and lets the real refusal fire, rather than
+    making the stub refuse.
+
+    **The default is ``inactive`` because that is what a correctly capped project
+    returns.** ``enforcement.status`` is the limit's *current* runtime state, not
+    its configuration: a project capped at $100 and sitting at $0 reports
+    ``inactive``, and reports ``enforcing`` only once it has hit the threshold and
+    is already refusing traffic. This default used to be ``enforcing``, which
+    described a project that was out of money and made the stub agree with a
+    predicate that could never pass against the real provider.
     """
 
     def __init__(
         self,
         recorder: ProvisionerRecorder,
         *,
-        enforcement_status: str = "enforcing",
+        enforcement_status: str = "inactive",
         threshold_cents: int | None = 5000,
         spend_limit_absent: bool = False,
         mint_error: str | None = None,
@@ -119,6 +127,11 @@ class StubOpenAIProvisioner(OpenAIKeyProvisioner):
         self.recorder.calls.append(AdminCall(method, path, json_body))
 
         if path.endswith("/spend_limit"):
+            # **Read-only, matching the code under test.** The limit is set on the
+            # provider's console and Cinna has no way to write one, so this stub
+            # answers a GET and nothing else. A write arriving here is a genuine
+            # regression and falls through to the unhandled-path assertion at the
+            # bottom rather than being quietly served.
             if method == "GET":
                 if self.spend_limit_absent:
                     # What ``absent_on_404`` produces: no limit row at all.
@@ -129,11 +142,6 @@ class StubOpenAIProvisioner(OpenAIKeyProvisioner):
                     "interval": "month",
                     "enforcement": {"status": self.enforcement_status},
                 }
-            # Setting one makes it exist and be enforced, as the provider would.
-            self.spend_limit_absent = False
-            self.enforcement_status = "enforcing"
-            self.threshold_cents = (json_body or {}).get("threshold_amount")
-            return {"threshold_amount": self.threshold_cents}
 
         if path.endswith("/service_accounts") and method == "POST":
             if self.on_mint is not None:

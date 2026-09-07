@@ -3,8 +3,8 @@
 WHAT A MINTED KEY CARRIES
 -------------------------
 A minted key carries write access to the project's API resources. Its blast
-radius is bounded by the project's monthly spend limit, which Cinna verifies is
-enforcing before minting into a project, and by revocation.
+radius is bounded by the project's monthly spend limit, which Cinna reads back
+and requires before minting into a project, and by revocation.
 
 That is the whole of the claim, and it is deliberately not softened into
 something more comforting. The provider documents default service-account
@@ -17,8 +17,13 @@ recorded on every external ref regardless, so a later hardening pass changes two
 values rather than rewriting the record.
 
 The single enforcement lever is therefore the project spend limit. It is not
-defence in depth, and it is checked *before* a key exists rather than applied
-after one does.
+defence in depth, and it is checked *before* a key exists.
+
+**Cinna never sets that limit — it only reads it.** The administrator configures
+it on the provider's console, which is the only place it can be authoritative:
+the same organisation is reachable from the console and from any number of other
+tools, so a threshold stored on this side is a second copy that goes stale
+without anything noticing. There is no local value and no fallback.
 
 ONE PROJECT
 -----------
@@ -127,20 +132,15 @@ class OpenAIKeyProvisioner:
                     "label": "Project ID",
                     "required": True,
                     "help": (
-                        "The project minted keys are created in. Its monthly "
-                        "spend limit is verified before the first key is minted."
+                        "The project minted keys are created in. Set its monthly "
+                        "spend limit in the OpenAI console — Cinna reads that "
+                        "limit and will not mint into an uncapped project."
                     ),
                 },
                 {
                     "name": "organization_id",
                     "label": "Organization ID",
                     "required": False,
-                },
-                {
-                    "name": "spend_limit_cents",
-                    "label": "Monthly spend limit (cents)",
-                    "required": True,
-                    "type": "integer",
                 },
             ]
         }
@@ -186,39 +186,6 @@ class OpenAIKeyProvisioner:
             currency=payload.get("currency"),
             interval=payload.get("interval"),
         )
-
-    async def ensure_spend_limit(
-        self, secret: str, config: dict
-    ) -> SpendLimitStatus:
-        """Set the configured limit if the project is not already capped.
-
-        Called at **setup**, before any key exists. Never after a mint: capping
-        a project that already has live keys in it leaves a window in which an
-        uncapped key is in the world, and under one project that window need not
-        exist at all.
-        """
-        current = await self.verify_spend_limit(secret, config)
-        if current.is_capped:
-            return current
-        project_id = self._project_id(config)
-        threshold = (config or {}).get("spend_limit_cents")
-        if not threshold:
-            raise ProviderAdminError("no_spend_limit_configured")
-        await self._call(
-            "POST",
-            f"/projects/{project_id}/spend_limit",
-            secret=secret,
-            # Integer cents, and "month" is the only interval the provider
-            # supports. Enforcement is documented as not instantaneous: recorded
-            # spend can slightly exceed the cap, so nothing here promises a hard
-            # stop.
-            json_body={
-                "threshold_amount": int(threshold),
-                "currency": "USD",
-                "interval": "month",
-            },
-        )
-        return await self.verify_spend_limit(secret, config)
 
     async def mint(
         self, secret: str, *, label: str, scope: ProvisionScope

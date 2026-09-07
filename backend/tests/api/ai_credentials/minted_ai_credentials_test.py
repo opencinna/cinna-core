@@ -85,7 +85,7 @@ def _admin_credential(client: TestClient, headers: dict[str, str]) -> str:
             "name": f"Org {random_lower_string()[:8]}",
             "provider_type": "openai",
             "secret": "sk-admin-not-a-real-secret",
-            "config": {"project_id": "proj_test", "spend_limit_cents": 5000},
+            "config": {"project_id": "proj_test"},
         },
     )
     assert response.status_code == 200, response.text
@@ -408,15 +408,19 @@ def test_set_as_default_wires_the_minted_credential_when_it_arrives(
 # ── Every way the mint can go wrong ─────────────────────────────────────────
 
 
-def test_minting_into_a_project_whose_limit_is_not_enforced_is_refused(
+def test_minting_into_a_project_with_no_spend_limit_is_refused(
     client: TestClient, superuser_token_headers: dict[str, str], db: Session
 ) -> None:
-    """The case a naive implementation passes.
+    """No ``project.spend_limit`` object at all — the one genuinely uncapped case.
 
-    A real ``threshold_amount`` is present; enforcement is ``inactive``. Anything
-    reading the obvious field calls that capped. The mint must not happen, and the
-    refusal must come *before* a key exists — there is deliberately no
-    mint-then-cap path.
+    The refusal must come *before* a key exists: there is deliberately no
+    mint-then-cap path, because capping a project that already holds live keys
+    leaves a window in which an uncapped key is in the world.
+
+    Note what this is **not**: an ``inactive`` enforcement status is a healthy
+    capped project that has not yet hit its threshold, and minting into one is
+    correct. That distinction is the whole of
+    :attr:`SpendLimitStatus.is_capped`.
     """
     admin_credential_id = _admin_credential(client, superuser_token_headers)
     user = _new_user(client)
@@ -428,9 +432,10 @@ def test_minting_into_a_project_whose_limit_is_not_enforced_is_refused(
     )
     parent_id = parent["record"]["id"]
 
-    with stub_minting_providers(
-        enforcement_status="inactive", threshold_cents=5000
-    ) as (_probes, provisioning):
+    with stub_minting_providers(spend_limit_absent=True) as (
+        _probes,
+        provisioning,
+    ):
         converge_keys(db)
 
     provisioning.assert_minted(0)

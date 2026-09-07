@@ -134,11 +134,26 @@ class ProvisionScope:
 class SpendLimitStatus:
     """What a provider says about one project's spend cap.
 
-    ``is_capped`` is **the** predicate, defined here and nowhere else. A limit
-    that exists but is not being enforced is not a cap, and reading
-    ``threshold_amount`` alone — the obvious field — would call it one. Every
+    ``is_capped`` is **the** predicate, defined here and nowhere else. Every
     caller asks this object; none re-derives the rule from the fields, and the
     docs describe this implementation rather than restating the rule beside it.
+
+    **The cap is the limit's existence, not its ``enforcement.status``.** This
+    predicate used to read ``status == "enforcing"``, which inverted the gate:
+    the provider's own generated types document that object as *"Represents a
+    hard spend limit configured at the project level"* and its status as
+    *"Whether the hard spend limit is **currently** enforcing"* — a runtime
+    state, not a configuration. A correctly capped project sitting at $0 of $100
+    reports ``inactive``; it reports ``enforcing`` only once it has hit the
+    threshold and is already 429-ing with ``project_spend_limit_exceeded``. So
+    the old rule refused every healthy project and would have admitted only an
+    exhausted one, where a minted key is dead on arrival. It could never pass in
+    the state it was written to allow.
+
+    Monitoring without enforcement is not this object: that is a project *spend
+    alert*, a separate endpoint with a ``notification_channel``, which this code
+    never reads. If a ``project.spend_limit`` came back, a hard limit is
+    configured.
 
     ``threshold_cents`` is **integer cents**, matching the provider's own
     contract. The unit is in the name at every layer because an off-by-100 here
@@ -147,7 +162,9 @@ class SpendLimitStatus:
 
     #: ``enforcing`` | ``inactive`` | ``absent``. An explicit value in every
     #: case, including "the project has no limit at all" — never ``None``
-    #: standing in for a state.
+    #: standing in for a state. ``absent`` is ours, synthesized from the
+    #: provider's 404; the other two are the provider's own runtime states and
+    #: are equally capped.
     enforcement_status: str
     threshold_cents: int | None = None
     currency: str | None = None
@@ -155,7 +172,10 @@ class SpendLimitStatus:
 
     @property
     def is_capped(self) -> bool:
-        return self.enforcement_status == "enforcing"
+        # A threshold is still required alongside existence: a limit object with
+        # no amount caps nothing, and a zero would read as falsy here for the
+        # same reason it would be meaningless there.
+        return self.enforcement_status != "absent" and bool(self.threshold_cents)
 
 
 class ProviderAdminError(Exception):
@@ -195,10 +215,6 @@ class KeyProvisioner(Protocol):
     async def verify_admin_access(self, secret: str, config: dict) -> str: ...
 
     async def verify_spend_limit(
-        self, secret: str, config: dict
-    ) -> SpendLimitStatus: ...
-
-    async def ensure_spend_limit(
         self, secret: str, config: dict
     ) -> SpendLimitStatus: ...
 

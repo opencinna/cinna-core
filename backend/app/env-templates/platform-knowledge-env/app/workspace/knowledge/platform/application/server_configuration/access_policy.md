@@ -21,21 +21,21 @@ Give a superuser one place to decide **who may get an account on this instance a
 ### Closing the instance to self-registration
 
 1. Superuser opens **Admin → Server Configuration → Access** (`/admin/server-configuration#access`)
-2. In **Who can join**, changes **Registration** from "Anyone with an allowed email" to "Invite only". The change saves immediately
+2. On the **Registration** card, changes **Registration** from "Anyone with an allowed email" to "Invite only". The change saves immediately
 3. New visitors to `/signup` now see an explanatory panel instead of the form; `/login` no longer shows the "Sign up" link, and `/start` no longer offers **Create account** — all three read the same `password_signup_available`
 4. Existing users are unaffected — they keep signing in exactly as before
 
 ### Restricting registration to company domains
 
-1. In **Who can join**, the superuser types a comma-separated pattern list into **Allowed email addresses**, e.g. `*@acme.com, *@*.acme.com`
+1. On the **Registration** card, the superuser clicks the pencil beside **Allowed email addresses**, which opens a dialog, and types a comma-separated pattern list, e.g. `*@acme.com, *@*.acme.com`
 2. A live counter beside the label reads "2 patterns" (it reads "No restriction" while the box is empty)
-3. Unlike every other control on the card, the patterns box has an explicit **Save patterns** / **Cancel** pair — a partly-typed pattern must not be saved on every keystroke
+3. The dialog has an explicit **Save** / **Cancel** pair — a partly-typed pattern must not be saved on every keystroke
 4. If an entry cannot ever match a real address, the save is rejected and the offending entry is named inline under the box
 5. Once a pattern list exists, users can no longer edit their own email address in **Settings → My profile** (the address is the identity the policy is written against)
 
 ### Making the instance Google-only
 
-1. In **How they sign in**, the superuser turns **Password sign-in** off
+1. On the **Sign-in methods** card, the superuser turns **Password sign-in** off
 2. The server validates first: Google OAuth must be configured, and some administrator must be able to sign in through Google. Either check failing returns an error and nothing is applied
 3. A third check requires that some administrator actually **has a password** — a superuser provisioned only through Google has none, so the break-glass would open onto nothing. The remedy is one call away (set a password on an admin account), which is why it is a separate, separately-actionable error
 4. On success, `/login` renders the Google button as the only way in, with a small **"Sign in with password (administrators)"** disclosure that reveals the password form for the break-glass path
@@ -43,9 +43,9 @@ Give a superuser one place to decide **who may get an account on this instance a
 
 ### Choosing what new accounts become
 
-1. In **New users**, the superuser picks **Default role** — Agent User or Agent Developer — and, at the foot of the section, ticks which **Company AI credentials** each role's new accounts receive (a credentials × roles matrix; see [Admin-Provisioned AI Credentials](../ai_credentials/admin_ai_credential_provisioning.md#auto-provisioning-at-account-creation)). The matrix is a view over `ManagedAICredential.auto_provision_roles` — it stores nothing of its own, and one toggle is one `PATCH /admin/llm-providers/{id}`
+1. On the **New user defaults** card, the superuser picks **Default role** — Agent User or Agent Developer. On the **Company AI credentials** card beside it, the superuser toggles which roles' new accounts receive each company key (one row per credential with a **User · Dev · Admin** role toggle group, capped at 5 rows with a link to the full list on `/admin/ai-credentials`; see [Admin-Provisioned AI Credentials](../ai_credentials/admin_ai_credential_provisioning.md#auto-provisioning-at-account-creation)). The card is a view over `ManagedAICredential.auto_provision_roles` — it stores nothing of its own, and one toggle is one `PATCH /admin/llm-providers/{id}`
 2. Every subsequently created non-superuser account (password signup, Google first login, externally-arriving channel sender) picks up that role. Existing users are untouched
-3. **Offer Cinna Desktop in invitations** pre-ticks a checkbox in the invitation wizard. It is a presentation default only and has no security meaning
+3. **Offer Cinna Desktop in invitations**, also on the **New user defaults** card, pre-ticks a checkbox in the invitation wizard. It is a presentation default only and has no security meaning
 
 ### Migrating from the env settings
 
@@ -144,4 +144,4 @@ Admin → Server Configuration → Access
 
 ---
 
-*Last updated: 2026-09-06*
+*Last updated: 2026-09-07*

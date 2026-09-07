@@ -256,9 +256,10 @@ class ProviderAdminCredentialsService:
     ) -> ProviderAdminCredentialVerifyResult:
         """Check the secret and the project's spend cap, and record the outcome.
 
-        The cap is *read*, not applied: applying one is a setup action
-        (:meth:`apply_spend_limit`) and must be a decision an admin makes, not a
-        side effect of pressing Verify.
+        The cap is only ever *read*. Cinna has no way to set one and deliberately
+        keeps none of its own: the limit belongs to the provider's console, where
+        it is authoritative for every tool pointed at that organisation, and a
+        copy on this side would be a second number that goes stale unobserved.
         """
         record = self._get_or_404(session, credential_id)
         provisioner = self._provisioner(record)
@@ -291,24 +292,6 @@ class ProviderAdminCredentialsService:
             account_ref=account_ref,
             spend_limit_enforcing=True,
             spend_limit_cents=limit.threshold_cents,
-        )
-
-    async def apply_spend_limit(
-        self, session: Session, admin: User, credential_id: uuid.UUID
-    ) -> ProviderAdminCredentialVerifyResult:
-        """Set the configured spend limit on the project, at setup time."""
-        record = self._get_or_404(session, credential_id)
-        provisioner = self._provisioner(record)
-        secret = self.decrypt_secret(record)
-        try:
-            limit = await provisioner.ensure_spend_limit(secret, record.config)
-        except ProviderAdminError as exc:
-            return ProviderAdminCredentialVerifyResult(ok=False, error=exc.code)
-        return ProviderAdminCredentialVerifyResult(
-            ok=limit.is_capped,
-            spend_limit_enforcing=limit.is_capped,
-            spend_limit_cents=limit.threshold_cents,
-            error=None if limit.is_capped else "project_not_capped",
         )
 
     def _stamp_verification(

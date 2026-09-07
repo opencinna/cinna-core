@@ -74,8 +74,8 @@ def stub_minting_providers(
     HTTP replaced.
 
     ``provisioner_kwargs`` configure the stubbed provider's behaviour, never our
-    own logic: ``enforcement_status="inactive"`` makes the provider report a limit
-    it is not enforcing and lets the real refusal fire. ``on_mint=<callable>`` is
+    own logic: ``spend_limit_absent=True`` makes the provider report a project
+    with no hard limit and lets the real refusal fire. ``on_mint=<callable>`` is
     the one exception to "provider behaviour only", and it is a *timing* control
     rather than a behaviour one: it fires inside the create call, which is the
     only place a test can stand in the window where a key exists at the provider

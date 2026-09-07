@@ -67,13 +67,3 @@ Auto-generated from OpenAPI spec. Tag: `admin-provider-credentials`
 **Response:** `ProviderAdminCredentialVerifyResult`
 
 ---
-
-## POST `/api/v1/admin/provider-admin-credentials/{credential_id}/apply-spend-limit`
-**Apply Provider Spend Limit**
-
-**Path parameters:**
-- `credential_id`: uuid
-
-**Response:** `ProviderAdminCredentialVerifyResult`
-
----
