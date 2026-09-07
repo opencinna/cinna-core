@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Pencil, Plus, Trash2 } from "lucide-react"
+import { FolderKanban, Plus } from "lucide-react"
 import { useEffect, useState } from "react"
 import { type UserWorkspacePublic, UserWorkspacesService } from "@/client"
+import { PreviewList } from "@/components/Common/PreviewList"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,11 +31,18 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
-import { getWorkspaceIcon, WORKSPACE_ICONS } from "@/config/workspaceIcons"
+import { Switch } from "@/components/ui/switch"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { WORKSPACE_ICONS } from "@/config/workspaceIcons"
 import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
 import { cn } from "@/lib/utils"
+import { AllWorkspacesSheet } from "./AllWorkspacesSheet"
+import { WorkspaceRow } from "./WorkspaceRow"
 
 function IconSelector({
   value,
@@ -157,8 +165,15 @@ export function WorkspaceSettings() {
   const [editWorkspace, setEditWorkspace] =
     useState<UserWorkspacePublic | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [isSheetOpen, setIsSheetOpen] = useState(false)
 
-  const { data: workspacesData, isLoading } = useQuery({
+  const {
+    data: workspacesData,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ["userWorkspaces"],
     queryFn: () => UserWorkspacesService.readWorkspaces(),
   })
@@ -205,40 +220,51 @@ export function WorkspaceSettings() {
     onError: () => showErrorToast("Failed to delete workspace"),
   })
 
+  const workspaces = workspacesData?.data ?? []
+
   return (
     <>
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1.5">
-              <CardTitle>Workspaces</CardTitle>
-              <CardDescription>
-                Organize agents, credentials, and sessions into workspaces.
-              </CardDescription>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2 min-w-0">
+              <FolderKanban className="h-5 w-5 shrink-0" />
+              Workspaces
+            </CardTitle>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => setCreateOpen(true)}
+                disabled={!workspacesEnabled}
+              >
+                <Plus className="mr-1.5 h-4 w-4" />
+                New workspace
+              </Button>
+              {/* The card's master switch. A `Switch` is right here — it is a
+                  card-level auto-saving boolean with a label, not a row
+                  control — and it replaces a hand-rolled checkbox-and-div
+                  toggle that reimplemented the primitive (R11). */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center">
+                    <Switch
+                      checked={workspacesEnabled}
+                      onCheckedChange={setWorkspacesEnabled}
+                      aria-label="Scope this account by workspace"
+                    />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  {workspacesEnabled
+                    ? "Workspace filtering is on"
+                    : "Workspace filtering is off"}
+                </TooltipContent>
+              </Tooltip>
             </div>
-            <label className="flex cursor-pointer select-none items-center ml-4 mt-1">
-              <div className="relative">
-                <input
-                  type="checkbox"
-                  checked={workspacesEnabled}
-                  onChange={(e) => setWorkspacesEnabled(e.target.checked)}
-                  className="sr-only"
-                />
-                <div
-                  className={`block h-6 w-11 rounded-full transition-colors ${
-                    workspacesEnabled
-                      ? "bg-primary"
-                      : "bg-gray-300 dark:bg-gray-600"
-                  }`}
-                />
-                <div
-                  className={`dot absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-                    workspacesEnabled ? "translate-x-5" : ""
-                  }`}
-                />
-              </div>
-            </label>
           </div>
+          <CardDescription>
+            Organize agents, credentials, and sessions into workspaces.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {!workspacesEnabled && (
@@ -247,66 +273,39 @@ export function WorkspaceSettings() {
               sessions, tasks, and credentials by workspace.
             </p>
           )}
-          <Button
-            size="sm"
-            onClick={() => setCreateOpen(true)}
-            disabled={!workspacesEnabled}
-          >
-            <Plus className="h-4 w-4 mr-1.5" />
-            New Workspace
-          </Button>
 
-          {isLoading ? (
-            <div className="text-sm text-muted-foreground">
-              Loading workspaces...
-            </div>
-          ) : workspacesData && workspacesData.data.length > 0 ? (
-            <Table>
-              <TableBody>
-                {workspacesData.data.map((ws) => {
-                  const Icon = getWorkspaceIcon(ws.icon)
-                  return (
-                    <TableRow key={ws.id} className="h-9">
-                      <TableCell className="px-2 py-1">
-                        <Icon className="h-4 w-4 text-muted-foreground" />
-                      </TableCell>
-                      <TableCell className="px-2 py-1 font-medium text-sm">
-                        {ws.name}
-                      </TableCell>
-                      <TableCell className="px-2 py-1 text-right">
-                        <div className="flex gap-1 justify-end">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => setEditWorkspace(ws)}
-                            title="Edit"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => setDeleteId(ws.id)}
-                            title="Delete"
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          ) : (
-            <div className="text-sm text-muted-foreground">
-              No workspaces yet. All entities belong to the Default workspace.
-            </div>
-          )}
+          <PreviewList
+            items={workspaces}
+            getKey={(ws) => ws.id}
+            renderItem={(ws) => (
+              <WorkspaceRow
+                workspace={ws}
+                onEdit={() => setEditWorkspace(ws)}
+                onDelete={() => setDeleteId(ws.id)}
+              />
+            )}
+            isLoading={isLoading}
+            isError={isError}
+            error={error}
+            onRetry={() => refetch()}
+            errorFallback="Couldn't load your workspaces"
+            empty={
+              <p className="text-sm text-muted-foreground">
+                No workspaces yet — everything lives in the Default workspace.
+              </p>
+            }
+            onShowAll={() => setIsSheetOpen(true)}
+          />
         </CardContent>
       </Card>
+
+      <AllWorkspacesSheet
+        workspaces={workspaces}
+        open={isSheetOpen}
+        onOpenChange={setIsSheetOpen}
+        onEdit={(ws) => setEditWorkspace(ws)}
+        onDelete={(ws) => setDeleteId(ws.id)}
+      />
 
       {/* Create Workspace Dialog */}
       <WorkspaceFormDialog

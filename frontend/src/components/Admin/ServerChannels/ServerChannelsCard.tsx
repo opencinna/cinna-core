@@ -12,6 +12,9 @@ import {
 import { useState } from "react"
 
 import { type ServerChannelPublic, ServerChannelsService } from "@/client"
+import { ListRow, ListRowGroup, RowFlag } from "@/components/Common/ListRow"
+import { OnOffToggle } from "@/components/Common/OnOffToggle"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,14 +34,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
+import { Skeleton } from "@/components/ui/skeleton"
 import useCustomToast from "@/hooks/useCustomToast"
 import { getErrorMessage } from "@/utils"
 import { ChannelDebugDialog } from "./ChannelDebugDialog"
@@ -139,8 +139,8 @@ export function ServerChannelsCard() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <MessagesSquare className="h-4 w-4 text-blue-500" />
+            <CardTitle className="flex items-center gap-2 min-w-0">
+              <MessagesSquare className="h-5 w-5" />
               Channels
             </CardTitle>
             <Button onClick={openCreate} size="sm">
@@ -173,16 +173,17 @@ export function ServerChannelsCard() {
               </p>
             </div>
           ) : (
-            <div className="space-y-1.5">
+            <ListRowGroup>
               {channels.map((channel) => {
                 // `enabled` is optional in the generated type; derive once so
-                // the dot, the row styling and the switch cannot disagree.
+                // the dot, the row styling and the On/Off control cannot
+                // disagree.
                 const isEnabled = channel.enabled ?? true
                 const shape =
                   shapes[channel.channel_type] ?? DEFAULT_TRANSPORT_SHAPE
                 // Only meaningful for a transport that resolves an outside
                 // sender. On an `authenticated` one the whitelist is never
-                // consulted, so an empty one denies nobody — and the badge
+                // consulted, so an empty one denies nobody — and the flag
                 // would be a permanent false alarm right next to a Google Chat
                 // row where it means the channel really is closed.
                 const hasNoAllowedSenders =
@@ -190,175 +191,113 @@ export function ServerChannelsCard() {
                   parseWhitelist(channel.email_whitelist ?? "").isEmpty
                 // "No credential" means something different per transport —
                 // a service account key for Google Chat, an SMTP server for
-                // email — so the badge's explanation comes from the registry.
+                // email — so the flag's explanation comes from the registry.
                 // Absent ⇒ this transport has no outbound path at all, and a
-                // badge with nothing to say in its tooltip is worse than none.
+                // flag with nothing to say in its tooltip is worse than none.
                 const meta = getChannelTypeMeta(channel.channel_type)
                 const missingCredentialsHint =
                   meta.outboundTest?.missingCredentialsHint
+                // Scoped to this row: a pending toggle shouldn't freeze every
+                // other channel's control.
+                const isToggling =
+                  toggleMutation.isPending &&
+                  toggleMutation.variables?.id === channel.id
                 return (
-                  <div
+                  <ListRow
                     key={channel.id}
-                    className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
-                      isEnabled ? "" : "bg-muted opacity-60"
-                    }`}
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span
-                        className={`h-2 w-2 shrink-0 rounded-full ${
-                          isEnabled ? "bg-green-500" : "bg-muted-foreground"
-                        }`}
-                        aria-hidden
-                      />
-                      <span className="truncate text-sm font-medium">
-                        {channel.name}
-                      </span>
-                      <Badge variant="outline" className="shrink-0 text-xs">
+                    muted={!isEnabled}
+                    status={{
+                      tone: isEnabled ? "on" : "off",
+                      label: isEnabled ? "Enabled" : "Disabled",
+                    }}
+                    title={channel.name}
+                    // The transport is the row's one badge rather than a
+                    // metadata line: it is a short word, it is what an admin
+                    // scans this list by, and as a badge it costs no height —
+                    // every row here stays a single line.
+                    badges={
+                      <Badge variant="outline" className="h-5 shrink-0 text-xs">
                         {channel.channel_type}
                       </Badge>
-                      {/* An empty whitelist denies everyone. The channel looks
-                        healthy from here otherwise, so the fail-closed state
-                        has to be visible in the list, not only in the dialog. */}
-                      {hasNoAllowedSenders && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge
-                                variant="outline"
-                                className="shrink-0 gap-1 border-amber-500/50 text-xs text-amber-600 dark:text-amber-400"
-                              >
-                                <ShieldOff className="h-3 w-3" />
-                                No allowed senders
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent className="max-w-xs text-xs">
-                              {WHITELIST_EMPTY_WARNING}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
-                      {!channel.has_outbound_credentials &&
-                        missingCredentialsHint && (
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Badge
-                                  variant="outline"
-                                  className="shrink-0 gap-1 border-amber-500/50 text-xs text-amber-600 dark:text-amber-400"
-                                >
-                                  <KeyRound className="h-3 w-3" />
-                                  No credential
-                                </Badge>
-                              </TooltipTrigger>
-                              <TooltipContent className="max-w-xs text-xs">
-                                {missingCredentialsHint}
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
+                    }
+                    flags={
+                      <>
+                        {/* An empty whitelist denies everyone. The channel
+                            looks healthy from here otherwise, so the
+                            fail-closed state has to be visible in the list,
+                            not only in the dialog. */}
+                        {hasNoAllowedSenders && (
+                          <RowFlag
+                            icon={ShieldOff}
+                            tone="warning"
+                            label={WHITELIST_EMPTY_WARNING}
+                          />
                         )}
-                    </div>
-
-                    <div className="ml-2 flex shrink-0 items-center gap-1">
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span>
-                              <Switch
-                                checked={isEnabled}
-                                // Scoped to this row: a pending toggle shouldn't
-                                // freeze every other channel's switch.
-                                disabled={
-                                  toggleMutation.isPending &&
-                                  toggleMutation.variables?.id === channel.id
-                                }
-                                aria-label={
-                                  isEnabled
-                                    ? `Disable ${channel.name}`
-                                    : `Enable ${channel.name}`
-                                }
-                                onCheckedChange={(checked) =>
-                                  toggleMutation.mutate({
-                                    id: channel.id,
-                                    enabled: checked,
-                                  })
-                                }
-                              />
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {isEnabled ? "Disable" : "Enable"}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-
-                      <div className="mx-1 h-4 w-px bg-border" />
-
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => setSetupChannel(channel)}
-                            >
-                              <Settings2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Setup instructions</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => setDebugChannel(channel)}
-                              aria-label="Debug channel"
-                            >
-                              <Bug className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            Debug — live inbound / outbound traffic
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => openEdit(channel)}
-                        aria-label="Edit channel"
+                        {!channel.has_outbound_credentials &&
+                          missingCredentialsHint && (
+                            <RowFlag
+                              icon={KeyRound}
+                              tone="warning"
+                              label={missingCredentialsHint}
+                            />
+                          )}
+                      </>
+                    }
+                  >
+                    {/* Being on or off is what an admin comes to this list to
+                        change, so it is the row's one inline control — the
+                        same Power glyph the `⋯` menus use elsewhere. */}
+                    <OnOffToggle
+                      checked={isEnabled}
+                      disabled={isToggling}
+                      label={channel.name}
+                      onChange={(enabled) =>
+                        toggleMutation.mutate({ id: channel.id, enabled })
+                      }
+                    />
+                    <RowActionsMenu label={`the channel ${channel.name}`}>
+                      <DropdownMenuItem
+                        onSelect={() => setSetupChannel(channel)}
                       >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
+                        <Settings2 />
+                        Setup instructions
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => setDebugChannel(channel)}
+                      >
+                        <Bug />
+                        Debug traffic
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => openEdit(channel)}>
+                        <Pencil />
+                        Edit channel
+                      </DropdownMenuItem>
                       {/* A singleton channel has no delete: the backend
                           refuses it, because the row would be re-materialized
                           with default settings on the next read — turning
                           "delete" into a silent reset of a kill switch the
-                          admin may have deliberately thrown. The switch to its
-                          left is the operation they want. */}
+                          admin may have deliberately thrown. The On/Off
+                          control is the operation they want. */}
                       {!shape.isSingleton && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-destructive hover:text-destructive"
-                          onClick={() => setDeleting(channel)}
-                          aria-label="Delete channel"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onSelect={(e) => {
+                              e.preventDefault()
+                              setDeleting(channel)
+                            }}
+                          >
+                            <Trash2 />
+                            Delete channel
+                          </DropdownMenuItem>
+                        </>
                       )}
-                    </div>
-                  </div>
+                    </RowActionsMenu>
+                  </ListRow>
                 )
               })}
-            </div>
+            </ListRowGroup>
           )}
         </CardContent>
       </Card>

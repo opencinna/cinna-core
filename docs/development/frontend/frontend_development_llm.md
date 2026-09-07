@@ -92,31 +92,60 @@ rejected deploy key logged the user out mid-connect.
 
 ## Compact List Row Pattern
 
-The house pattern for a list of entities inside a Card or on a manage-list route. **Composition rules** (how many rows, which actions are visible, when to use a dialog vs a route) are defined in [ui_ux_guidelines.md](ui_ux_guidelines.md) — §2 "Row actions", "List inside a card", "Inline forms", and pattern P3. This section only records the wiring skeleton.
+The house pattern for a list of entities inside a Card or on a manage-list route. **Composition rules** (how many rows, which actions are visible, when to use a dialog vs a route) are defined in [ui_ux_guidelines.md](ui_ux_guidelines.md) — §2 "Row anatomy", "Row state", "Row flags", "Row height", "Row actions", "Toggles on rows", "List inside a card", "Inline forms", and pattern P3. This section only records the wiring skeleton.
 
 ### Structure
 
 **Container**: Card (in a tab grid) or a manage-list route (`DataTable`)
-- `CardHeader` with title, one-line description, and the primary "Add …" `Button size="sm"` (`Plus` icon)
-- Up to **5** rows in `CardContent` (`space-y-1.5`); more → "Show all (N)" link to a route or full-height `Sheet` (guideline P5)
+- `CardHeader` with an icon + noun title, a one-line description, and the primary "Add …" `Button size="sm"` (`Plus` icon) on the title row
+- Up to **5** rows in `CardContent`, wrapped in `ListRowGroup` (or rendered through `Common/PreviewList.tsx`, which supplies the group and the four states); more → "Show all (N)" link to a route or full-height `Sheet` (guideline P5)
 - Empty state: one sentence + the Add button
 - Edit / create `Dialog` rendered once at the bottom, controlled by `editingItem` state
 
 ### Row layout
 
-`flex items-center justify-between px-3 py-2 border rounded-lg` (add `group` when actions are hover-revealed)
+Use `Common/ListRow.tsx`. **Do not hand-roll a row `div`** — the border, the ordering and the state rendering are the pattern, not the caller's choice.
 
-**Left** (`min-w-0 flex-1`):
-- Primary text `font-medium text-sm truncate`
-- ≤ 2 `Badge`s for **passive** state (Enabled, Default, Managed, type, expiry)
-- One metadata line `text-xs text-muted-foreground`
+```tsx
+import { ListRow, ListRowGroup, RowFlag, RowInfo } from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
+import { OnOffToggle } from "@/components/Common/OnOffToggle"
 
-**Right** (`flex items-center gap-0.5 shrink-0`):
-- At most **one** primary action as a ghost icon button (`variant="ghost" size="icon" className="h-7 w-7"`, icon `h-3.5 w-3.5`) wrapped in `Tooltip` — the thing the user comes to the row for (Run, Open, Copy)
-- A `DropdownMenu` triggered by `EllipsisVertical` (`Button variant="ghost" size="icon"`) holding everything else: Edit, Set default, Enable/Disable, then `DropdownMenuSeparator`, then Delete (`text-destructive`)
-- Delete confirms with `AlertDialog` (never `window.confirm`)
+<ListRowGroup>
+  {items.map((item) => (
+    <ListRow
+      key={item.id}
+      muted={!item.enabled}                                  // dims an inactive row
+      status={{ tone: item.enabled ? "on" : "off", label: "Enabled" }}
+      icon={/* optional h-6 w-6 identity tile */}
+      title={item.name}
+      badges={/* ≤ 1 Badge, only for a short word people scan by */}
+      meta="every day · next 09:00"                          // omit → the row is one line high
+      flags={
+        <>
+          <RowFlag icon={Terminal} label="Script trigger" tone="neutral" />
+          <RowInfo facts={["Created 3 Mar", "Never used"]} />
+        </>
+      }
+    >
+      <OnOffToggle checked={item.enabled} onChange={…} label={item.name} />
+      <RowActionsMenu label={`the schedule ${item.name}`} disabled={isPending}>
+        <DropdownMenuItem …>…</DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" …>…</DropdownMenuItem>
+      </RowActionsMenu>
+    </ListRow>
+  ))}
+</ListRowGroup>
+```
 
-Inactive rows: `opacity-60` + an "Off" badge. Hover-reveal variant for dense or view-only lists: right cluster gets `opacity-0 group-hover:opacity-100 focus-within:opacity-100`.
+Rendering order is fixed by the component: **dot → tile → title/meta → flags → children**. `children` is the action cluster: at most one ghost icon button (`h-7 w-7`, icon `h-3.5 w-3.5`, in a `Tooltip`), the `OnOffToggle` when toggling is the row's purpose, then the `⋯` menu.
+
+Hover-reveal variant (dense lists, a lone destructive control): put `opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity` on that control — `ListRow` always carries `group`.
+
+**Pending is per row**, not per list: `disabled={mutation.isPending && mutation.variables?.id === item.id}`. A shared `useMutation` observer describes only its latest call, so `isPending` alone freezes every row.
+
+**Confirms belong to the row.** A `DropdownMenuItem` unmounts on select, so an `AlertDialog` whose trigger is nested in one loses its pending state. Either the row component owns its own confirm (`ScheduleRow`, `HandoverRow`, `BundleRevisionRow`), or the menu item sets a list-level `deleteTarget` that one confirm reads (`ServerChannelsCard`, `GuestShareCard`).
 
 ### Actions
 
@@ -125,8 +154,9 @@ Inactive rows: `opacity-60` + an "Off" badge. Hover-reveal variant for dense or 
 | Create | "Add …" `Button size="sm"` in the header | Opens the create Dialog (type picker first when the form depends on a type — guideline P4/P6) |
 | Open / Run / Copy | The single inline ghost icon button | Direct action; Copy toggles `Copy`/`Check` with `setCopiedId` + `setTimeout` reset |
 | Edit | Menu item | Opens the edit Dialog populated from the row |
-| Enable / Disable, Set default | Menu item | Direct mutation, toast on result, no confirmation |
-| Delete | Last menu item, `text-destructive` | `AlertDialog` naming the entity, then mutation |
+| Enable / Disable | Menu item — or an inline `OnOffToggle` when toggling is what the list is *for* | Direct mutation, toast on result, no confirmation. Never a `Switch` on a row |
+| Set default | Menu item | Direct mutation, toast on result, no confirmation |
+| Delete | Last menu item, `variant="destructive"` | `AlertDialog` naming the entity, then mutation. Kept open while the request is in flight so the pending state has somewhere to live |
 
 ### Edit Dialog
 

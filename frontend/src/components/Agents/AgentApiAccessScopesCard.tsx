@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Pencil, ShieldCheck, Trash2, UserPlus } from "lucide-react"
+import { KeyRound, Pencil, ShieldCheck, Trash2, UserPlus } from "lucide-react"
 import { useMemo, useState } from "react"
 import type { AgentApiAccessGrantPublic } from "@/client"
 import { AgentApiService, AgentsService } from "@/client"
@@ -7,11 +7,12 @@ import {
   AgentApiScopeEditor,
   type ScopeCatalogEntry,
 } from "@/components/Common/AgentApiScopeEditor"
+import { ListRow, ListRowGroup, RowFlag } from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -21,6 +22,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -111,7 +116,8 @@ export function AgentApiAccessScopesCard({
       invalidateGrants()
       closeDialog()
     },
-    onError: (e: any) => showErrorToast(e?.message || "Failed to update scopes"),
+    onError: (e: any) =>
+      showErrorToast(e?.message || "Failed to update scopes"),
   })
 
   const deleteGrantMutation = useMutation({
@@ -124,10 +130,7 @@ export function AgentApiAccessScopesCard({
     onError: (e: any) => showErrorToast(e?.message || "Failed to remove user"),
   })
 
-  const grantedUserIds = useMemo(
-    () => grants.map((g) => g.user_id),
-    [grants],
-  )
+  const grantedUserIds = useMemo(() => grants.map((g) => g.user_id), [grants])
 
   const openAddDialog = () => {
     setEditingGrant(null)
@@ -160,15 +163,15 @@ export function AgentApiAccessScopesCard({
         <p className="text-xs text-muted-foreground">
           {checked ? (
             <>
-              Assign scopes to platform users. The platform resolves them live on
-              every call (effective on the next call) and your API reads them via{" "}
-              <code className="text-[11px]">caller.scopes</code>.
+              Assign scopes to platform users. The platform resolves them live
+              on every call (effective on the next call) and your API reads them
+              via <code className="text-[11px]">caller.scopes</code>.
             </>
           ) : (
             <>
-              Identify calling users and grant each one capability scopes your API
-              enforces in code. Off by default — callers are still identified, but
-              carry no scopes.
+              Identify calling users and grant each one capability scopes your
+              API enforces in code. Off by default — callers are still
+              identified, but carry no scopes.
             </>
           )}
         </p>
@@ -197,7 +200,7 @@ export function AgentApiAccessScopesCard({
           No users have been granted access yet. Add one to assign scopes.
         </p>
       ) : (
-        <div className="space-y-2">
+        <ListRowGroup>
           {grants.map((grant) => (
             <GrantRow
               key={grant.id}
@@ -207,7 +210,7 @@ export function AgentApiAccessScopesCard({
               onRemove={() => deleteGrantMutation.mutate(grant.id)}
             />
           ))}
-        </div>
+        </ListRowGroup>
       )}
 
       <Button
@@ -226,7 +229,9 @@ export function AgentApiAccessScopesCard({
         editingGrant={editingGrant}
         catalogScopes={catalogScopes}
         excludedUserIds={grantedUserIds}
-        isSaving={createGrantMutation.isPending || updateScopesMutation.isPending}
+        isSaving={
+          createGrantMutation.isPending || updateScopesMutation.isPending
+        }
         onSave={handleSave}
       />
     </div>
@@ -243,55 +248,48 @@ interface GrantRowProps {
 /** One granted user: name, read-only scope chips, edit + remove actions. */
 function GrantRow({ grant, disabled, onEdit, onRemove }: GrantRowProps) {
   const scopes = grant.scopes ?? []
+  const label = grant.user?.full_name || grant.user?.email || grant.user_id
+
   return (
-    <div className="rounded-md border px-3 py-2 flex items-start justify-between gap-2">
-      <div className="space-y-1.5 min-w-0">
-        <div className="min-w-0">
-          <span className="text-xs font-medium block truncate">
-            {grant.user?.full_name || grant.user?.email || grant.user_id}
-          </span>
-          {grant.user?.full_name && grant.user?.email && (
-            <span className="text-[11px] text-muted-foreground block truncate">
-              {grant.user.email}
-            </span>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {scopes.length === 0 ? (
-            <span className="text-xs text-muted-foreground italic">
-              No scopes — identified but no capabilities granted.
-            </span>
-          ) : (
-            scopes.map((scope) => (
-              <Badge key={scope} variant="secondary" className="text-xs">
-                {scope}
-              </Badge>
-            ))
-          )}
-        </div>
-      </div>
-      <div className="flex items-center gap-1 shrink-0">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={onEdit}
-          aria-label="Edit scopes"
+    <ListRow
+      title={label}
+      // The scope chips wrapped to as many lines as the person had scopes,
+      // which set the height of the whole list off its widest row. The count
+      // reads at a glance and the names are one hover — or one Edit — away.
+      meta={
+        <>
+          {grant.user?.full_name && grant.user?.email
+            ? `${grant.user.email} · `
+            : ""}
+          {scopes.length === 0
+            ? "No scopes — identified, but nothing granted"
+            : `${scopes.length} scope${scopes.length === 1 ? "" : "s"}`}
+        </>
+      }
+      flags={
+        scopes.length > 0 ? (
+          <RowFlag icon={KeyRound} label={scopes.join(", ")} />
+        ) : undefined
+      }
+    >
+      <RowActionsMenu label={`${label}'s access`} disabled={disabled}>
+        <DropdownMenuItem onSelect={onEdit}>
+          <Pencil />
+          Edit scopes
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
+          onSelect={(e) => {
+            e.preventDefault()
+            onRemove()
+          }}
         >
-          <Pencil className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-muted-foreground hover:text-destructive"
-          onClick={onRemove}
-          disabled={disabled}
-          aria-label="Remove user"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-    </div>
+          <Trash2 />
+          Remove access
+        </DropdownMenuItem>
+      </RowActionsMenu>
+    </ListRow>
   )
 }
 

@@ -1,4 +1,4 @@
-import { Check, Monitor, Moon, Sun } from "lucide-react"
+import { Check, Monitor, Moon, Palette, Sun } from "lucide-react"
 
 import { type Theme, useTheme } from "@/components/theme-provider"
 import { Badge } from "@/components/ui/badge"
@@ -61,7 +61,10 @@ export function ThemeAndColors() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Theme and Colors</CardTitle>
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <Palette className="h-5 w-5 shrink-0" />
+          Theme and Colors
+        </CardTitle>
         <CardDescription>
           Choose the color mode and the visual theme of the interface. Saved on
           this device.

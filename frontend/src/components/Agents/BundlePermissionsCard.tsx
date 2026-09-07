@@ -13,6 +13,8 @@ import {
   type FixedUserContext,
 } from "@/components/Agents/BundlePermissionsAddUserModal"
 import { AgentBadge } from "@/components/Common/AgentBadge"
+import { ListRow, ListRowGroup } from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +25,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -32,7 +33,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
+import { cn } from "@/lib/utils"
 
 interface BundlePermissionsCardProps {
   agent: AgentPublic
@@ -92,7 +103,8 @@ export function BundlePermissionsCard({
   )
 
   const excludeUserIds = useMemo(() => users.map((u) => u.user_id), [users])
-  const canAddAnything = bundleAccessApplicable || manageableProducers.length > 0
+  const canAddAnything =
+    bundleAccessApplicable || manageableProducers.length > 0
 
   /**
    * Cascading, multi-domain removal of a user's entire access record: the
@@ -178,7 +190,10 @@ export function BundlePermissionsCard({
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Permissions management</CardTitle>
+          <CardTitle className="flex items-center gap-2 min-w-0">
+            <ShieldCheck className="h-5 w-5" />
+            Permissions management
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">Loading…</p>
@@ -200,8 +215,8 @@ export function BundlePermissionsCard({
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1.5 min-w-0">
-            <CardTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="flex items-center gap-2 min-w-0">
+              <ShieldCheck className="h-5 w-5" />
               Permissions management
             </CardTitle>
             <CardDescription>
@@ -249,56 +264,50 @@ export function BundlePermissionsCard({
               : "No users yet. Add a user to assign their producer scopes."}
           </p>
         ) : (
-          <div className="space-y-1.5">
+          <ListRowGroup>
             {users.map((user) => (
-              <div
+              <ListRow
                 key={user.user_id}
-                className="flex items-center justify-between gap-3 px-3 py-2 border rounded-lg"
+                title={user.full_name || user.email || user.user_id}
+                // Membership in this list *is* bundle access, so the row has
+                // no on/off state and therefore no leading dot: a dot that is
+                // green on every row of every list is decoration.
+                meta={user.full_name && user.email ? user.email : undefined}
+                // The scope clusters are this row's passive read: what the
+                // person may do on each connected producer. They are also the
+                // shortcut into the editor, which is why they sit left of the
+                // menu rather than in it.
+                flags={manageableProducers.map((producer) => (
+                  <ProducerScopeInline
+                    key={producer.producer_agent_id}
+                    producer={producer}
+                    user={user}
+                    onEdit={() => openEditForUser(user)}
+                  />
+                ))}
               >
-                {/* Left — user identity. */}
-                <div className="min-w-0">
-                  <span className="text-sm font-medium block truncate">
-                    {user.full_name || user.email || user.user_id}
-                  </span>
-                  {user.full_name && user.email && (
-                    <span className="text-[11px] text-muted-foreground block truncate">
-                      {user.email}
-                    </span>
-                  )}
-                </div>
-
-                {/* Right — per-manageable-producer scope clusters + remove. */}
-                <div className="flex items-center gap-2 shrink-0">
-                  {manageableProducers.map((producer) => (
-                    <ProducerScopeInline
-                      key={producer.producer_agent_id}
-                      producer={producer}
-                      user={user}
-                      onEdit={() => openEditForUser(user)}
-                    />
-                  ))}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => openEditForUser(user)}
-                    aria-label="Edit user permissions"
+                <RowActionsMenu
+                  label={`${user.full_name || user.email || "this user"}'s permissions`}
+                >
+                  <DropdownMenuItem onSelect={() => openEditForUser(user)}>
+                    <Pencil />
+                    Edit permissions
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={(e) => {
+                      e.preventDefault()
+                      setRemoveTarget(user)
+                    }}
                   >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-destructive hover:text-destructive"
-                    onClick={() => setRemoveTarget(user)}
-                    aria-label="Remove user access"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
+                    <Trash2 />
+                    Remove access
+                  </DropdownMenuItem>
+                </RowActionsMenu>
+              </ListRow>
             ))}
-          </div>
+          </ListRowGroup>
         )}
       </CardContent>
 
@@ -338,10 +347,7 @@ export function BundlePermissionsCard({
           <AlertDialogHeader>
             <AlertDialogTitle>
               Remove{" "}
-              {removeTarget?.full_name ||
-                removeTarget?.email ||
-                "this user"}
-              ?
+              {removeTarget?.full_name || removeTarget?.email || "this user"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This removes their entire access record for this bundle — the
@@ -390,38 +396,58 @@ function ProducerScopeInline({
   const grant = producer.grants?.find((g) => g.user_id === user.user_id)
   const scopes = grant?.scopes ?? []
 
+  // The count, not the list: a row carrying three producers' worth of scope
+  // chips wraps to three lines and sets the height of the whole list. The
+  // names live in the tooltip and the editor.
+  const summary = !grant
+    ? "assign"
+    : scopes.length === 0
+      ? "none"
+      : `${scopes.length}`
+
   return (
-    <button
-      type="button"
-      onClick={onEdit}
-      className="flex items-center gap-1.5 rounded-md border px-2 py-1 text-left transition-colors hover:bg-accent max-w-[280px]"
-      title={`Edit ${producer.producer_agent_name || "producer"} scopes`}
-    >
-      <AgentBadge
-        agent={{
-          id: producer.producer_agent_id,
-          name: producer.producer_agent_name || "Producer",
-          ui_color_preset: producer.producer_ui_color_preset,
-        }}
-        linkTo="none"
-      />
-      {!grant ? (
-        <span className="text-[11px] text-muted-foreground">
-          + assign scopes
-        </span>
-      ) : scopes.length === 0 ? (
-        <span className="text-[11px] text-muted-foreground italic">
-          no scopes
-        </span>
-      ) : (
-        <span className="flex flex-wrap gap-1">
-          {scopes.map((scope) => (
-            <Badge key={scope} variant="secondary" className="text-[10px]">
-              {scope}
-            </Badge>
-          ))}
-        </span>
-      )}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onEdit}
+          className="flex h-7 min-w-0 max-w-[160px] items-center gap-1.5 overflow-hidden rounded-md border px-1.5 text-left whitespace-nowrap transition-colors hover:bg-accent"
+        >
+          <AgentBadge
+            agent={{
+              id: producer.producer_agent_id,
+              name: producer.producer_agent_name || "Producer",
+              ui_color_preset: producer.producer_ui_color_preset,
+            }}
+            linkTo="none"
+            // The chip is width-capped, so the producer's name truncates
+            // rather than wrapping the whole cluster to a second line.
+            className="min-w-0 max-w-[110px] [&>svg]:shrink-0"
+          />
+          <span
+            className={cn(
+              "shrink-0 text-[11px]",
+              grant && scopes.length > 0
+                ? "font-medium"
+                : "text-muted-foreground",
+            )}
+          >
+            {summary}
+          </span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs">
+        <p className="font-medium">
+          {producer.producer_agent_name || "Producer"}
+        </p>
+        <p>
+          {!grant
+            ? "No scopes assigned yet — click to assign."
+            : scopes.length === 0
+              ? "Granted access, but no scopes. Click to edit."
+              : scopes.join(", ")}
+        </p>
+      </TooltipContent>
+    </Tooltip>
   )
 }

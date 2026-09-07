@@ -5,6 +5,9 @@ import { useState } from "react"
 
 import type { AgentApiKeyPublic } from "@/client"
 import { AgentApiService, AgentsService } from "@/client"
+import { ListRow, ListRowGroup, RowFlag } from "@/components/Common/ListRow"
+import { AgentApiKeyDialog } from "@/components/Credentials/AgentApiKeyDialog"
+import { AGENT_API_KEY_LABEL_PLURAL } from "@/components/Credentials/agentApiKeyCopy"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,12 +22,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { AgentApiKeyDialog } from "@/components/Credentials/AgentApiKeyDialog"
-import { AGENT_API_KEY_LABEL_PLURAL } from "@/components/Credentials/agentApiKeyCopy"
-import {
-  agentApiKeysQueryKey,
-  useAgentApiKeys,
-} from "@/hooks/useAgentApiKeys"
+import { agentApiKeysQueryKey, useAgentApiKeys } from "@/hooks/useAgentApiKeys"
 import useCustomToast from "@/hooks/useCustomToast"
 
 interface AgentApiExternalKeysCardProps {
@@ -147,7 +145,7 @@ export function AgentApiExternalKeysCard({
           No keys issued yet. Issue one and hand the value to its holder.
         </p>
       ) : (
-        <div className="space-y-2">
+        <ListRowGroup>
           {keys.map((key) => (
             <ExternalKeyRow
               key={key.id}
@@ -157,7 +155,7 @@ export function AgentApiExternalKeysCard({
               onRevoke={() => revokeMutation.mutate(key.id)}
             />
           ))}
-        </div>
+        </ListRowGroup>
       )}
 
       {externalAccessEnabled && (
@@ -207,57 +205,54 @@ function ExternalKeyRow({
   const expired =
     !!apiKey.expires_at && new Date(apiKey.expires_at).getTime() <= Date.now()
 
-  return (
-    <div className="rounded-md border px-3 py-2 flex items-start justify-between gap-2">
-      <div className="space-y-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap min-w-0">
-          <span className="text-xs font-medium truncate">{subjectLabel}</span>
-          <code className="text-[11px] text-muted-foreground">
-            {apiKey.token_prefix}…
-          </code>
-          {apiKey.read_only && (
-            <Badge variant="outline" className="gap-1 text-xs">
-              <Lock className="h-3 w-3" />
-              read-only
-            </Badge>
-          )}
-          {expired ? (
-            <Badge variant="outline" className="text-xs text-destructive">
-              Expired
-            </Badge>
-          ) : (
-            !apiKey.is_usable &&
-            !blocked && (
-              <Badge variant="outline" className="text-xs text-destructive">
-                Inactive
-              </Badge>
-            )
-          )}
-        </div>
-        <div className="text-[11px] text-muted-foreground space-x-2">
-          {apiKey.label && <span className="truncate">{apiKey.label}</span>}
-          <span>
-            {apiKey.last_used_at
-              ? `Last used ${formatDistanceToNow(new Date(apiKey.last_used_at), { addSuffix: true })}`
-              : "Never used"}
-          </span>
-          <span>
-            {apiKey.expires_at
-              ? `${expired ? "Expired" : "Expires"} ${formatDistanceToNow(new Date(apiKey.expires_at), { addSuffix: true })}`
-              : "No expiry"}
-          </span>
-        </div>
-      </div>
+  const usable = !expired && apiKey.is_usable && !blocked
 
+  return (
+    <ListRow
+      muted={!usable}
+      status={{
+        tone: usable ? "on" : expired ? "warning" : "off",
+        label: expired
+          ? "Expired"
+          : `${usable ? "Active" : "Inactive"} — ${
+              apiKey.expires_at
+                ? `expires ${formatDistanceToNow(new Date(apiKey.expires_at), { addSuffix: true })}`
+                : "no expiry"
+            }`,
+      }}
+      title={subjectLabel}
+      // Three facts on one line rather than three stacked `<span>`s: the label
+      // is the only one that identifies the key, so it leads.
+      // The title is the *person*, so the prefix is the only thing telling two
+      // of their keys apart — it stays. Expiry moved to the dot's tooltip.
+      meta={[
+        apiKey.label,
+        `${apiKey.token_prefix}…`,
+        apiKey.last_used_at
+          ? `used ${formatDistanceToNow(new Date(apiKey.last_used_at), { addSuffix: true })}`
+          : "never used",
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      flags={
+        apiKey.read_only ? (
+          <RowFlag
+            icon={Lock}
+            label="Read-only — this key cannot change anything"
+          />
+        ) : undefined
+      }
+    >
+      {/* One action, and it is destructive, so it is hover-revealed rather
+          than sitting in a `⋯` menu of one item (§2 Row actions). */}
       <AlertDialog>
         <AlertDialogTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+            className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
             disabled={disabled}
-            aria-label="Revoke key"
-            title="Revoke this key"
+            aria-label={`Revoke the key issued to ${subjectLabel}`}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -268,8 +263,9 @@ function ExternalKeyRow({
             <AlertDialogDescription>
               Anything using <code>{apiKey.token_prefix}…</code> loses access
               immediately, and the key's credential is deleted. {subjectLabel}'s
-              scopes on this agent are left untouched — they still apply to their
-              own agents and any other key issued to them. This cannot be undone.
+              scopes on this agent are left untouched — they still apply to
+              their own agents and any other key issued to them. This cannot be
+              undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -283,6 +279,6 @@ function ExternalKeyRow({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </ListRow>
   )
 }

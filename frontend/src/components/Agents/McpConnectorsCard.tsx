@@ -1,47 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import {
-  Copy,
-  Check,
-  Plus,
-  Trash2,
-  Unplug,
-  Pencil,
-  Users,
-  MessageCircle,
-  Wrench,
-  Bot,
-} from "lucide-react"
+import { Bot, Check, Copy, Plus, Unplug, Users } from "lucide-react"
 import { useState } from "react"
-
-import useRole from "@/hooks/useRole"
-import useCustomToast from "@/hooks/useCustomToast"
+import { McpConnectorRow } from "@/components/Agents/McpConnectorRow"
+import { ListRowGroup } from "@/components/Common/ListRow"
 import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
-import { McpDirectTokensManager } from "./McpDirectTokensManager"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
-import { Switch } from "@/components/ui/switch"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -51,8 +16,26 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -60,12 +43,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { Separator } from "@/components/ui/separator"
+import { Switch } from "@/components/ui/switch"
+import useCustomToast from "@/hooks/useCustomToast"
+import useRole from "@/hooks/useRole"
+import { McpDirectTokensManager } from "./McpDirectTokensManager"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -117,7 +99,10 @@ interface McpConnectorsCardProps {
 // McpConnectorsCard
 // ---------------------------------------------------------------------------
 
-export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps) {
+export function McpConnectorsCard({
+  agentId,
+  agentName,
+}: McpConnectorsCardProps) {
   // RD-7: creating an agent-to-agent connector exposes an agent over MCP, so it
   // requires agent-developer. Consuming a connection is use-only (agent-user).
   const { isDeveloper } = useRole()
@@ -130,9 +115,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   // Direct connector form
   const [name, setName] = useState("")
   const [mode, setMode] = useState("conversation")
-  const [allowedUsers, setAllowedUsers] = useState<UserAllowlistSelectedItem[]>([])
+  const [allowedUsers, setAllowedUsers] = useState<UserAllowlistSelectedItem[]>(
+    [],
+  )
   const [allowTokenAccess, setAllowTokenAccess] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<McpConnector | null>(null)
 
   // Agent-to-agent connector form (exposes this agent over MCP for other agents)
   const [a2aName, setA2aName] = useState("")
@@ -143,10 +131,14 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
 
   // Edit connector state
   const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [editingConnector, setEditingConnector] = useState<McpConnector | null>(null)
+  const [editingConnector, setEditingConnector] = useState<McpConnector | null>(
+    null,
+  )
   const [editName, setEditName] = useState("")
   const [editMode, setEditMode] = useState("conversation")
-  const [editAllowedUsers, setEditAllowedUsers] = useState<UserAllowlistSelectedItem[]>([])
+  const [editAllowedUsers, setEditAllowedUsers] = useState<
+    UserAllowlistSelectedItem[]
+  >([])
   const [editAllowTokenAccess, setEditAllowTokenAccess] = useState(false)
 
   const queryClient = useQueryClient()
@@ -161,9 +153,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
   }>({
     queryKey: ["mcp-connectors", agentId],
     queryFn: async () => {
-      const res = await fetch(`${API_BASE}/api/v1/agents/${agentId}/mcp-connectors`, {
-        headers: getAuthHeaders(),
-      })
+      const res = await fetch(
+        `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors`,
+        {
+          headers: getAuthHeaders(),
+        },
+      )
       if (!res.ok) throw new Error("Failed to load connectors")
       return res.json()
     },
@@ -189,14 +184,19 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
       allow_token_access: boolean
       is_agent_to_agent?: boolean
     }) => {
-      const res = await fetch(`${API_BASE}/api/v1/agents/${agentId}/mcp-connectors`, {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: JSON.stringify(body),
-      })
+      const res = await fetch(
+        `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors`,
+        {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify(body),
+        },
+      )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to create connector")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to create connector",
+        )
       }
       return res.json()
     },
@@ -212,37 +212,49 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
     mutationFn: async (connectorId: string) => {
       const res = await fetch(
         `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors/${connectorId}`,
-        { method: "DELETE", headers: getAuthHeaders() }
+        { method: "DELETE", headers: getAuthHeaders() },
       )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to delete connector")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to delete connector",
+        )
       }
     },
     onSuccess: () => {
       showSuccessToast("Connector deleted")
+      setDeleteTarget(null)
       queryClient.invalidateQueries({ queryKey: ["mcp-connectors", agentId] })
     },
     onError: (error: Error) => showErrorToast(error.message),
   })
 
   const toggleConnectorMutation = useMutation({
-    mutationFn: async ({ connectorId, isActive }: { connectorId: string; isActive: boolean }) => {
+    mutationFn: async ({
+      connectorId,
+      isActive,
+    }: {
+      connectorId: string
+      isActive: boolean
+    }) => {
       const res = await fetch(
         `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors/${connectorId}`,
         {
           method: "PUT",
           headers: getAuthHeaders(),
           body: JSON.stringify({ is_active: isActive }),
-        }
+        },
       )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to update connector")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to update connector",
+        )
       }
       return res.json()
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["mcp-connectors", agentId] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["mcp-connectors", agentId] }),
     onError: (error: Error) => showErrorToast(error.message),
   })
 
@@ -265,11 +277,13 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
           method: "PUT",
           headers: getAuthHeaders(),
           body: JSON.stringify(body),
-        }
+        },
       )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to update connector")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to update connector",
+        )
       }
       return res.json()
     },
@@ -346,13 +360,15 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
     // names/emails rather than raw UUIDs.
     setEditAllowedUsers(
       (connector.allowed_user_ids || []).map((uid) => {
-        const resolved = (connector.allowed_users || []).find((u) => u.id === uid)
+        const resolved = (connector.allowed_users || []).find(
+          (u) => u.id === uid,
+        )
         return {
           id: uid,
           userId: uid,
           fallbackLabel: resolved?.full_name || resolved?.email || uid,
         }
-      })
+      }),
     )
     setEditAllowTokenAccess(connector.allow_token_access)
     setEditDialogOpen(true)
@@ -400,7 +416,8 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
               MCP Connectors
             </CardTitle>
             <CardDescription>
-              Connect external MCP clients (Claude Desktop, Cursor) to this agent
+              Connect external MCP clients (Claude Desktop, Cursor) to this
+              agent
             </CardDescription>
           </div>
           <Dialog open={createDialogOpen} onOpenChange={handleDialogClose}>
@@ -427,10 +444,13 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                     >
                       <div className="flex items-center gap-2">
                         <Unplug className="h-5 w-5 text-primary" />
-                        <span className="font-medium text-sm">Direct MCP Connector</span>
+                        <span className="font-medium text-sm">
+                          Direct MCP Connector
+                        </span>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Dedicated MCP endpoint for this agent. External clients connect directly to this specific agent.
+                        Dedicated MCP endpoint for this agent. External clients
+                        connect directly to this specific agent.
                       </p>
                     </button>
 
@@ -446,9 +466,10 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          Expose this agent over MCP so other platform agents can
-                          connect to it via "Connect MCP Provider". A direct token
-                          is minted automatically; control who may consume it.
+                          Expose this agent over MCP so other platform agents
+                          can connect to it via "Connect MCP Provider". A direct
+                          token is minted automatically; control who may consume
+                          it.
                         </p>
                       </button>
                     )}
@@ -484,12 +505,15 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="conversation">Conversation</SelectItem>
+                          <SelectItem value="conversation">
+                            Conversation
+                          </SelectItem>
                           <SelectItem value="building">Building</SelectItem>
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">
-                        Conversation mode for chat interactions, Building mode for development tasks.
+                        Conversation mode for chat interactions, Building mode
+                        for development tasks.
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -511,12 +535,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                                     userId: u.id,
                                     fallbackLabel: u.full_name || u.email,
                                   },
-                                ]
+                                ],
                           )
                         }
                         onRemove={(item) =>
                           setAllowedUsers((prev) =>
-                            prev.filter((s) => s.userId !== item.userId)
+                            prev.filter((s) => s.userId !== item.userId),
                           )
                         }
                         label={
@@ -534,9 +558,10 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                       <div className="space-y-0.5 pr-4">
                         <Label className="text-sm">Allow token access</Label>
                         <p className="text-xs text-muted-foreground">
-                          When off, clients must authorize via OAuth. When on, you can
-                          generate a direct access token that a client uses without an
-                          account — it connects under your name, for this connector only.
+                          When off, clients must authorize via OAuth. When on,
+                          you can generate a direct access token that a client
+                          uses without an account — it connects under your name,
+                          for this connector only.
                         </p>
                       </div>
                       <Switch
@@ -548,16 +573,22 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                   <DialogFooter>
                     <Button
                       onClick={handleCreateConnector}
-                      disabled={!name.trim() || createConnectorMutation.isPending}
+                      disabled={
+                        !name.trim() || createConnectorMutation.isPending
+                      }
                     >
-                      {createConnectorMutation.isPending ? "Creating..." : "Create"}
+                      {createConnectorMutation.isPending
+                        ? "Creating..."
+                        : "Create"}
                     </Button>
                   </DialogFooter>
                 </>
               ) : (
                 <>
                   <DialogHeader>
-                    <DialogTitle>Create Agent to Agent MCP Connector</DialogTitle>
+                    <DialogTitle>
+                      Create Agent to Agent MCP Connector
+                    </DialogTitle>
                     <DialogDescription>
                       <button
                         onClick={() => setCreateStep("type_select")}
@@ -569,12 +600,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                   </DialogHeader>
                   <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
                     <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-                      Share this connector with the users below. Their agents can
-                      then connect to this one via{" "}
-                      <span className="font-medium">Connect MCP Provider</span>. A
-                      direct token is minted automatically when a consumer
-                      connects. Manage the token and allowed users later from the
-                      connector's edit dialog.
+                      Share this connector with the users below. Their agents
+                      can then connect to this one via{" "}
+                      <span className="font-medium">Connect MCP Provider</span>.
+                      A direct token is minted automatically when a consumer
+                      connects. Manage the token and allowed users later from
+                      the connector's edit dialog.
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="a2a-name">Name</Label>
@@ -592,13 +623,15 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="conversation">Conversation</SelectItem>
+                          <SelectItem value="conversation">
+                            Conversation
+                          </SelectItem>
                           <SelectItem value="building">Building</SelectItem>
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">
-                        Conversation mode for chat interactions, Building mode for
-                        development tasks.
+                        Conversation mode for chat interactions, Building mode
+                        for development tasks.
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -620,12 +653,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                                     userId: u.id,
                                     fallbackLabel: u.full_name || u.email,
                                   },
-                                ]
+                                ],
                           )
                         }
                         onRemove={(item) =>
                           setA2aAllowedUsers((prev) =>
-                            prev.filter((s) => s.userId !== item.userId)
+                            prev.filter((s) => s.userId !== item.userId),
                           )
                         }
                         label={
@@ -642,9 +675,13 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                   <DialogFooter>
                     <Button
                       onClick={handleCreateAgent2Agent}
-                      disabled={!a2aName.trim() || createConnectorMutation.isPending}
+                      disabled={
+                        !a2aName.trim() || createConnectorMutation.isPending
+                      }
                     >
-                      {createConnectorMutation.isPending ? "Creating..." : "Create"}
+                      {createConnectorMutation.isPending
+                        ? "Creating..."
+                        : "Create"}
                     </Button>
                   </DialogFooter>
                 </>
@@ -669,162 +706,39 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                 <p className="font-medium">No dedicated connectors</p>
                 <p className="text-xs text-muted-foreground">
                   A direct connector gives this one agent its own MCP endpoint.
-                  You do not need one to reach it from your own MCP client —
-                  the App MCP Server already routes to every agent you own that
-                  has a Trigger Prompt.
+                  You do not need one to reach it from your own MCP client — the
+                  App MCP Server already routes to every agent you own that has
+                  a Trigger Prompt.
                 </p>
               </div>
             )}
 
             {/* ---- Direct Connectors ---- */}
             {connectors.length > 0 && (
-              <div className="space-y-1.5">
+              <ListRowGroup>
                 {connectors.map((connector) => (
-                  <div
+                  <McpConnectorRow
                     key={connector.id}
-                    className={`flex items-center justify-between px-3 py-2 border rounded-lg ${
-                      !connector.is_active ? "opacity-50 bg-muted" : ""
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="font-medium text-sm truncate">{connector.name}</span>
-                      {connector.mode === "building" ? (
-                        <Wrench className="h-3.5 w-3.5 text-orange-500 shrink-0" />
-                      ) : (
-                        <MessageCircle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                      )}
-                      {connector.is_active ? (
-                        <Badge className="text-xs shrink-0 bg-emerald-500 hover:bg-emerald-600">
-                          Active
-                        </Badge>
-                      ) : (
-                        <Badge variant="destructive" className="text-xs shrink-0">
-                          Inactive
-                        </Badge>
-                      )}
-                      {(() => {
-                        const userCount =
-                          (connector.allowed_user_ids?.length || 0) +
-                          (connector.allowed_emails?.length || 0)
-                        return userCount > 0 ? (
-                          <span className="text-xs text-muted-foreground shrink-0">
-                            {userCount} user{userCount !== 1 ? "s" : ""}
-                          </span>
-                        ) : null
-                      })()}
-                      {connector.allow_token_access && (
-                        <Badge
-                          variant="outline"
-                          className="text-xs shrink-0 border-amber-300 text-amber-600"
-                        >
-                          Tokens
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-0.5 ml-1 shrink-0">
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              disabled={!getMcpServerUrl(connector.id)}
-                              onClick={() => {
-                                const url = getMcpServerUrl(connector.id)
-                                if (url) handleCopyUrl(url, connector.id)
-                              }}
-                            >
-                              {copiedId === connector.id ? (
-                                <Check className="h-3.5 w-3.5 text-green-500" />
-                              ) : (
-                                <Copy className="h-3.5 w-3.5" />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            {getMcpServerUrl(connector.id)
-                              ? "Copy MCP server URL"
-                              : "MCP_SERVER_BASE_URL not configured"}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <div className="h-4 w-px bg-border mx-1" />
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() => handleEditConnectorOpen(connector)}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Edit connector
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() =>
-                                toggleConnectorMutation.mutate({
-                                  connectorId: connector.id,
-                                  isActive: !connector.is_active,
-                                })
-                              }
-                            >
-                              <Unplug
-                                className={`h-3.5 w-3.5 ${
-                                  connector.is_active ? "text-emerald-500" : "text-muted-foreground"
-                                }`}
-                              />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            {connector.is_active ? "Deactivate" : "Activate"}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete Connector</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This will disconnect all MCP clients using this connector and revoke their tokens.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={() => deleteConnectorMutation.mutate(connector.id)}
-                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            >
-                              Delete
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </div>
-                  </div>
+                    connector={connector}
+                    serverUrl={getMcpServerUrl(connector.id)}
+                    copied={copiedId === connector.id}
+                    onCopyUrl={(url) => handleCopyUrl(url, connector.id)}
+                    onEdit={() => handleEditConnectorOpen(connector)}
+                    onToggleActive={(isActive) =>
+                      toggleConnectorMutation.mutate({
+                        connectorId: connector.id,
+                        isActive,
+                      })
+                    }
+                    onDelete={() => setDeleteTarget(connector)}
+                    isPending={
+                      toggleConnectorMutation.isPending &&
+                      toggleConnectorMutation.variables?.connectorId ===
+                        connector.id
+                    }
+                  />
                 ))}
-              </div>
+              </ListRowGroup>
             )}
 
             {/* Separator before the agent-to-agent sub-section */}
@@ -836,162 +750,74 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Agent to Agent MCP Connector
                 </p>
-                {a2aConnectors.map((connector) => (
-                  <div
-                    key={connector.id}
-                    className={`flex items-center justify-between px-3 py-2 border rounded-lg ${
-                      !connector.is_active ? "opacity-50 bg-muted" : ""
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Bot className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                      <span className="font-medium text-sm truncate">
-                        {connector.name}
-                      </span>
-                      {connector.mode === "building" ? (
-                        <Wrench className="h-3.5 w-3.5 text-orange-500 shrink-0" />
-                      ) : (
-                        <MessageCircle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                      )}
-                      <Badge
-                        variant="outline"
-                        className="text-xs shrink-0 border-emerald-300 text-emerald-600"
-                      >
-                        Agent to Agent
-                      </Badge>
-                      {connector.is_active ? (
-                        <Badge className="text-xs shrink-0 bg-emerald-500 hover:bg-emerald-600">
-                          Active
-                        </Badge>
-                      ) : (
-                        <Badge variant="destructive" className="text-xs shrink-0">
-                          Inactive
-                        </Badge>
-                      )}
-                      {(() => {
-                        const userCount =
-                          (connector.allowed_user_ids?.length || 0) +
-                          (connector.allowed_emails?.length || 0)
-                        return userCount > 0 ? (
-                          <span className="text-xs text-muted-foreground shrink-0">
-                            {userCount} user{userCount !== 1 ? "s" : ""}
-                          </span>
-                        ) : null
-                      })()}
-                    </div>
-                    <div className="flex items-center gap-0.5 ml-1 shrink-0">
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              disabled={!getMcpServerUrl(connector.id)}
-                              onClick={() => {
-                                const url = getMcpServerUrl(connector.id)
-                                if (url) handleCopyUrl(url, connector.id)
-                              }}
-                            >
-                              {copiedId === connector.id ? (
-                                <Check className="h-3.5 w-3.5 text-green-500" />
-                              ) : (
-                                <Copy className="h-3.5 w-3.5" />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            {getMcpServerUrl(connector.id)
-                              ? "Copy MCP server URL"
-                              : "MCP_SERVER_BASE_URL not configured"}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <div className="h-4 w-px bg-border mx-1" />
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() => handleEditConnectorOpen(connector)}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Edit connector
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() =>
-                                toggleConnectorMutation.mutate({
-                                  connectorId: connector.id,
-                                  isActive: !connector.is_active,
-                                })
-                              }
-                            >
-                              <Unplug
-                                className={`h-3.5 w-3.5 ${
-                                  connector.is_active
-                                    ? "text-emerald-500"
-                                    : "text-muted-foreground"
-                                }`}
-                              />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            {connector.is_active ? "Deactivate" : "Activate"}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete Connector</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This will disconnect all agents consuming this
-                              connector and revoke their tokens.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={() =>
-                                deleteConnectorMutation.mutate(connector.id)
-                              }
-                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            >
-                              Delete
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </div>
-                  </div>
-                ))}
+                <ListRowGroup>
+                  {a2aConnectors.map((connector) => (
+                    <McpConnectorRow
+                      key={connector.id}
+                      connector={connector}
+                      isAgentToAgent
+                      serverUrl={getMcpServerUrl(connector.id)}
+                      copied={copiedId === connector.id}
+                      onCopyUrl={(url) => handleCopyUrl(url, connector.id)}
+                      onEdit={() => handleEditConnectorOpen(connector)}
+                      onToggleActive={(isActive) =>
+                        toggleConnectorMutation.mutate({
+                          connectorId: connector.id,
+                          isActive,
+                        })
+                      }
+                      onDelete={() => setDeleteTarget(connector)}
+                      isPending={
+                        toggleConnectorMutation.isPending &&
+                        toggleConnectorMutation.variables?.connectorId ===
+                          connector.id
+                      }
+                    />
+                  ))}
+                </ListRowGroup>
               </div>
             )}
           </div>
         )}
       </CardContent>
+
+      {/* One confirm for both lists, driven by the row the menu named: an
+          `AlertDialog` nested in a menu item loses its pending state when the
+          item unmounts on select. */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(next) => {
+          if (!deleteConnectorMutation.isPending && !next) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete connector</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete <strong>{deleteTarget?.name}</strong>?{" "}
+              {deleteTarget?.is_agent_to_agent
+                ? "Every agent consuming this connector is disconnected and its tokens are revoked."
+                : "Every MCP client using this connector is disconnected and its tokens are revoked."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteConnectorMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                if (deleteTarget)
+                  deleteConnectorMutation.mutate(deleteTarget.id)
+              }}
+              disabled={deleteConnectorMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteConnectorMutation.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ---- Edit Direct Connector Dialog ---- */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
@@ -1024,7 +850,8 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Conversation mode for chat interactions, Building mode for development tasks.
+                Conversation mode for chat interactions, Building mode for
+                development tasks.
               </p>
             </div>
             <div className="space-y-2">
@@ -1042,12 +869,12 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                             userId: u.id,
                             fallbackLabel: u.full_name || u.email,
                           },
-                        ]
+                        ],
                   )
                 }
                 onRemove={(item) =>
                   setEditAllowedUsers((prev) =>
-                    prev.filter((s) => s.userId !== item.userId)
+                    prev.filter((s) => s.userId !== item.userId),
                   )
                 }
                 label={
@@ -1059,12 +886,13 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                 searchPlaceholder="Search users..."
                 emptyHint="Leave empty for owner-only access."
               />
-              {editingConnector && editingConnector.allowed_emails.length > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Legacy allowed emails (fallback):{" "}
-                  {editingConnector.allowed_emails.join(", ")}
-                </p>
-              )}
+              {editingConnector &&
+                editingConnector.allowed_emails.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Legacy allowed emails (fallback):{" "}
+                    {editingConnector.allowed_emails.join(", ")}
+                  </p>
+                )}
             </div>
             {/* Agent2agent connectors expose their agent as a peer MCP server
                 for other agents (not external LLM clients): token access is
@@ -1079,9 +907,10 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                   <div className="space-y-0.5 pr-4">
                     <Label className="text-sm">Allow token access</Label>
                     <p className="text-xs text-muted-foreground">
-                      When off, clients must authorize via OAuth. When on, you can generate a
-                      direct access token that a client uses without an account — it connects
-                      under your name, for this connector only.
+                      When off, clients must authorize via OAuth. When on, you
+                      can generate a direct access token that a client uses
+                      without an account — it connects under your name, for this
+                      connector only.
                     </p>
                   </div>
                   <Switch
@@ -1115,7 +944,10 @@ export function McpConnectorsCard({ agentId, agentName }: McpConnectorsCardProps
                       size="icon"
                       className="shrink-0"
                       onClick={() =>
-                        handleCopyUrl(getMcpServerUrl(editingConnector.id)!, editingConnector.id)
+                        handleCopyUrl(
+                          getMcpServerUrl(editingConnector.id)!,
+                          editingConnector.id,
+                        )
                       }
                     >
                       {copiedId === editingConnector.id ? (

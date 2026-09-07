@@ -7,36 +7,28 @@
  * a peer of the Channels tab rather than in a user's own settings. The route
  * behind it (`/api/v1/mail-servers/*`) is superuser-only.
  */
-import { useState } from "react"
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Plus, Pencil, Trash2, Plug, Server, Loader2 } from "lucide-react"
 import {
-  MailServersService,
-  type MailServerConfigPublic,
-  type MailServerConfigCreate,
-  type MailServerConfigUpdate,
-  type MailServerType,
+  Loader2,
+  Pencil,
+  Plug,
+  Plus,
+  Server,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react"
+import { useState } from "react"
+import {
   type EncryptionType,
+  type MailServerConfigCreate,
+  type MailServerConfigPublic,
+  type MailServerConfigUpdate,
+  MailServersService,
+  type MailServerType,
 } from "@/client"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { ListRow, ListRowGroup, RowFlag } from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,13 +39,40 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { Badge } from "@/components/ui/badge"
 import useCustomToast from "@/hooks/useCustomToast"
 
 const DEFAULT_PORTS: Record<string, Record<string, number>> = {
@@ -125,7 +144,9 @@ function describeDeleteError(error: unknown): string {
   if (Array.isArray(usages) && usages.length > 0) {
     const names = usages
       .map((u) =>
-        u.role ? `${u.channel_name ?? "Unnamed channel"} (${u.role})` : u.channel_name ?? "Unnamed channel",
+        u.role
+          ? `${u.channel_name ?? "Unnamed channel"} (${u.role})`
+          : (u.channel_name ?? "Unnamed channel"),
       )
       .join(", ")
     return `Still used by ${names}. Detach it from the channel before deleting.`
@@ -138,7 +159,8 @@ export function MailServersCard() {
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingServer, setEditingServer] = useState<MailServerConfigPublic | null>(null)
+  const [editingServer, setEditingServer] =
+    useState<MailServerConfigPublic | null>(null)
   const [deleteServerId, setDeleteServerId] = useState<string | null>(null)
   const [formData, setFormData] = useState<MailServerFormData>(emptyForm)
   const [testingId, setTestingId] = useState<string | null>(null)
@@ -246,7 +268,8 @@ export function MailServersCard() {
       if (formData.port !== editingServer.port) update.port = formData.port
       if (formData.encryption_type !== editingServer.encryption_type)
         update.encryption_type = formData.encryption_type
-      if (formData.username !== editingServer.username) update.username = formData.username
+      if (formData.username !== editingServer.username)
+        update.username = formData.username
       if (formData.password) update.password = formData.password
 
       updateMutation.mutate({ serverId: editingServer.id, body: update })
@@ -256,16 +279,22 @@ export function MailServersCard() {
   }
 
   const handleServerTypeChange = (value: MailServerType) => {
-    const newPort = DEFAULT_PORTS[value]?.[formData.encryption_type] ?? formData.port
+    const newPort =
+      DEFAULT_PORTS[value]?.[formData.encryption_type] ?? formData.port
     setFormData({ ...formData, server_type: value, port: newPort })
   }
 
   const handleEncryptionChange = (value: EncryptionType) => {
-    const newPort = DEFAULT_PORTS[formData.server_type]?.[value] ?? formData.port
+    const newPort =
+      DEFAULT_PORTS[formData.server_type]?.[value] ?? formData.port
     setFormData({ ...formData, encryption_type: value, port: newPort })
   }
 
-  const isFormValid = formData.name && formData.host && formData.username && formData.port > 0 &&
+  const isFormValid =
+    formData.name &&
+    formData.host &&
+    formData.username &&
+    formData.port > 0 &&
     (editingServer ? true : formData.password.length > 0)
 
   const isSaving = createMutation.isPending || updateMutation.isPending
@@ -277,8 +306,8 @@ export function MailServersCard() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <Server className="h-4 w-4 text-blue-500" />
+            <CardTitle className="flex items-center gap-2 min-w-0">
+              <Server className="h-5 w-5" />
               Mail Servers
             </CardTitle>
             <Button onClick={handleAdd} size="sm">
@@ -293,79 +322,77 @@ export function MailServersCard() {
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading mail servers...</p>
+            <p className="text-sm text-muted-foreground">
+              Loading mail servers...
+            </p>
           ) : servers.length === 0 ? (
             <div className="text-sm text-muted-foreground py-6 text-center">
               <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
               <p>No mail servers configured</p>
-              <p className="text-xs mt-1">Add an IMAP or SMTP server so an email channel has somewhere to send and receive</p>
+              <p className="text-xs mt-1">
+                Add an IMAP or SMTP server so an email channel has somewhere to
+                send and receive
+              </p>
             </div>
           ) : (
-            <div className="space-y-1.5">
+            <ListRowGroup>
               {servers.map((server) => (
-                <div
+                <ListRow
                   key={server.id}
-                  className="flex items-center justify-between px-3 py-2 border rounded-lg"
+                  title={server.name}
+                  // Type and address are the row's two facts; the encryption
+                  // mode is the third and lives in the flag's tooltip.
+                  meta={`${server.server_type.toUpperCase()} · ${server.host}:${server.port}`}
+                  flags={
+                    <RowFlag
+                      icon={ShieldCheck}
+                      label={`${(server.encryption_type || "ssl").toUpperCase()} to ${server.host}:${server.port}`}
+                    />
+                  }
                 >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-medium text-sm truncate">{server.name}</span>
-                    <Badge variant="outline" className="uppercase text-xs shrink-0">
-                      {server.server_type}
-                    </Badge>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="text-xs text-muted-foreground cursor-help truncate">
-                            {server.host}:{server.port}
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="text-xs">
-                          {server.host}:{server.port} ({(server.encryption_type || "ssl").toUpperCase()})
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0 ml-2">
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => handleTestConnection(server.id)}
-                            disabled={testingId === server.id}
-                          >
-                            {testingId === server.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Plug className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Test connection</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => handleEdit(server)}
+                  {/* Test connection is the reason an admin opens this card
+                      mid-incident, so it is the one inline action. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => handleTestConnection(server.id)}
+                        disabled={testingId === server.id}
+                        aria-label={`Test the connection to ${server.name}`}
+                      >
+                        {testingId === server.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Plug className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="text-xs">
+                      Test connection
+                    </TooltipContent>
+                  </Tooltip>
+                  <RowActionsMenu label={`the mail server ${server.name}`}>
+                    <DropdownMenuItem onSelect={() => handleEdit(server)}>
+                      <Pencil />
+                      Edit server
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={(e) => {
+                        e.preventDefault()
+                        setDeleteServerId(server.id)
+                      }}
                     >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => setDeleteServerId(server.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                    </Button>
-                  </div>
-                </div>
+                      <Trash2 />
+                      Delete server
+                    </DropdownMenuItem>
+                  </RowActionsMenu>
+                </ListRow>
               ))}
-            </div>
+            </ListRowGroup>
           )}
         </CardContent>
       </Card>
@@ -390,7 +417,9 @@ export function MailServersCard() {
                 id="name"
                 placeholder="e.g., Gmail IMAP"
                 value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, name: e.target.value })
+                }
               />
             </div>
 
@@ -399,7 +428,9 @@ export function MailServersCard() {
                 <Label>Server Type</Label>
                 <Select
                   value={formData.server_type}
-                  onValueChange={(v) => handleServerTypeChange(v as MailServerType)}
+                  onValueChange={(v) =>
+                    handleServerTypeChange(v as MailServerType)
+                  }
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -419,7 +450,9 @@ export function MailServersCard() {
                   id="host"
                   placeholder="imap.gmail.com or smtp.gmail.com"
                   value={formData.host}
-                  onChange={(e) => setFormData({ ...formData, host: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({ ...formData, host: e.target.value })
+                  }
                 />
               </div>
               <div className="space-y-2">
@@ -428,7 +461,12 @@ export function MailServersCard() {
                   id="port"
                   type="number"
                   value={formData.port}
-                  onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value) || 0 })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      port: parseInt(e.target.value) || 0,
+                    })
+                  }
                 />
               </div>
             </div>
@@ -437,7 +475,9 @@ export function MailServersCard() {
               <Label>Encryption</Label>
               <Select
                 value={formData.encryption_type}
-                onValueChange={(v) => handleEncryptionChange(v as EncryptionType)}
+                onValueChange={(v) =>
+                  handleEncryptionChange(v as EncryptionType)
+                }
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -458,7 +498,9 @@ export function MailServersCard() {
                 id="username"
                 placeholder="user@example.com"
                 value={formData.username}
-                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, username: e.target.value })
+                }
               />
             </div>
 
@@ -474,9 +516,15 @@ export function MailServersCard() {
               <Input
                 id="password"
                 type="password"
-                placeholder={editingServer ? "Enter new password to change" : "Password or app password"}
+                placeholder={
+                  editingServer
+                    ? "Enter new password to change"
+                    : "Password or app password"
+                }
                 value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, password: e.target.value })
+                }
               />
             </div>
           </div>
@@ -509,15 +557,17 @@ export function MailServersCard() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Mail Server</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this mail server? This action cannot be undone.
-              Deletion is refused while an email channel still references the server — detach
-              it from the channel first.
+              Are you sure you want to delete this mail server? This action
+              cannot be undone. Deletion is refused while an email channel still
+              references the server — detach it from the channel first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteServerId && deleteMutation.mutate(deleteServerId)}
+              onClick={() =>
+                deleteServerId && deleteMutation.mutate(deleteServerId)
+              }
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete

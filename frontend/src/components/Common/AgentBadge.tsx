@@ -55,7 +55,7 @@ export function AgentBadge({
   const content = (
     <>
       <Bot className={iconSize} />
-      {agent.name}
+      <span className="truncate">{agent.name}</span>
     </>
   )
 

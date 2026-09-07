@@ -30,249 +30,249 @@
 [data-skin="hacker-1980"] {
   /* Cold cyan family — every 'informational' hue collapses toward the console cyan. */
   --color-blue-50: oklch(0.971 0.022 220);
-  --color-blue-100: oklch(0.936 0.040 220);
+  --color-blue-100: oklch(0.936 0.04 220);
   --color-blue-200: oklch(0.885 0.068 220);
   --color-blue-300: oklch(0.828 0.098 220);
   --color-blue-400: oklch(0.755 0.126 220);
   --color-blue-500: oklch(0.668 0.145 220);
-  --color-blue-600: oklch(0.573 0.140 220);
+  --color-blue-600: oklch(0.573 0.14 220);
   --color-blue-700: oklch(0.478 0.118 220);
   --color-blue-800: oklch(0.386 0.092 220);
-  --color-blue-900: oklch(0.301 0.070 220);
+  --color-blue-900: oklch(0.301 0.07 220);
   --color-blue-950: oklch(0.205 0.048 220);
   --color-sky-50: oklch(0.971 0.022 212);
-  --color-sky-100: oklch(0.936 0.040 212);
+  --color-sky-100: oklch(0.936 0.04 212);
   --color-sky-200: oklch(0.885 0.068 212);
   --color-sky-300: oklch(0.828 0.098 212);
   --color-sky-400: oklch(0.755 0.126 212);
   --color-sky-500: oklch(0.668 0.145 212);
-  --color-sky-600: oklch(0.573 0.140 212);
+  --color-sky-600: oklch(0.573 0.14 212);
   --color-sky-700: oklch(0.478 0.118 212);
   --color-sky-800: oklch(0.386 0.092 212);
-  --color-sky-900: oklch(0.301 0.070 212);
+  --color-sky-900: oklch(0.301 0.07 212);
   --color-sky-950: oklch(0.205 0.048 212);
   --color-cyan-50: oklch(0.971 0.022 203);
-  --color-cyan-100: oklch(0.936 0.040 203);
+  --color-cyan-100: oklch(0.936 0.04 203);
   --color-cyan-200: oklch(0.885 0.068 203);
   --color-cyan-300: oklch(0.828 0.098 203);
   --color-cyan-400: oklch(0.755 0.126 203);
   --color-cyan-500: oklch(0.668 0.145 203);
-  --color-cyan-600: oklch(0.573 0.140 203);
+  --color-cyan-600: oklch(0.573 0.14 203);
   --color-cyan-700: oklch(0.478 0.118 203);
   --color-cyan-800: oklch(0.386 0.092 203);
-  --color-cyan-900: oklch(0.301 0.070 203);
+  --color-cyan-900: oklch(0.301 0.07 203);
   --color-cyan-950: oklch(0.205 0.048 203);
   --color-indigo-50: oklch(0.971 0.022 236);
-  --color-indigo-100: oklch(0.936 0.040 236);
+  --color-indigo-100: oklch(0.936 0.04 236);
   --color-indigo-200: oklch(0.885 0.068 236);
   --color-indigo-300: oklch(0.828 0.098 236);
   --color-indigo-400: oklch(0.755 0.126 236);
   --color-indigo-500: oklch(0.668 0.145 236);
-  --color-indigo-600: oklch(0.573 0.140 236);
+  --color-indigo-600: oklch(0.573 0.14 236);
   --color-indigo-700: oklch(0.478 0.118 236);
   --color-indigo-800: oklch(0.386 0.092 236);
-  --color-indigo-900: oklch(0.301 0.070 236);
+  --color-indigo-900: oklch(0.301 0.07 236);
   --color-indigo-950: oklch(0.205 0.048 236);
   --color-violet-50: oklch(0.971 0.022 252);
-  --color-violet-100: oklch(0.936 0.040 252);
+  --color-violet-100: oklch(0.936 0.04 252);
   --color-violet-200: oklch(0.885 0.068 252);
   --color-violet-300: oklch(0.828 0.098 252);
   --color-violet-400: oklch(0.755 0.126 252);
   --color-violet-500: oklch(0.668 0.145 252);
-  --color-violet-600: oklch(0.573 0.140 252);
+  --color-violet-600: oklch(0.573 0.14 252);
   --color-violet-700: oklch(0.478 0.118 252);
   --color-violet-800: oklch(0.386 0.092 252);
-  --color-violet-900: oklch(0.301 0.070 252);
+  --color-violet-900: oklch(0.301 0.07 252);
   --color-violet-950: oklch(0.205 0.048 252);
   --color-purple-50: oklch(0.971 0.022 266);
-  --color-purple-100: oklch(0.936 0.040 266);
+  --color-purple-100: oklch(0.936 0.04 266);
   --color-purple-200: oklch(0.885 0.068 266);
   --color-purple-300: oklch(0.828 0.098 266);
   --color-purple-400: oklch(0.755 0.126 266);
   --color-purple-500: oklch(0.668 0.145 266);
-  --color-purple-600: oklch(0.573 0.140 266);
+  --color-purple-600: oklch(0.573 0.14 266);
   --color-purple-700: oklch(0.478 0.118 266);
   --color-purple-800: oklch(0.386 0.092 266);
-  --color-purple-900: oklch(0.301 0.070 266);
+  --color-purple-900: oklch(0.301 0.07 266);
   --color-purple-950: oklch(0.205 0.048 266);
   /* Aqua-green family — 'success' reads as a lighter, greener trace. */
   --color-green-50: oklch(0.971 0.022 172);
-  --color-green-100: oklch(0.936 0.040 172);
+  --color-green-100: oklch(0.936 0.04 172);
   --color-green-200: oklch(0.885 0.068 172);
   --color-green-300: oklch(0.828 0.098 172);
   --color-green-400: oklch(0.755 0.126 172);
   --color-green-500: oklch(0.668 0.145 172);
-  --color-green-600: oklch(0.573 0.140 172);
+  --color-green-600: oklch(0.573 0.14 172);
   --color-green-700: oklch(0.478 0.118 172);
   --color-green-800: oklch(0.386 0.092 172);
-  --color-green-900: oklch(0.301 0.070 172);
+  --color-green-900: oklch(0.301 0.07 172);
   --color-green-950: oklch(0.205 0.048 172);
   --color-emerald-50: oklch(0.971 0.022 168);
-  --color-emerald-100: oklch(0.936 0.040 168);
+  --color-emerald-100: oklch(0.936 0.04 168);
   --color-emerald-200: oklch(0.885 0.068 168);
   --color-emerald-300: oklch(0.828 0.098 168);
   --color-emerald-400: oklch(0.755 0.126 168);
   --color-emerald-500: oklch(0.668 0.145 168);
-  --color-emerald-600: oklch(0.573 0.140 168);
+  --color-emerald-600: oklch(0.573 0.14 168);
   --color-emerald-700: oklch(0.478 0.118 168);
   --color-emerald-800: oklch(0.386 0.092 168);
-  --color-emerald-900: oklch(0.301 0.070 168);
+  --color-emerald-900: oklch(0.301 0.07 168);
   --color-emerald-950: oklch(0.205 0.048 168);
   --color-teal-50: oklch(0.971 0.022 190);
-  --color-teal-100: oklch(0.936 0.040 190);
+  --color-teal-100: oklch(0.936 0.04 190);
   --color-teal-200: oklch(0.885 0.068 190);
   --color-teal-300: oklch(0.828 0.098 190);
   --color-teal-400: oklch(0.755 0.126 190);
   --color-teal-500: oklch(0.668 0.145 190);
-  --color-teal-600: oklch(0.573 0.140 190);
+  --color-teal-600: oklch(0.573 0.14 190);
   --color-teal-700: oklch(0.478 0.118 190);
   --color-teal-800: oklch(0.386 0.092 190);
-  --color-teal-900: oklch(0.301 0.070 190);
+  --color-teal-900: oklch(0.301 0.07 190);
   --color-teal-950: oklch(0.205 0.048 190);
   --color-lime-50: oklch(0.971 0.022 155);
-  --color-lime-100: oklch(0.936 0.040 155);
+  --color-lime-100: oklch(0.936 0.04 155);
   --color-lime-200: oklch(0.885 0.068 155);
   --color-lime-300: oklch(0.828 0.098 155);
   --color-lime-400: oklch(0.755 0.126 155);
   --color-lime-500: oklch(0.668 0.145 155);
-  --color-lime-600: oklch(0.573 0.140 155);
+  --color-lime-600: oklch(0.573 0.14 155);
   --color-lime-700: oklch(0.478 0.118 155);
   --color-lime-800: oklch(0.386 0.092 155);
-  --color-lime-900: oklch(0.301 0.070 155);
+  --color-lime-900: oklch(0.301 0.07 155);
   --color-lime-950: oklch(0.205 0.048 155);
   /* Amber family — 'warning' becomes an amber counter-signal. */
   --color-amber-50: oklch(0.971 0.022 72);
-  --color-amber-100: oklch(0.936 0.040 72);
+  --color-amber-100: oklch(0.936 0.04 72);
   --color-amber-200: oklch(0.885 0.068 72);
   --color-amber-300: oklch(0.828 0.098 72);
   --color-amber-400: oklch(0.755 0.126 72);
   --color-amber-500: oklch(0.668 0.145 72);
-  --color-amber-600: oklch(0.573 0.140 72);
+  --color-amber-600: oklch(0.573 0.14 72);
   --color-amber-700: oklch(0.478 0.118 72);
   --color-amber-800: oklch(0.386 0.092 72);
-  --color-amber-900: oklch(0.301 0.070 72);
+  --color-amber-900: oklch(0.301 0.07 72);
   --color-amber-950: oklch(0.205 0.048 72);
   --color-yellow-50: oklch(0.971 0.022 88);
-  --color-yellow-100: oklch(0.936 0.040 88);
+  --color-yellow-100: oklch(0.936 0.04 88);
   --color-yellow-200: oklch(0.885 0.068 88);
   --color-yellow-300: oklch(0.828 0.098 88);
   --color-yellow-400: oklch(0.755 0.126 88);
   --color-yellow-500: oklch(0.668 0.145 88);
-  --color-yellow-600: oklch(0.573 0.140 88);
+  --color-yellow-600: oklch(0.573 0.14 88);
   --color-yellow-700: oklch(0.478 0.118 88);
   --color-yellow-800: oklch(0.386 0.092 88);
-  --color-yellow-900: oklch(0.301 0.070 88);
+  --color-yellow-900: oklch(0.301 0.07 88);
   --color-yellow-950: oklch(0.205 0.048 88);
   --color-orange-50: oklch(0.971 0.022 55);
-  --color-orange-100: oklch(0.936 0.040 55);
+  --color-orange-100: oklch(0.936 0.04 55);
   --color-orange-200: oklch(0.885 0.068 55);
   --color-orange-300: oklch(0.828 0.098 55);
   --color-orange-400: oklch(0.755 0.126 55);
   --color-orange-500: oklch(0.668 0.145 55);
-  --color-orange-600: oklch(0.573 0.140 55);
+  --color-orange-600: oklch(0.573 0.14 55);
   --color-orange-700: oklch(0.478 0.118 55);
   --color-orange-800: oklch(0.386 0.092 55);
-  --color-orange-900: oklch(0.301 0.070 55);
+  --color-orange-900: oklch(0.301 0.07 55);
   --color-orange-950: oklch(0.205 0.048 55);
   /* Red family — 'danger' is a hot orange-red, still separable from amber. */
   --color-red-50: oklch(0.971 0.022 30);
-  --color-red-100: oklch(0.936 0.040 30);
+  --color-red-100: oklch(0.936 0.04 30);
   --color-red-200: oklch(0.885 0.068 30);
   --color-red-300: oklch(0.828 0.098 30);
   --color-red-400: oklch(0.755 0.126 30);
   --color-red-500: oklch(0.668 0.145 30);
-  --color-red-600: oklch(0.573 0.140 30);
+  --color-red-600: oklch(0.573 0.14 30);
   --color-red-700: oklch(0.478 0.118 30);
   --color-red-800: oklch(0.386 0.092 30);
-  --color-red-900: oklch(0.301 0.070 30);
+  --color-red-900: oklch(0.301 0.07 30);
   --color-red-950: oklch(0.205 0.048 30);
   --color-rose-50: oklch(0.971 0.022 18);
-  --color-rose-100: oklch(0.936 0.040 18);
+  --color-rose-100: oklch(0.936 0.04 18);
   --color-rose-200: oklch(0.885 0.068 18);
   --color-rose-300: oklch(0.828 0.098 18);
   --color-rose-400: oklch(0.755 0.126 18);
   --color-rose-500: oklch(0.668 0.145 18);
-  --color-rose-600: oklch(0.573 0.140 18);
+  --color-rose-600: oklch(0.573 0.14 18);
   --color-rose-700: oklch(0.478 0.118 18);
   --color-rose-800: oklch(0.386 0.092 18);
-  --color-rose-900: oklch(0.301 0.070 18);
+  --color-rose-900: oklch(0.301 0.07 18);
   --color-rose-950: oklch(0.205 0.048 18);
   --color-pink-50: oklch(0.971 0.022 352);
-  --color-pink-100: oklch(0.936 0.040 352);
+  --color-pink-100: oklch(0.936 0.04 352);
   --color-pink-200: oklch(0.885 0.068 352);
   --color-pink-300: oklch(0.828 0.098 352);
   --color-pink-400: oklch(0.755 0.126 352);
   --color-pink-500: oklch(0.668 0.145 352);
-  --color-pink-600: oklch(0.573 0.140 352);
+  --color-pink-600: oklch(0.573 0.14 352);
   --color-pink-700: oklch(0.478 0.118 352);
   --color-pink-800: oklch(0.386 0.092 352);
-  --color-pink-900: oklch(0.301 0.070 352);
+  --color-pink-900: oklch(0.301 0.07 352);
   --color-pink-950: oklch(0.205 0.048 352);
   --color-fuchsia-50: oklch(0.971 0.022 320);
-  --color-fuchsia-100: oklch(0.936 0.040 320);
+  --color-fuchsia-100: oklch(0.936 0.04 320);
   --color-fuchsia-200: oklch(0.885 0.068 320);
   --color-fuchsia-300: oklch(0.828 0.098 320);
   --color-fuchsia-400: oklch(0.755 0.126 320);
   --color-fuchsia-500: oklch(0.668 0.145 320);
-  --color-fuchsia-600: oklch(0.573 0.140 320);
+  --color-fuchsia-600: oklch(0.573 0.14 320);
   --color-fuchsia-700: oklch(0.478 0.118 320);
   --color-fuchsia-800: oklch(0.386 0.092 320);
-  --color-fuchsia-900: oklch(0.301 0.070 320);
+  --color-fuchsia-900: oklch(0.301 0.07 320);
   --color-fuchsia-950: oklch(0.205 0.048 320);
   /* Neutrals — near-achromatic, biased cold so greys sit on the blue-black canvas. */
   --color-slate-50: oklch(0.971 0.006 240);
   --color-slate-100: oklch(0.936 0.008 240);
-  --color-slate-200: oklch(0.885 0.010 240);
+  --color-slate-200: oklch(0.885 0.01 240);
   --color-slate-300: oklch(0.828 0.012 240);
   --color-slate-400: oklch(0.755 0.014 240);
   --color-slate-500: oklch(0.668 0.016 240);
   --color-slate-600: oklch(0.573 0.018 240);
-  --color-slate-700: oklch(0.478 0.020 240);
-  --color-slate-800: oklch(0.386 0.020 240);
+  --color-slate-700: oklch(0.478 0.02 240);
+  --color-slate-800: oklch(0.386 0.02 240);
   --color-slate-900: oklch(0.301 0.018 240);
   --color-slate-950: oklch(0.205 0.014 240);
   --color-gray-50: oklch(0.971 0.006 240);
   --color-gray-100: oklch(0.936 0.008 240);
-  --color-gray-200: oklch(0.885 0.010 240);
+  --color-gray-200: oklch(0.885 0.01 240);
   --color-gray-300: oklch(0.828 0.012 240);
   --color-gray-400: oklch(0.755 0.014 240);
   --color-gray-500: oklch(0.668 0.016 240);
   --color-gray-600: oklch(0.573 0.018 240);
-  --color-gray-700: oklch(0.478 0.020 240);
-  --color-gray-800: oklch(0.386 0.020 240);
+  --color-gray-700: oklch(0.478 0.02 240);
+  --color-gray-800: oklch(0.386 0.02 240);
   --color-gray-900: oklch(0.301 0.018 240);
   --color-gray-950: oklch(0.205 0.014 240);
   --color-zinc-50: oklch(0.971 0.006 240);
   --color-zinc-100: oklch(0.936 0.008 240);
-  --color-zinc-200: oklch(0.885 0.010 240);
+  --color-zinc-200: oklch(0.885 0.01 240);
   --color-zinc-300: oklch(0.828 0.012 240);
   --color-zinc-400: oklch(0.755 0.014 240);
   --color-zinc-500: oklch(0.668 0.016 240);
   --color-zinc-600: oklch(0.573 0.018 240);
-  --color-zinc-700: oklch(0.478 0.020 240);
-  --color-zinc-800: oklch(0.386 0.020 240);
+  --color-zinc-700: oklch(0.478 0.02 240);
+  --color-zinc-800: oklch(0.386 0.02 240);
   --color-zinc-900: oklch(0.301 0.018 240);
   --color-zinc-950: oklch(0.205 0.014 240);
   --color-neutral-50: oklch(0.971 0.006 240);
   --color-neutral-100: oklch(0.936 0.008 240);
-  --color-neutral-200: oklch(0.885 0.010 240);
+  --color-neutral-200: oklch(0.885 0.01 240);
   --color-neutral-300: oklch(0.828 0.012 240);
   --color-neutral-400: oklch(0.755 0.014 240);
   --color-neutral-500: oklch(0.668 0.016 240);
   --color-neutral-600: oklch(0.573 0.018 240);
-  --color-neutral-700: oklch(0.478 0.020 240);
-  --color-neutral-800: oklch(0.386 0.020 240);
+  --color-neutral-700: oklch(0.478 0.02 240);
+  --color-neutral-800: oklch(0.386 0.02 240);
   --color-neutral-900: oklch(0.301 0.018 240);
   --color-neutral-950: oklch(0.205 0.014 240);
   --color-stone-50: oklch(0.971 0.006 235);
   --color-stone-100: oklch(0.936 0.008 235);
-  --color-stone-200: oklch(0.885 0.010 235);
+  --color-stone-200: oklch(0.885 0.01 235);
   --color-stone-300: oklch(0.828 0.012 235);
   --color-stone-400: oklch(0.755 0.014 235);
   --color-stone-500: oklch(0.668 0.016 235);
   --color-stone-600: oklch(0.573 0.018 235);
-  --color-stone-700: oklch(0.478 0.020 235);
-  --color-stone-800: oklch(0.386 0.020 235);
+  --color-stone-700: oklch(0.478 0.02 235);
+  --color-stone-800: oklch(0.386 0.02 235);
   --color-stone-900: oklch(0.301 0.018 235);
   --color-stone-950: oklch(0.205 0.014 235);
 }
@@ -304,6 +304,10 @@
   --accent-foreground: oklch(0.93 0.05 210);
 
   --destructive: oklch(0.68 0.2 30);
+  --success: oklch(0.86 0.14 170);
+  --success-foreground: oklch(0.135 0.03 235);
+  --warning: oklch(0.82 0.13 65);
+  --warning-foreground: oklch(0.135 0.03 235);
 
   --border: oklch(0.83 0.128 217 / 26%);
   --input: oklch(0.83 0.128 217 / 22%);
@@ -364,6 +368,10 @@
   --accent-foreground: oklch(0.3 0.07 232);
 
   --destructive: oklch(0.58 0.2 30);
+  --success: oklch(0.62 0.13 172);
+  --success-foreground: oklch(0.99 0.01 220);
+  --warning: oklch(0.68 0.14 62);
+  --warning-foreground: oklch(0.99 0.01 220);
 
   --border: oklch(0.6 0.13 220 / 28%);
   --input: oklch(0.6 0.13 220 / 26%);
@@ -419,22 +427,20 @@
 
 [data-skin="hacker-1980"] body {
   background-color: var(--background);
+  /* scanlines */
   background-image:
-    /* scanlines */
     repeating-linear-gradient(
       to bottom,
       var(--skin-scanline) 0px,
       var(--skin-scanline) 1px,
       transparent 1px,
       transparent 3px
-    ),
-    /* horizon glow */
+    ), /* horizon glow */
     radial-gradient(
       120% 80% at 50% 0%,
       var(--skin-glow-soft) 0%,
       transparent 60%
-    ),
-    /* the grid */
+    ), /* the grid */
     linear-gradient(var(--skin-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--skin-grid) 1px, transparent 1px);
   background-size:
@@ -455,8 +461,9 @@
 [data-skin="hacker-1980"] [data-slot="sidebar-group-label"],
 [data-skin="hacker-1980"] [data-slot="dropdown-menu-label"],
 [data-skin="hacker-1980"] [data-slot="select-label"] {
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+  font-family:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-weight: 500;
@@ -468,8 +475,9 @@
    whenever a Button is the child of an `asChild` trigger. */
 [data-skin="hacker-1980"] [data-ui="button"],
 [data-skin="hacker-1980"] [data-slot="tabs-trigger"] {
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+  font-family:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-size: 0.75rem;
@@ -480,8 +488,9 @@
    the same language as card titles. Scoped to `header` so prose/markdown
    headings inside chat transcripts are untouched. */
 [data-skin="hacker-1980"] header h1 {
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+  font-family:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
   text-transform: uppercase;
   letter-spacing: 0.14em;
   font-weight: 500;
@@ -566,7 +575,9 @@
 [data-skin="hacker-1980"] [data-slot="textarea"]:focus-visible,
 [data-skin="hacker-1980"] [data-slot="select-trigger"]:focus-visible {
   border-color: var(--skin-line);
-  box-shadow: 0 0 0 1px var(--skin-line), 0 0 14px -2px var(--skin-glow);
+  box-shadow:
+    0 0 0 1px var(--skin-line),
+    0 0 14px -2px var(--skin-glow);
 }
 
 [data-skin="hacker-1980"] [data-ui="button"]:not(:disabled):hover {
@@ -574,8 +585,9 @@
 }
 
 [data-skin="hacker-1980"] [data-slot="badge"] {
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+  font-family:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
   letter-spacing: 0.06em;
   border-radius: 2px;
 }
@@ -667,8 +679,9 @@
   outline: 1px solid color-mix(in oklab, var(--skin-line) 75%, transparent);
   outline-offset: -1px;
   box-shadow: 0 0 20px -8px var(--skin-glow);
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+  font-family:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-size: 0.75rem;
@@ -714,7 +727,9 @@
 
 [data-skin="hacker-1980"] [data-slot="tabs-trigger"][data-state="active"] {
   color: var(--skin-line);
-  box-shadow: inset 0 -2px 0 -1px var(--skin-line), 0 0 16px -6px var(--skin-glow);
+  box-shadow:
+    inset 0 -2px 0 -1px var(--skin-line),
+    0 0 16px -6px var(--skin-glow);
 }
 
 /* --- Tables: a console readout ------------------------------------------- */
@@ -724,7 +739,9 @@
 }
 
 [data-skin="hacker-1980"] [data-slot="table-row"] {
-  transition: background-color 140ms ease, box-shadow 140ms ease;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 [data-skin="hacker-1980"] [data-slot="table-row"]:hover {
@@ -806,20 +823,30 @@
   opacity: 0.85;
 }
 
-[data-skin="hacker-1980"] [data-sonner-toaster] [data-sonner-toast] [data-title] {
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+[data-skin="hacker-1980"]
+  [data-sonner-toaster]
+  [data-sonner-toast]
+  [data-title] {
+  font-family:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-weight: 500;
   font-size: 0.75rem;
 }
 
-[data-skin="hacker-1980"] [data-sonner-toaster] [data-sonner-toast] [data-description] {
+[data-skin="hacker-1980"]
+  [data-sonner-toaster]
+  [data-sonner-toast]
+  [data-description] {
   color: var(--muted-foreground);
 }
 
-[data-skin="hacker-1980"] [data-sonner-toaster] [data-sonner-toast] [data-close-button] {
+[data-skin="hacker-1980"]
+  [data-sonner-toaster]
+  [data-sonner-toast]
+  [data-close-button] {
   background: var(--popover);
   border-color: color-mix(in oklab, var(--skin-line) 34%, transparent);
   color: var(--skin-label-color);
@@ -843,7 +870,8 @@
 
 [data-skin="hacker-1980"] [data-slot="sidebar-menu-button"]:hover,
 [data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-state="open"],
-[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-active="true"] {
+[data-skin="hacker-1980"]
+  [data-slot="sidebar-menu-button"][data-active="true"] {
   --skin-plate-bevel: 9px;
   --skin-plate-edge: color-mix(in oklab, var(--skin-line) 26%, transparent);
   --skin-plate-bar: transparent;
@@ -855,7 +883,8 @@
   box-shadow: none;
 }
 
-[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-active="true"] {
+[data-skin="hacker-1980"]
+  [data-slot="sidebar-menu-button"][data-active="true"] {
   --skin-plate-edge: color-mix(in oklab, var(--skin-line) 55%, transparent);
   --skin-plate-bar: var(--skin-line);
   --skin-plate-inset-left: 2px;
@@ -873,7 +902,8 @@
 
 /* Outline layer — the bevelled edge plus, when active, the bar down the left. */
 [data-skin="hacker-1980"] [data-slot="sidebar-menu-button"]:hover::after,
-[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-state="open"]::after,
+[data-skin="hacker-1980"]
+  [data-slot="sidebar-menu-button"][data-state="open"]::after,
 [data-skin="hacker-1980"]
   [data-slot="sidebar-menu-button"][data-active="true"]::after {
   content: "";
@@ -898,7 +928,8 @@
 /* Fill layer — the untouched sidebar-accent, inset 1px so the outline shows
    through as a hairline. */
 [data-skin="hacker-1980"] [data-slot="sidebar-menu-button"]:hover::before,
-[data-skin="hacker-1980"] [data-slot="sidebar-menu-button"][data-state="open"]::before,
+[data-skin="hacker-1980"]
+  [data-slot="sidebar-menu-button"][data-state="open"]::before,
 [data-skin="hacker-1980"]
   [data-slot="sidebar-menu-button"][data-active="true"]::before {
   content: "";

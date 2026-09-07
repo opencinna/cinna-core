@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react"
 
+import { ListRowGroup } from "@/components/Common/ListRow"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -75,7 +76,7 @@ export function PreviewList<T>({
   errorFallback,
   empty,
   skeletonRows = 3,
-  skeletonClassName = "h-[52px] w-full rounded-lg",
+  skeletonClassName = "h-[48px] w-full rounded-md",
   onShowAll,
 }: PreviewListProps<T>) {
   if (isError) {
@@ -103,14 +104,22 @@ export function PreviewList<T>({
   const totalCount = total ?? items.length
 
   return (
-    <div className="space-y-1.5">
-      {/* A Fragment, not a wrapper div: `space-y-1.5` must reach the caller's
-          own row element, exactly as it did before the extraction. */}
-      {items.slice(0, previewCount).map((item) => (
-        <Fragment key={getKey(item)}>{renderItem(item)}</Fragment>
-      ))}
+    <div>
+      {/* The separated group, not a stack of bordered boxes: `ListRowGroup`
+          owns the hairline between rows, so a caller cannot space its own list
+          differently from every other list in the product. */}
+      <ListRowGroup>
+        {items.slice(0, previewCount).map((item) => (
+          <Fragment key={getKey(item)}>{renderItem(item)}</Fragment>
+        ))}
+      </ListRowGroup>
       {onShowAll && totalCount > previewCount && (
-        <Button variant="link" size="sm" className="px-0" onClick={onShowAll}>
+        <Button
+          variant="link"
+          size="sm"
+          className="mt-1 px-0"
+          onClick={onShowAll}
+        >
           Show all ({totalCount})
         </Button>
       )}

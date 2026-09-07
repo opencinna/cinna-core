@@ -1,9 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, EyeOff, PackagePlus, Trash2 } from "lucide-react"
+import { AlertTriangle, EyeOff, PackagePlus, Plus, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import { CatalogService, ServerChannelsService } from "@/client"
-import { Badge } from "@/components/ui/badge"
+import {
+  ListRow,
+  ListRowGroup,
+  RowFlag,
+  RowInfo,
+} from "@/components/Common/ListRow"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -12,6 +17,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Select,
   SelectContent,
@@ -23,7 +36,6 @@ import { Skeleton } from "@/components/ui/skeleton"
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -34,6 +46,7 @@ export function AutoInstallAgentsCard() {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [selected, setSelected] = useState<string>("")
+  const [addOpen, setAddOpen] = useState(false)
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["autoInstallBundles"],
@@ -74,6 +87,7 @@ export function AutoInstallAgentsCard() {
       queryClient.setQueryData(["autoInstallBundles"], list)
       showSuccessToast("Added to the auto-install list")
       setSelected("")
+      setAddOpen(false)
     },
     onError: (err) =>
       showErrorToast(getErrorMessage(err, "Failed to add bundle")),
@@ -95,52 +109,28 @@ export function AutoInstallAgentsCard() {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2">
-          <PackagePlus className="h-4 w-4 text-blue-500" />
-          Auto-install agents
-        </CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 min-w-0">
+            <PackagePlus className="h-5 w-5" />
+            Auto-install agents
+          </CardTitle>
+          <Button
+            size="sm"
+            onClick={() => setAddOpen(true)}
+            disabled={catalogError || addable.length === 0}
+          >
+            <Plus className="mr-1 h-4 w-4" />
+            Add bundle
+          </Button>
+        </div>
         <CardDescription>
           When no agent a sender already has matches their message, these
           bundles are considered and the best match is installed for them
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Select
-            value={selected}
-            onValueChange={setSelected}
-            disabled={catalogError}
-          >
-            <SelectTrigger className="flex-1">
-              <SelectValue
-                placeholder={
-                  // Never let a failed catalog fetch read as "you've added
-                  // them all" — the admin would conclude the list is complete.
-                  catalogError
-                    ? "Couldn't load the catalog"
-                    : addable.length === 0
-                      ? "No more bundles available"
-                      : "Select a bundle to add"
-                }
-              />
-            </SelectTrigger>
-            <SelectContent>
-              {addable.map((c) => (
-                <SelectItem key={c.bundle_uuid} value={c.bundle_uuid}>
-                  {c.display_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            size="sm"
-            disabled={!selected || catalogError || addMutation.isPending}
-            onClick={() => selected && addMutation.mutate(selected)}
-          >
-            Add
-          </Button>
-        </div>
-
+        {/* The catalog is what the Add button picks from, so a failed fetch is
+            reported here rather than silently disabling the button. */}
         {catalogError && (
           <p className="text-sm text-destructive">
             {getErrorMessage(
@@ -156,8 +146,8 @@ export function AutoInstallAgentsCard() {
           </p>
         ) : isLoading ? (
           <div className="space-y-2">
-            <Skeleton className="h-11 w-full" />
-            <Skeleton className="h-11 w-full" />
+            <Skeleton className="h-[48px] w-full rounded-md" />
+            <Skeleton className="h-[48px] w-full rounded-md" />
           </div>
         ) : entries.length === 0 ? (
           <div className="py-6 text-center text-sm text-muted-foreground">
@@ -169,82 +159,110 @@ export function AutoInstallAgentsCard() {
             </p>
           </div>
         ) : (
-          <div className="space-y-1.5">
+          <ListRowGroup>
             {entries.map((entry) => {
               const isPublic = entry.visibility === "public"
               return (
-                <div
+                <ListRow
                   key={entry.bundle_uuid}
-                  className="flex items-center justify-between rounded-lg border px-3 py-2"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="truncate text-sm font-medium">
-                        {entry.display_name}
-                      </span>
-                      {/* Each amber badge says WHY the bundle won't be
-                          auto-installed — a bare "warning" would leave the
-                          admin guessing. */}
+                  title={entry.display_name}
+                  flags={
+                    // Each flag says WHY the bundle won't be auto-installed —
+                    // a bare warning glyph would leave the admin guessing.
+                    <>
                       {!isPublic && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge
-                                variant="outline"
-                                className="gap-1 border-amber-500/50 text-xs text-amber-600 dark:text-amber-400"
-                              >
-                                <EyeOff className="h-3 w-3" />
-                                {entry.visibility}
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent className="max-w-xs text-xs">
-                              {VISIBILITY_WARNING}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        <RowFlag
+                          icon={EyeOff}
+                          tone="warning"
+                          label={VISIBILITY_WARNING}
+                        />
                       )}
                       {!entry.has_trigger_prompt && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge
-                                variant="outline"
-                                className="gap-1 border-amber-500/50 text-xs text-amber-600 dark:text-amber-400"
-                              >
-                                <AlertTriangle className="h-3 w-3" />
-                                No trigger prompt
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent className="max-w-xs text-xs">
-                              {NO_TRIGGER_PROMPT_WARNING}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        <RowFlag
+                          icon={AlertTriangle}
+                          tone="warning"
+                          label={NO_TRIGGER_PROMPT_WARNING}
+                        />
                       )}
-                    </div>
-                    <p className="truncate font-mono text-xs text-muted-foreground">
-                      {entry.bundle_id}
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="ml-2 h-7 w-7 shrink-0 text-destructive hover:text-destructive"
-                    onClick={() => removeMutation.mutate(entry.bundle_uuid)}
-                    disabled={
-                      removeMutation.isPending &&
-                      removeMutation.variables === entry.bundle_uuid
-                    }
-                    aria-label={`Remove ${entry.display_name}`}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
+                      <RowInfo
+                        facts={[
+                          entry.bundle_id,
+                          `Visibility: ${entry.visibility}`,
+                        ]}
+                      />
+                    </>
+                  }
+                >
+                  {/* One action, and it is destructive, so it is
+                      hover-revealed rather than in a menu of one item. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                        onClick={() => removeMutation.mutate(entry.bundle_uuid)}
+                        disabled={
+                          removeMutation.isPending &&
+                          removeMutation.variables === entry.bundle_uuid
+                        }
+                        aria-label={`Remove ${entry.display_name}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="text-xs">
+                      Remove from auto-install
+                    </TooltipContent>
+                  </Tooltip>
+                </ListRow>
               )
             })}
-          </div>
+          </ListRowGroup>
         )}
       </CardContent>
+
+      {/* Adding is a Create story with one field, so it is a dialog off the
+          header button — not a Select and a button sitting above the list on
+          every visit (§1 Create, §2 card blocks). */}
+      <Dialog
+        open={addOpen}
+        onOpenChange={(next) => {
+          if (addMutation.isPending) return
+          setAddOpen(next)
+          if (!next) setSelected("")
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add a bundle to auto-install</DialogTitle>
+            <DialogDescription>
+              Only published bundles that are not already on the list are
+              offered.
+            </DialogDescription>
+          </DialogHeader>
+          <Select value={selected} onValueChange={setSelected}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select a bundle" />
+            </SelectTrigger>
+            <SelectContent>
+              {addable.map((c) => (
+                <SelectItem key={c.bundle_uuid} value={c.bundle_uuid}>
+                  {c.display_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button
+              disabled={!selected || addMutation.isPending}
+              onClick={() => selected && addMutation.mutate(selected)}
+            >
+              {addMutation.isPending ? "Adding…" : "Add bundle"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }

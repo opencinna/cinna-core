@@ -1,4 +1,5 @@
 import type { HandoverConfigPublic } from "@/client"
+import { ListRowGroup } from "@/components/Common/ListRow"
 import {
   Sheet,
   SheetContent,
@@ -47,23 +48,25 @@ export function AllHandoversSheet({
           <SheetTitle>Handover to Agents</SheetTitle>
           <SheetDescription>{totalCount} handovers</SheetDescription>
         </SheetHeader>
-        <div className="flex-1 overflow-y-auto space-y-1.5 px-4 pb-4">
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
           {handovers.length === 0 ? (
             // Reachable without closing the Sheet: the rows carry Delete.
             <p className="text-sm text-muted-foreground">
               This agent doesn&apos;t hand work to any other agent yet.
             </p>
           ) : (
-            handovers.map((handover) => (
-              <HandoverRow
-                key={handover.id}
-                agentId={agentId}
-                handover={handover}
-                targetColorPreset={
-                  colorPresetByAgentId[handover.target_agent_id]
-                }
-              />
-            ))
+            <ListRowGroup>
+              {handovers.map((handover) => (
+                <HandoverRow
+                  key={handover.id}
+                  agentId={agentId}
+                  handover={handover}
+                  targetColorPreset={
+                    colorPresetByAgentId[handover.target_agent_id]
+                  }
+                />
+              ))}
+            </ListRowGroup>
           )}
         </div>
       </SheetContent>

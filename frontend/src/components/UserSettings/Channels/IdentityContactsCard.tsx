@@ -26,9 +26,11 @@
  * off.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Users } from "lucide-react"
 import { useMemo, useState } from "react"
-
 import { IdentityContactsService } from "@/client"
+
+import { ListRowGroup } from "@/components/Common/ListRow"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Button } from "@/components/ui/button"
 import {
@@ -122,7 +124,10 @@ export function IdentityContactsCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>People who shared with you</CardTitle>
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <Users className="h-5 w-5" />
+          People who shared with you
+        </CardTitle>
         <CardDescription>
           People who have shared an agent with you, and whether you may address
           them by name.
@@ -145,9 +150,9 @@ export function IdentityContactsCard() {
           </QueryErrorAlert>
         ) : isLoading ? (
           <div className="space-y-1.5">
-            <Skeleton className="h-[52px] w-full rounded-lg" />
-            <Skeleton className="h-[52px] w-full rounded-lg" />
-            <Skeleton className="h-[52px] w-full rounded-lg" />
+            <Skeleton className="h-[48px] w-full rounded-md" />
+            <Skeleton className="h-[48px] w-full rounded-md" />
+            <Skeleton className="h-[48px] w-full rounded-md" />
           </div>
         ) : totalCount === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -155,15 +160,17 @@ export function IdentityContactsCard() {
             they appear here and you choose whether to keep them on.
           </p>
         ) : (
-          <div className="space-y-1.5">
-            {contacts.slice(0, PREVIEW_COUNT).map((contact) => (
-              <IdentityContactRow
-                key={contact.owner_id}
-                contact={contact}
-                isPending={pendingContactIds.has(contact.owner_id)}
-                onToggle={(next) => toggle(contact.owner_id, next)}
-              />
-            ))}
+          <div className="space-y-2">
+            <ListRowGroup>
+              {contacts.slice(0, PREVIEW_COUNT).map((contact) => (
+                <IdentityContactRow
+                  key={contact.owner_id}
+                  contact={contact}
+                  isPending={pendingContactIds.has(contact.owner_id)}
+                  onToggle={(next) => toggle(contact.owner_id, next)}
+                />
+              ))}
+            </ListRowGroup>
             {totalCount > PREVIEW_COUNT && (
               <Button
                 variant="link"

@@ -20,20 +20,30 @@
  * === true``).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useMemo } from "react"
 import { Link } from "@tanstack/react-router"
-import { AlertTriangle, Hammer, MessageCircle } from "lucide-react"
+import { AlertTriangle, Hammer, KeyRound, MessageCircle } from "lucide-react"
+import { useMemo } from "react"
 
 import {
+  type AgentBundlePublic,
+  type AgentPublic,
   AgentsService,
   AiCredentialsService,
   BundlesService,
   EnvironmentsService,
   InstallsService,
-  type AgentPublic,
-  type AgentBundlePublic,
 } from "@/client"
-import useCustomToast from "@/hooks/useCustomToast"
+import { CredentialTypeBadge } from "@/components/Credentials/CredentialTypeBadge"
+import {
+  type ProvidedBy,
+  providedByLabel,
+} from "@/components/Credentials/providedByLabel"
+import {
+  extractEngine,
+  getEngineLabel,
+  SDK_CREDENTIAL_COMPATIBILITY,
+  sdkExpectedCredentialType,
+} from "@/components/Environments/EnvironmentConfigForm"
 import { Badge } from "@/components/ui/badge"
 import {
   Card,
@@ -43,7 +53,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
-import { CredentialTypeBadge } from "@/components/Credentials/CredentialTypeBadge"
 import {
   Select,
   SelectContent,
@@ -51,17 +60,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  SDK_CREDENTIAL_COMPATIBILITY,
-  extractEngine,
-  getEngineLabel,
-  sdkExpectedCredentialType,
-} from "@/components/Environments/EnvironmentConfigForm"
-
-import {
-  providedByLabel,
-  type ProvidedBy,
-} from "@/components/Credentials/providedByLabel"
+import useCustomToast from "@/hooks/useCustomToast"
 
 interface CredentialProvisioningSectionProps {
   agent: AgentPublic
@@ -148,10 +147,10 @@ export function CredentialProvisioningSection({
   // an empty dropdown.
   const conversationCompatibleTypes = conversationExpectedType
     ? [conversationExpectedType]
-    : SDK_CREDENTIAL_COMPATIBILITY[conversationEngine] ?? []
+    : (SDK_CREDENTIAL_COMPATIBILITY[conversationEngine] ?? [])
   const buildingCompatibleTypes = buildingExpectedType
     ? [buildingExpectedType]
-    : SDK_CREDENTIAL_COMPATIBILITY[buildingEngine] ?? []
+    : (SDK_CREDENTIAL_COMPATIBILITY[buildingEngine] ?? [])
 
   const conversationOptions = aiCredentialOptions.filter((c) =>
     conversationCompatibleTypes.includes(c.type),
@@ -164,9 +163,11 @@ export function CredentialProvisioningSection({
 
   const serverOverrides = useMemo<Record<string, ProvidedBy>>(() => {
     const raw =
-      (agent.publish_settings as
-        | { credential_overrides?: Record<string, { provided_by?: string }> }
-        | undefined)?.credential_overrides ?? {}
+      (
+        agent.publish_settings as
+          | { credential_overrides?: Record<string, { provided_by?: string }> }
+          | undefined
+      )?.credential_overrides ?? {}
     const out: Record<string, ProvidedBy> = {}
     for (const [name, entry] of Object.entries(raw)) {
       if (
@@ -193,8 +194,7 @@ export function CredentialProvisioningSection({
     name: string
     allow_sharing?: boolean
     allow_template_sharing?: boolean
-  }): ProvidedBy =>
-    serverOverrides[cred.name] ?? inferredFor(cred)
+  }): ProvidedBy => serverOverrides[cred.name] ?? inferredFor(cred)
 
   // Pre-publish AI credential draft — stored on the publisher install's
   // ``publish_settings.ai_credentials`` until the bundle row exists. After
@@ -204,14 +204,16 @@ export function CredentialProvisioningSection({
     building_credential_id: string | null
   }>(() => {
     const raw =
-      (agent.publish_settings as
-        | {
-            ai_credentials?: {
-              conversation_credential_id?: string | null
-              building_credential_id?: string | null
+      (
+        agent.publish_settings as
+          | {
+              ai_credentials?: {
+                conversation_credential_id?: string | null
+                building_credential_id?: string | null
+              }
             }
-          }
-        | undefined)?.ai_credentials ?? {}
+          | undefined
+      )?.ai_credentials ?? {}
     return {
       conversation_credential_id: raw.conversation_credential_id ?? null,
       building_credential_id: raw.building_credential_id ?? null,
@@ -219,10 +221,10 @@ export function CredentialProvisioningSection({
   }, [agent.publish_settings])
 
   const conversationAiId = bundle
-    ? bundle.publisher_ai_credential_conversation_id ?? null
+    ? (bundle.publisher_ai_credential_conversation_id ?? null)
     : draftAiCredentials.conversation_credential_id
   const buildingAiId = bundle
-    ? bundle.publisher_ai_credential_building_id ?? null
+    ? (bundle.publisher_ai_credential_building_id ?? null)
     : draftAiCredentials.building_credential_id
 
   // ── Mutations ───────────────────────────────────────────────────────
@@ -334,20 +336,22 @@ export function CredentialProvisioningSection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Credential provisioning</CardTitle>
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <KeyRound className="h-5 w-5" />
+          Credential provisioning
+        </CardTitle>
         <CardDescription>
           Decide which credentials you (the publisher) provide for foreign
-          installs and which the user must supply themselves. These
-          choices are baked into the next published revision.
+          installs and which the user must supply themselves. These choices are
+          baked into the next published revision.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {/* Per-credential override map. */}
         {linkedCredentials.length === 0 ? (
           <p className="text-sm text-muted-foreground py-2">
-            No service credentials linked to this install yet — link
-            credentials from the Credentials tab to manage their
-            provisioning here.
+            No service credentials linked to this install yet — link credentials
+            from the Credentials tab to manage their provisioning here.
           </p>
         ) : (
           linkedCredentials.map((cred) => {
@@ -373,8 +377,8 @@ export function CredentialProvisioningSection({
                     {!cred.allow_sharing && !cred.allow_template_sharing && (
                       <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300">
                         <AlertTriangle className="h-3 w-3 shrink-0" />
-                        not shareable — enable Sharing or Template Sharing
-                        on the credential to expose it to users
+                        not shareable — enable Sharing or Template Sharing on
+                        the credential to expose it to users
                       </span>
                     )}
                   </div>
@@ -383,8 +387,9 @@ export function CredentialProvisioningSection({
                       <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
                       <span>
                         Installers still receive the previously published
-                        setting ({providedByLabel(rowDrift.snapshot)}). Republish
-                        the bundle to apply "{providedByLabel(rowDrift.live)}".
+                        setting ({providedByLabel(rowDrift.snapshot)}).
+                        Republish the bundle to apply "
+                        {providedByLabel(rowDrift.live)}".
                       </span>
                     </div>
                   )}
@@ -426,14 +431,14 @@ export function CredentialProvisioningSection({
         <div className="pt-2">
           <Label className="text-sm font-medium">AI credentials</Label>
           <p className="text-xs text-muted-foreground">
-            Pick an AI credential to share with foreign installs, or leave
-            "None — user provides" so the user supplies their own. Only
-            credentials compatible with the mode's SDK are listed.
+            Pick an AI credential to share with foreign installs, or leave "None
+            — user provides" so the user supplies their own. Only credentials
+            compatible with the mode's SDK are listed.
             {!bundle && (
               <>
                 {" "}
-                Selections are saved as a draft and applied to the bundle
-                on first publish.
+                Selections are saved as a draft and applied to the bundle on
+                first publish.
               </>
             )}
           </p>
@@ -496,10 +501,7 @@ export function CredentialProvisioningSection({
                 <Select
                   value={buildingAiId ?? "__none__"}
                   onValueChange={(val) =>
-                    handlePickAi(
-                      "building",
-                      val === "__none__" ? null : val,
-                    )
+                    handlePickAi("building", val === "__none__" ? null : val)
                   }
                   disabled={aiPending}
                 >

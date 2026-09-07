@@ -1,13 +1,31 @@
-import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Copy, Check, Trash2, Plus, Eye, EyeOff, Info } from "lucide-react"
+import {
+  Ban,
+  Check,
+  Copy,
+  Eye,
+  EyeOff,
+  Plus,
+  RotateCcw,
+  Trash2,
+} from "lucide-react"
+import { useState } from "react"
 
 import type { MCPConnectorTokenPublic } from "@/client"
 import { McpConnectorsService } from "@/client"
-import useCustomToast from "@/hooks/useCustomToast"
+import { ListRow, ListRowGroup, RowInfo } from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Dialog,
   DialogContent,
@@ -18,23 +36,12 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import useCustomToast from "@/hooks/useCustomToast"
 
 interface McpDirectTokensManagerProps {
   agentId: string
@@ -55,6 +62,8 @@ export function McpDirectTokensManager({
   const [createdToken, setCreatedToken] = useState<string | null>(null)
   const [copiedToken, setCopiedToken] = useState(false)
   const [showToken, setShowToken] = useState(false)
+  const [deleteTarget, setDeleteTarget] =
+    useState<MCPConnectorTokenPublic | null>(null)
 
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -80,7 +89,9 @@ export function McpDirectTokensManager({
       })
     },
     onError: (error: any) => {
-      showErrorToast(error.body?.detail || error.message || "Failed to create token")
+      showErrorToast(
+        error.body?.detail || error.message || "Failed to create token",
+      )
     },
   })
 
@@ -99,21 +110,30 @@ export function McpDirectTokensManager({
       })
     },
     onError: (error: any) => {
-      showErrorToast(error.body?.detail || error.message || "Failed to update token")
+      showErrorToast(
+        error.body?.detail || error.message || "Failed to update token",
+      )
     },
   })
 
   const deleteTokenMutation = useMutation({
     mutationFn: (tokenId: string) =>
-      McpConnectorsService.deleteConnectorToken({ agentId, connectorId, tokenId }),
+      McpConnectorsService.deleteConnectorToken({
+        agentId,
+        connectorId,
+        tokenId,
+      }),
     onSuccess: () => {
       showSuccessToast("Token deleted")
+      setDeleteTarget(null)
       queryClient.invalidateQueries({
         queryKey: ["mcp-connector-tokens", connectorId],
       })
     },
     onError: (error: any) => {
-      showErrorToast(error.body?.detail || error.message || "Failed to delete token")
+      showErrorToast(
+        error.body?.detail || error.message || "Failed to delete token",
+      )
     },
   })
 
@@ -247,7 +267,9 @@ export function McpDirectTokensManager({
                   onClick={handleCreateToken}
                   disabled={createTokenMutation.isPending}
                 >
-                  {createTokenMutation.isPending ? "Generating..." : "Generate Token"}
+                  {createTokenMutation.isPending
+                    ? "Generating..."
+                    : "Generate Token"}
                 </Button>
               )}
             </DialogFooter>
@@ -260,96 +282,93 @@ export function McpDirectTokensManager({
       ) : tokens.length === 0 ? (
         <p className="text-sm text-muted-foreground">No direct tokens yet.</p>
       ) : (
-        <div className="space-y-1.5">
+        <ListRowGroup>
           {tokens.map((token: MCPConnectorTokenPublic) => (
-            <div
+            <ListRow
               key={token.id}
-              className={`flex items-center justify-between px-3 py-2 border rounded-lg ${
-                token.revoked ? "opacity-50 bg-muted" : ""
-              }`}
+              muted={token.revoked}
+              status={{
+                tone: token.revoked ? "error" : "on",
+                label: token.revoked ? "Revoked" : "Active",
+              }}
+              title={token.label || "Untitled"}
+              flags={
+                <RowInfo
+                  facts={[
+                    `Prefix ${token.prefix}…`,
+                    `Created ${formatDate(token.created_at)}`,
+                    token.last_used_at
+                      ? `Last used ${formatDate(token.last_used_at)}`
+                      : "Never used",
+                  ]}
+                />
+              }
             >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="font-medium text-sm truncate">
-                  {token.label || "Untitled"}
-                </span>
-                {token.revoked && (
-                  <Badge variant="destructive" className="text-xs shrink-0">
-                    Revoked
-                  </Badge>
-                )}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="font-mono text-xs text-muted-foreground">
-                  {token.prefix}...
-                </span>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="flex items-center cursor-help">
-                        <Info className="h-3.5 w-3.5 text-muted-foreground" />
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="text-xs">
-                      <div className="space-y-1">
-                        <p>Created: {formatDate(token.created_at)}</p>
-                        {token.last_used_at && (
-                          <p>Last used: {formatDate(token.last_used_at)}</p>
-                        )}
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <div className="flex items-center gap-0.5 ml-1 border-l pl-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-xs"
-                    onClick={() =>
-                      revokeTokenMutation.mutate({
-                        tokenId: token.id,
-                        revoked: !token.revoked,
-                      })
-                    }
-                    disabled={revokeTokenMutation.isPending}
-                  >
-                    {token.revoked ? "Restore" : "Revoke"}
-                  </Button>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete Direct Token</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          Are you sure you want to delete "{token.label || "this token"}"?
-                          This action cannot be undone. Any client using it will lose
-                          access immediately.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => deleteTokenMutation.mutate(token.id)}
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        >
-                          Delete
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </div>
-              </div>
-            </div>
+              <RowActionsMenu
+                label={`the token ${token.label || "Untitled"}`}
+                disabled={revokeTokenMutation.isPending}
+              >
+                <DropdownMenuItem
+                  onSelect={() =>
+                    revokeTokenMutation.mutate({
+                      tokenId: token.id,
+                      revoked: !token.revoked,
+                    })
+                  }
+                >
+                  {token.revoked ? <RotateCcw /> : <Ban />}
+                  {token.revoked ? "Restore token" : "Revoke token"}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={(e) => {
+                    e.preventDefault()
+                    setDeleteTarget(token)
+                  }}
+                >
+                  <Trash2 />
+                  Delete token
+                </DropdownMenuItem>
+              </RowActionsMenu>
+            </ListRow>
           ))}
-        </div>
+        </ListRowGroup>
       )}
+
+      {/* One confirm for the list, driven by the row the menu named. */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(next) => {
+          if (!deleteTokenMutation.isPending && !next) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete direct token</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete <strong>{deleteTarget?.label || "this token"}</strong>?
+              This cannot be undone, and any client using it loses access
+              immediately.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteTokenMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                if (deleteTarget) deleteTokenMutation.mutate(deleteTarget.id)
+              }}
+              disabled={deleteTokenMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteTokenMutation.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

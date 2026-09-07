@@ -1,15 +1,41 @@
-import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { formatDistanceToNow } from "date-fns"
-import { Copy, Check, Trash2, Plus, Link2, Users, Pencil, ShieldAlert } from "lucide-react"
+import {
+  Check,
+  Copy,
+  Link2,
+  Pencil,
+  Plus,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react"
+import { useState } from "react"
 
 import type {
-  AgentGuestSharePublic,
   AgentGuestShareCreate,
+  AgentGuestSharePublic,
   AgentGuestShareUpdate,
 } from "@/client"
 import { GuestSharesService } from "@/client"
-import useCustomToast from "@/hooks/useCustomToast"
+import {
+  ListRow,
+  ListRowGroup,
+  RowFlag,
+  RowInfo,
+} from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -17,16 +43,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -37,24 +53,20 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+import useCustomToast from "@/hooks/useCustomToast"
 
 interface GuestShareCardProps {
   agentId: string
@@ -72,7 +84,9 @@ const EXPIRATION_OPTIONS: ExpirationOption[] = [
   { label: "30 days", hours: 720 },
 ]
 
-function getShareStatus(share: AgentGuestSharePublic): "active" | "expired" | "revoked" | "blocked" {
+function getShareStatus(
+  share: AgentGuestSharePublic,
+): "active" | "expired" | "revoked" | "blocked" {
   if (share.is_revoked) return "revoked"
   if (new Date(share.expires_at) < new Date()) return "expired"
   if (share.is_code_blocked) return "blocked"
@@ -95,14 +109,19 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
   const [shareLabel, setShareLabel] = useState("")
   const [expirationHours, setExpirationHours] = useState<string>("24")
   const [createdShareUrl, setCreatedShareUrl] = useState<string | null>(null)
-  const [createdSecurityCode, setCreatedSecurityCode] = useState<string | null>(null)
+  const [createdSecurityCode, setCreatedSecurityCode] = useState<string | null>(
+    null,
+  )
   const [copiedUrl, setCopiedUrl] = useState(false)
   const [copiedCode, setCopiedCode] = useState(false)
+  const [deleteTarget, setDeleteTarget] =
+    useState<AgentGuestSharePublic | null>(null)
   const [copiedShareId, setCopiedShareId] = useState<string | null>(null)
 
   // Edit dialog state
   const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [editingShare, setEditingShare] = useState<AgentGuestSharePublic | null>(null)
+  const [editingShare, setEditingShare] =
+    useState<AgentGuestSharePublic | null>(null)
   const [editLabel, setEditLabel] = useState("")
   const [editSecurityCode, setEditSecurityCode] = useState("")
   const [editAllowEnvPanel, setEditAllowEnvPanel] = useState(false)
@@ -140,6 +159,7 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
       GuestSharesService.deleteGuestShare({ agentId, guestShareId }),
     onSuccess: () => {
       showSuccessToast("Guest share link deleted successfully")
+      setDeleteTarget(null)
       queryClient.invalidateQueries({ queryKey: ["guest-shares", agentId] })
     },
     onError: (error: any) => {
@@ -149,7 +169,13 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
 
   // Update guest share mutation
   const updateShareMutation = useMutation({
-    mutationFn: ({ guestShareId, data }: { guestShareId: string; data: AgentGuestShareUpdate }) =>
+    mutationFn: ({
+      guestShareId,
+      data,
+    }: {
+      guestShareId: string
+      data: AgentGuestShareUpdate
+    }) =>
       GuestSharesService.updateGuestShare({
         agentId,
         guestShareId,
@@ -264,7 +290,9 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>
-                  {createdShareUrl ? "Share Link Created" : "Create Guest Share Link"}
+                  {createdShareUrl
+                    ? "Share Link Created"
+                    : "Create Guest Share Link"}
                 </DialogTitle>
                 <DialogDescription>
                   {createdShareUrl
@@ -326,7 +354,8 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
                         </Button>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Share this code separately with your guest. They will need it to access the link.
+                        Share this code separately with your guest. They will
+                        need it to access the link.
                       </p>
                     </div>
                   )}
@@ -341,7 +370,10 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
                       value={shareLabel}
                       onChange={(e) => setShareLabel(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter" && !createShareMutation.isPending) {
+                        if (
+                          e.key === "Enter" &&
+                          !createShareMutation.isPending
+                        ) {
                           e.preventDefault()
                           handleCreateShare()
                         }
@@ -351,13 +383,19 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
 
                   <div className="space-y-2">
                     <Label htmlFor="share-expiration">Expiration</Label>
-                    <Select value={expirationHours} onValueChange={setExpirationHours}>
+                    <Select
+                      value={expirationHours}
+                      onValueChange={setExpirationHours}
+                    >
                       <SelectTrigger id="share-expiration">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         {EXPIRATION_OPTIONS.map((option) => (
-                          <SelectItem key={option.hours} value={String(option.hours)}>
+                          <SelectItem
+                            key={option.hours}
+                            value={String(option.hours)}
+                          >
                             {option.label}
                           </SelectItem>
                         ))}
@@ -378,7 +416,9 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
                     onClick={handleCreateShare}
                     disabled={createShareMutation.isPending}
                   >
-                    {createShareMutation.isPending ? "Creating..." : "Create Link"}
+                    {createShareMutation.isPending
+                      ? "Creating..."
+                      : "Create Link"}
                   </Button>
                 )}
               </DialogFooter>
@@ -388,160 +428,155 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
       </CardHeader>
       <CardContent>
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading share links...</p>
+          <p className="text-sm text-muted-foreground">
+            Loading share links...
+          </p>
         ) : shares.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No guest share links yet. Create one to let guests chat with this agent.
+            No guest share links yet. Create one to let guests chat with this
+            agent.
           </p>
         ) : (
-          <div className="space-y-1.5">
+          <ListRowGroup>
             {shares.map((share: AgentGuestSharePublic) => {
               const status = getShareStatus(share)
+              const isActive = status === "active"
               return (
-                <div
+                <ListRow
                   key={share.id}
-                  className={`flex items-center justify-between px-3 py-2 border rounded-lg ${
-                    status !== "active" ? "opacity-50 bg-muted" : ""
-                  }`}
-                >
-                  {/* Left: label, status badge, code, blocked */}
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-medium text-sm truncate">
-                      {share.label || "Untitled"}
-                    </span>
-                    {status === "active" && (
-                      <Badge variant="default" className="text-xs shrink-0 bg-emerald-500 hover:bg-emerald-600">
-                        Active
+                  muted={!isActive}
+                  // Four states, one dot: the four `Badge`s this row used to
+                  // print were the widest thing on it and were mutually
+                  // exclusive anyway.
+                  status={{
+                    tone:
+                      status === "active"
+                        ? "on"
+                        : status === "blocked"
+                          ? "error"
+                          : status === "expired"
+                            ? "warning"
+                            : "off",
+                    label:
+                      status === "active"
+                        ? `Active — ${formatRelativeExpiry(share.expires_at)}`
+                        : status === "blocked"
+                          ? "Blocked — too many wrong security codes"
+                          : status === "expired"
+                            ? "Expired"
+                            : "Revoked",
+                  }}
+                  title={share.label || "Untitled"}
+                  // The code is the thing a publisher reads off and hands to a
+                  // guest, so it stays visible — as a badge on the title line
+                  // rather than a second line under it.
+                  badges={
+                    share.security_code ? (
+                      <Badge
+                        variant="outline"
+                        className="h-5 shrink-0 font-mono text-xs"
+                      >
+                        {share.security_code}
                       </Badge>
-                    )}
-                    {status === "expired" && (
-                      <Badge variant="destructive" className="text-xs shrink-0">
-                        Expired
-                      </Badge>
-                    )}
-                    {status === "revoked" && (
-                      <Badge variant="secondary" className="text-xs shrink-0">
-                        Revoked
-                      </Badge>
-                    )}
-                    {status === "blocked" && (
-                      <Badge variant="destructive" className="text-xs shrink-0 flex items-center gap-1">
-                        <ShieldAlert className="h-3 w-3" />
-                        Blocked
-                      </Badge>
-                    )}
-                    {share.security_code && (
-                      <span className="font-mono text-xs text-muted-foreground shrink-0">
-                        Code: {share.security_code}
-                      </span>
-                    )}
-                  </div>
-                  {/* Right: session count, expiry, and actions */}
-                  <div className="flex items-center gap-2 shrink-0">
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="flex items-center gap-1 cursor-help">
-                            <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span className="text-xs text-muted-foreground">
-                              {share.session_count ?? 0}
-                            </span>
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="text-xs">
-                          {share.session_count === 1
+                    ) : undefined
+                  }
+                  flags={
+                    <>
+                      {status === "blocked" && (
+                        <RowFlag
+                          icon={ShieldAlert}
+                          tone="error"
+                          label="Blocked after too many wrong security codes. Set a new code to unblock it."
+                        />
+                      )}
+                      <RowInfo
+                        facts={[
+                          share.session_count === 1
                             ? "1 session created"
-                            : `${share.session_count ?? 0} sessions created`}
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    {status === "active" && (
-                      <span className="text-xs text-muted-foreground">
-                        {formatRelativeExpiry(share.expires_at)}
-                      </span>
+                            : `${share.session_count ?? 0} sessions created`,
+                          share.expires_at &&
+                            `${status === "expired" ? "Expired" : "Expires"} ${formatRelativeExpiry(share.expires_at)}`,
+                        ]}
+                      />
+                    </>
+                  }
+                >
+                  <RowActionsMenu
+                    label={`the share link ${share.label || "Untitled"}`}
+                  >
+                    {isActive && share.share_url && (
+                      <DropdownMenuItem
+                        onSelect={(e) => {
+                          // The item unmounts on select and would take the
+                          // tick with it.
+                          e.preventDefault()
+                          handleCopyShareLink(share.share_url!, share.id)
+                        }}
+                      >
+                        {copiedShareId === share.id ? <Check /> : <Copy />}
+                        {copiedShareId === share.id
+                          ? "Copied"
+                          : "Copy share link"}
+                      </DropdownMenuItem>
                     )}
-                    <div className="flex items-center gap-0.5 ml-1 border-l pl-2">
-                      {status === "active" && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6"
-                                onClick={() => handleEditOpen(share)}
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="text-xs">
-                              Edit share
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
-                      {share.share_url && status === "active" && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6"
-                                onClick={() => handleCopyShareLink(share.share_url!, share.id)}
-                              >
-                                {copiedShareId === share.id ? (
-                                  <Check className="h-3.5 w-3.5 text-green-500" />
-                                ) : (
-                                  <Copy className="h-3.5 w-3.5" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="text-xs">
-                              Copy share link
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete Guest Share Link</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              Are you sure you want to delete the share link
-                              &ldquo;{share.label || "Untitled"}&rdquo;?
-                              This action cannot be undone. The link will no longer be
-                              usable, but existing sessions will continue to work.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={() => deleteShareMutation.mutate(share.id)}
-                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            >
-                              Delete
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </div>
-                  </div>
-                </div>
+                    {isActive && (
+                      <DropdownMenuItem onSelect={() => handleEditOpen(share)}>
+                        <Pencil />
+                        Edit share
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={(e) => {
+                        e.preventDefault()
+                        setDeleteTarget(share)
+                      }}
+                    >
+                      <Trash2 />
+                      Delete share link
+                    </DropdownMenuItem>
+                  </RowActionsMenu>
+                </ListRow>
               )
             })}
-          </div>
+          </ListRowGroup>
         )}
       </CardContent>
+
+      {/* One confirm for the list, driven by the row the menu named. */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(next) => {
+          if (!deleteShareMutation.isPending && !next) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete guest share link</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete <strong>{deleteTarget?.label || "Untitled"}</strong>? This
+              cannot be undone. The link stops working, but sessions already
+              created through it keep running.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteShareMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                if (deleteTarget) deleteShareMutation.mutate(deleteTarget.id)
+              }}
+              disabled={deleteShareMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteShareMutation.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
@@ -552,7 +587,8 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
               Update the label or security code for this share link.
               {editingShare?.is_code_blocked && (
                 <span className="block mt-1 text-destructive">
-                  This link is currently blocked. Setting a new security code will unblock it.
+                  This link is currently blocked. Setting a new security code
+                  will unblock it.
                 </span>
               )}
             </DialogDescription>
@@ -590,7 +626,8 @@ export function GuestShareCard({ agentId }: GuestShareCardProps) {
                 className="font-mono"
               />
               <p className="text-xs text-muted-foreground">
-                Enter a new 4-digit code to replace the current one. This will also reset the attempt counter.
+                Enter a new 4-digit code to replace the current one. This will
+                also reset the attempt counter.
               </p>
             </div>
 

@@ -1,4 +1,3 @@
-import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { formatDistanceToNow } from "date-fns"
 import {
@@ -7,11 +6,14 @@ import {
   Laptop,
   Monitor,
   Smartphone,
+  TerminalSquare,
   Unplug,
 } from "lucide-react"
+import { useState } from "react"
 
 import type { DesktopOAuthClientPublic } from "@/client"
 import { DesktopAuthService } from "@/client"
+import { ListRow, RowFlag } from "@/components/Common/ListRow"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,7 +24,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -122,58 +123,45 @@ export function AppSessionRow({ client }: AppSessionRowProps) {
   })
 
   return (
-    <div className="group flex items-center justify-between px-3 py-2 border rounded-lg">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md shrink-0 flex items-center justify-center bg-muted">
-            <PlatformIcon platform={client.platform} />
-          </div>
-          <span className="text-sm font-medium truncate min-w-0">
-            {client.device_name}
-          </span>
-          {/* Only the CLI-exchanged origin is badged: a browser consent is the
-              ordinary way to connect an app, and a badge on every row would
-              bury the one that matters. */}
-          {client.origin === "cli_exchange" && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="secondary" className="text-xs shrink-0">
-                  CLI link
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="text-xs">
-                Linked from a CLI account token on this machine, without a
-                browser sign-in.
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {metadataLine(client)}
-        </p>
-      </div>
-
+    <ListRow
+      icon={
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
+          <PlatformIcon platform={client.platform} />
+        </span>
+      }
+      title={client.device_name}
+      meta={metadataLine(client)}
+      flags={
+        // Only the CLI-exchanged origin is flagged: a browser consent is the
+        // ordinary way to connect an app, and a mark on every row would bury
+        // the one that matters.
+        client.origin === "cli_exchange" ? (
+          <RowFlag
+            icon={TerminalSquare}
+            label="Linked from a CLI account token on this machine, without a browser sign-in."
+          />
+        ) : undefined
+      }
+    >
       {/* Hover-revealed (P3 variant): this is a View surface, and a destructive
           control that is visible on every row invites the accident. */}
-      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-destructive"
-              disabled={revokeMutation.isPending}
-              aria-label={`Disconnect ${client.device_name}`}
-              onClick={() => setConfirmOpen(true)}
-            >
-              <Unplug className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            Disconnect
-          </TooltipContent>
-        </Tooltip>
-      </div>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+            disabled={revokeMutation.isPending}
+            aria-label={`Disconnect ${client.device_name}`}
+            onClick={() => setConfirmOpen(true)}
+          >
+            <Unplug className="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          Disconnect
+        </TooltipContent>
+      </Tooltip>
 
       <AlertDialog
         open={confirmOpen}
@@ -210,6 +198,6 @@ export function AppSessionRow({ client }: AppSessionRowProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </ListRow>
   )
 }

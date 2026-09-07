@@ -45,8 +45,8 @@ export function ServerDebugToolsCard() {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2">
-          <Wrench className="h-4 w-4 text-blue-500" />
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <Wrench className="h-5 w-5" />
           Server debug tools
         </CardTitle>
         <CardDescription>

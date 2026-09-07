@@ -1,4 +1,5 @@
 import type { DesktopOAuthClientPublic } from "@/client"
+import { ListRowGroup } from "@/components/Common/ListRow"
 import {
   Sheet,
   SheetContent,
@@ -45,16 +46,18 @@ export function AllAppSessionsSheet({
               : `${clients.length} connected apps`}
           </SheetDescription>
         </SheetHeader>
-        <div className="flex-1 overflow-y-auto space-y-1.5 px-4 pb-4">
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
           {clients.length === 0 ? (
             // Reachable without closing the Sheet: the rows carry Disconnect.
             <p className="text-sm text-muted-foreground">
               No apps are connected to this account.
             </p>
           ) : (
-            clients.map((client) => (
-              <AppSessionRow key={client.client_id} client={client} />
-            ))
+            <ListRowGroup>
+              {clients.map((client) => (
+                <AppSessionRow key={client.client_id} client={client} />
+              ))}
+            </ListRowGroup>
           )}
         </div>
       </SheetContent>

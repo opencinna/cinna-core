@@ -3,12 +3,12 @@
  *
  * Rendered by both the Channels card and its "Show all" Sheet so the two hosts
  * cannot drift. The row carries the one control whose purpose it is — the
- * on/off `Switch` — and nothing else inline; everything structured lives one
- * level down, in the Configure Sheet the `⋯` menu opens.
+ * On/Off power button — and nothing else inline; everything structured lives
+ * one level down, in the Configure Sheet the `⋯` menu opens.
  *
  * WHY INHERITANCE IS LABELLED RATHER THAN JUST RENDERED
  * -----------------------------------------------------
- * A switch showing "on" because an admin default says so looks identical to
+ * A control showing "On" because an admin default says so looks identical to
  * one the user turned on themselves, and the two behave differently the moment
  * the admin changes their mind: the first follows, the second does not. So the
  * metadata line says which of the two this is, its tooltip names the default
@@ -17,7 +17,7 @@
  *
  * `is_available` AND `is_enabled` ARE DIFFERENT FACTS
  * ---------------------------------------------------
- * `is_enabled` is the user's own switch. `is_available` is the whole
+ * `is_enabled` is the user's own choice. `is_available` is the whole
  * conjunction — the admin kill switch, access, *and* that switch. They are
  * rendered separately, and a channel that is switched on by its user but not
  * available says so instead of silently showing "on".
@@ -30,18 +30,15 @@
  * checklist tick made there.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import {
-  EllipsisVertical,
-  Loader2,
-  RotateCcw,
-  Settings2,
-  Undo2,
-} from "lucide-react"
+import { Loader2, RotateCcw, Settings2, Undo2, Users } from "lucide-react"
 import { useState } from "react"
 
 import type { UserChannelPublic } from "@/client"
 import { UserChannelsService } from "@/client"
 import { getChannelTypeMeta } from "@/components/Admin/ServerChannels/channelTypes"
+import { ListRow, RowFlag } from "@/components/Common/ListRow"
+import { OnOffToggle } from "@/components/Common/OnOffToggle"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,16 +49,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Switch } from "@/components/ui/switch"
 import {
   Tooltip,
   TooltipContent,
@@ -131,65 +122,36 @@ export function ChannelRow({ channel, onConfigure }: ChannelRowProps) {
   )
 
   return (
-    <div
-      className={cn(
-        "flex items-center justify-between px-3 py-2 border rounded-lg",
-        !channel.is_enabled && "opacity-60",
-      )}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md shrink-0 flex items-center justify-center bg-muted">
-            <Icon className={cn("h-3.5 w-3.5", meta.iconClass)} />
-          </div>
-          <span className="text-sm font-medium truncate min-w-0">
-            {channel.name}
-          </span>
-          {/* No "Default" / "Your choice" badge: it would repeat, in ~60px of
-              a name's ~90px at 1024, exactly what the metadata line's first
-              fact already says. Only the two facts that line CANNOT carry are
-              badged — the channel being unavailable, and identity routing
-              being on. */}
-          {blockedByAdmin && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="destructive" className="text-xs shrink-0">
-                  Unavailable
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs text-xs">
-                {UNAVAILABLE_SENTENCE}
-              </TooltipContent>
-            </Tooltip>
-          )}
-          {/* Only when on. Identity routing is off by default, so a badge on
-              every row would be noise about a feature most people are not
-              using — while the people who ARE need to see it at a glance. */}
-          {channel.allow_identity_routing && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="secondary" className="text-xs shrink-0">
-                  + identities
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs text-xs">
-                This channel may also reach an agent someone has shared with
-                you, in a session that lives in their workspace.
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {/* Provenance carries its own sentence, which is where the badge's
-              tooltip used to live: which default is being followed, and what
-              happens if the administrator changes it. */}
+    <ListRow
+      muted={!channel.is_enabled}
+      // One dot carries what two badges and a switch position used to say
+      // between them: available and on, on but blocked by the administrator,
+      // or off. Its tooltip is where the "why" lives.
+      status={
+        blockedByAdmin
+          ? { tone: "error", label: UNAVAILABLE_SENTENCE }
+          : {
+              tone: channel.is_enabled ? "on" : "off",
+              label: channel.is_enabled ? "On for you" : "Off for you",
+            }
+      }
+      icon={
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
+          <Icon className={cn("h-3.5 w-3.5", meta.iconClass)} />
+        </span>
+      }
+      title={channel.name}
+      meta={
+        <>
+          {/* Provenance carries its own sentence: which default is being
+              followed, and what happens if the administrator changes it. */}
           <Tooltip>
             <TooltipTrigger asChild>
               {/* A `button` only so the sentence is reachable by keyboard —
                   this tooltip is its only home, and a `span` cannot take
                   focus (`tabIndex` on one is a lint error, correctly). It
                   performs nothing, so the row's inline action budget is still
-                  the Switch and the menu. */}
+                  the On/Off control and the menu. */}
               <button
                 type="button"
                 className="cursor-default underline decoration-dotted underline-offset-2"
@@ -202,95 +164,84 @@ export function ChannelRow({ channel, onConfigure }: ChannelRowProps) {
             </TooltipContent>
           </Tooltip>{" "}
           · {scopeSummary(channel)}
-        </p>
-      </div>
-
-      <div className="flex items-center gap-0.5 shrink-0">
-        {/* A reserved slot, always present: a spinner that appears on write
-            must not push the switch sideways. It is a pending indicator, not
-            an action — the row's inline budget is the Switch and the menu. */}
-        <span className="flex h-3.5 w-3.5 items-center justify-center">
-          {isBusy && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+        </>
+      }
+      flags={
+        <>
+          {/* A pending indicator, not an action: a reserved slot so a spinner
+              appearing on write cannot push the controls sideways. */}
+          <span className="flex h-3.5 w-3.5 items-center justify-center">
+            {isBusy && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            )}
+          </span>
+          {/* Only when on. Identity routing is off by default, so a flag on
+              every row would be noise about a feature most people are not
+              using — while the people who ARE need to see it at a glance. */}
+          {channel.allow_identity_routing && (
+            <RowFlag
+              icon={Users}
+              label="This channel may also reach an agent someone has shared with you, in a session that lives in their workspace."
+            />
           )}
-        </span>
-        <Switch
-          checked={channel.is_enabled}
-          disabled={isBusy}
-          aria-label={`Enable ${channel.name} for me`}
-          // Inherited values are dimmed so the row reads as "this is not (yet)
-          // yours" at a glance, matching the Default badge.
-          className={cn(channel.is_enabled_inherited && "opacity-70")}
-          onCheckedChange={(next) =>
-            updateMutation.mutate({ is_enabled: next })
-          }
-        />
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  disabled={isBusy}
-                  aria-label={`Actions for ${channel.name}`}
-                >
-                  <EllipsisVertical className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              More actions
-            </TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end">
+        </>
+      }
+    >
+      {/* Being on or off is the reason this list exists, so it is the row's
+          one inline control — the same Power glyph the menus use, rather than
+          a `Switch` that said nothing the dot does not already say. */}
+      <OnOffToggle
+        checked={channel.is_enabled}
+        disabled={isBusy}
+        label={channel.name}
+        // Inherited values are dimmed so the row reads as "this is not (yet)
+        // yours" at a glance.
+        className={cn(channel.is_enabled_inherited && "opacity-70")}
+        onChange={(next) => updateMutation.mutate({ is_enabled: next })}
+      />
+      <RowActionsMenu label={channel.name} disabled={isBusy}>
+        <DropdownMenuItem
+          onSelect={(e) => {
+            e.preventDefault()
+            onConfigure(channel)
+          }}
+        >
+          <Settings2 />
+          Configure
+        </DropdownMenuItem>
+        {!channel.is_enabled_inherited && (
+          <DropdownMenuItem
+            onSelect={() =>
+              // An explicit `null` clears just this field, returning it to the
+              // channel default while keeping the agent choices. That is what
+              // the API's "explicit null = inherit" contract is for.
+              updateMutation.mutate({ is_enabled: null })
+            }
+          >
+            <RotateCcw />
+            Follow the default again
+          </DropdownMenuItem>
+        )}
+        {/* The only way back to *pure* inheritance once anything has been
+            written — the per-field paths above clear one field each, but a row
+            can exist with every field already cleared. Offered only when a row
+            actually exists, because DELETE is a no-op otherwise. */}
+        {channel.has_settings && (
+          <>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
+              variant="destructive"
               onSelect={(e) => {
                 e.preventDefault()
-                onConfigure(channel)
+                setConfirmOpen(true)
               }}
             >
-              <Settings2 />
-              Configure
+              <Undo2 />
+              Discard all my settings
             </DropdownMenuItem>
-            {!channel.is_enabled_inherited && (
-              <DropdownMenuItem
-                onSelect={() =>
-                  // An explicit `null` clears just this field, returning it to
-                  // the channel default while keeping the agent choices. That
-                  // is what the API's "explicit null = inherit" contract is
-                  // for.
-                  updateMutation.mutate({ is_enabled: null })
-                }
-              >
-                <RotateCcw />
-                Follow the default again
-              </DropdownMenuItem>
-            )}
-            {/* The only way back to *pure* inheritance once anything has been
-                written — the per-field paths above clear one field each, but a
-                row can exist with every field already cleared. Offered only
-                when a row actually exists, because DELETE is a no-op
-                otherwise. */}
-            {channel.has_settings && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={(e) => {
-                    e.preventDefault()
-                    setConfirmOpen(true)
-                  }}
-                >
-                  <Undo2 />
-                  Discard all my settings
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+          </>
+        )}
+      </RowActionsMenu>
 
       <AlertDialog
         open={confirmOpen}
@@ -338,6 +289,6 @@ export function ChannelRow({ channel, onConfigure }: ChannelRowProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </ListRow>
   )
 }

@@ -1,7 +1,5 @@
-import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
-  EllipsisVertical,
   History,
   Pencil,
   Play,
@@ -10,9 +8,12 @@ import {
   Terminal,
   Trash2,
 } from "lucide-react"
+import { useState } from "react"
 
 import type { AgentSchedulePublic } from "@/client"
 import { AgentsService } from "@/client"
+import { ListRow, RowFlag } from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,14 +24,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
   Tooltip,
@@ -38,7 +35,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
-import { cn } from "@/lib/utils"
 import { getErrorMessage } from "@/utils"
 import { EditScheduleDialog } from "./EditScheduleDialog"
 import { ScheduleLogsDialog } from "./ScheduleLogsDialog"
@@ -159,160 +155,99 @@ export function ScheduleRow({
       ? `${schedule.description} · Next ${formatNextExecutionShort(schedule.next_execution)}`
       : schedule.description
 
-  // The type badge is the *second* badge, so it is the one that yields width
-  // when the row cannot pay for everything: the mark alone carries the fact,
-  // and its label — with the command under it — moves into the tooltip P3
-  // reserves for exactly this.
-  const typeBadge = (
-    <Badge variant="outline" className="text-xs shrink-0 px-1.5">
-      <Terminal className="h-3 w-3" />
-      <span className="sr-only">Script trigger</span>
-    </Badge>
-  )
-
   return (
-    <div
-      className={cn(
-        "flex items-center justify-between px-3 py-2 border rounded-lg",
-        !schedule.enabled && "opacity-60",
-      )}
+    <ListRow
+      muted={!schedule.enabled}
+      // State was an "Off" badge on the minority of rows; it is now the dot on
+      // every row, which costs the name nothing and reads the same way in
+      // every list in the product.
+      status={{
+        tone: schedule.enabled ? "on" : "off",
+        label: schedule.enabled ? "Enabled" : "Disabled",
+      }}
+      title={schedule.name}
+      meta={metadata}
+      flags={
+        // The trigger kind, only when it is not the default static prompt: a
+        // glyph on the majority of rows is decoration. The command it runs is
+        // in the tooltip, which is the only place it fits.
+        isScript ? (
+          <RowFlag
+            icon={Terminal}
+            label={
+              schedule.command
+                ? `Script trigger — ${schedule.command}`
+                : "Script trigger"
+            }
+          />
+        ) : undefined
+      }
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          {/* `title` keeps the full name recoverable: in a half-width card at
-              1024 the badges and the right cluster leave the identifier very
-              little room, and it is the only thing that tells two rows
-              apart. */}
-          <span
-            className="text-sm font-medium truncate min-w-0"
-            title={schedule.name}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            disabled={isPending}
+            onClick={() => runMutation.mutate()}
+            aria-label={`Run ${schedule.name} now`}
           >
-            {schedule.name}
-          </span>
-          {/* Up to two badges, and both of them earn their width by being the
-              exception rather than the rule: state only when the schedule is
-              *off* (a live schedule is the majority, and `opacity-60` already
-              carries the negative case), type only when it is not the default
-              static prompt. A badge printed on the majority of rows costs the
-              name ~58px and says nothing. */}
-          {!schedule.enabled && (
-            <Badge variant="secondary" className="text-xs shrink-0">
-              Off
-            </Badge>
-          )}
-          {isScript && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="shrink-0">{typeBadge}</span>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs text-xs">
-                <p>Script trigger</p>
-                {schedule.command && (
-                  <p className="font-mono break-all opacity-90">
-                    {schedule.command}
-                  </p>
-                )}
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {metadata}
-        </p>
-      </div>
+            <Play className="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          Run now
+        </TooltipContent>
+      </Tooltip>
 
-      <div className="flex items-center gap-0.5 shrink-0">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              disabled={isPending}
-              onClick={() => runMutation.mutate()}
-              aria-label={`Run ${schedule.name} now`}
-            >
-              <Play className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            Run now
-          </TooltipContent>
-        </Tooltip>
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={() => setLogsOpen(true)}
-              aria-label={`Execution logs for ${schedule.name}`}
-            >
-              <History className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            Execution logs
-          </TooltipContent>
-        </Tooltip>
-
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  disabled={isPending}
-                  aria-label={`Actions for the schedule ${schedule.name}`}
-                >
-                  <EllipsisVertical className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              More actions
-            </TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end">
-            {!readOnly && (
-              <DropdownMenuItem
-                onSelect={(e) => {
-                  e.preventDefault()
-                  setEditOpen(true)
-                }}
-              >
-                <Pencil />
-                Edit schedule
-              </DropdownMenuItem>
-            )}
-            {/* Reversible, so it toasts its result instead of confirming. */}
+      <RowActionsMenu
+        label={`the schedule ${schedule.name}`}
+        disabled={isPending}
+      >
+        {!readOnly && (
+          <DropdownMenuItem
+            onSelect={(e) => {
+              e.preventDefault()
+              setEditOpen(true)
+            }}
+          >
+            <Pencil />
+            Edit schedule
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem
+          onSelect={(e) => {
+            e.preventDefault()
+            setLogsOpen(true)
+          }}
+        >
+          <History />
+          Execution logs
+        </DropdownMenuItem>
+        {/* Reversible, so it toasts its result instead of confirming. */}
+        <DropdownMenuItem
+          onSelect={() => toggleMutation.mutate(!schedule.enabled)}
+        >
+          {schedule.enabled ? <PowerOff /> : <Power />}
+          {schedule.enabled ? "Disable" : "Enable"}
+        </DropdownMenuItem>
+        {!readOnly && (
+          <>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={() => toggleMutation.mutate(!schedule.enabled)}
+              variant="destructive"
+              onSelect={(e) => {
+                e.preventDefault()
+                setConfirmOpen(true)
+              }}
             >
-              {schedule.enabled ? <PowerOff /> : <Power />}
-              {schedule.enabled ? "Disable" : "Enable"}
+              <Trash2 />
+              Delete schedule
             </DropdownMenuItem>
-            {!readOnly && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={(e) => {
-                    e.preventDefault()
-                    setConfirmOpen(true)
-                  }}
-                >
-                  <Trash2 />
-                  Delete schedule
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+          </>
+        )}
+      </RowActionsMenu>
 
       {/* Mounted only while open: a resident instance would re-seed its form
           from a background refetch and lose the user's in-progress edit. */}
@@ -373,6 +308,6 @@ export function ScheduleRow({
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </div>
+    </ListRow>
   )
 }

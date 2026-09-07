@@ -1,31 +1,17 @@
-import { useState, useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useNavigate } from "@tanstack/react-router"
 import {
-  AgenticTeamsService,
-  type AgenticTeamPublic,
-} from "@/client"
-import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Pencil,
+  Plus,
+  SquareArrowOutUpRight,
+  Trash2,
+  Workflow,
+} from "lucide-react"
+import { useEffect, useState } from "react"
+import { type AgenticTeamPublic, AgenticTeamsService } from "@/client"
+import { ListRow } from "@/components/Common/ListRow"
+import { PreviewList } from "@/components/Common/PreviewList"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,12 +22,32 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { getWorkspaceIcon, WORKSPACE_ICONS } from "@/config/workspaceIcons"
 import useCustomToast from "@/hooks/useCustomToast"
-import { WORKSPACE_ICONS, getWorkspaceIcon } from "@/config/workspaceIcons"
 import { cn } from "@/lib/utils"
-import { Pencil, Plus, Trash2 } from "lucide-react"
 
 function IconSelector({
   value,
@@ -103,7 +109,10 @@ export function AgenticTeamFormDialog({
 
   const handleTaskPrefixChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Only allow uppercase alphanumeric, max 10 chars
-    const value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10)
+    const value = e.target.value
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 10)
     setTaskPrefix(value)
   }
 
@@ -154,8 +163,9 @@ export function AgenticTeamFormDialog({
                 className="font-mono uppercase"
               />
               <p className="text-xs text-muted-foreground">
-                Custom prefix for task short codes in this team (e.g., HR&nbsp;→&nbsp;HR-1).
-                Leave empty to use the default TASK prefix.
+                Custom prefix for task short codes in this team (e.g.,
+                HR&nbsp;→&nbsp;HR-1). Leave empty to use the default TASK
+                prefix.
               </p>
             </div>
           </div>
@@ -181,15 +191,24 @@ export function AgenticTeamFormDialog({
 
 export function AgenticTeamSettings() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [createOpen, setCreateOpen] = useState(false)
   const [editTeam, setEditTeam] = useState<AgenticTeamPublic | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
-  const { data: teamsData, isLoading } = useQuery({
+  const {
+    data: teamsData,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ["agenticTeams"],
     queryFn: () => AgenticTeamsService.listAgenticTeams(),
   })
+
+  const teams = teamsData?.data ?? []
 
   const createMutation = useMutation({
     mutationFn: (data: { name: string; icon: string; task_prefix?: string }) =>
@@ -237,64 +256,94 @@ export function AgenticTeamSettings() {
     <>
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle>Agentic Teams</CardTitle>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2 min-w-0">
+              <Workflow className="h-5 w-5 shrink-0" />
+              Agentic Teams
+            </CardTitle>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              New team
+            </Button>
+          </div>
           <CardDescription>
-            Define agent orchestration teams — visual org-charts that wire agents together with handover prompts.
+            Define agent orchestration teams — visual org-charts that wire
+            agents together with handover prompts.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4 mr-1.5" />
-            New Agentic Team
-          </Button>
-
-          {isLoading ? (
-            <div className="text-sm text-muted-foreground">
-              Loading agentic teams...
-            </div>
-          ) : teamsData && teamsData.data.length > 0 ? (
-            <Table>
-              <TableBody>
-                {teamsData.data.map((team) => {
-                  const Icon = getWorkspaceIcon(team.icon)
-                  return (
-                    <TableRow key={team.id} className="h-9">
-                      <TableCell className="px-2 py-1">
-                        <Icon className="h-4 w-4 text-muted-foreground" />
-                      </TableCell>
-                      <TableCell className="px-2 py-1 font-medium text-sm">{team.name}</TableCell>
-                      <TableCell className="px-2 py-1 text-right">
-                        <div className="flex gap-1 justify-end">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => setEditTeam(team)}
-                            title="Edit"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => setDeleteId(team.id)}
-                            title="Delete"
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          ) : (
-            <div className="text-sm text-muted-foreground">
-              No agentic teams yet. Create your first team to define agent orchestration topology.
-            </div>
-          )}
+        <CardContent>
+          <PreviewList
+            items={teams}
+            getKey={(team) => team.id}
+            renderItem={(team) => {
+              const Icon = getWorkspaceIcon(team.icon)
+              return (
+                <ListRow
+                  icon={
+                    <span className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
+                      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                    </span>
+                  }
+                  title={team.name}
+                  // The task prefix is a short word people scan by when they
+                  // are looking for the team a task code came from, so it is a
+                  // badge on the title line rather than a second line.
+                  badges={
+                    team.task_prefix ? (
+                      <Badge
+                        variant="outline"
+                        className="h-5 shrink-0 font-mono text-xs"
+                      >
+                        {team.task_prefix}
+                      </Badge>
+                    ) : undefined
+                  }
+                >
+                  <RowActionsMenu label={`the team ${team.name}`}>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        navigate({
+                          to: "/agentic-teams/$teamId",
+                          params: { teamId: team.id },
+                        })
+                      }
+                    >
+                      <SquareArrowOutUpRight />
+                      Open team
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setEditTeam(team)}>
+                      <Pencil />
+                      Edit team
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={(e) => {
+                        e.preventDefault()
+                        setDeleteId(team.id)
+                      }}
+                    >
+                      <Trash2 />
+                      Delete team
+                    </DropdownMenuItem>
+                  </RowActionsMenu>
+                </ListRow>
+              )
+            }}
+            isLoading={isLoading}
+            isError={isError}
+            error={error}
+            onRetry={() => refetch()}
+            errorFallback="Couldn't load your agentic teams"
+            empty={
+              <p className="text-sm text-muted-foreground">
+                No teams yet — create one to wire agents into an org-chart.
+              </p>
+            }
+            // A route, not a Sheet (P5's test): a team has a page of its own
+            // and its whole lifecycle lives there.
+            onShowAll={() => navigate({ to: "/agentic-teams" })}
+          />
         </CardContent>
       </Card>
 
@@ -332,8 +381,8 @@ export function AgenticTeamSettings() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Agentic Team</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure? This will delete the team and all its nodes and connections.
-              This action cannot be undone.
+              Are you sure? This will delete the team and all its nodes and
+              connections. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

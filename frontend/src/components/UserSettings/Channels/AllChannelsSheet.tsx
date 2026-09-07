@@ -1,4 +1,5 @@
 import type { UserChannelPublic } from "@/client"
+import { ListRowGroup } from "@/components/Common/ListRow"
 import {
   Sheet,
   SheetContent,
@@ -42,22 +43,24 @@ export function AllChannelsSheet({
           <SheetTitle>Channels</SheetTitle>
           <SheetDescription>{channels.length} channels</SheetDescription>
         </SheetHeader>
-        <div className="flex-1 overflow-y-auto space-y-1.5 px-4 pb-4">
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
           {channels.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No channels are available to you yet.
             </p>
           ) : (
-            channels.map((channel) => (
-              <ChannelRow
-                key={channel.id}
-                channel={channel}
-                onConfigure={(picked) => {
-                  onOpenChange(false)
-                  onConfigure(picked)
-                }}
-              />
-            ))
+            <ListRowGroup>
+              {channels.map((channel) => (
+                <ChannelRow
+                  key={channel.id}
+                  channel={channel}
+                  onConfigure={(picked) => {
+                    onOpenChange(false)
+                    onConfigure(picked)
+                  }}
+                />
+              ))}
+            </ListRowGroup>
           )}
         </div>
       </SheetContent>

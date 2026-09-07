@@ -1,29 +1,17 @@
-import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
+import {
+  LayoutDashboard,
+  Pencil,
+  Plus,
+  SquareArrowOutUpRight,
+  Trash2,
+} from "lucide-react"
+import { useState } from "react"
 import { DashboardsService } from "@/client"
-import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { ListRow, RowInfo } from "@/components/Common/ListRow"
+import { PreviewList } from "@/components/Common/PreviewList"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,10 +22,29 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import useCustomToast from "@/hooks/useCustomToast"
-import { LayoutDashboard, Pencil, Plus, Trash2 } from "lucide-react"
 
 function DashboardFormDialog({
   open,
@@ -134,10 +141,18 @@ export function DashboardSettings() {
     name: string
   } | null>(null)
 
-  const { data: dashboards, isLoading } = useQuery({
+  const {
+    data: dashboardsData,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ["userDashboards"],
     queryFn: () => DashboardsService.listDashboards(),
   })
+
+  const dashboards = dashboardsData ?? []
 
   const createMutation = useMutation({
     mutationFn: (name: string) =>
@@ -185,71 +200,93 @@ export function DashboardSettings() {
     <>
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle>Dashboards</CardTitle>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2 min-w-0">
+              <LayoutDashboard className="h-5 w-5 shrink-0" />
+              Dashboards
+            </CardTitle>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              New dashboard
+            </Button>
+          </div>
           <CardDescription>
             Monitor your agents at a glance with custom dashboards.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4 mr-1.5" />
-            New Dashboard
-          </Button>
-
-          {isLoading ? (
-            <div className="text-sm text-muted-foreground">
-              Loading dashboards...
-            </div>
-          ) : dashboards && dashboards.length > 0 ? (
-            <Table>
-              <TableBody>
-                {dashboards.map((d) => (
-                  <TableRow key={d.id} className="h-9">
-                    <TableCell className="px-2 py-1">
-                      <LayoutDashboard className="h-4 w-4 text-muted-foreground" />
-                    </TableCell>
-                    <TableCell className="px-2 py-1 font-medium text-sm">
-                      {d.name}
-                    </TableCell>
-                    <TableCell className="px-2 py-1 text-right">
-                      <div className="flex gap-1 justify-end">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() =>
-                            setEditDashboard({
-                              id: d.id,
-                              name: d.name,
-                              description: d.description ?? null,
-                            })
-                          }
-                          title="Edit"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() =>
-                            setDeleteTarget({ id: d.id, name: d.name })
-                          }
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <div className="text-sm text-muted-foreground">
-              No dashboards yet. Create your first dashboard to monitor agents.
-            </div>
-          )}
+        <CardContent>
+          <PreviewList
+            items={dashboards}
+            getKey={(d) => d.id}
+            renderItem={(d) => (
+              <ListRow
+                icon={
+                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
+                    <LayoutDashboard className="h-3.5 w-3.5 text-muted-foreground" />
+                  </span>
+                }
+                title={d.name}
+                // No metadata line: a dashboard is a name, and the description
+                // is optional prose most of them do not have. It lives in the
+                // detail flag on the rows that do.
+                flags={
+                  d.description ? (
+                    <RowInfo facts={[d.description]} />
+                  ) : undefined
+                }
+              >
+                <RowActionsMenu label={`the dashboard ${d.name}`}>
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      navigate({
+                        to: "/dashboards/$dashboardId",
+                        params: { dashboardId: d.id },
+                      })
+                    }
+                  >
+                    <SquareArrowOutUpRight />
+                    Open dashboard
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      setEditDashboard({
+                        id: d.id,
+                        name: d.name,
+                        description: d.description ?? null,
+                      })
+                    }
+                  >
+                    <Pencil />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={(e) => {
+                      e.preventDefault()
+                      setDeleteTarget({ id: d.id, name: d.name })
+                    }}
+                  >
+                    <Trash2 />
+                    Delete dashboard
+                  </DropdownMenuItem>
+                </RowActionsMenu>
+              </ListRow>
+            )}
+            isLoading={isLoading}
+            isError={isError}
+            error={error}
+            onRetry={() => refetch()}
+            errorFallback="Couldn't load your dashboards"
+            empty={
+              <p className="text-sm text-muted-foreground">
+                No dashboards yet — create one to watch your agents at a glance.
+              </p>
+            }
+            // A route, not a Sheet (P5's test): dashboards have a page of their
+            // own and a lifecycle that lives there.
+            onShowAll={() => navigate({ to: "/dashboards" })}
+          />
         </CardContent>
       </Card>
 
@@ -267,8 +304,7 @@ export function DashboardSettings() {
         onClose={() => setEditDashboard(null)}
         dashboard={editDashboard}
         onSubmit={(name) =>
-          editDashboard &&
-          renameMutation.mutate({ id: editDashboard.id, name })
+          editDashboard && renameMutation.mutate({ id: editDashboard.id, name })
         }
         isPending={renameMutation.isPending}
       />

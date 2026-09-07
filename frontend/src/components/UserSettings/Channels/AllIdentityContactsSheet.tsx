@@ -1,4 +1,5 @@
 import type { IdentityContactPublic } from "@/client"
+import { ListRowGroup } from "@/components/Common/ListRow"
 import {
   Sheet,
   SheetContent,
@@ -44,21 +45,23 @@ export function AllIdentityContactsSheet({
             {contacts.length === 1 ? "1 person" : `${contacts.length} people`}
           </SheetDescription>
         </SheetHeader>
-        <div className="flex-1 overflow-y-auto space-y-1.5 px-4 pb-4">
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
           {contacts.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nobody has shared their identity with you yet.
             </p>
           ) : (
             <>
-              {contacts.map((contact) => (
-                <IdentityContactRow
-                  key={contact.owner_id}
-                  contact={contact}
-                  isPending={pendingContactIds.has(contact.owner_id)}
-                  onToggle={(next) => onToggle(contact.owner_id, next)}
-                />
-              ))}
+              <ListRowGroup>
+                {contacts.map((contact) => (
+                  <IdentityContactRow
+                    key={contact.owner_id}
+                    contact={contact}
+                    isPending={pendingContactIds.has(contact.owner_id)}
+                    onToggle={(next) => onToggle(contact.owner_id, next)}
+                  />
+                ))}
+              </ListRowGroup>
               <IdentityConsentFootnote />
             </>
           )}

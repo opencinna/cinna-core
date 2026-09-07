@@ -24,10 +24,12 @@
  * around.
  */
 import { useQuery } from "@tanstack/react-query"
+import { MessagesSquare } from "lucide-react"
 import { useMemo, useState } from "react"
-
 import type { UserChannelPublic } from "@/client"
 import { UserChannelsService } from "@/client"
+
+import { ListRowGroup } from "@/components/Common/ListRow"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Button } from "@/components/ui/button"
 import {
@@ -89,7 +91,10 @@ export function UserChannelsCard() {
       <CardHeader>
         {/* No primary button: a user cannot create a channel — an
             administrator connects one in Server Configuration. */}
-        <CardTitle>Channels</CardTitle>
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <MessagesSquare className="h-5 w-5" />
+          Channels
+        </CardTitle>
         <CardDescription>
           Chat apps an administrator has connected, and whether each one may
           reach you.
@@ -112,9 +117,9 @@ export function UserChannelsCard() {
           </QueryErrorAlert>
         ) : isLoading ? (
           <div className="space-y-1.5">
-            <Skeleton className="h-[52px] w-full rounded-lg" />
-            <Skeleton className="h-[52px] w-full rounded-lg" />
-            <Skeleton className="h-[52px] w-full rounded-lg" />
+            <Skeleton className="h-[48px] w-full rounded-md" />
+            <Skeleton className="h-[48px] w-full rounded-md" />
+            <Skeleton className="h-[48px] w-full rounded-md" />
           </div>
         ) : totalCount === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -124,19 +129,21 @@ export function UserChannelsCard() {
             again if it comes back.
           </p>
         ) : (
-          <div className="space-y-1.5">
-            {sorted.slice(0, PREVIEW_COUNT).map((channel) => (
-              <ChannelRow
-                key={channel.id}
-                channel={channel}
-                onConfigure={(picked) => setConfiguringId(picked.id)}
-              />
-            ))}
+          <div>
+            <ListRowGroup>
+              {sorted.slice(0, PREVIEW_COUNT).map((channel) => (
+                <ChannelRow
+                  key={channel.id}
+                  channel={channel}
+                  onConfigure={(picked) => setConfiguringId(picked.id)}
+                />
+              ))}
+            </ListRowGroup>
             {totalCount > PREVIEW_COUNT && (
               <Button
                 variant="link"
                 size="sm"
-                className="px-0"
+                className="mt-1 px-0"
                 onClick={() => setIsAllOpen(true)}
               >
                 Show all ({totalCount})

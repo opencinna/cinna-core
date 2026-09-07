@@ -1,13 +1,19 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, Copy, Check, Key, Laptop, MonitorDot, RefreshCw, Unplug } from "lucide-react"
-import { useState, useEffect } from "react"
+import { useMutation, useQuery } from "@tanstack/react-query"
+import {
+  Check,
+  ChevronDown,
+  Copy,
+  Key,
+  MonitorDot,
+  RefreshCw,
+} from "lucide-react"
+import { useEffect, useState } from "react"
 
-import type { CLISetupTokenCreated, CLIAccountTokenPublic } from "@/client"
+import type { CLIAccountTokenPublic, CLISetupTokenCreated } from "@/client"
 import { CliService } from "@/client"
 import { CopyPromptSnippet } from "@/components/Common/CopyPromptSnippet"
-import useCustomToast from "@/hooks/useCustomToast"
-import { useLocalAgentKitAvailable } from "@/hooks/useLocalAgentKit"
-import useRole from "@/hooks/useRole"
+import { PreviewList } from "@/components/Common/PreviewList"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -15,20 +21,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import useCustomToast from "@/hooks/useCustomToast"
+import { useLocalAgentKitAvailable } from "@/hooks/useLocalAgentKit"
+import useRole from "@/hooks/useRole"
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { AllCliSessionsSheet } from "./AllCliSessionsSheet"
+import { CliSessionRow } from "./CliSessionRow"
 
 function formatCountdown(seconds: number): string {
   if (seconds >= 60) {
@@ -47,18 +51,26 @@ function formatCountdown(seconds: number): string {
  */
 export function LocalDevelopmentCard() {
   const { isDeveloper } = useRole()
-  const [setupToken, setSetupToken] = useState<CLISetupTokenCreated | null>(null)
+  const [setupToken, setSetupToken] = useState<CLISetupTokenCreated | null>(
+    null,
+  )
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [secondsLeft, setSecondsLeft] = useState(0)
   const [scratchOpen, setScratchOpen] = useState(false)
+  const [isSheetOpen, setIsSheetOpen] = useState(false)
   // Hidden entirely when the instance does not publish the starter surface —
   // the prompt would send the user's assistant at a URL that 404s.
   const localAgentKitAvailable = useLocalAgentKitAvailable()
 
-  const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
-  const { data: tokensData, isLoading } = useQuery({
+  const {
+    data: tokensData,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ["account-cli-tokens"],
     queryFn: () => CliService.listAccountTokens(),
     enabled: isDeveloper,
@@ -79,18 +91,6 @@ export function LocalDevelopmentCard() {
     },
     onError: () => {
       showErrorToast("Failed to generate setup command")
-    },
-  })
-
-  const revokeAccountTokenMutation = useMutation({
-    mutationFn: (tokenId: string) =>
-      CliService.revokeAccountToken({ tokenId }),
-    onSuccess: () => {
-      showSuccessToast("Account session disconnected")
-      queryClient.invalidateQueries({ queryKey: ["account-cli-tokens"] })
-    },
-    onError: () => {
-      showErrorToast("Failed to disconnect account session")
     },
   })
 
@@ -135,7 +135,7 @@ export function LocalDevelopmentCard() {
       <CardHeader>
         <div className="flex items-start justify-between">
           <div className="space-y-1.5">
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 min-w-0">
               <MonitorDot className="h-5 w-5" />
               Local Development
             </CardTitle>
@@ -166,44 +166,67 @@ export function LocalDevelopmentCard() {
                 className="font-mono text-xs"
               />
               <div className="flex shrink-0">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="rounded-r-none border-r-0"
-                  onClick={handleSetup}
-                  disabled={createSetupTokenMutation.isPending}
-                  title="Regenerate"
-                >
-                  <RefreshCw
-                    className={`h-4 w-4 ${createSetupTokenMutation.isPending ? "animate-spin" : ""}`}
-                  />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="rounded-none border-r-0"
-                  onClick={() => handleCopy(setupToken.token, "token")}
-                  title="Copy token"
-                >
-                  {copiedId === "token" ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Key className="h-4 w-4" />
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="rounded-l-none"
-                  onClick={() => handleCopy(setupToken.setup_command, "cmd")}
-                  title="Copy command"
-                >
-                  {copiedId === "cmd" ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="rounded-r-none border-r-0"
+                      onClick={handleSetup}
+                      disabled={createSetupTokenMutation.isPending}
+                      aria-label="Regenerate the setup command"
+                    >
+                      <RefreshCw
+                        className={`h-4 w-4 ${createSetupTokenMutation.isPending ? "animate-spin" : ""}`}
+                      />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    Regenerate
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="rounded-none border-r-0"
+                      onClick={() => handleCopy(setupToken.token, "token")}
+                      aria-label="Copy the setup token"
+                    >
+                      {copiedId === "token" ? (
+                        <Check className="h-4 w-4 text-success" />
+                      ) : (
+                        <Key className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    {copiedId === "token" ? "Copied" : "Copy token"}
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="rounded-l-none"
+                      onClick={() =>
+                        handleCopy(setupToken.setup_command, "cmd")
+                      }
+                      aria-label="Copy the setup command"
+                    >
+                      {copiedId === "cmd" ? (
+                        <Check className="h-4 w-4 text-success" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    {copiedId === "cmd" ? "Copied" : "Copy command"}
+                  </TooltipContent>
+                </Tooltip>
               </div>
             </div>
             {secondsLeft > 0 && (
@@ -215,98 +238,27 @@ export function LocalDevelopmentCard() {
         )}
 
         <div>
-          <p className="text-sm font-medium mb-2">Active Account Sessions</p>
-          {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : tokens.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {setupToken
-                ? "No active account sessions yet. Run the setup command above to bootstrap your account workspace."
-                : "No active account sessions. Click Set up Local Development to generate a bootstrap command."}
-            </p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {tokens.map((token) => (
-                <li
-                  key={token.id}
-                  className="flex items-center justify-between gap-3 py-3"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Laptop className="h-4 w-4 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {token.name || token.prefix}
-                      </p>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-muted-foreground text-xs">
-                          {token.child_count} agent
-                          {token.child_count === 1 ? "" : "s"} synced
-                          {token.desktop_session_count > 0
-                            ? ` · ${token.desktop_session_count} desktop session${
-                                token.desktop_session_count === 1 ? "" : "s"
-                              }`
-                            : ""}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="shrink-0 text-muted-foreground hover:text-destructive"
-                        title="Disconnect"
-                        aria-label="Disconnect account session"
-                      >
-                        <Unplug className="h-4 w-4" />
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent
-                      onOpenAutoFocus={(e) => e.preventDefault()}
-                    >
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>
-                          Disconnect Account Session
-                        </AlertDialogTitle>
-                        <AlertDialogDescription>
-                          Revoking disconnects all agents synced from this
-                          machine ({token.child_count} agent
-                          {token.child_count === 1 ? "" : "s"})
-                          {token.desktop_session_count > 0 ? (
-                            <>
-                              {" "}
-                              <strong>
-                                and signs out {token.desktop_session_count} Cinna
-                                Desktop session
-                                {token.desktop_session_count === 1 ? "" : "s"}
-                              </strong>{" "}
-                              linked from this machine's account file
-                            </>
-                          ) : null}
-                          . Local files remain intact, but the CLI will need to
-                          be set up again.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          autoFocus
-                          onClick={() =>
-                            revokeAccountTokenMutation.mutate(token.id)
-                          }
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        >
-                          Disconnect
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </li>
-              ))}
-            </ul>
-          )}
+          <p className="mb-2 text-sm font-medium">Active account sessions</p>
+          {/* A P5 preview, like App Sessions on this same tab: the card's
+              height used to *be* the session count. */}
+          <PreviewList
+            items={tokens}
+            getKey={(token) => token.id}
+            renderItem={(token) => <CliSessionRow token={token} />}
+            isLoading={isLoading}
+            isError={isError}
+            error={error}
+            onRetry={() => refetch()}
+            errorFallback="Couldn't load your account sessions"
+            empty={
+              <p className="text-sm text-muted-foreground">
+                {setupToken
+                  ? "No machines connected yet — run the setup command above to bootstrap your account workspace."
+                  : "No machines connected yet. Use Setup above to generate a bootstrap command."}
+              </p>
+            }
+            onShowAll={() => setIsSheetOpen(true)}
+          />
         </div>
 
         {/*
@@ -316,23 +268,29 @@ export function LocalDevelopmentCard() {
           so it is offered here, collapsed, rather than competing with Setup.
         */}
         {localAgentKitAvailable && (
-        <div className="mt-4 border-t pt-3">
-          <button
-            type="button"
-            onClick={() => setScratchOpen((open) => !open)}
-            className="flex w-full items-center gap-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
-            aria-expanded={scratchOpen}
-          >
-            <ChevronDown
-              className={`h-3.5 w-3.5 transition-transform ${scratchOpen ? "" : "-rotate-90"}`}
-            />
-            Starting from scratch on a new machine? Paste into your coding
-            assistant
-          </button>
-          {scratchOpen && <CopyPromptSnippet className="mt-2" />}
-        </div>
+          <div className="mt-4 border-t pt-3">
+            <button
+              type="button"
+              onClick={() => setScratchOpen((open) => !open)}
+              className="flex w-full items-center gap-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
+              aria-expanded={scratchOpen}
+            >
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform ${scratchOpen ? "" : "-rotate-90"}`}
+              />
+              Starting from scratch on a new machine? Paste into your coding
+              assistant
+            </button>
+            {scratchOpen && <CopyPromptSnippet className="mt-2" />}
+          </div>
         )}
       </CardContent>
+
+      <AllCliSessionsSheet
+        tokens={tokens}
+        open={isSheetOpen}
+        onOpenChange={setIsSheetOpen}
+      />
     </Card>
   )
 }

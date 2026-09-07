@@ -6,44 +6,29 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  UserCircle,
-  Pencil,
-  Trash2,
-  X,
-  MessageCircle,
-  Wrench,
-  Users,
+  Bot,
   ChevronDown,
   ChevronUp,
+  MessageCircle,
+  Pencil,
   Plus,
-  Bot,
+  Power,
+  PowerOff,
+  Trash2,
+  UserCircle,
+  Users,
+  Wrench,
+  X,
 } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import { AgentsService, IdentityService } from "@/client"
-import useCustomToast from "@/hooks/useCustomToast"
-import { getErrorMessage } from "@/utils"
-import { getColorPreset } from "@/utils/colorPresets"
-import { cn } from "@/lib/utils"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import type { AgentOption } from "@/components/Common/AgentSelectorDialog"
+import { AgentSelectorDialog } from "@/components/Common/AgentSelectorDialog"
+import { ListRow, ListRowGroup, RowFlag } from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
+import type { UserAllowlistSelectedItem } from "@/components/Common/UserAllowlistPicker"
+import { UserAllowlistPicker } from "@/components/Common/UserAllowlistPicker"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -53,26 +38,45 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { UserAllowlistPicker } from "@/components/Common/UserAllowlistPicker"
-import type { UserAllowlistSelectedItem } from "@/components/Common/UserAllowlistPicker"
-import { AgentSelectorDialog } from "@/components/Common/AgentSelectorDialog"
-import type { AgentOption } from "@/components/Common/AgentSelectorDialog"
+import useCustomToast from "@/hooks/useCustomToast"
+import { cn } from "@/lib/utils"
+import { getErrorMessage } from "@/utils"
+import { getColorPreset } from "@/utils/colorPresets"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -121,11 +125,16 @@ export function IdentityServerCard() {
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
   // Expanded state per binding (show/hide user assignments)
-  const [expandedBindings, setExpandedBindings] = useState<Set<string>>(new Set())
+  const [expandedBindings, setExpandedBindings] = useState<Set<string>>(
+    new Set(),
+  )
+  const [deleteBindingTarget, setDeleteBindingTarget] =
+    useState<IdentityAgentBinding | null>(null)
 
   // Edit binding dialog state
   const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [editingBinding, setEditingBinding] = useState<IdentityAgentBinding | null>(null)
+  const [editingBinding, setEditingBinding] =
+    useState<IdentityAgentBinding | null>(null)
   const [editTriggerPrompt, setEditTriggerPrompt] = useState("")
   const [editSessionMode, setEditSessionMode] = useState("conversation")
   const [editPromptExamples, setEditPromptExamples] = useState("")
@@ -193,7 +202,7 @@ export function IdentityServerCard() {
 
   // Edit dialog: live binding data for real-time assignment updates
   const editBindingLive = editingBinding
-    ? bindings.find((b) => b.id === editingBinding.id) ?? editingBinding
+    ? (bindings.find((b) => b.id === editingBinding.id) ?? editingBinding)
     : null
   const editAssignments = editBindingLive?.assignments ?? []
 
@@ -251,14 +260,19 @@ export function IdentityServerCard() {
         is_active?: boolean
       }
     }) => {
-      const res = await fetch(`${API_BASE}/api/v1/identity/bindings/${bindingId}`, {
-        method: "PUT",
-        headers: getAuthHeaders(),
-        body: JSON.stringify(body),
-      })
+      const res = await fetch(
+        `${API_BASE}/api/v1/identity/bindings/${bindingId}`,
+        {
+          method: "PUT",
+          headers: getAuthHeaders(),
+          body: JSON.stringify(body),
+        },
+      )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to update binding")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to update binding",
+        )
       }
       return res.json()
     },
@@ -272,17 +286,23 @@ export function IdentityServerCard() {
 
   const deleteBindingMutation = useMutation({
     mutationFn: async (bindingId: string) => {
-      const res = await fetch(`${API_BASE}/api/v1/identity/bindings/${bindingId}`, {
-        method: "DELETE",
-        headers: getAuthHeaders(),
-      })
+      const res = await fetch(
+        `${API_BASE}/api/v1/identity/bindings/${bindingId}`,
+        {
+          method: "DELETE",
+          headers: getAuthHeaders(),
+        },
+      )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to delete binding")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to delete binding",
+        )
       }
     },
     onSuccess: () => {
       showSuccessToast("Agent removed from identity")
+      setDeleteBindingTarget(null)
       queryClient.invalidateQueries({ queryKey: ["identity-bindings"] })
     },
     onError: (error: Error) => showErrorToast(error.message),
@@ -296,18 +316,24 @@ export function IdentityServerCard() {
       bindingId: string
       isActive: boolean
     }) => {
-      const res = await fetch(`${API_BASE}/api/v1/identity/bindings/${bindingId}`, {
-        method: "PUT",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ is_active: isActive }),
-      })
+      const res = await fetch(
+        `${API_BASE}/api/v1/identity/bindings/${bindingId}`,
+        {
+          method: "PUT",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ is_active: isActive }),
+        },
+      )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to toggle binding")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to toggle binding",
+        )
       }
       return res.json()
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["identity-bindings"] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["identity-bindings"] }),
     onError: (error: Error) => showErrorToast(error.message),
   })
 
@@ -325,15 +351,18 @@ export function IdentityServerCard() {
           method: "POST",
           headers: getAuthHeaders(),
           body: JSON.stringify(userIds),
-        }
+        },
       )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to assign users")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to assign users",
+        )
       }
       return res.json()
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["identity-bindings"] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["identity-bindings"] }),
     onError: (error: Error) => showErrorToast(error.message),
   })
 
@@ -350,14 +379,17 @@ export function IdentityServerCard() {
         {
           method: "DELETE",
           headers: getAuthHeaders(),
-        }
+        },
       )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error((err as { detail?: string }).detail || "Failed to remove assignment")
+        throw new Error(
+          (err as { detail?: string }).detail || "Failed to remove assignment",
+        )
       }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["identity-bindings"] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["identity-bindings"] }),
     onError: (error: Error) => showErrorToast(error.message),
   })
 
@@ -425,8 +457,8 @@ export function IdentityServerCard() {
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2">
-            <UserCircle className="h-4 w-4 text-violet-500" />
+          <CardTitle className="flex items-center gap-2 min-w-0">
+            <UserCircle className="h-5 w-5" />
             Identity Server
           </CardTitle>
           <Button size="sm" onClick={handleAddOpen}>
@@ -435,8 +467,9 @@ export function IdentityServerCard() {
           </Button>
         </div>
         <CardDescription>
-          Expose your agents through your personal identity. Other users can address you by name
-          and the system routes to the right agent automatically.
+          Expose your agents through your personal identity. Other users can
+          address you by name and the system routes to the right agent
+          automatically.
         </CardDescription>
       </CardHeader>
 
@@ -448,147 +481,105 @@ export function IdentityServerCard() {
             {/* ---- Binding list ---- */}
             {bindings.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                No agents in your identity yet. Use "Add Agent" above to put one behind your
-                identity.
+                No agents in your identity yet. Use "Add Agent" above to put one
+                behind your identity.
               </p>
             )}
 
-            <div className="space-y-2">
+            <ListRowGroup>
               {bindings.map((binding) => {
                 const isExpanded = expandedBindings.has(binding.id)
                 return (
-                  <div
-                    key={binding.id}
-                    className={`border rounded-lg overflow-hidden ${
-                      !binding.is_active ? "opacity-60 bg-muted" : ""
-                    }`}
-                  >
-                    {/* Main row */}
-                    <div className="flex items-center justify-between px-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {binding.session_mode === "building" ? (
-                            <Wrench className="h-3.5 w-3.5 text-orange-500 shrink-0" />
-                          ) : (
-                            <MessageCircle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                          )}
-                          <span className="font-medium text-sm">{binding.agent_name}</span>
-                          {binding.is_active ? (
-                            <Badge className="text-xs bg-emerald-500 hover:bg-emerald-600 shrink-0">
-                              Active
-                            </Badge>
-                          ) : (
-                            <Badge variant="destructive" className="text-xs shrink-0">
-                              Inactive
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5 ml-[22px] truncate max-w-xs">
-                          {binding.trigger_prompt}
-                        </p>
-                      </div>
+                  <div key={binding.id}>
+                    <ListRow
+                      muted={!binding.is_active}
+                      status={{
+                        tone: binding.is_active ? "on" : "off",
+                        label: binding.is_active ? "Active" : "Inactive",
+                      }}
+                      title={binding.agent_name}
+                      meta={binding.trigger_prompt}
+                      flags={
+                        <RowFlag
+                          icon={
+                            binding.session_mode === "building"
+                              ? Wrench
+                              : MessageCircle
+                          }
+                          label={
+                            binding.session_mode === "building"
+                              ? "Building mode — this agent may be changed through your identity"
+                              : "Conversation only"
+                          }
+                          tone={
+                            binding.session_mode === "building"
+                              ? "warning"
+                              : "neutral"
+                          }
+                        />
+                      }
+                    >
+                      {/* Read-only disclosure of who this is shared with, so
+                          §2 allows it in place: it adds no control and the
+                          list below is short. */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => toggleExpanded(binding.id)}
+                            aria-label={
+                              isExpanded
+                                ? `Hide who ${binding.agent_name} is shared with`
+                                : `Show who ${binding.agent_name} is shared with`
+                            }
+                          >
+                            {isExpanded ? (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs">
+                          {isExpanded ? "Hide users" : "Show users"}
+                        </TooltipContent>
+                      </Tooltip>
 
-                      <div className="flex items-center gap-0.5 ml-2 shrink-0">
-                        {/* Toggle expand/collapse */}
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6"
-                                onClick={() => toggleExpanded(binding.id)}
-                              >
-                                {isExpanded ? (
-                                  <ChevronUp className="h-3.5 w-3.5" />
-                                ) : (
-                                  <ChevronDown className="h-3.5 w-3.5" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="text-xs">
-                              {isExpanded ? "Hide users" : "Show users"}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-
-                        <div className="h-4 w-px bg-border mx-1" />
-
-                        {/* Active toggle */}
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="flex items-center">
-                                <Switch
-                                  checked={binding.is_active}
-                                  onCheckedChange={(v) =>
-                                    toggleBindingMutation.mutate({
-                                      bindingId: binding.id,
-                                      isActive: v,
-                                    })
-                                  }
-                                  className="scale-75"
-                                />
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="text-xs">
-                              {binding.is_active ? "Deactivate" : "Activate"}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-
-                        {/* Edit */}
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6"
-                                onClick={() => handleEditOpen(binding)}
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="text-xs">
-                              Edit binding
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-
-                        {/* Delete */}
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 text-destructive hover:text-destructive"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Remove Agent from Identity</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                This removes {binding.agent_name} from your identity and revokes
-                                access for all assigned users. Existing identity sessions are not
-                                affected but cannot receive new messages.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => deleteBindingMutation.mutate(binding.id)}
-                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                              >
-                                Remove
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </div>
+                      <RowActionsMenu
+                        label={`${binding.agent_name} in your identity`}
+                      >
+                        <DropdownMenuItem
+                          onSelect={() => handleEditOpen(binding)}
+                        >
+                          <Pencil />
+                          Edit binding
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() =>
+                            toggleBindingMutation.mutate({
+                              bindingId: binding.id,
+                              isActive: !binding.is_active,
+                            })
+                          }
+                        >
+                          {binding.is_active ? <PowerOff /> : <Power />}
+                          {binding.is_active ? "Deactivate" : "Activate"}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onSelect={(e) => {
+                            e.preventDefault()
+                            setDeleteBindingTarget(binding)
+                          }}
+                        >
+                          <Trash2 />
+                          Remove from identity
+                        </DropdownMenuItem>
+                      </RowActionsMenu>
+                    </ListRow>
 
                     {/* Expanded: user assignments */}
                     {isExpanded && (
@@ -612,7 +603,8 @@ export function IdentityServerCard() {
                                     : "bg-muted text-muted-foreground line-through"
                                 }`}
                               >
-                                {assignment.target_user_name || assignment.target_user_email}
+                                {assignment.target_user_name ||
+                                  assignment.target_user_email}
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -635,8 +627,46 @@ export function IdentityServerCard() {
                   </div>
                 )
               })}
-            </div>
+            </ListRowGroup>
 
+            {/* One confirm for the list, driven by the row the menu named. */}
+            <AlertDialog
+              open={!!deleteBindingTarget}
+              onOpenChange={(next) => {
+                if (!deleteBindingMutation.isPending && !next)
+                  setDeleteBindingTarget(null)
+              }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    Remove agent from identity
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Remove <strong>{deleteBindingTarget?.agent_name}</strong>{" "}
+                    from your identity and revoke access for every assigned
+                    user? Existing identity sessions are not affected, but they
+                    cannot receive new messages.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleteBindingMutation.isPending}>
+                    Cancel
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={(e) => {
+                      e.preventDefault()
+                      if (deleteBindingTarget)
+                        deleteBindingMutation.mutate(deleteBindingTarget.id)
+                    }}
+                    disabled={deleteBindingMutation.isPending}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {deleteBindingMutation.isPending ? "Removing…" : "Remove"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </>
         )}
       </CardContent>
@@ -647,8 +677,9 @@ export function IdentityServerCard() {
           <DialogHeader>
             <DialogTitle>Add Agent to Identity</DialogTitle>
             <DialogDescription>
-              Expose one of your agents behind your identity. Other users can address you by
-              name and the system routes to this agent automatically.
+              Expose one of your agents behind your identity. Other users can
+              address you by name and the system routes to this agent
+              automatically.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
@@ -706,22 +737,28 @@ export function IdentityServerCard() {
                 placeholder="Describe when to route to this agent (e.g. 'Handle annual report requests and financial analysis')"
               />
               <p className="text-xs text-muted-foreground">
-                Used by the AI router to select this agent when someone addresses you.
+                Used by the AI router to select this agent when someone
+                addresses you.
               </p>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="add-identity-prompt-examples">Prompt Examples (optional)</Label>
+              <Label htmlFor="add-identity-prompt-examples">
+                Prompt Examples (optional)
+              </Label>
               <Textarea
                 id="add-identity-prompt-examples"
                 value={addPromptExamples}
                 onChange={(e) => setAddPromptExamples(e.target.value)}
                 rows={3}
-                placeholder={"generate employee report\nprepare quarterly analysis"}
+                placeholder={
+                  "generate employee report\nprepare quarterly analysis"
+                }
                 className="font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Short example prompts. MCP clients will see these prefixed with your name (e.g., 'ask Your Name to generate employee report').
+                Short example prompts. MCP clients will see these prefixed with
+                your name (e.g., 'ask Your Name to generate employee report').
               </p>
             </div>
 
@@ -772,7 +809,9 @@ export function IdentityServerCard() {
                 createBindingMutation.isPending
               }
             >
-              {createBindingMutation.isPending ? "Adding..." : "Add to Identity"}
+              {createBindingMutation.isPending
+                ? "Adding..."
+                : "Add to Identity"}
             </Button>
           </DialogFooter>
 
@@ -803,7 +842,10 @@ export function IdentityServerCard() {
           <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
             <div className="space-y-2">
               <Label>Session Mode</Label>
-              <Select value={editSessionMode} onValueChange={setEditSessionMode}>
+              <Select
+                value={editSessionMode}
+                onValueChange={setEditSessionMode}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -822,7 +864,8 @@ export function IdentityServerCard() {
                 placeholder="Describe when to route to this agent"
               />
               <p className="text-xs text-muted-foreground">
-                Used by the AI router to select this agent when someone addresses you.
+                Used by the AI router to select this agent when someone
+                addresses you.
               </p>
             </div>
             <div className="space-y-2">
@@ -831,11 +874,14 @@ export function IdentityServerCard() {
                 value={editPromptExamples}
                 onChange={(e) => setEditPromptExamples(e.target.value)}
                 rows={3}
-                placeholder={"generate employee report\nprepare quarterly analysis"}
+                placeholder={
+                  "generate employee report\nprepare quarterly analysis"
+                }
                 className="font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Short example prompts. MCP clients will see these prefixed with your name (e.g., 'ask Your Name to generate employee report').
+                Short example prompts. MCP clients will see these prefixed with
+                your name (e.g., 'ask Your Name to generate employee report').
               </p>
             </div>
 
@@ -882,7 +928,9 @@ export function IdentityServerCard() {
             </Button>
             <Button
               onClick={handleEditSave}
-              disabled={!editTriggerPrompt.trim() || updateBindingMutation.isPending}
+              disabled={
+                !editTriggerPrompt.trim() || updateBindingMutation.isPending
+              }
             >
               {updateBindingMutation.isPending ? "Saving..." : "Save"}
             </Button>

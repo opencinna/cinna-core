@@ -1,16 +1,11 @@
-import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import {
-  Bot,
-  EllipsisVertical,
-  Pencil,
-  Power,
-  PowerOff,
-  Trash2,
-} from "lucide-react"
+import { Bot, Pencil, Power, PowerOff, Trash2 } from "lucide-react"
+import { useState } from "react"
 
 import type { HandoverConfigPublic } from "@/client"
 import { AgentsService } from "@/client"
+import { ListRow, RowInfo } from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,20 +16,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
 import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
@@ -111,90 +96,71 @@ export function HandoverRow({
   // Pending is scoped to this row: only the row being mutated loses its menu.
   const isPending = toggleMutation.isPending || deleteMutation.isPending
 
-  const promptPreview =
-    handover.handover_prompt.replace(/\s+/g, " ").trim() || "No prompt yet"
+  // Capped: the tooltip is a preview, not a reader. The whole prompt is one
+  // menu item away, in the edit dialog.
+  const collapsed = handover.handover_prompt.replace(/\s+/g, " ").trim()
+  const promptPreview = !collapsed
+    ? "No prompt yet"
+    : collapsed.length > 300
+      ? `${collapsed.slice(0, 300)}…`
+      : collapsed
 
   return (
-    <div
-      className={cn(
-        "flex items-center justify-between px-3 py-2 border rounded-lg",
-        !handover.enabled && "opacity-60",
-      )}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <div
-            className={cn(
-              "w-6 h-6 rounded-md shrink-0 flex items-center justify-center",
-              colorPreset.iconBg,
-            )}
-          >
-            <Bot className={cn("h-3.5 w-3.5", colorPreset.iconText)} />
-          </div>
-          <span className="text-sm font-medium truncate min-w-0">
-            {handover.target_agent_name}
-          </span>
-          {!handover.enabled && (
-            <Badge variant="secondary" className="text-xs shrink-0">
-              Off
-            </Badge>
+    <ListRow
+      muted={!handover.enabled}
+      // The dot replaces the "Off" badge the row used to print: state is the
+      // one fact every row in this list carries, so it gets the cheapest
+      // possible rendering (guidelines §2 "Toggles on rows").
+      status={{
+        tone: handover.enabled ? "on" : "off",
+        label: handover.enabled ? "Enabled" : "Disabled",
+      }}
+      icon={
+        <span
+          className={cn(
+            "flex h-6 w-6 items-center justify-center rounded-md",
+            colorPreset.iconBg,
           )}
-        </div>
-        <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {promptPreview}
-        </p>
-      </div>
-
-      <div className="flex items-center gap-0.5 shrink-0">
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  disabled={isPending}
-                  aria-label={`Actions for the handover to ${handover.target_agent_name}`}
-                >
-                  <EllipsisVertical className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              More actions
-            </TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              onSelect={(e) => {
-                e.preventDefault()
-                setEditOpen(true)
-              }}
-            >
-              <Pencil />
-              Edit prompt
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => toggleMutation.mutate(!handover.enabled)}
-            >
-              {handover.enabled ? <PowerOff /> : <Power />}
-              {handover.enabled ? "Disable" : "Enable"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              onSelect={(e) => {
-                e.preventDefault()
-                setConfirmOpen(true)
-              }}
-            >
-              <Trash2 />
-              Delete handover
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+        >
+          <Bot className={cn("h-3.5 w-3.5", colorPreset.iconText)} />
+        </span>
+      }
+      title={handover.target_agent_name}
+      // The prompt is prose of unknown length and nobody scans this list by
+      // it, so it is the detail flag rather than a second line on every row.
+      flags={<RowInfo facts={[promptPreview]} />}
+    >
+      <RowActionsMenu
+        label={`the handover to ${handover.target_agent_name}`}
+        disabled={isPending}
+      >
+        <DropdownMenuItem
+          onSelect={(e) => {
+            e.preventDefault()
+            setEditOpen(true)
+          }}
+        >
+          <Pencil />
+          Edit prompt
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => toggleMutation.mutate(!handover.enabled)}
+        >
+          {handover.enabled ? <PowerOff /> : <Power />}
+          {handover.enabled ? "Disable" : "Enable"}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
+          onSelect={(e) => {
+            e.preventDefault()
+            setConfirmOpen(true)
+          }}
+        >
+          <Trash2 />
+          Delete handover
+        </DropdownMenuItem>
+      </RowActionsMenu>
 
       {/* Mounted only while open: a resident instance would re-seed its form
           from a background refetch and lose the user's in-progress edit. */}
@@ -246,6 +212,6 @@ export function HandoverRow({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </ListRow>
   )
 }

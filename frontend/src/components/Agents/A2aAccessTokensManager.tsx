@@ -1,37 +1,45 @@
-import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  Copy,
+  Ban,
   Check,
-  Trash2,
-  Plus,
+  Copy,
   Eye,
   EyeOff,
-  Info,
-  Wrench,
-  MessageCircle,
-  Lock,
   Globe,
+  Lock,
+  MessageCircle,
+  Plus,
+  RotateCcw,
+  Trash2,
+  Wrench,
 } from "lucide-react"
+import { useState } from "react"
 
 import type {
-  AgentAccessTokenPublic,
-  AgentAccessTokenCreate,
   AccessTokenMode,
   AccessTokenScope,
+  AgentAccessTokenCreate,
+  AgentAccessTokenPublic,
 } from "@/client"
 import { AccessTokensService } from "@/client"
-import useCustomToast from "@/hooks/useCustomToast"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+  ListRow,
+  ListRowGroup,
+  RowFlag,
+  RowInfo,
+} from "@/components/Common/ListRow"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -42,23 +50,19 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import useCustomToast from "@/hooks/useCustomToast"
 
 interface A2aAccessTokensManagerProps {
   agentId: string
@@ -69,7 +73,9 @@ interface A2aAccessTokensManagerProps {
  * embedded inside the A2A Integration card (no Card wrapper of its own).
  * Backed by the existing AccessTokensService (A2A JWT tokens).
  */
-export function A2aAccessTokensManager({ agentId }: A2aAccessTokensManagerProps) {
+export function A2aAccessTokensManager({
+  agentId,
+}: A2aAccessTokensManagerProps) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [tokenName, setTokenName] = useState("")
   const [tokenMode, setTokenMode] = useState<AccessTokenMode>("conversation")
@@ -77,6 +83,8 @@ export function A2aAccessTokensManager({ agentId }: A2aAccessTokensManagerProps)
   const [createdToken, setCreatedToken] = useState<string | null>(null)
   const [copiedToken, setCopiedToken] = useState(false)
   const [showToken, setShowToken] = useState(false)
+  const [deleteTarget, setDeleteTarget] =
+    useState<AgentAccessTokenPublic | null>(null)
 
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -104,6 +112,7 @@ export function A2aAccessTokensManager({ agentId }: A2aAccessTokensManagerProps)
       AccessTokensService.deleteAccessToken({ agentId, tokenId }),
     onSuccess: () => {
       showSuccessToast("Access token deleted successfully")
+      setDeleteTarget(null)
       queryClient.invalidateQueries({ queryKey: ["access-tokens", agentId] })
     },
     onError: (error: any) => {
@@ -112,14 +121,22 @@ export function A2aAccessTokensManager({ agentId }: A2aAccessTokensManagerProps)
   })
 
   const revokeTokenMutation = useMutation({
-    mutationFn: ({ tokenId, isRevoked }: { tokenId: string; isRevoked: boolean }) =>
+    mutationFn: ({
+      tokenId,
+      isRevoked,
+    }: {
+      tokenId: string
+      isRevoked: boolean
+    }) =>
       AccessTokensService.updateAccessToken({
         agentId,
         tokenId,
         requestBody: { is_revoked: isRevoked },
       }),
     onSuccess: (_, { isRevoked }) => {
-      showSuccessToast(isRevoked ? "Access token revoked" : "Access token restored")
+      showSuccessToast(
+        isRevoked ? "Access token revoked" : "Access token restored",
+      )
       queryClient.invalidateQueries({ queryKey: ["access-tokens", agentId] })
     },
     onError: (error: any) => {
@@ -270,7 +287,9 @@ export function A2aAccessTokensManager({ agentId }: A2aAccessTokensManagerProps)
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="conversation">Conversation Only</SelectItem>
+                      <SelectItem value="conversation">
+                        Conversation Only
+                      </SelectItem>
                       <SelectItem value="building">
                         Building (includes Conversation)
                       </SelectItem>
@@ -291,13 +310,17 @@ export function A2aAccessTokensManager({ agentId }: A2aAccessTokensManagerProps)
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="limited">Limited (own sessions only)</SelectItem>
-                      <SelectItem value="general">General (all sessions)</SelectItem>
+                      <SelectItem value="limited">
+                        Limited (own sessions only)
+                      </SelectItem>
+                      <SelectItem value="general">
+                        General (all sessions)
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Limited: can only access sessions created by this token. General:
-                    can access all agent sessions.
+                    Limited: can only access sessions created by this token.
+                    General: can access all agent sessions.
                   </p>
                 </div>
               </div>
@@ -311,7 +334,9 @@ export function A2aAccessTokensManager({ agentId }: A2aAccessTokensManagerProps)
                   onClick={handleCreateToken}
                   disabled={createTokenMutation.isPending}
                 >
-                  {createTokenMutation.isPending ? "Creating..." : "Create Token"}
+                  {createTokenMutation.isPending
+                    ? "Creating..."
+                    : "Create Token"}
                 </Button>
               )}
             </DialogFooter>
@@ -326,128 +351,116 @@ export function A2aAccessTokensManager({ agentId }: A2aAccessTokensManagerProps)
           No access tokens yet. Create one to enable external A2A access.
         </p>
       ) : (
-        <div className="space-y-1.5">
+        <ListRowGroup>
           {tokens.map((token: AgentAccessTokenPublic) => (
-            <div
+            <ListRow
               key={token.id}
-              className={`flex items-center justify-between px-3 py-2 border rounded-lg ${
-                token.is_revoked ? "opacity-50 bg-muted" : ""
-              }`}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="font-medium text-sm truncate">{token.name}</span>
-                {token.is_revoked && (
-                  <Badge variant="destructive" className="text-xs shrink-0">
-                    Revoked
-                  </Badge>
-                )}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="font-mono text-xs text-muted-foreground">
-                  {token.token_prefix}...
-                </span>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="flex items-center">
-                        {token.mode === "building" ? (
-                          <Wrench className="h-3.5 w-3.5 text-orange-500" />
-                        ) : (
-                          <MessageCircle className="h-3.5 w-3.5 text-blue-500" />
-                        )}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="text-xs">
-                      {token.mode === "building" ? "Building mode" : "Conversation only"}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="flex items-center">
-                        {token.scope === "limited" ? (
-                          <Lock className="h-3.5 w-3.5 text-amber-500" />
-                        ) : (
-                          <Globe className="h-3.5 w-3.5 text-green-500" />
-                        )}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="text-xs">
-                      {token.scope === "limited"
-                        ? "Limited (own sessions)"
-                        : "General (all sessions)"}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="flex items-center cursor-help">
-                        <Info className="h-3.5 w-3.5 text-muted-foreground" />
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="text-xs">
-                      <div className="space-y-1">
-                        <p>Created: {formatDate(token.created_at)}</p>
-                        {token.last_used_at && (
-                          <p>Last used: {formatDate(token.last_used_at)}</p>
-                        )}
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <div className="flex items-center gap-0.5 ml-1 border-l pl-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-xs"
-                    onClick={() =>
-                      revokeTokenMutation.mutate({
-                        tokenId: token.id,
-                        isRevoked: !token.is_revoked,
-                      })
+              muted={token.is_revoked}
+              // Revoked was a `Badge`; it is the dot now, like every other
+              // list in the product.
+              status={{
+                tone: token.is_revoked ? "error" : "on",
+                label: token.is_revoked ? "Revoked" : "Active",
+              }}
+              title={token.name}
+              flags={
+                <>
+                  <RowFlag
+                    icon={token.mode === "building" ? Wrench : MessageCircle}
+                    label={
+                      token.mode === "building"
+                        ? "Building mode — may change the agent"
+                        : "Conversation only"
                     }
-                    disabled={revokeTokenMutation.isPending}
-                  >
-                    {token.is_revoked ? "Restore" : "Revoke"}
-                  </Button>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Delete Access Token</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          Are you sure you want to delete the token "{token.name}"? This
-                          action cannot be undone. Any systems using this token will lose
-                          access to this agent.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => deleteTokenMutation.mutate(token.id)}
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        >
-                          Delete
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </div>
-              </div>
-            </div>
+                    tone={token.mode === "building" ? "warning" : "neutral"}
+                  />
+                  <RowFlag
+                    icon={token.scope === "limited" ? Lock : Globe}
+                    label={
+                      token.scope === "limited"
+                        ? "Limited — only its own sessions"
+                        : "General — all sessions of this agent"
+                    }
+                  />
+                  <RowInfo
+                    facts={[
+                      `Prefix ${token.token_prefix}…`,
+                      `Created ${formatDate(token.created_at)}`,
+                      token.last_used_at
+                        ? `Last used ${formatDate(token.last_used_at)}`
+                        : "Never used",
+                    ]}
+                  />
+                </>
+              }
+            >
+              <RowActionsMenu
+                label={`the token ${token.name}`}
+                disabled={revokeTokenMutation.isPending}
+              >
+                <DropdownMenuItem
+                  onSelect={() =>
+                    revokeTokenMutation.mutate({
+                      tokenId: token.id,
+                      isRevoked: !token.is_revoked,
+                    })
+                  }
+                >
+                  {token.is_revoked ? <RotateCcw /> : <Ban />}
+                  {token.is_revoked ? "Restore token" : "Revoke token"}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={(e) => {
+                    e.preventDefault()
+                    setDeleteTarget(token)
+                  }}
+                >
+                  <Trash2 />
+                  Delete token
+                </DropdownMenuItem>
+              </RowActionsMenu>
+            </ListRow>
           ))}
-        </div>
+        </ListRowGroup>
       )}
+
+      {/* One confirm for the list, driven by the row the menu named: a
+          per-row `AlertDialog` nested in a menu item loses its pending state
+          when the item unmounts on select. */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(next) => {
+          if (!deleteTokenMutation.isPending && !next) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete access token</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete the token <strong>{deleteTarget?.name}</strong>? This
+              cannot be undone, and any system using it loses access to this
+              agent.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteTokenMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                if (deleteTarget) deleteTokenMutation.mutate(deleteTarget.id)
+              }}
+              disabled={deleteTokenMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteTokenMutation.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

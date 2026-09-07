@@ -1,4 +1,5 @@
 import type { AgentSchedulePublic } from "@/client"
+import { ListRowGroup } from "@/components/Common/ListRow"
 import {
   Sheet,
   SheetContent,
@@ -46,7 +47,7 @@ export function AllSchedulesSheet({
           <SheetTitle>Schedules</SheetTitle>
           <SheetDescription>{totalCount} schedules</SheetDescription>
         </SheetHeader>
-        <div className="flex-1 overflow-y-auto space-y-1.5 px-4 pb-4">
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
           {schedules.length === 0 ? (
             // Reachable without closing the Sheet: the rows carry Delete.
             <p className="text-sm text-muted-foreground">
@@ -55,14 +56,16 @@ export function AllSchedulesSheet({
                 : "No schedules yet. Add one to run this agent on a timer."}
             </p>
           ) : (
-            schedules.map((schedule) => (
-              <ScheduleRow
-                key={schedule.id}
-                agentId={agentId}
-                schedule={schedule}
-                readOnly={readOnly}
-              />
-            ))
+            <ListRowGroup>
+              {schedules.map((schedule) => (
+                <ScheduleRow
+                  key={schedule.id}
+                  agentId={agentId}
+                  schedule={schedule}
+                  readOnly={readOnly}
+                />
+              ))}
+            </ListRowGroup>
           )}
         </div>
       </SheetContent>

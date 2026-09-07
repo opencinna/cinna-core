@@ -3,6 +3,7 @@ import {
   findAutoProvisionConflict,
   getProviderTypeLabel,
 } from "@/components/Admin/LlmProviders/providerTypes"
+import { ListRow } from "@/components/Common/ListRow"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Tooltip,
@@ -42,21 +43,15 @@ export function CompanyAiCredentialRow({
   const roles = record.auto_provision_roles ?? []
 
   return (
-    <div className="flex items-center justify-between gap-2 px-3 py-2 border rounded-lg">
-      <div className="min-w-0 flex-1">
-        <span className="block text-sm font-medium truncate">
-          {record.name}
-        </span>
-        {/* The provider type is the row's one metadata fact, on its own line
-            rather than in a `Badge`: at 1024 this row is ~268px, of which the
-            toggle group takes ~130, and an "OpenAI Compatible" chip beside the
-            name would leave the name under 50px (P3: the kind must not cost
-            the name its width). */}
-        <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {getProviderTypeLabel(record.type)}
-        </p>
-      </div>
-
+    <ListRow
+      title={record.name}
+      // The provider type is the row's one metadata fact, on its own line
+      // rather than in a `Badge`: at 1024 this row is ~268px, of which the
+      // toggle group takes ~130, and an "OpenAI Compatible" chip beside the
+      // name would leave the name under 50px (P3: the kind must not cost the
+      // name its width).
+      meta={getProviderTypeLabel(record.type)}
+    >
       <ToggleGroup
         type="multiple"
         variant="outline"
@@ -146,6 +141,6 @@ export function CompanyAiCredentialRow({
           )
         })}
       </ToggleGroup>
-    </div>
+    </ListRow>
   )
 }
