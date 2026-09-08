@@ -56,7 +56,7 @@ concrete artefacts. Walk the table top-down after every substantive change.
 | **Schedules** | the user says daily / weekly / every / at …, or the agent should run unattended | manifest `schedules[]`, `docs/ENTRYPOINT_PROMPT.md` becomes mandatory, a `run-<name>` Makefile target |
 | **Status reporting** | the agent runs unattended, or performs long-running checks | `scripts/update_status.py` usage, `app-data/storage/STATUS.md`, `status_refresh_command`, a `status` CLI command |
 | **CLI commands** | the same operation is run repeatedly by name | `docs/CLI_COMMANDS.yaml` entries + matching Makefile targets |
-| **Knowledge & local skills** | 3+ distinct capabilities, or domain docs beyond a page | `knowledge/<topic>/`, one doc per local skill, `scripts/<skill>/` subfolders |
+| **Knowledge & local skills** | 3+ distinct capabilities, or domain docs beyond a page | `knowledge/<topic>/`, `skills/<name>/SKILL.md`, per-skill `scripts/` |
 | **Multi-agent** | a second agent appears, or one agent should delegate | root orchestrator conventions, manifest `handovers[]` |
 | **Go cloud** | the user asks, or the agent needs 24/7, email/chat channels, sharing or webapps | everything in `guides/11-go-cloud.md` |
 
@@ -94,6 +94,7 @@ not get `STATUS.md`. Unused scaffolding costs the user real attention later.
 | Folder | Owner | Survives a cloud update? | Use for |
 |--------|-------|--------------------------|---------|
 | `docs/` | the agent's author | replaced on update | prompts, `CLI_COMMANDS.yaml`, domain docs |
+| `skills/` | the agent's author | replaced on update | one folder per capability, `skills/<name>/SKILL.md` |
 | `scripts/` | the agent's author | replaced on update | Python that does the work |
 | `knowledge/` | the agent's author | replaced on update | static reference material, read-only at runtime |
 | `files/` | the agent's author | replaced on update | static shipped assets (lookup tables, fixtures) |

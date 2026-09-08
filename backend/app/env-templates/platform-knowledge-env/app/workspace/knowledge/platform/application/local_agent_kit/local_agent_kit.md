@@ -53,7 +53,7 @@ agent into it with one command.
     guide, template or tool edit. Answers *"is my copy of the kit current?"*,
     and it is what `kit.py refresh` polls and what every ETag is keyed on. It
     gates nothing.
-  - `contract_version` — a hand-maintained semantic version (`1.0.0` today),
+  - `contract_version` — a hand-maintained semantic version (`1.1.0` today),
     carried in three places that must agree: the `CONTRACT_VERSION` file,
     `kit.json` and `layout.json`. Every manifest records the one it was
     scaffolded with. Answers *"may this tool operate this folder?"*
@@ -87,11 +87,16 @@ agent into it with one command.
   kit tells the assistant to announce which hat it is wearing.
 - **Cloud-mirroring layout** — A locally scaffolded agent has the exact same
   top-level folders a cloud agent workspace has: `docs/` (prompts,
-  `CLI_COMMANDS.yaml`), `scripts/`, `knowledge/`, `files/`, `config/`,
+  `CLI_COMMANDS.yaml`), `skills/` (one folder per skill, contract 1.1.0),
+  `scripts/`, `knowledge/`, `files/`, `config/`,
   `credentials/` (local `.env`, never copied to the cloud), and
   `app-data/{storage,cache,uploads}/`. Nothing about the layout is
-  kit-specific — it is the same convention [agent_prompts](../../agents/agent_prompts/agent_prompts.md)
-  and [agent_bundles](../../agents/agent_bundles/agent_bundles.md) already use.
+  kit-specific — it is the same convention [agent_prompts](../../agents/agent_prompts/agent_prompts.md),
+  [agent_bundles](../../agents/agent_bundles/agent_bundles.md) and
+  [agent_skills](../../agents/agent_skills/agent_skills.md) already use.
+  Locally, a skill's progressive disclosure is an `AGENTS.md` instruction the
+  assistant follows, not machinery — nothing on the user's machine registers
+  `skills/` with their coding assistant.
 - **`cinna-agent.json`** — The manifest at an agent folder's root, and the one
   file every host agrees on. Identity first: a stable `id` (UUID v4, written
   once at scaffold and never rewritten, so a folder move or a slug rename does

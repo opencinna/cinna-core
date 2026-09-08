@@ -95,7 +95,7 @@ Non-negotiable, every time, before anything leaves the machine:
 git check-ignore -v credentials/.env             # must match an ignore rule
 git status --short                               # .env must not appear
 grep -rn "credentials/.env" scripts/             # only cinna_credentials.py may
-grep -rniE "password|api[_-]?token|secret" app-data/storage/ docs/ knowledge/ config/
+grep -rniE "password|api[_-]?token|secret" app-data/storage/ docs/ skills/ knowledge/ config/
 ```
 
 The last grep should return only field *names* in documentation, never a value. If a

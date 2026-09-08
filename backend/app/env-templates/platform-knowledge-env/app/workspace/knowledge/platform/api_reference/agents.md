@@ -25,6 +25,37 @@ Auto-generated from OpenAPI spec. Tag: `agents`
 
 ---
 
+## GET `/api/v1/agents/{agent_id}/skills`
+**Get Agent Skills**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AgentSkillsPublic`
+
+---
+
+## POST `/api/v1/agents/{agent_id}/skills/refresh`
+**Refresh Agent Skills**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AgentSkillsPublic`
+
+---
+
+## GET `/api/v1/agents/{agent_id}/skills/{name}/content`
+**Get Agent Skill Content**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `name`: string
+
+**Response:** `SkillContentPublic`
+
+---
+
 ## GET `/api/v1/agents/`
 **Read Agents**
 

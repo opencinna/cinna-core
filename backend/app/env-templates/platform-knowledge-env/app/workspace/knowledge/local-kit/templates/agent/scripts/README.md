@@ -63,5 +63,5 @@ _No agent scripts yet._
 - Large results are passed between scripts through files in `app-data/storage/`,
   not through stdout.
 - Paginated fetching always specifies a deterministic sort order.
-- Shared helpers stay at the top level of `scripts/`; scripts belonging to one local
-  skill go into `scripts/<skill>/`.
+- Shared helpers stay at the top level of `scripts/`; a script belonging to exactly
+  one skill goes into `skills/<name>/scripts/` and is catalogued here all the same.

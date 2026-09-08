@@ -17,8 +17,9 @@ knowledge/
 
 Do not put here:
 
-- prompts (`docs/`), tunable parameters (`config/`), lookup tables the scripts load
-  (`files/`), or anything the agent produces at runtime (`app-data/storage/`);
+- prompts (`docs/`), capabilities (`skills/<name>/SKILL.md`), tunable parameters
+  (`config/`), lookup tables the scripts load (`files/`), or anything the agent
+  produces at runtime (`app-data/storage/`);
 - credentials, hostnames with tokens in them, or personal data.
 
 Add this folder only when the ladder's **Knowledge & local skills** trigger has

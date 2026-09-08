@@ -11,7 +11,12 @@ the §8.2 exchange, built, with three disclosures you must act on. Section 12 an
 required change on your side into one checklist; the sections above explain them, the
 checklist is what you work from.
 
-**Contract version shipped: `1.0.0`**, in three places inside one archive —
+**Written against contract `1.0.0`.** The contract has moved since — `CONTRACT_VERSION`
+is the current number and `CHANGELOG.md` says what changed. Everything below is the
+reply as it was sent, and is left that way on purpose; read a version in it as the one
+shipping at the time, not as today's.
+
+The version shipped in three places inside one archive —
 `CONTRACT_VERSION`, `kit.json` → `contract_version`, and `layout.json` →
 `contract_version`. The serving path verifies the three agree and refuses to serve the
 contract if they do not (section 14).
