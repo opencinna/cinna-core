@@ -95,17 +95,6 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 
 ---
 
-## POST `/api/v1/admin/llm-providers/{managed_credential_id}/members/{user_id}/retry`
-**Retry Member Key Provisioning**
-
-**Path parameters:**
-- `managed_credential_id`: uuid
-- `user_id`: uuid
-
-**Response:** `ManagedAICredentialPublic`
-
----
-
 ## POST `/api/v1/admin/llm-providers/test-connection`
 **Test Managed Ai Credential Connection**
 

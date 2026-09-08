@@ -133,6 +133,9 @@ from .credentials.ai_credential import (
     AICredentialDeletionImpact,
 )
 from .credentials.managed_ai_credential import (
+    AdminAIKeyKind,
+    AdminAIKeyRow,
+    AdminAIKeysPublic,
     ManagedAICredential,
     ManagedAICredentialMember,
     ManagedAICredentialPublic,
@@ -977,6 +980,9 @@ __all__ = [
     "AICredentialBundleUsage",
     "AICredentialDeletionImpact",
     # Managed AI Credentials (admin-managed parent/child)
+    "AdminAIKeyKind",
+    "AdminAIKeyRow",
+    "AdminAIKeysPublic",
     "ManagedAICredential",
     "ManagedAICredentialMember",
     "ManagedAICredentialPublic",

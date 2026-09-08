@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     a2a,
     access_tokens,
+    admin_ai_keys,
     admin_environments,
     admin_ai_providers,
     admin_llm_providers,
@@ -132,6 +133,11 @@ api_router.include_router(admin_llm_providers.router)
 # projection that used to live on /admin/provider-adapters. Registered after
 # admin_llm_providers only for readability; the two prefixes do not overlap.
 api_router.include_router(admin_ai_providers.router)
+# /admin/ai-credentials/keys/* — one resource per real API key. Separate from
+# admin_llm_providers because the unit differs: that router administers records,
+# this one the keys a record hands out, which for a minted provider is one per
+# member.
+api_router.include_router(admin_ai_keys.router)
 api_router.include_router(admin_routing.router)
 api_router.include_router(server_config.router)
 api_router.include_router(server_channels.router)

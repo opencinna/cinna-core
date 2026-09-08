@@ -644,3 +644,119 @@ class ManagedAICredentialApplyResult(ManagedAICredentialReconcileResult):
     # the default they chose, and a dialog that says nothing because it looked
     # at one flag is worse than one that says nothing at all.
     defaults_overwrite_count: int = 0
+
+
+# ============= The keys list =============
+#
+# ONE ROW = ONE REAL API KEY.
+#
+# The admin surface used to list *records*, which meant a minted provider showed
+# one row holding one key per member — the unit stored and the unit administered
+# had come apart for exactly the configuration the feature was built for. These
+# two DTOs are the projection that puts them back together, and the rule they
+# implement is arithmetic on the model rather than a presentation choice:
+#
+# * a **minted** parent has one real key per membership, each with its own
+#   ``external_key_ref`` at the vendor and its own child credential → one row
+#   per membership;
+# * a **shared** parent (manual, or owned by a ``fixed_key`` provider) has
+#   exactly one key: ``_resolve_key`` decrypts the parent's and ``_add_child``
+#   copies *that same secret* onto every member's child row → one row for the
+#   record, whatever its member count.
+#
+# So the N children under a shared record are copies, not keys, and the row
+# count follows the number of secrets that exist at the provider.
+
+
+class AdminAIKeyKind(str, Enum):
+    """Which of the two things a row on the keys list is.
+
+    Not derivable from ``provisioning_mode`` in the client even though the two
+    agree today: the mode describes the *record*, this describes the **row**,
+    and the day a third kind of row appears (a key held by nobody, an orphan
+    found at the vendor) the mode still says ``minted`` for it.
+    """
+
+    #: One person's own key. ``membership_id`` is the resource every per-key
+    #: verb addresses.
+    PER_USER = "per_user"
+    #: One shared key, held as a copy by ``member_count`` people.
+    SHARED = "shared"
+
+
+class AdminAIKeyRow(SQLModel):
+    """One real API key — or one that is on its way.
+
+    A row with no key yet (``pending`` / ``minting`` / ``failed`` /
+    ``suspended``) is still a row. It is the only place an administrator can see
+    that one person's key is stuck, which is half the reason this list exists;
+    hiding it until a key materialises would make the surface silent exactly
+    when something needs doing.
+
+    **Two id fields rather than one polymorphic ``id``.** A single ``id`` whose
+    meaning depends on ``kind`` is a field whose type every consumer has to
+    re-derive, and the first one to get it wrong addresses a verb at the wrong
+    table. ``managed_credential_id`` is always the record; ``membership_id`` is
+    the per-key resource and is ``None`` for exactly ``kind="shared"``.
+    """
+
+    #: **Required, no default** — the discriminator every other optional field
+    #: on this model is read against.
+    kind: AdminAIKeyKind
+    managed_credential_id: uuid.UUID
+    #: The verb target: revoke, rotate, set-default and retry all address this.
+    #: ``None`` for a shared row, whose verbs act on the record instead.
+    membership_id: uuid.UUID | None = None
+    #: What the administrator called the record this key came from. The row's
+    #: own title when ``kind="shared"``; the second line when ``per_user``.
+    credential_name: str
+    type: AICredentialType
+    provider_id: uuid.UUID | None = None
+    #: ``None`` for a manual record **and** for a record whose provider row has
+    #: gone — the surface renders those two differently and reads
+    #: ``provider_id`` to tell them apart, exactly as the record list does.
+    provider_name: str | None = None
+
+    # ---- per_user only ----
+    holder_user_id: uuid.UUID | None = None
+    holder_email: str | None = None
+    holder_full_name: str | None = None
+    #: ``None`` for exactly ``kind="shared"``, and that is the one place this
+    #: feature relaxes its "a status is always explicit" rule. The alternative
+    #: is worse: a synthetic ``not_applicable`` on a shared row would be a
+    #: provisioning status invented by the server for a row with no membership
+    #: behind it, and a client filtering on it would silently include records.
+    provisioning_status: MembershipProvisioningStatus | None = None
+    provision_error: str | None = None
+    provision_attempts: int = 0
+    child_credential_id: uuid.UUID | None = None
+    #: Whether this key is its holder's default for its type. Read off the
+    #: child row, never inferred from the record's ``set_as_default`` — that
+    #: flag is what a *grant* does, and the person may have changed it since.
+    is_default: bool = False
+    api_key_onboarding_state: AIKeyOnboardingState | None = None
+    #: The vendor's own handles for this key, formatted for reading:
+    #: ``"proj_… · user-…"``. Never the secret, and never the half of an
+    #: ``api_key_id`` that could be replayed. It is here so an administrator can
+    #: match a row against the provider's console — the same job the service
+    #: account's ``email (membership id)`` name does from the other side.
+    key_reference: str | None = None
+
+    # ---- shared only ----
+    #: How many people hold a copy of this one key. ``None`` for a per-user row,
+    #: where the answer is always one and printing it would suggest otherwise.
+    member_count: int | None = None
+
+    created_at: datetime
+
+
+class AdminAIKeysPublic(SQLModel):
+    """One page of the keys list.
+
+    ``count`` is the **total** number of matching rows, not the length of
+    ``data`` — the house shape (:class:`~app.models.users.user.UsersPublic`),
+    and the only one a pager can be built on.
+    """
+
+    data: list[AdminAIKeyRow] = Field(default_factory=list)
+    count: int = 0

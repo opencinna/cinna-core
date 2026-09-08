@@ -1,12 +1,18 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { CheckCircle2, EllipsisVertical, Pencil, Trash, UsersRound } from "lucide-react"
+import {
+  CheckCircle2,
+  EllipsisVertical,
+  Pencil,
+  Trash,
+  UsersRound,
+} from "lucide-react"
 import { useState } from "react"
 
 import {
-  type ManagedAICredentialPublic,
   AdminLlmProvidersService,
+  type ManagedAICredentialPublic,
 } from "@/client"
-import { ApiError } from "@/client/core/ApiError"
+import type { ApiError } from "@/client/core/ApiError"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,37 +34,14 @@ import {
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import { ManagedCredentialDialog } from "./ManagedCredentialDialog"
-import { MANAGED_CREDENTIALS_QUERY_PREFIX } from "./providerTypes"
+import {
+  type BlockedMember,
+  blockedFromError,
+  MANAGED_CREDENTIALS_QUERY_PREFIX,
+} from "./providerTypes"
 
 interface LlmProviderActionsMenuProps {
   record: ManagedAICredentialPublic
-}
-
-// One blocked member from a 409 delete response.
-//
-// `message` is the server's sentence for `reason`, and it is what gets
-// rendered. This menu used to state its own — "in use by a published bundle" —
-// for every block, including `mint_in_flight`, where the sentence is wrong and
-// the remedy it implies (force) is the one thing an admin must not reach for
-// while a key is being minted.
-interface BlockedMember {
-  user_id: string
-  reason: string
-  message: string
-  impact?: unknown
-}
-
-// Extract the blocked-members list from a 409 ApiError body
-// ({ detail: { message, blocked: [...] } }).
-function blockedFromError(error: unknown): BlockedMember[] | null {
-  if (error instanceof ApiError && error.status === 409) {
-    const detail = (error.body as { detail?: unknown } | undefined)?.detail
-    if (detail && typeof detail === "object" && "blocked" in detail) {
-      const blocked = (detail as { blocked?: unknown }).blocked
-      if (Array.isArray(blocked)) return blocked as BlockedMember[]
-    }
-  }
-  return null
 }
 
 // Everything a mutation on this menu can move. Delete removes members'
@@ -94,7 +77,9 @@ const AFFECTED_QUERY_KEYS = [
  *   has no `auto_provision_roles` to apply, so the call could only ever have
  *   answered `candidate_count: 0`, and an honest no-op is still a no-op.
  */
-export function LlmProviderActionsMenu({ record }: LlmProviderActionsMenuProps) {
+export function LlmProviderActionsMenu({
+  record,
+}: LlmProviderActionsMenuProps) {
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   // Populated when a non-forced delete is blocked by bundle usage (409); drives
@@ -234,15 +219,17 @@ export function LlmProviderActionsMenu({ record }: LlmProviderActionsMenuProps) 
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {isBlocked ? "Some members could not be removed" : "Delete managed credential"}
+              {isBlocked
+                ? "Some members could not be removed"
+                : "Delete managed credential"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {isBlocked ? (
                 <>
-                  Some members couldn't be removed — each reason is listed below.
-                  Forcing the delete removes the record anyway; where the cause is
-                  a published bundle, that bundle degrades back to "user
-                  provides". This action cannot be undone.
+                  Some members couldn't be removed — each reason is listed
+                  below. Forcing the delete removes the record anyway; where the
+                  cause is a published bundle, that bundle degrades back to
+                  "user provides". This action cannot be undone.
                 </>
               ) : (
                 <>

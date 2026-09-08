@@ -568,6 +568,65 @@ export type AdminAgentEnvironmentsPublic = {
 };
 
 /**
+ * Which of the two things a row on the keys list is.
+ *
+ * Not derivable from ``provisioning_mode`` in the client even though the two
+ * agree today: the mode describes the *record*, this describes the **row**,
+ * and the day a third kind of row appears (a key held by nobody, an orphan
+ * found at the vendor) the mode still says ``minted`` for it.
+ */
+export type AdminAIKeyKind = 'per_user' | 'shared';
+
+/**
+ * One real API key — or one that is on its way.
+ *
+ * A row with no key yet (``pending`` / ``minting`` / ``failed`` /
+ * ``suspended``) is still a row. It is the only place an administrator can see
+ * that one person's key is stuck, which is half the reason this list exists;
+ * hiding it until a key materialises would make the surface silent exactly
+ * when something needs doing.
+ *
+ * **Two id fields rather than one polymorphic ``id``.** A single ``id`` whose
+ * meaning depends on ``kind`` is a field whose type every consumer has to
+ * re-derive, and the first one to get it wrong addresses a verb at the wrong
+ * table. ``managed_credential_id`` is always the record; ``membership_id`` is
+ * the per-key resource and is ``None`` for exactly ``kind="shared"``.
+ */
+export type AdminAIKeyRow = {
+    kind: AdminAIKeyKind;
+    managed_credential_id: string;
+    membership_id?: (string | null);
+    credential_name: string;
+    type: AICredentialType;
+    provider_id?: (string | null);
+    provider_name?: (string | null);
+    holder_user_id?: (string | null);
+    holder_email?: (string | null);
+    holder_full_name?: (string | null);
+    provisioning_status?: (MembershipProvisioningStatus | null);
+    provision_error?: (string | null);
+    provision_attempts?: number;
+    child_credential_id?: (string | null);
+    is_default?: boolean;
+    api_key_onboarding_state?: (AIKeyOnboardingState | null);
+    key_reference?: (string | null);
+    member_count?: (number | null);
+    created_at: string;
+};
+
+/**
+ * One page of the keys list.
+ *
+ * ``count`` is the **total** number of matching rows, not the length of
+ * ``data`` — the house shape (:class:`~app.models.users.user.UsersPublic`),
+ * and the only one a pager can be built on.
+ */
+export type AdminAIKeysPublic = {
+    data?: Array<AdminAIKeyRow>;
+    count?: number;
+};
+
+/**
  * Request body for bulk rebuild endpoint.
  */
 export type AdminBulkRebuildRequest = {
@@ -7230,6 +7289,45 @@ export type ActivitiesMarkActivitiesAsReadResponse = ({
     [key: string]: unknown;
 });
 
+export type AdminAiKeysListAiKeysData = {
+    kind?: (AdminAIKeyKind | null);
+    limit?: number;
+    providerId?: (string | null);
+    /**
+     * Match the holder's email or name, or the credential's name
+     */
+    q?: (string | null);
+    skip?: number;
+    status?: (Array<MembershipProvisioningStatus> | null);
+};
+
+export type AdminAiKeysListAiKeysResponse = (AdminAIKeysPublic);
+
+export type AdminAiKeysRevokeAiKeyData = {
+    force?: boolean;
+    membershipId: string;
+};
+
+export type AdminAiKeysRevokeAiKeyResponse = (Message);
+
+export type AdminAiKeysRotateAiKeyData = {
+    membershipId: string;
+};
+
+export type AdminAiKeysRotateAiKeyResponse = (Message);
+
+export type AdminAiKeysSetAiKeyAsDefaultData = {
+    membershipId: string;
+};
+
+export type AdminAiKeysSetAiKeyAsDefaultResponse = (Message);
+
+export type AdminAiKeysRetryAiKeyData = {
+    membershipId: string;
+};
+
+export type AdminAiKeysRetryAiKeyResponse = (Message);
+
 export type AdminAiProvidersListProviderAdaptersResponse = (ProviderAdaptersPublic);
 
 export type AdminAiProvidersListAiProvidersResponse = (Array<AIProviderPublic>);
@@ -7378,13 +7476,6 @@ export type AdminLlmProvidersSetManagedAiCredentialDefaultData = {
 };
 
 export type AdminLlmProvidersSetManagedAiCredentialDefaultResponse = (ManagedAICredentialPublic);
-
-export type AdminLlmProvidersRetryMemberKeyProvisioningData = {
-    managedCredentialId: string;
-    userId: string;
-};
-
-export type AdminLlmProvidersRetryMemberKeyProvisioningResponse = (ManagedAICredentialPublic);
 
 export type AdminLlmProvidersTestManagedAiCredentialConnectionData = {
     /**

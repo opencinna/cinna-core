@@ -10,9 +10,10 @@ Each file below documents one API domain.
 | A2A | [a2a.md](./a2a.md) | 9 |
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
 | Activities | [activities.md](./activities.md) | 8 |
+| Admin Ai Keys | [admin_ai_keys.md](./admin_ai_keys.md) | 5 |
 | Admin Ai Providers | [admin_ai_providers.md](./admin_ai_providers.md) | 9 |
 | Admin Environments | [admin_environments.md](./admin_environments.md) | 3 |
-| Admin Llm Providers | [admin_llm_providers.md](./admin_llm_providers.md) | 8 |
+| Admin Llm Providers | [admin_llm_providers.md](./admin_llm_providers.md) | 7 |
 | Admin Routing | [admin_routing.md](./admin_routing.md) | 6 |
 | Agent Api | [agent_api.md](./agent_api.md) | 14 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |

@@ -331,49 +331,6 @@ async def set_managed_ai_credential_default(
     return record
 
 
-@router.post(
-    "/{managed_credential_id}/members/{user_id}/retry",
-    response_model=ManagedAICredentialPublic,
-)
-async def retry_member_key_provisioning(
-    session: SessionDep,
-    current_user: SuperUser,
-    managed_credential_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> Any:
-    """Put a member whose key provisioning failed back in the mint queue.
-
-    ``failed`` is terminal on purpose — bounded retries that converge are what
-    makes the status mean "somebody has to look at this" — but terminal must not
-    mean unreachable. This is the "look at it, fix the configuration, try again"
-    action, and it is deliberately explicit: re-adding the member instead would
-    make every unrelated PATCH quietly reset failures it never mentioned.
-
-    The next converge pass picks the member up. 400 if their provisioning has not
-    failed; 404 if they are not a member.
-    """
-    membership = key_provisioning_service.requeue_failed_member(
-        session, parent_id=managed_credential_id, user_id=user_id
-    )
-    await SecurityEventService.create_event(
-        session=session,
-        user_id=user_id,
-        data=SecurityEventCreate(
-            event_type="admin.ai_credential.mint_requested",
-            severity="medium",
-            details={
-                "managed_credential_id": str(managed_credential_id),
-                "target_user_id": str(user_id),
-                "managed_by_id": str(current_user.id),
-                "retry_of": membership.last_error,
-            },
-        ),
-    )
-    return managed_ai_credentials_service.get(
-        session, current_user, managed_credential_id
-    )
-
-
 @router.post("/test-connection", response_model=AICredentialTestResult)
 async def test_managed_ai_credential_connection(
     *,

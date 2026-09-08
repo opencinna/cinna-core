@@ -15,10 +15,26 @@ export const PROVIDER_TYPE_OPTIONS: {
   label: string
   description: string
 }[] = [
-  { value: "anthropic", label: "Anthropic", description: "Claude AI models (API Key or OAuth Token)" },
-  { value: "openai", label: "OpenAI", description: "OpenAI API (GPT-4o, o3, etc.)" },
-  { value: "openai_compatible", label: "OpenAI Compatible", description: "OpenAI-compatible endpoints (vLLM, custom)" },
-  { value: "google", label: "Google", description: "Google AI (Gemini models via AI Studio)" },
+  {
+    value: "anthropic",
+    label: "Anthropic",
+    description: "Claude AI models (API Key or OAuth Token)",
+  },
+  {
+    value: "openai",
+    label: "OpenAI",
+    description: "OpenAI API (GPT-4o, o3, etc.)",
+  },
+  {
+    value: "openai_compatible",
+    label: "OpenAI Compatible",
+    description: "OpenAI-compatible endpoints (vLLM, custom)",
+  },
+  {
+    value: "google",
+    label: "Google",
+    description: "Google AI (Gemini models via AI Studio)",
+  },
 ]
 
 /**
@@ -60,7 +76,10 @@ export function getProviderTypeLabel(type: AICredentialType): string {
 // surfaces (the page, the auto-provision matrix and the invite wizard) depend
 // on producing the *same* string. Renaming it splits the cache silently — no
 // error, just two lists that stop agreeing with each other.
-export const MANAGED_CREDENTIALS_QUERY_PREFIX = ["admin", "llm-providers"] as const
+export const MANAGED_CREDENTIALS_QUERY_PREFIX = [
+  "admin",
+  "llm-providers",
+] as const
 
 /**
  * React Query key for the connected **providers** (`/admin/ai-providers`).
@@ -340,4 +359,33 @@ export const AI_PROVIDER_KINDS: {
 /** Display label for a provider `kind` string off the wire. */
 export function aiProviderKindLabel(kind: string): string {
   return AI_PROVIDER_KINDS.find((entry) => entry.value === kind)?.label ?? kind
+}
+
+// One blocked member from a 409 removal response — the record's delete and the
+// keys list's per-key revoke send the same envelope.
+//
+// `message` is the server's sentence for `reason`, and it is what gets
+// rendered. The record menu used to state its own — "in use by a published
+// bundle" — for every block, including `mint_in_flight`, where the sentence is
+// wrong and the remedy it implies (force) is the one thing an admin must not
+// reach for while a key is being minted. Shared from here so the second reader
+// cannot reintroduce that.
+export interface BlockedMember {
+  user_id: string
+  reason: string
+  message: string
+  impact?: unknown
+}
+
+// Extract the blocked-members list from a 409 ApiError body
+// ({ detail: { message, blocked: [...] } }).
+export function blockedFromError(error: unknown): BlockedMember[] | null {
+  if (error instanceof ApiError && error.status === 409) {
+    const detail = (error.body as { detail?: unknown } | undefined)?.detail
+    if (detail && typeof detail === "object" && "blocked" in detail) {
+      const blocked = (detail as { blocked?: unknown }).blocked
+      if (Array.isArray(blocked)) return blocked as BlockedMember[]
+    }
+  }
+  return null
 }

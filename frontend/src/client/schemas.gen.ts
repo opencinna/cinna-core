@@ -3315,6 +3315,227 @@ export const ActivityUpdateSchema = {
     title: 'ActivityUpdate'
 } as const;
 
+export const AdminAIKeyKindSchema = {
+    type: 'string',
+    enum: ['per_user', 'shared'],
+    title: 'AdminAIKeyKind',
+    description: `Which of the two things a row on the keys list is.
+
+Not derivable from \`\`provisioning_mode\`\` in the client even though the two
+agree today: the mode describes the *record*, this describes the **row**,
+and the day a third kind of row appears (a key held by nobody, an orphan
+found at the vendor) the mode still says \`\`minted\`\` for it.`
+} as const;
+
+export const AdminAIKeyRowSchema = {
+    properties: {
+        kind: {
+            '$ref': '#/components/schemas/AdminAIKeyKind'
+        },
+        managed_credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Managed Credential Id'
+        },
+        membership_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Membership Id'
+        },
+        credential_name: {
+            type: 'string',
+            title: 'Credential Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        provider_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider Id'
+        },
+        provider_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider Name'
+        },
+        holder_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Holder User Id'
+        },
+        holder_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Holder Email'
+        },
+        holder_full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Holder Full Name'
+        },
+        provisioning_status: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/MembershipProvisioningStatus'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        provision_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provision Error'
+        },
+        provision_attempts: {
+            type: 'integer',
+            title: 'Provision Attempts',
+            default: 0
+        },
+        child_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Child Credential Id'
+        },
+        is_default: {
+            type: 'boolean',
+            title: 'Is Default',
+            default: false
+        },
+        api_key_onboarding_state: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AIKeyOnboardingState'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        key_reference: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Key Reference'
+        },
+        member_count: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Member Count'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['kind', 'managed_credential_id', 'credential_name', 'type', 'created_at'],
+    title: 'AdminAIKeyRow',
+    description: `One real API key — or one that is on its way.
+
+A row with no key yet (\`\`pending\`\` / \`\`minting\`\` / \`\`failed\`\` /
+\`\`suspended\`\`) is still a row. It is the only place an administrator can see
+that one person's key is stuck, which is half the reason this list exists;
+hiding it until a key materialises would make the surface silent exactly
+when something needs doing.
+
+**Two id fields rather than one polymorphic \`\`id\`\`.** A single \`\`id\`\` whose
+meaning depends on \`\`kind\`\` is a field whose type every consumer has to
+re-derive, and the first one to get it wrong addresses a verb at the wrong
+table. \`\`managed_credential_id\`\` is always the record; \`\`membership_id\`\` is
+the per-key resource and is \`\`None\`\` for exactly \`\`kind="shared"\`\`.`
+} as const;
+
+export const AdminAIKeysPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AdminAIKeyRow'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count',
+            default: 0
+        }
+    },
+    type: 'object',
+    title: 'AdminAIKeysPublic',
+    description: `One page of the keys list.
+
+\`\`count\`\` is the **total** number of matching rows, not the length of
+\`\`data\`\` — the house shape (:class:\`~app.models.users.user.UsersPublic\`),
+and the only one a pager can be built on.`
+} as const;
+
 export const AdminAgentEnvironmentPublicSchema = {
     properties: {
         id: {

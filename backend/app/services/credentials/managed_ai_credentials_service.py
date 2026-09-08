@@ -54,6 +54,9 @@ from app.models.credentials.ai_credential import (
     AICredentialUpdate,
 )
 from app.models.credentials.managed_ai_credential import (
+    AdminAIKeyKind,
+    AdminAIKeyRow,
+    AdminAIKeysPublic,
     ManagedAICredential,
     ManagedAICredentialApplyCandidate,
     ManagedAICredentialApplyResult,
@@ -154,6 +157,20 @@ class MemberRow:
 
     membership: "ManagedAICredentialMembership"
     child: AICredential | None = None
+
+
+@dataclass(frozen=True)
+class MemberRemoval:
+    """What removing one member did.
+
+    At most one of the two is set: ``block`` when the row was refused and left
+    intact, ``revocation`` when a key now needs destroying at the provider.
+    Both ``None`` is the ordinary case of a member who held no provider key — a
+    shared record's member, or a minted one whose mint never produced anything.
+    """
+
+    block: "ManagedReconcileBlock | None" = None
+    revocation: "RevocationRequest | None" = None
 
 
 @dataclass(frozen=True)
@@ -1431,6 +1448,130 @@ class ManagedAICredentialsService:
                 detail="An API key is required for a shared credential.",
             )
 
+    def _remove_one_member(
+        self,
+        session: Session,
+        *,
+        member: MemberRow,
+        parent_id: uuid.UUID,
+        parent_type: str,
+        parent_provider_id: uuid.UUID | None,
+        force: bool,
+    ) -> "MemberRemoval":
+        """Take one person's grant away: child first, then the key.
+
+        The whole of what "removing a member" means, in one place, because there
+        are now two callers who must not disagree about it — :meth:`reconcile`,
+        where a removal is the difference between a desired set and the current
+        one, and the keys list's per-key revoke, where it is the whole request.
+        The second caller is the reason this is a method: a second
+        implementation of this sequence would be a second opinion about whether
+        the key is destroyed before or after the row that names it.
+
+        Returns rather than raises. Every failure here is *per member* — the
+        set-based caller records it and carries on with the rest — so the
+        outcome is a value the caller decides what to do with.
+
+        **It does not schedule the revocation it produces.** A revoke destroys a
+        key at the provider and must happen only once the database has accepted
+        every row change; the caller collects the requests and hands them off
+        together at the end. Returning the request rather than firing it is what
+        keeps that ordering the caller's to enforce.
+        """
+        membership = member.membership
+        owner_id = membership.user_id
+        child = member.child
+        if membership.status == MembershipProvisioningStatus.MINTING.value:
+            # A converge pass has claimed this row and is inside a provider
+            # call right now, in another session. Deleting the row here means
+            # its ``external_key_ref`` — which that call is about to write —
+            # lands nowhere: the service account exists at the provider, no
+            # row names it, and no revocation can ever be scheduled for it.
+            # So the removal is refused for as long as the mint is in flight,
+            # which is at most one converge tick. The admin sees it in
+            # ``blocked`` and retries; that is a far better outcome than a key
+            # nobody can find.
+            return MemberRemoval(
+                block=ManagedReconcileBlock.of(
+                    user_id=owner_id, reason="mint_in_flight"
+                )
+            )
+        # Read while the rows still exist, for two reasons that both make
+        # the answer unrecoverable afterwards: the owner's default pointers
+        # are NULLed by ``ondelete="SET NULL"``, and the membership row
+        # (which carries the provider handles needed to revoke a minted key)
+        # is about to be deleted.
+        child_id = child.id if child else None
+        revoke_ref = membership.external_key_ref
+        owner = session.get(User, owner_id)
+        held_modes = (
+            self._modes_pointing_at(owner, child_id)
+            if owner and child_id
+            else []
+        )
+        try:
+            if child is not None:
+                ai_credentials_service.delete_credential(
+                    session,
+                    child.id,
+                    child.owner_id,
+                    force=force,
+                    admin_override=True,
+                )
+        except AICredentialInUseError as in_use:
+            return MemberRemoval(
+                block=ManagedReconcileBlock.of(
+                    user_id=owner_id,
+                    reason="in_use_bundle",
+                    impact=in_use.impact.model_dump(mode="json"),
+                )
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            # Repair before logging, and before returning — the same rule
+            # ``add_members`` states at length. A statement-level failure here
+            # leaves the transaction aborted, and the set-based caller ends at
+            # ``_to_public``, which queries: recording a block and carrying on
+            # would turn a per-member problem into a 500 for the whole PATCH.
+            # Nothing of the caller's is pending — ``delete_credential`` and
+            # ``_release_model_overrides`` commit their own work, as does the
+            # Add pass.
+            restore_session(session)
+            logger.exception(
+                "Failed to remove child for user %s under parent %s",
+                owner_id, parent_id,
+            )
+            return MemberRemoval(
+                block=ManagedReconcileBlock.of(
+                    user_id=owner_id, reason="remove_failed"
+                )
+            )
+        # Only on the success path: a blocked member keeps their child and
+        # must keep their wiring with it.
+        self._release_model_overrides(session, owner_id, held_modes)
+        self._delete_membership(session, membership)
+        # **Delete first, revoke second**, and this is the reason: the delete
+        # above can be refused by the Tier-2 blast-radius gate, and a revoke
+        # that ran first would leave a dead key on a surviving row that reads
+        # as healthy everywhere and fails at first use. A blocked member keeps
+        # a working key instead, which is recoverable.
+        revocation = None
+        if revoke_ref:
+            revocation = RevocationRequest(
+                user_id=owner_id,
+                parent_id=parent_id,
+                provider_admin_credential_id=parent_provider_id,
+                provider_type=parent_type,
+                external_key_ref=revoke_ref,
+                # The holder's own feed: they still exist, and "your
+                # administrator removed you from this credential and the key
+                # was destroyed" is exactly the entry that belongs there.
+                audit_user_id=owner_id,
+            )
+        return MemberRemoval(revocation=revocation)
+
+
     def _delete_membership(
         self, session: Session, membership: ManagedAICredentialMembership
     ) -> None:
@@ -1600,101 +1741,19 @@ class ManagedAICredentialsService:
             (uid for uid in current_ids if uid not in desired_set), key=str
         )
         for owner_id in to_remove:
-            member = current[owner_id]
-            child = member.child
-            if (
-                member.membership.status
-                == MembershipProvisioningStatus.MINTING.value
-            ):
-                # A converge pass has claimed this row and is inside a provider
-                # call right now, in another session. Deleting the row here means
-                # its ``external_key_ref`` — which that call is about to write —
-                # lands nowhere: the service account exists at the provider, no
-                # row names it, and no revocation can ever be scheduled for it.
-                # So the removal is refused for as long as the mint is in flight,
-                # which is at most one converge tick. The admin sees it in
-                # ``blocked`` and retries; that is a far better outcome than a key
-                # nobody can find.
-                blocked.append(
-                    ManagedReconcileBlock.of(
-                        user_id=owner_id, reason="mint_in_flight"
-                    )
-                )
-                continue
-            # Read while the rows still exist, for two reasons that both make
-            # the answer unrecoverable afterwards: the owner's default pointers
-            # are NULLed by ``ondelete="SET NULL"``, and the membership row
-            # (which carries the provider handles needed to revoke a minted key)
-            # is about to be deleted.
-            child_id = child.id if child else None
-            revoke_ref = member.membership.external_key_ref
-            owner = session.get(User, owner_id)
-            held_modes = (
-                self._modes_pointing_at(owner, child_id)
-                if owner and child_id
-                else []
+            outcome = self._remove_one_member(
+                session,
+                member=current[owner_id],
+                parent_id=parent_id,
+                parent_type=parent_type,
+                parent_provider_id=parent_admin_credential_id,
+                force=force,
             )
-            try:
-                if child is not None:
-                    ai_credentials_service.delete_credential(
-                        session,
-                        child.id,
-                        child.owner_id,
-                        force=force,
-                        admin_override=True,
-                    )
-            except AICredentialInUseError as in_use:
-                blocked.append(
-                    ManagedReconcileBlock.of(
-                        user_id=owner_id,
-                        reason="in_use_bundle",
-                        impact=in_use.impact.model_dump(mode="json"),
-                    )
-                )
+            if outcome.block is not None:
+                blocked.append(outcome.block)
                 continue
-            except HTTPException:
-                raise
-            except Exception:
-                # Repair before logging, and before continuing — the same rule
-                # ``add_members`` states at length. A statement-level failure
-                # here leaves the transaction aborted, and this function ends
-                # at ``_to_public``, which queries: recording a block and
-                # carrying on would turn a per-member problem into a 500 for
-                # the whole PATCH. Nothing of the caller's is pending —
-                # ``delete_credential`` and ``_release_model_overrides`` commit
-                # their own work, as does the Add pass above.
-                restore_session(session)
-                logger.exception(
-                    "Failed to remove child for user %s under parent %s",
-                    owner_id, parent_id,
-                )
-                blocked.append(
-                    ManagedReconcileBlock.of(
-                        user_id=owner_id, reason="remove_failed"
-                    )
-                )
-                continue
-            # Only on the success path: a blocked member keeps their child and
-            # must keep their wiring with it.
-            self._release_model_overrides(session, owner_id, held_modes)
-            self._delete_membership(session, member.membership)
-            # **Delete first, revoke second**, and this is the reason: the delete
-            # above can be refused by the Tier-2 blast-radius gate, and a revoke
-            # that ran first would leave a dead key on a surviving row that reads
-            # as healthy everywhere and fails at first use. A blocked member
-            # keeps a working key instead, which is recoverable.
-            if revoke_ref:
-                revocations.append(RevocationRequest(
-                    user_id=owner_id,
-                    parent_id=parent_id,
-                    provider_admin_credential_id=parent_admin_credential_id,
-                    provider_type=parent_type,
-                    external_key_ref=revoke_ref,
-                    # The holder's own feed: they still exist, and "your
-                    # administrator removed you from this credential and the key
-                    # was destroyed" is exactly the entry that belongs there.
-                    audit_user_id=owner_id,
-                ))
+            if outcome.revocation is not None:
+                revocations.append(outcome.revocation)
             removed.append(owner_id)
 
         # ----- Update (current ∩ desired) -----
@@ -2267,6 +2326,466 @@ class ManagedAICredentialsService:
     # ------------------------------------------------------------------ #
     # Listing / projection
     # ------------------------------------------------------------------ #
+
+    # ------------------------------------------------------------------ #
+    # Per-key verbs
+    # ------------------------------------------------------------------ #
+    #
+    # The membership row is the resource. It is what carries the vendor handles,
+    # names the child credential and holds the provisioning lifecycle, so every
+    # verb below addresses one by id and nothing else. Until these existed the
+    # only way to act on one person's key was to PATCH the record with the whole
+    # desired member set — which is why the blast-radius gate answers with a
+    # *list* of blocked members: the caller could never remove fewer than a set.
+
+    def membership_or_404(
+        self, session: Session, membership_id: uuid.UUID
+    ) -> tuple[ManagedAICredentialMembership, ManagedAICredential]:
+        """One membership and the record it belongs to, or 404.
+
+        Both, always, because no verb below can act on one without the other:
+        the record carries the provider and the type a revocation has to name.
+        """
+        membership = session.get(ManagedAICredentialMembership, membership_id)
+        if membership is None:
+            raise HTTPException(status_code=404, detail="Key not found.")
+        parent = session.get(
+            ManagedAICredential, membership.managed_credential_id
+        )
+        if parent is None:  # pragma: no cover - FK guarded
+            raise HTTPException(status_code=404, detail="Key not found.")
+        return membership, parent
+
+    def revoke_key(
+        self,
+        session: Session,
+        admin: User,
+        membership_id: uuid.UUID,
+        *,
+        force: bool = False,
+    ) -> ManagedAICredentialReconcileResult:
+        """Take one key away: the same removal a PATCH would do, for one person.
+
+        Returns a reconcile result rather than a bare acknowledgement so the
+        route can answer with the envelope the set-based paths already use — the
+        blocked list on a refusal, the record on success — and the browser needs
+        no second shape for what is the same event.
+
+        On a **shared** record this removes that person's copy and leaves the key
+        alone for everyone else, which is what removing a member has always
+        meant there. Only a minted membership's revoke reaches the provider.
+        """
+        membership, parent = self.membership_or_404(session, membership_id)
+        child = (
+            session.get(AICredential, membership.ai_credential_id)
+            if membership.ai_credential_id
+            else None
+        )
+        parent_id = parent.id
+        parent_type = (
+            parent.type.value
+            if isinstance(parent.type, AICredentialType)
+            else str(parent.type)
+        )
+        parent_provider_id = parent.provider_id
+        owner_id = membership.user_id
+
+        outcome = self._remove_one_member(
+            session,
+            member=MemberRow(membership=membership, child=child),
+            parent_id=parent_id,
+            parent_type=parent_type,
+            parent_provider_id=parent_provider_id,
+            force=force,
+        )
+        if outcome.block is not None:
+            return ManagedAICredentialReconcileResult(
+                record=self._to_public(
+                    session,
+                    self._get_parent_or_404(session, parent_id),
+                ),
+                blocked=[outcome.block],
+            )
+        if outcome.revocation is not None:
+            from app.services.credentials import key_provisioning_service
+
+            key_provisioning_service.schedule_revocations([outcome.revocation])
+        return ManagedAICredentialReconcileResult(
+            record=self._to_public(
+                session, self._get_parent_or_404(session, parent_id)
+            ),
+            removed=[owner_id],
+        )
+
+    def set_key_as_holder_default(
+        self, session: Session, membership_id: uuid.UUID
+    ) -> ManagedAICredentialPublic:
+        """Make this key its holder's default for its type.
+
+        The per-person counterpart of *Set default for all*, and deliberately a
+        separate verb: the record-level one is an administrator overwriting
+        everybody's choice, this one is fixing a single person whose grant
+        declined an occupied slot (the incumbent-wins rule) or who changed their
+        default later.
+
+        400 when no child credential exists yet — ``pending``, ``minting``,
+        ``failed`` and ``suspended`` all mean there is nothing to point a default
+        at, and creating something to point at would break the invariant that
+        every ``AICredential`` row that exists is usable.
+        """
+        membership, parent = self.membership_or_404(session, membership_id)
+        if membership.ai_credential_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This member holds no key yet, so there is nothing to make "
+                    "their default."
+                ),
+            )
+        ai_credentials_service.set_default(
+            session, membership.ai_credential_id, membership.user_id
+        )
+        return self._to_public(session, parent)
+
+    # NOTE ON PLACEMENT: everything from here to :meth:`list` is defined
+    # *above* it deliberately. ``def list`` binds the name ``list`` in this
+    # class body, so every annotation evaluated after that statement resolves
+    # ``list[...]`` to the method rather than the builtin and raises at import.
+    # Moving this block below it is a ``TypeError: 'function' object is not
+    # subscriptable`` at start-up, not a style change.
+    # ------------------------------------------------------------------ #
+    # The keys list — one row per real API key
+    # ------------------------------------------------------------------ #
+
+    def list_keys(
+        self,
+        session: Session,
+        *,
+        q: str | None = None,
+        statuses: list[MembershipProvisioningStatus] | None = None,
+        kind: AdminAIKeyKind | None = None,
+        provider_id: uuid.UUID | None = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> AdminAIKeysPublic:
+        """One page of the keys list.
+
+        WHY THIS IS NOT :meth:`list` WITH A FLAG
+        ----------------------------------------
+        :meth:`list` answers "what records exist"; this answers "what keys
+        exist". They differ by exactly the thing that broke the admin surface: a
+        minted record is **one** row there and **one row per member** here,
+        because it holds one key per member. The two questions are projected
+        separately rather than one being derived from the other in the browser,
+        which is what the old members-as-chips cell was.
+
+        THE COST
+        --------
+        Flat in the page size and, more importantly, flat in **headcount**. The
+        old surface's payload grew with the number of people on a record; this
+        one asks:
+
+        1. every parent (bounded by what an admin creates, not by who holds a
+           key) and one batched ``resolve_policies`` over them;
+        2. one ``COUNT`` and one paged ``SELECT`` over the memberships of minted
+           parents, joined to ``user`` because the filter and the sort both need
+           it;
+        3. one lookup of the page's child credentials, one batched onboarding
+           state, and — only when shared rows are on the page — one grouped
+           member count.
+
+        ORDERING: SHARED ROWS FIRST, THEN PER-USER, EACH BY NAME
+        --------------------------------------------------------
+        The two row sources live in different tables, so a page is a slice of
+        their union. Making ``kind`` the **primary** sort key is what keeps that
+        slice exact with one query: the shared rows are few and fully in memory,
+        so a page either starts inside them and is topped up from the membership
+        page, or lies entirely past them at a known offset. Interleaving the two
+        by name instead would need either a SQL ``UNION`` over two dissimilar
+        tables or a fetch window sized by the shared count, and buys nothing an
+        administrator can use — a specific key is found by searching, not by
+        scrolling to where it sorts.
+
+        FILTERS
+        -------
+        ``q`` matches the holder's email or name **or the credential's name**,
+        so "openai" lists everybody's OpenAI keys and "alice" lists Alice's.
+        ``statuses`` is a provisioning filter and therefore excludes every
+        shared row by construction: a shared key has no provisioning lifecycle,
+        and inventing a status for it so it could pass the filter is exactly the
+        synthetic value :class:`AdminAIKeyRow` refuses to publish.
+        """
+        from sqlmodel import func, or_
+
+        limit = max(1, min(limit, 100))
+        skip = max(0, skip)
+        needle = f"%{q.strip()}%" if q and q.strip() else None
+
+        parents = session.exec(select(ManagedAICredential)).all()
+        policies = resolve_policies(session, parents)
+        parents_by_id = {parent.id: parent for parent in parents}
+
+        minted_ids: list[uuid.UUID] = []
+        shared_parents: list[ManagedAICredential] = []
+        for parent in parents:
+            policy = policies[parent.id]
+            if provider_id is not None and policy.provider_id != provider_id:
+                continue
+            if policy.is_minted:
+                minted_ids.append(parent.id)
+            else:
+                shared_parents.append(parent)
+
+        # ---- The shared rows: one per record, all in memory ----
+        shared_rows: list[AdminAIKeyRow] = []
+        if kind is not AdminAIKeyKind.PER_USER and not statuses:
+            wanted = [
+                parent
+                for parent in shared_parents
+                if needle is None
+                or q.strip().lower() in parent.name.lower()
+            ]
+            member_counts = self._member_counts(
+                session, [parent.id for parent in wanted]
+            )
+            shared_rows = [
+                self._shared_key_row(
+                    parent, policies[parent.id], member_counts.get(parent.id, 0)
+                )
+                for parent in wanted
+            ]
+            shared_rows.sort(key=lambda row: row.credential_name.lower())
+
+        # ---- The per-user rows: one per membership of a minted parent ----
+        per_user_total = 0
+        memberships: list[tuple[ManagedAICredentialMembership, User]] = []
+        if kind is not AdminAIKeyKind.SHARED and minted_ids:
+            clauses = [
+                col(ManagedAICredentialMembership.managed_credential_id).in_(
+                    minted_ids
+                )
+            ]
+            if statuses:
+                clauses.append(
+                    col(ManagedAICredentialMembership.status).in_(
+                        [status.value for status in statuses]
+                    )
+                )
+            if needle is not None:
+                name_matched = [
+                    parent_id
+                    for parent_id in minted_ids
+                    if q.strip().lower()
+                    in parents_by_id[parent_id].name.lower()
+                ]
+                match_clauses = [
+                    col(User.email).ilike(needle),
+                    col(User.full_name).ilike(needle),
+                ]
+                if name_matched:
+                    match_clauses.append(
+                        col(
+                            ManagedAICredentialMembership.managed_credential_id
+                        ).in_(name_matched)
+                    )
+                clauses.append(or_(*match_clauses))
+
+            # The join is inner on purpose. A membership whose user row has gone
+            # is unreachable through the FK (``ON DELETE CASCADE``) and is
+            # dropped here rather than rendered as a key belonging to nobody —
+            # the same call ``_to_public`` makes, where it is logged as
+            # defensive.
+            count_statement = (
+                select(func.count())
+                .select_from(ManagedAICredentialMembership)
+                .join(
+                    User,
+                    col(User.id) == col(ManagedAICredentialMembership.user_id),
+                )
+            )
+            for clause in clauses:
+                count_statement = count_statement.where(clause)
+            per_user_total = session.exec(count_statement).one()
+
+            # Where this page starts inside the per-user sequence. The shared
+            # rows come first as a block, so a page either overlaps them (offset
+            # 0 here, topped up below) or begins past them.
+            per_user_skip = max(0, skip - len(shared_rows))
+            per_user_limit = limit - max(
+                0, min(len(shared_rows) - skip, limit)
+            )
+            if per_user_limit > 0:
+                statement = (
+                    select(ManagedAICredentialMembership, User)
+                    .join(
+                        User,
+                        col(User.id)
+                        == col(ManagedAICredentialMembership.user_id),
+                    )
+                )
+                for clause in clauses:
+                    statement = statement.where(clause)
+                statement = (
+                    statement.order_by(
+                        func.lower(col(User.email)),
+                        col(ManagedAICredentialMembership.id),
+                    )
+                    .offset(per_user_skip)
+                    .limit(per_user_limit)
+                )
+                memberships = list(session.exec(statement).all())
+
+        rows = shared_rows[skip : skip + limit]
+        if memberships:
+            rows = rows + self._per_user_key_rows(
+                session, memberships, parents_by_id, policies
+            )
+        return AdminAIKeysPublic(
+            data=rows, count=len(shared_rows) + per_user_total
+        )
+
+    @staticmethod
+    def _member_counts(
+        session: Session, parent_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        """How many people hold each of these records, in one grouped query.
+
+        Named rather than inlined because the obvious implementation —
+        ``len(self._current_members(...))`` per row — is a per-row pair of
+        queries, which is the cost the keys list exists to remove.
+        """
+        from sqlmodel import func
+
+        if not parent_ids:
+            return {}
+        rows = session.exec(
+            select(
+                col(ManagedAICredentialMembership.managed_credential_id),
+                func.count(),
+            )
+            .where(
+                col(ManagedAICredentialMembership.managed_credential_id).in_(
+                    parent_ids
+                )
+            )
+            .group_by(col(ManagedAICredentialMembership.managed_credential_id))
+        ).all()
+        return {parent_id: count for parent_id, count in rows}
+
+    @staticmethod
+    def _shared_key_row(
+        parent: ManagedAICredential,
+        policy: ProvisioningPolicy,
+        member_count: int,
+    ) -> AdminAIKeyRow:
+        """The one row a shared record contributes.
+
+        No status, no holder and no key reference: this key was pasted, not
+        minted, so there is no provisioning lifecycle to report, no single
+        person to name and no vendor handle we were ever given.
+        """
+        return AdminAIKeyRow(
+            kind=AdminAIKeyKind.SHARED,
+            managed_credential_id=parent.id,
+            membership_id=None,
+            credential_name=parent.name,
+            type=parent.type,
+            provider_id=policy.provider_id,
+            provider_name=policy.provider_name,
+            member_count=member_count,
+            created_at=parent.created_at,
+        )
+
+    def _per_user_key_rows(
+        self,
+        session: Session,
+        memberships: list[tuple[ManagedAICredentialMembership, User]],
+        parents_by_id: dict[uuid.UUID, ManagedAICredential],
+        policies: dict[uuid.UUID, ProvisioningPolicy],
+    ) -> list[AdminAIKeyRow]:
+        """Project one page of memberships, in a fixed number of queries.
+
+        Two lookups for the whole page — the children the memberships name, and
+        the batched onboarding state — for the same reason
+        :meth:`_project_members` exists: a required keyword does not stop a
+        caller satisfying it inside a loop, and an N+1 here would arrive exactly
+        when an admin is watching a batch provision.
+        """
+        child_ids = [
+            membership.ai_credential_id
+            for membership, _owner in memberships
+            if membership.ai_credential_id
+        ]
+        children: dict[uuid.UUID, AICredential] = {}
+        if child_ids:
+            children = {
+                row.id: row
+                for row in session.exec(
+                    select(AICredential).where(
+                        col(AICredential.id).in_(child_ids)
+                    )
+                ).all()
+            }
+        key_states = self._owner_key_states(
+            session, {owner.id for _membership, owner in memberships}
+        )
+
+        rows: list[AdminAIKeyRow] = []
+        for membership, owner in memberships:
+            parent = parents_by_id[membership.managed_credential_id]
+            policy = policies[parent.id]
+            child = (
+                children.get(membership.ai_credential_id)
+                if membership.ai_credential_id
+                else None
+            )
+            rows.append(
+                AdminAIKeyRow(
+                    kind=AdminAIKeyKind.PER_USER,
+                    managed_credential_id=parent.id,
+                    membership_id=membership.id,
+                    credential_name=parent.name,
+                    type=parent.type,
+                    provider_id=policy.provider_id,
+                    provider_name=policy.provider_name,
+                    holder_user_id=owner.id,
+                    holder_email=owner.email,
+                    holder_full_name=owner.full_name,
+                    provisioning_status=MembershipProvisioningStatus(
+                        membership.status
+                    ),
+                    provision_error=membership.last_error,
+                    provision_attempts=membership.provision_attempts,
+                    child_credential_id=membership.ai_credential_id,
+                    is_default=child.is_default if child else False,
+                    api_key_onboarding_state=key_states.get(
+                        owner.id, AIKeyOnboardingState.NEEDS_KEY
+                    ),
+                    key_reference=self._key_reference(
+                        membership.external_key_ref
+                    ),
+                    created_at=membership.created_at,
+                )
+            )
+        return rows
+
+    @staticmethod
+    def _key_reference(external_key_ref: dict | None) -> str | None:
+        """The vendor's handles for one key, formatted for a person to read.
+
+        Handles only — the project and the service account — so a row can be
+        matched against the provider's own console. Never the secret, and never
+        the api-key id: that one names the credential at the vendor and has no
+        job on a screen.
+        """
+        if not external_key_ref:
+            return None
+        parts = [
+            str(external_key_ref.get(field))
+            for field in ("project_id", "service_account_id")
+            if external_key_ref.get(field)
+        ]
+        return " · ".join(parts) or None
 
     def list(
         self,

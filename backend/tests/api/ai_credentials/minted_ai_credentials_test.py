@@ -19,6 +19,8 @@ module attribute, and the stub is the real provisioner with only its HTTP
 swapped — so the spend-cap refusal, the null-secret rejection and the external-ref
 shape are all exercised for real. See ``tests/stubs/key_provisioner_stub.py``.
 """
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -46,6 +48,10 @@ from tests.utils.fixtures import (
     patched_background_tasks,
     patched_create_sessions,
 )
+from tests.utils.managed_ai_credential import (
+    configure_minted_record,
+    connect_minted_provider,
+)
 from tests.utils.key_provisioning import (
     converge_keys,
     make_membership_due,
@@ -66,6 +72,7 @@ NEEDS_DEFAULT_CREDENTIALS = False
 API = settings.API_V1_STR
 PROVIDER_BASE = f"{API}/admin/ai-providers"
 MANAGED_BASE = f"{API}/admin/llm-providers"
+KEYS_BASE = f"{API}/admin/ai-credentials/keys"
 
 
 @pytest.fixture(autouse=True)
@@ -91,24 +98,9 @@ def _admin_credential(client: TestClient, headers: dict[str, str]) -> str:
 
     The name is kept from when this created a ``provider_admin_credential``,
     because the forty call sites below read as "the thing this record mints
-    through" and that is still exactly what it is. What changed is that
-    ``POST /admin/ai-providers/`` writes the provider **and its one managed
-    credential** in a single transaction, so there is no longer a second
-    request that points a credential at it — see :func:`_minted_parent`.
+    through" and that is still exactly what it is.
     """
-    response = client.post(
-        f"{PROVIDER_BASE}/",
-        headers=headers,
-        json={
-            "name": f"Org {random_lower_string()[:8]}",
-            "kind": "minted",
-            "type": "openai",
-            "secret": "sk-admin-not-a-real-secret",
-            "config": {"project_id": "proj_test"},
-        },
-    )
-    assert response.status_code == 200, response.text
-    return response.json()["id"]
+    return connect_minted_provider(client, headers)
 
 
 def _minted_parent(
@@ -121,48 +113,16 @@ def _minted_parent(
     set_as_default: bool = False,
     expected_status: int = 200,
 ) -> dict:
-    """Configure the provider's own managed credential, and grant its members.
-
-    Returns a ``ManagedAICredentialReconcileResult`` — ``{"record": …,
-    "added": …, …}`` — which is the shape this helper has always returned, so
-    every caller keeps destructuring it unchanged.
-
-    Two requests instead of one create, because the record already exists:
-
-    * the **policy** (``set_as_default``, ``auto_provision_roles``) belongs to
-      the provider now — a managed credential is not a factory, and both fields
-      are shadowed and read-only on a provider-owned record;
-    * the **membership** still belongs to the credential, which is the record
-      that has always held it, so ``target_user_ids`` goes to
-      ``/admin/llm-providers``.
-
-    The policy is written *before* the members are added, so the wiring a
-    member receives is the wiring this call asked for rather than a
-    write-through applied a request later.
-    """
-    provider = client.get(f"{PROVIDER_BASE}/{admin_credential_id}", headers=headers)
-    assert provider.status_code == 200, provider.text
-    parent_id = provider.json()["owned_credential_id"]
-    assert parent_id is not None, (
-        "the provider owns no managed credential; POST /admin/ai-providers/ "
-        "is supposed to write the pair together"
+    """Configure the provider's own managed credential, and grant its members."""
+    return configure_minted_record(
+        client,
+        headers,
+        provider_id=admin_credential_id,
+        target_user_ids=target_user_ids,
+        auto_provision_roles=auto_provision_roles,
+        set_as_default=set_as_default,
+        expected_status=expected_status,
     )
-
-    policy: dict = {"set_as_default": set_as_default}
-    if auto_provision_roles is not None:
-        policy["auto_provision_roles"] = auto_provision_roles
-    patched = client.patch(
-        f"{PROVIDER_BASE}/{admin_credential_id}", headers=headers, json=policy
-    )
-    assert patched.status_code == 200, patched.text
-
-    response = client.patch(
-        f"{MANAGED_BASE}/{parent_id}",
-        headers=headers,
-        json={"target_user_ids": target_user_ids or []},
-    )
-    assert response.status_code == expected_status, response.text
-    return response.json()
 
 
 def _record(client: TestClient, headers: dict[str, str], parent_id: str) -> dict:
@@ -1164,7 +1124,7 @@ def test_a_failed_member_can_be_retried_and_re_adding_them_cannot(
     )
 
     retried = client.post(
-        f"{MANAGED_BASE}/{parent_id}/members/{user['id']}/retry",
+        f"{KEYS_BASE}/{membership_id_for(db, user['id'])}/retry",
         headers=superuser_token_headers,
     )
     assert retried.status_code == 200, retried.text
@@ -1204,16 +1164,20 @@ def test_retrying_a_member_who_has_not_failed_is_refused(
     parent_id = parent["record"]["id"]
 
     pending = client.post(
-        f"{MANAGED_BASE}/{parent_id}/members/{user['id']}/retry",
+        f"{KEYS_BASE}/{membership_id_for(db, user['id'])}/retry",
         headers=superuser_token_headers,
     )
     assert pending.status_code == 400, pending.text
 
+    # `other` is not a member of anything, so no membership row names them and
+    # the verb has nothing to address. A key id that does not exist is a 404 —
+    # the same answer, now stated about the key rather than about the pair.
     not_a_member = client.post(
-        f"{MANAGED_BASE}/{parent_id}/members/{other['id']}/retry",
+        f"{KEYS_BASE}/{uuid.uuid4()}/retry",
         headers=superuser_token_headers,
     )
     assert not_a_member.status_code == 404, not_a_member.text
+    assert other["id"]
 
 
 def test_deactivation_revokes_a_live_key_held_by_a_terminally_failed_member(

@@ -1034,75 +1034,187 @@ class KeyProvisioningService:
                 # holder must not destroy it for the others; their child row
                 # simply stops being reachable with the account.
                 continue
-            ref = dict(membership.external_key_ref or {})
-            child_id = membership.ai_credential_id
-            if child_id is not None:
-                try:
-                    ai_credentials_service.delete_credential(
-                        session, child_id, user_id,
-                        force=False, admin_override=True,
-                    )
-                except AICredentialInUseError:
-                    logger.warning(
-                        "Minted credential %s for deactivated user %s is in use "
-                        "by a published bundle; leaving the key live.",
-                        child_id, user_id,
-                    )
-                    self._emit_revoke_blocked_sync(
-                        session, user_id, parent.id, "in_use_bundle"
-                    )
-                    continue
-                except Exception:
-                    restore_session(session)
-                    logger.exception(
-                        "Could not delete minted credential %s for deactivated "
-                        "user %s; leaving the key live.", child_id, user_id,
-                    )
-                    self._emit_revoke_blocked_sync(
-                        session, user_id, parent.id, "delete_failed"
-                    )
-                    continue
-
-            # Built before the row is rewritten (the ref is about to be erased)
-            # and *appended after the commit* — the two halves are deliberately
-            # not adjacent. A request added before the commit that then fails
-            # would destroy a key the surviving row still names and still points
-            # a live child at, which is the "dead key that reads as healthy"
-            # this method's delete-then-revoke ordering exists to avoid.
-            pending_revocation = (
-                RevocationRequest(
-                    user_id=user_id,
-                    parent_id=parent.id,
-                    provider_admin_credential_id=(
-                        parent.provider_id
-                    ),
-                    provider_type=(
-                        parent.type.value
-                        if hasattr(parent.type, "value")
-                        else str(parent.type)
-                    ),
-                    external_key_ref=ref,
-                    audit_user_id=user_id,
-                )
-                if holds_provider_key(membership)
-                else None
+            blocked = self.suspend_one_membership(
+                session, membership, parent, revocations
             )
-            membership.ai_credential_id = None
-            membership.external_key_ref = None
-            if membership.status != MembershipProvisioningStatus.FAILED.value:
-                membership.status = MembershipProvisioningStatus.SUSPENDED.value
-                membership.provision_attempts = 0
-                membership.next_attempt_at = None
-                membership.last_error = None
-            # ``updated_at`` moves in every branch, ``failed`` included. It is
-            # not decoration: it is half of the mint claim token, so touching the
-            # row here is what tells a converge pass that is inside a provider
-            # call right now that the row it claimed is no longer its to write.
-            membership.updated_at = datetime.now(timezone.utc)
-            session.add(membership)
-            session.commit()
-            if pending_revocation is not None:
-                revocations.append(pending_revocation)
+            if blocked is not None:
+                self._emit_revoke_blocked_sync(
+                    session, membership.user_id, parent.id, blocked
+                )
+
+    def suspend_one_membership(
+        self,
+        session: Session,
+        membership: ManagedAICredentialMembership,
+        parent: ManagedAICredential,
+        revocations: list[RevocationRequest],
+    ) -> str | None:
+        """Drop one membership's key: delete the child, then revoke.
+
+        Returns ``None`` on success, or a block reason (``in_use_bundle``,
+        ``delete_failed``) when the child could not be removed and the key was
+        therefore left live. The **caller** turns that into whatever it owes its
+        own audience — a `revoke_blocked` event for the deactivation cascade, a
+        409 for the per-key rotate — because the two answer to different people.
+
+        Everything :meth:`suspend_user_memberships` promises about ordering is
+        implemented here, and is why rotate is built from this rather than from
+        its own revoke: delete the child first (the delete can be refused by the
+        Tier-2 gate, and a revoke that ran first would leave a dead key on a
+        surviving row that reads as healthy and fails at first use), build the
+        revocation request *before* the row is rewritten, and append it only
+        *after* the commit that erases the ref.
+
+        Callers must be minted-only. A shared membership has no key of its own
+        and passing one here would destroy the key its co-holders are using; the
+        two callers both check ``is_minted`` first, and neither may stop.
+        """
+        user_id = membership.user_id
+        ref = dict(membership.external_key_ref or {})
+        child_id = membership.ai_credential_id
+        if child_id is not None:
+            try:
+                ai_credentials_service.delete_credential(
+                    session, child_id, user_id,
+                    force=False, admin_override=True,
+                )
+            except AICredentialInUseError:
+                logger.warning(
+                    "Minted credential %s for user %s is in use by a published "
+                    "bundle; leaving the key live.",
+                    child_id, user_id,
+                )
+                return "in_use_bundle"
+            except Exception:
+                restore_session(session)
+                logger.exception(
+                    "Could not delete minted credential %s for user %s; "
+                    "leaving the key live.", child_id, user_id,
+                )
+                return "delete_failed"
+
+        # Built before the row is rewritten (the ref is about to be erased)
+        # and *appended after the commit* — the two halves are deliberately
+        # not adjacent. A request added before the commit that then fails
+        # would destroy a key the surviving row still names and still points
+        # a live child at, which is the "dead key that reads as healthy"
+        # the delete-then-revoke ordering exists to avoid.
+        pending_revocation = (
+            RevocationRequest(
+                user_id=user_id,
+                parent_id=parent.id,
+                provider_admin_credential_id=parent.provider_id,
+                provider_type=(
+                    parent.type.value
+                    if hasattr(parent.type, "value")
+                    else str(parent.type)
+                ),
+                external_key_ref=ref,
+                audit_user_id=user_id,
+            )
+            if holds_provider_key(membership)
+            else None
+        )
+        membership.ai_credential_id = None
+        membership.external_key_ref = None
+        if membership.status != MembershipProvisioningStatus.FAILED.value:
+            membership.status = MembershipProvisioningStatus.SUSPENDED.value
+            membership.provision_attempts = 0
+            membership.next_attempt_at = None
+            membership.last_error = None
+        # ``updated_at`` moves in every branch, ``failed`` included. It is
+        # not decoration: it is half of the mint claim token, so touching the
+        # row here is what tells a converge pass that is inside a provider
+        # call right now that the row it claimed is no longer its to write.
+        membership.updated_at = datetime.now(timezone.utc)
+        session.add(membership)
+        session.commit()
+        if pending_revocation is not None:
+            revocations.append(pending_revocation)
+        return None
+
+    def rotate_member_key(
+        self,
+        session: Session,
+        membership: ManagedAICredentialMembership,
+        parent: ManagedAICredential,
+    ) -> ManagedAICredentialMembership:
+        """Destroy one member's key and queue a fresh mint.
+
+        **Built from the suspend/resume pair, not from its own revoke.**
+        Deactivating an account already destroys a minted key and reactivating
+        it already mints a new one; that sequence carries the delete-then-revoke
+        ordering, the blast-radius gate, the claim-token touch and the "never
+        leave a key live and unrecorded" guarantee, and it is tested. A bespoke
+        rotate would be a second implementation of the one sequence that must
+        never get this wrong.
+
+        The resume half is written here rather than delegated to
+        :meth:`resume_user_memberships`, which resumes *every* suspended
+        membership this person has — rotating one key would silently requeue the
+        keys they hold under every other record. It is also why the row goes
+        straight to ``pending`` even when it was ``failed``: a rotate is an
+        administrator saying "try again with a new key", which is exactly what
+        the retry verb means, and leaving it ``suspended`` would strand a row
+        that nothing converges.
+
+        The holder is **without a key until the next converge tick**. That
+        window is real, is at most one minute, and is the same one a
+        deactivation followed by a reactivation already produces; the surface
+        says so rather than pretending the new key is instant.
+
+        Raises 400 for a shared membership (rotating a pasted key is the
+        provider's *Replace key*), 409 while a mint is in flight, and 409 when
+        the child credential cannot be deleted.
+        """
+        if not resolve_policy(session, parent).is_minted:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This key is shared: one key held by every member. Replace "
+                    "it on the provider instead — rotating it here would give "
+                    "one member a key nobody else has."
+                ),
+            )
+        if membership.status == MembershipProvisioningStatus.MINTING.value:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A key is being created for this member right now. Try "
+                    "again in a moment."
+                ),
+            )
+        revocations: list[RevocationRequest] = []
+        blocked = self.suspend_one_membership(
+            session, membership, parent, revocations
+        )
+        if blocked is not None:
+            self._emit_revoke_blocked_sync(
+                session, membership.user_id, parent.id, blocked
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This member's credential is in use by a published bundle "
+                    "and could not be replaced; their key was left working."
+                    if blocked == "in_use_bundle"
+                    else "Could not remove this member's credential; their key "
+                    "was left working."
+                ),
+            )
+        membership.status = MembershipProvisioningStatus.PENDING.value
+        membership.provision_attempts = 0
+        membership.next_attempt_at = None
+        membership.last_error = None
+        membership.updated_at = datetime.now(timezone.utc)
+        session.add(membership)
+        session.commit()
+        session.refresh(membership)
+        # After the row is committed, never before: a revoke that ran first
+        # would destroy a key for a rotation the database then refused.
+        if revocations:
+            self.schedule_revocations(revocations)
+        return membership
 
     def requeue_failed_member(
         self,

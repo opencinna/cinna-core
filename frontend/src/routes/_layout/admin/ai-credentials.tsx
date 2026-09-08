@@ -1,32 +1,20 @@
 import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router"
-import { AlertTriangle, Filter } from "lucide-react"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { AlertTriangle } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
 
-import { type ManagedAICredentialPublic, AdminLlmProvidersService } from "@/client"
 import {
-  UserAllowlistPicker,
-  type UserAllowlistSelectedItem,
-} from "@/components/Common/UserAllowlistPicker"
-import { LlmProvidersTable } from "@/components/Admin/LlmProviders/LlmProvidersTable"
-import { hasKeyInFlight } from "@/components/Admin/LlmProviders/MemberKeyStatus"
-import { ManagedCredentialDialog } from "@/components/Admin/LlmProviders/ManagedCredentialDialog"
-import { managedCredentialsQueryKey } from "@/components/Admin/LlmProviders/providerTypes"
+  AdminLlmProvidersService,
+  type ManagedAICredentialPublic,
+} from "@/client"
+import { KeysTab } from "@/components/Admin/AiKeys/KeysTab"
 import { ConnectProviderDialog } from "@/components/Admin/AiProviders/ConnectProviderDialog"
 import { ProvidersTab } from "@/components/Admin/AiProviders/ProvidersTab"
+import { ManagedCredentialDialog } from "@/components/Admin/LlmProviders/ManagedCredentialDialog"
+import { MANAGED_CREDENTIALS_QUERY_PREFIX } from "@/components/Admin/LlmProviders/providerTypes"
 import { HashTabs, type TabConfig } from "@/components/Common/HashTabs"
-import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
-import PendingItems from "@/components/Pending/PendingItems"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { usePageHeader } from "@/routes/_layout"
@@ -46,8 +34,12 @@ type AiCredentialsSearch = {
   label?: string
 }
 
-/** The two hash-addressable tabs. `managed-credentials` is `tabs[0]`. */
-type TabValue = "managed-credentials" | "providers"
+/** The two hash-addressable tabs. `keys` is `tabs[0]`.
+ *
+ * It was `managed-credentials` while the first tab listed records. Nothing in
+ * `frontend/src` links to that hash, and `HashTabs` falls back to `tabs[0]` for
+ * one it does not recognise, so an old bookmark still lands on this tab. */
+type TabValue = "keys" | "providers"
 
 export const Route = createFileRoute("/_layout/admin/ai-credentials")({
   component: AdminAiCredentials,
@@ -154,15 +146,6 @@ function AdminAiCredentials() {
   } | null>(null)
   const [noticeEditOpen, setNoticeEditOpen] = useState(false)
 
-  // Single-user filter, modeled as a 0-or-1 entry selection so it can reuse
-  // the shared UserAllowlistPicker. The filter panel is hidden by default and
-  // toggled open via the "Filter" button in the page header. Maps to the
-  // backend `target_user_id` query param (records that have that user as a
-  // member).
-  const [filterUser, setFilterUser] = useState<UserAllowlistSelectedItem | null>(null)
-  const [showFilter, setShowFilter] = useState(false)
-  const targetUserId = filterUser?.userId ?? undefined
-
   // Two surfaces that configure each other: a provider owns the managed
   // credential it grants through, so they live on one page rather than on two
   // pages an admin has to know to visit in order.
@@ -170,55 +153,39 @@ function AdminAiCredentials() {
   // `HashTabs` owns which tab is showing (it is URL-addressable, which is what
   // makes `/admin/ai-credentials#providers` linkable from the Access tab, the
   // invite wizard and the read-only credential dialog). This mirror exists for
-  // the two things rendered *outside* the `Tabs` tree: the page header's
-  // per-tab buttons, and the managed list's poll, which must not run while the
-  // other tab is showing.
-  const [tab, setTab] = useState<TabValue>("managed-credentials")
+  // the things rendered *outside* the `Tabs` tree: the page header's per-tab
+  // button, and the Keys tab's poll, which must not run while the other tab is
+  // showing.
+  const [tab, setTab] = useState<TabValue>("keys")
   const handleTabChange = useCallback(
     (value: string) => setTab(value as TabValue),
     [],
   )
 
-  // Client-side pagination over the full managed-credential list.
-  const PAGE_SIZE = 10
-  const [page, setPage] = useState(1)
-
-  // Reset to the first page whenever the active filter changes.
-  useEffect(() => {
-    setPage(1)
-  }, [targetUserId])
-
-  const {
-    data: records,
-    isLoading,
-    isError,
-    error,
-    refetch,
-  } = useQuery({
-    queryKey: managedCredentialsQueryKey(targetUserId),
+  // **One record, not the list.** The notice below is about a single grant, and
+  // this page no longer loads every record to answer a question about one of
+  // them — that whole-list read (every record with every member embedded) is
+  // exactly what the Keys tab replaced. Enabled only while a notice is armed.
+  const { data: liveNoticeRecord } = useQuery({
+    queryKey: [
+      ...MANAGED_CREDENTIALS_QUERY_PREFIX,
+      "record",
+      keyNotice?.record.id,
+    ],
     queryFn: () =>
-      AdminLlmProvidersService.listManagedAiCredentials({ targetUserId }),
+      AdminLlmProvidersService.getManagedAiCredential({
+        managedCredentialId: keyNotice!.record.id,
+      }),
+    enabled: Boolean(keyNotice),
     staleTime: 30_000,
-    // A key being created is the one thing on this page that moves without an
-    // admin doing anything, so the list follows it and stops when it settles.
-    // The predicate reads the status the server stated on each member; it does
-    // not decide for itself which members are still working.
-    refetchInterval: (query) =>
-      tab === "managed-credentials" &&
-      (query.state.data ?? []).some(hasKeyInFlight)
-        ? 10_000
-        : false,
   })
 
   // The alert answers to the server, not to us: once this member's state stops
   // being `needs_key` — the admin set the default here, or the person chose it
   // themselves in Settings — the reason for the alert is gone and so is the
-  // alert. A record missing from the current view (the filter above can hide
-  // it) is not evidence of anything, so the notice stands until dismissed.
-  const noticeRecord = keyNotice
-    ? ((records ?? []).find((row) => row.id === keyNotice.record.id) ??
-      keyNotice.record)
-    : null
+  // alert. Until the record arrives we fall back to the one the invite handed
+  // us, so the notice is never blank while it loads.
+  const noticeRecord = keyNotice ? (liveNoticeRecord ?? keyNotice.record) : null
   const noticeMember =
     keyNotice && noticeRecord
       ? noticeRecord.members?.find((m) => m.user_id === keyNotice.userId)
@@ -227,21 +194,6 @@ function AdminAiCredentials() {
   // record deleted — and nothing is owed on it any more. Defaulting that case
   // to `needs_key` would pin an alert open that only Dismiss could clear.
   const noticeStillOwed = noticeMember?.api_key_onboarding_state === "needs_key"
-
-  // Sort by name for stable ordering across refetches.
-  const sortedRecords = useMemo(
-    () => [...(records ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
-    [records],
-  )
-
-  // Derived pagination over records: clamp the active page and slice the
-  // current page out of the list.
-  const totalPages = Math.max(1, Math.ceil(sortedRecords.length / PAGE_SIZE))
-  const currentPage = Math.min(page, totalPages)
-  const pagedRecords = useMemo(
-    () => sortedRecords.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
-    [sortedRecords, currentPage],
-  )
 
   useEffect(() => {
     setHeaderContent(
@@ -253,21 +205,8 @@ function AdminAiCredentials() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {tab === "managed-credentials" ? (
-            <>
-              <Button
-                variant={showFilter || filterUser ? "secondary" : "outline"}
-                size="sm"
-                onClick={() => setShowFilter((v) => !v)}
-              >
-                <Filter className="mr-2 h-4 w-4" />
-                Filter
-                {filterUser && (
-                  <span className="ml-2 inline-block size-2 rounded-full bg-primary" />
-                )}
-              </Button>
-              <ManagedCredentialDialog mode="create" />
-            </>
+          {tab === "keys" ? (
+            <ManagedCredentialDialog mode="create" />
           ) : (
             <ConnectProviderDialog />
           )}
@@ -275,116 +214,13 @@ function AdminAiCredentials() {
       </>,
     )
     return () => setHeaderContent(null)
-  }, [setHeaderContent, showFilter, filterUser, tab])
-
-  // The managed tab's body, lifted out so the tab list below stays readable.
-  // Its four states are its own: `HashTabs` renders content, it does not own
-  // any of it.
-  const managedTabContent = (
-    <div className="space-y-4">
-      {/* Filter by target user — toggled via the header "Filter" button */}
-      {showFilter && (
-        <div className="flex flex-col gap-2 sm:max-w-md rounded-md border bg-muted/30 p-3">
-          <UserAllowlistPicker
-            label="Filter by target user"
-            searchPlaceholder="Search a user to filter..."
-            selected={filterUser ? [filterUser] : []}
-            onAdd={(u) =>
-              setFilterUser({
-                id: u.id,
-                userId: u.id,
-                fallbackLabel: u.full_name || u.email,
-              })
-            }
-            onRemove={() => setFilterUser(null)}
-          />
-          {filterUser && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="self-start h-7 px-2 text-xs"
-              onClick={() => setFilterUser(null)}
-            >
-              Clear filter
-            </Button>
-          )}
-        </div>
-      )}
-
-      {/* Error before "nothing yet", and gated on there being nothing to show.
-          A failed background refetch must not replace a live table with an
-          error panel, and a failed *first* read must not render as an empty
-          list — an admin who reads "no managed credentials" after a 500
-          concludes the list is empty and goes and creates a duplicate. */}
-      {isError && records === undefined ? (
-        <QueryErrorAlert
-          error={error}
-          fallback="Couldn't load the managed AI credentials."
-          onRetry={() => refetch()}
-        />
-      ) : isLoading || !records ? (
-        <PendingItems />
-      ) : (
-        <>
-          <LlmProvidersTable records={pagedRecords} />
-          {totalPages > 1 && (
-            <Pagination>
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    href="#"
-                    aria-disabled={currentPage <= 1}
-                    className={
-                      currentPage <= 1 ? "pointer-events-none opacity-50" : undefined
-                    }
-                    onClick={(e) => {
-                      e.preventDefault()
-                      setPage((p) => Math.max(1, p - 1))
-                    }}
-                  />
-                </PaginationItem>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-                  <PaginationItem key={p}>
-                    <PaginationLink
-                      href="#"
-                      isActive={p === currentPage}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        setPage(p)
-                      }}
-                    >
-                      {p}
-                    </PaginationLink>
-                  </PaginationItem>
-                ))}
-                <PaginationItem>
-                  <PaginationNext
-                    href="#"
-                    aria-disabled={currentPage >= totalPages}
-                    className={
-                      currentPage >= totalPages
-                        ? "pointer-events-none opacity-50"
-                        : undefined
-                    }
-                    onClick={(e) => {
-                      e.preventDefault()
-                      setPage((p) => Math.min(totalPages, p + 1))
-                    }}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          )}
-        </>
-      )}
-    </div>
-  )
+  }, [setHeaderContent, tab])
 
   const tabs: TabConfig[] = [
     {
-      value: "managed-credentials",
-      title: "Managed credentials",
-      content: managedTabContent,
+      value: "keys",
+      title: "Keys",
+      content: <KeysTab active={tab === "keys"} />,
     },
     { value: "providers", title: "Providers", content: <ProvidersTab /> },
   ]

@@ -166,3 +166,94 @@ def member_for(record: dict[str, Any], user_id: str) -> dict[str, Any] | None:
         if member["user_id"] == user_id:
             return member
     return None
+
+
+PROVIDER_BASE = f"{settings.API_V1_STR}/admin/ai-providers"
+
+
+def connect_minted_provider(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    *,
+    name: str | None = None,
+    project_id: str = "proj_test",
+) -> str:
+    """Connect a ``minted`` provider organisation; return the provider id.
+
+    ``POST /admin/ai-providers/`` writes the provider **and its one managed
+    credential** in a single transaction, so there is no second request
+    pointing a credential at it — see :func:`configure_minted_record` for the
+    other half.
+
+    The secret is never sent anywhere: every test that mints replaces the
+    provider's HTTP through the registry override
+    (``tests/stubs/key_provisioner_stub.py``), so this only has to round-trip.
+    """
+    response = client.post(
+        f"{PROVIDER_BASE}/",
+        headers=superuser_token_headers,
+        json={
+            "name": name or f"Org {random_lower_string()[:8]}",
+            "kind": "minted",
+            "type": "openai",
+            "secret": "sk-admin-not-a-real-secret",
+            "config": {"project_id": project_id},
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["id"]
+
+
+def configure_minted_record(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    *,
+    provider_id: str,
+    target_user_ids: list[str] | None = None,
+    auto_provision_roles: list[str] | None = None,
+    set_as_default: bool = False,
+    expected_status: int = 200,
+) -> dict[str, Any]:
+    """Set the provider's policy, then grant its managed credential's members.
+
+    Two requests instead of one create, because the record already exists:
+
+    * the **policy** (``set_as_default``, ``auto_provision_roles``) belongs to
+      the provider — a managed credential is not a factory, and both fields are
+      shadowed and read-only on a provider-owned record;
+    * the **membership** still belongs to the credential, so
+      ``target_user_ids`` goes to ``/admin/llm-providers``.
+
+    The policy is written *before* the members are added, so the wiring a member
+    receives is the wiring this call asked for rather than a write-through
+    applied a request later.
+
+    Returns the reconcile result — ``{"record": …, "added": …, …}``.
+    """
+    provider = client.get(
+        f"{PROVIDER_BASE}/{provider_id}", headers=superuser_token_headers
+    )
+    assert provider.status_code == 200, provider.text
+    parent_id = provider.json()["owned_credential_id"]
+    assert parent_id is not None, (
+        "the provider owns no managed credential; POST /admin/ai-providers/ "
+        "is supposed to write the pair together"
+    )
+
+    policy: dict[str, Any] = {"set_as_default": set_as_default}
+    if auto_provision_roles is not None:
+        policy["auto_provision_roles"] = auto_provision_roles
+    patched = client.patch(
+        f"{PROVIDER_BASE}/{provider_id}",
+        headers=superuser_token_headers,
+        json=policy,
+    )
+    assert patched.status_code == 200, patched.text
+
+    response = client.patch(
+        f"{ADMIN_BASE}/{parent_id}",
+        headers=superuser_token_headers,
+        json={"target_user_ids": target_user_ids or []},
+    )
+    assert response.status_code == expected_status, response.text
+    return response.json()

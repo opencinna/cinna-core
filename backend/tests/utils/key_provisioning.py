@@ -101,13 +101,18 @@ def mark_membership_minting(db: Session, user_id) -> None:
     db.commit()
 
 
-def membership_id_for(db: Session, user_id) -> str:
+def membership_id_for(db: Session, user_id, parent_id=None) -> str:
     """The membership row's id, as a string.
 
-    The handle the provider-side key name is postfixed with. It is not on any
-    projection — the admin member list publishes the *user*, which is the
-    question that surface answers — so the one test that reads the name the
-    provider was given reads the id here rather than inventing a field for it.
+    Two things address a membership directly and neither can reach it through
+    the API: the provider-side key name is postfixed with this id, and every
+    per-key verb (`/admin/ai-credentials/keys/{membership_id}/…`) takes one. It
+    is not on any record projection — the admin member list publishes the
+    *user*, which is the question that surface answers — so tests read it here
+    rather than a field being invented for them.
+
+    ``parent_id`` disambiguates a user who is a member of more than one record;
+    without it the lookup asserts there is exactly one.
     """
     from sqlmodel import select
 
@@ -115,10 +120,16 @@ def membership_id_for(db: Session, user_id) -> str:
         ManagedAICredentialMembership,
     )
 
-    membership = db.exec(
-        select(ManagedAICredentialMembership).where(
-            ManagedAICredentialMembership.user_id == user_id
+    statement = select(ManagedAICredentialMembership).where(
+        ManagedAICredentialMembership.user_id == user_id
+    )
+    if parent_id is not None:
+        statement = statement.where(
+            ManagedAICredentialMembership.managed_credential_id == parent_id
         )
-    ).first()
-    assert membership is not None, f"no membership row for user {user_id}"
-    return str(membership.id)
+    rows = db.exec(statement).all()
+    assert rows, f"no membership row for user {user_id}"
+    assert len(rows) == 1, (
+        f"user {user_id} is a member of {len(rows)} records; pass parent_id"
+    )
+    return str(rows[0].id)

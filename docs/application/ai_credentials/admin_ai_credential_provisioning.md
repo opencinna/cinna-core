@@ -8,7 +8,7 @@ Two related backend capabilities that together deliver a "ready on login" experi
 - **Part A′ — Per-user key minting.** A Provider is one of two **kinds**. A `fixed_key` Provider holds one pasted key that every member gets a copy of. A `minted` Provider holds an organisation administration secret and creates **each member their own key** at the vendor, destroying it again when they lose the credential. Only OpenAI can do this today; for every other vendor a key is **pasted**, which is a normal path and not a fallback.
 - **Part B — Native account-config endpoint.** A native-token-gated endpoint (`GET /api/v1/external/account-config`) returns the caller's own usable AI credentials with the *decrypted* API key, so Cinna Desktop and Cinna Mobile can auto-create local "LLM providers" and a suggested chat mode per credential on login, without the user having to copy-paste keys into the native app.
 
-> **Frontend status:** The admin **AI Credentials** section (`/admin/ai-credentials`) is implemented, with two hash-addressable tabs — **Managed credentials** (`#managed-credentials`) and **Providers** (`#providers`). Superusers connect, edit, verify, re-key, apply and delete Providers from the Providers tab, and manage membership and manual records from the Managed credentials tab. The user-facing AI Credentials card renders admin-managed child credentials with a **"Managed" badge** and a read-only **Default model** line when a curated default is set. The native-app side (Part B) backend is complete; Cinna Desktop/Mobile provider auto-creation is not yet built.
+> **Frontend status:** The admin **AI Credentials** section (`/admin/ai-credentials`) is implemented, with two hash-addressable tabs — **Keys** (`#keys`) and **Providers** (`#providers`). Superusers connect, edit, verify, re-key, apply and delete Providers from the Providers tab; the Keys tab lists **one row per real API key** and carries the per-key verbs (retry, set as their default, rotate, revoke). The user-facing AI Credentials card renders admin-managed child credentials with a **"Managed" badge** and a read-only **Default model** line when a curated default is set. The native-app side (Part B) backend is complete; Cinna Desktop/Mobile provider auto-creation is not yet built.
 
 ---
 
@@ -265,6 +265,32 @@ This is also what makes the one unavoidable leak nameable: a crash between the p
 
 Single-project only. A project per user was considered and dropped: projects cannot be deleted at the provider (archive only, and archive is irreversible), the ceiling is around 2,000 per organisation, and archived projects are retained — so project-per-user is a one-way ratchet that buys roughly 2,000 *lifetime* provisions and two permanent failure classes no retry can resolve. Service accounts have no documented ceiling, are genuinely deletable, and per-user cost attribution is available under one project anyway.
 
+### The Keys surface
+
+**One row = one real API key.** The record list answers "what records exist"; that is a different question from "what keys exist", and for a minted Provider the two had drifted a long way apart — one record row stood for one key per member, and an admin could see them only as a row of chips inside a table cell.
+
+The arithmetic is the model's, not a presentation choice:
+
+| Record | Real keys at the vendor | Rows |
+|---|---|---|
+| A `minted` Provider's credential | one per member, each with its own `external_key_ref` and its own child credential | **one per member** |
+| A `fixed_key` Provider's credential, or a manual record | **one** — the parent's key, copied onto every member's child row | **one for the record** |
+
+So the N child credentials under a shared record are *copies*, not keys, and the row count follows the number of secrets that exist at the provider. That is what makes the surface mean something at company size, and why it is paginated, searched and filtered on the server rather than in the browser.
+
+A row with **no key yet** — `pending`, `minting`, `failed`, `suspended` — is still a row. It is the only place an administrator sees that one person's key is stuck, which is half the reason the list exists.
+
+#### The four per-key verbs
+
+Each addresses one membership row by id.
+
+- **Retry** — a terminally `failed` key back into the queue at zero attempts. `400` if it has not failed.
+- **Set as their default** — makes this key its holder's default for its type. The per-person counterpart of *Set default for all*, which is an administrator overwriting everybody's choice; this one fixes the single person whose grant declined an occupied slot under the incumbent-wins rule. `400` when no key exists yet: there is nothing to point a default at, and creating something to point at would break the invariant that every credential row that exists is usable.
+- **Rotate** — destroy this key at the vendor and queue a fresh mint. It is the **suspend/resume pair applied to one row**, not a second implementation: deactivating an account already destroys a minted key and reactivating it already mints a new one, with the delete-then-revoke ordering and the never-leave-a-key-live-and-unrecorded guarantee that sequence carries. The holder is **without a key until the next converge tick** — at most a minute, and the confirmation says so. Refused for a shared key (replace that on the Provider) and while a mint is in flight.
+- **Revoke** — the same removal a PATCH of the member set performs, aimed at one person: the child credential is deleted, then the key is destroyed at the vendor. It inherits the Tier-2 blast-radius gate (`409` with the impact unless forced) and the refusal while a mint is in flight. On a **shared** record it removes that person's copy and leaves the key working for everyone else.
+
+Granting is deliberately **not** a verb here. A new member is added on the record or by the Provider's rule; this surface is where keys are seen, repaired, rotated and revoked, which are the four things that are per-key and had nowhere to live.
+
 ### Membership statuses
 
 Every membership row carries an explicit status. **None of them is ever inferred from a NULL** — including the terminal ones. The one absence that means something is the *row*: no row = never a member.
@@ -307,7 +333,7 @@ Retries are bounded: **5 attempts**, backing off 60s → 300s → 900s → 3600s
 
 #### Retrying a failed member
 
-`failed` is terminal on purpose, but terminal must not mean unreachable. **Admin → AI Credentials → Managed credentials** shows a failed member with the reason and a **Retry** button (`POST /admin/llm-providers/{id}/members/{user_id}/retry`), which puts the row back to `pending` at zero attempts. The likeliest first-run failure is a project with no spend limit on it; the admin fixes it in a minute and needs a way to say "try again" that does something.
+`failed` is terminal on purpose, but terminal must not mean unreachable. **Admin → AI Credentials → Keys** shows a failed key with the reason on the row and **Retry** in its menu (`POST /admin/ai-credentials/keys/{membership_id}/retry`), which puts the row back to `pending` at zero attempts. The likeliest first-run failure is a project with no spend limit on it; the admin fixes it in a minute and needs a way to say "try again" that does something.
 
 It is deliberately **not** folded into "re-add the member": re-adding an existing member is a no-op, and making it a requeue instead would mean any PATCH that merely renames the record quietly resets every durable failure it touches (reconcile passes the current membership list as the desired one). `last_error` is deliberately kept across the requeue — until the retry succeeds, why it failed last time is still the most useful thing anyone can read there.
 
@@ -693,7 +719,7 @@ Through `/admin/llm-providers/` — **the credential and its members**:
 - **Update** the name/key/base_url/model/default-flags and/or membership; reconcile runs automatically; `?force=` overrides the Tier-2 block on removed members. On a **provider-owned** record every wiring field, plus the key and its shape, is refused with a `400` naming the Provider
 - **Delete** the record and its children — `409` (with a `blocked` list) when any child is referenced by a published bundle, unless `?force=true`; and a flat `400` naming the Provider for a provider-owned record
 - **Set default for all** — one of the two deliberate acts that overwrite a held slot
-- **Retry a member's key** — `POST /{id}/members/{user_id}/retry`, for a member whose minting has terminally failed (`400` if it has not failed, `404` if they are not a member)
+- **Per-key verbs** live on their own resource, `/admin/ai-credentials/keys/{membership_id}` — see [The Keys surface](#the-keys-surface). Retry moved there from `/{id}/members/{user_id}/retry`, which is gone
 
 There is no **apply to existing users** here; it is a Provider action.
 
@@ -743,11 +769,15 @@ At the head of the policy section: **"Changes here re-apply to everyone who alre
 
 Selecting Delete fires the unforced delete as a probe. Nobody holding a key means there was nothing to confirm and it just goes. Otherwise the `409`'s impact fills the confirmation, which names **the people who lose a key** rather than counting them, and says whether the keys are revoked at the vendor: for a `minted` Provider *"{n} of those keys were created at {Type} and will be revoked there. They stop working immediately."*; for a `fixed_key` one, that the copies here are deleted and the key stays valid at the vendor until the admin removes it there. The destructive button names what it does — *Delete provider and revoke {n} keys* — and a second `409` (`ai_provider_members_not_removed`) keeps the dialog open and offers **Try again**, because the retry completes the removal.
 
-#### Managed credentials tab (`#managed-credentials`)
+#### Keys tab (`#keys`)
 
-The fleet-wide table of records, filterable to those that have a specific user as a member. Its columns name what they render: **Type** is the vendor, **Default key** is `set_as_default`, and **Source** is the Provider's name (linking to the Providers tab) or **Manual**. The **Keys** column shows `Shared key` for a shared record and a per-status roll-up for a minted one; member chips carry each person's key status, with the reason and a **Retry** button on a failure.
+The fleet-wide table of **keys**, one row each — see [The Keys surface](#the-keys-surface) for what a row is. Six columns: **Key** (the holder's email, with the credential's name beneath it; for a shared key the credential's name, with "Shared with N people" beneath), **Status**, **Type**, **Source** (the Provider's name, linking to the Providers tab, or **Manual**), **Created**, and the row menu. A `Default` badge marks a key that is its holder's default; the vendor handles ride in the row's detail glyph rather than a column, since a minted service account is now named `<email> (<membership id>)` at the provider and the email in the first column is already the match.
 
-The dialog behind a row has **two branches**:
+Above the table: a search box that matches the holder's email or name **or** the credential's name, plus Status, Kind and Provider filters. Every one of them is a server-side query parameter, and the page resets to the first when any changes. A status filter excludes shared rows by construction — a shared key has no provisioning lifecycle.
+
+A per-user row's menu is the four verbs. A **shared** row's menu is the *record's* menu, unchanged — Members, Set default for all, Edit and Delete — because a shared row is a record, and the record is fetched when the menu is reached for rather than shipped with every page.
+
+The dialog behind the record menu has **two branches**:
 
 - **A manual record** keeps every control it has today: name, type, API key, base URL/model, default and available models, target users, "set as default", "set user SDK defaults" and its modes. What it no longer has is a Key-source radio, a Provider organisation select, or an Auto-provision block — a manual record is always shared, can never point at a Provider, and carries no rule. In place of the Auto-provision block, one line says where the rule went: *"Who automatically receives a key is set on a provider, under **Providers**."*
 - **A provider-owned record** is a different composition rather than the same form with disabled controls. An alert names the owner — *"Managed by the provider {name}"* — says the key, the models and the SDK wiring are set there, and adds *"Deleting this credential means deleting its provider."* What the Provider decided is rendered as **text**, not as greyed inputs, so nothing depends on disabled styling to carry meaning. The one editable thing is **who holds it**, and that is the reason the dialog is still a form. Its row menu shows **Members** and **Set default for all**; Delete is not rendered (it is a `400` naming the Provider) and Apply to existing users is not rendered (it lives on the Provider).
@@ -1122,7 +1152,9 @@ Deliberate, each carrying a docstring at the code that owns it. Recorded here so
 
 ---
 
-*Last updated: 2026-09-07 — **ai-credential-providers**. One record used to be both a credential and its own factory; it is now a **Provider** (the key source plus the rule for who gets one) that owns exactly one **managed AI credential** (the key that exists and who holds it), with manual managed credentials unchanged and provider-less. `/admin/ai-providers` is the provider surface — connect, edit, verify, replace key, apply to existing users, delete with a named-people impact gate — and `GET /admin/ai-providers/adapters` describes the **types** the server supports; `/admin/provider-admin-credentials` and `/admin/provider-adapters` are gone, and so is `POST /admin/llm-providers/{id}/apply-to-existing`. `/admin/llm-providers` keeps its path and now creates manual records only. The wiring policy has one read path (`provisioning_policy.resolve_policy`) because the same-named columns are shadowed rather than mirrored on a provider-owned record. Two conflict rules at two times: provider-vs-provider at write time (409, scoped to newly claimed slots), and **the incumbent wins** at run time, where automatic provisioning declines an occupied default and discloses it while "apply to existing users" and "set default for all" deliberately overwrite. Deleting a provider-owned credential on its own is a 400 naming the Provider, and the forced provider delete no longer leaves that same orphan behind its own gate. The invite wizard submits `provider_ids`, and `managed_credential_not_found` gave way to `provider_not_found`. Migrations `c23d6b59a8f5` then `45938a69aee7`.*
+*Last updated: 2026-09-08 — **ai-credential-keys**. The admin surface listed *records*, which for a minted Provider meant one row standing for one key per member, rendered as an unbounded cell of member chips and paginated by the count that never grows. The first tab is now **Keys** (`#keys`): **one row = one real API key** — one per member for a minted record, one for a shared one, because a shared record's N children are copies of a single secret. `/admin/ai-credentials/keys` is the new resource, addressed by **membership id**, with four per-key verbs: retry (moved here from `/admin/llm-providers/{id}/members/{user_id}/retry`, which is gone), set as their holder's default, rotate (the suspend/resume pair applied to one row, so the key is destroyed and re-minted through the sequence that already carries the never-leave-a-key-live guarantee) and revoke (the same removal a member-set PATCH performs, inheriting the Tier-2 gate and the in-flight-mint refusal). Search, filters and paging are server-side, so the payload no longer grows with headcount. No migration: the membership row already carried everything a key row needs.*
+
+*Previously — 2026-09-07 — **ai-credential-providers**. One record used to be both a credential and its own factory; it is now a **Provider** (the key source plus the rule for who gets one) that owns exactly one **managed AI credential** (the key that exists and who holds it), with manual managed credentials unchanged and provider-less. `/admin/ai-providers` is the provider surface — connect, edit, verify, replace key, apply to existing users, delete with a named-people impact gate — and `GET /admin/ai-providers/adapters` describes the **types** the server supports; `/admin/provider-admin-credentials` and `/admin/provider-adapters` are gone, and so is `POST /admin/llm-providers/{id}/apply-to-existing`. `/admin/llm-providers` keeps its path and now creates manual records only. The wiring policy has one read path (`provisioning_policy.resolve_policy`) because the same-named columns are shadowed rather than mirrored on a provider-owned record. Two conflict rules at two times: provider-vs-provider at write time (409, scoped to newly claimed slots), and **the incumbent wins** at run time, where automatic provisioning declines an occupied default and discloses it while "apply to existing users" and "set default for all" deliberately overwrite. Deleting a provider-owned credential on its own is a 400 naming the Provider, and the forced provider delete no longer leaves that same orphan behind its own gate. The invite wizard submits `provider_ids`, and `managed_credential_not_found` gave way to `provider_not_found`. Migrations `c23d6b59a8f5` then `45938a69aee7`.*
 
 *Previously — 2026-09-06 — known gap 14 resolved: an unshareable publisher credential no longer gates an install. The `publisher_credential_unshareable` reason is removed from `GateMissingReason`, the gate skips the credential whether or not a share exists, and the bespoke copy is gone from both renderers — the environment already resolves the installer's own credential, so nothing is missing.*
 
