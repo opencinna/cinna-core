@@ -268,10 +268,10 @@ async def invite_user(
 ) -> Any:
     """Create a passwordless account and offer it to its owner.
 
-    The account is created through the one chokepoint, the managed AI
-    credentials the admin chose are granted through
-    ``AccountProvisioningService``, and the invitation row is written and
-    mailed. Provisioning and mail cannot fail the invite — the response
+    The account is created through the one chokepoint, the AI providers are
+    granted through ``AccountProvisioningService`` — the ones the admin ticked,
+    or, when ``provider_ids`` is omitted, whatever this role would have been
+    auto-provisioned anyway — and the invitation row is written and mailed. Provisioning and mail cannot fail the invite — the response
     reports what happened through ``provisioning`` and ``email_sent``, and
     ``accept_url`` is returned either way so an instance with no SMTP (the
     default) is still usable: the admin hands the link over.

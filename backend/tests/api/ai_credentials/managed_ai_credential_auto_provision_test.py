@@ -1,20 +1,14 @@
-"""Configuring auto-provisioning: the slot conflict, the backfill, the overrides.
+"""Granting a managed credential: the backfill, and the model overrides.
 
-The admin side of zero-touch onboarding phase 2. Three things live on
-``ManagedAICredential`` now that did not before, and each carries a rule that
-is not obvious from the field name:
-
-**``auto_provision_roles`` + the ``(role, mode)`` uniqueness rule.**
-``User.default_ai_credential_<mode>_id`` holds exactly one credential. Two
-managed records that both auto-provision to the same role *and* both wire that
-role's SDK default for the same mode would fight over it — resolved silently at
-grant time, per user, in whatever order the rows came back. So the second
-configuration is refused at write time with a 409 that names the other record,
-and the frontend highlights the offending cell from the structured body rather
-than parsing a sentence.
+The member-facing half of auto-provisioning. The **rule** — which roles get a
+key automatically, and which ``(role, mode)`` default slot a configuration
+claims — lives on ``ai_provider`` and is covered by
+``ai_providers_service_test.py``, including the uniqueness 409 and the known
+``set_as_default`` gap. What is here is what happens to *people* once a rule
+exists.
 
 **"Apply to existing users".** Auto-provisioning fires at account *creation*.
-Turning the flag on does nothing for the people already on the instance, and
+Turning the rule on does nothing for the people already on the instance, and
 re-running provisioning on a role change was rejected as a design (a promotion
 should not hand out a company key as a side effect). This action closes that
 gap explicitly, with a dry run so the admin sees the cost before paying it —
@@ -30,19 +24,18 @@ The spec had one rule; the implementation has two, because the single rule
 destroyed user data. Claiming a slot (a member is added, the pointer moves onto
 this credential) *resets* the override — whatever was there described a
 different credential and may name a model this provider does not serve. Holding
-a slot (any later edit of the record) only pushes an *actual opinion* — a
-``None`` on the parent means "no opinion", not "clear theirs", or an admin
-renaming a record would silently erase the model every member had picked.
+a slot (any later edit) only pushes an *actual opinion* — no opinion means "not
+clear theirs", or an admin renaming a record would silently erase the model
+every member had picked.
 
 Clearing an override is its own case again: an omitted field means "leave it
 alone", a submitted ``""`` retracts it — and retracting it unpins the members
 who still carry the value being dropped, so the clear is not merely cosmetic.
 
-One deliberate backend gap is pinned here as behaviour rather than tested as a
-bug: the uniqueness rule does not consider ``set_as_default``. That is about
-the *409*, and is not the same thing as the preview counting that flag — two
-records may still both claim it, and the admin is simply told what the second
-one costs.
+**Setup goes through the provider.** A managed credential is no longer a
+factory: ``auto_provision_roles`` on one is a 400, not a silent drop, so every
+scenario below configures the rule where it lives and then acts on the
+credential the provider owns.
 
 The account-creation side — which origins get provisioned, and what happens
 when provisioning fails — is in ``tests/api/users/users_auto_provision_*``.
@@ -62,12 +55,13 @@ from tests.utils.account_provisioning import (
     failing_sql_statement,
     session_is_usable,
 )
+from tests.utils.ai_provider_admin import (
+    create_provider_credential,
+    get_provider,
+)
 from tests.utils.managed_ai_credential import (
-    ADMIN_BASE,
-    apply_to_existing,
     create_managed_credential,
     get_managed_credential,
-    list_managed_credentials,
     member_for,
     member_user_ids,
     update_managed_credential,
@@ -101,301 +95,39 @@ def _patch_me(client: TestClient, headers: dict[str, str], **fields) -> dict:
     return response.json()
 
 
-def _create_conflicting(
+def _apply_provider_to_existing(
     client: TestClient,
-    superuser_token_headers: dict[str, str],
-    **kwargs,
+    headers: dict[str, str],
+    provider_id: str,
+    *,
+    dry_run: bool = False,
 ) -> dict:
-    """POST expecting the 409 envelope; returns the ``detail`` object."""
-    body = create_managed_credential(
-        client, superuser_token_headers, expected_status=409, **kwargs
-    )
-    return body["detail"]
+    """``POST /admin/ai-providers/{id}/apply-to-existing``.
 
-
-# ── Scenario 1: the (role, mode) slot may have only one owner ──────────
-
-
-def test_two_records_cannot_claim_the_same_role_and_mode_default(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
+    Every record below is provider-owned (``create_provider_credential``), so
+    this is the reconcile these scenarios exercise. It used to be reached
+    through ``/admin/llm-providers/{id}/apply-to-existing`` instead — the
+    managed credential's own copy of the same action — but that route was
+    removed as redundant (§5.7, ai-credential-providers plan): for a
+    provider-owned record it ran the identical
+    ``ManagedAICredentialsService.apply_to_existing`` call this one does, and
+    for a manual record it always answered ``candidate_count: 0``, because a
+    manual record can never carry ``auto_provision_roles``.
     """
-    The uniqueness rule, from the admin's side:
-      1. "Company OpenAI" auto-provisions to developers and wires both modes
-      2. "Company Claude" tries to wire ``building`` for developers → 409,
-         with a structured body naming the other record and the exact cell
-      3. Nothing was written — a refused create must not leave a
-         half-configured parent behind for the admin to clean up
-      4. The same record for a *different role* is accepted
-      5. The same role and mode, but not wiring SDK defaults, is accepted —
-         granting a credential without touching a default is a supported
-         configuration, not an oversight
-      6. The same role, a mode the first record does not claim, is accepted
-    """
-    # ── Phase 1 ────────────────────────────────────────────────────────
-    first = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Company OpenAI",
-        auto_provision_roles=["agent-developer"],
-        set_user_sdk_defaults=True,
-        sdk_default_modes=["conversation", "building"],
-    )["record"]
-
-    # ── Phase 2: the collision ─────────────────────────────────────────
-    detail = _create_conflicting(
-        client,
-        superuser_token_headers,
-        name="Company Claude",
-        auto_provision_roles=["agent-developer"],
-        set_user_sdk_defaults=True,
-        sdk_default_modes=["building"],
+    response = client.post(
+        f"{API}/admin/ai-providers/{provider_id}/apply-to-existing",
+        headers=headers,
+        params={"dry_run": dry_run},
     )
-    # The exact key set, not just the ones this test reads: the dialog
-    # highlights the offending role/mode cell and links to the other record,
-    # and it can do neither from a prose string. A field quietly dropped from
-    # the envelope is a frontend regression with no backend symptom.
-    assert set(detail) == {
-        "code",
-        "message",
-        "conflicting_credential_id",
-        "conflicting_credential_name",
-        "role",
-        "mode",
-    }, detail
-    assert detail["code"] == "auto_provision_conflict"
-    assert detail["conflicting_credential_id"] == first["id"]
-    assert detail["conflicting_credential_name"] == "Company OpenAI"
-    assert detail["role"] == "agent-developer"
-    assert detail["mode"] == "building"
-    # The message names the other record, so the dialog has something to say
-    # even before it reads the structured fields.
-    assert "Company OpenAI" in detail["message"]
-
-    # ── Phase 3: nothing half-written ──────────────────────────────────
-    names = {record["name"] for record in list_managed_credentials(
-        client, superuser_token_headers
-    )}
-    assert names == {"Company OpenAI"}, names
-
-    # ── Phase 4: a different role does not collide ─────────────────────
-    other_role = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Company Claude (admins)",
-        auto_provision_roles=["admin"],
-        set_user_sdk_defaults=True,
-        sdk_default_modes=["building"],
-    )["record"]
-    assert other_role["auto_provision_roles"] == ["admin"]
-
-    # ── Phase 5: same cell, but no SDK defaults → allowed ──────────────
-    no_defaults = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Company Claude (grant only)",
-        auto_provision_roles=["agent-developer"],
-        set_user_sdk_defaults=False,
-        sdk_default_modes=["building"],
-    )["record"]
-    assert no_defaults["set_user_sdk_defaults"] is False
-    assert no_defaults["auto_provision_roles"] == ["agent-developer"]
-
-    # ── Phase 6: an unclaimed mode → allowed ───────────────────────────
-    narrowed = update_managed_credential(
-        client,
-        superuser_token_headers,
-        first["id"],
-        sdk_default_modes=["conversation"],
-    )["record"]
-    assert narrowed["sdk_default_modes"] == ["conversation"]
-
-    freed = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Company Claude (building)",
-        auto_provision_roles=["agent-developer"],
-        set_user_sdk_defaults=True,
-        sdk_default_modes=["building"],
-    )["record"]
-    assert freed["sdk_default_modes"] == ["building"]
-
-
-def test_an_update_that_would_introduce_a_conflict_is_refused_and_applies_nothing(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """
-    The same rule on PATCH, where "applies nothing" is the harder half:
-      1. Two records coexist because they cover different roles
-      2. Widening the second one's roles onto the first's would collide → 409
-      3. The second record is completely unchanged — roles *and* the name that
-         rode along in the same request. The validation runs against the
-         *effective* values before anything is written, so a PATCH cannot
-         half-apply
-      4. A PATCH that touches only the name is not refused for a conflict it
-         did not introduce
-      5. Nor is one that renames *and* resubmits the record's own
-         auto-provision fields unchanged — the rule is scoped to the slots a
-         request newly claims, not to the state it happens to describe
-      6. The same widening with SDK defaults turned off is accepted
-    """
-    # ── Phase 1 ────────────────────────────────────────────────────────
-    incumbent = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Incumbent",
-        auto_provision_roles=["agent-user"],
-        set_user_sdk_defaults=True,
-        sdk_default_modes=["conversation"],
-    )["record"]
-    challenger = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Challenger",
-        auto_provision_roles=["agent-developer"],
-        set_user_sdk_defaults=True,
-        sdk_default_modes=["conversation"],
-    )["record"]
-
-    # ── Phase 2 ────────────────────────────────────────────────────────
-    body = update_managed_credential(
-        client,
-        superuser_token_headers,
-        challenger["id"],
-        expected_status=409,
-        name="Challenger renamed",
-        auto_provision_roles=["agent-user", "agent-developer"],
-    )
-    detail = body["detail"]
-    assert set(detail) == {
-        "code",
-        "message",
-        "conflicting_credential_id",
-        "conflicting_credential_name",
-        "role",
-        "mode",
-    }, detail
-    assert detail["code"] == "auto_provision_conflict"
-    assert detail["conflicting_credential_id"] == incumbent["id"]
-    assert detail["conflicting_credential_name"] == "Incumbent"
-    assert detail["role"] == "agent-user"
-    assert detail["mode"] == "conversation"
-
-    # ── Phase 3: not even the name landed ──────────────────────────────
-    unchanged = get_managed_credential(
-        client, superuser_token_headers, challenger["id"]
-    )
-    assert unchanged["name"] == "Challenger"
-    assert unchanged["auto_provision_roles"] == ["agent-developer"]
-
-    # ── Phase 4: an unrelated edit still goes through ──────────────────
-    renamed = update_managed_credential(
-        client, superuser_token_headers, challenger["id"], name="Challenger v2"
-    )["record"]
-    assert renamed["name"] == "Challenger v2"
-    assert renamed["auto_provision_roles"] == ["agent-developer"]
-
-    # ── Phase 5: a stale absolute payload claims nothing new ───────────
-    # What the dialog used to send on a rename: every auto-provision field,
-    # rebuilt from the snapshot taken when it opened. Nothing here is a new
-    # claim, so nothing here may be refused. The dialog now sends only what
-    # the admin touched; this is the backstop under that, and the reason the
-    # validator compares transitions rather than end states.
-    resubmitted = update_managed_credential(
-        client,
-        superuser_token_headers,
-        challenger["id"],
-        name="Challenger v3",
-        set_user_sdk_defaults=True,
-        sdk_default_modes=["conversation"],
-        auto_provision_roles=["agent-developer"],
-    )["record"]
-    assert resubmitted["name"] == "Challenger v3"
-    assert resubmitted["auto_provision_roles"] == ["agent-developer"]
-
-    # ── Phase 6: no SDK defaults, no fight ─────────────────────────────
-    widened = update_managed_credential(
-        client,
-        superuser_token_headers,
-        challenger["id"],
-        set_user_sdk_defaults=False,
-        auto_provision_roles=["agent-user", "agent-developer"],
-    )["record"]
-    assert widened["set_user_sdk_defaults"] is False
-    assert set(widened["auto_provision_roles"]) == {"agent-user", "agent-developer"}
-
-
-def test_an_unknown_role_in_auto_provision_roles_is_rejected(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """A mistyped role is a 400, not a silent drop.
-
-    Silently dropping it would let an admin save successfully and then watch
-    nothing happen at the next signup, with no clue why. Duplicates and
-    whitespace, on the other hand, are canonicalised rather than refused —
-    those are not mistakes worth an error.
-    """
-    body = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Typo",
-        auto_provision_roles=["agent-develper"],
-        expected_status=400,
-    )
-    assert "agent-develper" in body["detail"]
-
-    canonicalised = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Tidy",
-        auto_provision_roles=[" agent-user ", "agent-user", ""],
-    )["record"]
-    assert canonicalised["auto_provision_roles"] == ["agent-user"]
-
-
-# ── Scenario 2: known gap — set_as_default is outside the rule ─────────
-
-
-def test_set_as_default_is_not_covered_by_the_uniqueness_rule(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """Pinned as known behaviour, not asserted as correct.
-
-    The uniqueness rule guards ``default_ai_credential_<mode>_id`` only. Two
-    auto-provisioning records that both carry ``set_as_default`` — the child
-    credential's own "is default for its type" flag — are accepted, and a new
-    account covered by both ends up with whichever was provisioned second.
-
-    Recorded here so the gap is a decision with a test next to it rather than
-    something a reader has to infer from the absence of one. If ``set_as_default``
-    is ever brought under the rule, this test is the one that fails and the one
-    to rewrite.
-    """
-    create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Default A",
-        auto_provision_roles=["agent-user"],
-        set_as_default=True,
-        set_user_sdk_defaults=False,
-    )
-    accepted = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Default B",
-        auto_provision_roles=["agent-user"],
-        set_as_default=True,
-        set_user_sdk_defaults=False,
-    )["record"]
-    assert accepted["set_as_default"] is True
-    assert accepted["auto_provision_roles"] == ["agent-user"]
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 # ── Scenario 3: apply to existing users ────────────────────────────────
 
 
 def test_apply_to_existing_previews_then_backfills_then_becomes_a_no_op(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """
     Bringing the people who were already here into a new company credential:
@@ -428,20 +160,21 @@ def test_apply_to_existing_previews_then_backfills_then_becomes_a_no_op(
     )
 
     # ── Phase 3: the record is created; nothing happens to anyone ──────
-    parent = create_managed_credential(
-        client,
-        superuser_token_headers,
+    created = create_provider_credential(
+        db,
         name="Company Backfill",
         auto_provision_roles=["agent-user"],
         set_user_sdk_defaults=True,
         sdk_default_modes=["conversation"],
         model_override_conversation="an-admin-model",
-    )["record"]
+    )
+    parent = created["record"]
+    provider_id = created["provider_id"]
     assert parent["members"] == []
 
     # ── Phase 4: dry run ───────────────────────────────────────────────
-    preview = apply_to_existing(
-        client, superuser_token_headers, parent["id"], dry_run=True
+    preview = _apply_provider_to_existing(
+        client, superuser_token_headers, provider_id, dry_run=True
     )
     assert preview["dry_run"] is True
     assert preview["added"] == []
@@ -457,7 +190,7 @@ def test_apply_to_existing_previews_then_backfills_then_becomes_a_no_op(
     )["members"] == []
 
     # ── Phase 5: the real run ──────────────────────────────────────────
-    applied = apply_to_existing(client, superuser_token_headers, parent["id"])
+    applied = _apply_provider_to_existing(client, superuser_token_headers, provider_id)
     assert applied["dry_run"] is False
     assert applied["candidates"] == []
     added_ids = {member["user_id"] for member in applied["added"]}
@@ -474,7 +207,7 @@ def test_apply_to_existing_previews_then_backfills_then_becomes_a_no_op(
     ] is None
 
     # ── Phase 7: idempotent ────────────────────────────────────────────
-    again = apply_to_existing(client, superuser_token_headers, parent["id"])
+    again = _apply_provider_to_existing(client, superuser_token_headers, provider_id)
     assert again["added"] == []
     assert again["candidate_count"] == 0
     assert again["defaults_overwrite_count"] == 0
@@ -491,7 +224,7 @@ def test_apply_to_existing_previews_then_backfills_then_becomes_a_no_op(
 
 
 def test_the_preview_counts_the_default_credential_a_grant_would_demote(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """``set_as_default`` costs a candidate their own default, and must say so.
 
@@ -523,18 +256,19 @@ def test_the_preview_counts_the_default_credential_a_grant_would_demote(
     """
     # ── Phase 1 + 2 ────────────────────────────────────────────────────
     opinionated, opinionated_headers = create_random_user_with_headers(client)
-    parent = create_managed_credential(
-        client,
-        superuser_token_headers,
+    created = create_provider_credential(
+        db,
         name="Company Type Default",
         auto_provision_roles=["agent-user"],
         set_as_default=True,
         set_user_sdk_defaults=False,
-    )["record"]
+    )
+    parent = created["record"]
+    provider_id = created["provider_id"]
 
     # ── Phase 3 ────────────────────────────────────────────────────────
-    before = apply_to_existing(
-        client, superuser_token_headers, parent["id"], dry_run=True
+    before = _apply_provider_to_existing(
+        client, superuser_token_headers, provider_id, dry_run=True
     )
 
     # ── Phase 4 ────────────────────────────────────────────────────────
@@ -543,8 +277,8 @@ def test_the_preview_counts_the_default_credential_a_grant_would_demote(
     )
 
     # ── Phase 5 ────────────────────────────────────────────────────────
-    after = apply_to_existing(
-        client, superuser_token_headers, parent["id"], dry_run=True
+    after = _apply_provider_to_existing(
+        client, superuser_token_headers, provider_id, dry_run=True
     )
     assert after["candidate_count"] == before["candidate_count"], (
         "Nobody joined or left; only one candidate's credentials changed."
@@ -562,16 +296,15 @@ def test_the_preview_counts_the_default_credential_a_grant_would_demote(
     # Same candidates, same type, only the flag differs. Two records may both
     # carry ``set_as_default`` for one role — that gap is pinned in scenario 2
     # — so this second record is accepted.
-    passive = create_managed_credential(
-        client,
-        superuser_token_headers,
+    passive_created = create_provider_credential(
+        db,
         name="Company Passive",
         auto_provision_roles=["agent-user"],
         set_as_default=False,
         set_user_sdk_defaults=False,
-    )["record"]
-    passive_preview = apply_to_existing(
-        client, superuser_token_headers, passive["id"], dry_run=True
+    )
+    passive_preview = _apply_provider_to_existing(
+        client, superuser_token_headers, passive_created["provider_id"], dry_run=True
     )
     assert passive_preview["candidate_count"] == after["candidate_count"]
     assert passive_preview["defaults_overwrite_count"] == 0, (
@@ -579,7 +312,7 @@ def test_the_preview_counts_the_default_credential_a_grant_would_demote(
     )
 
     # ── Phase 7: the real run ──────────────────────────────────────────
-    apply_to_existing(client, superuser_token_headers, parent["id"])
+    _apply_provider_to_existing(client, superuser_token_headers, provider_id)
     record = get_managed_credential(
         client, superuser_token_headers, parent["id"]
     )
@@ -600,7 +333,7 @@ def test_the_preview_counts_the_default_credential_a_grant_would_demote(
 
 
 def test_the_preview_counts_a_model_override_that_no_pointer_guards(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """A chosen model with no credential behind it is still a thing to lose.
 
@@ -625,16 +358,17 @@ def test_the_preview_counts_a_model_override_that_no_pointer_guards(
     # The account first: one created after the record would be
     # auto-provisioned on the spot and never appear as a candidate.
     picky, picky_headers = create_random_user_with_headers(client)
-    parent = create_managed_credential(
-        client,
-        superuser_token_headers,
+    created = create_provider_credential(
+        db,
         name="Company Slot Claim",
         auto_provision_roles=["agent-user"],
         set_user_sdk_defaults=True,
         sdk_default_modes=["conversation"],
-    )["record"]
-    before = apply_to_existing(
-        client, superuser_token_headers, parent["id"], dry_run=True
+    )
+    parent = created["record"]
+    provider_id = created["provider_id"]
+    before = _apply_provider_to_existing(
+        client, superuser_token_headers, provider_id, dry_run=True
     )
     profile = _me(client, picky_headers)
     assert profile["default_ai_credential_conversation_id"] is None
@@ -648,8 +382,8 @@ def test_the_preview_counts_a_model_override_that_no_pointer_guards(
     )
 
     # ── Phase 4 ────────────────────────────────────────────────────────
-    after = apply_to_existing(
-        client, superuser_token_headers, parent["id"], dry_run=True
+    after = _apply_provider_to_existing(
+        client, superuser_token_headers, provider_id, dry_run=True
     )
     assert after["candidate_count"] == before["candidate_count"], (
         "Nobody joined or left; only one candidate's profile changed."
@@ -664,7 +398,7 @@ def test_the_preview_counts_a_model_override_that_no_pointer_guards(
     )
 
     # ── Phase 5 ────────────────────────────────────────────────────────
-    apply_to_existing(client, superuser_token_headers, parent["id"])
+    _apply_provider_to_existing(client, superuser_token_headers, provider_id)
     record = get_managed_credential(
         client, superuser_token_headers, parent["id"]
     )
@@ -710,14 +444,14 @@ def test_a_failing_child_insert_leaves_apply_to_existing_a_usable_session(
     """
     create_random_user_with_headers(client)
     create_random_user_with_headers(client)
-    parent = create_managed_credential(
-        client,
-        superuser_token_headers,
+    created = create_provider_credential(
+        db,
         name="Company Half Broken",
         auto_provision_roles=["agent-user"],
-    )["record"]
-    expected = apply_to_existing(
-        client, superuser_token_headers, parent["id"], dry_run=True
+    )
+    provider_id = created["provider_id"]
+    expected = _apply_provider_to_existing(
+        client, superuser_token_headers, provider_id, dry_run=True
     )["candidate_count"]
     assert expected >= 2, (
         f"Need at least two candidates to abort the second insert; got {expected}"
@@ -727,7 +461,7 @@ def test_a_failing_child_insert_leaves_apply_to_existing_a_usable_session(
         db, when_statement_contains=CHILD_CREDENTIAL_INSERT, occurrence=2
     ) as injection:
         response = client.post(
-            f"{ADMIN_BASE}/{parent['id']}/apply-to-existing",
+            f"{API}/admin/ai-providers/{provider_id}/apply-to-existing",
             headers=superuser_token_headers,
             params={"dry_run": False},
         )
@@ -749,62 +483,44 @@ def test_a_failing_child_insert_leaves_apply_to_existing_a_usable_session(
 
 
 def test_apply_to_existing_on_a_record_with_no_auto_provision_roles_does_nothing(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """No roles means no candidate set — the action is defined, and empty.
 
     Also the control for ``defaults_overwrite_count``: it must be 0 here, so
     the ``>= 1`` above is measuring something rather than reporting a constant.
+
+    A manual (non-provider) record can never reach this: ``auto_provision_roles``
+    is refused on ``ManagedAICredentialCreate``, so the empty-roles case is only
+    reachable through a provider config that leaves the list unset.
     """
     create_random_user_with_headers(client)
-    parent = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Manual only",
-        set_user_sdk_defaults=True,
-        sdk_default_modes=["conversation"],
-    )["record"]
-    assert parent["auto_provision_roles"] == []
+    created = create_provider_credential(
+        db,
+        name="No Roles Configured",
+    )
+    provider_id = created["provider_id"]
+    # The roles live on the provider; the credential projection does not
+    # restate them.
+    assert get_provider(db, provider_id)["auto_provision_roles"] == []
 
-    preview = apply_to_existing(
-        client, superuser_token_headers, parent["id"], dry_run=True
+    preview = _apply_provider_to_existing(
+        client, superuser_token_headers, provider_id, dry_run=True
     )
     assert preview["candidates"] == []
     assert preview["candidate_count"] == 0
     assert preview["defaults_overwrite_count"] == 0
 
-    applied = apply_to_existing(client, superuser_token_headers, parent["id"])
+    applied = _apply_provider_to_existing(client, superuser_token_headers, provider_id)
     assert applied["added"] == []
     assert applied["candidate_count"] == 0
-
-
-def test_apply_to_existing_is_superuser_only(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """It hands out a company API key, so it is not a route a member may call."""
-    _, member_headers = create_random_user_with_headers(client)
-    parent = create_managed_credential(
-        client,
-        superuser_token_headers,
-        name="Guarded",
-        auto_provision_roles=["agent-user"],
-    )["record"]
-
-    response = client.post(
-        f"{ADMIN_BASE}/{parent['id']}/apply-to-existing", headers=member_headers
-    )
-    assert response.status_code in (401, 403), response.text
-    assert client.post(f"{ADMIN_BASE}/{parent['id']}/apply-to-existing").status_code in (
-        401,
-        403,
-    )
 
 
 # ── Scenario 4: model overrides — landing, updating, clearing ──────────
 
 
 def test_model_overrides_land_on_the_owner_and_clear_when_membership_ends(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """
     The whole life of a per-mode model override:
@@ -919,7 +635,7 @@ def test_model_overrides_land_on_the_owner_and_clear_when_membership_ends(
 
 
 def test_removing_a_member_tears_down_the_model_override_with_the_pointer(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """The other half of step 5, stated on its own because it was missing.
 
@@ -976,7 +692,7 @@ def test_removing_a_member_tears_down_the_model_override_with_the_pointer(
 
 
 def test_claiming_a_slot_resets_the_override_but_holding_one_does_not_wipe_it(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """
     The asymmetry the spec did not have, and the reason it was added.
@@ -1062,7 +778,7 @@ def test_claiming_a_slot_resets_the_override_but_holding_one_does_not_wipe_it(
 
 
 def test_clearing_an_override_retracts_only_the_value_this_record_wrote(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """The guard that makes the clear safe, on the branch where it holds.
 

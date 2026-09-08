@@ -2053,6 +2053,180 @@ export type AIKnowledgeGitRepoUpdate = {
 };
 
 /**
+ * The request-side config shape: same fields, unknown keys refused.
+ *
+ * A subclass rather than ``extra="forbid"`` on the parent, because the parent
+ * is also the **response** shape (:attr:`AIProviderPublic.config`, built as
+ * ``ProviderAdminCredentialConfig(**(record.config or {}))``). Forbidding
+ * extras there would make a stored config carrying a stray key raise on *read*,
+ * taking the admin listing down over a row somebody has to look at to fix.
+ * Strict going in, tolerant coming out.
+ *
+ * The reason it is strict going in is specific rather than tidiness.
+ * ``organization_id`` is spelled the American way here and this codebase's own
+ * prose spells it the British way everywhere else — "provider organisation",
+ * "organisation administration secret" — so ``organisation_id`` is the likeliest
+ * typo on the surface. Ignored, it lands on one of the two fields that select
+ * *which OpenAI project keys are minted into*: a provider created with a
+ * dropped ``project_id`` verifies as uncapped and refuses to mint, with nothing
+ * anywhere saying the field was thrown away. Pinned by
+ * ``tests/api/ai_credentials/admin_ai_providers_test.py::
+ * test_a_misspelled_config_field_is_refused_not_dropped``.
+ */
+export type AIProviderConfigInput = {
+    organization_id?: (string | null);
+    project_id?: (string | null);
+};
+
+/**
+ * Connect a key source and say who automatically gets one.
+ *
+ * ``kind`` has no default here for the same reason the column has none in
+ * Python: the secret means two categorically different things depending on it,
+ * and a caller that did not say which one it is pasting has not been asked the
+ * question.
+ *
+ * ``extra="forbid"`` because there is exactly **one** secret field and for a
+ * ``minted`` provider it is the administration key. A body that also carried
+ * ``api_key`` — the spelling every other credential surface uses, and the
+ * obvious thing to reach for — would otherwise be accepted, ignored, and leave
+ * an admin believing they had given the provider a member key. Refusing it
+ * names the field instead. Pinned by
+ * ``tests/api/ai_credentials/admin_ai_providers_test.py::
+ * test_a_stray_member_key_on_a_provider_create_is_refused_not_ignored``.
+ */
+export type AIProviderCreate = {
+    name: string;
+    kind: AIProviderKind;
+    type: AICredentialType;
+    secret: string;
+    config?: AIProviderConfigInput;
+    base_url?: (string | null);
+    model?: (string | null);
+    auto_provision_roles?: Array<(string)>;
+    set_as_default?: boolean;
+    set_user_sdk_defaults?: boolean;
+    sdk_default_modes?: Array<(string)>;
+    default_model?: (string | null);
+    available_models?: (Array<(string)> | null);
+    model_override_conversation?: (string | null);
+    model_override_building?: (string | null);
+    expiry_notification_date?: (string | null);
+    target_user_ids?: Array<(string)>;
+};
+
+/**
+ * What a provider *is*, and therefore what its secret means.
+ *
+ * - ``fixed_key`` — the admin pastes one model API key and every member's
+ * child credential holds a copy of it. Available for every type.
+ * - ``minted`` — each member gets their own key, created at the provider
+ * through an administration secret. Available only for types whose adapter
+ * sets ``supports_minting``; the service, not the schema, enforces that.
+ */
+export type AIProviderKind = 'fixed_key' | 'minted';
+
+/**
+ * Admin-facing projection of one provider. **Never** carries the secret.
+ *
+ * ``has_secret`` rather than a nullable secret field, copying
+ * ``MailServerConfigPublic``: a projection that carries the value's *slot* is
+ * one refactor away from carrying the value. There is no reveal endpoint.
+ */
+export type AIProviderPublic = {
+    id: string;
+    name: string;
+    kind: string;
+    type: AICredentialType;
+    config: ProviderAdminCredentialConfig;
+    has_secret?: boolean;
+    base_url?: (string | null);
+    model?: (string | null);
+    auto_provision_roles?: Array<(string)>;
+    set_as_default?: boolean;
+    set_user_sdk_defaults?: boolean;
+    sdk_default_modes?: Array<(string)>;
+    default_model?: (string | null);
+    available_models?: (Array<(string)> | null);
+    model_override_conversation?: (string | null);
+    model_override_building?: (string | null);
+    expiry_notification_date?: (string | null);
+    last_verified_at?: (string | null);
+    last_verify_error?: (string | null);
+    created_by_id?: (string | null);
+    owned_credential_id?: (string | null);
+    member_count?: number;
+    key_state_summary?: {
+        [key: string]: (number);
+    };
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * Replace a ``fixed_key`` provider's key. Refused on ``minted``.
+ */
+export type AIProviderRotateKey = {
+    api_key: string;
+};
+
+/**
+ * Partial update. Every field's omission means "leave it alone".
+ *
+ * ``model_override_*`` keeps the three-state contract of
+ * ``ManagedAICredentialUpdate`` **verbatim**, because the same members are on
+ * the other end of it:
+ *
+ * * omitted / ``null`` — leave the stored override alone;
+ * * ``""`` — clear it, and unpin every member still carrying the dropped
+ * value (without that the clear is cosmetic);
+ * * a model id — set it and write it through.
+ *
+ * ``kind``, ``type`` and ``target_user_ids`` are absent on purpose. The first
+ * two would re-point an existing member's key at a different vendor or change
+ * what the stored secret means; membership is edited on the managed credential
+ * the provider owns, which is the record that has always held it.
+ *
+ * ``extra="forbid"`` for the same reason as :class:`AIProviderCreate`, and one
+ * more: ``secret`` is absent here on purpose — replacing a ``fixed_key``
+ * provider's key is ``POST /{id}/rotate-key``, which re-keys every member, and
+ * a ``secret`` quietly ignored by this endpoint would look exactly like the
+ * rotation that endpoint exists to perform.
+ */
+export type AIProviderUpdate = {
+    name?: (string | null);
+    config?: (AIProviderConfigInput | null);
+    base_url?: (string | null);
+    model?: (string | null);
+    auto_provision_roles?: (Array<(string)> | null);
+    set_as_default?: (boolean | null);
+    set_user_sdk_defaults?: (boolean | null);
+    sdk_default_modes?: (Array<(string)> | null);
+    default_model?: (string | null);
+    available_models?: (Array<(string)> | null);
+    model_override_conversation?: (string | null);
+    model_override_building?: (string | null);
+    expiry_notification_date?: (string | null);
+};
+
+/**
+ * Outcome of a Verify press, for either kind.
+ *
+ * ``spend_limit_*`` are answered only for a ``minted`` provider — a
+ * ``fixed_key`` provider has no project whose cap could be read, and reporting
+ * ``False`` there would read as "no cap configured" rather than "the question
+ * does not apply". ``checked_spend_limit`` says which of the two it is.
+ */
+export type AIProviderVerifyResult = {
+    ok: boolean;
+    account_ref?: (string | null);
+    checked_spend_limit?: boolean;
+    spend_limit_enforcing?: boolean;
+    spend_limit_cents?: (number | null);
+    error?: (string | null);
+};
+
+/**
  * Decrypted AI service credentials
  */
 export type AIServiceCredentials = {
@@ -4076,7 +4250,42 @@ export type InvitationLookupRequest = {
 };
 
 /**
- * One managed AI credential the invited account did *not* receive.
+ * A provider's SDK wiring that did not apply to the invited account.
+ *
+ * **Disclosure, not an error**, in the same sense as
+ * ``InviteUserResponse.adopted_existing_account``: the grant succeeded, the
+ * person holds a usable key, and the only surprising thing is that the
+ * provider's per-mode default did not get repointed at it because the account
+ * already held one in that mode. It is therefore *not* an
+ * :class:`InviteProvisioningSkip` — that shape means the person did not
+ * receive the key at all — and it never sets
+ * :attr:`InviteProvisioningSummary.provisioning_failed`.
+ *
+ * Carries the provider and the mode: together they name the policy that did
+ * not take effect and the slot it did not take, which is what an
+ * administrator can act on. The credential already occupying the slot is
+ * deliberately not carried — it belongs to the invited person's own
+ * configuration and the wizard has no name for it.
+ *
+ * Reachable on the ordinary re-invite path rather than an exotic one:
+ * ``InvitationService.invite`` runs explicit provisioning even when it adopts
+ * an account that already exists, and such an account may already hold a
+ * default. One ticked provider is enough; §5.5's write-time uniqueness rule
+ * guards two providers claiming the same configuration, not one provider
+ * meeting an occupied slot.
+ */
+export type InviteProvisioningDefaultSlotSkip = {
+    provider_id: string;
+    mode: string;
+};
+
+/**
+ * One AI provider whose key the invited account did *not* receive.
+ *
+ * Keyed by the provider, because that is what the wizard submits and what it
+ * has a name for on screen; the managed credential a provider grants through
+ * is not a thing the wizard ever names, and for ``provider_not_found`` there
+ * is no credential to name at all.
  *
  * ``reason`` is the machine-readable string ``AccountProvisioningService``
  * already produces. The full vocabulary, because the wizard renders copy per
@@ -4087,19 +4296,21 @@ export type InvitationLookupRequest = {
  * which is in practice the only producer this wizard ever sees: the
  * short-circuit returns before ``add_members`` is called, so the
  * reconcile path's own ``user_inactive`` cannot be reached from here.
- * One entry per **requested** credential, so that a deactivated
+ * One entry per **requested** provider, so that a deactivated
  * account does not report the empty summary an admin who ticked
  * nothing gets;
- * * ``managed_credential_not_found`` — an id the admin ticked no longer
- * exists, or is not a managed credential. Reachable **only** from the
+ * * ``provider_not_found`` — an id the admin ticked no longer names a
+ * provider with a credential to grant through. Reachable **only** from the
  * explicit invite path (``provision_explicit``), which is exactly this
  * model's path, so it is the one reason the automatic path never emits and
- * the one most likely to be missing from the frontend's map;
- * * ``provision_failed`` — the per-parent guard caught something;
- * * ``add_members_failed`` — the grant itself failed for this credential.
+ * the one most likely to be missing from the frontend's map. It replaced
+ * ``managed_credential_not_found`` when the wizard moved to providers, so a
+ * map carrying the old string renders a blank line for it;
+ * * ``provision_failed`` — the per-provider guard caught something;
+ * * ``add_members_failed`` — the grant itself failed for this provider.
  */
 export type InviteProvisioningSkip = {
-    managed_credential_id: string;
+    provider_id: string;
     reason: string;
 };
 
@@ -4114,6 +4325,7 @@ export type InviteProvisioningSkip = {
 export type InviteProvisioningSummary = {
     added_count?: number;
     skipped?: Array<InviteProvisioningSkip>;
+    default_slot_skips?: Array<InviteProvisioningDefaultSlotSkip>;
     provisioning_failed?: boolean;
 };
 
@@ -4149,10 +4361,12 @@ export type InviteProvisioningSummary = {
  * Clearing a name is a real thing to want and the user edit form is where
  * it belongs; the invite wizard does not offer it.
  *
- * ``managed_credential_ids`` is the same rule with a third state, and it
- * already had it: ``None`` means *grant whatever this role would have been
+ * ``provider_ids`` is the same rule with a third state, and it already had
+ * it: ``None`` means *grant whatever this role would have been
  * auto-provisioned anyway*, which is the same predicate every other arrival
  * path runs, while ``[]`` means the admin deliberately unticked everything.
+ * It names **providers** — the key source and the rule for who gets one —
+ * since a managed credential stopped being a factory.
  */
 export type InviteUserRequest = {
     email: string;
@@ -4160,7 +4374,7 @@ export type InviteUserRequest = {
     role: string;
     include_desktop?: (boolean | null);
     auth_hint?: string;
-    managed_credential_ids?: (Array<(string)> | null);
+    provider_ids?: (Array<(string)> | null);
     send_email?: boolean;
     is_active?: (boolean | null);
 };
@@ -4469,17 +4683,49 @@ export type ManagedAICredentialApplyResult = {
 };
 
 /**
- * Admin request to create a managed AI credential record.
+ * Admin request to create a **manual** managed AI credential record.
  *
  * Creates the parent row + reconciles to create one ``AICredential`` child per
  * valid target user.
+ *
+ * THIS ROUTE ONLY CREATES MANUAL RECORDS
+ * --------------------------------------
+ * A record that belongs to a provider is created *by creating the provider*
+ * (``POST /admin/ai-providers``), which writes the pair in one transaction.
+ * So three fields this model used to carry are gone rather than optional:
+ *
+ * * ``provider_admin_credential_id`` — pointing a new credential at a provider
+ * is §5.2's refused shape. It produced either a record holding its own key
+ * *and* a provider (the shape the Phase 1 migration aborts on) or a silent
+ * second credential on a provider that already owns one, invisible to
+ * rotation, apply-to-existing and the delete gate while still handing out
+ * keys. The refusal used to be a service 400; with the field gone it is
+ * structural, and ``extra="forbid"`` below is what keeps it from becoming a
+ * silent accept.
+ * * ``provisioning_mode`` — derived, never stated. A manual record is always
+ * ``shared``; ``minted`` is a property of the provider's ``kind``, and there
+ * is no provider to name here any more.
+ * * ``auto_provision_roles`` — the rule lives on ``ai_provider``. A managed
+ * credential is not a factory.
+ *
+ * ``extra="forbid"``, AND WHY IT IS NOT DECORATION
+ * -------------------------------------------------
+ * Removing a field from a Pydantic model does not refuse it; by default it
+ * *ignores* it. A client still sending ``auto_provision_roles`` would get a
+ * 200 and nothing would happen at the next signup — the exact "saved
+ * successfully, changed nothing" failure the provider/credential split exists
+ * to delete, arriving through the door the split just closed. Phase 1 made a
+ * non-empty ``auto_provision_roles`` a 400 for that reason and left a narrow
+ * gap at ``[]`` on provider-owned records; forbidding unknown keys closes the
+ * gap and strengthens the refusal rather than trading it away, and it names
+ * the offending field in the 422. Pinned by
+ * ``tests/api/ai_credentials/admin_ai_providers_test.py::
+ * test_the_retired_managed_credential_fields_are_refused_not_ignored``.
  */
 export type ManagedAICredentialCreate = {
     name: string;
     type: AICredentialType;
     api_key?: (string | null);
-    provisioning_mode?: ProvisioningMode;
-    provider_admin_credential_id?: (string | null);
     base_url?: (string | null);
     model?: (string | null);
     default_model?: (string | null);
@@ -4489,7 +4735,6 @@ export type ManagedAICredentialCreate = {
     set_as_default?: boolean;
     set_user_sdk_defaults?: boolean;
     sdk_default_modes?: Array<(string)>;
-    auto_provision_roles?: Array<(string)>;
     model_override_conversation?: (string | null);
     model_override_building?: (string | null);
 };
@@ -4524,6 +4769,11 @@ export type ManagedAICredentialMember = {
  * Admin-facing projection of a managed AI credential parent record.
  *
  * Never includes ``encrypted_data`` or any key material.
+ *
+ * ``auto_provision_roles`` is **not** published here. §3.2 dropped the column
+ * from ``managed_ai_credential``; the rule is a property of a provider and is
+ * published on :class:`AIProviderPublic`. Restating it on this projection
+ * would put a second answer on the wire for a question that has one owner.
  */
 export type ManagedAICredentialPublic = {
     id: string;
@@ -4536,13 +4786,14 @@ export type ManagedAICredentialPublic = {
     set_as_default?: boolean;
     set_user_sdk_defaults?: boolean;
     sdk_default_modes?: Array<(string)>;
-    auto_provision_roles?: Array<(string)>;
     model_override_conversation?: (string | null);
     model_override_building?: (string | null);
     expiry_notification_date?: (string | null);
     managed_by_id?: (string | null);
     provisioning_mode: ProvisioningMode;
-    provider_admin_credential_id?: (string | null);
+    provider_id?: (string | null);
+    provider_name?: (string | null);
+    is_provider_owned?: boolean;
     has_api_key?: boolean;
     is_oauth_token?: boolean;
     members?: Array<ManagedAICredentialMember>;
@@ -4575,6 +4826,13 @@ export type ManagedAICredentialReconcileResult = {
  * rotates nothing is how an admin comes to believe they have rolled a key they
  * have not. Rotating a minted member's key is a per-member mint, not a parent
  * edit.
+ *
+ * ``auto_provision_roles`` is **gone**, not optional, and ``extra="forbid"``
+ * is what makes that a refusal instead of a silent accept — see
+ * :class:`ManagedAICredentialCreate` for the argument. The ``[]`` gap this
+ * closes was specific to this model: on a provider-owned record an empty list
+ * was accepted, wrote nothing anywhere, and left an administrator believing
+ * they had stopped that provider auto-provisioning.
  */
 export type ManagedAICredentialUpdate = {
     name?: (string | null);
@@ -4588,7 +4846,6 @@ export type ManagedAICredentialUpdate = {
     set_as_default?: (boolean | null);
     set_user_sdk_defaults?: (boolean | null);
     sdk_default_modes?: (Array<(string)> | null);
-    auto_provision_roles?: (Array<(string)> | null);
     model_override_conversation?: (string | null);
     model_override_building?: (string | null);
 };
@@ -5187,7 +5444,6 @@ export type ProviderAdapterPublic = {
     admin_config_schema?: ({
     [key: string]: unknown;
 } | null);
-    can_mint_now: boolean;
 };
 
 export type ProviderAdaptersPublic = {
@@ -5215,77 +5471,19 @@ export type ProviderAdminCredentialConfig = {
 };
 
 /**
- * Connect a provider organisation.
- */
-export type ProviderAdminCredentialCreate = {
-    name: string;
-    provider_type: AICredentialType;
-    secret: string;
-    config: ProviderAdminCredentialConfig;
-};
-
-/**
- * Admin-facing projection. **Never** includes the secret.
- *
- * ``has_secret`` rather than a nullable secret field, copying
- * ``MailServerConfigPublic``: a projection that carries the value's *slot* is
- * one refactor away from carrying the value.
- */
-export type ProviderAdminCredentialPublic = {
-    id: string;
-    name: string;
-    provider_type: AICredentialType;
-    config: ProviderAdminCredentialConfig;
-    has_secret?: boolean;
-    last_verified_at?: (string | null);
-    last_verify_error?: (string | null);
-    created_by_id?: (string | null);
-    minting_credential_count?: number;
-    live_minted_key_count?: number;
-    delete_blocked?: boolean;
-    created_at: string;
-    updated_at: string;
-};
-
-/**
- * Partial update. Every field's omission is representable and means "leave
- * it alone" — in particular, omitting ``secret`` keeps the stored one, so the
- * admin surface never has to round-trip a secret in order to rename a record.
- */
-export type ProviderAdminCredentialUpdate = {
-    name?: (string | null);
-    secret?: (string | null);
-    config?: (ProviderAdminCredentialConfig | null);
-};
-
-/**
- * Outcome of a Verify press.
- *
- * Two questions, one answer object, because they fail independently and an
- * admin who fixes one wants to see the other: is the secret good, and does the
- * project carry a hard spend limit?
- *
- * ``spend_limit_enforcing`` keeps its name for wire compatibility, but it
- * answers "is this project capped", not "is the cap currently biting" — see
- * :attr:`SpendLimitStatus.is_capped`.
- */
-export type ProviderAdminCredentialVerifyResult = {
-    ok: boolean;
-    account_ref?: (string | null);
-    spend_limit_enforcing?: boolean;
-    spend_limit_cents?: (number | null);
-    error?: (string | null);
-};
-
-/**
  * How a parent record gets each member their key.
  *
- * - ``shared`` — the administrator pastes one key and every member's child row
- * holds a copy of it. The historical behaviour and the default; the only mode
- * available for a provider whose API cannot create keys.
+ * - ``shared`` — one key, copied onto every member's child row. A manual
+ * record (no provider) is always ``shared``; so is a provider-owned record
+ * whose provider is ``fixed_key``.
  * - ``minted`` — each member gets their **own** key, created at the provider
- * through a :class:`ProviderAdminCredential`. The parent holds no key of its
- * own, which is why ``encrypted_data`` is nullable.
+ * through an :class:`app.models.credentials.provider_admin_credential.AIProvider`
+ * whose ``kind`` is ``minted``. The parent holds no key of its own, which is
+ * why ``encrypted_data`` is nullable.
+ *
+ * **No longer a stored column.** It is derived from the owning provider's
+ * ``kind`` and stays on :class:`ManagedAICredentialPublic` as a computed
+ * field, so a record and its provider cannot disagree about it.
  */
 export type ProvisioningMode = 'shared' | 'minted';
 
@@ -7032,6 +7230,62 @@ export type ActivitiesMarkActivitiesAsReadResponse = ({
     [key: string]: unknown;
 });
 
+export type AdminAiProvidersListProviderAdaptersResponse = (ProviderAdaptersPublic);
+
+export type AdminAiProvidersListAiProvidersResponse = (Array<AIProviderPublic>);
+
+export type AdminAiProvidersCreateAiProviderData = {
+    requestBody: AIProviderCreate;
+};
+
+export type AdminAiProvidersCreateAiProviderResponse = (AIProviderPublic);
+
+export type AdminAiProvidersGetAiProviderData = {
+    providerId: string;
+};
+
+export type AdminAiProvidersGetAiProviderResponse = (AIProviderPublic);
+
+export type AdminAiProvidersUpdateAiProviderData = {
+    providerId: string;
+    requestBody: AIProviderUpdate;
+};
+
+export type AdminAiProvidersUpdateAiProviderResponse = (AIProviderPublic);
+
+export type AdminAiProvidersDeleteAiProviderData = {
+    /**
+     * Delete even though people hold a key from this provider. Minted keys are revoked at the provider first.
+     */
+    force?: boolean;
+    providerId: string;
+};
+
+export type AdminAiProvidersDeleteAiProviderResponse = (Message);
+
+export type AdminAiProvidersVerifyAiProviderData = {
+    providerId: string;
+};
+
+export type AdminAiProvidersVerifyAiProviderResponse = (AIProviderVerifyResult);
+
+export type AdminAiProvidersRotateAiProviderKeyData = {
+    providerId: string;
+    requestBody: AIProviderRotateKey;
+};
+
+export type AdminAiProvidersRotateAiProviderKeyResponse = (AIProviderPublic);
+
+export type AdminAiProvidersApplyAiProviderToExistingData = {
+    /**
+     * Return who would receive a key without granting one. Backs the confirm dialog's preview count.
+     */
+    dryRun?: boolean;
+    providerId: string;
+};
+
+export type AdminAiProvidersApplyAiProviderToExistingResponse = (ManagedAICredentialApplyResult);
+
 export type AdminEnvironmentsListAdminEnvironmentsData = {
     /**
      * Filter by in-use flag
@@ -7119,16 +7373,6 @@ export type AdminLlmProvidersDeleteManagedAiCredentialData = {
 
 export type AdminLlmProvidersDeleteManagedAiCredentialResponse = (Message);
 
-export type AdminLlmProvidersApplyManagedAiCredentialToExistingData = {
-    /**
-     * Return who would receive the credential without granting it. Backs the confirm dialog's preview count.
-     */
-    dryRun?: boolean;
-    managedCredentialId: string;
-};
-
-export type AdminLlmProvidersApplyManagedAiCredentialToExistingResponse = (ManagedAICredentialApplyResult);
-
 export type AdminLlmProvidersSetManagedAiCredentialDefaultData = {
     managedCredentialId: string;
 };
@@ -7151,42 +7395,6 @@ export type AdminLlmProvidersTestManagedAiCredentialConnectionData = {
 };
 
 export type AdminLlmProvidersTestManagedAiCredentialConnectionResponse = (AICredentialTestResult);
-
-export type AdminProviderAdaptersListProviderAdaptersResponse = (ProviderAdaptersPublic);
-
-export type AdminProviderCredentialsListProviderAdminCredentialsResponse = (Array<ProviderAdminCredentialPublic>);
-
-export type AdminProviderCredentialsCreateProviderAdminCredentialData = {
-    requestBody: ProviderAdminCredentialCreate;
-};
-
-export type AdminProviderCredentialsCreateProviderAdminCredentialResponse = (ProviderAdminCredentialPublic);
-
-export type AdminProviderCredentialsGetProviderAdminCredentialData = {
-    credentialId: string;
-};
-
-export type AdminProviderCredentialsGetProviderAdminCredentialResponse = (ProviderAdminCredentialPublic);
-
-export type AdminProviderCredentialsUpdateProviderAdminCredentialData = {
-    credentialId: string;
-    requestBody: ProviderAdminCredentialUpdate;
-};
-
-export type AdminProviderCredentialsUpdateProviderAdminCredentialResponse = (ProviderAdminCredentialPublic);
-
-export type AdminProviderCredentialsDeleteProviderAdminCredentialData = {
-    credentialId: string;
-    force?: boolean;
-};
-
-export type AdminProviderCredentialsDeleteProviderAdminCredentialResponse = (Message);
-
-export type AdminProviderCredentialsVerifyProviderAdminCredentialData = {
-    credentialId: string;
-};
-
-export type AdminProviderCredentialsVerifyProviderAdminCredentialResponse = (ProviderAdminCredentialVerifyResult);
 
 export type AdminRoutingListRoutingTracesData = {
     channelId?: (string | null);

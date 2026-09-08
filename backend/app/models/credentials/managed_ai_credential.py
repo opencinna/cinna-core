@@ -4,6 +4,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
+from pydantic import ConfigDict
 from sqlmodel import Field, Relationship, SQLModel, Column, Text, Index
 from sqlalchemy.dialects.postgresql import JSON as PG_JSON
 
@@ -17,12 +18,17 @@ from app.models.users.user import VALID_USER_ROLES, AIKeyOnboardingState
 class ProvisioningMode(str, Enum):
     """How a parent record gets each member their key.
 
-    - ``shared`` — the administrator pastes one key and every member's child row
-      holds a copy of it. The historical behaviour and the default; the only mode
-      available for a provider whose API cannot create keys.
+    - ``shared`` — one key, copied onto every member's child row. A manual
+      record (no provider) is always ``shared``; so is a provider-owned record
+      whose provider is ``fixed_key``.
     - ``minted`` — each member gets their **own** key, created at the provider
-      through a :class:`ProviderAdminCredential`. The parent holds no key of its
-      own, which is why ``encrypted_data`` is nullable.
+      through an :class:`app.models.credentials.provider_admin_credential.AIProvider`
+      whose ``kind`` is ``minted``. The parent holds no key of its own, which is
+      why ``encrypted_data`` is nullable.
+
+    **No longer a stored column.** It is derived from the owning provider's
+    ``kind`` and stays on :class:`ManagedAICredentialPublic` as a computed
+    field, so a record and its provider cannot disagree about it.
     """
 
     SHARED = "shared"
@@ -35,17 +41,6 @@ if TYPE_CHECKING:
 def _default_sdk_modes() -> list[str]:
     """Default SDK modes wired when ``set_user_sdk_defaults`` is enabled."""
     return ["conversation", "building"]
-
-
-def _no_auto_provision_roles() -> list[str]:
-    """Default for ``auto_provision_roles``: nobody, until an admin says so.
-
-    Empty is the only safe default. A managed credential that auto-granted
-    itself to every new account the moment the column shipped would hand a
-    company API key to the next person who signed up, with no admin action
-    anywhere in the story.
-    """
-    return []
 
 
 # Roles that may appear in ``auto_provision_roles``. Deliberately the full
@@ -72,12 +67,18 @@ class ManagedAICredential(SQLModel, table=True):
     two do not coexist: the derived notion is gone, and a member is a membership
     row whatever its status.
 
-    In ``shared`` mode the parent holds its own Fernet-encrypted copy of the key
-    (same shape/codec as ``ai_credential.encrypted_data``) so new children can be
-    created and existing children re-keyed without the admin re-typing the
-    secret. In ``minted`` mode there is no such key: ``encrypted_data`` is NULL,
-    each member's key is created at the provider, and a rotation request is
-    refused because there is nothing here to rotate.
+    A **manual** record (``provider_id IS NULL``) holds its own Fernet-encrypted
+    copy of the key (same shape/codec as ``ai_credential.encrypted_data``) so new
+    children can be created and existing children re-keyed without the admin
+    re-typing the secret, and every policy column below is the real value.
+
+    A **provider-owned** record (``provider_id`` set) is the member list and
+    nothing else. Its ``encrypted_data`` is NULL — the key lives on the provider,
+    which is the only source of truth for it — and every policy column below is
+    *shadowed*: still present, no longer read. The values are deliberately not
+    mirrored down from the provider, because a second copy of a number the
+    provider owns goes stale the moment the provider is edited, and a stale copy
+    displayed as the active policy is worse than no copy.
     """
 
     __tablename__ = "managed_ai_credential"
@@ -97,27 +98,36 @@ class ManagedAICredential(SQLModel, table=True):
         default=None, sa_column=Column(Text, nullable=True)
     )
 
-    # How members get their key. See :class:`ProvisioningMode`.
-    provisioning_mode: str = Field(
-        default=ProvisioningMode.SHARED.value,
-        sa_column=Column(
-            sa.String(24), nullable=False, server_default="shared"
-        ),
-    )
-    # The admin secret used to mint (and later revoke) this record's per-user
-    # keys. Required in ``minted`` mode, NULL in ``shared`` mode. SET NULL rather
-    # than CASCADE for the same reason as ``managed_by_id``: losing the pointer
-    # must degrade minting, not delete the record and its members' keys. Deleting
-    # a provider admin credential that any parent still points at is refused by
-    # the service, so this SET NULL is a safety net rather than a normal path.
-    provider_admin_credential_id: uuid.UUID | None = Field(
+    # The provider that owns this record: the source of its key and of every
+    # wiring flag below. NULL means a **manual** record — an admin pasted a key
+    # here and this row is the source of truth for it.
+    #
+    # **ON DELETE RESTRICT**, and deliberately unlike every other FK in this
+    # domain. Elsewhere a lost pointer should degrade a capability rather than
+    # delete data, so the FK is SET NULL with a service-level gate. Here SET NULL
+    # would silently turn a provider-owned record into a *manual* one: fully
+    # editable, its shadowed columns suddenly load-bearing while holding stale
+    # values, and its ``encrypted_data`` NULL. A refused delete is the better
+    # state, so the ordering is fixed the other way round: the credential is
+    # deleted first — that path revokes its members' keys — and the provider
+    # second. RESTRICT is the backstop under that ordering, so an ordering bug
+    # surfaces as a database error rather than as an orphan. It is also what
+    # turned the superseded ``ProviderAdminCredentialsService.delete`` from a
+    # forced disconnect into a refusal; ``AIProvidersService.delete`` (Phase 2
+    # of the ai-credential-providers plan) is where the ordered force lands.
+    provider_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(
             sa.Uuid(),
-            sa.ForeignKey("provider_admin_credential.id", ondelete="SET NULL"),
+            sa.ForeignKey("ai_provider.id", ondelete="RESTRICT"),
             nullable=True,
         ),
     )
+
+    # ── Everything from here to ``managed_by_id`` is SHADOWED on a
+    # provider-owned record: the real values live on the provider and are read
+    # through the policy resolver, never off these columns. They remain the real
+    # values for a manual record, which keeps every control it has today.
 
     # Non-secret mirrors for projection/UI (openai_compatible/google).
     base_url: str | None = Field(default=None, max_length=500)
@@ -157,27 +167,14 @@ class ManagedAICredential(SQLModel, table=True):
         ),
     )
 
-    # ── Auto-provisioning (zero-touch onboarding) ────────────────────
-    # Roles whose *newly created* accounts receive this credential, granted by
-    # ``AccountProvisioningService.on_account_created`` at the creation
-    # chokepoint. Empty (the default) = never granted automatically; the admin
-    # picks members by hand. Deliberately creation-time only: a role change on
-    # an existing account does not re-run provisioning, because a promotion
-    # should not silently hand out a company key. "Apply to existing users" is
-    # the explicit path for that.
-    auto_provision_roles: list[str] = Field(
-        default_factory=_no_auto_provision_roles,
-        sa_column=Column(
-            PG_JSON,
-            nullable=False,
-            server_default=sa.text("""'[]'::json"""),
-        ),
-    )
     # Model the owner's ``default_model_override_<mode>`` is set to when this
     # parent wires that mode's SDK defaults. Separate from ``default_model``
     # (which is the credential's own preferred model, written onto the child
     # row): these two write to the *user profile*, and only for the modes in
-    # ``sdk_default_modes``.
+    # ``sdk_default_modes``. Shadowed on a provider-owned record, like every
+    # column above it in this block: the provider's ``base_url``/``model``/
+    # policy are the values that are read there, and these are the manual
+    # record's.
     #
     # NULL means "this record has no opinion about the model", and what that
     # produces depends on whether the slot is being *claimed* or merely
@@ -275,6 +272,11 @@ class ManagedAICredentialPublic(SQLModel):
     """Admin-facing projection of a managed AI credential parent record.
 
     Never includes ``encrypted_data`` or any key material.
+
+    ``auto_provision_roles`` is **not** published here. §3.2 dropped the column
+    from ``managed_ai_credential``; the rule is a property of a provider and is
+    published on :class:`AIProviderPublic`. Restating it on this projection
+    would put a second answer on the wire for a question that has one owner.
     """
 
     id: uuid.UUID
@@ -287,9 +289,6 @@ class ManagedAICredentialPublic(SQLModel):
     set_as_default: bool = False
     set_user_sdk_defaults: bool = False
     sdk_default_modes: list[str] = Field(default_factory=_default_sdk_modes)
-    auto_provision_roles: list[str] = Field(
-        default_factory=_no_auto_provision_roles
-    )
     model_override_conversation: str | None = None
     model_override_building: str | None = None
     expiry_notification_date: datetime | None = None
@@ -297,9 +296,23 @@ class ManagedAICredentialPublic(SQLModel):
     #: Required for the same reason as ``provisioning_status`` above: an absent
     #: mode rendered through a client-side ``!== "minted"`` fallback is the
     #: browser deciding a record holds one shared key because a field did not
-    #: arrive.
+    #: arrive. **Computed**, not stored — see :class:`ProvisioningMode`.
     provisioning_mode: ProvisioningMode
-    provider_admin_credential_id: uuid.UUID | None = None
+    #: The AI provider that owns this record, or ``None`` for a manual one.
+    #: Renamed from ``provider_admin_credential_id`` when the wire moved to the
+    #: provider vocabulary of §2.1 — the entity is a **Provider**, and the
+    #: administration secret is one of the two things a provider's secret can
+    #: be, not the name of the relationship.
+    provider_id: uuid.UUID | None = None
+    #: The owning provider's name, resolved once by the policy resolver so the
+    #: managed-credentials table can render a "Source" column without a second
+    #: request per row. ``None`` for a manual record, and also for the
+    #: unreachable "points at a provider row that is gone" policy.
+    provider_name: str | None = None
+    #: The **answer** to "is every wiring control read-only here", rather than
+    #: ``provider_id !== null`` re-derived in the browser. The two agree today;
+    #: only one of them keeps agreeing the day the rule changes.
+    is_provider_owned: bool = False
     # Whether this parent holds a key of its own. True for every shared record;
     # **false for every minted one**, which is why it is computed rather than the
     # constant it used to be. A reader who trusts the old "always true" comment
@@ -313,23 +326,56 @@ class ManagedAICredentialPublic(SQLModel):
 
 
 class ManagedAICredentialCreate(SQLModel):
-    """Admin request to create a managed AI credential record.
+    """Admin request to create a **manual** managed AI credential record.
 
     Creates the parent row + reconciles to create one ``AICredential`` child per
     valid target user.
+
+    THIS ROUTE ONLY CREATES MANUAL RECORDS
+    --------------------------------------
+    A record that belongs to a provider is created *by creating the provider*
+    (``POST /admin/ai-providers``), which writes the pair in one transaction.
+    So three fields this model used to carry are gone rather than optional:
+
+    * ``provider_admin_credential_id`` — pointing a new credential at a provider
+      is §5.2's refused shape. It produced either a record holding its own key
+      *and* a provider (the shape the Phase 1 migration aborts on) or a silent
+      second credential on a provider that already owns one, invisible to
+      rotation, apply-to-existing and the delete gate while still handing out
+      keys. The refusal used to be a service 400; with the field gone it is
+      structural, and ``extra="forbid"`` below is what keeps it from becoming a
+      silent accept.
+    * ``provisioning_mode`` — derived, never stated. A manual record is always
+      ``shared``; ``minted`` is a property of the provider's ``kind``, and there
+      is no provider to name here any more.
+    * ``auto_provision_roles`` — the rule lives on ``ai_provider``. A managed
+      credential is not a factory.
+
+    ``extra="forbid"``, AND WHY IT IS NOT DECORATION
+    -------------------------------------------------
+    Removing a field from a Pydantic model does not refuse it; by default it
+    *ignores* it. A client still sending ``auto_provision_roles`` would get a
+    200 and nothing would happen at the next signup — the exact "saved
+    successfully, changed nothing" failure the provider/credential split exists
+    to delete, arriving through the door the split just closed. Phase 1 made a
+    non-empty ``auto_provision_roles`` a 400 for that reason and left a narrow
+    gap at ``[]`` on provider-owned records; forbidding unknown keys closes the
+    gap and strengthens the refusal rather than trading it away, and it names
+    the offending field in the 422. Pinned by
+    ``tests/api/ai_credentials/admin_ai_providers_test.py::
+    test_the_retired_managed_credential_fields_are_refused_not_ignored``.
     """
+
+    model_config = ConfigDict(extra="forbid")  # type: ignore[assignment]
 
     name: str = Field(min_length=1, max_length=255)
     type: AICredentialType
-    # Required in ``shared`` mode, refused in ``minted`` mode — a minted parent
-    # holds no key. Nullable rather than required-with-a-sentinel so the omission
-    # is representable in the request model itself; the service raises the 400
-    # that ties it to ``provisioning_mode``, because that rule is a policy and
-    # policies live in one place, not in a validator on every write site.
+    # Required — a manual record is always ``shared`` and a shared record must
+    # hold a key. Nullable rather than required-with-a-sentinel so the omission
+    # is representable in the request model itself; the service raises the 400,
+    # because that rule is a policy and policies live in one place, not in a
+    # validator on every write site.
     api_key: str | None = Field(default=None, min_length=1)
-    provisioning_mode: ProvisioningMode = ProvisioningMode.SHARED
-    # Required in ``minted`` mode: the admin secret the keys are minted with.
-    provider_admin_credential_id: uuid.UUID | None = None
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=255)
     # Admin-curated model metadata (normalized + prefix-stripped server-side).
@@ -342,9 +388,6 @@ class ManagedAICredentialCreate(SQLModel):
     set_as_default: bool = False
     set_user_sdk_defaults: bool = False
     sdk_default_modes: list[str] = Field(default_factory=_default_sdk_modes)
-    auto_provision_roles: list[str] = Field(
-        default_factory=_no_auto_provision_roles
-    )
     model_override_conversation: str | None = Field(default=None, max_length=255)
     model_override_building: str | None = Field(default=None, max_length=255)
 
@@ -360,7 +403,16 @@ class ManagedAICredentialUpdate(SQLModel):
     rotates nothing is how an admin comes to believe they have rolled a key they
     have not. Rotating a minted member's key is a per-member mint, not a parent
     edit.
+
+    ``auto_provision_roles`` is **gone**, not optional, and ``extra="forbid"``
+    is what makes that a refusal instead of a silent accept — see
+    :class:`ManagedAICredentialCreate` for the argument. The ``[]`` gap this
+    closes was specific to this model: on a provider-owned record an empty list
+    was accepted, wrote nothing anywhere, and left an administrator believing
+    they had stopped that provider auto-provisioning.
     """
+
+    model_config = ConfigDict(extra="forbid")  # type: ignore[assignment]
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
     api_key: str | None = Field(default=None, min_length=1)
@@ -377,9 +429,6 @@ class ManagedAICredentialUpdate(SQLModel):
     set_as_default: bool | None = None
     set_user_sdk_defaults: bool | None = None
     sdk_default_modes: list[str] | None = None
-    # ``None`` = leave unchanged; ``[]`` = stop auto-provisioning (existing
-    # members keep their credential — this is not a revoke).
-    auto_provision_roles: list[str] | None = None
     # Three distinct requests, and the distinction is the contract:
     #   * **omitted / ``null``** — leave the stored override alone. The common
     #     case: a PATCH that renames the record says nothing about models.
@@ -476,6 +525,64 @@ class ManagedReconcileBlock(SQLModel):
         )
 
 
+class ManagedDefaultSlotSkip(SQLModel):
+    """A default slot an automatic grant declined to take, because it was held.
+
+    **Not a** :class:`ManagedReconcileSkip`. That one means "this person did not
+    receive the credential"; this one means the opposite — they received it, and
+    the one thing that did *not* happen is the SDK default being repointed at
+    it. Folding the two together would have every reader of ``skipped`` report a
+    successful grant as a failure.
+
+    Produced by ``_apply_sdk_defaults`` when the owner's
+    ``default_ai_credential_<mode>_id`` already names a credential, and carried
+    on :class:`~app.services.credentials.managed_ai_credentials_service.MemberAddition`
+    — the add-only shape the automatic path returns. The two deliberate grant
+    paths (``reconcile``'s explicit member list and ``apply_to_existing``) claim
+    the slot instead and produce none of these.
+
+    ``set-default-all`` is not in that list and does not belong in it: it never
+    calls ``_apply_sdk_defaults`` at all. It sets each member's child as the
+    per-type default and flips the flag, which is a different axis from the
+    per-mode SDK slot this class is about.
+
+    **It reaches a client through the invite response.**
+    ``AccountProvisioningService`` takes the incumbent-wins default and carries
+    the skips up as ``ProvisioningReport.default_slot_skips``, which
+    ``InvitationService`` renders as
+    :class:`~app.models.users.user_invitation.InviteProvisioningDefaultSlotSkip`
+    on ``InviteProvisioningSummary``. Phase 3 declined to add the field on the
+    grounds that it would be empty on virtually every response; Phase 4 added it
+    once the ordinary producer was identified — a re-invite of an account that
+    already exists runs explicit provisioning against somebody who may already
+    hold a default, and one ticked provider is enough.
+
+    Two things it is **not**, both load-bearing: it is not a failure (it never
+    sets ``provisioning_failed``), and it is not carried on
+    :class:`ManagedAICredentialReconcileResult`, whose every caller claims held
+    slots and would therefore publish a field that is always empty.
+
+    The automatic account-creation path produces these too, and
+    ``on_account_created``'s ``ProvisioningReport`` has no HTTP surface — signup
+    and the OAuth callback do not return one — so the invite response is the
+    only place the value is currently rendered. That is a statement about
+    today's callers rather than a rule; what is asserted is the positive half,
+    end to end through the route, by
+    ``tests/api/users/users_invitation_lifecycle_test.py::
+    test_a_provider_whose_wiring_a_reinvited_account_already_holds_is_disclosed_not_failed``,
+    which also pins both negatives — ``provisioning_failed`` false and
+    ``skipped`` empty.
+    """
+
+    user_id: uuid.UUID
+    #: ``conversation`` or ``building``.
+    mode: str
+    #: The credential already sitting in the slot. **Required, no default**: the
+    #: skip exists *because* something is there, so a null here would describe a
+    #: state that cannot produce this row.
+    held_by_credential_id: uuid.UUID
+
+
 class ManagedAICredentialReconcileResult(SQLModel):
     """Result of a create/update reconcile call."""
 
@@ -489,6 +596,11 @@ class ManagedAICredentialReconcileResult(SQLModel):
     updated_count: int = 0
     skipped: list[ManagedReconcileSkip] = Field(default_factory=list)
     blocked: list[ManagedReconcileBlock] = Field(default_factory=list)
+    # No ``default_slot_skips`` here, deliberately. Every path into
+    # ``reconcile`` is a superuser naming members by hand, and those claim the
+    # slot; a field on this shape would be empty on every response it ever
+    # appeared in, which is a worse lie than not offering it. The skips live on
+    # ``MemberAddition``, which is what the automatic path returns.
 
 
 class ManagedAICredentialApplyCandidate(SQLModel):

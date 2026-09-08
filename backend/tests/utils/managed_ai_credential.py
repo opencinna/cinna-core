@@ -5,8 +5,15 @@ parent records — the thing an admin configures once and every covered account
 then receives a child credential from. Zero-touch onboarding phase 2 turned it
 into a *cross-domain* surface: ``tests/api/users/`` now needs to create a
 parent record in order to observe what a brand-new account is handed, and
-``tests/api/ai_credentials/`` needs the same calls for the uniqueness /
-apply-to-existing scenarios.
+``tests/api/ai_credentials/`` needs the same calls for the uniqueness
+scenarios.
+
+There is no ``apply_to_existing`` wrapper here. ``POST
+/admin/llm-providers/{id}/apply-to-existing`` was removed as redundant (§5.7,
+ai-credential-providers plan): for a provider-owned record it duplicated
+``POST /admin/ai-providers/{id}/apply-to-existing``, and for a manual record
+it always answered ``candidate_count: 0``. Tests exercising that reconcile
+call the surviving provider route instead.
 
 ``tests/api/ai_credentials/test_admin_ai_credentials.py`` predates this module
 and keeps its own private ``_create_managed`` / ``_update_managed`` copies.
@@ -42,7 +49,6 @@ def create_managed_credential(
     credential_type: str = "anthropic",
     api_key: str = DEFAULT_API_KEY,
     target_user_ids: list[str] | None = None,
-    auto_provision_roles: list[str] | None = None,
     set_as_default: bool = False,
     set_user_sdk_defaults: bool = False,
     sdk_default_modes: list[str] | None = None,
@@ -60,6 +66,13 @@ def create_managed_credential(
 
     On a non-200 ``expected_status`` the raw body is returned so the caller can
     assert on the error envelope (the 409 conflict payload, say).
+
+    There is no ``auto_provision_roles`` parameter, and its absence is the
+    point: the rule for who automatically receives a key lives on
+    ``ai_provider`` now, and ``ManagedAICredentialCreate`` sets
+    ``extra="forbid"``, so sending the field here is a 422 rather than a
+    silently ignored key. A test that needs auto-provisioning needs a
+    provider — ``tests/utils/ai_provider_admin.create_provider_credential``.
     """
     payload: dict[str, Any] = {
         "name": name or f"Managed {random_lower_string()[:8]}",
@@ -69,8 +82,6 @@ def create_managed_credential(
         "set_as_default": set_as_default,
         "set_user_sdk_defaults": set_user_sdk_defaults,
     }
-    if auto_provision_roles is not None:
-        payload["auto_provision_roles"] = auto_provision_roles
     if sdk_default_modes is not None:
         payload["sdk_default_modes"] = sdk_default_modes
     if model_override_conversation is not None:
@@ -134,32 +145,6 @@ def list_managed_credentials(
     """``GET /admin/llm-providers/`` → list of parent projections."""
     response = client.get(f"{ADMIN_BASE}/", headers=superuser_token_headers)
     assert response.status_code == 200, response.text
-    return response.json()
-
-
-def apply_to_existing(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
-    managed_credential_id: str,
-    *,
-    dry_run: bool = False,
-    expected_status: int = 200,
-) -> dict[str, Any]:
-    """``POST /admin/llm-providers/{id}/apply-to-existing``.
-
-    ``dry_run=True`` is the confirm dialog's preview: it writes nothing and
-    answers with ``candidates`` / ``candidate_count`` /
-    ``defaults_overwrite_count``.
-    """
-    response = client.post(
-        f"{ADMIN_BASE}/{managed_credential_id}/apply-to-existing",
-        headers=superuser_token_headers,
-        params={"dry_run": dry_run},
-    )
-    assert response.status_code == expected_status, (
-        f"apply_to_existing expected {expected_status}, "
-        f"got {response.status_code}: {response.text}"
-    )
     return response.json()
 
 

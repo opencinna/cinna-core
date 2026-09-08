@@ -1,5 +1,6 @@
-import type { ManagedAICredentialPublic } from "@/client"
+import type { AIProviderPublic } from "@/client"
 import {
+  aiProviderKindLabel,
   findAutoProvisionConflict,
   getProviderTypeLabel,
 } from "@/components/Admin/LlmProviders/providerTypes"
@@ -14,19 +15,19 @@ import { cn } from "@/lib/utils"
 import { USER_ROLE_OPTIONS } from "@/utils/userRoles"
 
 interface CompanyAiCredentialRowProps {
-  record: ManagedAICredentialPublic
+  record: AIProviderPublic
   /**
-   * Every credential the card holds, for the advisory clash hint — a clash is
-   * a property of the pair, so a row cannot see one on its own.
+   * Every provider the card holds, for the advisory clash hint — a clash is a
+   * property of the pair, so a row cannot see one on its own.
    */
-  records: ManagedAICredentialPublic[]
+  records: AIProviderPublic[]
   /** This row's write is in flight; its whole toggle group is frozen. */
   isPending: boolean
   onToggle: (role: string, checked: boolean) => void
 }
 
 /**
- * One managed AI credential, with the roles that receive it on creation.
+ * One AI provider, with the roles whose new accounts receive its key.
  *
  * The three roles are a segmented multi-toggle rather than three columns of a
  * table: guidelines §2 "Toggles on rows" counts the set as **one** control
@@ -45,12 +46,13 @@ export function CompanyAiCredentialRow({
   return (
     <ListRow
       title={record.name}
-      // The provider type is the row's one metadata fact, on its own line
-      // rather than in a `Badge`: at 1024 this row is ~268px, of which the
-      // toggle group takes ~130, and an "OpenAI Compatible" chip beside the
-      // name would leave the name under 50px (P3: the kind must not cost the
-      // name its width).
-      meta={getProviderTypeLabel(record.type)}
+      // Two facts, on the metadata line rather than in a `Badge`: at 1024 this
+      // row is ~268px, of which the toggle group takes ~130, and an "OpenAI
+      // Compatible" chip beside the name would leave the name under 50px (P3:
+      // the kind must not cost the name its width). The kind is what tells a
+      // shared-key source from a one-key-each source at a glance, which is why
+      // it earns the second half of the line.
+      meta={`${getProviderTypeLabel(record.type)} · ${aiProviderKindLabel(record.kind)}`}
     >
       <ToggleGroup
         type="multiple"
@@ -126,7 +128,7 @@ export function CompanyAiCredentialRow({
                     //    otherwise look like the answer.
                     "aria-pressed:bg-primary aria-pressed:text-primary-foreground",
                     "aria-pressed:hover:bg-primary aria-pressed:hover:text-primary-foreground",
-                    clash && "text-amber-600 dark:text-amber-500",
+                    clash && "text-warning",
                   )}
                 >
                   {role.short}

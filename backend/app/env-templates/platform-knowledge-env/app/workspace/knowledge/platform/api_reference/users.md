@@ -51,7 +51,7 @@ Auto-generated from OpenAPI spec. Tag: `users`
   - `role`: string (required)
   - `include_desktop`: boolean | null
   - `auth_hint`: string
-  - `managed_credential_ids`: array | null
+  - `provider_ids`: array | null
   - `send_email`: boolean
   - `is_active`: boolean | null
 

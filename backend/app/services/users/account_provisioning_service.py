@@ -4,9 +4,19 @@ WHAT THIS IS
 ------------
 ``UserService.create_account`` decides that an account *exists*. This decides
 what is already in it when its owner first signs in. Today that means one
-thing: the managed AI credentials an administrator marked
-``auto_provision_roles ∋ user.role``, materialised as ordinary per-user child
-``AICredential`` rows through the same ``add_members`` path the admin UI uses.
+thing: the **AI providers** whose ``auto_provision_roles`` contain the new
+account's role, each granted through the one managed credential it owns, and
+materialised as ordinary per-user child ``AICredential`` rows by the same
+``add_members`` path the admin UI uses.
+
+The rule lives on ``ai_provider`` since the provider/credential split, and this
+module does not query that table: it asks
+``AIProvidersService.auto_provision_targets`` (automatic) or
+``AIProvidersService.grant_targets`` (an administrator's explicit list) for
+provider-and-credential pairs. ``tests/architecture/ai_provider_isolation_test.py``
+is what keeps it that way — the table holds organisation administration
+secrets, and its isolation is structural.
+
 An employee who signs in with Google therefore lands on a dashboard that
 already has the company key wired as their default, and Cinna Desktop picks
 the same keys up through ``/external/account-config`` with no further step.
@@ -28,9 +38,9 @@ loop moves on. Making the report a value rather than an exception is what lets
 tests assert on failures without the production path ever branching on one.
 
 There are two entry points and one body. :meth:`on_account_created` is the
-automatic path — every managed credential whose ``auto_provision_roles``
-contains the new account's role — and :meth:`provision_explicit` is the
-invitation wizard's, granting a list the administrator chose. They share
+automatic path — every provider whose ``auto_provision_roles`` contains the
+new account's role — and :meth:`provision_explicit` is the invitation
+wizard's, granting a list of providers the administrator chose. They share
 :meth:`_provision` and :meth:`_guarded` rather than existing as two
 implementations, because the moment they are two, an invited ``agent-user``
 and a Google-arriving ``agent-user`` can end up with different key sets,
@@ -60,12 +70,15 @@ The caller still has work to do after this returns — ``register_user`` sends a
 confirmation email, which commits — so leaving the session unusable would fail
 the account creation just as surely as re-raising would.
 
-**2. No third-party provider is contacted on this path.** Every key handed out
-here is already in the database, decrypted from the parent record. Nothing in
-this module talks to OpenAI, Anthropic or a Google admin API, and nothing
-should: this runs inline on the signup and OAuth-callback request, where a
-provider timeout would become a failed login. Phase 5 introduces minting and
-it goes in a background task, not here.
+**2. No third-party provider is contacted on this path.** A ``fixed_key``
+grant is a database write — the key is already in the table, decrypted from the
+provider's envelope. A ``minted`` grant records the membership as ``pending``
+and nothing more; the key is created out of band by ``KeyProvisioningService``'s
+converge pass. Nothing in this module talks to OpenAI, Anthropic or a Google
+admin API, and nothing should: this runs inline on the signup and
+OAuth-callback request, where a provider timeout would become a failed login.
+``tests/api/users/users_auto_provision_resilience_test.py::test_no_provider_is_contacted_anywhere_on_the_account_creation_path``
+is what holds it, with the outbound-HTTP guard armed and proved armed.
 
 WHY THE EVENTS ARE WRITTEN DIRECTLY
 -----------------------------------
@@ -92,9 +105,8 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session
 
-from app.models.credentials.managed_ai_credential import ManagedAICredential
 from app.models.events.security_event import SecurityEvent
 from app.models.users.user import AccountOrigin, User
 from app.utils import restore_session
@@ -121,7 +133,12 @@ _LABEL_INVITE = "Invitation provisioning"
 
 @dataclass(frozen=True)
 class ProvisionedCredential:
-    """One managed credential successfully granted to the new account.
+    """One provider's credential successfully granted to the new account.
+
+    Both ids, because the two halves answer different questions: ``provider_id``
+    is what the request named and what a :class:`ProvisioningSkip` is keyed by,
+    so a caller can line the two lists up; ``managed_credential_id`` is where
+    the membership actually landed.
 
     ``child_credential_id`` is ``None`` when the grant is a **membership of a
     minted record**: the person is a member from this moment, and their key is
@@ -130,29 +147,74 @@ class ProvisionedCredential:
     id is there.
     """
 
+    provider_id: uuid.UUID
     managed_credential_id: uuid.UUID
     child_credential_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
 class ProvisioningSkip:
-    """One managed credential that was *not* granted, and why.
+    """One provider that was *not* granted to the account, and why.
+
+    Keyed by the **provider**, because that is what a caller named: the
+    invitation wizard submits provider ids, and the automatic path selects
+    providers. The credential a provider grants through is an implementation
+    detail of the grant, and for the one reason below there is no credential to
+    name at all.
 
     ``reason`` is a stable machine-readable string: the reconcile skip reasons
     (``user_not_found``, ``user_inactive``, ``provision_failed``),
     ``add_members_failed`` when the call itself raised, or
-    ``managed_credential_not_found`` when an explicitly requested id no longer
-    names a record (only reachable from :meth:`provision_explicit`).
+    ``provider_not_found`` when an explicitly requested id no longer names a
+    provider with a credential to grant through (only reachable from
+    :meth:`provision_explicit`).
 
     ``user_inactive`` has a **second** producer, and it is the one a caller
     actually sees: :meth:`AccountProvisioningService._provision`'s inactive
-    short-circuit emits it directly, one per requested credential. It returns
+    short-circuit emits it directly, one per requested provider. It returns
     before ``add_members`` is called, so on an inactive account the reconcile
     path's own ``user_inactive`` is unreachable.
     """
 
-    managed_credential_id: uuid.UUID
+    provider_id: uuid.UUID
     reason: str
+
+
+@dataclass(frozen=True)
+class ProvisioningDefaultSlotSkip:
+    """A provider's SDK wiring that did not apply, because the slot was taken.
+
+    **Disclosure, not a failure**, and the distinction is the whole reason this
+    is its own list rather than a :class:`ProvisioningSkip`. A skip means the
+    person did *not* receive a key from that provider; this means they did, and
+    the one thing that did not happen is their ``default_sdk_<mode>`` being
+    repointed at it. Folded into ``skipped`` it would be rendered as a grant
+    that failed, which is the opposite of what happened.
+
+    ``provisioning_failed`` is likewise untouched by this: nothing fell over.
+
+    The provider and the mode, because those are what an administrator can act
+    on — "this provider's wiring did not take effect for this mode" names the
+    policy and the slot. The credential already sitting in the slot is on the
+    underlying :class:`~app.models.credentials.managed_ai_credential.ManagedDefaultSlotSkip`
+    and is deliberately not carried up: it is an ``ai_credential`` id belonging
+    to somebody else's configuration, and the invite wizard has no name for it.
+
+    Reachable on an ordinary path, not an exotic one. ``InvitationService``
+    calls :meth:`AccountProvisioningService.provision_explicit` unconditionally,
+    including on the adoption branch that re-invites an account which already
+    exists — an interrupted earlier attempt, or the passwordless account a
+    server channel created for an inbound sender. That account may already hold
+    a default, from an earlier provider grant or from a key its own owner
+    pasted, and **one ticked provider is enough**. §5.5's write-time uniqueness
+    rule does not protect it: that rule guards two providers claiming the same
+    ``(role, mode)`` *configuration*, not one provider meeting a particular
+    person's occupied slot.
+    """
+
+    provider_id: uuid.UUID
+    #: ``conversation`` or ``building``.
+    mode: str
 
 
 @dataclass(frozen=True)
@@ -170,12 +232,18 @@ class ProvisioningReport:
     not tell you what happened".
 
     It is deliberately not a :class:`ProvisioningSkip` entry: a skip names a
-    credential, and the failure this describes may have happened before any
-    credential was named.
+    provider, and the failure this describes may have happened before any
+    provider was named.
     """
 
     added: list[ProvisionedCredential] = field(default_factory=list)
     skipped: list[ProvisioningSkip] = field(default_factory=list)
+    #: Wiring that did not apply for an account that *was* granted the key. See
+    #: :class:`ProvisioningDefaultSlotSkip` — disclosure, never an error, and
+    #: never a reason to set :attr:`failed`.
+    default_slot_skips: list[ProvisioningDefaultSlotSkip] = field(
+        default_factory=list
+    )
     failed: bool = False
 
 
@@ -186,7 +254,7 @@ class AccountProvisioningService:
     def on_account_created(
         session: Session, user: User, origin: AccountOrigin
     ) -> ProvisioningReport:
-        """Grant every managed AI credential whose roles include ``user.role``.
+        """Grant every provider whose roles include ``user.role``.
 
         Called by ``UserService.create_account`` after the account row is
         committed. Never raises — unconditionally, including when handed a
@@ -197,7 +265,7 @@ class AccountProvisioningService:
         Role changes *after* creation deliberately do not re-run this — an
         admin promoting someone should not silently hand them a company key as
         a side effect. The explicit "Apply to existing users" action on the
-        managed credential is the intended path for that.
+        provider is the intended path for that.
         """
         return AccountProvisioningService._guarded(
             session,
@@ -207,7 +275,7 @@ class AccountProvisioningService:
                 session,
                 user,
                 origin,
-                parent_ids=None,
+                provider_ids=None,
                 actor=None,
                 label=_LABEL_AUTOMATIC,
             ),
@@ -220,10 +288,10 @@ class AccountProvisioningService:
         user: User,
         origin: AccountOrigin,
         *,
-        managed_credential_ids: list[uuid.UUID] | None,
+        provider_ids: list[uuid.UUID] | None,
         actor: User,
     ) -> ProvisioningReport:
-        """Grant a caller-chosen set of managed AI credentials to a new account.
+        """Grant a caller-chosen set of AI providers to a new account.
 
         The invitation wizard's entry point, and the *only* sanctioned way for
         an explicit list to be granted at account creation. It exists as a
@@ -235,7 +303,7 @@ class AccountProvisioningService:
           because an admin pasted an expired key last month);
         * ``_restore_session`` before any post-failure logging, which is what
           stops a ``PendingRollbackError`` escaping past every net;
-        * the ``ProvisioningReport`` skip list and the per-credential
+        * the ``ProvisioningReport`` skip list and the per-provider
           ``SecurityEvent`` written into the *invited* account's feed;
         * the ``not user.is_active`` short-circuit, so inviting a deactivated
           account grants nothing and writes no skip events.
@@ -244,12 +312,15 @@ class AccountProvisioningService:
         invisible: the invite succeeds, the account exists, and the person
         signs in with no company key.
 
-        ``managed_credential_ids`` distinguishes "not stated" from "none".
-        ``None`` means *grant exactly what this role would have been granted
+        ``provider_ids`` distinguishes "not stated" from "none". ``None``
+        means *grant exactly what this role would have been granted
         automatically*, evaluated by the same predicate
         :meth:`_provision` uses — so an invited ``agent-user`` and a
         Google-arriving ``agent-user`` cannot end up with different key sets.
-        ``[]`` means the admin deliberately unticked everything.
+        ``[]`` means the admin deliberately unticked everything. The three
+        states are not interchangeable and the middle one is the one a flattened
+        implementation loses: ``[]`` must grant nothing where ``None`` grants
+        the role's set.
 
         ``actor`` is the acting superuser and is required. Unlike the
         automatic path there *is* an admin in this story, and the grant is
@@ -263,7 +334,7 @@ class AccountProvisioningService:
                 session,
                 user,
                 origin,
-                parent_ids=managed_credential_ids,
+                provider_ids=provider_ids,
                 actor=actor,
                 label=_LABEL_INVITE,
             ),
@@ -311,7 +382,7 @@ class AccountProvisioningService:
             # role filter — was not, and an exception there would escape into
             # a caller that has already committed the account row. A signup
             # answering 500 for an account that exists is precisely the
-            # failure invariant 2 forbids, so the guarantee is made
+            # failure invariant 1 forbids, so the guarantee is made
             # structural here rather than left to the discipline of the code
             # inside.
             AccountProvisioningService._restore_session(session)
@@ -334,21 +405,26 @@ class AccountProvisioningService:
         user: User,
         origin: AccountOrigin,
         *,
-        parent_ids: list[uuid.UUID] | None,
+        provider_ids: list[uuid.UUID] | None,
         actor: User | None,
         label: str,
     ) -> ProvisioningReport:
         """The body of both entry points, minus the outer net.
 
-        ``parent_ids is None`` selects the automatic set (every managed
-        credential whose ``auto_provision_roles`` contains the account's role);
-        a list selects exactly those records. Everything after the selection —
-        the per-parent guard, the skip reporting, the audit events — is
-        identical for both, which is the point of having one function. The
-        inactive short-circuit runs *before* the selection and is the one
-        place the two differ: it can only name the credentials it was handed,
-        so the explicit path reports one skip each and the automatic path has
-        nothing to name. Its comment says why.
+        ``provider_ids is None`` selects the automatic set (every provider
+        whose ``auto_provision_roles`` contains the account's role); a list
+        selects exactly those providers. Everything after the selection — the
+        per-provider guard, the skip reporting, the audit events — is identical
+        for both, which is the point of having one function. The inactive
+        short-circuit runs *before* the selection and is the one place the two
+        differ: it can only name the providers it was handed, so the explicit
+        path reports one skip each and the automatic path has nothing to name.
+        Its comment says why.
+
+        Neither branch queries ``ai_provider``: both ask ``AIProvidersService``
+        for provider-and-credential pairs, because the rule lives on the
+        provider and the members live on the credential and this module is
+        allowed to name neither table.
 
         ``actor`` is ``None`` for the system-initiated path and the acting
         superuser for an explicit grant. It reaches ``add_members`` and the
@@ -356,12 +432,16 @@ class AccountProvisioningService:
         the child, which is stamped with the *parent's* managing admin either
         way.
         """
+        from app.services.credentials.ai_providers_service import (
+            ai_providers_service,
+        )
         from app.services.credentials.managed_ai_credentials_service import (
             managed_ai_credentials_service,
         )
 
         added: list[ProvisionedCredential] = []
         skipped: list[ProvisioningSkip] = []
+        default_slot_skips: list[ProvisioningDefaultSlotSkip] = []
 
         # Snapshot first — before any other read of ``user``, including the
         # ``is_active`` test below. Every one of those reads can hit the
@@ -387,86 +467,107 @@ class AccountProvisioningService:
             # provisioning failure. Granting keys to an account nobody can
             # sign into buys nothing, and no security event is written for
             # this: a medium-severity ``auto_provision_failed`` row per
-            # managed credential, in the feed of an account that has done
+            # requested provider, in the feed of an account that has done
             # nothing, is noise about an outcome that was never in doubt. When
             # the account is activated, "Apply to existing users" is the path.
             #
             # But the *report* must still say what happened, for the same
             # reason ``ProvisioningReport.failed`` exists: a bare empty report
             # is byte-identical to a deliberate grant of nothing, so an admin
-            # who ticked three credentials and invited a deactivated account
+            # who ticked three providers and invited a deactivated account
             # saw exactly the screen of an admin who ticked none. One skip per
-            # requested credential, with the reason the vocabulary already has
+            # requested provider, with the reason the vocabulary already has
             # — ``user_inactive``, the string the shared reconcile path emits
             # for this same condition, so no new field and no new value.
             #
             # Only the explicit path can name them. On the automatic path
-            # ``parent_ids`` is ``None``, the set is not known without the
+            # ``provider_ids`` is ``None``, the set is not known without the
             # query this short-circuit exists to skip, and no caller renders
             # that report at all — ``on_account_created``'s return value is
             # read by tests and by nothing else.
             return ProvisioningReport(
                 skipped=[
                     ProvisioningSkip(
-                        managed_credential_id=parent_id,
+                        provider_id=provider_id,
                         reason="user_inactive",
                     )
                     # Deduplicated here as well as below: the same id twice
                     # would produce one grant on the active path, so it must
                     # not produce two skips on this one.
-                    for parent_id in dict.fromkeys(parent_ids or [])
+                    for provider_id in dict.fromkeys(provider_ids or [])
                 ]
             )
 
-        if parent_ids is None:
-            # Filtered in Python rather than with a JSON containment predicate:
-            # the table holds a handful of rows per instance, and a portable
-            # ``?|``/``@>`` expression over a ``json`` (not ``jsonb``) column is
-            # more machinery than the saving is worth. ``isinstance`` guards a
-            # hand-edited row whose JSON is not a list — ``in`` against a
-            # non-container raises, and this runs on the signup path.
-            parents = [
-                parent
-                for parent in session.exec(select(ManagedAICredential)).all()
-                if isinstance(parent.auto_provision_roles, list)
-                and user_role in parent.auto_provision_roles
-            ]
+        if provider_ids is None:
+            # The role predicate, in the one place both *arrival* paths read
+            # it, so an invited ``agent-user`` and a Google-arriving one
+            # cannot be given different sets. (``apply_to_existing`` answers
+            # the same question for accounts that already exist, and runs its
+            # own copy against a resolved policy — a deliberate admin act on a
+            # different population, not this predicate.)
+            targets = ai_providers_service.auto_provision_targets(
+                session, user_role
+            )
         else:
             # Deduplicated because the same id twice would produce one grant
             # (``add_members`` is idempotent) and two audit events.
-            wanted = list(dict.fromkeys(parent_ids))
+            wanted = list(dict.fromkeys(provider_ids))
             if not wanted:
+                # ``[]`` — the admin unticked everything. A shortcut, not the
+                # semantic: what separates ``[]`` from ``None`` is the ``is
+                # None`` test above, and falling through here would answer the
+                # same empty report by way of a query for no ids. The branch
+                # that must never be softened to ``if not provider_ids`` is
+                # that one; ``tests/api/users/users_invitation_lifecycle_test.py::
+                # test_the_provisioning_tri_state_grants_exactly_what_the_admin_stated``
+                # is what fails when it is.
                 return ProvisioningReport()
-            parents = list(
-                session.exec(
-                    select(ManagedAICredential).where(
-                        col(ManagedAICredential.id).in_(wanted)
-                    )
-                ).all()
-            )
-            # An id the admin ticked that no longer names a record is
-            # reported, not silently dropped: the wizard's list can go stale
-            # against a concurrent deletion, and "you asked for four keys and
-            # got three" is only visible if the fourth says why.
-            found = {parent.id for parent in parents}
+            targets = ai_providers_service.grant_targets(session, wanted)
+            # An id the admin ticked that no longer names a provider with a
+            # credential to grant through is reported, not silently dropped:
+            # the wizard's list can go stale against a concurrent deletion, and
+            # "you asked for four keys and got three" is only visible if the
+            # fourth says why.
+            found = {target.provider_id for target in targets}
             for missing in wanted:
                 if missing not in found:
                     skipped.append(
                         ProvisioningSkip(
-                            managed_credential_id=missing,
-                            reason="managed_credential_not_found",
+                            provider_id=missing,
+                            reason="provider_not_found",
                         )
                     )
 
-        if not parents:
-            return ProvisioningReport(added=added, skipped=skipped)
-
-        for parent in parents:
-            parent_id = parent.id
-            managed_by_id = (
-                str(parent.managed_by_id) if parent.managed_by_id else None
+        if not targets:
+            return ProvisioningReport(
+                added=added,
+                skipped=skipped,
+                default_slot_skips=default_slot_skips,
             )
+
+        for target in targets:
+            # A frozen-dataclass field. Reading it cannot touch the session,
+            # which is why it is the one identifier the handler below can
+            # always name.
+            provider_id = target.provider_id
+            parent = target.credential
+            parent_id: uuid.UUID | None = None
+            managed_by_id: str | None = None
             try:
+                # **Inside the net, and that is the fix rather than the
+                # style.** ``add_members`` commits, ``expire_on_commit`` is
+                # on, so from the second target onward reading ``parent.id``
+                # is a refresh ``SELECT`` — the module docstring's "it is the
+                # second one that bites", one layer further out. Above the
+                # ``try`` it would escape to ``_guarded``, which answers
+                # ``failed=True`` and throws away every grant already made:
+                # the invite would report "nothing was granted" for an account
+                # that holds credentials, which is the misreport
+                # ``ProvisioningReport.failed`` exists to prevent, inverted.
+                parent_id = parent.id
+                managed_by_id = (
+                    str(parent.managed_by_id) if parent.managed_by_id else None
+                )
                 # Two call shapes rather than one ``actor=actor``, and
                 # deliberately. ``actor=None`` means *the system did this, at
                 # account creation* — the one attribution the audit trail
@@ -499,9 +600,10 @@ class AccountProvisioningService:
                 # attribute, which is why they are all locals by now.
                 AccountProvisioningService._restore_session(session)
                 logger.warning(
-                    "%s of managed credential %s for user %s (origin=%s) "
-                    "failed; the account was still created.",
+                    "%s of provider %s (managed credential %s) for user %s "
+                    "(origin=%s) failed; the account was still created.",
                     label,
+                    provider_id,
                     parent_id,
                     user_id,
                     origin_value,
@@ -509,7 +611,7 @@ class AccountProvisioningService:
                 )
                 skipped.append(
                     ProvisioningSkip(
-                        managed_credential_id=parent_id,
+                        provider_id=provider_id,
                         reason="add_members_failed",
                     )
                 )
@@ -519,7 +621,13 @@ class AccountProvisioningService:
                     event_type=EVENT_AUTO_PROVISION_FAILED,
                     severity="medium",
                     details={
-                        "managed_credential_id": str(parent_id),
+                        "provider_id": str(provider_id),
+                        # ``None`` when the failure was the read of the
+                        # credential itself, which is now inside the net. The
+                        # provider above names the grant either way.
+                        "managed_credential_id": (
+                            str(parent_id) if parent_id is not None else None
+                        ),
                         "target_user_id": str(user_id),
                         "origin": origin_value,
                         "role": user_role,
@@ -529,9 +637,22 @@ class AccountProvisioningService:
                 )
                 continue
 
+            # Wiring this provider's policy declined to apply, for a member it
+            # *did* grant. Inside the per-provider net, so a provider that
+            # raised contributes none of these, and deliberately **not** in
+            # ``skipped``: a skip means the person did not receive the key, and
+            # here they did. See :class:`ProvisioningDefaultSlotSkip`.
+            for slot_skip in addition.default_slot_skips:
+                default_slot_skips.append(
+                    ProvisioningDefaultSlotSkip(
+                        provider_id=provider_id, mode=slot_skip.mode
+                    )
+                )
+
             for member in addition.added:
                 added.append(
                     ProvisionedCredential(
+                        provider_id=provider_id,
                         managed_credential_id=parent_id,
                         child_credential_id=member.child_credential_id,
                     )
@@ -541,6 +662,7 @@ class AccountProvisioningService:
                 # says which happened rather than stringifying a ``None`` into a
                 # field that every other row of the feed reads as an id.
                 details = {
+                    "provider_id": str(provider_id),
                     "managed_credential_id": str(parent_id),
                     "target_user_id": str(user_id),
                     "origin": origin_value,
@@ -563,8 +685,14 @@ class AccountProvisioningService:
 
             for skip in addition.skipped:
                 logger.warning(
-                    "Auto-provisioning managed credential %s for new user %s "
-                    "(origin=%s) was skipped: %s",
+                    # ``label``, not a hardcoded "Auto-provisioning": this is
+                    # the higher-volume of the two skip paths, and an admin
+                    # debugging a failed invitation greps for the invite
+                    # string. See the ``_LABEL_*`` comment above.
+                    "%s of provider %s (managed credential %s) for new user "
+                    "%s (origin=%s) was skipped: %s",
+                    label,
+                    provider_id,
                     parent_id,
                     user_id,
                     origin_value,
@@ -572,7 +700,7 @@ class AccountProvisioningService:
                 )
                 skipped.append(
                     ProvisioningSkip(
-                        managed_credential_id=parent_id, reason=skip.reason
+                        provider_id=provider_id, reason=skip.reason
                     )
                 )
                 AccountProvisioningService._emit(
@@ -581,6 +709,7 @@ class AccountProvisioningService:
                     event_type=EVENT_AUTO_PROVISION_FAILED,
                     severity="medium",
                     details={
+                        "provider_id": str(provider_id),
                         "managed_credential_id": str(parent_id),
                         "target_user_id": str(user_id),
                         "origin": origin_value,
@@ -590,7 +719,11 @@ class AccountProvisioningService:
                     },
                 )
 
-        return ProvisioningReport(added=added, skipped=skipped)
+        return ProvisioningReport(
+            added=added,
+            skipped=skipped,
+            default_slot_skips=default_slot_skips,
+        )
 
     @staticmethod
     def on_account_deactivated(session: Session, user: User) -> None:

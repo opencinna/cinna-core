@@ -4,8 +4,8 @@ from app.api.routes import (
     a2a,
     access_tokens,
     admin_environments,
+    admin_ai_providers,
     admin_llm_providers,
-    admin_provider_credentials,
     admin_routing,
     agent_api,
     agent_api_public,
@@ -128,8 +128,10 @@ api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)
 api_router.include_router(admin_environments.router)
 api_router.include_router(admin_llm_providers.router)
-api_router.include_router(admin_provider_credentials.router)
-api_router.include_router(admin_provider_credentials.adapters_router)
+# /admin/ai-providers/* — the provider surface, including the adapters
+# projection that used to live on /admin/provider-adapters. Registered after
+# admin_llm_providers only for readability; the two prefixes do not overlap.
+api_router.include_router(admin_ai_providers.router)
 api_router.include_router(admin_routing.router)
 api_router.include_router(server_config.router)
 api_router.include_router(server_channels.router)

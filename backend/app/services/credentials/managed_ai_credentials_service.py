@@ -54,7 +54,6 @@ from app.models.credentials.ai_credential import (
     AICredentialUpdate,
 )
 from app.models.credentials.managed_ai_credential import (
-    VALID_AUTO_PROVISION_ROLES,
     ManagedAICredential,
     ManagedAICredentialApplyCandidate,
     ManagedAICredentialApplyResult,
@@ -65,7 +64,9 @@ from app.models.credentials.managed_ai_credential import (
     ManagedAICredentialUpdate,
     ManagedReconcileBlock,
     ManagedReconcileSkip,
-    ProvisioningMode,
+)
+from app.models.credentials.managed_ai_credential import (
+    ManagedDefaultSlotSkip,
 )
 from app.models.credentials.managed_ai_credential_membership import (
     ManagedAICredentialMembership,
@@ -75,6 +76,11 @@ from app.models.users.user import AIKeyOnboardingState, User
 from app.services.credentials.ai_credentials_service import (
     AICredentialInUseError,
     ai_credentials_service,
+)
+from app.services.credentials.provisioning_policy import (
+    ProvisioningPolicy,
+    resolve_policies,
+    resolve_policy,
 )
 from app.services.credentials.key_provisioning_types import RevocationRequest
 from app.services.environments.model_catalog import _strip_provider_prefix
@@ -99,15 +105,22 @@ def _sdk_engine_for(cred_type: AICredentialType | str | None) -> str | None:
 
 
 class ManagedCredentialConflictError(Exception):
-    """Two auto-provisioned parents would fight over the same default slot.
+    """Two auto-provisioning configurations would fight over one default slot.
+
+    **Neither raised nor caught in this module.** The rule moved with the thing
+    it guards: auto-provision roles live on ``ai_provider``, so the collision is
+    provider-vs-provider, ``AIProvidersService`` raises it as
+    ``AIProviderConflictError``, and ``admin_ai_providers._conflict_409`` renders
+    it. What is left here is the payload and the argument, kept as the base class
+    that subclass is declared against — its only remaining consumer.
 
     ``default_ai_credential_<mode>_id`` holds exactly one credential. If two
-    managed records both auto-provision to the same role AND both wire that
-    role's accounts' SDK default for the same mode, the account gets whichever
-    one happened to be provisioned second — silently, differently per user if
-    the row order ever changes, and invisibly to the admin who configured
-    both. So the second configuration is refused at write time rather than
-    resolved at grant time.
+    providers both auto-provision to the same role AND both wire that role's
+    accounts' SDK default for the same mode, the account gets whichever one
+    happened to be provisioned second — silently, differently per user if the row
+    order ever changes, and invisibly to the admin who configured both. So the
+    second configuration is refused at write time rather than resolved at grant
+    time.
 
     Carries enough to name the other side in the 409 the route raises: an
     error that says only "conflict" leaves the admin to find the culprit among
@@ -144,6 +157,21 @@ class MemberRow:
 
 
 @dataclass(frozen=True)
+class ChildCreation:
+    """One created child credential, plus the default slots it did not take.
+
+    ``_add_child`` returns this rather than the bare row because the SDK-default
+    wiring can decline a slot that somebody else already holds, and that fact
+    has to travel to the reconcile result. Bundling it with the child is what
+    keeps the two from being reported by different code paths that could
+    disagree about which member they belong to.
+    """
+
+    child: AICredential
+    slot_skips: list[ManagedDefaultSlotSkip] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class MemberAddition:
     """What one add-only membership grant did.
 
@@ -153,6 +181,11 @@ class MemberAddition:
 
     added: list[ManagedAICredentialMember] = field(default_factory=list)
     skipped: list[ManagedReconcileSkip] = field(default_factory=list)
+    #: Default slots left alone because the owner already held one. Always empty
+    #: when the caller passed ``claim_held_slots=True``.
+    default_slot_skips: list[ManagedDefaultSlotSkip] = field(
+        default_factory=list
+    )
 
 
 class ManagedAICredentialsService:
@@ -173,23 +206,63 @@ class ManagedAICredentialsService:
             )
         return parent
 
-    @staticmethod
-    def is_minted(parent: ManagedAICredential) -> bool:
-        """Whether this record mints a separate key per member."""
-        return parent.provisioning_mode == ProvisioningMode.MINTED.value
+    # ── Policy reads ─────────────────────────────────────────────────
+    # ``provisioning_mode``, ``auto_provision_roles`` and every wiring flag are
+    # read through ``provisioning_policy.resolve_policy``, never off the
+    # record's own columns and never off ``AIProvider`` directly. This module
+    # therefore holds no query against the provider table at all;
+    # ``tests/architecture/ai_provider_isolation_test.py`` keeps it that way.
 
-    def _decrypt_parent(self, parent: ManagedAICredential) -> AICredentialData:
-        """Decrypt the parent's canonical key (same codec as a child row).
+    def _decrypt_parent(
+        self, session: Session, parent: ManagedAICredential
+    ) -> AICredentialData:
+        """Decrypt the key this record hands out, wherever it lives.
 
-        **Refuses a minted parent**, which has no key at all. Every one of this
-        service's five decrypt sites reaches here, so the guard is stated once:
-        the alternative is five ``if parent.encrypted_data`` checks, four of
-        which would eventually be written as ``or ""`` and hand an empty key to
-        something that stores it.
+        Two places, one for each shape:
+
+        * **Manual record** — the key is ``parent.encrypted_data``, as it always
+          was.
+        * **``fixed_key`` provider-owned record** — the provider is the only
+          source of truth for the key, so it is read from
+          ``AIProvider.encrypted_secret``. The bytes are in the same envelope:
+          migration ``c23d6b59a8f5`` moved them across unchanged, and whatever
+          writes one later has to keep doing so. Covered directly by
+          ``tests/unit/test_managed_credential_key_source.py`` and exercised
+          throughout ``tests/api/ai_credentials/ai_providers_service_test.py``,
+          which builds ``fixed_key`` providers through
+          ``AIProvidersService.create``.
+
+        **Refuses a minted record**, which has no key anywhere: each member's is
+        created at the provider. Every decrypt site in this service reaches here,
+        so the guard is stated once rather than as an ``if parent.encrypted_data``
+        at each of them, some of which would eventually be written as ``or ""``
+        and hand an empty key to something that stores it.
         """
         from app.core.security import decrypt_field
+        from app.services.credentials.ai_providers_service import (
+            ai_providers_service,
+        )
 
-        if not parent.encrypted_data:
+        if parent.provider_id is not None:
+            # **Preferred, not a fallback**, and the difference is the bug it
+            # closes. Reading ``encrypted_data`` first and only then asking the
+            # provider means a stale key left on the record — one written before
+            # the provider took ownership, or by a write that should have been
+            # refused — silently outranks the provider's. A later
+            # ``rotate_key`` would then re-key every member with the key it had
+            # just replaced and report success.
+            #
+            # The provider service is the only module allowed to read the
+            # provider table, so the envelope comes through it. It answers
+            # ``None`` for a ``minted`` provider, whose secret is an
+            # administration key and would become a member's model key if it
+            # were handed back.
+            blob = ai_providers_service.fixed_key_envelope(
+                session, parent.provider_id
+            )
+        else:
+            blob = parent.encrypted_data
+        if not blob:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -197,7 +270,7 @@ class ManagedAICredentialsService:
                     "member and holds no key of its own."
                 ),
             )
-        data_dict = json.loads(decrypt_field(parent.encrypted_data))
+        data_dict = json.loads(decrypt_field(blob))
         return AICredentialData(**data_dict)
 
     def _encrypt_key(
@@ -406,128 +479,79 @@ class ManagedAICredentialsService:
                 break
         return out
 
-    @staticmethod
-    def _normalize_auto_provision_roles(value: list[str] | None) -> list[str] | None:
-        """Validate + canonicalise an ``auto_provision_roles`` list.
+    #: The fields a provider owns once it owns the record. Named here so the
+    #: refusal below and the message it produces cannot drift apart; the same
+    #: set is derived independently by
+    #: ``tests/architecture/managed_credential_shadowed_fields_test.py`` from
+    #: the plan's §3.2 list, and that test fails if the two disagree.
+    SHADOWED_FIELDS = (
+        "set_as_default",
+        "set_user_sdk_defaults",
+        "sdk_default_modes",
+        "default_model",
+        "available_models",
+        "model_override_conversation",
+        "model_override_building",
+        "expiry_notification_date",
+    )
 
-        ``None`` passes through as "no change". Anything else is trimmed,
-        de-duplicated order-preservingly, and checked against the role enum —
-        an unknown role is a 400, not a silent drop, because an admin who
-        mistypes a role would otherwise save successfully and watch nothing
-        happen at the next signup with no clue why.
-        """
-        if value is None:
-            return None
-        seen: set[str] = set()
-        out: list[str] = []
-        for raw in value:
-            entry = (raw or "").strip()
-            if not entry or entry in seen:
-                continue
-            if entry not in VALID_AUTO_PROVISION_ROLES:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Unknown role '{entry}' in auto_provision_roles. "
-                        f"Valid roles: {', '.join(VALID_AUTO_PROVISION_ROLES)}."
-                    ),
-                )
-            seen.add(entry)
-            out.append(entry)
-        return out
-
-    @classmethod
-    def _claimed_slots(
-        cls,
-        roles: list[str] | None,
-        modes: list[str] | None,
-        set_user_sdk_defaults: bool,
-    ) -> set[tuple[str, str]]:
-        """The ``(role, mode)`` default slots a configuration lays claim to.
-
-        Empty unless the record does all three things: auto-provision to a
-        role, wire SDK defaults, and claim a mode. A parent that
-        auto-provisions without ``set_user_sdk_defaults`` grants a credential
-        and touches no default, so any number of those may coexist — that is a
-        supported configuration, not an oversight.
-
-        Modes outside the two real ones are filtered out, because a mode that
-        wires nothing cannot be fought over. This is the one place the rewrite
-        is not merely a restatement of the older role-and-mode intersection,
-        which would have flagged two records sharing an invalid mode string.
-        It is also downstream of a real gap: ``sdk_default_modes`` is not
-        validated at the edge the way ``auto_provision_roles`` is (see
-        ``_normalize_auto_provision_roles``), so a typo saves successfully and
-        then wires nothing, with no error anywhere.
-        """
-        if not set_user_sdk_defaults or not roles or not modes:
-            return set()
-        wanted_modes = [m for m in modes if m in cls._MODE_OVERRIDE_ATTR]
-        return {(role, mode) for role in roles for mode in wanted_modes}
-
-    def _validate_auto_provision_uniqueness(
+    def _refuse_shadowed_writes(
         self,
-        session: Session,
-        parent_id: uuid.UUID | None,
-        roles: list[str],
-        modes: list[str],
-        set_user_sdk_defaults: bool,
-        *,
-        previously_claimed: set[tuple[str, str]] | None = None,
+        data: ManagedAICredentialUpdate,
+        policy: ProvisioningPolicy,
     ) -> None:
-        """Refuse a second auto-provisioned owner of a ``(role, mode)`` slot.
+        """400 on any attempt to edit a provider-owned record's wiring policy.
 
-        ``User.default_ai_credential_<mode>_id`` holds exactly one credential,
-        so two records that would both wire it for the same role fight over it
-        silently, per user, in row order. The second configuration is refused
-        at write time instead.
+        Every submitted field is named, not just the first: an admin who sent
+        three should not have to discover them one round trip at a time.
 
-        **The rule is scoped to the transition, not to the state.** Only slots
-        this request *newly* claims — ``claimed - previously_claimed`` — can
-        raise. A record already sitting in a conflicting configuration is not
-        made this request's problem by being touched: renaming it, rotating its
-        key or editing an unrelated field must not 409 on a collision the admin
-        did not introduce. (Phase 1 reached the same answer for lockout
-        validation; it is the feature's rule, not a local patch here.)
+        **Three fields are refused here that are not in :data:`SHADOWED_FIELDS`**,
+        and they are added to the local tuple rather than to that constant
+        because it is the §3.2 set, pinned field-for-field by
+        ``tests/architecture/managed_credential_shadowed_fields_test.py``.
 
-        The alternative — validating the effective end state — reads as safer
-        and is not. It makes a stale absolute payload indistinguishable from a
-        deliberate edit, so a client rebuilding its request from an open-time
-        snapshot gets refused for someone else's change; and a validator taught
-        to tolerate that is one that would also have masked the membership
-        clobber ``target_user_ids`` had. The dialog sends only what the admin
-        touched, and this is the backstop under it.
-
-        ``parent_id`` is the record being written (excluded from the search),
-        or ``None`` on create. ``previously_claimed`` is what that record
-        claimed *before* this request; empty on create, where every slot is
-        new.
-
-        Raises :class:`ManagedCredentialConflictError`; the route maps it to a
-        409 naming the other record.
+        * ``api_key`` — the key itself. Accepting it would write
+          ``encrypted_data`` on a record whose key the provider owns, and the
+          next ``AIProvidersService.rotate_key`` would re-key every member from
+          that stale copy while telling the admin the rotation succeeded: the
+          "believing they rolled a key they did not" failure, reached through the
+          credential surface instead of the provider one.
+        * ``base_url`` and ``model`` — the key's *shape*, and for a ``fixed_key``
+          provider they live in the provider's encrypted envelope, not here.
+          ``_add_child`` builds each new member's credential straight out of that
+          envelope (``_decrypt_parent`` prefers the provider), while an edit made
+          on this record only reaches members who already exist. So accepting one
+          wrote through to today's members and was silently reverted for every
+          member added afterwards, and by the next ``rotate_key`` — two members
+          of one credential holding different base URLs, with nothing reporting
+          the divergence. The provider's own ``PATCH`` is the edit that
+          re-encrypts the envelope, which is why it reaches both
+          (``ai_providers_service_test.py::test_editing_a_providers_base_url_reaches_members_added_afterwards``).
         """
-        claimed = self._claimed_slots(roles, modes, set_user_sdk_defaults)
-        newly_claimed = claimed - (previously_claimed or set())
-        if not newly_claimed:
+        offending = [
+            name
+            for name in (*self.SHADOWED_FIELDS, "api_key", "base_url", "model")
+            if getattr(data, name, None) is not None
+        ]
+        if not offending:
             return
+        provider = policy.provider_name or "its AI provider"
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{', '.join(offending)} {'is' if len(offending) == 1 else 'are'}"
+                f" managed by the AI provider '{provider}'. Edit the provider "
+                "instead; changing it there re-applies to every member."
+            ),
+        )
 
-        for other in session.exec(select(ManagedAICredential)).all():
-            if parent_id is not None and other.id == parent_id:
-                continue
-            overlap = newly_claimed & self._claimed_slots(
-                other.auto_provision_roles,
-                other.sdk_default_modes,
-                other.set_user_sdk_defaults,
-            )
-            if not overlap:
-                continue
-            role, mode = sorted(overlap)[0]
-            raise ManagedCredentialConflictError(
-                conflicting_name=other.name,
-                conflicting_id=other.id,
-                role=role,
-                mode=mode,
-            )
+    # ``_claimed_slots`` and ``_validate_auto_provision_uniqueness`` moved to
+    # ``AIProvidersService``. The rule they enforce — one owner per
+    # ``(role, mode)`` default slot — is now **provider vs provider**, because
+    # the rule that claims a slot lives on ``ai_provider`` and a managed
+    # credential has no auto-provision roles of its own to fight with. The
+    # claim itself is computed by ``ProvisioningPolicy.claimed_slots``, so the
+    # write-time check and the run-time grant read the same definition.
 
     # ------------------------------------------------------------------ #
     # Per-child operations (delegate to ai_credentials_service)
@@ -538,70 +562,92 @@ class ManagedAICredentialsService:
         session: Session,
         child: AICredential,
         parent: ManagedAICredential,
+        policy: ProvisioningPolicy,
     ) -> None:
         """Stamp the admin-managed markers + structural parent link on a freshly
         created child so it looks exactly like today's admin-managed rows.
 
-        Also writes through the parent's admin-curated model metadata
+        Also writes through the admin-curated model metadata
         (``default_model`` / ``available_models``) directly on the child row —
         these are non-secret plain columns, so no ``update_credential`` round-trip
-        is needed (they are not part of the encrypted ``AICredentialData``)."""
+        is needed (they are not part of the encrypted ``AICredentialData``). The
+        values come off the resolved policy, so a provider-owned record writes
+        the *provider's* curation and a manual one writes its own."""
         child.is_admin_managed = True
         child.managed_by_id = parent.managed_by_id
         child.managed_credential_id = parent.id
-        child.default_model = parent.default_model
-        child.available_models = parent.available_models
+        child.default_model = policy.default_model
+        child.available_models = policy.available_models
         session.add(child)
         session.commit()
         session.refresh(child)
-
-    @staticmethod
-    def _model_override_for(
-        parent: ManagedAICredential, mode: str
-    ) -> str | None:
-        """The parent's model override for ``mode`` (``None`` when unset)."""
-        if mode == "conversation":
-            return parent.model_override_conversation
-        return parent.model_override_building
 
     def _apply_sdk_defaults(
         self,
         session: Session,
         owner: User,
         child: AICredential,
-        parent: ManagedAICredential,
-    ) -> None:
+        policy: ProvisioningPolicy,
+        *,
+        claim_held_slots: bool,
+    ) -> list[ManagedDefaultSlotSkip]:
         """Wire the owner's ``default_sdk_*`` + ``default_ai_credential_*_id`` for
-        the parent's ``sdk_default_modes``. A mode whose composed engine is
+        the policy's ``sdk_default_modes``. A mode whose composed engine is
         incompatible with the type is skipped (not a hard error).
 
-        The per-mode model override is written here too, and written
-        *unconditionally* for every mode this parent claims — including back
-        to ``NULL`` when the parent has no override of its own.
+        **The incumbent wins, unless the caller is a deliberate admin act.**
+        ``claim_held_slots`` is keyword-only and has no default, because the two
+        answers are the difference between a company key arriving quietly and a
+        company key silently displacing the one a person chose:
 
-        That is a reset, not a wipe, because of *when* this runs: only from
-        ``_add_child``, i.e. only when the owner was not already a member, so
-        the credential pointer for this mode is moving onto a different
-        credential than the one it named before. Whatever override was sitting
-        in the slot described that other credential and may well name a model
-        this provider does not serve — an OpenAI model id left pinned in front
-        of a freshly wired Anthropic key. Carrying it across would be the
-        silent breakage; clearing it falls back to the credential's own
-        ``default_model``.
+        * ``False`` — automatic provisioning (a new account, an invite grant, a
+          minted key materialising). A slot whose
+          ``default_ai_credential_<mode>_id`` already names *any* credential is
+          left exactly as it is, and the fact is returned as a
+          :class:`ManagedDefaultSlotSkip`. The person still becomes a member and
+          still gets the credential; only the default is not taken. This is a
+          normal, expected situation — somebody pastes their own key and a
+          provider later grants them one — and it is resolved rather than
+          prevented.
+        * ``True`` — ``apply_to_existing`` and ``set-default-all``, the two
+          explicit "make this the default for everyone" actions, plus an admin
+          naming members by hand. Those overwrite, which is what they are for,
+          and produce no skips.
+
+        The per-mode model override is written for every slot actually claimed,
+        *unconditionally*, including back to ``NULL`` when the policy has no
+        override of its own. That is a reset rather than a wipe because of when
+        it runs: the credential pointer for this mode is moving onto a different
+        credential than the one it named before, so whatever override was
+        sitting in the slot described that other credential and may well name a
+        model this provider does not serve. A slot that was *not* claimed is not
+        touched at all — resetting the override of a default that stays where it
+        was would be exactly the silent data loss the skip exists to avoid.
 
         The update path is the opposite case and behaves the opposite way —
         see :meth:`_sync_model_overrides`.
         """
         sdk_engine = _sdk_engine_for(child.type)
         if not sdk_engine:
-            return
+            return []
 
-        for mode in parent.sdk_default_modes:
-            if mode not in ("conversation", "building"):
+        skips: list[ManagedDefaultSlotSkip] = []
+        for mode in policy.sdk_default_modes:
+            if mode not in self._MODE_POINTER_ATTR:
                 continue
             if not is_credential_compatible_with_sdk(sdk_engine, child.type):
                 continue
-            override = self._model_override_for(parent, mode)
+            incumbent = getattr(owner, self._MODE_POINTER_ATTR[mode])
+            if incumbent is not None and not claim_held_slots:
+                skips.append(
+                    ManagedDefaultSlotSkip(
+                        user_id=owner.id,
+                        mode=mode,
+                        held_by_credential_id=incumbent,
+                    )
+                )
+                continue
+            override = policy.model_override_for(mode)
             if mode == "conversation":
                 owner.default_sdk_conversation = sdk_engine
                 owner.default_ai_credential_conversation_id = child.id
@@ -614,6 +660,7 @@ class ManagedAICredentialsService:
         session.add(owner)
         session.commit()
         session.refresh(owner)
+        return skips
 
     # The two per-mode profile columns, keyed by mode, so the "conversation
     # else building" branch is not written out a fourth time. Membership of
@@ -631,7 +678,7 @@ class ManagedAICredentialsService:
     def _sync_model_overrides(
         self,
         session: Session,
-        parent: ManagedAICredential,
+        policy: ProvisioningPolicy,
         child: AICredential,
         cleared_overrides: dict[str, str] | None = None,
     ) -> bool:
@@ -679,7 +726,7 @@ class ManagedAICredentialsService:
 
         Returns True iff the owner row was written.
         """
-        if not parent.set_user_sdk_defaults:
+        if not policy.set_user_sdk_defaults:
             return False
         owner = session.get(User, child.owner_id)
         if owner is None:
@@ -692,13 +739,13 @@ class ManagedAICredentialsService:
         # how the pointer has always behaved — dropping a mode stops this
         # record managing it, it does not un-manage what it already set — and
         # the pair is left consistent on purpose rather than by omission.
-        for mode in parent.sdk_default_modes:
+        for mode in policy.sdk_default_modes:
             if mode not in self._MODE_OVERRIDE_ATTR:
                 continue
             if getattr(owner, self._MODE_POINTER_ATTR[mode]) != child.id:
                 continue
             attr = self._MODE_OVERRIDE_ATTR[mode]
-            override = self._model_override_for(parent, mode)
+            override = policy.model_override_for(mode)
             if override is None:
                 retracted = dropped.get(mode)
                 if retracted is None or getattr(owner, attr) != retracted:
@@ -720,11 +767,19 @@ class ManagedAICredentialsService:
         self,
         session: Session,
         parent: ManagedAICredential,
+        policy: ProvisioningPolicy,
         owner: User,
         key: AICredentialData,
-    ) -> AICredential:
+        *,
+        claim_held_slots: bool,
+    ) -> "ChildCreation":
         """Create one child for ``owner`` via the per-user pipeline, then stamp
         it + apply optional default / SDK-default wiring.
+
+        Returns a :class:`ChildCreation` rather than the bare child, because the
+        SDK-default wiring can now decline a slot and that fact has to reach the
+        reconcile result. ``claim_held_slots`` is passed straight through to
+        :meth:`_apply_sdk_defaults`; see there for what the two answers mean.
 
         The child is fully created + stamped (committed = a real member) BEFORE
         the optional default/SDK wiring runs. If that post-create wiring throws,
@@ -748,11 +803,11 @@ class ManagedAICredentialsService:
                 api_key=key.api_key,
                 base_url=key.base_url,
                 model=key.model,
-                expiry_notification_date=parent.expiry_notification_date,
+                expiry_notification_date=policy.expiry_notification_date,
             ),
         )
         child = session.get(AICredential, public.id)
-        self._stamp_child(session, child, parent)
+        self._stamp_child(session, child, parent, policy)
 
         # Snapshotted while the session is known good. ``_stamp_child`` has
         # just committed, which expires the identity map, so every one of
@@ -763,12 +818,19 @@ class ManagedAICredentialsService:
         parent_id = parent.id
 
         # --- Post-commit wiring: best-effort, never demotes a created member. ---
+        slot_skips: list[ManagedDefaultSlotSkip] = []
         try:
-            if parent.set_as_default:
+            if policy.set_as_default:
                 ai_credentials_service.set_default(session, child.id, owner.id)
                 session.refresh(child)
-            if parent.set_user_sdk_defaults:
-                self._apply_sdk_defaults(session, owner, child, parent)
+            if policy.set_user_sdk_defaults:
+                slot_skips = self._apply_sdk_defaults(
+                    session,
+                    owner,
+                    child,
+                    policy,
+                    claim_held_slots=claim_held_slots,
+                )
         except Exception:
             # Repair, then log. Without the rollback this handler only keeps
             # the promise in the docstring for *Python*-level failures: a
@@ -790,7 +852,7 @@ class ManagedAICredentialsService:
                 child_id, owner_id, parent_id,
             )
 
-        return child
+        return ChildCreation(child=child, slot_skips=slot_skips)
 
     def materialise_minted_child(
         self,
@@ -811,25 +873,66 @@ class ManagedAICredentialsService:
         The three model-level guards that refuse an empty key are left exactly as
         they are, and this path does not need relaxing them: it is called only
         once a real key exists.
+
+        **The default-slot intent is read off the membership row**, not decided
+        here. This runs on a converge pass with no idea whether a superuser
+        pressed "apply to existing users" or an account simply signed up, and
+        both answers are wrong for half the callers: always claiming lets
+        automatic provisioning steal a default (§5.5 says it never may), never
+        claiming silently breaks the two deliberate escape hatches for exactly
+        the provider kind — per-user minted keys — the feature's headline
+        scenario uses. The grant recorded which it was; this reads it back.
+
+        The slot skips it can produce are dropped: there is no reconcile result
+        to carry them, the request that created the membership returned long
+        ago, and ``ConvergeReport`` has no field for them. That is a real gap in
+        what an administrator can see, not a tidy-up — a minted member who kept
+        their own default is currently indistinguishable from one who never had
+        one.
         """
         key = AICredentialData(
             api_key=api_key, base_url=parent.base_url, model=parent.model
         )
-        return self._add_child(session, parent, owner, key)
+        membership = session.exec(
+            select(ManagedAICredentialMembership).where(
+                ManagedAICredentialMembership.managed_credential_id == parent.id,
+                ManagedAICredentialMembership.user_id == owner.id,
+            )
+        ).first()
+        return self._add_child(
+            session,
+            parent,
+            resolve_policy(session, parent),
+            owner,
+            key,
+            # No membership row is not a state this path can reach — the mint it
+            # is the tail of was claimed off one — but the incumbent-wins
+            # default is the safe answer if it ever did.
+            claim_held_slots=bool(
+                membership is not None and membership.claim_held_default_slots
+            ),
+        ).child
 
     def _update_child_fields(
         self,
         session: Session,
         parent: ManagedAICredential,
+        policy: ProvisioningPolicy,
         child: AICredential,
         *,
         key_rotated: bool,
         key: AICredentialData | None,
         cleared_overrides: dict[str, str] | None = None,
     ) -> bool:
-        """Write changed parent scalar fields (and rotated key) through to a
-        child via the per-user pipeline, then apply/clear default per
-        ``set_as_default``.
+        """Write changed scalar fields (and rotated key) through to a child via
+        the per-user pipeline, then apply/clear default per ``set_as_default``.
+
+        The record's own columns supply the child's *shape* (name, base_url,
+        model); the resolved policy supplies everything the provider owns
+        (curated models, expiry, the default flags, the per-mode overrides). A
+        provider edit therefore reaches every existing member through exactly
+        this method — that is what makes §5.3's "a policy edit re-applies"
+        true, rather than a second write path that has to be kept in step.
 
         Diffs parent-vs-child first and only writes when something actually
         changed, so a no-op reconcile is genuinely a no-op (idempotency).
@@ -858,7 +961,7 @@ class ManagedAICredentialsService:
             parent.model is not None and parent.model != existing.model
         )
         expiry_changed = (
-            parent.expiry_notification_date != child.expiry_notification_date
+            policy.expiry_notification_date != child.expiry_notification_date
         )
         fields_changed = (
             name_changed or base_url_changed or model_changed or key_rotated
@@ -874,8 +977,11 @@ class ManagedAICredentialsService:
                 # expiry handled separately below (update_credential can't clear
                 # to None); only pass through a non-None set value here.
                 expiry_notification_date=(
-                    parent.expiry_notification_date
-                    if (expiry_changed and parent.expiry_notification_date is not None)
+                    policy.expiry_notification_date
+                    if (
+                        expiry_changed
+                        and policy.expiry_notification_date is not None
+                    )
                     else None
                 ),
                 api_key=key.api_key if (key_rotated and key) else None,
@@ -887,7 +993,7 @@ class ManagedAICredentialsService:
             changed = True
 
         # Clear-through for expiry → None (update_credential can't express it).
-        if expiry_changed and parent.expiry_notification_date is None:
+        if expiry_changed and policy.expiry_notification_date is None:
             child.expiry_notification_date = None
             child.updated_at = datetime.now(timezone.utc)
             session.add(child)
@@ -903,11 +1009,11 @@ class ManagedAICredentialsService:
         # ``available_models`` distinguishes None (no change) from [] (clear) by
         # comparing exact stored values: the parent itself carries None vs [].
         curated_changed = False
-        if parent.default_model != child.default_model:
-            child.default_model = parent.default_model
+        if policy.default_model != child.default_model:
+            child.default_model = policy.default_model
             curated_changed = True
-        if parent.available_models != child.available_models:
-            child.available_models = parent.available_models
+        if policy.available_models != child.available_models:
+            child.available_models = policy.available_models
             curated_changed = True
         if curated_changed:
             child.updated_at = datetime.now(timezone.utc)
@@ -919,16 +1025,16 @@ class ManagedAICredentialsService:
         # Per-mode model override write-through for slots this child still
         # occupies (see ``_sync_model_overrides``).
         if self._sync_model_overrides(
-            session, parent, child, cleared_overrides
+            session, policy, child, cleared_overrides
         ):
             changed = True
 
         # Default flag application/clear (counts as a change of its own).
-        if parent.set_as_default and not child.is_default:
+        if policy.set_as_default and not child.is_default:
             ai_credentials_service.set_default(session, child.id, child.owner_id)
             session.refresh(child)
             changed = True
-        elif not parent.set_as_default and child.is_default:
+        elif not policy.set_as_default and child.is_default:
             self._clear_child_default(session, child)
             changed = True
 
@@ -1073,6 +1179,7 @@ class ManagedAICredentialsService:
         parent: ManagedAICredential,
         user_ids: list[uuid.UUID],
         actor: User | None,
+        claim_held_slots: bool = False,
     ) -> MemberAddition:
         """Grant ``parent`` to ``user_ids``. Adds only — never removes.
 
@@ -1116,6 +1223,17 @@ class ManagedAICredentialsService:
         exists to prevent. It does not affect what is written to the child —
         children are stamped with the *parent's* managing admin either way.
 
+        ``claim_held_slots`` says whether this grant may take a default slot
+        somebody already holds. It **defaults to False — the incumbent wins**,
+        because the callers that do not pass it are the automatic ones
+        (``AccountProvisioningService`` at account creation and at invite), and
+        automatic provisioning never steals a default. Every deliberate admin
+        act passes True: ``apply_to_existing``, ``set-default-all``, and
+        ``reconcile`` — the last because a manual record's explicit member list
+        has always claimed the slot and §3.2 of the ai-credential-providers plan
+        keeps every control a manual record has today. Declined slots come back
+        in ``default_slot_skips``; the member is added either way.
+
         **Returns on a healthy session, always.** A per-owner failure can be a
         statement-level one — a lock timeout, a serialization failure, a
         constraint the child insert trips — and Postgres leaves the whole
@@ -1141,7 +1259,8 @@ class ManagedAICredentialsService:
         # Snapshotted while the session is known good — see the docstring.
         parent_id = parent.id
         actor_id = actor.id if actor else None
-        minted = self.is_minted(parent)
+        policy = resolve_policy(session, parent)
+        minted = policy.is_minted
         current = self._current_members(session, parent)
 
         # Projected *after* the loop, in one batched key-state lookup — see
@@ -1151,6 +1270,7 @@ class ManagedAICredentialsService:
         # answer the change was about to invalidate.
         added_rows: list[MemberRow] = []
         skipped: list[ManagedReconcileSkip] = []
+        slot_skips: list[ManagedDefaultSlotSkip] = []
         key: AICredentialData | None = None
 
         for owner_id in desired:
@@ -1199,6 +1319,7 @@ class ManagedAICredentialsService:
                         parent_id=parent_id,
                         user_id=owner_id,
                         status=MembershipProvisioningStatus.PENDING,
+                        claim_held_slots=claim_held_slots,
                         existing=existing.membership if existing else None,
                     )
                 except Exception:
@@ -1218,15 +1339,25 @@ class ManagedAICredentialsService:
                 continue
 
             if key is None:
-                key = self._decrypt_parent(parent)
+                key = self._decrypt_parent(session, parent)
             child = None
             try:
-                child = self._add_child(session, parent, owner, key)
+                creation = self._add_child(
+                    session,
+                    parent,
+                    policy,
+                    owner,
+                    key,
+                    claim_held_slots=claim_held_slots,
+                )
+                child = creation.child
+                slot_skips.extend(creation.slot_skips)
                 membership = self._upsert_membership(
                     session,
                     parent_id=parent_id,
                     user_id=owner_id,
                     status=MembershipProvisioningStatus.NOT_APPLICABLE,
+                    claim_held_slots=claim_held_slots,
                     existing=existing.membership if existing else None,
                     ai_credential_id=child.id,
                 )
@@ -1265,81 +1396,39 @@ class ManagedAICredentialsService:
             added_rows.append(MemberRow(membership=membership, child=child))
 
         return MemberAddition(
-            added=self._project_members(session, added_rows), skipped=skipped
+            added=self._project_members(session, added_rows),
+            skipped=skipped,
+            default_slot_skips=slot_skips,
         )
 
     def _validate_provisioning_shape(
         self, session: Session, data: ManagedAICredentialCreate
     ) -> None:
-        """Refuse a record that cannot do what its mode promises.
+        """Refuse a manual record that has nothing to give anyone.
 
         Stated **server-side**, once, and not in the dialog that happens to be
         the only current caller: "may this record be created" is a policy, and a
-        policy answered only in a browser is answered nowhere. Four ways a
-        request can be incoherent, each with its own message, because "invalid
-        configuration" sends an admin hunting:
+        policy answered only in a browser is answered nowhere.
 
-        1. shared without a key — there is nothing to give anyone;
-        2. minted with a key — the key would be stored and never used, which
-           reads as "rotated" to whoever pasted it;
-        3. minted for a provider whose API cannot create keys (Anthropic today);
-        4. minted with no provider admin credential to mint through.
+        One rule is left, and the shrinkage is the point. This route creates
+        **manual** records only — a provider-owned one is created by creating
+        its provider — so the five other incoherent shapes it used to refuse
+        (shared-with-a-provider, a second credential on one provider, minted
+        with a key, minted for a type that cannot mint, minted with nothing to
+        mint through) are no longer expressible: every one of them needed
+        ``provisioning_mode`` or ``provider_admin_credential_id``, and
+        :class:`ManagedAICredentialCreate` carries neither and forbids unknown
+        keys. What remains is the rule that was never about a provider — a
+        manual record is always ``shared``, and a shared record must hold a key.
+
+        ``session`` is kept in the signature although nothing reads it: the
+        checks that queried are the ones that moved to the provider surface, and
+        a caller-visible signature change buys nothing here.
         """
-        from app.models.credentials.provider_admin_credential import (
-            ProviderAdminCredential,
-        )
-
-        if data.provisioning_mode == ProvisioningMode.SHARED:
-            if not data.api_key:
-                raise HTTPException(
-                    status_code=400,
-                    detail="An API key is required for a shared credential.",
-                )
-            return
-
-        if data.api_key:
+        if not data.api_key:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "A minted credential creates a separate key for each member "
-                    "and must not be given one."
-                ),
-            )
-
-        adapter = registry.find_adapter(data.type)
-        if adapter is None or not adapter.supports_minting:
-            label = adapter.label if adapter is not None else str(data.type)
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{label} cannot create API keys through its administration "
-                    "API, so per-user keys must be added by hand for this "
-                    "provider."
-                ),
-            )
-
-        if data.provider_admin_credential_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "A minted credential needs a provider admin credential to "
-                    "mint keys with."
-                ),
-            )
-        admin_credential = session.get(
-            ProviderAdminCredential, data.provider_admin_credential_id
-        )
-        if admin_credential is None:
-            raise HTTPException(
-                status_code=404, detail="Provider admin credential not found"
-            )
-        if admin_credential.provider_type != data.type:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "The selected provider admin credential is for a different "
-                    "provider."
-                ),
+                detail="An API key is required for a shared credential.",
             )
 
     def _delete_membership(
@@ -1379,6 +1468,7 @@ class ManagedAICredentialsService:
         parent_id: uuid.UUID,
         user_id: uuid.UUID,
         status: MembershipProvisioningStatus,
+        claim_held_slots: bool,
         existing: ManagedAICredentialMembership | None = None,
         ai_credential_id: uuid.UUID | None = None,
     ) -> ManagedAICredentialMembership:
@@ -1388,6 +1478,12 @@ class ManagedAICredentialsService:
         already committed the child: a membership that only exists in the
         caller's session would be rolled back by the next per-owner failure and
         leave a real, invisible member behind.
+
+        ``claim_held_slots`` is keyword-only with no default because it is the
+        grant's *intent*, and for a minted member nothing else will remember it:
+        the key — and therefore the default wiring — arrives on a converge pass
+        long after this request has returned. See
+        ``ManagedAICredentialMembership.claim_held_default_slots``.
         """
         now = datetime.now(timezone.utc)
         membership = existing or ManagedAICredentialMembership(
@@ -1398,6 +1494,7 @@ class ManagedAICredentialsService:
         )
         membership.status = status.value
         membership.ai_credential_id = ai_credential_id
+        membership.claim_held_default_slots = claim_held_slots
         membership.updated_at = now
         session.add(membership)
         session.commit()
@@ -1446,6 +1543,7 @@ class ManagedAICredentialsService:
         :meth:`_sync_model_overrides`.
         """
         desired = self._dedup(desired_user_ids)
+        policy = resolve_policy(session, parent)
         current = self._current_members(session, parent)
         current_ids = set(current.keys())
         desired_set = set(desired)
@@ -1458,7 +1556,7 @@ class ManagedAICredentialsService:
             if isinstance(parent.type, AICredentialType)
             else str(parent.type)
         )
-        parent_admin_credential_id = parent.provider_admin_credential_id
+        parent_admin_credential_id = parent.provider_id
 
         removed: list[uuid.UUID] = []
         # Collected here and projected once at the end — see
@@ -1473,8 +1571,22 @@ class ManagedAICredentialsService:
         # Delegated, not duplicated: ``add_members`` is the same code the
         # auto-provisioning path and "apply to existing" run, so a change to
         # how a member is created cannot land in one of three places.
+        # ``claim_held_slots=True``. §5.5 of the ai-credential-providers plan
+        # makes automatic provisioning the thing that never steals a default;
+        # everything reaching ``reconcile`` is a superuser naming members by
+        # hand (create, PATCH, delete-to-empty), which is the same deliberate
+        # act as ``apply_to_existing``. It is also what a **manual** record's
+        # member list has always done, and §3.2 keeps every control a manual
+        # record has today — claiming the slot is one of them, asserted by
+        # ``test_claiming_a_slot_resets_the_override_but_holding_one_does_not_wipe_it``.
+        # Automatic provisioning does not come through here: it calls
+        # ``add_members`` directly and takes the incumbent-wins default.
         addition = self.add_members(
-            session, parent=parent, user_ids=desired, actor=admin
+            session,
+            parent=parent,
+            user_ids=desired,
+            actor=admin,
+            claim_held_slots=True,
         )
         added = list(addition.added)
         skipped = list(addition.skipped)
@@ -1598,10 +1710,10 @@ class ManagedAICredentialsService:
                     # from the parent as it stands *then*, so it cannot be stale.
                     continue
                 if key_rotated and key is None:
-                    key = self._decrypt_parent(parent)
+                    key = self._decrypt_parent(session, parent)
                 try:
                     child_changed = self._update_child_fields(
-                        session, parent, child,
+                        session, parent, policy, child,
                         key_rotated=key_rotated, key=key,
                         cleared_overrides=cleared_overrides,
                     )
@@ -1662,30 +1774,18 @@ class ManagedAICredentialsService:
         """Create the parent row then reconcile to add one member per valid
         target user.
 
-        In ``shared`` mode that means one child credential per member, created
-        here. In ``minted`` mode it means one ``pending`` membership per member
-        and no provider call — the keys are minted out of band.
+        **Manual records only.** One shared key, copied onto one
+        ``AICredential`` child per member, created here. A provider-owned record
+        is created by ``AIProvidersService.create``, which writes the provider
+        and its one credential in a single transaction — that is what holds the
+        1:1 invariant, and it is why this method no longer has a branch for a
+        submitted ``provider_id``. The policy fields below are therefore always
+        this record's own: nothing here is shadowed, because nothing here has a
+        provider to shadow it.
         """
         self._validate_provisioning_shape(session, data)
-        encrypted = (
-            self._encrypt_key(
-                data.type, data.api_key, data.base_url, data.model
-            )
-            if data.provisioning_mode == ProvisioningMode.SHARED
-            else None
-        )
-        auto_roles = (
-            self._normalize_auto_provision_roles(data.auto_provision_roles)
-            or []
-        )
-        # Before the row exists: a conflict must not leave a half-configured
-        # parent behind for the admin to clean up.
-        self._validate_auto_provision_uniqueness(
-            session,
-            None,
-            auto_roles,
-            data.sdk_default_modes,
-            data.set_user_sdk_defaults,
+        encrypted = self._encrypt_key(
+            data.type, data.api_key, data.base_url, data.model
         )
         now = datetime.now(timezone.utc)
         parent = ManagedAICredential(
@@ -1694,6 +1794,9 @@ class ManagedAICredentialsService:
             encrypted_data=encrypted,
             base_url=data.base_url,
             model=data.model,
+            managed_by_id=admin.id,
+            created_at=now,
+            updated_at=now,
             default_model=self._normalize_default_model(data.default_model),
             available_models=self._normalize_available_models(
                 data.available_models
@@ -1701,7 +1804,6 @@ class ManagedAICredentialsService:
             set_as_default=data.set_as_default,
             set_user_sdk_defaults=data.set_user_sdk_defaults,
             sdk_default_modes=data.sdk_default_modes,
-            auto_provision_roles=auto_roles,
             model_override_conversation=self._normalize_default_model(
                 data.model_override_conversation
             ),
@@ -1709,11 +1811,6 @@ class ManagedAICredentialsService:
                 data.model_override_building
             ),
             expiry_notification_date=data.expiry_notification_date,
-            managed_by_id=admin.id,
-            provisioning_mode=data.provisioning_mode.value,
-            provider_admin_credential_id=data.provider_admin_credential_id,
-            created_at=now,
-            updated_at=now,
         )
         session.add(parent)
         session.commit()
@@ -1734,14 +1831,29 @@ class ManagedAICredentialsService:
     ) -> ManagedAICredentialReconcileResult:
         """Update parent scalars (+ rotate the key when ``api_key`` is present)
         then reconcile. Omitting ``target_user_ids`` leaves membership unchanged.
+
+        **A provider-owned record refuses every shadowed field**, with a 400
+        naming the provider. Those columns are not read for such a record, so
+        accepting the write would save successfully and change nothing — the
+        failure mode this whole split exists to remove. Membership, the name and
+        the key shape are still editable here; the policy is edited on the
+        provider. ``ManagedAICredentialUpdate`` makes every one of those fields
+        optional, so "omitted" is representable and the refusal is unambiguous.
         """
         parent = self._get_parent_or_404(session, managed_credential_id)
+        policy = resolve_policy(session, parent)
 
-        if data.api_key is not None and self.is_minted(parent):
+        if data.api_key is not None and policy.is_minted:
             # Refused, not ignored. There is no stored key here to replace, so
             # accepting this would store one nothing reads and leave the admin
             # believing they had rolled a key. Rotating a minted member's key is
             # a per-member mint, not a parent edit.
+            #
+            # **Checked before the generic provider-owned refusal below**, which
+            # also covers ``api_key``: both are correct here, and this one says
+            # *why* there is nothing to rotate rather than "go and edit the
+            # provider", which for a minted provider is advice that leads
+            # nowhere — its rotate-key endpoint refuses too.
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -1750,51 +1862,17 @@ class ManagedAICredentialsService:
                 ),
             )
 
-        # What this record claimed and pinned *before* the request, read
-        # before a single field is written. Both are transitions rather than
-        # states, and neither is recoverable once the new values are in:
-        # ``previously_claimed`` scopes the conflict rule to slots this
-        # request actually takes, and ``previous_overrides`` is what lets a
-        # cleared override be told apart from one that was never set.
-        previously_claimed = self._claimed_slots(
-            parent.auto_provision_roles,
-            parent.sdk_default_modes,
-            parent.set_user_sdk_defaults,
-        )
+        if policy.is_provider_owned:
+            self._refuse_shadowed_writes(data, policy)
+
+        # What this record pinned *before* the request, read before a single
+        # field is written. It is a transition rather than a state and is not
+        # recoverable once the new values are in: a stored ``None`` cannot
+        # distinguish "just cleared" from "never set".
         previous_overrides = {
-            mode: self._model_override_for(parent, mode)
+            mode: policy.model_override_for(mode)
             for mode in self._MODE_OVERRIDE_ATTR
         }
-
-        # Validate the auto-provision shape against the *effective* values —
-        # the submitted ones where given, the stored ones otherwise — before
-        # any of them is written, so a PATCH that introduces a conflict cannot
-        # half-apply. Only newly claimed slots can raise; see
-        # ``_validate_auto_provision_uniqueness``.
-        auto_roles = self._normalize_auto_provision_roles(
-            data.auto_provision_roles
-        )
-        effective_roles = (
-            auto_roles if auto_roles is not None else parent.auto_provision_roles
-        )
-        effective_modes = (
-            data.sdk_default_modes
-            if data.sdk_default_modes is not None
-            else parent.sdk_default_modes
-        )
-        effective_sdk_defaults = (
-            data.set_user_sdk_defaults
-            if data.set_user_sdk_defaults is not None
-            else parent.set_user_sdk_defaults
-        )
-        self._validate_auto_provision_uniqueness(
-            session,
-            parent.id,
-            effective_roles or [],
-            effective_modes or [],
-            effective_sdk_defaults,
-            previously_claimed=previously_claimed,
-        )
 
         # Apply scalar updates to the parent before reconcile so the diff sees
         # the new desired field values.
@@ -1822,8 +1900,6 @@ class ManagedAICredentialsService:
             parent.set_user_sdk_defaults = data.set_user_sdk_defaults
         if data.sdk_default_modes is not None:
             parent.sdk_default_modes = data.sdk_default_modes
-        if auto_roles is not None:
-            parent.auto_provision_roles = auto_roles
         if data.model_override_conversation is not None:
             parent.model_override_conversation = self._normalize_default_model(
                 data.model_override_conversation
@@ -1852,11 +1928,12 @@ class ManagedAICredentialsService:
         # Modes whose override this request retracted (had a value, now NULL).
         # Passed down because the stored ``None`` alone cannot distinguish
         # "just cleared" from "never set" — see ``_sync_model_overrides``.
+        updated_policy = resolve_policy(session, parent)
         cleared_overrides = {
             mode: previous
             for mode, previous in previous_overrides.items()
             if previous is not None
-            and self._model_override_for(parent, mode) is None
+            and updated_policy.model_override_for(mode) is None
         }
 
         return self.reconcile(
@@ -1871,21 +1948,54 @@ class ManagedAICredentialsService:
         admin: User,
         managed_credential_id: uuid.UUID,
         force: bool = False,
+        *,
+        allow_provider_owned: bool = False,
     ) -> ManagedAICredentialReconcileResult:
         """Reconcile to empty membership (blast-radius gated) then delete the
         parent row. Returns the reconcile result so the route can surface any
         ``blocked`` members (409) when ``force`` is not set.
 
         When any member is blocked and ``force`` is False the parent row is left
-        in place (delete is aborted)."""
+        in place (delete is aborted).
+
+        **A provider-owned record is refused with a 400 naming the provider**,
+        the same shape as :meth:`_refuse_shadowed_writes`, and for a sharper
+        reason than symmetry. The FK is ``ON DELETE RESTRICT`` in the other
+        direction only, so deleting the credential leaves the ``ai_provider`` row
+        standing with its ``auto_provision_roles`` still populated — and
+        ``AIProvidersService.auto_provision_targets`` drops a provider that owns
+        no credential *silently*, with no skip, no log and no event. Every
+        subsequent signup for those roles would get nothing, for ever, while the
+        admin surface went on showing the rule as active. Deleting the provider
+        is the way to delete its credential, and that path revokes and removes in
+        the order §5.4 fixes.
+
+        ``allow_provider_owned`` is how ``AIProvidersService.delete`` reaches
+        this method for exactly that purpose. Keyword-only and defaulted off, so
+        a new caller has to say the word.
+        """
         parent = self._get_parent_or_404(session, managed_credential_id)
+        if not allow_provider_owned:
+            policy = resolve_policy(session, parent)
+            if policy.is_provider_owned:
+                provider = policy.provider_name or "its AI provider"
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"This credential belongs to the AI provider "
+                        f"'{provider}' and cannot be deleted on its own — the "
+                        "provider would go on auto-provisioning with nothing to "
+                        "grant through. Delete the provider instead; that "
+                        "revokes every key it issued first."
+                    ),
+                )
         parent_id = parent.id
         parent_type = (
             parent.type.value
             if isinstance(parent.type, AICredentialType)
             else str(parent.type)
         )
-        parent_admin_credential_id = parent.provider_admin_credential_id
+        parent_admin_credential_id = parent.provider_id
 
         result = self.reconcile(
             session, admin, parent, [],
@@ -1942,6 +2052,13 @@ class ManagedAICredentialsService:
         explicit action that closes that gap, and being explicit is the point
         — the admin sees the count before it happens.
 
+        **"Its roles" are the resolved policy's, so a manual record covers
+        nobody.** ``policy_from_manual`` returns an empty role list
+        unconditionally — the rule lives on ``ai_provider`` — so for a manual
+        record this is a truthful ``candidate_count: 0`` rather than an action.
+        The reaching caller for real work is ``AIProvidersService.apply_to_existing``,
+        which resolves the provider and delegates here.
+
         Add-only. Nobody loses a credential here: the desired set is current
         members ∪ role matches, never a diff that could remove someone.
 
@@ -1949,7 +2066,8 @@ class ManagedAICredentialsService:
         the confirm dialog.
         """
         parent = self._get_parent_or_404(session, managed_credential_id)
-        roles = parent.auto_provision_roles or []
+        policy = resolve_policy(session, parent)
+        roles = policy.auto_provision_roles
 
         current_ids = set(self._current_members(session, parent).keys())
         candidates: list[ManagedAICredentialApplyCandidate] = []
@@ -1980,7 +2098,9 @@ class ManagedAICredentialsService:
         # default credential — and its model override — repointed. That is the
         # part an admin would want to know *before* confirming, so it is
         # counted here rather than discovered afterwards.
-        overwrites = self._count_default_overwrites(session, parent, matches)
+        overwrites = self._count_default_overwrites(
+            session, parent, policy, matches
+        )
 
         if dry_run:
             return ManagedAICredentialApplyResult(
@@ -1991,11 +2111,17 @@ class ManagedAICredentialsService:
                 defaults_overwrite_count=overwrites,
             )
 
+        # ``claim_held_slots=True``: this is the explicit "grant this to
+        # everyone who already matches" action, and §5.5 of the
+        # ai-credential-providers plan keeps it — with ``set-default-all`` — as
+        # the escape hatch that *does* overwrite. Automatic provisioning is the
+        # path that never steals a default.
         result = self.add_members(
             session,
             parent=parent,
             user_ids=[c.user_id for c in candidates],
             actor=admin,
+            claim_held_slots=True,
         )
         return ManagedAICredentialApplyResult(
             record=self._to_public(session, parent),
@@ -2010,6 +2136,7 @@ class ManagedAICredentialsService:
         self,
         session: Session,
         parent: ManagedAICredential,
+        policy: ProvisioningPolicy,
         candidates: list[User],
     ) -> int:
         """How many candidates already hold a default this grant would replace.
@@ -2048,17 +2175,20 @@ class ManagedAICredentialsService:
 
         # A type with no SDK engine cannot claim a mode slot — ``_apply_sdk_defaults``
         # returns immediately — so counting one would promise a change that
-        # will not happen.
+        # will not happen. The same is true of a slot the owner already holds:
+        # this action claims held slots (it is one of the two escape hatches),
+        # so those *are* counted; what is not counted is a slot nothing will
+        # reach.
         modes: list[str] = []
-        if parent.set_user_sdk_defaults and _sdk_engine_for(parent.type):
+        if policy.set_user_sdk_defaults and _sdk_engine_for(parent.type):
             modes = [
                 mode
-                for mode in parent.sdk_default_modes
+                for mode in policy.sdk_default_modes
                 if mode in self._MODE_POINTER_ATTR
             ]
 
         demoted_owner_ids: set[uuid.UUID] = set()
-        if parent.set_as_default:
+        if policy.set_as_default:
             cred_type = (
                 parent.type.value
                 if isinstance(parent.type, AICredentialType)
@@ -2107,13 +2237,27 @@ class ManagedAICredentialsService:
         happens for them when their key arrives — that is what the flag is for.
         """
         parent = self._get_parent_or_404(session, managed_credential_id)
+        policy = resolve_policy(session, parent)
         members = self._current_members(session, parent)
         for owner_id, member in members.items():
             if member.child is None:
                 continue
             ai_credentials_service.set_default(session, member.child.id, owner_id)
 
-        parent.set_as_default = True
+        # The flag follows ownership. On a provider-owned record it is the
+        # provider's column that is read, so writing ``True`` here would leave
+        # the action's promise — "and it stays the default for members who
+        # arrive later" — unkept while the record displayed the flag as on.
+        if policy.is_provider_owned:
+            from app.services.credentials.ai_providers_service import (
+                ai_providers_service,
+            )
+
+            ai_providers_service.write_policy_fields(
+                session, policy.provider_id, {"set_as_default": True}
+            )
+        else:
+            parent.set_as_default = True
         parent.updated_at = datetime.now(timezone.utc)
         session.add(parent)
         session.commit()
@@ -2158,7 +2302,13 @@ class ManagedAICredentialsService:
             }
             parents = [p for p in parents if p.id in parent_ids]
 
-        return [self._to_public(session, p) for p in parents]
+        # One provider fetch for the whole page rather than one per record —
+        # the batch form ``resolve_policies`` exists for exactly this call.
+        policies = resolve_policies(session, parents)
+        return [
+            self._to_public(session, p, policy=policies[p.id])
+            for p in parents
+        ]
 
     def get(
         self,
@@ -2170,21 +2320,34 @@ class ManagedAICredentialsService:
         return self._to_public(session, parent)
 
     def _to_public(
-        self, session: Session, parent: ManagedAICredential
+        self,
+        session: Session,
+        parent: ManagedAICredential,
+        *,
+        policy: ProvisioningPolicy | None = None,
     ) -> ManagedAICredentialPublic:
         """Load memberships + children + owners and build the member projection.
 
-        **A fixed five queries, whatever the membership size** — memberships,
-        their children, their owners, and the two behind the batched
-        onboarding-state lookup — so the admin list page's cost grows with the
-        number of *records*, as it always has, and not with how many people hold
-        them. The number is stated because it is the thing that regresses: it
-        was three before the onboarding state joined the projection, and the
-        query-count test is what keeps it from becoming five-plus-two-per-member.
-        That matters more than it used to: a minted record's members appear
-        the moment they are added, before any key exists, so a projection with a
-        per-member lookup in it would get slower exactly when an admin is
-        watching a batch provision.
+        **Nothing here is asked once per member.** Memberships, their children,
+        their owners, the batched onboarding-state lookup and the owning
+        provider are each asked for once per *record*, so the admin list page's
+        cost grows with the number of records, as it always has, and not with
+        how many people hold them. That matters more than it used to: a minted
+        record's members appear the moment they are added, before any key
+        exists, so a projection with a per-member lookup in it would get slower
+        exactly when an admin is watching a batch provision.
+
+        What is *tested* is narrower than what is claimed, and the gap is worth
+        knowing: ``minted_ai_credentials_test.py::
+        test_the_member_list_costs_the_same_however_many_members_there_are``
+        counts two needles — the membership read and the ``is_default``
+        predicate — and holds them flat across member counts. The children,
+        owner and provider reads are flat by inspection, not by that test.
+
+        The provider read is the newest of them, and :meth:`list` folds it into
+        one for the whole page by resolving policies in a batch and handing the
+        answer in; a caller that does not is charged one provider read per
+        record, which is the cost this method had before the batch existed.
 
         The projection is also the **only** thing that reads provisioning state.
         The client is handed one member list with a status on each entry; it
@@ -2192,6 +2355,10 @@ class ManagedAICredentialsService:
         therefore cannot invent a rule for combining them.
         """
         members_by_owner = self._current_members(session, parent)
+        # Resolved once per record — or handed in already resolved by ``list``,
+        # which batches the provider fetch for the whole page.
+        if policy is None:
+            policy = resolve_policy(session, parent)
 
         # One query for every owner rather than ``session.get`` per member.
         owner_ids = set(members_by_owner.keys())
@@ -2246,10 +2413,11 @@ class ManagedAICredentialsService:
         if (
             adapter is not None
             and adapter.issues_oauth_tokens
-            and parent.encrypted_data
+            and not policy.is_minted
+            and (parent.encrypted_data or policy.is_provider_owned)
         ):
             try:
-                api_key = self._decrypt_parent(parent).api_key or ""
+                api_key = self._decrypt_parent(session, parent).api_key or ""
                 is_oauth = adapter.classify_key(api_key).is_oauth_token
             except Exception:  # pragma: no cover - defensive
                 is_oauth = False
@@ -2260,19 +2428,35 @@ class ManagedAICredentialsService:
             type=parent.type,
             base_url=parent.base_url,
             model=parent.model,
-            default_model=parent.default_model,
-            available_models=parent.available_models,
-            set_as_default=parent.set_as_default,
-            set_user_sdk_defaults=parent.set_user_sdk_defaults,
-            sdk_default_modes=parent.sdk_default_modes,
-            auto_provision_roles=parent.auto_provision_roles or [],
-            model_override_conversation=parent.model_override_conversation,
-            model_override_building=parent.model_override_building,
-            expiry_notification_date=parent.expiry_notification_date,
+            default_model=policy.default_model,
+            available_models=policy.available_models,
+            set_as_default=policy.set_as_default,
+            set_user_sdk_defaults=policy.set_user_sdk_defaults,
+            sdk_default_modes=policy.sdk_default_modes,
+            model_override_conversation=policy.model_override_conversation,
+            model_override_building=policy.model_override_building,
+            expiry_notification_date=policy.expiry_notification_date,
             managed_by_id=parent.managed_by_id,
-            provisioning_mode=ProvisioningMode(parent.provisioning_mode),
-            provider_admin_credential_id=parent.provider_admin_credential_id,
-            has_api_key=bool(parent.encrypted_data),
+            provisioning_mode=policy.provisioning_mode,
+            provider_id=policy.provider_id,
+            provider_name=policy.provider_name,
+            is_provider_owned=policy.is_provider_owned,
+            # True when a key exists for this record to hand out, wherever it
+            # is stored: on the record for a manual one, on the provider for a
+            # ``fixed_key`` one. False for a minted record, whose members' keys
+            # are created individually and none of which is *this* record's.
+            # ``provider_name is not None`` is what distinguishes a resolved
+            # provider from the "provider-owned but the row is gone" policy: for
+            # the latter there is no key anywhere, and answering True would tell
+            # the admin a record holds one when nothing does.
+            has_api_key=(
+                bool(parent.encrypted_data)
+                or (
+                    policy.is_provider_owned
+                    and policy.provider_name is not None
+                    and not policy.is_minted
+                )
+            ),
             is_oauth_token=is_oauth,
             members=members,
             member_count=len(members),
@@ -2292,7 +2476,7 @@ class ManagedAICredentialsService:
         """Decrypt the parent's stored key for the Test Connection edit case
         (blank api_key on an existing record). 404 if the parent is missing."""
         parent = self._get_parent_or_404(session, managed_credential_id)
-        return self._decrypt_parent(parent)
+        return self._decrypt_parent(session, parent)
 
 
 # Singleton instance (matches ai_credentials_service).

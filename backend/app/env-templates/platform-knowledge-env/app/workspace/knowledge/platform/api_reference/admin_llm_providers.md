@@ -9,8 +9,6 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
   - `name`: string (required)
   - `type`: AICredentialType (required)
   - `api_key`: string | null
-  - `provisioning_mode`: ProvisioningMode
-  - `provider_admin_credential_id`: string | null
   - `base_url`: string | null
   - `model`: string | null
   - `default_model`: string | null
@@ -20,7 +18,6 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
   - `set_as_default`: boolean
   - `set_user_sdk_defaults`: boolean
   - `sdk_default_modes`: string[]
-  - `auto_provision_roles`: string[]
   - `model_override_conversation`: string | null
   - `model_override_building`: string | null
 
@@ -68,7 +65,6 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
   - `set_as_default`: boolean | null
   - `set_user_sdk_defaults`: boolean | null
   - `sdk_default_modes`: array | null
-  - `auto_provision_roles`: array | null
   - `model_override_conversation`: string | null
   - `model_override_building`: string | null
 
@@ -86,19 +82,6 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 - `force`: boolean, default: `False`
 
 **Response:** `Message`
-
----
-
-## POST `/api/v1/admin/llm-providers/{managed_credential_id}/apply-to-existing`
-**Apply Managed Ai Credential To Existing**
-
-**Path parameters:**
-- `managed_credential_id`: uuid
-
-**Query parameters:**
-- `dry_run`: boolean, default: `False`
-
-**Response:** `ManagedAICredentialApplyResult`
 
 ---
 

@@ -1,11 +1,15 @@
-import type { AICredentialType, ManagedAICredentialPublic } from "@/client"
+import type { AICredentialType } from "@/client"
 import { ApiError } from "@/client/core/ApiError"
 import { userRoleLabel } from "@/utils/userRoles"
 
-// Display metadata for the user-selectable AI credential provider types.
-// Mirrors the copy used in the user-facing AICredentialDialog so admin and
-// user surfaces stay consistent.
-// NOTE: MiniMax is temporarily disabled in the UI (not currently supported).
+// The types a **manual** managed credential may be created as, with the copy
+// the user-facing AICredentialDialog uses, so the admin and user surfaces stay
+// consistent.
+//
+// This is a *selection* list and is deliberately shorter than the adapter
+// registry: MiniMax is not offered here. It is **not** a label source — see
+// `PROVIDER_TYPE_LABELS` below, which must cover every type the server can
+// send, including the ones this list declines to offer.
 export const PROVIDER_TYPE_OPTIONS: {
   value: AICredentialType
   label: string
@@ -17,14 +21,33 @@ export const PROVIDER_TYPE_OPTIONS: {
   { value: "google", label: "Google", description: "Google AI (Gemini models via AI Studio)" },
 ]
 
-const PROVIDER_TYPE_LABELS: Partial<Record<AICredentialType, string>> = {
+/**
+ * How each vendor is spelled for a reader.
+ *
+ * A **total** `Record` over the generated union, not a `Partial`: a sixth type
+ * added on the server stops compiling here instead of rendering as a raw
+ * identifier. It was `Partial` and missing `minimax`, whose adapter *is*
+ * registered — so a MiniMax provider read "minimax" on the Access tab and in
+ * the invite checklist while reading "MiniMax" on the Providers tab, which is
+ * the same defect class as an unmapped skip reason printing its own token.
+ *
+ * The adapters endpoint stays the authority wherever it is already in hand
+ * (`useProviderAdapters().typeLabel`); this map is for the surfaces that would
+ * otherwise have to open a query just to spell a word, and for the first paint
+ * before that query answers.
+ */
+const PROVIDER_TYPE_LABELS: Record<AICredentialType, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   openai_compatible: "OpenAI Compatible",
   google: "Google",
+  minimax: "MiniMax",
 }
 
 export function getProviderTypeLabel(type: AICredentialType): string {
+  // The `Record` above is the drift-catcher and stays that way. This fallback
+  // is for the other case — a value off the wire outside the union, which the
+  // compiler cannot rule out.
   return PROVIDER_TYPE_LABELS[type] ?? type
 }
 
@@ -38,6 +61,20 @@ export function getProviderTypeLabel(type: AICredentialType): string {
 // on producing the *same* string. Renaming it splits the cache silently — no
 // error, just two lists that stop agreeing with each other.
 export const MANAGED_CREDENTIALS_QUERY_PREFIX = ["admin", "llm-providers"] as const
+
+/**
+ * React Query key for the connected **providers** (`/admin/ai-providers`).
+ *
+ * Read by the Providers tab, the create/edit surfaces, the invite wizard's
+ * provisioning step and the Access tab's Company AI providers card. Every
+ * provider mutation invalidates this *and* `MANAGED_CREDENTIALS_QUERY_PREFIX`:
+ * a policy edit re-applies to the members of the credential the provider owns,
+ * so the managed list is stale too.
+ *
+ * It replaced `PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY`, which addressed the
+ * retired `/admin/provider-admin-credentials` router.
+ */
+export const AI_PROVIDERS_QUERY_KEY = ["admin", "ai-providers"] as const
 
 // React Query key for the fleet-wide managed-credential list, optionally
 // scoped to a single target user.
@@ -98,12 +135,66 @@ export function modelOverrideField(
     : "model_override_building"
 }
 
+// ── Model ids ──────────────────────────────────────────────────────────
+
+/**
+ * Strip any leading `provider/` prefix for nicer display.
+ *
+ * The backend re-normalises regardless; doing it here keeps the box showing
+ * the value that will actually be stored.
+ */
+export function stripProviderPrefix(value: string): string {
+  const trimmed = value.trim()
+  const idx = trimmed.indexOf("/")
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
+}
+
+/**
+ * Parse the free-form available-models textarea into a deduped,
+ * prefix-stripped list. Accepts commas and newlines as separators.
+ */
+export function parseAvailableModels(raw: string | undefined): string[] {
+  if (!raw) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const part of raw.split(/[\n,]/)) {
+    const entry = stripProviderPrefix(part)
+    if (entry && !seen.has(entry)) {
+      seen.add(entry)
+      out.push(entry)
+    }
+  }
+  return out
+}
+
+// Official "available models" documentation page per type. `openai_compatible`
+// has no canonical page (the model list depends on the configured endpoint),
+// so it is intentionally absent and the link is omitted for that type.
+const PROVIDER_MODELS_DOC_URL: Partial<Record<AICredentialType, string>> = {
+  anthropic: "https://platform.claude.com/docs/en/about-claude/models/overview",
+  google: "https://ai.google.dev/gemini-api/docs/models",
+  openai: "https://developers.openai.com/api/docs/models",
+}
+
+/** The vendor's own model list page, or `undefined` when it has none. */
+export function providerModelsDocUrl(
+  type: AICredentialType | undefined,
+): string | undefined {
+  return type ? PROVIDER_MODELS_DOC_URL[type] : undefined
+}
+
 // ── Auto-provision conflicts ───────────────────────────────────────────
 
 /**
- * The 409 body raised when two managed credentials would both wire the same
+ * The 409 body raised when two **providers** would both wire the same
  * `(role, mode)` default slot. Mirrors `_conflict_409` in
- * `backend/app/api/routes/admin_llm_providers.py`.
+ * `backend/app/api/routes/admin_ai_providers.py`.
+ *
+ * The wire keys still say `credential`. That is deliberate and is Phase 4's
+ * decision, not an oversight: the envelope predates the provider/credential
+ * split and renaming it would break every reader for no gain. Only what a
+ * person *reads* changed — see `describeAutoProvisionConflict`, which says
+ * "provider", because after §2.1 that is what owns the rule.
  */
 export interface AutoProvisionConflict {
   message: string
@@ -162,10 +253,28 @@ export function describeAutoProvisionConflict(
 ): string {
   return (
     `"${conflict.conflicting_credential_name}" already sets the ` +
-    `${sdkModeLabel(conflict.mode).toLowerCase()} default for auto-provisioned ` +
-    `${userRoleLabel(conflict.role)} accounts. Only one credential can own a ` +
-    `role's default for a mode — drop the role or the mode on one of the two.`
+    `${sdkModeLabel(conflict.mode)} default for auto-provisioned ` +
+    `${userRoleLabel(conflict.role)} accounts. Only one provider can own a ` +
+    `role's default for a mode — drop the role, or turn off that mode, on one ` +
+    `of the two.`
   )
+}
+
+/**
+ * The parts of a record this rule reads.
+ *
+ * Structural rather than `AIProviderPublic` so the helper cannot acquire a
+ * dependency on fields it does not use. It is written against providers —
+ * `auto_provision_roles` moved there and is no longer on
+ * `ManagedAICredentialPublic` at all — but the rule is about the four fields,
+ * not about the table.
+ */
+export interface AutoProvisionSlotClaimant {
+  id: string
+  name: string
+  set_user_sdk_defaults?: boolean | null
+  sdk_default_modes?: readonly string[] | null
+  auto_provision_roles?: readonly string[] | null
 }
 
 /**
@@ -177,13 +286,13 @@ export function describeAutoProvisionConflict(
  * stale, and the server stays the authority — the click still goes out and a
  * real 409 is still rendered.
  *
- * Returns the record that would collide, or `null`.
+ * Returns the provider that would collide, or `null`.
  */
-export function findAutoProvisionConflict(
-  records: ManagedAICredentialPublic[],
-  record: ManagedAICredentialPublic,
+export function findAutoProvisionConflict<T extends AutoProvisionSlotClaimant>(
+  records: readonly T[],
+  record: AutoProvisionSlotClaimant,
   role: string,
-): ManagedAICredentialPublic | null {
+): T | null {
   if (!record.set_user_sdk_defaults) return null
   // Only the two real slots count, exactly as the backend filters them — an
   // unrecognised mode string on both records is not a collision because
@@ -201,13 +310,34 @@ export function findAutoProvisionConflict(
   )
 }
 
-// ── Per-user key provisioning ──────────────────────────────────────────
+// ── Provider kinds ─────────────────────────────────────────────────────
 
 /**
- * React Query key for the connected provider organisations
- * (`/admin/provider-admin-credentials`). Mutations invalidate by this prefix.
+ * What a provider *is*, in the two sentences §9 fixes.
+ *
+ * `label` is the word an admin scans a list by; `blurb` is why they would pick
+ * it. The second sentence on `minted` is not decoration: per-user spend
+ * tracking is the reason that kind exists, so the surface offering it says so.
  */
-export const PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY = [
-  "admin",
-  "provider-admin-credentials",
-] as const
+export const AI_PROVIDER_KINDS: {
+  value: "fixed_key" | "minted"
+  label: string
+  blurb: string
+}[] = [
+  {
+    value: "fixed_key",
+    label: "Fixed key",
+    blurb: "Everyone shares one key you paste.",
+  },
+  {
+    value: "minted",
+    label: "Per-user keys",
+    blurb:
+      "Each person gets their own, created in your provider account. This is what makes per-user spend tracking possible.",
+  },
+]
+
+/** Display label for a provider `kind` string off the wire. */
+export function aiProviderKindLabel(kind: string): string {
+  return AI_PROVIDER_KINDS.find((entry) => entry.value === kind)?.label ?? kind
+}

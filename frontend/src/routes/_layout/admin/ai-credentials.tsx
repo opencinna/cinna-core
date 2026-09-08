@@ -1,13 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router"
 import { AlertTriangle, Filter } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 
-import {
-  type ManagedAICredentialPublic,
-  AdminLlmProvidersService,
-  AdminProviderCredentialsService,
-} from "@/client"
+import { type ManagedAICredentialPublic, AdminLlmProvidersService } from "@/client"
 import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
@@ -15,16 +11,14 @@ import {
 import { LlmProvidersTable } from "@/components/Admin/LlmProviders/LlmProvidersTable"
 import { hasKeyInFlight } from "@/components/Admin/LlmProviders/MemberKeyStatus"
 import { ManagedCredentialDialog } from "@/components/Admin/LlmProviders/ManagedCredentialDialog"
-import {
-  managedCredentialsQueryKey,
-  PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY,
-} from "@/components/Admin/LlmProviders/providerTypes"
-import { ProviderAdminCredentialDialog } from "@/components/Admin/ProviderAdminCredentials/ProviderAdminCredentialDialog"
-import { ProviderAdminCredentialsTable } from "@/components/Admin/ProviderAdminCredentials/ProviderAdminCredentialsTable"
+import { managedCredentialsQueryKey } from "@/components/Admin/LlmProviders/providerTypes"
+import { ConnectProviderDialog } from "@/components/Admin/AiProviders/ConnectProviderDialog"
+import { ProvidersTab } from "@/components/Admin/AiProviders/ProvidersTab"
+import { HashTabs, type TabConfig } from "@/components/Common/HashTabs"
+import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import PendingItems from "@/components/Pending/PendingItems"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Pagination,
   PaginationContent,
@@ -51,6 +45,9 @@ type AiCredentialsSearch = {
   newCredentialFor?: string
   label?: string
 }
+
+/** The two hash-addressable tabs. `managed-credentials` is `tabs[0]`. */
+type TabValue = "managed-credentials" | "providers"
 
 export const Route = createFileRoute("/_layout/admin/ai-credentials")({
   component: AdminAiCredentials,
@@ -121,7 +118,20 @@ function AdminAiCredentials() {
 
   useEffect(() => {
     if (search.newCredentialFor !== undefined || search.label !== undefined) {
-      navigate({ to: "/admin/ai-credentials", search: {}, replace: true })
+      navigate({
+        to: "/admin/ai-credentials",
+        search: {},
+        // The hash and the hand-off marker have to coexist. This navigate
+        // states the whole location, so omitting `hash` drops the one
+        // `HashTabs` wrote and silently sends the admin back to the first tab
+        // — arriving at `#providers` and dismissing a hand-off would land them
+        // on Managed credentials. Read at the moment of the call rather than
+        // from state, because `HashTabs` owns the hash and writes it directly
+        // to `window.location`. `undefined` when there is none, so arriving
+        // with `?newCredentialFor=` and no hash does not invent one.
+        hash: window.location.hash.slice(1) || undefined,
+        replace: true,
+      })
     }
   }, [search.newCredentialFor, search.label, navigate])
 
@@ -153,11 +163,21 @@ function AdminAiCredentials() {
   const [showFilter, setShowFilter] = useState(false)
   const targetUserId = filterUser?.userId ?? undefined
 
-  // Two surfaces that configure each other: a managed credential can only mint
-  // through a provider organisation connected on the second tab, so they live
-  // on one page rather than on two pages an admin has to know to visit in
-  // order.
-  const [tab, setTab] = useState<"managed" | "provider-keys">("managed")
+  // Two surfaces that configure each other: a provider owns the managed
+  // credential it grants through, so they live on one page rather than on two
+  // pages an admin has to know to visit in order.
+  //
+  // `HashTabs` owns which tab is showing (it is URL-addressable, which is what
+  // makes `/admin/ai-credentials#providers` linkable from the Access tab, the
+  // invite wizard and the read-only credential dialog). This mirror exists for
+  // the two things rendered *outside* the `Tabs` tree: the page header's
+  // per-tab buttons, and the managed list's poll, which must not run while the
+  // other tab is showing.
+  const [tab, setTab] = useState<TabValue>("managed-credentials")
+  const handleTabChange = useCallback(
+    (value: string) => setTab(value as TabValue),
+    [],
+  )
 
   // Client-side pagination over the full managed-credential list.
   const PAGE_SIZE = 10
@@ -172,6 +192,8 @@ function AdminAiCredentials() {
     data: records,
     isLoading,
     isError,
+    error,
+    refetch,
   } = useQuery({
     queryKey: managedCredentialsQueryKey(targetUserId),
     queryFn: () =>
@@ -182,20 +204,10 @@ function AdminAiCredentials() {
     // The predicate reads the status the server stated on each member; it does
     // not decide for itself which members are still working.
     refetchInterval: (query) =>
-      tab === "managed" && (query.state.data ?? []).some(hasKeyInFlight)
+      tab === "managed-credentials" &&
+      (query.state.data ?? []).some(hasKeyInFlight)
         ? 10_000
         : false,
-  })
-
-  const {
-    data: providerKeys,
-    isError: providerKeysError,
-  } = useQuery({
-    queryKey: PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY,
-    queryFn: () =>
-      AdminProviderCredentialsService.listProviderAdminCredentials(),
-    staleTime: 30_000,
-    enabled: tab === "provider-keys",
   })
 
   // The alert answers to the server, not to us: once this member's state stops
@@ -241,7 +253,7 @@ function AdminAiCredentials() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {tab === "managed" ? (
+          {tab === "managed-credentials" ? (
             <>
               <Button
                 variant={showFilter || filterUser ? "secondary" : "outline"}
@@ -257,13 +269,125 @@ function AdminAiCredentials() {
               <ManagedCredentialDialog mode="create" />
             </>
           ) : (
-            <ProviderAdminCredentialDialog mode="create" />
+            <ConnectProviderDialog />
           )}
         </div>
       </>,
     )
     return () => setHeaderContent(null)
   }, [setHeaderContent, showFilter, filterUser, tab])
+
+  // The managed tab's body, lifted out so the tab list below stays readable.
+  // Its four states are its own: `HashTabs` renders content, it does not own
+  // any of it.
+  const managedTabContent = (
+    <div className="space-y-4">
+      {/* Filter by target user — toggled via the header "Filter" button */}
+      {showFilter && (
+        <div className="flex flex-col gap-2 sm:max-w-md rounded-md border bg-muted/30 p-3">
+          <UserAllowlistPicker
+            label="Filter by target user"
+            searchPlaceholder="Search a user to filter..."
+            selected={filterUser ? [filterUser] : []}
+            onAdd={(u) =>
+              setFilterUser({
+                id: u.id,
+                userId: u.id,
+                fallbackLabel: u.full_name || u.email,
+              })
+            }
+            onRemove={() => setFilterUser(null)}
+          />
+          {filterUser && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="self-start h-7 px-2 text-xs"
+              onClick={() => setFilterUser(null)}
+            >
+              Clear filter
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Error before "nothing yet", and gated on there being nothing to show.
+          A failed background refetch must not replace a live table with an
+          error panel, and a failed *first* read must not render as an empty
+          list — an admin who reads "no managed credentials" after a 500
+          concludes the list is empty and goes and creates a duplicate. */}
+      {isError && records === undefined ? (
+        <QueryErrorAlert
+          error={error}
+          fallback="Couldn't load the managed AI credentials."
+          onRetry={() => refetch()}
+        />
+      ) : isLoading || !records ? (
+        <PendingItems />
+      ) : (
+        <>
+          <LlmProvidersTable records={pagedRecords} />
+          {totalPages > 1 && (
+            <Pagination>
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    href="#"
+                    aria-disabled={currentPage <= 1}
+                    className={
+                      currentPage <= 1 ? "pointer-events-none opacity-50" : undefined
+                    }
+                    onClick={(e) => {
+                      e.preventDefault()
+                      setPage((p) => Math.max(1, p - 1))
+                    }}
+                  />
+                </PaginationItem>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                  <PaginationItem key={p}>
+                    <PaginationLink
+                      href="#"
+                      isActive={p === currentPage}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setPage(p)
+                      }}
+                    >
+                      {p}
+                    </PaginationLink>
+                  </PaginationItem>
+                ))}
+                <PaginationItem>
+                  <PaginationNext
+                    href="#"
+                    aria-disabled={currentPage >= totalPages}
+                    className={
+                      currentPage >= totalPages
+                        ? "pointer-events-none opacity-50"
+                        : undefined
+                    }
+                    onClick={(e) => {
+                      e.preventDefault()
+                      setPage((p) => Math.min(totalPages, p + 1))
+                    }}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          )}
+        </>
+      )}
+    </div>
+  )
+
+  const tabs: TabConfig[] = [
+    {
+      value: "managed-credentials",
+      title: "Managed credentials",
+      content: managedTabContent,
+    },
+    { value: "providers", title: "Providers", content: <ProvidersTab /> },
+  ]
 
   // Edge-case guard for a non-superuser that slipped past beforeLoad.
   if (user && !user.is_superuser) {
@@ -364,134 +488,7 @@ function AdminAiCredentials() {
           />
         )}
 
-        <Tabs
-          value={tab}
-          onValueChange={(value) => setTab(value as "managed" | "provider-keys")}
-          className="space-y-4"
-        >
-          <TabsList>
-            <TabsTrigger value="managed">Managed credentials</TabsTrigger>
-            <TabsTrigger value="provider-keys">Provider keys</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="managed" className="space-y-4">
-            {/* Filter by target user — toggled via the header "Filter" button */}
-            {showFilter && (
-              <div className="flex flex-col gap-2 sm:max-w-md rounded-md border bg-muted/30 p-3">
-                <UserAllowlistPicker
-                  label="Filter by target user"
-                  searchPlaceholder="Search a user to filter..."
-                  selected={filterUser ? [filterUser] : []}
-                  onAdd={(u) =>
-                    setFilterUser({
-                      id: u.id,
-                      userId: u.id,
-                      fallbackLabel: u.full_name || u.email,
-                    })
-                  }
-                  onRemove={() => setFilterUser(null)}
-                />
-                {filterUser && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="self-start h-7 px-2 text-xs"
-                    onClick={() => setFilterUser(null)}
-                  >
-                    Clear filter
-                  </Button>
-                )}
-              </div>
-            )}
-
-            {isLoading ? (
-              <PendingItems />
-            ) : isError || !records ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
-                <p className="text-muted-foreground">
-                  Failed to load credentials. Please try refreshing the page.
-                </p>
-              </div>
-            ) : (
-              <>
-                <LlmProvidersTable records={pagedRecords} />
-                {totalPages > 1 && (
-                  <Pagination>
-                    <PaginationContent>
-                      <PaginationItem>
-                        <PaginationPrevious
-                          href="#"
-                          aria-disabled={currentPage <= 1}
-                          className={
-                            currentPage <= 1 ? "pointer-events-none opacity-50" : undefined
-                          }
-                          onClick={(e) => {
-                            e.preventDefault()
-                            setPage((p) => Math.max(1, p - 1))
-                          }}
-                        />
-                      </PaginationItem>
-                      {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-                        <PaginationItem key={p}>
-                          <PaginationLink
-                            href="#"
-                            isActive={p === currentPage}
-                            onClick={(e) => {
-                              e.preventDefault()
-                              setPage(p)
-                            }}
-                          >
-                            {p}
-                          </PaginationLink>
-                        </PaginationItem>
-                      ))}
-                      <PaginationItem>
-                        <PaginationNext
-                          href="#"
-                          aria-disabled={currentPage >= totalPages}
-                          className={
-                            currentPage >= totalPages
-                              ? "pointer-events-none opacity-50"
-                              : undefined
-                          }
-                          onClick={(e) => {
-                            e.preventDefault()
-                            setPage((p) => Math.min(totalPages, p + 1))
-                          }}
-                        />
-                      </PaginationItem>
-                    </PaginationContent>
-                  </Pagination>
-                )}
-              </>
-            )}
-          </TabsContent>
-
-          <TabsContent value="provider-keys" className="space-y-4">
-            <p className="max-w-3xl text-sm text-muted-foreground">
-              Provider organisations this instance can create API keys in. A
-              managed credential set to give each member their own key mints it
-              through one of these. Each key is created inside the configured
-              project, and the project's monthly spend limit is verified as
-              enforcing before the first key is created.
-            </p>
-            {/* Error first, then "no data yet". The query is disabled while the
-                other tab is showing, and a disabled query is not loading — an
-                `isLoading ? … : !data ? error` ladder would flash the failure
-                message on the first render after the tab switch. */}
-            {providerKeysError ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
-                <p className="text-muted-foreground">
-                  Failed to load provider keys. Please try refreshing the page.
-                </p>
-              </div>
-            ) : !providerKeys ? (
-              <PendingItems />
-            ) : (
-              <ProviderAdminCredentialsTable records={providerKeys} />
-            )}
-          </TabsContent>
-        </Tabs>
+        <HashTabs tabs={tabs} onTabChange={handleTabChange} />
       </div>
     </div>
   )

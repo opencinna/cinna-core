@@ -1,8 +1,9 @@
 import { zodResolver } from "@hookform/resolvers/zod"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { CheckCircle2, ExternalLink, Loader2, Plus } from "lucide-react"
 import { useEffect, useId, useRef, useState } from "react"
-import { useForm, type UseFormReturn } from "react-hook-form"
+import { useForm } from "react-hook-form"
 import { z } from "zod"
 
 import {
@@ -13,10 +14,8 @@ import {
   type ManagedAICredentialReconcileResult,
   type ManagedAICredentialUpdate,
   AdminLlmProvidersService,
-  AdminProviderCredentialsService,
 } from "@/client"
 import type { ApiError } from "@/client/core/ApiError"
-import { ListModelsButton } from "@/components/Common/ListModelsButton"
 import {
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
@@ -53,28 +52,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
-import { USER_ROLE_OPTIONS } from "@/utils/userRoles"
+import { ModelOverrideField } from "./ModelOverrideField"
 import {
-  type AutoProvisionConflict,
-  describeAutoProvisionConflict,
   getProviderTypeLabel,
   MANAGED_CREDENTIALS_QUERY_PREFIX,
   modelOverrideField,
-  parseAutoProvisionConflict,
-  PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY,
+  parseAvailableModels,
+  providerModelsDocUrl,
   PROVIDER_TYPE_OPTIONS,
+  sdkModeLabel,
   SDK_MODE_OPTIONS,
   SDK_MODE_VALUES,
+  stripProviderPrefix,
 } from "./providerTypes"
-import { useProviderAdapters } from "./useProviderAdapters"
 
 // Default credential name suggested for a freshly-provisioned record,
-// derived from the selected provider (e.g. "Anthropic Key").
+// derived from the selected provider type (e.g. "Anthropic Key").
 function defaultCredentialName(
   type: AICredentialType,
   subject?: string,
@@ -112,19 +109,18 @@ function describeTestResult(result: AICredentialTestResult): string {
 //  - openai_compatible requires both base_url and model
 //  - google may set an optional base_url
 //  - all others use neither
-// Base object shape — `FormData` is inferred from this so the form type stays
-// stable across modes. The per-field rules below are applied via `superRefine`.
+//
+// Three fields this schema used to carry are gone rather than optional, and the
+// generated types are why: `ManagedAICredentialCreate` / `Update` set
+// `extra="forbid"`, so a client still sending `provisioning_mode`,
+// `provider_admin_credential_id` or `auto_provision_roles` gets a 422 naming
+// the field. A manual record is always `shared`, can never point at a provider,
+// and is not a factory — the rule for who automatically receives a key lives on
+// `ai_provider` and is edited under Providers.
 const baseFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
   type: z.enum(["anthropic", "openai", "openai_compatible", "google"]),
   api_key: z.string(),
-  // How members get their key. Immutable after creation — the backend has no
-  // field for it on the update model, because switching a live record between
-  // one shared key and a key per person is a migration, not an edit.
-  provisioning_mode: z.enum(["shared", "minted"]),
-  // Which connected provider organisation the per-user keys are created in.
-  // Only read in `minted` mode.
-  provider_admin_credential_id: z.string(),
   base_url: z.string().optional(),
   model: z.string().optional(),
   // Admin-curated default model (single concrete id). Optional.
@@ -140,8 +136,6 @@ const baseFormSchema = z.object({
   // saved. Like every other edit field it travels only when the admin changed
   // it — see the diff in the submit handler.
   sdk_default_modes: z.array(z.string()),
-  // Roles whose newly created accounts receive this credential.
-  auto_provision_roles: z.array(z.string()),
   // Per-mode model pinned on the member's profile alongside the default
   // credential. Blank = the record has no opinion.
   model_override_conversation: z.string().optional(),
@@ -150,29 +144,12 @@ const baseFormSchema = z.object({
 
 type FormData = z.infer<typeof baseFormSchema>
 
-// Strip any leading "provider/" prefix for nicer display (the backend
-// re-normalizes regardless).
-function stripProviderPrefix(value: string): string {
-  const trimmed = value.trim()
-  const idx = trimmed.indexOf("/")
-  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
-}
-
-// Official "available models" documentation page per provider. openai_compatible
-// has no canonical page (the model list depends on the configured endpoint), so
-// it's intentionally absent and the link is omitted for that type.
-const PROVIDER_MODELS_DOC_URL: Partial<Record<AICredentialType, string>> = {
-  anthropic: "https://platform.claude.com/docs/en/about-claude/models/overview",
-  google: "https://ai.google.dev/gemini-api/docs/models",
-  openai: "https://developers.openai.com/api/docs/models",
-}
-
 // Canonical Gemini alias used as the Google default — a stable pointer to the
 // latest Flash model that may not appear verbatim in the discovered list.
 const GOOGLE_DEFAULT_MODEL = "gemini-flash-latest"
 
-// Pick the best default model id for the given provider from a (prefix-stripped)
-// model list. Provider-specific:
+// Pick the best default model id for the given provider type from a
+// (prefix-stripped) model list:
 //  - google: always the canonical Flash alias (independent of the list).
 //  - anthropic: the highest-version Sonnet, tie-broken by trailing snapshot.
 //  - openai / openai_compatible: the first list entry.
@@ -194,15 +171,11 @@ function pickHighestSonnet(models: string[]): string | undefined {
 
   // Split an id into its version tokens and a trailing dated snapshot, kept in
   // separate fields so they are never compared against each other positionally.
-  // The version is the run of numeric tokens (e.g. [4, 6] in "claude-sonnet-4-6"),
-  // and the snapshot is a trailing 6+ digit run (e.g. 20250115 in "...-20250115").
   const parseKey = (id: string): { version: number[]; snapshot: number } => {
     const snapshotMatch = id.match(/(\d{6,})\s*$/)
     const snapshot = snapshotMatch ? Number(snapshotMatch[1]) : 0
-    // Numeric tokens excluding a trailing snapshot make up the version.
     const body = snapshotMatch ? id.slice(0, snapshotMatch.index) : id
     const version = (body.match(/\d+/g) ?? []).map(Number)
-    // Ids with no numeric version compare as version [0].
     return { version: version.length > 0 ? version : [0], snapshot }
   }
 
@@ -211,7 +184,6 @@ function pickHighestSonnet(models: string[]): string | undefined {
     const b = parseKey(best)
 
     // Phase 1: compare version tokens element-by-element (missing slot = 0).
-    // A longer version that is otherwise an equal prefix wins (e.g. 4-5 > 4).
     const len = Math.max(a.version.length, b.version.length)
     for (let i = 0; i < len; i++) {
       const av = a.version[i] ?? 0
@@ -227,47 +199,15 @@ function pickHighestSonnet(models: string[]): string | undefined {
   })
 }
 
-// Parse the free-form available-models textarea into a deduped, prefix-stripped
-// list. Accepts commas and newlines as separators.
-function parseAvailableModels(raw: string | undefined): string[] {
-  if (!raw) return []
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const part of raw.split(/[\n,]/)) {
-    const entry = stripProviderPrefix(part)
-    if (entry && !seen.has(entry)) {
-      seen.add(entry)
-      out.push(entry)
-    }
-  }
-  return out
-}
-
 // In edit mode the API key is optional (blank = keep the stored key); the
 // required check is applied conditionally in `superRefine` keyed off `mode`.
 function buildFormSchema(mode: "create" | "edit") {
   return baseFormSchema.superRefine((data, ctx) => {
-    // Only a shared record has a key here to require. A minted one holds none
-    // at all — each member's key is created at the provider.
-    if (
-      mode === "create" &&
-      data.provisioning_mode === "shared" &&
-      data.api_key.trim() === ""
-    ) {
+    if (mode === "create" && data.api_key.trim() === "") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["api_key"],
         message: "API key is required",
-      })
-    }
-    if (
-      data.provisioning_mode === "minted" &&
-      data.provider_admin_credential_id.trim() === ""
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider_admin_credential_id"],
-        message: "Choose the provider organisation the keys are created in",
       })
     }
     if (data.type === "openai_compatible") {
@@ -292,16 +232,12 @@ function buildFormSchema(mode: "create" | "edit") {
 // Mirrors the backend's `_default_sdk_modes()` so a record created here and one
 // created by an API caller that omits the field start out the same — which is
 // every mode there is.
-// Copied, not aliased: this array is a form default and `SDK_MODE_VALUES` is
-// exported to several other surfaces.
 const DEFAULT_SDK_MODES = [...SDK_MODE_VALUES]
 
 const CREATE_DEFAULTS: FormData = {
   name: defaultCredentialName("anthropic"),
   type: "anthropic",
   api_key: "",
-  provisioning_mode: "shared",
-  provider_admin_credential_id: "",
   base_url: "",
   model: "",
   default_model: "",
@@ -309,7 +245,6 @@ const CREATE_DEFAULTS: FormData = {
   set_as_default: false,
   set_user_sdk_defaults: false,
   sdk_default_modes: DEFAULT_SDK_MODES,
-  auto_provision_roles: [],
   model_override_conversation: "",
   model_override_building: "",
 }
@@ -344,12 +279,12 @@ function membersToTargets(
 function recordToFormData(record: ManagedAICredentialPublic): FormData {
   return {
     name: record.name,
-    // Managed records are always one of the four UI-selectable providers
-    // (minimax is not exposed); narrow to the form's enum.
+    // Narrowed to the manual form's enum. A provider-owned record may carry a
+    // type this form does not offer (a MiniMax provider creates one), which is
+    // safe only because such a record never reaches this form — the
+    // provider-owned branch returns before it is used.
     type: record.type as FormData["type"],
     api_key: "",
-    provisioning_mode: record.provisioning_mode ?? "shared",
-    provider_admin_credential_id: record.provider_admin_credential_id ?? "",
     base_url: record.base_url ?? "",
     model: record.model ?? "",
     default_model: record.default_model ?? "",
@@ -357,90 +292,23 @@ function recordToFormData(record: ManagedAICredentialPublic): FormData {
     set_as_default: record.set_as_default ?? false,
     set_user_sdk_defaults: record.set_user_sdk_defaults ?? false,
     sdk_default_modes: record.sdk_default_modes ?? DEFAULT_SDK_MODES,
-    auto_provision_roles: record.auto_provision_roles ?? [],
     model_override_conversation: record.model_override_conversation ?? "",
     model_override_building: record.model_override_building ?? "",
   }
 }
 
-interface ModelOverrideFieldProps {
-  form: UseFormReturn<FormData>
-  name: "model_override_conversation" | "model_override_building"
-  modeLabel: string
-  /** The value already stored on the record; `null` in create mode. */
-  storedValue: string | null
-  /** Fetch this credential's live model list for the picker. */
-  probeModels: () => Promise<AICredentialTestResult>
-  /** True while the form is saving or there is no key to probe with. */
-  probeDisabled: boolean
+/** "Fixed key" / "Per-user keys", from the record's computed mode. */
+function keySourceLabel(record: ManagedAICredentialPublic): string {
+  return record.provisioning_mode === "minted" ? "Per-user keys" : "Fixed key"
 }
 
-/**
- * One mode's model override, with the shared model picker beside it.
- *
- * Its own component because the two modes differ only by field name, and the
- * field name has to be a literal for `react-hook-form` to type the value.
- */
-function ModelOverrideField({
-  form,
-  name,
-  modeLabel,
-  storedValue,
-  probeModels,
-  probeDisabled,
-}: ModelOverrideFieldProps) {
-  // Emptying the box is a real edit: the submit handler sends `""`, the
-  // backend stores NULL and unpins every member still carrying the value
-  // being dropped. Say what that costs while the box is empty, since the
-  // consequence lands on other people's profiles rather than on this screen.
-  const clearing = !!storedValue && (form.watch(name) ?? "").trim() === ""
-
+/** One label-over-value pair in the provider-owned branch's definition list. */
+function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <FormField
-      control={form.control}
-      name={name}
-      render={({ field }) => (
-        <FormItem>
-          <FormLabel>{modeLabel} model override</FormLabel>
-          <div className="flex items-start gap-2">
-            <FormControl>
-              <Input
-                placeholder="Leave blank to use the credential's default model"
-                {...field}
-                value={field.value ?? ""}
-              />
-            </FormControl>
-            <ListModelsButton
-              credentialId={null}
-              credentialType={null}
-              probeModels={probeModels}
-              disabled={probeDisabled}
-              // The picker hands back the provider's id verbatim, and the
-              // backend stores `_normalize_default_model` of it. Stripping here
-              // rather than only on submit keeps the box showing the value that
-              // will actually be saved.
-              onSelect={(modelId) =>
-                form.setValue(name, stripProviderPrefix(modelId), {
-                  shouldDirty: true,
-                })
-              }
-            />
-          </div>
-          <FormDescription>
-            Pinned as each member's {modeLabel.toLowerCase()} model when this
-            credential becomes their default for that mode. Leave blank for no
-            opinion — members fall back to the credential's own default model.
-          </FormDescription>
-          {clearing && (
-            <p className="text-xs text-amber-600 dark:text-amber-500">
-              Saving unpins "{storedValue}" from members who still have it.
-              Anyone who picked their own model keeps it.
-            </p>
-          )}
-          <FormMessage />
-        </FormItem>
-      )}
-    />
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-sm">{value}</dd>
+    </div>
   )
 }
 
@@ -466,13 +334,30 @@ interface ManagedCredentialDialogProps {
   //
   // It is handed the reconcile result rather than nothing, because "the record
   // was created" and "that person can now work" are different facts and the
-  // host has no business deriving the second from the first. The result's
-  // members carry `api_key_onboarding_state` — the server's own answer, the
-  // same field that decides whether that person's dashboard shows the
-  // paste-a-key wall.
+  // host has no business deriving the second from the first.
   onCreated?: (result: ManagedAICredentialReconcileResult) => void
 }
 
+/**
+ * A managed AI credential — the key that exists, and who holds it.
+ *
+ * **Two compositions, one dialog**, because the record has two shapes and they
+ * are not the same story:
+ *
+ * * **Manual** — the admin pasted a key and chose everything about it. The
+ *   full form, eight blocks, as before minus the three concerns that moved:
+ *   the key-source radio (a manual record is always `shared`), the provider
+ *   organisation select (a manual record can never point at one) and the
+ *   auto-provision roles (the rule lives on `ai_provider` now). All three are
+ *   unsendable — `extra="forbid"` makes each a 422 naming the field — so they
+ *   are gone rather than disabled.
+ * * **Provider-owned** — a provider decided the key, the models and the SDK
+ *   wiring, and the only editable thing here is *who holds it*. Those values
+ *   render as **text**, not as disabled controls: that removes §4's
+ *   "disabled controls with no explanation" anti-pattern structurally instead
+ *   of annotating it, and it satisfies §9's accessibility requirement, since
+ *   there is no disabled styling left to be the only carrier of meaning.
+ */
 export function ManagedCredentialDialog({
   mode,
   record,
@@ -493,7 +378,7 @@ export function ManagedCredentialDialog({
     else setInternalOpen(open)
   }
 
-  // Every row of the providers table mounts one of these dialogs, so the
+  // Every row of the credentials table mounts one of these dialogs, so the
   // checkbox ids below have to be unique per instance even though Radix only
   // keeps the open one's content in the DOM.
   const fieldId = useId()
@@ -515,6 +400,10 @@ export function ManagedCredentialDialog({
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
+  // The branch. A provider-owned record's key and wiring are the provider's;
+  // this dialog manages its membership and says where the rest is decided.
+  const isProviderOwned = mode === "edit" && record?.is_provider_owned === true
+
   const form = useForm<FormData>({
     resolver: zodResolver(buildFormSchema(mode)),
     mode: "onBlur",
@@ -527,17 +416,8 @@ export function ManagedCredentialDialog({
   // The values the form was last seeded with — i.e. what the record looked
   // like when this dialog opened. Every PATCH field is diffed against this,
   // for the same reason `membershipDirty` exists: the payload is *absolute*,
-  // the snapshot is stale the moment it is taken (a signup auto-provisions,
-  // another admin edits the record, a window-focus refetch lands), and
-  // resubmitting an untouched field asserts a value the admin never chose.
-  // For the auto-provision fields that is not merely redundant — it is how a
-  // rename comes back as a 409 for a slot conflict the admin did not
-  // introduce. Sending only what changed is the fix; the backend's
-  // transition-scoped validator is the backstop under it.
-  // Recomputed on every render and discarded after the first — cheap enough
-  // for a dialog, and it keeps the ref non-nullable so every read below is a
-  // real `FormData`. The spread matters: the ref outlives the render, and the
-  // module-level defaults must not become per-instance state.
+  // the snapshot is stale the moment it is taken, and resubmitting an
+  // untouched field asserts a value the admin never chose.
   const openedWithRef = useRef<FormData>(
     mode === "edit" && record ? recordToFormData(record) : createDefaults(nameSubject),
   )
@@ -553,85 +433,9 @@ export function ManagedCredentialDialog({
   const showModel = selectedType === "openai_compatible"
   const setUserSdkDefaults = form.watch("set_user_sdk_defaults")
   const sdkModes = form.watch("sdk_default_modes")
-  const autoProvisionRoles = form.watch("auto_provision_roles")
-  const provisioningMode = form.watch("provisioning_mode")
-  const selectedProviderKeyId = form.watch("provider_admin_credential_id")
-  const isMinted = provisioningMode === "minted"
-
-  // Whether per-user minting may be chosen for this provider is the *server's*
-  // answer — `can_mint_now` on the adapter projection, which is the same rule
-  // `ManagedAICredentialsService._validate_provisioning` enforces on create.
-  // Rebuilding it here out of "the adapter supports minting" and "an
-  // organisation of that type is connected" would be a second implementation
-  // that stops agreeing the day a third condition is added.
-  //
-  // `supportsMinting` is still read, but only to say *why* the option is
-  // unavailable — that is a fact about the provider, not the policy.
-  const {
-    supportsMinting,
-    canMintNow,
-    isPending: adaptersPending,
-  } = useProviderAdapters(isOpen)
-
-  const { data: providerKeys } = useQuery({
-    queryKey: PROVIDER_ADMIN_CREDENTIALS_QUERY_KEY,
-    queryFn: () => AdminProviderCredentialsService.listProviderAdminCredentials(),
-    enabled: isOpen,
-    staleTime: 30_000,
-  })
-  const eligibleProviderKeys = (providerKeys ?? []).filter(
-    (entry) => entry.provider_type === selectedType,
-  )
-  // Both queries have to have answered before "minting is not available" is an
-  // answer rather than a loading state — otherwise the radio would disable
-  // itself for a moment on every open and take an already-made choice with it.
-  // The organisation list is needed for the select below, not for the verdict.
-  const mintingKnown = !adaptersPending && providerKeys !== undefined
-  const mintingAvailable = mintingKnown && canMintNow(selectedType)
-
-  // Changing the provider can invalidate a minted choice: the new provider may
-  // not mint at all, and a connected organisation belongs to exactly one
-  // provider. Both are reset rather than left to fail server-side.
-  useEffect(() => {
-    if (mode !== "create" || !mintingKnown) return
-    if (isMinted && !mintingAvailable) {
-      form.setValue("provisioning_mode", "shared", { shouldDirty: true })
-      form.setValue("provider_admin_credential_id", "", { shouldDirty: true })
-      return
-    }
-    if (
-      selectedProviderKeyId &&
-      !eligibleProviderKeys.some((entry) => entry.id === selectedProviderKeyId)
-    ) {
-      form.setValue("provider_admin_credential_id", "", { shouldDirty: true })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    // `providerKeys` is in the list because the effect reads the organisations
-    // themselves: one being disconnected elsewhere leaves a selected id that no
-    // longer exists while the verdict and the id both stay put.
-  }, [
-    mintingKnown,
-    mintingAvailable,
-    isMinted,
-    selectedType,
-    selectedProviderKeyId,
-    providerKeys,
-  ])
-
-  // The 409 raised when another managed credential already owns a
-  // (role, mode) default slot this one is claiming. Rendered next to the
-  // controls that caused it rather than as a toast: the fix is to untick one
-  // of them, and a toast is gone by the time the admin looks for it.
-  const [conflict, setConflict] = useState<AutoProvisionConflict | null>(null)
-  useEffect(() => {
-    setConflict(null)
-    // Only the three inputs the rule reads. Keyed by value, not by array
-    // identity, so an unrelated re-render does not clear a live error.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setUserSdkDefaults, sdkModes.join(","), autoProvisionRoles.join(",")])
 
   const toggleInArray = (
-    field: "sdk_default_modes" | "auto_provision_roles",
+    field: "sdk_default_modes",
     value: string,
     checked: boolean,
   ) => {
@@ -655,8 +459,8 @@ export function ManagedCredentialDialog({
   // hasn't typed their own name. Only active in create mode.
   const autoNameRef = useRef(defaultCredentialName(CREATE_DEFAULTS.type, nameSubject))
 
-  // Keep the suggested name in sync with the selected provider until the user
-  // types their own name. Disabled in edit mode (provider type is immutable).
+  // Keep the suggested name in sync with the selected type until the user
+  // types their own name. Disabled in edit mode (type is immutable).
   useEffect(() => {
     if (mode === "edit") return
     const currentName = form.getValues("name")
@@ -675,7 +479,6 @@ export function ManagedCredentialDialog({
       setTargets(membersToTargets(record))
       setMembershipDirty(false)
       setTestResult(null)
-      setConflict(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, record?.id])
@@ -692,7 +495,6 @@ export function ManagedCredentialDialog({
     }
     setMembershipDirty(false)
     setTestResult(null)
-    setConflict(null)
   }
 
   // Test Connection mutation — validates the entered key without persisting
@@ -727,8 +529,7 @@ export function ManagedCredentialDialog({
   // its own pending / error / empty rendering. Routing it through
   // `testMutation` would make opening a picker repaint the red-or-green
   // Test Connection banner at the foot of the dialog — a result the admin
-  // never asked for, reporting on a probe they did not run — and would let the
-  // picker's own Retry re-enter an already-pending mutation.
+  // never asked for, reporting on a probe they did not run.
   const probeModelsForOverride = () =>
     AdminLlmProvidersService.testManagedAiCredentialConnection({
       managedCredentialId:
@@ -757,18 +558,14 @@ export function ManagedCredentialDialog({
 
   // "Fill top 10 models": reuse a fresh successful test result if one exists for
   // the current inputs, otherwise run the Test Connection first and continue
-  // once it resolves. On success, populate the Available models field with the
-  // top 10 discovered models (provider order, deduped, prefix-stripped) and set
-  // a provider-appropriate default model. A failed/empty test fills nothing —
-  // the inline test-result alert explains why.
+  // once it resolves. A failed/empty test fills nothing — the inline
+  // test-result alert explains why.
   const fillTopModels = async () => {
     let result = testResult
     if (!(result?.success && (result.models?.length ?? 0) > 0)) {
       try {
         result = await testMutation.mutateAsync()
       } catch {
-        // mutation onError already surfaces the failure via testResult; nothing
-        // to fill.
         return
       }
     }
@@ -819,14 +616,8 @@ export function ManagedCredentialDialog({
     const labelFor = (userId: string) => labelById.get(userId) ?? userId
 
     // Per-user warnings: blocked and skipped (unknown / inactive). One toast per
-    // entry so the admin sees each by name.
-    //
-    // `b.message` is the server's own sentence for `b.reason`. It used to be a
-    // constant here — "in use by a published bundle" — printed for all three
-    // reasons, so an admin blocked by a mint that was still in flight was told
-    // they had a bundle conflict, whose obvious remedy is the force delete that
-    // must not be used while a key is being minted. The server states the
-    // reason; this renders it.
+    // entry so the admin sees each by name. `b.message` is the server's own
+    // sentence for `b.reason`; this renders it rather than substituting one.
     for (const b of blocked) {
       showErrorToast(`${labelFor(b.user_id)} was not removed. ${b.message}`)
     }
@@ -850,18 +641,6 @@ export function ManagedCredentialDialog({
     }
   }
 
-  // A (role, mode) collision is the one failure the admin can fix without
-  // leaving the dialog, so it is kept on screen; everything else is a toast as
-  // before.
-  const handleSaveError = (error: unknown) => {
-    const detected = parseAutoProvisionConflict(error)
-    if (detected) {
-      setConflict(detected)
-      return
-    }
-    handleError.call(showErrorToast, error as ApiError)
-  }
-
   const createMutation = useMutation({
     mutationFn: (body: ManagedAICredentialCreate) =>
       AdminLlmProvidersService.createManagedAiCredential({ requestBody: body }),
@@ -871,7 +650,7 @@ export function ManagedCredentialDialog({
       setIsOpen(false)
       onCreated?.(result)
     },
-    onError: handleSaveError,
+    onError: (error) => handleError.call(showErrorToast, error as ApiError),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: MANAGED_CREDENTIALS_QUERY_PREFIX })
     },
@@ -887,7 +666,7 @@ export function ManagedCredentialDialog({
       surfaceReconcileResult(result, targets)
       setIsOpen(false)
     },
-    onError: handleSaveError,
+    onError: (error) => handleError.call(showErrorToast, error as ApiError),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: MANAGED_CREDENTIALS_QUERY_PREFIX })
     },
@@ -904,21 +683,21 @@ export function ManagedCredentialDialog({
         ).length
       : 0
 
+  // The provider-owned branch's one write: membership, and nothing else. Every
+  // other field on the update model is refused on such a record with a 400
+  // naming the provider, so none of them is sent.
+  const saveMembersOnly = () => {
+    updateMutation.mutate({
+      target_user_ids: membershipDirty ? targets.map((t) => t.userId) : undefined,
+    })
+  }
+
   const onSubmit = (data: FormData) => {
-    // Create only. A brand-new record with neither members nor auto-provision
-    // roles would do nothing at all, so it is refused; an auto-provision-only
-    // record is the new legitimate case, starting empty and filling up as
-    // accounts are created. On edit there is nothing to guard: membership is
-    // only sent when the picker was touched, and unticking the last role on an
-    // as-yet-empty record is a state the backend accepts.
-    if (
-      mode === "create" &&
-      targets.length === 0 &&
-      data.auto_provision_roles.length === 0
-    ) {
-      showErrorToast(
-        "Select at least one target user, or a role to auto-provision for.",
-      )
+    // Create only. A brand-new record with no members would do nothing at all,
+    // so it is refused. An auto-provisioning record is no longer creatable
+    // here at all — that shape is a provider.
+    if (mode === "create" && targets.length === 0) {
+      showErrorToast("Select at least one target user.")
       return
     }
 
@@ -941,18 +720,10 @@ export function ManagedCredentialDialog({
     )
 
     if (mode === "create") {
-      const minted = data.provisioning_mode === "minted"
       const body: ManagedAICredentialCreate = {
         name: data.name.trim(),
         type: data.type,
-        provisioning_mode: data.provisioning_mode,
-        // A minted record holds no key of its own, and the backend refuses one
-        // rather than ignoring it. Omission is the representable "there is
-        // none" — not an empty string the server has to interpret.
-        api_key: minted ? undefined : data.api_key,
-        provider_admin_credential_id: minted
-          ? data.provider_admin_credential_id
-          : undefined,
+        api_key: data.api_key,
         base_url: includesBaseUrl ? data.base_url?.trim() || undefined : undefined,
         model: includesModel ? data.model?.trim() || undefined : undefined,
         default_model: defaultModel || undefined,
@@ -962,7 +733,6 @@ export function ManagedCredentialDialog({
         set_as_default: data.set_as_default,
         set_user_sdk_defaults: data.set_user_sdk_defaults,
         sdk_default_modes: data.sdk_default_modes,
-        auto_provision_roles: data.auto_provision_roles,
         // On create there is nothing to clear; blank means "not set".
         model_override_conversation: overrideConversation || undefined,
         model_override_building: overrideBuilding || undefined,
@@ -974,14 +744,9 @@ export function ManagedCredentialDialog({
     // Edit: PATCH, carrying only what this admin actually changed.
     //
     // Every field on `ManagedAICredentialUpdate` reads an omitted value as
-    // "leave it alone", so the diff below is lossless — and it is what stops a
-    // rename from re-asserting a stale snapshot of the auto-provision fields
-    // (see `openedWithRef`). Membership follows the same rule through
-    // `membershipDirty`; api_key follows it by being blank unless typed.
-    //
-    // Values still carry their own clear-vs-set meaning once a field *is*
-    // dirty: `available_models: []` clears the curation, `model_override_*:
-    // ""` clears the pinned model.
+    // "leave it alone", so the diff below is lossless. Membership follows the
+    // same rule through `membershipDirty`; api_key follows it by being blank
+    // unless typed.
     const opened = openedWithRef.current
     const sameSet = (a: string[], b: string[]) =>
       a.length === b.length &&
@@ -1001,9 +766,11 @@ export function ManagedCredentialDialog({
       body.model = data.model?.trim() || null
     }
     if ((data.default_model ?? "") !== (opened.default_model ?? "")) {
-      // Blank still leaves `default_model` alone — the backend has no clear for
-      // it, unlike the per-mode overrides.
-      body.default_model = defaultModel || undefined
+      // `""` is a real clear, exactly as on the provider endpoint: `update`
+      // writes the field whenever it is not null and `_normalize_default_model`
+      // turns a blank into NULL. Sending `undefined` here instead dropped the
+      // key from the body, so blanking the box saved green and changed nothing.
+      body.default_model = defaultModel
     }
     if ((data.available_models ?? "") !== (opened.available_models ?? "")) {
       body.available_models = availableModels
@@ -1017,12 +784,6 @@ export function ManagedCredentialDialog({
     if (!sameSet(data.sdk_default_modes, opened.sdk_default_modes)) {
       body.sdk_default_modes = data.sdk_default_modes
     }
-    if (!sameSet(data.auto_provision_roles, opened.auto_provision_roles)) {
-      // `[]` is a real value here (stop auto-provisioning), not "no change" —
-      // the backend distinguishes it from an omitted field, and existing
-      // members keep their credential either way.
-      body.auto_provision_roles = data.auto_provision_roles
-    }
     if (
       overrideConversation !==
       stripProviderPrefix(opened.model_override_conversation ?? "")
@@ -1035,23 +796,150 @@ export function ManagedCredentialDialog({
     ) {
       body.model_override_building = overrideBuilding
     }
-    // Never on a minted record: it stores no key, and the backend answers a
-    // rotation request there with a 400 rather than silently rotating nothing.
-    // The field is not on screen in that mode either — this is the guard for
-    // the value surviving a mode the admin then changed.
-    if (!isMinted && data.api_key && data.api_key.trim() !== "") {
+    if (data.api_key && data.api_key.trim() !== "") {
       body.api_key = data.api_key
     }
     updateMutation.mutate(body)
   }
 
+  const membershipPicker = (
+    <div className="space-y-2">
+      <Label className="text-sm font-medium">
+        {isProviderOwned ? "Who holds it" : "Target Users"}
+      </Label>
+      <UserAllowlistPicker
+        label={null}
+        enabled={isOpen}
+        selected={targets}
+        searchPlaceholder="Search users to provision for..."
+        emptyHint="Select the users this credential is for."
+        onAdd={(user) => {
+          setMembershipDirty(true)
+          setTargets((prev) =>
+            prev.some((t) => t.userId === user.id)
+              ? prev
+              : [
+                  ...prev,
+                  {
+                    id: user.id,
+                    userId: user.id,
+                    fallbackLabel: user.full_name
+                      ? `${user.full_name} <${user.email}>`
+                      : user.email,
+                  },
+                ],
+          )
+        }}
+        onRemove={(item) => {
+          setMembershipDirty(true)
+          setTargets((prev) => prev.filter((t) => t.userId !== item.userId))
+        }}
+      />
+      {/* Saving is what removes a member, and removing a member deletes their
+          credential — so the consequence is visible before Save. */}
+      {membershipDirty && removedMemberCount > 0 && (
+        <p className="text-xs text-warning">
+          Saving removes this credential from {removedMemberCount}{" "}
+          {removedMemberCount === 1 ? "member" : "members"} and deletes{" "}
+          {removedMemberCount === 1 ? "their copy" : "their copies"} of it.
+        </p>
+      )}
+    </div>
+  )
+
+  // ── The provider-owned branch: four blocks, no form controls but one ────
+  if (isProviderOwned && record) {
+    const providerName = record.provider_name ?? "its provider"
+    const wiredModes = record.set_user_sdk_defaults
+      ? (record.sdk_default_modes ?? []).map(sdkModeLabel).join(", ")
+      : ""
+    const overrides = SDK_MODE_OPTIONS.filter(
+      (option) => record[modelOverrideField(option.value)],
+    )
+      .map(
+        (option) =>
+          `${option.label}: ${record[modelOverrideField(option.value)]}`,
+      )
+      .join(" · ")
+
+    return (
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{record.name}</DialogTitle>
+            <DialogDescription>Managed by {providerName}.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <Alert>
+              <AlertTitle>Managed by the provider {providerName}</AlertTitle>
+              <AlertDescription>
+                <p>
+                  The key, the models and the SDK wiring are set on the
+                  provider. Change them there. Deleting this credential means
+                  deleting its provider.
+                </p>
+                <Button asChild variant="link" className="h-auto px-0">
+                  <Link to="/admin/ai-credentials" hash="providers">
+                    Open {providerName}
+                  </Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+
+            {/* Values as text, not as disabled inputs. They are computed
+                through the policy resolver on the wire, so this block cannot
+                disagree with the provider. */}
+            <div>
+              <h3 className="text-sm font-medium">What the provider decided</h3>
+              <dl className="mt-2 grid grid-cols-2 gap-3">
+                <Fact
+                  label="Type"
+                  value={getProviderTypeLabel(record.type)}
+                />
+                <Fact label="Key source" value={keySourceLabel(record)} />
+                <Fact
+                  label="Default model"
+                  value={record.default_model || "Platform default"}
+                />
+                <Fact
+                  label="SDK defaults"
+                  value={wiredModes || "Not wired"}
+                />
+                <Fact label="Model overrides" value={overrides || "None"} />
+              </dl>
+            </div>
+
+            {membershipPicker}
+          </div>
+
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" type="button" disabled={isPending}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <LoadingButton
+              type="button"
+              loading={isPending}
+              onClick={saveMembersOnly}
+            >
+              Save
+            </LoadingButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
+
+  // ── The manual branch: the full form ────────────────────────────────────
   const dialogBody = (
     <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
       <DialogHeader>
         <DialogTitle>
           {mode === "create"
-            ? "Provision LLM Provider Credential"
-            : "Edit Managed Credential"}
+            ? "Provision an AI credential"
+            : "Edit managed credential"}
         </DialogTitle>
         <DialogDescription>
           {mode === "create"
@@ -1083,7 +971,7 @@ export function ManagedCredentialDialog({
             render={({ field }) => (
               <FormItem>
                 <FormLabel>
-                  Provider Type <span className="text-destructive">*</span>
+                  Type <span className="text-destructive">*</span>
                 </FormLabel>
                 <Select
                   onValueChange={field.onChange}
@@ -1092,7 +980,7 @@ export function ManagedCredentialDialog({
                 >
                   <FormControl>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select a provider" />
+                      <SelectValue placeholder="Select a type" />
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
@@ -1105,7 +993,7 @@ export function ManagedCredentialDialog({
                 </Select>
                 <FormDescription>
                   {mode === "edit"
-                    ? "Provider type can't be changed after creation."
+                    ? "The type can't be changed after creation."
                     : PROVIDER_TYPE_OPTIONS.find((o) => o.value === selectedType)
                         ?.description}
                 </FormDescription>
@@ -1114,138 +1002,6 @@ export function ManagedCredentialDialog({
             )}
           />
 
-          <div className="space-y-3 rounded-md border p-3">
-            <div className="space-y-0.5">
-              <Label className="text-sm font-medium">Key source</Label>
-              <p className="text-xs text-muted-foreground">
-                {mode === "edit"
-                  ? "Set when the record was created and fixed afterwards."
-                  : "How each member gets a key."}
-              </p>
-            </div>
-            <RadioGroup
-              value={provisioningMode}
-              onValueChange={(value) =>
-                form.setValue("provisioning_mode", value as FormData["provisioning_mode"], {
-                  shouldDirty: true,
-                })
-              }
-              disabled={mode === "edit"}
-              className="gap-3"
-            >
-              <div className="flex items-start gap-2">
-                <RadioGroupItem
-                  value="shared"
-                  id={`${fieldId}-mode-shared`}
-                  className="mt-1"
-                />
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor={`${fieldId}-mode-shared`}
-                    className="text-sm font-normal"
-                  >
-                    One key, shared by every member
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    You paste a key and each member gets their own copy of it.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-start gap-2">
-                <RadioGroupItem
-                  value="minted"
-                  id={`${fieldId}-mode-minted`}
-                  className="mt-1"
-                  disabled={mode === "edit" || !mintingAvailable}
-                />
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor={`${fieldId}-mode-minted`}
-                    className="text-sm font-normal"
-                  >
-                    A separate key for each member
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    {mode === "create" && !mintingAvailable
-                      ? mintingKnown && !supportsMinting(selectedType)
-                        ? `${getProviderTypeLabel(selectedType)}'s administration API does not create keys, so a ${getProviderTypeLabel(selectedType)} key is pasted here and shared.`
-                        : "Connect a provider organisation on the Provider keys tab first."
-                      : "Cinna creates each member's key at the provider and destroys it when they lose the credential."}
-                  </p>
-                </div>
-              </div>
-            </RadioGroup>
-
-            {isMinted && (
-              <>
-                <FormField
-                  control={form.control}
-                  name="provider_admin_credential_id"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        Provider organisation{" "}
-                        <span className="text-destructive">*</span>
-                      </FormLabel>
-                      <Select
-                        onValueChange={field.onChange}
-                        value={field.value || undefined}
-                        disabled={mode === "edit"}
-                      >
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select a connected organisation" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {eligibleProviderKeys.map((entry) => (
-                            <SelectItem key={entry.id} value={entry.id}>
-                              {entry.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormDescription>
-                        Keys are created in this organisation's configured
-                        project.
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                {/* What we enforce, stated as what we enforce. The provider
-                    offers no narrower key than this, and saying otherwise here
-                    would be a reassurance nothing backs. */}
-                <div className="space-y-1 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
-                  <p>What this record does with each member's key:</p>
-                  <ul className="list-disc space-y-1 pl-4">
-                    <li>
-                      Creates it inside the organisation's configured project,
-                      whose monthly spend limit is verified as enforcing before
-                      any key is created.
-                    </li>
-                    <li>
-                      Destroys it when the member loses the credential — on
-                      removal, on deactivation, and when the account is deleted.
-                      A removal that is refused because a published bundle still
-                      uses the credential leaves the key live until it goes
-                      through.
-                    </li>
-                    <li>
-                      Records the provider handles needed to destroy it, so a key
-                      is never left behind unnamed.
-                    </li>
-                  </ul>
-                  <p>
-                    The key carries write access to that project's API
-                    resources. The project and its spend limit are the boundary.
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-
-          {!isMinted && (
           <FormField
             control={form.control}
             name="api_key"
@@ -1275,7 +1031,6 @@ export function ManagedCredentialDialog({
               </FormItem>
             )}
           />
-          )}
 
           {showBaseUrl && (
             <FormField
@@ -1336,9 +1091,9 @@ export function ManagedCredentialDialog({
               <FormItem>
                 <div className="flex items-center justify-between">
                   <FormLabel>Default model</FormLabel>
-                  {PROVIDER_MODELS_DOC_URL[selectedType] && (
+                  {providerModelsDocUrl(selectedType) && (
                     <a
-                      href={PROVIDER_MODELS_DOC_URL[selectedType]}
+                      href={providerModelsDocUrl(selectedType)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
@@ -1357,8 +1112,7 @@ export function ManagedCredentialDialog({
                 </FormControl>
                 <FormDescription>
                   The model used by default with this credential, across agents
-                  and native apps. Leave blank to use the platform default. Use a
-                  concrete model id for native apps.
+                  and native apps. Leave blank to use the platform default.
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -1416,50 +1170,7 @@ export function ManagedCredentialDialog({
             )}
           />
 
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Target Users</Label>
-            <UserAllowlistPicker
-              label={null}
-              enabled={isOpen}
-              selected={targets}
-              searchPlaceholder="Search users to provision for..."
-              emptyHint="Select the users to provision this credential for, or leave empty and pick roles under Auto-provision below."
-              onAdd={(user) => {
-                setMembershipDirty(true)
-                setTargets((prev) =>
-                  prev.some((t) => t.userId === user.id)
-                    ? prev
-                    : [
-                        ...prev,
-                        {
-                          id: user.id,
-                          userId: user.id,
-                          fallbackLabel: user.full_name
-                            ? `${user.full_name} <${user.email}>`
-                            : user.email,
-                        },
-                      ],
-                )
-              }}
-              onRemove={(item) => {
-                setMembershipDirty(true)
-                setTargets((prev) => prev.filter((t) => t.userId !== item.userId))
-              }}
-            />
-            {/* Saving is what removes a member, and removing a member deletes
-                their credential. Previously the "at least one target" guard
-                made emptying the list impossible; now that an
-                auto-provision-only record may legitimately have none, the
-                consequence has to be visible before Save instead. */}
-            {membershipDirty && removedMemberCount > 0 && (
-              <p className="text-xs text-amber-600 dark:text-amber-500">
-                Saving removes this credential from {removedMemberCount}{" "}
-                {removedMemberCount === 1 ? "member" : "members"} and deletes{" "}
-                {removedMemberCount === 1 ? "their copy" : "their copies"} of
-                it.
-              </p>
-            )}
-          </div>
+          {membershipPicker}
 
           <FormField
             control={form.control}
@@ -1469,7 +1180,7 @@ export function ManagedCredentialDialog({
                 <div className="space-y-0.5 pr-4">
                   <FormLabel>Set as default</FormLabel>
                   <FormDescription>
-                    Make this each user's default credential for its provider type.
+                    Make this each user's default credential for its type.
                   </FormDescription>
                 </div>
                 <FormControl>
@@ -1536,68 +1247,44 @@ export function ManagedCredentialDialog({
 
               {SDK_MODE_OPTIONS.filter((option) =>
                 sdkModes.includes(option.value),
-              ).map((option) => (
-                <ModelOverrideField
-                  key={option.value}
-                  form={form}
-                  name={modelOverrideField(option.value)}
-                  modeLabel={option.label}
-                  storedValue={
-                    record?.[modelOverrideField(option.value)] ?? null
-                  }
-                  probeModels={probeModelsForOverride}
-                  probeDisabled={!canTest() || isPending}
-                />
-              ))}
+              ).map((option) => {
+                const name = modelOverrideField(option.value)
+                return (
+                  <ModelOverrideField
+                    key={option.value}
+                    id={`${fieldId}-override-${option.value}`}
+                    modeLabel={option.label}
+                    value={form.watch(name) ?? ""}
+                    onChange={(next) =>
+                      form.setValue(name, next, { shouldDirty: true })
+                    }
+                    storedValue={record?.[name] ?? null}
+                    probeModels={probeModelsForOverride}
+                    probeDisabled={!canTest() || isPending}
+                  />
+                )
+              })}
             </div>
           )}
 
-          <div className="space-y-3 rounded-md border p-3">
-            <div className="space-y-0.5">
-              <Label className="text-sm font-medium">
-                Auto-provision for new users
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                Applied when an account is created; use Apply to existing users
-                for current accounts.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-x-6 gap-y-2">
-              {USER_ROLE_OPTIONS.map((role) => (
-                <div key={role.value} className="flex items-center gap-2">
-                  <Checkbox
-                    id={`${fieldId}-auto-provision-${role.value}`}
-                    checked={autoProvisionRoles.includes(role.value)}
-                    onCheckedChange={(checked) =>
-                      toggleInArray(
-                        "auto_provision_roles",
-                        role.value,
-                        checked === true,
-                      )
-                    }
-                  />
-                  <Label
-                    htmlFor={`${fieldId}-auto-provision-${role.value}`}
-                    className="text-sm font-normal"
-                  >
-                    {role.label}
-                  </Label>
-                </div>
-              ))}
-            </div>
-            {conflict && (
-              <Alert variant="destructive">
-                <AlertTitle>Another credential owns that default</AlertTitle>
-                <AlertDescription>
-                  {describeAutoProvisionConflict(conflict)}
-                </AlertDescription>
-              </Alert>
-            )}
-          </div>
+          {/* The rule moved to the provider, and an admin who cannot find the
+              control it replaced needs to be told where it went — deleting it
+              silently is how they conclude the feature was removed. */}
+          <p className="text-xs text-muted-foreground">
+            Who automatically receives a key is set on a provider, under{" "}
+            <Link
+              to="/admin/ai-credentials"
+              hash="providers"
+              className="text-primary hover:underline"
+            >
+              Providers
+            </Link>
+            .
+          </p>
 
           {testResult && (
             <Alert variant={testResult.success ? "default" : "destructive"}>
-              {testResult.success && <CheckCircle2 className="h-4 w-4 text-green-600" />}
+              {testResult.success && <CheckCircle2 className="h-4 w-4" />}
               <AlertDescription>{describeTestResult(testResult)}</AlertDescription>
             </Alert>
           )}
@@ -1641,9 +1328,7 @@ export function ManagedCredentialDialog({
       }}
     >
       {/* Only when this dialog owns its own open state. A controlled create —
-          the invite wizard's step 3 — brings its own button, and rendering this
-          one beside it was the sibling that kept assuming create ⇒ uncontrolled
-          after `isControlled` replaced that proxy. */}
+          the invite wizard's hand-off — brings its own trigger. */}
       {mode === "create" && !isControlled && (
         <DialogTrigger asChild>
           <Button>

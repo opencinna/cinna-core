@@ -674,13 +674,17 @@ def _create_admin_managed_ai_credential(
     *,
     credential_type: str = "anthropic",
 ) -> str:
-    """Create a shared-mode managed AI credential; return the caller's child id.
+    """Create a manual (shared) managed AI credential; return the caller's child id.
 
-    Fully API-driven: ``POST /admin/llm-providers/`` with
-    ``provisioning_mode="shared"`` stamps ``is_admin_managed=True`` on each
-    member's own child ``AICredential`` row synchronously (no key-provisioning
-    scheduler involved, unlike ``provisioning_mode="minted"``). The superuser
-    is both the admin creating the record and its only member, matching how
+    Fully API-driven: ``POST /admin/llm-providers/`` creates a **manual**
+    record, which is always shared — ``provisioning_mode`` is derived rather
+    than stated and the create request forbids it outright. A shared record
+    stamps ``is_admin_managed=True`` on each member's own child
+    ``AICredential`` row synchronously, with no key-provisioning scheduler
+    involved; a minted record is the contrasting shape, and it is created by
+    creating a minted provider (``POST /admin/ai-providers/``) rather than
+    here. The superuser is both the admin creating the record and its only
+    member, matching how
     ``tests/api/agents/bundles_install/agents_bundles_install_readiness_test.py``
     (``_publisher_managed_child``) sets up the same shape.
     """
@@ -691,7 +695,6 @@ def _create_admin_managed_ai_credential(
         json={
             "name": f"Managed-{uuid.uuid4().hex[:8]}",
             "type": credential_type,
-            "provisioning_mode": "shared",
             "api_key": "sk-ant-api03-managed-notice",
             "target_user_ids": [publisher["id"]],
         },

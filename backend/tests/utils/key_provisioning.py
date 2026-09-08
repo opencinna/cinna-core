@@ -30,6 +30,7 @@ __all__ = [
     "converge_keys",
     "make_membership_due",
     "mark_membership_minting",
+    "membership_id_for",
 ]
 
 
@@ -98,3 +99,26 @@ def mark_membership_minting(db: Session, user_id) -> None:
     membership.provision_attempts = 1
     db.add(membership)
     db.commit()
+
+
+def membership_id_for(db: Session, user_id) -> str:
+    """The membership row's id, as a string.
+
+    The handle the provider-side key name is postfixed with. It is not on any
+    projection — the admin member list publishes the *user*, which is the
+    question that surface answers — so the one test that reads the name the
+    provider was given reads the id here rather than inventing a field for it.
+    """
+    from sqlmodel import select
+
+    from app.models.credentials.managed_ai_credential_membership import (
+        ManagedAICredentialMembership,
+    )
+
+    membership = db.exec(
+        select(ManagedAICredentialMembership).where(
+            ManagedAICredentialMembership.user_id == user_id
+        )
+    ).first()
+    assert membership is not None, f"no membership row for user {user_id}"
+    return str(membership.id)

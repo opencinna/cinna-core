@@ -62,8 +62,8 @@ from tests.utils.account_provisioning import (
     session_is_usable,
 )
 from tests.utils.google_oauth import login_with_google, random_google_id
+from tests.utils.ai_provider_admin import create_provider_credential
 from tests.utils.managed_ai_credential import (
-    create_managed_credential,
     get_managed_credential,
     member_user_ids,
 )
@@ -85,16 +85,19 @@ NEEDS_AGENT_STUBS = False
 
 
 def _parent(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
+    db: Session,
     *,
     name: str,
     set_user_sdk_defaults: bool = False,
 ) -> dict:
-    """One auto-provisioning managed credential covering ``agent-user``."""
-    result = create_managed_credential(
-        client,
-        superuser_token_headers,
+    """One auto-provisioning provider, and the credential it owns.
+
+    The rule lives on the provider since the provider/credential split; what is
+    returned is still the managed credential's projection, because that is the
+    record every assertion below reads members off.
+    """
+    result = create_provider_credential(
+        db,
         name=name,
         auto_provision_roles=["agent-user"],
         set_user_sdk_defaults=set_user_sdk_defaults,
@@ -132,7 +135,7 @@ def _failure_events(client: TestClient, headers: dict[str, str]) -> list[dict]:
 
 
 def test_no_provider_is_contacted_anywhere_on_the_account_creation_path(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """
     Account creation must never wait on OpenAI, Anthropic or anyone else:
@@ -159,8 +162,8 @@ def test_no_provider_is_contacted_anywhere_on_the_account_creation_path(
     sockets are untouched, so Postgres and SMTP behave normally.
     """
     # ── Phase 1: Two parents, so provisioning has real work to do ──────
-    first = _parent(client, superuser_token_headers, name="Company A")
-    second = _parent(client, superuser_token_headers, name="Company B")
+    first = _parent(db, name="Company A")
+    second = _parent(db, name="Company B")
 
     with no_outbound_http() as attempts:
         # ── Phase 2: The control. Without this the rest is vacuous. ────
@@ -242,8 +245,8 @@ def test_a_failing_sql_statement_inside_add_members_never_loses_the_account(
     against exactly the code it exists to catch.
     """
     # ── Phase 1 ────────────────────────────────────────────────────────
-    _parent(client, superuser_token_headers, name="Company A")
-    _parent(client, superuser_token_headers, name="Company B")
+    _parent(db, name="Company A")
+    _parent(db, name="Company B")
 
     email = random_email()
     password = random_lower_string()
@@ -323,8 +326,8 @@ def test_a_failing_membership_query_inside_add_members_never_loses_the_account(
       3. Signup still succeeds and the session is still usable
       4. The first parent's grant stands; the second is reported failed
     """
-    _parent(client, superuser_token_headers, name="Company A")
-    _parent(client, superuser_token_headers, name="Company B")
+    _parent(db, name="Company A")
+    _parent(db, name="Company B")
 
     email = random_email()
     password = random_lower_string()
@@ -388,8 +391,8 @@ def test_provisioning_survives_being_handed_an_already_aborted_session(
     one worth documenting, so it is tested for the ones that do not exist yet.
     """
     # ── Phase 1 + 2 ────────────────────────────────────────────────────
-    _parent(client, superuser_token_headers, name="Company A")
-    _parent(client, superuser_token_headers, name="Company B")
+    _parent(db, name="Company A")
+    _parent(db, name="Company B")
 
     email = random_email()
     password = random_lower_string()
@@ -505,7 +508,7 @@ def test_a_failing_audit_write_is_swallowed_and_the_caller_can_still_commit(
 
 
 def test_account_creation_survives_provisioning_on_an_instance_without_smtp(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """Creating an account must not depend on an email being sendable.
 
@@ -536,9 +539,8 @@ def test_account_creation_survives_provisioning_on_an_instance_without_smtp(
     callback is unaffected because it answers with a token rather than a
     ``UserPublic``.
     """
-    parent = create_managed_credential(
-        client,
-        superuser_token_headers,
+    parent = create_provider_credential(
+        db,
         name="Company A",
         auto_provision_roles=["agent-user"],
     )["record"]

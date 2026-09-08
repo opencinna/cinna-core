@@ -165,20 +165,20 @@ function AttemptsTable({
   const attempts = stage.llm_attempts
   if (attempts === undefined) {
     // No `llm_attempts` key at all — an older or malformed row. Says nothing
-    // about whether a provider was reached.
+    // about whether a model was reached.
     return (
       <p className="px-1 text-xs text-muted-foreground">
-        This trace records no provider attempts for this pass.
+        This trace records no model attempts for this pass.
       </p>
     )
   }
   if (attempts.length === 0) {
     // Present and empty: a pattern match or a single-candidate shortcut never
-    // reaches a provider. Saying so beats an empty section that reads as "the
-    // providers failed".
+    // reaches a model. Saying so beats an empty section that reads as "the
+    // models failed".
     return (
       <p className="px-1 text-xs text-muted-foreground">
-        No provider was called in this pass.
+        No model was called in this pass.
       </p>
     )
   }
@@ -187,7 +187,7 @@ function AttemptsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="text-xs">Provider</TableHead>
+            <TableHead className="text-xs">Type</TableHead>
             <TableHead className="text-xs">Model</TableHead>
             <TableHead className="text-xs">Result</TableHead>
             <TableHead className="text-xs">Latency</TableHead>

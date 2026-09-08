@@ -6,6 +6,27 @@ The registry that answers every "what does this provider do" question in one pla
 
 ---
 
+## An adapter describes a **type**. It never describes a Provider.
+
+Read this before anything else in this file, because the word "provider" arrives here with three histories and they will re-converge unless the rule is written down.
+
+| Term | What it names | Where it lives |
+|------|---------------|----------------|
+| **Type** | The **vendor**: `anthropic`, `openai`, `google`, `minimax`, `openai_compatible` | `AICredentialType` |
+| **Adapter** | The server-side module that knows how to talk to one type | `app/services/ai_providers/*`, projected as `ProviderAdapterPublic` |
+| **Provider** | An **entity an administrator creates**: one key source plus the rule for who automatically gets a key from it | `AIProvider`, table `ai_provider`, surface `/admin/ai-providers` — see [admin_ai_credential_provisioning](admin_ai_credential_provisioning.md) |
+
+So:
+
+- An adapter is **per type**, and there is one of each. `registry.all_adapters()` is the whole set, and it is the same set on an instance with no providers connected as on one with twenty.
+- A Provider is **per configuration**, created and deleted by an administrator. Several Providers may share one type; a type with no Provider is still a type this server supports.
+- The package directory is called `ai_providers/` and the class is `AIProviderAdapter`. **Those names predate the vocabulary split and were deliberately not churned.** They mean "adapter for an AI vendor", and the identifier that names the new entity is `AIProvider` in `app/models/credentials/provider_admin_credential.py`, not anything in this package.
+- In user-visible copy the word **Provider** means the entity. The vendor is called the **type** — on the admin surface it is the `Type` column, and the create wizard's first step picks a type before anything else, because the shape of the rest of the form depends on it.
+
+The consequence for this file: nothing an adapter declares may be a function of what an administrator has connected. That is a property of the projection, not a style preference, and it is asserted — see [`GET /api/v1/admin/ai-providers/adapters`](#get-apiv1adminai-providersadapters).
+
+---
+
 ## Files
 
 | Path | Contents |
@@ -198,7 +219,7 @@ Two further notes worth keeping:
 | `revoke(secret, external_ref) -> None` | Destroy the key. A 404 is success — the thing we were asked to destroy is gone; treating it as a failure would make an already-revoked key retry forever |
 | `verify_admin_access(secret, config) -> str` | Read-only administration call. Returns the provider-side id it reached |
 | `verify_spend_limit(secret, config) -> SpendLimitStatus` | Read the project's cap |
-| `config_schema() -> dict` | What an administrator must supply to connect an organisation. Published verbatim as `admin_config_schema` by `GET /admin/provider-adapters/` |
+| `config_schema() -> dict` | What an administrator must supply to connect a per-user-keys Provider of this type. Published verbatim as `admin_config_schema` by `GET /admin/ai-providers/adapters` |
 
 **There is no `ensure_spend_limit`, and its absence is deliberate.** The protocol had one, along with an editable `spend_limit_cents` and an "Apply spend limit" action; all three were removed. The spend limit is the provider console's to own — the same organisation is reachable from the console and from any other tool pointed at it, so a threshold stored on this side is a second copy that goes stale unobserved, and a stale figure shown as the project's cap is worse than none. The cap is read, checked and never written. No fallback value exists anywhere.
 
@@ -273,22 +294,31 @@ The provider has two create endpoints returning the secret in two different plac
 
 ---
 
-## `GET /api/v1/admin/provider-adapters/`
+## `GET /api/v1/admin/ai-providers/adapters`
 
 Superuser only. `ProviderAdaptersPublic` → `{ "data": [ProviderAdapterPublic], "count": int }`.
 
-Derived from `registry.all_adapters()`, so a sixth provider appears the moment its adapter is registered — no list to update, and no way for this endpoint to disagree with the validation it describes.
+Handled by `list_provider_adapters` in `backend/app/api/routes/admin_ai_providers.py`, declared **above** `/{provider_id}` so the literal segment wins the match. It moved here from `/admin/provider-adapters` — a router deleted with `/admin/provider-admin-credentials` — **unchanged in shape**. It sits on the Providers router because that is the surface that consumes it, not because it describes a Provider: it describes the **types** a Provider may be created for.
+
+Derived from `registry.all_adapters()`, so a sixth type appears the moment its adapter is registered — no list to update, and no way for this endpoint to disagree with the validation it describes.
 
 | Field | Source |
 |-------|--------|
 | `type`, `label`, `account_config_display_name`, `account_config_slug`, `sdk_engine` | adapter attributes, verbatim |
 | `requires_base_url`, `requires_model`, `supports_model_listing`, `issues_oauth_tokens`, `supports_minting` | adapter attributes, verbatim |
 | `admin_config_schema` | `adapter.key_provisioner.config_schema()`, or `None` when the adapter cannot mint |
-| `can_mint_now` | **Required, no default.** `adapter.supports_minting and adapter.type in connected_types`, where `connected_types` is one `SELECT DISTINCT provider_type FROM provider_admin_credential` for the whole response |
 
-`supports_minting` and `can_mint_now` are both published on purpose. The first is a fact about the provider and is what tells an admin *why* the option is unavailable; the second is the **policy answer**. `can_mint_now` has no default because an absent policy answer read through a client-side fallback is the browser deciding the policy — and the create route enforces the same rule in `ManagedAICredentialsService._validate_provisioning_shape`, so a conjunction rebuilt in the client is the copy that stops agreeing the day a third condition is added.
+`supports_minting` is the server's whole answer to *"may an administrator choose per-user keys for this type"*. A Provider carries its own administration secret, so minting has no precondition beyond the adapter being able to do it, and `AIProvidersService._validate_shape` — the rule that raises the `400` — reads exactly this one term. The create wizard gates its "Per-user keys" tile on the same field.
 
-> **Envelope note.** This endpoint returns `{data, count}`; `GET /admin/provider-admin-credentials/` and `GET /ai-credentials/provisioning` return bare arrays. See [Known gaps](admin_ai_credential_provisioning.md#known-gaps).
+### `can_mint_now` is gone, and why it had to go
+
+The projection used to publish a second field, `can_mint_now`, defined as `supports_minting and type in connected_types` where `connected_types` was a `SELECT DISTINCT provider_type` over the providers table. Under the superseded model that conjunction was correct: a minted managed credential borrowed a *separately connected* organisation's secret, so "is an organisation of this type connected" was a real precondition answered on a different tab.
+
+Under the provider model the Provider **is** the organisation, and the conjunction became circular. It answered `false` for the first OpenAI Provider an administrator ever connects — the case the create wizard exists to serve — so a client gating on it could never reach per-user keys at all. The field is removed rather than redefined: one term, in one place, published under the name of the fact it states.
+
+**The property that replaced it is asserted, not asked for.** `tests/api/ai_credentials/admin_ai_providers_test.py::test_provider_adapters_says_which_provider_can_mint` reads the projection into a `by_type` map, connects a fixed-key Provider and a minted one, reads it again, and asserts `after == by_type`. That equality is the whole point and it is not recoverable from the individual field assertions above it: it says **no field on this projection may become a function of what is connected**, which is precisely the defect `can_mint_now` had. A future field computed from a query against `ai_provider` fails that line rather than shipping and being discovered by an administrator who cannot create their first Provider. The same test also asserts the retired key is absent from the payload, so it cannot come back silently under its old name.
+
+> **Envelope note.** This endpoint returns `{data, count}`; `GET /admin/ai-providers/` and `GET /ai-credentials/provisioning` return bare arrays. See [Known gaps](admin_ai_credential_provisioning.md#known-gaps).
 
 ---
 
@@ -309,6 +339,6 @@ Half A of this phase moved existing per-provider tables onto the adapters rather
 ## Integration points
 
 - [ai_credentials_tech](ai_credentials_tech.md) — the probe path, `model_discovery_service`, `sdk_constants`, the credential bag
-- [admin_ai_credential_provisioning](admin_ai_credential_provisioning.md) / [_tech](admin_ai_credential_provisioning_tech.md) — provider admin credentials, per-user key minting, and everything the `KeyProvisioner` capability feeds
+- [admin_ai_credential_provisioning](admin_ai_credential_provisioning.md) / [_tech](admin_ai_credential_provisioning_tech.md) — Providers (the entity), per-user key minting, and everything the `KeyProvisioner` capability feeds. `AIProvidersService._validate_shape` is the enforcing reader of `supports_minting`, `requires_base_url` and `requires_model`
 - [anthropic_credential_types_tech](anthropic_credential_types_tech.md) — `classify_key` and the two Anthropic environment variables
 - [Multi-SDK environments](../../agents/agent_environment_core/multi_sdk.md) — the SDK-engine axis `sdk_engine` feeds, and the credential bag the adapters fill

@@ -5,7 +5,7 @@ WHAT THIS IS
 Zero-touch onboarding phase 3. An administrator invites a person by address:
 the account row is created through the ordinary chokepoint
 (``UserService.create_account(origin=AccountOrigin.INVITE)``) with no password,
-the managed AI credentials the admin chose are granted through
+the AI providers the admin chose are granted through
 ``AccountProvisioningService``, and one ``user_invitation`` row records the
 outstanding offer plus the ``jti`` of the single live token that redeems it.
 
@@ -93,6 +93,7 @@ from app.models.users.user_invitation import (
     INVITATION_STATUS_EXPIRED,
     INVITATION_STATUS_PENDING,
     INVITATION_STATUS_REVOKED,
+    InviteProvisioningDefaultSlotSkip,
     InviteProvisioningSkip,
     InviteProvisioningSummary,
     InviteUserRequest,
@@ -963,17 +964,26 @@ class InvitationService:
             session,
             user,
             AccountOrigin.INVITE,
-            managed_credential_ids=data.managed_credential_ids,
+            provider_ids=data.provider_ids,
             actor=admin,
         )
         provisioning = InviteProvisioningSummary(
             added_count=len(report.added),
             skipped=[
                 InviteProvisioningSkip(
-                    managed_credential_id=skip.managed_credential_id,
+                    provider_id=skip.provider_id,
                     reason=skip.reason,
                 )
                 for skip in report.skipped
+            ],
+            # Disclosure, carried straight through. It says the grant landed and
+            # its wiring did not, so it must not be folded into ``skipped`` and
+            # must not touch ``provisioning_failed``.
+            default_slot_skips=[
+                InviteProvisioningDefaultSlotSkip(
+                    provider_id=slot_skip.provider_id, mode=slot_skip.mode
+                )
+                for slot_skip in report.default_slot_skips
             ],
             provisioning_failed=report.failed,
         )

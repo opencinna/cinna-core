@@ -4,17 +4,16 @@ import { KeyRound } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import {
-  AdminLlmProvidersService,
-  type ManagedAICredentialPublic,
-  type ManagedAICredentialReconcileResult,
+  AdminAiProvidersService,
+  type AIProviderPublic,
 } from "@/client"
 import type { ApiError } from "@/client/core/ApiError"
 import { CompanyAiCredentialRow } from "@/components/Admin/AccessPolicy/CompanyAiCredentialRow"
 import {
+  AI_PROVIDERS_QUERY_KEY,
   type AutoProvisionConflict,
   describeAutoProvisionConflict,
   MANAGED_CREDENTIALS_QUERY_PREFIX,
-  managedCredentialsQueryKey,
   parseAutoProvisionConflict,
 } from "@/components/Admin/LlmProviders/providerTypes"
 import { PREVIEW_COUNT, PreviewList } from "@/components/Common/PreviewList"
@@ -32,7 +31,7 @@ import { handleError } from "@/utils"
 import { userRoleLabel } from "@/utils/userRoles"
 
 interface ToggleVariables {
-  record: ManagedAICredentialPublic
+  record: AIProviderPublic
   role: string
   checked: boolean
 }
@@ -52,8 +51,8 @@ interface RefusedToggle {
  * card asks, and the rest is what the link at the foot is for.
  */
 function sortForPreview(
-  records: ManagedAICredentialPublic[],
-): ManagedAICredentialPublic[] {
+  records: AIProviderPublic[],
+): AIProviderPublic[] {
   return [...records].sort((a, b) => {
     const aGrants = (a.auto_provision_roles ?? []).length > 0
     const bGrants = (b.auto_provision_roles ?? []).length > 0
@@ -65,19 +64,25 @@ function sortForPreview(
 /**
  * Which company AI keys a new account of each role receives.
  *
- * The flag itself lives on `ManagedAICredential.auto_provision_roles` and is
- * edited on the AI Credentials page alongside everything else about a
- * credential. This is the same flag seen from the other end: an admin setting
- * up the front door is asking "what does a new Agent Developer get?", and
- * answering that from a list of credentials means opening each one in turn.
- * So the card reads and writes the same field, and never invents state of its
- * own — a click here is one PATCH to one credential.
+ * The rule itself lives on `AIProvider.auto_provision_roles` and is edited on
+ * the Providers tab alongside everything else about a provider. This is the
+ * same rule seen from the other end: an admin setting up the front door is
+ * asking "what does a new Agent Developer get?", and answering that from a list
+ * of key sources means opening each one in turn. So the card reads and writes
+ * the same field, and never invents state of its own — a click here is one
+ * PATCH to one provider.
  *
- * A preview list (P5) at half width, not the full-width table this used to be:
- * a name plus a three-segment role toggle is a list of rows, and the segmented
- * group is one control (guidelines §2 "Card width" / "Toggles on rows"). The
- * table that would genuinely need its columns would also need search, which
- * makes it the `/admin/ai-credentials` route the footer link already goes to.
+ * **The entity moved, and only the entity.** It used to read and write
+ * `auto_provision_roles` on a managed credential; that column is gone (§3.2), a
+ * managed credential is no longer a factory, and `ManagedAICredentialUpdate`
+ * refuses the field outright. Everything else here — the pattern, the width,
+ * the header icon, the per-record pending set and the `onSuccess` cache
+ * write-through — is unchanged, deliberately: that mechanism is load-bearing
+ * and its reasons are written out below.
+ *
+ * A preview list (P5) at half width: a name plus a three-segment role toggle is
+ * a list of rows, and the segmented group is one control (guidelines §2 "Card
+ * width" / "Toggles on rows").
  */
 export function CompanyAiCredentialsCard() {
   const queryClient = useQueryClient()
@@ -123,28 +128,23 @@ export function CompanyAiCredentialsCard() {
     error,
     refetch,
   } = useQuery({
-    // The same key the AI Credentials page uses, so a change made there is
-    // already reflected here (and vice versa) without a second source of
-    // truth.
-    queryKey: managedCredentialsQueryKey(),
-    queryFn: () => AdminLlmProvidersService.listManagedAiCredentials({}),
+    // The same key the Providers tab uses, so a change made there is already
+    // reflected here (and vice versa) without a second source of truth.
+    queryKey: AI_PROVIDERS_QUERY_KEY,
+    queryFn: () => AdminAiProvidersService.listAiProviders(),
     staleTime: 30_000,
   })
 
-  const toggleMutation = useMutation<
-    ManagedAICredentialReconcileResult,
-    ApiError,
-    ToggleVariables
-  >({
+  const toggleMutation = useMutation<AIProviderPublic, ApiError, ToggleVariables>({
     mutationFn: ({ record, role, checked }) => {
       const current = record.auto_provision_roles ?? []
       const next = checked
         ? [...current, role]
         : current.filter((entry) => entry !== role)
-      return AdminLlmProvidersService.updateManagedAiCredential({
-        managedCredentialId: record.id,
-        // Only this field. Every other property is `null`/omitted, which the
-        // backend reads as "unchanged" — membership included.
+      return AdminAiProvidersService.updateAiProvider({
+        providerId: record.id,
+        // Only this field. Every other property is omitted, which the backend
+        // reads as "unchanged".
         requestBody: { auto_provision_roles: next },
       })
     },
@@ -165,17 +165,14 @@ export function CompanyAiCredentialsCard() {
       // undoing it, with two green toasts and no error. Writing the row here
       // closes the window rather than narrowing it: there is no interval in
       // which the control is live and the cache is behind.
-      queryClient.setQueryData<ManagedAICredentialPublic[]>(
-        managedCredentialsQueryKey(),
-        (rows) =>
-          rows?.map((row) =>
-            row.id === result.record.id ? result.record : row,
-          ),
+      queryClient.setQueryData<AIProviderPublic[]>(
+        AI_PROVIDERS_QUERY_KEY,
+        (rows) => rows?.map((row) => (row.id === result.id ? result : row)),
       )
       showSuccessToast(
         checked
-          ? "New accounts with that role will receive this credential."
-          : "New accounts with that role will no longer receive this credential.",
+          ? "New accounts with that role will receive this key."
+          : "New accounts with that role will no longer receive this key.",
       )
     },
     onError: (error, { record, role }) => {
@@ -196,7 +193,10 @@ export function CompanyAiCredentialsCard() {
       releasePending(record.id)
       // Still invalidated — the write above keeps this row honest, but a
       // conflict is evidence that *another* row is involved and the whole list
-      // may have moved under a different admin.
+      // may have moved under a different admin. The managed list goes too: a
+      // provider edit re-applies its policy to the members of the credential it
+      // owns (§6.7).
+      void queryClient.invalidateQueries({ queryKey: AI_PROVIDERS_QUERY_KEY })
       void queryClient.invalidateQueries({
         queryKey: MANAGED_CREDENTIALS_QUERY_PREFIX,
       })
@@ -210,12 +210,12 @@ export function CompanyAiCredentialsCard() {
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 min-w-0">
           <KeyRound className="h-5 w-5" />
-          Company AI credentials
+          Company AI providers
         </CardTitle>
         <CardDescription>
-          Granted when an account is created. Changing a role later never grants
-          or revokes a key — use "Apply to existing users" on the AI Credentials
-          page for accounts that already exist.
+          Key sources a new account receives, by role. Changing a role later
+          never grants or revokes a key — use "Apply to existing users" on the
+          AI Credentials page for accounts that already exist.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -238,15 +238,16 @@ export function CompanyAiCredentialsCard() {
           isError={isError && records === undefined}
           error={error}
           onRetry={() => refetch()}
-          errorFallback="Couldn't read the managed AI credentials."
+          errorFallback="Couldn't read the AI providers."
           empty={
             <p className="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
-              No managed AI credentials yet —{" "}
+              No AI providers yet —{" "}
               <Link
                 to="/admin/ai-credentials"
+                hash="providers"
                 className="text-primary hover:underline"
               >
-                create one
+                connect one
               </Link>{" "}
               to hand new accounts a working key on day one.
             </p>
@@ -258,7 +259,7 @@ export function CompanyAiCredentialsCard() {
 
         {conflict && (
           <Alert variant="destructive">
-            <AlertTitle>Another credential owns that default</AlertTitle>
+            <AlertTitle>Another provider owns that default</AlertTitle>
             <AlertDescription>
               {userRoleLabel(conflict.role)} accounts couldn't be added to "
               {conflict.recordName}".{" "}
@@ -274,10 +275,10 @@ export function CompanyAiCredentialsCard() {
         {rows.length > 0 && (
           <div>
             <Button asChild variant="link" className="h-auto px-0">
-              <Link to="/admin/ai-credentials">
+              <Link to="/admin/ai-credentials" hash="providers">
                 {rows.length > PREVIEW_COUNT
                   ? `Show all (${rows.length}) on AI Credentials`
-                  : "Manage AI credentials"}
+                  : "Manage AI providers"}
               </Link>
             </Button>
           </div>

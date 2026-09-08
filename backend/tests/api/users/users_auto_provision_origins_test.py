@@ -13,7 +13,10 @@ own scenario here:
   ``admin``     — ``POST /users/`` (a superuser creating an account)
   ``external``  — a whitelisted unknown sender on a Server Channel webhook
   ``seed``      — the first-superuser bootstrap (see the note on that test)
-  ``invite``    — phase 3; the origin exists but nothing constructs one yet
+  ``invite``    — ``POST /users/invite``, whose own lifecycle lives in
+                  ``users_invitation_lifecycle_test.py``; what is asserted here
+                  is the one thing neither file can assert alone — that it
+                  grants the *same set* as a signup of the same role
 
 Two things are asserted for each, not one: that the child credential exists
 (membership of the managed parent) *and* that the owner's SDK defaults were
@@ -50,8 +53,13 @@ from tests.utils.account_provisioning import (
     provision_account,
 )
 from tests.utils.google_oauth import login_with_google, random_google_id
+from tests.utils.ai_provider_admin import (
+    create_provider_credential,
+    get_provider,
+)
+from tests.utils.invitation import accept, invite_user, token_of
+from tests.utils.network_guard import assert_guard_is_armed, no_outbound_http
 from tests.utils.managed_ai_credential import (
-    create_managed_credential,
     get_managed_credential,
     member_for,
     member_user_ids,
@@ -105,20 +113,24 @@ def _patch_anyio_to_thread():
 
 
 def _company_credential(
-    client: TestClient,
-    superuser_token_headers: dict[str, str],
+    db: Session,
     *,
     roles: list[str] | None = None,
 ) -> dict:
     """The shape an admin configures once: auto-provision + wired defaults.
 
+    Configured on the **provider**, which is where the rule lives since the
+    provider/credential split — a managed credential is no longer a factory and
+    refuses ``auto_provision_roles`` outright. What comes back is still the
+    managed credential's projection, because that is what every account-arrival
+    assertion below reads.
+
     Member list starts empty on purpose — that is the auto-provision-only
     record ``target_user_ids`` was made optional for, and it means every
     member observed later got there by arriving, not by being listed.
     """
-    result = create_managed_credential(
-        client,
-        superuser_token_headers,
+    result = create_provider_credential(
+        db,
         name=f"Company Anthropic {random_lower_string()[:6]}",
         auto_provision_roles=roles if roles is not None else ["agent-user"],
         set_user_sdk_defaults=True,
@@ -128,7 +140,9 @@ def _company_credential(
         set_as_default=True,
     )
     assert result["added"] == []
-    assert result["record"]["auto_provision_roles"] == (
+    # Read off the provider: the rule is the provider's, and the credential
+    # projection does not restate it.
+    assert get_provider(db, result["provider_id"])["auto_provision_roles"] == (
         roles if roles is not None else ["agent-user"]
     )
     return result["record"]
@@ -240,7 +254,7 @@ def _admin_email_kept_off_the_wire():
 
 
 def test_password_signup_receives_the_auto_provisioned_credential(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """
     The self-service path, end to end:
@@ -253,7 +267,7 @@ def test_password_signup_receives_the_auto_provisioned_credential(
          and attributed to the system rather than to an admin
     """
     # ── Phase 1: Admin configures it once ──────────────────────────────
-    parent = _company_credential(client, superuser_token_headers)
+    parent = _company_credential(db)
 
     # ── Phase 2: Somebody signs up ─────────────────────────────────────
     email = random_email()
@@ -290,7 +304,7 @@ def test_password_signup_receives_the_auto_provisioned_credential(
 
 
 def test_google_first_login_receives_the_auto_provisioned_credential(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """
     The zero-touch path the feature is named for:
@@ -300,7 +314,7 @@ def test_google_first_login_receives_the_auto_provisioned_credential(
          has its defaults wired — "already has keys on first login"
       4. The grant is stamped ``origin=google``
     """
-    parent = _company_credential(client, superuser_token_headers)
+    parent = _company_credential(db)
 
     email = random_email()
     headers = login_with_google(
@@ -327,7 +341,7 @@ def test_google_first_login_receives_the_auto_provisioned_credential(
 
 
 def test_admin_created_account_receives_the_auto_provisioned_credential(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """
     ``POST /users/`` is a caller of the chokepoint like any other:
@@ -337,7 +351,7 @@ def test_admin_created_account_receives_the_auto_provisioned_credential(
       4. The grant is stamped ``origin=admin`` — the audit distinguishes the
          path even though the outcome is identical
     """
-    parent = _company_credential(client, superuser_token_headers)
+    parent = _company_credential(db)
 
     email = random_email()
     password = random_lower_string()
@@ -367,7 +381,7 @@ def test_admin_created_account_receives_the_auto_provisioned_credential(
 
 
 def test_external_channel_auto_registered_sender_is_provisioned(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """
     A whitelisted stranger messages a Server Channel and gets an account:
@@ -380,7 +394,7 @@ def test_external_channel_auto_registered_sender_is_provisioned(
     This is the path most likely to be forgotten by a future refactor: it
     creates accounts from inside a webhook, nowhere near the auth routes.
     """
-    parent = _company_credential(client, superuser_token_headers)
+    parent = _company_credential(db)
     channel = create_server_channel(
         client,
         superuser_token_headers,
@@ -436,7 +450,7 @@ def test_seed_origin_provisions_the_bootstrapped_superuser(
       3. The ``role ⇔ is_superuser`` invariant pins it to ``admin`` …
       4. … and provisioning follows the resolved role, not the requested one
     """
-    parent = _company_credential(client, superuser_token_headers, roles=["admin"])
+    parent = _company_credential(db, roles=["admin"])
 
     seeded = create_account_via_service(
         db,
@@ -475,7 +489,7 @@ def test_auto_provisioning_an_existing_member_adds_nothing(
     explicit credential list and then the chokepoint's auto-provisioning runs
     over the same parents.
     """
-    parent = _company_credential(client, superuser_token_headers)
+    parent = _company_credential(db)
 
     email = random_email()
     password = random_lower_string()
@@ -536,7 +550,7 @@ def test_an_inactive_account_on_the_automatic_path_reports_nothing_at_all(
       4. ``on_account_created`` on that row reports empty ``added``, empty
          ``skipped``, and is not ``failed``
     """
-    parent = _company_credential(client, superuser_token_headers)
+    parent = _company_credential(db)
 
     email = random_email()
     with _admin_email_kept_off_the_wire():
@@ -570,7 +584,7 @@ def test_an_inactive_account_on_the_automatic_path_reports_nothing_at_all(
 
 
 def test_a_role_outside_auto_provision_roles_receives_nothing(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
 ) -> None:
     """Keeps every test above honest.
 
@@ -580,7 +594,7 @@ def test_a_role_outside_auto_provision_roles_receives_nothing(
     come away with nothing, and no failure event either — not being covered is
     not a failure.
     """
-    parent = _company_credential(client, superuser_token_headers, roles=["admin"])
+    parent = _company_credential(db, roles=["admin"])
 
     email = random_email()
     password = random_lower_string()
@@ -610,3 +624,236 @@ def test_a_role_outside_auto_provision_roles_receives_nothing(
     )
     assert failures.status_code == 200, failures.text
     assert failures.json()["data"] == []
+
+
+# ── Origin: invite, against origin: signup ─────────────────────────────
+
+
+def test_an_invite_and_a_signup_of_the_same_role_are_granted_the_same_set(
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
+) -> None:
+    """The two entry points, one body — asserted rather than read off the code.
+
+    ``on_account_created`` and ``provision_explicit`` share ``_provision`` so
+    that an invited ``agent-user`` and a Google-arriving one cannot come away
+    with different key sets. That is the whole argument for the shared body, and
+    until this test it was an argument about the code rather than about its
+    behaviour. What is compared:
+
+      1. Two providers auto-provision ``agent-user`` — one ``fixed_key``, one
+         ``minted`` — and a third auto-provisions ``agent-developer`` only, so
+         "the same set" means *the role's set* and not "everything configured"
+      2. A password signup, and an invite that says nothing about providers
+         (``provider_ids`` omitted — the "grant what this role would have got"
+         state of the tri-state)
+      3. Both are members of the same two records, and of neither the third
+      4. The **minted** grant is a ``pending`` membership with no key on both
+         paths, and neither request waited on OpenAI: both run inside the
+         outbound-HTTP guard, proved armed. A minted provider that blocked the
+         request would be a failed signup and a failed invitation
+      5. Their two feeds carry the same grants — the same event type against
+         the same provider ids — and differ in exactly the two fields that
+         *should* differ: ``origin`` and ``actor``
+    """
+    # ── Phase 1: What an administrator configured ─────────────────────
+    shared = create_provider_credential(
+        db,
+        name=f"Company Anthropic {random_lower_string()[:6]}",
+        credential_type="anthropic",
+        auto_provision_roles=["agent-user"],
+    )
+    minted = create_provider_credential(
+        db,
+        name=f"Company OpenAI {random_lower_string()[:6]}",
+        kind="minted",
+        credential_type="openai",
+        auto_provision_roles=["agent-user"],
+    )
+    developers_only = create_provider_credential(
+        db,
+        name=f"Developer Anthropic {random_lower_string()[:6]}",
+        credential_type="anthropic",
+        auto_provision_roles=["agent-developer"],
+    )
+
+    # ── Phase 2: Both arrivals, with nothing allowed to dial out ──────
+    signup_email = random_email()
+    signup_password = random_lower_string()
+    invited_email = random_email()
+    with no_outbound_http() as attempts:
+        assert_guard_is_armed(attempts)
+
+        signup = client.post(
+            f"{API}/users/signup",
+            json={"email": signup_email, "password": signup_password},
+        )
+        assert signup.status_code == 200, signup.text
+        signup_user = signup.json()
+
+        invited = invite_user(
+            client,
+            superuser_token_headers,
+            email=invited_email,
+            role="agent-user",
+        )
+
+        assert attempts == [], (
+            "Creating an account contacted a provider. A minted provider "
+            "records a pending membership and nothing else; the key is minted "
+            "by the converge pass, off the request path."
+        )
+
+    invited_user = invited["user"]
+    assert invited_user["role"] == "agent-user"
+    # The invite reports its own grants, and the count is the role's set.
+    assert invited["provisioning"]["added_count"] == 2, invited["provisioning"]
+    assert invited["provisioning"]["skipped"] == [], invited["provisioning"]
+    assert invited["provisioning"]["provisioning_failed"] is False
+
+    # ── Phase 3: The same set, both times ─────────────────────────────
+    both = {signup_user["id"], invited_user["id"]}
+    for granted in (shared, minted):
+        record = get_managed_credential(
+            client, superuser_token_headers, granted["record"]["id"]
+        )
+        assert both <= member_user_ids(record), (
+            f"{granted['record']['name']} did not reach both accounts; "
+            f"members were {member_user_ids(record)}"
+        )
+    developer_record = get_managed_credential(
+        client, superuser_token_headers, developers_only["record"]["id"]
+    )
+    assert not (both & member_user_ids(developer_record)), (
+        "an agent-user was granted a provider scoped to agent-developer"
+    )
+
+    # ── Phase 4: The minted grant is an intent, not a key ─────────────
+    minted_record = get_managed_credential(
+        client, superuser_token_headers, minted["record"]["id"]
+    )
+    for user_id in both:
+        member = member_for(minted_record, user_id)
+        assert member is not None
+        assert member["provisioning_status"] == "pending", member
+        assert member["child_credential_id"] is None, member
+
+    # ── Phase 5: The same events, differing only where they must ──────
+    signup_headers = user_authentication_headers(
+        client=client, email=signup_email, password=signup_password
+    )
+    accepted = accept(
+        client, token_of(invited["accept_url"]), random_lower_string()
+    )
+    assert accepted.status_code == 200, accepted.text
+    invited_headers = {
+        "Authorization": f"Bearer {accepted.json()['access_token']}"
+    }
+
+    signup_events = _auto_provision_events(client, signup_headers)
+    invited_events = _auto_provision_events(client, invited_headers)
+    granted_providers = {
+        shared["provider_id"], minted["provider_id"]
+    }
+    assert {
+        event["details"]["provider_id"] for event in signup_events
+    } == granted_providers, signup_events
+    assert {
+        event["details"]["provider_id"] for event in invited_events
+    } == granted_providers, invited_events
+    assert {event["severity"] for event in signup_events} == {"low"}
+    assert {event["severity"] for event in invited_events} == {"low"}
+
+    # The two fields that are *meant* to differ, so "the same events" is not
+    # read as "indistinguishable": an admin reading either feed must be able to
+    # tell how the account arrived and who caused the grant.
+    assert {event["details"]["origin"] for event in signup_events} == {"signup"}
+    assert {event["details"]["actor"] for event in signup_events} == {"system"}
+    assert {event["details"]["origin"] for event in invited_events} == {"invite"}
+    assert {event["details"]["actor"] for event in invited_events} == {
+        _find_user_id_by_email(
+            client, superuser_token_headers, settings.FIRST_SUPERUSER
+        )
+    }
+
+
+def test_a_role_change_on_an_existing_account_provisions_nothing(
+    client: TestClient, db: Session, superuser_token_headers: dict[str, str]
+) -> None:
+    """Auto-provisioning is creation-time only, and stays that way.
+
+    An admin promoting somebody should not silently hand them a company key as
+    a side effect: the promotion is about what the person may *do*, and the
+    grant is a separate decision with a separate audit trail. The explicit
+    "apply to existing users" action on the provider is the path for it, and it
+    has its own tests.
+
+    The control is that the provider genuinely covers the role afterwards — the
+    account is an ``agent-developer`` by the end and the provider
+    auto-provisions ``agent-developer``, so the only reason nothing was granted
+    is that nothing re-ran.
+
+    **Both doors, because there are two.** ``PATCH /users/{id}/role`` is the
+    one the admin UI uses; ``UserUpdate`` inherits ``role`` from ``UserBase``,
+    so the generic ``PATCH /users/{id}`` changes it too — and that route *does*
+    call into ``AccountProvisioningService`` for the ``is_active`` transition,
+    which is exactly the place a role transition would be tempting to hang a
+    grant off. Covering one door and not the other would leave the more
+    dangerous one unpinned.
+    """
+    provider = _company_credential(db, roles=["agent-developer"])
+
+    email = random_email()
+    password = random_lower_string()
+    signup = client.post(
+        f"{API}/users/signup", json={"email": email, "password": password}
+    )
+    assert signup.status_code == 200, signup.text
+    user = signup.json()
+    assert user["role"] == "agent-user"
+
+    promoted = client.patch(
+        f"{API}/users/{user['id']}/role",
+        headers=superuser_token_headers,
+        json={"role": "agent-developer"},
+    )
+    assert promoted.status_code == 200, promoted.text
+    assert promoted.json()["role"] == "agent-developer"
+
+    # The second door: the generic user update carries ``role`` as well.
+    other_email = random_email()
+    other_password = random_lower_string()
+    other_signup = client.post(
+        f"{API}/users/signup",
+        json={"email": other_email, "password": other_password},
+    )
+    assert other_signup.status_code == 200, other_signup.text
+    other = other_signup.json()
+    generic = client.patch(
+        f"{API}/users/{other['id']}",
+        headers=superuser_token_headers,
+        json={"role": "agent-developer"},
+    )
+    assert generic.status_code == 200, generic.text
+    assert generic.json()["role"] == "agent-developer"
+
+    record = get_managed_credential(
+        client, superuser_token_headers, provider["id"]
+    )
+    assert record["members"] == [], (
+        "a role change re-ran auto-provisioning; it is creation-time only, and "
+        "'apply to existing users' is the deliberate path"
+    )
+    assert record["member_count"] == 0
+
+    for promoted_id in (user["id"], other["id"]):
+        owner = _read_user(client, superuser_token_headers, promoted_id)
+        assert owner["default_ai_credential_conversation_id"] is None
+        assert owner["default_ai_credential_building_id"] is None
+
+    for address, secret in (
+        (email, password), (other_email, other_password)
+    ):
+        headers = user_authentication_headers(
+            client=client, email=address, password=secret
+        )
+        assert _auto_provision_events(client, headers) == []

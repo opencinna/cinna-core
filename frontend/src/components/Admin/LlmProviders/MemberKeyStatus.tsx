@@ -3,6 +3,7 @@ import { Loader2, RotateCw } from "lucide-react"
 
 import {
   AdminLlmProvidersService,
+  type AIProviderPublic,
   type ManagedAICredentialMember,
   type ManagedAICredentialPublic,
   type MembershipProvisioningStatus,
@@ -25,7 +26,7 @@ const TONE_CLASS: Record<
 > = {
   neutral: "text-muted-foreground",
   progress: "text-sky-600 dark:text-sky-400",
-  ok: "text-emerald-600 dark:text-emerald-400",
+  ok: "text-success",
   error: "text-destructive",
 }
 
@@ -33,6 +34,27 @@ const TONE_CLASS: Record<
 export function hasKeyInFlight(record: ManagedAICredentialPublic): boolean {
   return (record.members ?? []).some(
     (member) => membershipStatusMeta(member.provisioning_status).inFlight,
+  )
+}
+
+/**
+ * The same question of a provider, answered from its key-state summary.
+ *
+ * A provider projection carries counts per membership status rather than the
+ * member rows, so the predicate cannot be `hasKeyInFlight` — but the *idea* is
+ * one idea, and both halves read `inFlight` off `membershipStatusMeta` rather
+ * than each listing which statuses are still moving. That list is the thing
+ * that drifts.
+ *
+ * A status the server sends that this build has never heard of resolves to the
+ * fallback meta, which is deliberately not-in-flight: guessing "in progress"
+ * for a status nobody has described would poll forever.
+ */
+export function hasProviderKeyInFlight(provider: AIProviderPublic): boolean {
+  return Object.entries(provider.key_state_summary ?? {}).some(
+    ([status, count]) =>
+      count > 0 &&
+      membershipStatusMeta(status as MembershipProvisioningStatus).inFlight,
   )
 }
 

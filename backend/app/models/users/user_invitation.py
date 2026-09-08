@@ -165,7 +165,12 @@ class UserInvitationPublic(SQLModel):
 
 
 class InviteProvisioningSkip(SQLModel):
-    """One managed AI credential the invited account did *not* receive.
+    """One AI provider whose key the invited account did *not* receive.
+
+    Keyed by the provider, because that is what the wizard submits and what it
+    has a name for on screen; the managed credential a provider grants through
+    is not a thing the wizard ever names, and for ``provider_not_found`` there
+    is no credential to name at all.
 
     ``reason`` is the machine-readable string ``AccountProvisioningService``
     already produces. The full vocabulary, because the wizard renders copy per
@@ -176,20 +181,53 @@ class InviteProvisioningSkip(SQLModel):
       which is in practice the only producer this wizard ever sees: the
       short-circuit returns before ``add_members`` is called, so the
       reconcile path's own ``user_inactive`` cannot be reached from here.
-      One entry per **requested** credential, so that a deactivated
+      One entry per **requested** provider, so that a deactivated
       account does not report the empty summary an admin who ticked
       nothing gets;
-    * ``managed_credential_not_found`` — an id the admin ticked no longer
-      exists, or is not a managed credential. Reachable **only** from the
+    * ``provider_not_found`` — an id the admin ticked no longer names a
+      provider with a credential to grant through. Reachable **only** from the
       explicit invite path (``provision_explicit``), which is exactly this
       model's path, so it is the one reason the automatic path never emits and
-      the one most likely to be missing from the frontend's map;
-    * ``provision_failed`` — the per-parent guard caught something;
-    * ``add_members_failed`` — the grant itself failed for this credential.
+      the one most likely to be missing from the frontend's map. It replaced
+      ``managed_credential_not_found`` when the wizard moved to providers, so a
+      map carrying the old string renders a blank line for it;
+    * ``provision_failed`` — the per-provider guard caught something;
+    * ``add_members_failed`` — the grant itself failed for this provider.
     """
 
-    managed_credential_id: uuid.UUID
+    provider_id: uuid.UUID
     reason: str
+
+
+class InviteProvisioningDefaultSlotSkip(SQLModel):
+    """A provider's SDK wiring that did not apply to the invited account.
+
+    **Disclosure, not an error**, in the same sense as
+    ``InviteUserResponse.adopted_existing_account``: the grant succeeded, the
+    person holds a usable key, and the only surprising thing is that the
+    provider's per-mode default did not get repointed at it because the account
+    already held one in that mode. It is therefore *not* an
+    :class:`InviteProvisioningSkip` — that shape means the person did not
+    receive the key at all — and it never sets
+    :attr:`InviteProvisioningSummary.provisioning_failed`.
+
+    Carries the provider and the mode: together they name the policy that did
+    not take effect and the slot it did not take, which is what an
+    administrator can act on. The credential already occupying the slot is
+    deliberately not carried — it belongs to the invited person's own
+    configuration and the wizard has no name for it.
+
+    Reachable on the ordinary re-invite path rather than an exotic one:
+    ``InvitationService.invite`` runs explicit provisioning even when it adopts
+    an account that already exists, and such an account may already hold a
+    default. One ticked provider is enough; §5.5's write-time uniqueness rule
+    guards two providers claiming the same configuration, not one provider
+    meeting an occupied slot.
+    """
+
+    provider_id: uuid.UUID
+    #: ``conversation`` or ``building``.
+    mode: str
 
 
 class InviteProvisioningSummary(SQLModel):
@@ -203,6 +241,15 @@ class InviteProvisioningSummary(SQLModel):
 
     added_count: int = 0
     skipped: list[InviteProvisioningSkip] = Field(default_factory=list)
+    #: Per-mode SDK wiring a granted provider declined to apply because the
+    #: account already held a default there. Empty on almost every invite, and
+    #: on the ordinary re-invite of an existing account it is the one thing that
+    #: silently did not happen — see
+    #: :class:`InviteProvisioningDefaultSlotSkip`. Not a failure and not a
+    #: skipped grant; the wizard renders it as a note beside a successful one.
+    default_slot_skips: list[InviteProvisioningDefaultSlotSkip] = Field(
+        default_factory=list
+    )
     # True when provisioning fell over as a whole rather than reporting
     # per-credential results. Without it the wizard cannot tell that state
     # apart from an admin who deliberately unticked everything — both arrive
@@ -247,10 +294,12 @@ class InviteUserRequest(SQLModel):
     Clearing a name is a real thing to want and the user edit form is where
     it belongs; the invite wizard does not offer it.
 
-    ``managed_credential_ids`` is the same rule with a third state, and it
-    already had it: ``None`` means *grant whatever this role would have been
+    ``provider_ids`` is the same rule with a third state, and it already had
+    it: ``None`` means *grant whatever this role would have been
     auto-provisioned anyway*, which is the same predicate every other arrival
     path runs, while ``[]`` means the admin deliberately unticked everything.
+    It names **providers** — the key source and the rule for who gets one —
+    since a managed credential stopped being a factory.
     """
 
     email: EmailStr = Field(max_length=255)
@@ -262,7 +311,7 @@ class InviteUserRequest(SQLModel):
     auth_hint: str = Field(
         default=INVITATION_AUTH_HINT_ANY, max_length=16
     )
-    managed_credential_ids: list[uuid.UUID] | None = None
+    provider_ids: list[uuid.UUID] | None = None
     # NOT account state: an instruction for *this request*, which either sends
     # a mail or does not and cannot overwrite anything. A default is correct
     # for it, and "did not say" genuinely does mean "yes, send it".

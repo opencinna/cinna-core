@@ -188,7 +188,7 @@ def invite_user(
     full_name: str | None = None,
     auth_hint: str = "any",
     include_desktop: bool | None = None,
-    managed_credential_ids: list[str] | None = None,
+    provider_ids: list[str] | None = None,
     send_email: bool = False,
     is_active: bool | None = True,
     expected_status: int = 200,
@@ -222,8 +222,8 @@ def invite_user(
         payload["full_name"] = full_name
     if include_desktop is not None:
         payload["include_desktop"] = include_desktop
-    if managed_credential_ids is not None:
-        payload["managed_credential_ids"] = managed_credential_ids
+    if provider_ids is not None:
+        payload["provider_ids"] = provider_ids
 
     response = client.post(
         INVITE_URL, headers=superuser_token_headers, json=payload

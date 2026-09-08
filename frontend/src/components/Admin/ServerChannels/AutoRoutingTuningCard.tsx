@@ -326,7 +326,7 @@ export function AutoRoutingTuningCard() {
                     <TableHead className="text-xs">Outcome</TableHead>
                     <TableHead className="text-xs">Chosen</TableHead>
                     <TableHead className="text-xs">Conf.</TableHead>
-                    <TableHead className="text-xs">Provider / model</TableHead>
+                    <TableHead className="text-xs">Type / model</TableHead>
                     <TableHead className="text-xs">Latency</TableHead>
                   </TableRow>
                 </TableHeader>

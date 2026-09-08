@@ -1,42 +1,61 @@
 import { useQuery } from "@tanstack/react-query"
 
-import { AdminProviderAdaptersService, type ProviderAdapterPublic } from "@/client"
+import { AdminAiProvidersService, type ProviderAdapterPublic } from "@/client"
 import type { AICredentialType } from "@/client"
+import { getProviderTypeLabel } from "./providerTypes"
 
 /**
- * What the server knows about each AI provider.
+ * What the server knows about each AI provider **type** (the vendor).
  *
- * `GET /admin/provider-adapters` publishes one row per registered adapter, and
- * it is the only place any of these facts are stated — which providers exist,
+ * `GET /admin/ai-providers/adapters` publishes one row per registered adapter,
+ * and it is the only place any of these facts are stated — which vendors exist,
  * what they are called, which of them can create keys through an administration
- * API, and what an administration credential for one needs. The browser keeps
- * no copy of any of that: a sixth provider is a module on the server, and this
- * hook picks it up with no frontend edit.
+ * API, and what an administration secret for one needs. The browser keeps no
+ * copy of any of that: a sixth vendor is a module on the server, and this hook
+ * picks it up with no frontend edit.
  *
  * Superuser-only, like the endpoint. Every caller today is an admin surface.
  */
-export const PROVIDER_ADAPTERS_QUERY_KEY = ["admin", "provider-adapters"] as const
+/**
+ * A **sibling** of `AI_PROVIDERS_QUERY_KEY`, not a child of it.
+ *
+ * `invalidateQueries` is prefix-matching, so `["admin","ai-providers","adapters"]`
+ * would be invalidated by every provider mutation — pressing Verify on one row
+ * would refetch the adapter registry, defeating the five-minute `staleTime`
+ * below whose whole premise is that the registry changes only on deploy.
+ */
+export const PROVIDER_ADAPTERS_QUERY_KEY = [
+  "admin",
+  "ai-provider-adapters",
+] as const
 
 export interface UseProviderAdaptersResult {
   adapters: ProviderAdapterPublic[]
-  /** Adapters whose administration API can create keys. */
-  mintingAdapters: ProviderAdapterPublic[]
   /** The adapter for a type, or `undefined` while the list is still loading. */
   adapterFor: (type: AICredentialType) => ProviderAdapterPublic | undefined
   /**
-   * Whether per-user keys can be minted for this provider.
+   * The vendor's display label.
+   *
+   * Falls back to the shared label map — never to the wire value. The window
+   * before this query answers, and the case where it errors outright, are both
+   * real: a fallback of `type` renders `minimax` to an administrator.
+   */
+  typeLabel: (type: AICredentialType) => string
+  /**
+   * Whether per-user keys can be minted for this type.
+   *
+   * This is the **whole** of the create wizard's precondition. A provider
+   * carries its own administration secret, so there is nothing to connect
+   * first; the server says the same thing in one term
+   * (`AIProvidersService._validate_shape`). The retired second term,
+   * `can_mint_now`, additionally required a provider of that type to exist
+   * already, which would have made the first OpenAI provider an admin ever
+   * connects unable to be minted.
    *
    * `false` while the list is loading, so a control gated on it stays off
    * until the server has actually said yes. Loading is not a yes.
    */
   supportsMinting: (type: AICredentialType) => boolean
-  /**
-   * Whether an administrator may choose per-user minting for this provider
-   * right now — the server's own answer, not a conjunction assembled here.
-   *
-   * `false` while the list is loading, for the same reason as above.
-   */
-  canMintNow: (type: AICredentialType) => boolean
   isPending: boolean
   isError: boolean
 }
@@ -44,7 +63,7 @@ export interface UseProviderAdaptersResult {
 export function useProviderAdapters(enabled = true): UseProviderAdaptersResult {
   const { data, isPending, isError } = useQuery({
     queryKey: PROVIDER_ADAPTERS_QUERY_KEY,
-    queryFn: () => AdminProviderAdaptersService.listProviderAdapters(),
+    queryFn: () => AdminAiProvidersService.listProviderAdapters(),
     // The registry only changes on deploy.
     staleTime: 5 * 60_000,
     enabled,
@@ -56,12 +75,11 @@ export function useProviderAdapters(enabled = true): UseProviderAdaptersResult {
 
   return {
     adapters,
-    mintingAdapters: adapters.filter((adapter) => adapter.supports_minting),
     adapterFor,
+    typeLabel: (type: AICredentialType) =>
+      adapterFor(type)?.label ?? getProviderTypeLabel(type),
     supportsMinting: (type: AICredentialType) =>
       adapterFor(type)?.supports_minting === true,
-    canMintNow: (type: AICredentialType) =>
-      adapterFor(type)?.can_mint_now === true,
     isPending: enabled && isPending,
     isError,
   }

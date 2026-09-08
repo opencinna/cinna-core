@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router"
 import { AlertTriangle, Mail, MailX } from "lucide-react"
 
-import type { InviteUserResponse } from "@/client"
+import type { AIProviderPublic, InviteUserResponse } from "@/client"
+import { sdkModeLabel } from "@/components/Admin/LlmProviders/providerTypes"
 import { CopyableValue } from "@/components/Common/CopyableValue"
 import { Button } from "@/components/ui/button"
 import {
@@ -14,15 +15,30 @@ import {
 /**
  * Copy for every `reason` `InviteProvisioningSkip` can carry.
  *
- * The vocabulary is enumerated on the backend model. `managed_credential_not_found`
- * is reachable only from this path — the explicit-list entry point — so it is
- * the one most likely to be missing from a hand-written map.
+ * The vocabulary is enumerated on the backend model, and this map's **fallback
+ * is part of its contract**: the render below is
+ * `SKIP_REASON_COPY[skip.reason] ?? skip.reason`, so a reason with no entry
+ * prints its own machine string inside an admin-facing sentence. That is what
+ * makes a missing key a visible defect rather than a silent one, and it is why
+ * the whole vocabulary is written out here rather than the subset this surface
+ * expects to see. All five entries below are present; the fallback is the guard
+ * for a sixth reason a later release adds.
+ *
+ * `provider_not_found` is reachable **only** from this path — explicit
+ * provisioning is the only caller that can be handed an id — so it is the one
+ * entry the automatic path could never have exercised, and the one this phase
+ * existed to add.
+ *
+ * `managed_credential_not_found` is gone. Nothing produces it since the wizard
+ * moved to providers, and a dead key in a copy map is how the next reader
+ * concludes the old vocabulary is still live.
  */
 const SKIP_REASON_COPY: Record<string, string> = {
   user_not_found: "the new account could not be read back",
   user_inactive: "the account is not active",
-  managed_credential_not_found: "that credential no longer exists",
-  provision_failed: "provisioning failed for that credential",
+  provider_not_found:
+    "that provider no longer exists, or has no credential to grant through",
+  provision_failed: "provisioning failed for that provider",
   add_members_failed: "the grant itself failed",
 }
 
@@ -37,15 +53,41 @@ const SKIP_REASON_COPY: Record<string, string> = {
  */
 export function InviteSuccessPanel({
   result,
+  providers,
   onDone,
   onInviteAnother,
 }: {
   result: InviteUserResponse
+  /**
+   * The providers the wizard listed, so both line families below can name one
+   * instead of printing an id. The array the wizard already holds.
+   */
+  providers: AIProviderPublic[]
   onDone: () => void
   onInviteAnother: () => void
 }) {
+  /**
+   * The provider's name, or `null` when the id names nothing this wizard saw.
+   *
+   * `null` is the honest answer and it is exactly what `provider_not_found`
+   * produces, so the sentences below fall back to "One provider" rather than
+   * inventing a name or printing a UUID.
+   */
+  const providerName = (id: string): string | null =>
+    providers.find((provider) => provider.id === id)?.name ?? null
+
   const added = result.provisioning.added_count ?? 0
   const skipped = result.provisioning.skipped ?? []
+  // A grant that landed while the account already held a default in that mode.
+  //
+  // **Disclosure, not an error** — the same category as
+  // `adopted_existing_account`. The grant succeeded and the person holds a
+  // usable key; the only surprising thing is that the provider's model wiring
+  // did not apply, because an incumbent default was kept. It never sets
+  // `provisioning_failed`, never joins `skipped`, and no count on this panel
+  // includes it. Its whole risk is being read as a grant that fell over, so the
+  // sentence below says the grant succeeded first.
+  const defaultSlotSkips = result.provisioning.default_slot_skips ?? []
   // Provisioning falling over as a whole and an admin deliberately ticking
   // nothing both arrive as `added_count=0, skipped=[]`. Only this flag tells
   // them apart, and they must never render the same again: an admin whose
@@ -154,8 +196,8 @@ export function InviteSuccessPanel({
           ) : accountInactive ? (
             // Gated on the *fact*, not on the skip count. An inactive account
             // can report zero skips and still be the reason nothing was
-            // granted: the wizard sends `managed_credential_ids: null` while
-            // the credential query is in flight or has failed, the server then
+            // granted: the wizard sends `provider_ids: null` while
+            // the provider query is in flight or has failed, the server then
             // has no ids to name, and falling through to "No AI credentials
             // were granted" would be the exact screen this branch exists to
             // stop showing.
@@ -163,14 +205,14 @@ export function InviteSuccessPanel({
             // Not a failure and not "nothing was asked for", so neither of the
             // other two renderings is honest about it. Amber, not destructive:
             // nothing went wrong, the account simply cannot hold keys yet.
-            <div className="flex items-start gap-2 text-amber-600 dark:text-amber-400">
+            <div className="flex items-start gap-2 text-warning">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               <p>
                 This account is deactivated, so{" "}
                 {/* "selected" means requested, not existing: the short-circuit
-                    runs before the credentials are looked up, so an id that
-                    has since been deleted is counted here rather than
-                    reported as `managed_credential_not_found`. */}
+                    runs before the providers are looked up, so an id that has
+                    since been deleted is counted here rather than reported as
+                    `provider_not_found`. */}
                 {inactiveSkips.length === 0
                   ? "no AI credentials were granted"
                   : inactiveSkips.length === 1
@@ -187,15 +229,39 @@ export function InviteSuccessPanel({
                 : `${added} AI credential${added === 1 ? "" : "s"} granted.`}
             </p>
           )}
-          {detailSkips.map((skip) => (
-            <p
-              key={skip.managed_credential_id}
-              className="text-xs text-muted-foreground"
-            >
-              One credential was skipped —{" "}
-              {SKIP_REASON_COPY[skip.reason] ?? skip.reason}.
-            </p>
-          ))}
+          {detailSkips.map((skip) => {
+            const name = providerName(skip.provider_id)
+            return (
+              <p
+                key={`${skip.provider_id}-${skip.reason}`}
+                className="text-xs text-muted-foreground"
+              >
+                {name ? `"${name}" was skipped` : "One provider was skipped"} —{" "}
+                {SKIP_REASON_COPY[skip.reason] ?? skip.reason}.
+              </p>
+            )
+          })}
+          {/* Beside the grant, in the same muted class as the skip lines —
+              and gated, not merely placed, so "was granted" cannot appear under
+              a headline saying provisioning failed or that the account cannot
+              hold keys. The backend does not set `provisioning_failed` for a
+              declined slot, but nothing in this component depended on that
+              until the gate below made it explicit. */}
+          {!provisioningFailed &&
+            !accountInactive &&
+            defaultSlotSkips.map((slot) => {
+              const name = providerName(slot.provider_id)
+              return (
+                <p
+                  key={`${slot.provider_id}-${slot.mode}`}
+                  className="text-xs text-muted-foreground"
+                >
+                  {name ? `"${name}" was granted` : "A provider was granted"},
+                  but it did not become the {sdkModeLabel(slot.mode)} default —
+                  the account already had one, and it was kept.
+                </p>
+              )
+            })}
           {result.invitation.include_desktop && (
             <p className="text-xs text-muted-foreground">
               Cinna Desktop is offered after they claim the account.

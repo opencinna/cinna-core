@@ -192,7 +192,7 @@ tests/
     environment.py         # set_environment_status(), link_ai_credential_to_environment() (documented DB-seam helpers)
     fixtures.py            # shared stub fixtures, CREATE_SESSION_TARGETS_*, BACKGROUND_TASK_TARGETS_* patch lists
     mail_server.py         # create_imap_server(), create_smtp_server() — superuser-only route
-    managed_ai_credential.py # /admin/llm-providers CRUD + apply-to-existing wrappers
+    managed_ai_credential.py # /admin/llm-providers CRUD wrappers
     network_guard.py       # no_outbound_http() tripwire for "no provider was contacted" claims
     platform_token.py      # mint_platform_token() — raw/expired/scoped JWTs (documented app.core.security exemption)
     query_counter.py       # count_queries() — counts the SQL a block issues (N+1 guards; observes, never injects)

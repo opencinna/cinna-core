@@ -91,7 +91,7 @@ from app.models.credentials.managed_ai_credential_membership import (
     holds_provider_key_clause,
 )
 from app.models.credentials.provider_admin_credential import (
-    ProviderAdminCredential,
+    AIProvider,
 )
 from app.models.events.security_event import SecurityEventCreate
 from app.models.users.user import AIKeyOnboardingState, User
@@ -109,8 +109,11 @@ from app.services.credentials.key_provisioning_types import RevocationRequest
 from app.services.credentials.managed_ai_credentials_service import (
     managed_ai_credentials_service,
 )
-from app.services.credentials.provider_admin_credentials_service import (
-    provider_admin_credentials_service,
+from app.services.credentials.provisioning_policy import (
+    resolve_policy,
+)
+from app.services.credentials.ai_providers_service import (
+    ai_providers_service,
 )
 from app.services.events.security_event_service import SecurityEventService
 from app.utils import create_task_with_error_logging, restore_session
@@ -241,7 +244,7 @@ class KeyProvisioningService:
             report.skipped.append("row_missing")
             return
 
-        if not managed_ai_credentials_service.is_minted(parent):
+        if not resolve_policy(session, parent).is_minted:
             # A shared parent has no mint to attempt. Reachable only if a mode
             # ever changed under a live membership; say so in the row rather than
             # leaving it converge-able forever.
@@ -300,9 +303,9 @@ class KeyProvisioningService:
 
         admin_credential = (
             session.get(
-                ProviderAdminCredential, parent.provider_admin_credential_id
+                AIProvider, parent.provider_id
             )
-            if parent.provider_admin_credential_id
+            if parent.provider_id
             else None
         )
         adapter = registry.find_adapter(parent.type)
@@ -317,9 +320,7 @@ class KeyProvisioningService:
                 report.skipped.append("claim_lost")
             return
 
-        secret = provider_admin_credentials_service.decrypt_secret(
-            admin_credential
-        )
+        secret = ai_providers_service.decrypt_secret(admin_credential)
 
         # Idempotency: a previous attempt that stored handles and then died left
         # a key we own and cannot use. Destroy it before minting another, or
@@ -350,7 +351,21 @@ class KeyProvisioningService:
                 return
             claim = cleared
 
-        label = f"cinna-{parent.id}-{owner.id}"
+        # The name the *provider's* console shows for this key. It is read by a
+        # human standing in OpenAI's UI asking "whose key is this?", so the
+        # answer leads with the answer: the member's email address. The
+        # membership id postfix is what makes it a handle rather than a hint —
+        # it is unique per grant, so two keys for the same person (a re-mint
+        # after a revoke, the same person in two providers) stay tellable apart,
+        # and it is the row whose ``ai_credential_id`` names the credential this
+        # key ends up on.
+        #
+        # The credential's own id cannot go here: it does not exist yet. The
+        # child row is created from the minted secret, and no provider offers a
+        # rename afterwards — OpenAI's administration API can create, list and
+        # delete a service account but not modify one. The membership id is the
+        # identifier that exists on both sides of the mint.
+        label = f"{owner.email} ({membership.id})"
         try:
             minted = await provisioner.mint(
                 secret,
@@ -543,7 +558,7 @@ class KeyProvisioningService:
         request = RevocationRequest(
             user_id=claim.user_id,
             parent_id=claim.parent_id,
-            provider_admin_credential_id=parent.provider_admin_credential_id,
+            provider_admin_credential_id=parent.provider_id,
             provider_type=(
                 parent.type.value
                 if hasattr(parent.type, "value")
@@ -735,7 +750,7 @@ class KeyProvisioningService:
         for request in requests:
             admin_credential = (
                 session.get(
-                    ProviderAdminCredential, request.provider_admin_credential_id
+                    AIProvider, request.provider_admin_credential_id
                 )
                 if request.provider_admin_credential_id
                 else None
@@ -749,9 +764,7 @@ class KeyProvisioningService:
                 continue
             try:
                 await provisioner.revoke(
-                    provider_admin_credentials_service.decrypt_secret(
-                        admin_credential
-                    ),
+                    ai_providers_service.decrypt_secret(admin_credential),
                     request.external_key_ref,
                 )
             except ProviderAdminError as exc:
@@ -939,7 +952,7 @@ class KeyProvisioningService:
             RevocationRequest(
                 user_id=user_id,
                 parent_id=parent.id,
-                provider_admin_credential_id=parent.provider_admin_credential_id,
+                provider_admin_credential_id=parent.provider_id,
                 provider_type=(
                     parent.type.value
                     if hasattr(parent.type, "value")
@@ -1016,7 +1029,7 @@ class KeyProvisioningService:
         ).all()
 
         for membership, parent in members:
-            if not managed_ai_credentials_service.is_minted(parent):
+            if not resolve_policy(session, parent).is_minted:
                 # A shared key is one key held by many people. Deactivating one
                 # holder must not destroy it for the others; their child row
                 # simply stops being reachable with the account.
@@ -1061,7 +1074,7 @@ class KeyProvisioningService:
                     user_id=user_id,
                     parent_id=parent.id,
                     provider_admin_credential_id=(
-                        parent.provider_admin_credential_id
+                        parent.provider_id
                     ),
                     provider_type=(
                         parent.type.value

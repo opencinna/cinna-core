@@ -34,27 +34,24 @@ class ProviderAdapterPublic(SQLModel):
     requires_model: bool
     supports_model_listing: bool
     issues_oauth_tokens: bool
-    #: Whether this provider's administration API can create keys. False for
-    #: every provider but one; where it is false, per-user keys are added by
-    #: hand, which is a normal path and not a degraded one.
+    #: Whether this provider's administration API can create keys, and — since
+    #: a provider carries its own administration secret — the whole of the
+    #: server's answer to "may an administrator choose per-user minting for
+    #: this type". False for every provider but one; where it is false,
+    #: per-user keys are added by hand, which is a normal path and not a
+    #: degraded one.
+    #:
+    #: There used to be a second field, ``can_mint_now``, conjoining this with
+    #: "an organisation of this type is already connected". That was the rule
+    #: when minting borrowed a separately connected organisation's secret. It
+    #: is not the rule now, and as a conjunction it was circular: it answered
+    #: false for the *first* provider of a type, which is the case the create
+    #: wizard exists to serve. ``AIProvidersService._validate_shape``
+    #: is the enforcing authority and reads exactly this one term.
     supports_minting: bool
     #: What an administration credential for this provider needs, when it can
     #: mint. ``None`` when it cannot.
     admin_config_schema: dict | None = None
-    #: Whether an administrator may choose per-user minting for this provider
-    #: **right now**: the adapter can mint *and* an organisation for it is
-    #: connected. The **answer**, not its ingredients.
-    #:
-    #: ``supports_minting`` above is a fact about the provider and stays, because
-    #: it is what tells an admin *why* the option is unavailable. This field is
-    #: the policy, and it lives here so the browser does not assemble it from two
-    #: endpoints — the create route enforces the same rule in
-    #: ``ManagedAICredentialsService._validate_provisioning``, and a conjunction
-    #: rebuilt in the client is the copy that stops agreeing the day a third
-    #: condition is added.
-    #: Required, no default: an absent policy answer read through a client-side
-    #: fallback is the browser deciding the policy.
-    can_mint_now: bool
 
 
 class ProviderAdaptersPublic(SQLModel):

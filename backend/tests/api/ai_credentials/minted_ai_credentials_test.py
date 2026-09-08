@@ -29,7 +29,15 @@ from tests.utils.account_provisioning import (
     CHILD_CREDENTIAL_INSERT,
     failing_sql_statement,
 )
-from tests.utils.ai_provider import stub_minting_providers
+from tests.utils.ai_provider import (
+    stub_all_providers,
+    stub_minting_providers,
+)
+from tests.utils.ai_provider_admin import (
+    AIProviderInUseError,
+    create_provider_credential,
+    delete_provider,
+)
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.desktop_auth import obtain_desktop_tokens
 from tests.utils.fixtures import (
@@ -42,6 +50,7 @@ from tests.utils.key_provisioning import (
     converge_keys,
     make_membership_due,
     mark_membership_minting,
+    membership_id_for,
 )
 from tests.utils.query_counter import count_queries
 from tests.utils.user import create_random_user_with_headers
@@ -55,7 +64,7 @@ NEEDS_AGENT_STUBS = False
 NEEDS_DEFAULT_CREDENTIALS = False
 
 API = settings.API_V1_STR
-ADMIN_CRED_BASE = f"{API}/admin/provider-admin-credentials"
+PROVIDER_BASE = f"{API}/admin/ai-providers"
 MANAGED_BASE = f"{API}/admin/llm-providers"
 
 
@@ -78,12 +87,22 @@ def background_and_sessions(db: Session):
 
 
 def _admin_credential(client: TestClient, headers: dict[str, str]) -> str:
+    """Connect a ``minted`` provider organisation; return the **provider** id.
+
+    The name is kept from when this created a ``provider_admin_credential``,
+    because the forty call sites below read as "the thing this record mints
+    through" and that is still exactly what it is. What changed is that
+    ``POST /admin/ai-providers/`` writes the provider **and its one managed
+    credential** in a single transaction, so there is no longer a second
+    request that points a credential at it — see :func:`_minted_parent`.
+    """
     response = client.post(
-        f"{ADMIN_CRED_BASE}/",
+        f"{PROVIDER_BASE}/",
         headers=headers,
         json={
             "name": f"Org {random_lower_string()[:8]}",
-            "provider_type": "openai",
+            "kind": "minted",
+            "type": "openai",
             "secret": "sk-admin-not-a-real-secret",
             "config": {"project_id": "proj_test"},
         },
@@ -102,17 +121,46 @@ def _minted_parent(
     set_as_default: bool = False,
     expected_status: int = 200,
 ) -> dict:
-    payload = {
-        "name": f"Minted {random_lower_string()[:8]}",
-        "type": "openai",
-        "provisioning_mode": "minted",
-        "provider_admin_credential_id": admin_credential_id,
-        "target_user_ids": target_user_ids or [],
-        "set_as_default": set_as_default,
-    }
+    """Configure the provider's own managed credential, and grant its members.
+
+    Returns a ``ManagedAICredentialReconcileResult`` — ``{"record": …,
+    "added": …, …}`` — which is the shape this helper has always returned, so
+    every caller keeps destructuring it unchanged.
+
+    Two requests instead of one create, because the record already exists:
+
+    * the **policy** (``set_as_default``, ``auto_provision_roles``) belongs to
+      the provider now — a managed credential is not a factory, and both fields
+      are shadowed and read-only on a provider-owned record;
+    * the **membership** still belongs to the credential, which is the record
+      that has always held it, so ``target_user_ids`` goes to
+      ``/admin/llm-providers``.
+
+    The policy is written *before* the members are added, so the wiring a
+    member receives is the wiring this call asked for rather than a
+    write-through applied a request later.
+    """
+    provider = client.get(f"{PROVIDER_BASE}/{admin_credential_id}", headers=headers)
+    assert provider.status_code == 200, provider.text
+    parent_id = provider.json()["owned_credential_id"]
+    assert parent_id is not None, (
+        "the provider owns no managed credential; POST /admin/ai-providers/ "
+        "is supposed to write the pair together"
+    )
+
+    policy: dict = {"set_as_default": set_as_default}
     if auto_provision_roles is not None:
-        payload["auto_provision_roles"] = auto_provision_roles
-    response = client.post(f"{MANAGED_BASE}/", headers=headers, json=payload)
+        policy["auto_provision_roles"] = auto_provision_roles
+    patched = client.patch(
+        f"{PROVIDER_BASE}/{admin_credential_id}", headers=headers, json=policy
+    )
+    assert patched.status_code == 200, patched.text
+
+    response = client.patch(
+        f"{MANAGED_BASE}/{parent_id}",
+        headers=headers,
+        json={"target_user_ids": target_user_ids or []},
+    )
     assert response.status_code == expected_status, response.text
     return response.json()
 
@@ -154,19 +202,26 @@ def test_a_minted_record_is_refused_without_an_admin_credential(
     Stated on the server, not in the dialog: a rule answered only in a browser is
     answered nowhere, and this one has a second caller already (the invitation
     wizard).
+
+    The rule moved with the record it describes. A minted managed credential is
+    now created *by creating a minted provider*, so "there is nothing to mint
+    through" is expressed as a provider with no project to mint into — there is
+    no project, therefore no spend limit bounding the keys, therefore nothing
+    this provider could ever legitimately create.
     """
     response = client.post(
-        f"{MANAGED_BASE}/",
+        f"{PROVIDER_BASE}/",
         headers=superuser_token_headers,
         json={
-            "name": "No admin credential",
+            "name": "No project to mint into",
+            "kind": "minted",
             "type": "openai",
-            "provisioning_mode": "minted",
-            "target_user_ids": [],
+            "secret": "sk-admin-not-a-real-secret",
+            "config": {},
         },
     )
     assert response.status_code == 400, response.text
-    assert "provider admin credential" in str(response.json()["detail"])
+    assert "project id" in str(response.json()["detail"])
 
 
 def test_anthropic_cannot_be_minted(
@@ -175,40 +230,38 @@ def test_anthropic_cannot_be_minted(
     """Its administration API cannot create keys, so minted mode is refused.
 
     The refusal is at creation rather than at the first mint, because failing at
-    the first mint fails for every member at once and looks like an outage.
+    the first mint fails for every member at once and looks like an outage. It is
+    asked of the **provider** now — ``kind`` is what says whether a source mints,
+    and the adapter for the type is what says whether it can.
     """
     response = client.post(
-        f"{MANAGED_BASE}/",
+        f"{PROVIDER_BASE}/",
         headers=superuser_token_headers,
         json={
             "name": "Minted anthropic",
+            "kind": "minted",
             "type": "anthropic",
-            "provisioning_mode": "minted",
-            "target_user_ids": [],
+            "secret": "sk-ant-not-a-real-secret",
+            "config": {"project_id": "proj_test"},
         },
     )
     assert response.status_code == 400, response.text
     assert "cannot create API keys" in str(response.json()["detail"])
 
 
-def test_a_minted_record_must_not_be_given_a_key(
-    client: TestClient, superuser_token_headers: dict[str, str]
-) -> None:
-    """A key here would be stored, never used, and read as 'rotated'."""
-    admin_credential_id = _admin_credential(client, superuser_token_headers)
-    response = client.post(
-        f"{MANAGED_BASE}/",
-        headers=superuser_token_headers,
-        json={
-            "name": "Minted with a key",
-            "type": "openai",
-            "provisioning_mode": "minted",
-            "provider_admin_credential_id": admin_credential_id,
-            "api_key": "sk-should-not-be-here",
-            "target_user_ids": [],
-        },
-    )
-    assert response.status_code == 400, response.text
+# ``test_a_minted_record_must_not_be_given_a_key`` used to sit here: a create
+# request that carried both ``provisioning_mode="minted"`` and an ``api_key``
+# was a 400, because that key would be stored, never used, and read as
+# "rotated". The request that could say both no longer exists —
+# ``AIProviderCreate`` has exactly one ``secret`` field and it *is* the
+# administration secret, so a minted provider cannot be handed a member key at
+# create time in any spelling. The property survives on the two paths where a
+# key can still be offered to a minted record after the fact, both of which
+# refuse it: ``test_a_minted_record_refuses_key_rotation`` below (``PATCH
+# /admin/llm-providers/{id}`` with ``api_key``) and
+# ``ai_providers_service_test.py::
+# test_rotating_a_minted_provider_is_refused_rather_than_accepted``
+# (``POST /admin/ai-providers/{id}/rotate-key``).
 
 
 def test_a_shared_record_still_requires_a_key(
@@ -258,7 +311,8 @@ def test_a_minted_record_reports_that_it_holds_no_key(
     )["record"]
     assert parent["provisioning_mode"] == "minted"
     assert parent["has_api_key"] is False
-    assert parent["provider_admin_credential_id"] == admin_credential_id
+    assert parent["provider_id"] == admin_credential_id
+    assert parent["is_provider_owned"] is True
 
     # And a shared record still says it holds one.
     shared = client.post(
@@ -341,13 +395,17 @@ def test_converge_mints_the_key_and_creates_one_usable_credential(
     assert credentials[0]["is_admin_managed"] is True
     assert credentials[0]["has_api_key"] is True
 
-    # The mint is named per (record, member), so the provider console shows who a
-    # service account belongs to.
+    # The mint is named for the person who will hold it, so somebody standing in
+    # the provider's own console can read off whose key a service account is
+    # without a lookup table. The email leads, because that is the answer; the
+    # membership id postfix is what keeps two keys for the same person apart and
+    # names the row this key ended up on.
     create_call = next(
         call for call in provisioning.calls if call.path.endswith("/service_accounts")
     )
-    assert str(user["id"]) in create_call.json_body["name"]
-    assert parent_id in create_call.json_body["name"]
+    assert create_call.json_body["name"] == (
+        f"{user['email']} ({membership_id_for(db, user['id'])})"
+    )
     # ``scopes`` is deliberately not sent: the vocabulary is not authoritative in
     # anything we hold, and a guessed list hard-fails the create call the day the
     # provider changes it.
@@ -785,6 +843,15 @@ def test_disconnecting_a_provider_organisation_is_refused_while_keys_live(
     Deleting it does not merely stop new mints; it strands every existing key at
     the provider forever. So the delete is refused, with the counts that make the
     consequence legible, and forcing it is an explicit act.
+
+    The refusal used to be checked twice, once on
+    ``DELETE /admin/provider-admin-credentials/{id}`` and once on the provider
+    service. That route is gone, and with it the ``force`` that used to get past
+    the refusal by NULLing the managed credential's pointer — leaving a record
+    that read as manual, was fully editable and had no key. The FK is
+    ``ON DELETE RESTRICT`` now, so that shape is not merely unrouted but
+    unrepresentable, and the ordered force lives on the provider: delete the
+    credential (which revokes its members' keys), then the provider.
     """
     admin_credential_id = _admin_credential(client, superuser_token_headers)
     user = _new_user(client)
@@ -798,19 +865,25 @@ def test_disconnecting_a_provider_organisation_is_refused_while_keys_live(
     with stub_minting_providers():
         converge_keys(db)
 
-    refused = client.delete(
-        f"{ADMIN_CRED_BASE}/{admin_credential_id}", headers=superuser_token_headers
-    )
-    assert refused.status_code == 409, refused.text
-    detail = refused.json()["detail"]
-    assert detail["minting_credential_count"] == 1
-    assert detail["live_minted_key_count"] == 1
+    with pytest.raises(AIProviderInUseError) as blocked:
+        delete_provider(db, admin_credential_id)
+    assert blocked.value.impact.member_count == 1
+    assert blocked.value.impact.minted_key_count == 1
 
-    forced = client.delete(
-        f"{ADMIN_CRED_BASE}/{admin_credential_id}?force=true",
+    with stub_minting_providers() as (_probes, provisioning):
+        impact = delete_provider(db, admin_credential_id, force=True)
+        drain_tasks()
+    assert impact["member_count"] == 1
+    assert impact["minted_key_count"] == 1
+    # Ordered: the key was destroyed at the provider before the rows that name
+    # it went away, so nothing was stranded.
+    assert provisioning.revoke_count == 1
+
+    gone = client.get(
+        f"{PROVIDER_BASE}/{admin_credential_id}",
         headers=superuser_token_headers,
     )
-    assert forced.status_code == 200, forced.text
+    assert gone.status_code == 404, gone.text
 
 
 # ── The member-list projection ──────────────────────────────────────────────
@@ -996,13 +1069,21 @@ def test_a_record_wired_to_a_deleted_admin_credential_converges_to_failed(
 ) -> None:
     """The branch that never claimed an attempt, and so never ended.
 
-    Forcing a provider organisation's disconnect NULLs
-    ``provider_admin_credential_id`` on every record that minted through it. The
-    memberships underneath then have nothing to mint with — and if that branch
-    records a failure *without* claiming an attempt, it never reaches the ceiling:
-    the row sits at ``pending`` retrying every minute forever, and writes one
+    A membership whose parent has nothing to mint with. If that branch records a
+    failure *without* claiming an attempt it never reaches the ceiling: the row
+    sits at ``pending`` retrying every minute forever, and writes one
     ``mint_failed`` security event per minute into its owner's feed while doing
     it. Bounded means bounded on **every** path out of an attempt.
+
+    The state used to be produced by forcing a provider organisation's
+    disconnect, which NULLed the pointer on every record that minted through it.
+    That path is gone: the FK is ``ON DELETE RESTRICT``, the provider's ordered
+    delete removes the credential first, and a record with no provider is not
+    ``minted`` at all any more — the converge pass settles it long before this
+    branch. So the branch is reached from its other side instead, which is the
+    same line of code and the same reason string: the provider is there and its
+    **adapter cannot mint**. ``stub_all_providers`` wraps every real adapter
+    without a key provisioner, which is exactly that shape.
     """
     from app.services.credentials.key_provisioning_service import (
         key_provisioning_service,
@@ -1018,13 +1099,7 @@ def test_a_record_wired_to_a_deleted_admin_credential_converges_to_failed(
     )
     parent_id = parent["record"]["id"]
 
-    forced = client.delete(
-        f"{ADMIN_CRED_BASE}/{admin_credential_id}?force=true",
-        headers=superuser_token_headers,
-    )
-    assert forced.status_code == 200, forced.text
-
-    with stub_minting_providers() as (_probes, provisioning):
+    with stub_all_providers():
         for attempt in range(1, key_provisioning_service.MAX_ATTEMPTS + 1):
             make_membership_due(db, user["id"])
             converge_keys(db)
@@ -1035,11 +1110,11 @@ def test_a_record_wired_to_a_deleted_admin_credential_converges_to_failed(
 
     assert member["provisioning_status"] == "failed"
     assert member["provision_error"] == "no_admin_credential"
-    assert provisioning.mint_count == 0
 
     # Terminal: no further pass picks it up, so no further event is written.
-    with stub_minting_providers():
+    with stub_minting_providers() as (_probes, provisioning):
         assert converge_keys(db).attempted == 0
+    assert provisioning.mint_count == 0
 
 
 def test_a_failed_member_can_be_retried_and_re_adding_them_cannot(
@@ -1322,15 +1397,40 @@ def test_a_member_cannot_be_removed_while_their_mint_is_in_flight(
     assert "being created" in message
     assert "bundle" not in message.lower()
 
-    # And the delete route's 409 says the same thing, from the same source.
-    refused = client.delete(
+    # Deleting the credential on its own is refused outright now — a
+    # provider-owned record is deleted by deleting its provider — so the same
+    # sentence has to survive on the path that *does* delete it.
+    wrong_door = client.delete(
         f"{MANAGED_BASE}/{parent_id}", headers=superuser_token_headers
     )
-    assert refused.status_code == 409, refused.text
-    detail = refused.json()["detail"]
-    assert message in detail["message"]
-    assert "in use by a published bundle" not in detail["message"]
-    assert detail["blocked"][0]["reason"] == "mint_in_flight"
+    assert wrong_door.status_code == 400, wrong_door.text
+
+    # ``force`` on the provider walks past the block — that is what force means —
+    # and the thing worth pinning is that it does not stop half way. It used to:
+    # ``ManagedAICredentialsService.delete(force=True)`` reports blocked members
+    # *and deletes the parent anyway*, so refusing on ``blocked`` alone deleted
+    # the credential, answered 409, and left the provider standing with its
+    # ``auto_provision_roles`` intact — a provider auto-provisioning with nothing
+    # to grant through, which is the silent no-op the whole delete gate exists to
+    # prevent, produced by the gate itself.
+    forced = client.delete(
+        f"{PROVIDER_BASE}/{admin_credential_id}?force=true",
+        headers=superuser_token_headers,
+    )
+    assert forced.status_code == 200, forced.text
+    assert (
+        client.get(
+            f"{PROVIDER_BASE}/{admin_credential_id}",
+            headers=superuser_token_headers,
+        ).status_code
+        == 404
+    ), "the provider survived its own forced delete"
+    assert (
+        client.get(
+            f"{MANAGED_BASE}/{parent_id}", headers=superuser_token_headers
+        ).status_code
+        == 404
+    )
 
 
 def test_removing_a_member_records_the_revoke_in_their_own_feed(
@@ -1396,11 +1496,13 @@ def test_re_inviting_an_interrupted_invite_as_inactive_revokes_its_minted_key(
     """
     from tests.utils.invitation import invite_user
 
-    admin_credential_id = _admin_credential(client, superuser_token_headers)
-    parent = _minted_parent(
-        client,
-        superuser_token_headers,
-        admin_credential_id=admin_credential_id,
+    # Auto-provisioning is configured on the provider — a managed credential is
+    # not a factory any more and refuses the field outright — so this is a
+    # ``minted`` provider that grants itself to every new ``agent-user``.
+    parent = create_provider_credential(
+        db,
+        kind="minted",
+        credential_type="openai",
         auto_provision_roles=["agent-user"],
     )
     parent_id = parent["record"]["id"]
@@ -1471,8 +1573,12 @@ def test_deleting_a_minted_record_revokes_every_members_key(
         converge_keys(db)
         provisioning.assert_minted(2)
 
+        # Through the provider, which is the only door now: a provider-owned
+        # credential cannot be deleted on its own, because the provider left
+        # behind would auto-provision with nothing to grant through.
         deleted = client.delete(
-            f"{MANAGED_BASE}/{parent_id}", headers=superuser_token_headers
+            f"{PROVIDER_BASE}/{admin_credential_id}?force=true",
+            headers=superuser_token_headers,
         )
         assert deleted.status_code == 200, deleted.text
         drain_tasks()
@@ -1621,8 +1727,11 @@ def test_force_deleting_the_record_mid_mint_revokes_the_key_it_could_not_store(
     parent_id = parent["record"]["id"]
 
     def force_delete_record() -> None:
+        # The provider, not the credential: deleting a provider-owned credential
+        # on its own is refused, and the provider's forced delete is the path
+        # that reaches ``ManagedAICredentialsService.delete(force=True)``.
         response = client.delete(
-            f"{MANAGED_BASE}/{parent_id}?force=true",
+            f"{PROVIDER_BASE}/{admin_credential_id}?force=true",
             headers=superuser_token_headers,
         )
         assert response.status_code == 200, response.text
@@ -1999,14 +2108,20 @@ def test_a_deactivation_that_fails_part_way_still_revokes_what_it_took(
     the failure. This test fails the *second* member's row write and asserts the
     first member's key was still destroyed.
     """
-    admin_credential_id = _admin_credential(client, superuser_token_headers)
     user = _new_user(client)
-    # Two minted records, so one deactivation walks two membership rows.
+    # Two minted records, so one deactivation walks two membership rows — and
+    # therefore **two provider organisations**, one credential each. A provider
+    # owns exactly one managed credential; creating a second against the same
+    # one is refused, because ``owned_credential`` would resolve the older row
+    # and the newer record would be invisible to rotation, apply-to-existing and
+    # the delete gate while still handing out keys.
     for _ in range(2):
         _minted_parent(
             client,
             superuser_token_headers,
-            admin_credential_id=admin_credential_id,
+            admin_credential_id=_admin_credential(
+                client, superuser_token_headers
+            ),
             target_user_ids=[str(user["id"])],
         )
 

@@ -184,6 +184,31 @@ class ManagedAICredentialMembership(SQLModel, table=True):
         default=None, sa_column=Column(Text, nullable=True)
     )
 
+    #: Whether the grant that created this row may take an SDK default slot its
+    #: owner already occupies.
+    #:
+    #: **It is on the row because the answer is needed at a different time from
+    #: when it is known.** For a shared member the wiring happens inside the
+    #: grant, so the caller's intent is still on the stack. For a **minted**
+    #: member the wiring happens in ``materialise_minted_child``, minutes or
+    #: hours later, on a converge pass that has no idea whether a superuser
+    #: pressed "apply to existing users" or an account simply signed up. Without
+    #: this column the converge pass has to guess, and whichever way it guesses
+    #: is wrong for half of the callers: guess ``True`` and automatic
+    #: provisioning steals defaults (§5.5 of the ai-credential-providers plan
+    #: says it never may); guess ``False`` and the two deliberate escape hatches
+    #: silently stop overwriting for exactly the provider kind — per-user minted
+    #: keys — that the feature's headline scenario uses.
+    #:
+    #: ``False`` is the safe default in both the column and the application, and
+    #: the automatic path is what leaves it alone.
+    claim_held_default_slots: bool = Field(
+        default=False,
+        sa_column=Column(
+            sa.Boolean(), nullable=False, server_default=sa.false()
+        ),
+    )
+
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )

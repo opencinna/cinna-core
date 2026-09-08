@@ -363,41 +363,40 @@ def _publisher_managed_child(
 ) -> uuid.UUID:
     """Give the publisher a child credential of a managed record, and return it.
 
-    ``minted`` picks the provisioning mode. Both modes matter here: the guard
+    ``minted`` picks where the key comes from — a minted provider that creates
+    one key per member, or a manual (shared) record holding one pasted key.
+    Both matter here: the guard
     used to refuse only minted children, while a shared-mode child is deleted by
     the same reconcile when its holder is removed from the record — so the
     sharees lose access in exactly the same way, with the same absence of any
     event telling them why.
     """
-    admin_base = f"{API}/admin/provider-admin-credentials"
+    provider_base = f"{API}/admin/ai-providers"
     managed_base = f"{API}/admin/llm-providers"
     publisher = client.get(f"{API}/users/me", headers=superuser_token_headers).json()
 
     if minted:
-        admin_credential = client.post(
-            f"{admin_base}/",
-            headers=superuser_token_headers,
-            json={
-                "name": f"Readiness-{uuid.uuid4().hex[:8]}",
-                "provider_type": "openai",
-                "secret": "sk-admin-readiness",
-                "config": {"project_id": "proj_readiness"},
-            },
-        )
-        assert admin_credential.status_code == 200, admin_credential.text
+        # A minted membership is created by creating a **minted provider**:
+        # ``POST /admin/ai-providers/`` writes the provider and its one managed
+        # credential in a single transaction and grants ``target_user_ids``
+        # through it. ``provisioning_mode`` and ``provider_admin_credential_id``
+        # are no longer fields of the managed-credential create request.
         with stub_minting_providers():
-            created = client.post(
-                f"{managed_base}/",
+            provider = client.post(
+                f"{provider_base}/",
                 headers=superuser_token_headers,
                 json={
-                    "name": f"Minted-{uuid.uuid4().hex[:8]}",
+                    "name": f"Readiness-{uuid.uuid4().hex[:8]}",
+                    "kind": "minted",
                     "type": "openai",
-                    "provisioning_mode": "minted",
-                    "provider_admin_credential_id": admin_credential.json()["id"],
+                    "secret": "sk-admin-readiness",
+                    "config": {"project_id": "proj_readiness"},
                     "target_user_ids": [publisher["id"]],
                 },
             )
-            assert created.status_code == 200, created.text
+            assert provider.status_code == 200, provider.text
+            parent_id = provider.json()["owned_credential_id"]
+            assert parent_id is not None, provider.text
             converge_keys(db)
     else:
         created = client.post(
@@ -411,10 +410,11 @@ def _publisher_managed_child(
             },
         )
         assert created.status_code == 200, created.text
+        parent_id = created.json()["record"]["id"]
 
     db.expire_all()
     record = client.get(
-        f"{managed_base}/{created.json()['record']['id']}",
+        f"{managed_base}/{parent_id}",
         headers=superuser_token_headers,
     ).json()
     member = next(m for m in record["members"] if m["user_id"] == publisher["id"])

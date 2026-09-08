@@ -887,6 +887,706 @@ export const AIKnowledgeGitRepoUpdateSchema = {
     description: 'Schema for updating a knowledge git repository.'
 } as const;
 
+export const AIProviderConfigInputSchema = {
+    properties: {
+        organization_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Organization Id'
+        },
+        project_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Project Id'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    title: 'AIProviderConfigInput',
+    description: `The request-side config shape: same fields, unknown keys refused.
+
+A subclass rather than \`\`extra="forbid"\`\` on the parent, because the parent
+is also the **response** shape (:attr:\`AIProviderPublic.config\`, built as
+\`\`ProviderAdminCredentialConfig(**(record.config or {}))\`\`). Forbidding
+extras there would make a stored config carrying a stray key raise on *read*,
+taking the admin listing down over a row somebody has to look at to fix.
+Strict going in, tolerant coming out.
+
+The reason it is strict going in is specific rather than tidiness.
+\`\`organization_id\`\` is spelled the American way here and this codebase's own
+prose spells it the British way everywhere else — "provider organisation",
+"organisation administration secret" — so \`\`organisation_id\`\` is the likeliest
+typo on the surface. Ignored, it lands on one of the two fields that select
+*which OpenAI project keys are minted into*: a provider created with a
+dropped \`\`project_id\`\` verifies as uncapped and refuses to mint, with nothing
+anywhere saying the field was thrown away. Pinned by
+\`\`tests/api/ai_credentials/admin_ai_providers_test.py::
+test_a_misspelled_config_field_is_refused_not_dropped\`\`.`
+} as const;
+
+export const AIProviderCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        kind: {
+            '$ref': '#/components/schemas/AIProviderKind'
+        },
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        secret: {
+            type: 'string',
+            minLength: 1,
+            title: 'Secret'
+        },
+        config: {
+            '$ref': '#/components/schemas/AIProviderConfigInput'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        auto_provision_roles: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Auto Provision Roles'
+        },
+        set_as_default: {
+            type: 'boolean',
+            title: 'Set As Default',
+            default: false
+        },
+        set_user_sdk_defaults: {
+            type: 'boolean',
+            title: 'Set User Sdk Defaults',
+            default: false
+        },
+        sdk_default_modes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Sdk Default Modes'
+        },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
+        available_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Available Models'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
+        },
+        expiry_notification_date: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expiry Notification Date'
+        },
+        target_user_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Target User Ids'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['name', 'kind', 'type', 'secret'],
+    title: 'AIProviderCreate',
+    description: `Connect a key source and say who automatically gets one.
+
+\`\`kind\`\` has no default here for the same reason the column has none in
+Python: the secret means two categorically different things depending on it,
+and a caller that did not say which one it is pasting has not been asked the
+question.
+
+\`\`extra="forbid"\`\` because there is exactly **one** secret field and for a
+\`\`minted\`\` provider it is the administration key. A body that also carried
+\`\`api_key\`\` — the spelling every other credential surface uses, and the
+obvious thing to reach for — would otherwise be accepted, ignored, and leave
+an admin believing they had given the provider a member key. Refusing it
+names the field instead. Pinned by
+\`\`tests/api/ai_credentials/admin_ai_providers_test.py::
+test_a_stray_member_key_on_a_provider_create_is_refused_not_ignored\`\`.`
+} as const;
+
+export const AIProviderKindSchema = {
+    type: 'string',
+    enum: ['fixed_key', 'minted'],
+    title: 'AIProviderKind',
+    description: `What a provider *is*, and therefore what its secret means.
+
+- \`\`fixed_key\`\` — the admin pastes one model API key and every member's
+  child credential holds a copy of it. Available for every type.
+- \`\`minted\`\` — each member gets their own key, created at the provider
+  through an administration secret. Available only for types whose adapter
+  sets \`\`supports_minting\`\`; the service, not the schema, enforces that.`
+} as const;
+
+export const AIProviderPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind'
+        },
+        type: {
+            '$ref': '#/components/schemas/AICredentialType'
+        },
+        config: {
+            '$ref': '#/components/schemas/ProviderAdminCredentialConfig'
+        },
+        has_secret: {
+            type: 'boolean',
+            title: 'Has Secret',
+            default: true
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        auto_provision_roles: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Auto Provision Roles'
+        },
+        set_as_default: {
+            type: 'boolean',
+            title: 'Set As Default',
+            default: false
+        },
+        set_user_sdk_defaults: {
+            type: 'boolean',
+            title: 'Set User Sdk Defaults',
+            default: false
+        },
+        sdk_default_modes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Sdk Default Modes'
+        },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
+        available_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Available Models'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
+        },
+        expiry_notification_date: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expiry Notification Date'
+        },
+        last_verified_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Verified At'
+        },
+        last_verify_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Verify Error'
+        },
+        created_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By Id'
+        },
+        owned_credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owned Credential Id'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        key_state_summary: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Key State Summary'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'kind', 'type', 'config', 'created_at', 'updated_at'],
+    title: 'AIProviderPublic',
+    description: `Admin-facing projection of one provider. **Never** carries the secret.
+
+\`\`has_secret\`\` rather than a nullable secret field, copying
+\`\`MailServerConfigPublic\`\`: a projection that carries the value's *slot* is
+one refactor away from carrying the value. There is no reveal endpoint.`
+} as const;
+
+export const AIProviderRotateKeySchema = {
+    properties: {
+        api_key: {
+            type: 'string',
+            minLength: 1,
+            title: 'Api Key'
+        }
+    },
+    type: 'object',
+    required: ['api_key'],
+    title: 'AIProviderRotateKey',
+    description: "Replace a ``fixed_key`` provider's key. Refused on ``minted``."
+} as const;
+
+export const AIProviderUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        config: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AIProviderConfigInput'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        auto_provision_roles: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Auto Provision Roles'
+        },
+        set_as_default: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Set As Default'
+        },
+        set_user_sdk_defaults: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Set User Sdk Defaults'
+        },
+        sdk_default_modes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Sdk Default Modes'
+        },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
+        available_models: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Available Models'
+        },
+        model_override_conversation: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Conversation'
+        },
+        model_override_building: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model Override Building'
+        },
+        expiry_notification_date: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expiry Notification Date'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    title: 'AIProviderUpdate',
+    description: `Partial update. Every field's omission means "leave it alone".
+
+\`\`model_override_*\`\` keeps the three-state contract of
+\`\`ManagedAICredentialUpdate\`\` **verbatim**, because the same members are on
+the other end of it:
+
+  * omitted / \`\`null\`\` — leave the stored override alone;
+  * \`\`""\`\` — clear it, and unpin every member still carrying the dropped
+    value (without that the clear is cosmetic);
+  * a model id — set it and write it through.
+
+\`\`kind\`\`, \`\`type\`\` and \`\`target_user_ids\`\` are absent on purpose. The first
+two would re-point an existing member's key at a different vendor or change
+what the stored secret means; membership is edited on the managed credential
+the provider owns, which is the record that has always held it.
+
+\`\`extra="forbid"\`\` for the same reason as :class:\`AIProviderCreate\`, and one
+more: \`\`secret\`\` is absent here on purpose — replacing a \`\`fixed_key\`\`
+provider's key is \`\`POST /{id}/rotate-key\`\`, which re-keys every member, and
+a \`\`secret\`\` quietly ignored by this endpoint would look exactly like the
+rotation that endpoint exists to perform.`
+} as const;
+
+export const AIProviderVerifyResultSchema = {
+    properties: {
+        ok: {
+            type: 'boolean',
+            title: 'Ok'
+        },
+        account_ref: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Account Ref'
+        },
+        checked_spend_limit: {
+            type: 'boolean',
+            title: 'Checked Spend Limit',
+            default: false
+        },
+        spend_limit_enforcing: {
+            type: 'boolean',
+            title: 'Spend Limit Enforcing',
+            default: false
+        },
+        spend_limit_cents: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Spend Limit Cents'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['ok'],
+    title: 'AIProviderVerifyResult',
+    description: `Outcome of a Verify press, for either kind.
+
+\`\`spend_limit_*\`\` are answered only for a \`\`minted\`\` provider — a
+\`\`fixed_key\`\` provider has no project whose cap could be read, and reporting
+\`\`False\`\` there would read as "no cap configured" rather than "the question
+does not apply". \`\`checked_spend_limit\`\` says which of the two it is.`
+} as const;
+
 export const AIServiceCredentialsSchema = {
     properties: {
         anthropic_api_key: {
@@ -17285,12 +17985,52 @@ every proxy access log, kept in browser history and leaked through
 \`\`Referer\`\`. Same reasoning, same shape as \`\`NewPassword.token\`\`.`
 } as const;
 
-export const InviteProvisioningSkipSchema = {
+export const InviteProvisioningDefaultSlotSkipSchema = {
     properties: {
-        managed_credential_id: {
+        provider_id: {
             type: 'string',
             format: 'uuid',
-            title: 'Managed Credential Id'
+            title: 'Provider Id'
+        },
+        mode: {
+            type: 'string',
+            title: 'Mode'
+        }
+    },
+    type: 'object',
+    required: ['provider_id', 'mode'],
+    title: 'InviteProvisioningDefaultSlotSkip',
+    description: `A provider's SDK wiring that did not apply to the invited account.
+
+**Disclosure, not an error**, in the same sense as
+\`\`InviteUserResponse.adopted_existing_account\`\`: the grant succeeded, the
+person holds a usable key, and the only surprising thing is that the
+provider's per-mode default did not get repointed at it because the account
+already held one in that mode. It is therefore *not* an
+:class:\`InviteProvisioningSkip\` — that shape means the person did not
+receive the key at all — and it never sets
+:attr:\`InviteProvisioningSummary.provisioning_failed\`.
+
+Carries the provider and the mode: together they name the policy that did
+not take effect and the slot it did not take, which is what an
+administrator can act on. The credential already occupying the slot is
+deliberately not carried — it belongs to the invited person's own
+configuration and the wizard has no name for it.
+
+Reachable on the ordinary re-invite path rather than an exotic one:
+\`\`InvitationService.invite\`\` runs explicit provisioning even when it adopts
+an account that already exists, and such an account may already hold a
+default. One ticked provider is enough; §5.5's write-time uniqueness rule
+guards two providers claiming the same configuration, not one provider
+meeting an occupied slot.`
+} as const;
+
+export const InviteProvisioningSkipSchema = {
+    properties: {
+        provider_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Provider Id'
         },
         reason: {
             type: 'string',
@@ -17298,9 +18038,14 @@ export const InviteProvisioningSkipSchema = {
         }
     },
     type: 'object',
-    required: ['managed_credential_id', 'reason'],
+    required: ['provider_id', 'reason'],
     title: 'InviteProvisioningSkip',
-    description: `One managed AI credential the invited account did *not* receive.
+    description: `One AI provider whose key the invited account did *not* receive.
+
+Keyed by the provider, because that is what the wizard submits and what it
+has a name for on screen; the managed credential a provider grants through
+is not a thing the wizard ever names, and for \`\`provider_not_found\`\` there
+is no credential to name at all.
 
 \`\`reason\`\` is the machine-readable string \`\`AccountProvisioningService\`\`
 already produces. The full vocabulary, because the wizard renders copy per
@@ -17311,16 +18056,18 @@ reason and a value it has never heard of falls through to a blank line:
   which is in practice the only producer this wizard ever sees: the
   short-circuit returns before \`\`add_members\`\` is called, so the
   reconcile path's own \`\`user_inactive\`\` cannot be reached from here.
-  One entry per **requested** credential, so that a deactivated
+  One entry per **requested** provider, so that a deactivated
   account does not report the empty summary an admin who ticked
   nothing gets;
-* \`\`managed_credential_not_found\`\` — an id the admin ticked no longer
-  exists, or is not a managed credential. Reachable **only** from the
+* \`\`provider_not_found\`\` — an id the admin ticked no longer names a
+  provider with a credential to grant through. Reachable **only** from the
   explicit invite path (\`\`provision_explicit\`\`), which is exactly this
   model's path, so it is the one reason the automatic path never emits and
-  the one most likely to be missing from the frontend's map;
-* \`\`provision_failed\`\` — the per-parent guard caught something;
-* \`\`add_members_failed\`\` — the grant itself failed for this credential.`
+  the one most likely to be missing from the frontend's map. It replaced
+  \`\`managed_credential_not_found\`\` when the wizard moved to providers, so a
+  map carrying the old string renders a blank line for it;
+* \`\`provision_failed\`\` — the per-provider guard caught something;
+* \`\`add_members_failed\`\` — the grant itself failed for this provider.`
 } as const;
 
 export const InviteProvisioningSummarySchema = {
@@ -17336,6 +18083,13 @@ export const InviteProvisioningSummarySchema = {
             },
             type: 'array',
             title: 'Skipped'
+        },
+        default_slot_skips: {
+            items: {
+                '$ref': '#/components/schemas/InviteProvisioningDefaultSlotSkip'
+            },
+            type: 'array',
+            title: 'Default Slot Skips'
         },
         provisioning_failed: {
             type: 'boolean',
@@ -17395,7 +18149,7 @@ export const InviteUserRequestSchema = {
             title: 'Auth Hint',
             default: 'any'
         },
-        managed_credential_ids: {
+        provider_ids: {
             anyOf: [
                 {
                     items: {
@@ -17408,7 +18162,7 @@ export const InviteUserRequestSchema = {
                     type: 'null'
                 }
             ],
-            title: 'Managed Credential Ids'
+            title: 'Provider Ids'
         },
         send_email: {
             type: 'boolean',
@@ -17461,10 +18215,12 @@ whitespace-only name is an omission spelled differently, so it becomes
 Clearing a name is a real thing to want and the user edit form is where
 it belongs; the invite wizard does not offer it.
 
-\`\`managed_credential_ids\`\` is the same rule with a third state, and it
-already had it: \`\`None\`\` means *grant whatever this role would have been
+\`\`provider_ids\`\` is the same rule with a third state, and it already had
+it: \`\`None\`\` means *grant whatever this role would have been
 auto-provisioned anyway*, which is the same predicate every other arrival
-path runs, while \`\`[]\`\` means the admin deliberately unticked everything.`
+path runs, while \`\`[]\`\` means the admin deliberately unticked everything.
+It names **providers** — the key source and the rule for who gets one —
+since a managed credential stopped being a factory.`
 } as const;
 
 export const InviteUserResponseSchema = {
@@ -19453,22 +20209,6 @@ export const ManagedAICredentialCreateSchema = {
             ],
             title: 'Api Key'
         },
-        provisioning_mode: {
-            '$ref': '#/components/schemas/ProvisioningMode',
-            default: 'shared'
-        },
-        provider_admin_credential_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Provider Admin Credential Id'
-        },
         base_url: {
             anyOf: [
                 {
@@ -19556,13 +20296,6 @@ export const ManagedAICredentialCreateSchema = {
             type: 'array',
             title: 'Sdk Default Modes'
         },
-        auto_provision_roles: {
-            items: {
-                type: 'string'
-            },
-            type: 'array',
-            title: 'Auto Provision Roles'
-        },
         model_override_conversation: {
             anyOf: [
                 {
@@ -19588,13 +20321,48 @@ export const ManagedAICredentialCreateSchema = {
             title: 'Model Override Building'
         }
     },
+    additionalProperties: false,
     type: 'object',
     required: ['name', 'type'],
     title: 'ManagedAICredentialCreate',
-    description: `Admin request to create a managed AI credential record.
+    description: `Admin request to create a **manual** managed AI credential record.
 
 Creates the parent row + reconciles to create one \`\`AICredential\`\` child per
-valid target user.`
+valid target user.
+
+THIS ROUTE ONLY CREATES MANUAL RECORDS
+--------------------------------------
+A record that belongs to a provider is created *by creating the provider*
+(\`\`POST /admin/ai-providers\`\`), which writes the pair in one transaction.
+So three fields this model used to carry are gone rather than optional:
+
+* \`\`provider_admin_credential_id\`\` — pointing a new credential at a provider
+  is §5.2's refused shape. It produced either a record holding its own key
+  *and* a provider (the shape the Phase 1 migration aborts on) or a silent
+  second credential on a provider that already owns one, invisible to
+  rotation, apply-to-existing and the delete gate while still handing out
+  keys. The refusal used to be a service 400; with the field gone it is
+  structural, and \`\`extra="forbid"\`\` below is what keeps it from becoming a
+  silent accept.
+* \`\`provisioning_mode\`\` — derived, never stated. A manual record is always
+  \`\`shared\`\`; \`\`minted\`\` is a property of the provider's \`\`kind\`\`, and there
+  is no provider to name here any more.
+* \`\`auto_provision_roles\`\` — the rule lives on \`\`ai_provider\`\`. A managed
+  credential is not a factory.
+
+\`\`extra="forbid"\`\`, AND WHY IT IS NOT DECORATION
+-------------------------------------------------
+Removing a field from a Pydantic model does not refuse it; by default it
+*ignores* it. A client still sending \`\`auto_provision_roles\`\` would get a
+200 and nothing would happen at the next signup — the exact "saved
+successfully, changed nothing" failure the provider/credential split exists
+to delete, arriving through the door the split just closed. Phase 1 made a
+non-empty \`\`auto_provision_roles\`\` a 400 for that reason and left a narrow
+gap at \`\`[]\`\` on provider-owned records; forbidding unknown keys closes the
+gap and strengthens the refusal rather than trading it away, and it names
+the offending field in the 422. Pinned by
+\`\`tests/api/ai_credentials/admin_ai_providers_test.py::
+test_the_retired_managed_credential_fields_are_refused_not_ignored\`\`.`
 } as const;
 
 export const ManagedAICredentialMemberSchema = {
@@ -19754,13 +20522,6 @@ export const ManagedAICredentialPublicSchema = {
             type: 'array',
             title: 'Sdk Default Modes'
         },
-        auto_provision_roles: {
-            items: {
-                type: 'string'
-            },
-            type: 'array',
-            title: 'Auto Provision Roles'
-        },
         model_override_conversation: {
             anyOf: [
                 {
@@ -19810,7 +20571,7 @@ export const ManagedAICredentialPublicSchema = {
         provisioning_mode: {
             '$ref': '#/components/schemas/ProvisioningMode'
         },
-        provider_admin_credential_id: {
+        provider_id: {
             anyOf: [
                 {
                     type: 'string',
@@ -19820,7 +20581,23 @@ export const ManagedAICredentialPublicSchema = {
                     type: 'null'
                 }
             ],
-            title: 'Provider Admin Credential Id'
+            title: 'Provider Id'
+        },
+        provider_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider Name'
+        },
+        is_provider_owned: {
+            type: 'boolean',
+            title: 'Is Provider Owned',
+            default: false
         },
         has_api_key: {
             type: 'boolean',
@@ -19860,7 +20637,12 @@ export const ManagedAICredentialPublicSchema = {
     title: 'ManagedAICredentialPublic',
     description: `Admin-facing projection of a managed AI credential parent record.
 
-Never includes \`\`encrypted_data\`\` or any key material.`
+Never includes \`\`encrypted_data\`\` or any key material.
+
+\`\`auto_provision_roles\`\` is **not** published here. §3.2 dropped the column
+from \`\`managed_ai_credential\`\`; the rule is a property of a provider and is
+published on :class:\`AIProviderPublic\`. Restating it on this projection
+would put a second answer on the wire for a question that has one owner.`
 } as const;
 
 export const ManagedAICredentialReconcileResultSchema = {
@@ -20056,20 +20838,6 @@ export const ManagedAICredentialUpdateSchema = {
             ],
             title: 'Sdk Default Modes'
         },
-        auto_provision_roles: {
-            anyOf: [
-                {
-                    items: {
-                        type: 'string'
-                    },
-                    type: 'array'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Auto Provision Roles'
-        },
         model_override_conversation: {
             anyOf: [
                 {
@@ -20095,6 +20863,7 @@ export const ManagedAICredentialUpdateSchema = {
             title: 'Model Override Building'
         }
     },
+    additionalProperties: false,
     type: 'object',
     title: 'ManagedAICredentialUpdate',
     description: `Admin request to update a managed AI credential record (partial update).
@@ -20106,7 +20875,14 @@ leaves membership unchanged.
 there is no stored key to replace, and silently accepting a rotation that
 rotates nothing is how an admin comes to believe they have rolled a key they
 have not. Rotating a minted member's key is a per-member mint, not a parent
-edit.`
+edit.
+
+\`\`auto_provision_roles\`\` is **gone**, not optional, and \`\`extra="forbid"\`\`
+is what makes that a refusal instead of a silent accept — see
+:class:\`ManagedAICredentialCreate\` for the argument. The \`\`[]\`\` gap this
+closes was specific to this model: on a provider-owned record an empty list
+was accepted, wrote nothing anywhere, and left an administrator believing
+they had stopped that provider auto-provisioning.`
 } as const;
 
 export const ManagedReconcileBlockSchema = {
@@ -21387,14 +22163,10 @@ export const ProviderAdapterPublicSchema = {
                 }
             ],
             title: 'Admin Config Schema'
-        },
-        can_mint_now: {
-            type: 'boolean',
-            title: 'Can Mint Now'
         }
     },
     type: 'object',
-    required: ['type', 'label', 'account_config_display_name', 'account_config_slug', 'sdk_engine', 'requires_base_url', 'requires_model', 'supports_model_listing', 'issues_oauth_tokens', 'supports_minting', 'can_mint_now'],
+    required: ['type', 'label', 'account_config_display_name', 'account_config_slug', 'sdk_engine', 'requires_base_url', 'requires_model', 'supports_model_listing', 'issues_oauth_tokens', 'supports_minting'],
     title: 'ProviderAdapterPublic',
     description: 'One provider, as the server understands it.'
 } as const;
@@ -21461,241 +22233,23 @@ displayed as the project's cap is worse than no copy at all. There is no
 fallback value and no local default.`
 } as const;
 
-export const ProviderAdminCredentialCreateSchema = {
-    properties: {
-        name: {
-            type: 'string',
-            maxLength: 255,
-            minLength: 1,
-            title: 'Name'
-        },
-        provider_type: {
-            '$ref': '#/components/schemas/AICredentialType'
-        },
-        secret: {
-            type: 'string',
-            minLength: 1,
-            title: 'Secret'
-        },
-        config: {
-            '$ref': '#/components/schemas/ProviderAdminCredentialConfig'
-        }
-    },
-    type: 'object',
-    required: ['name', 'provider_type', 'secret', 'config'],
-    title: 'ProviderAdminCredentialCreate',
-    description: 'Connect a provider organisation.'
-} as const;
-
-export const ProviderAdminCredentialPublicSchema = {
-    properties: {
-        id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Id'
-        },
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        provider_type: {
-            '$ref': '#/components/schemas/AICredentialType'
-        },
-        config: {
-            '$ref': '#/components/schemas/ProviderAdminCredentialConfig'
-        },
-        has_secret: {
-            type: 'boolean',
-            title: 'Has Secret',
-            default: true
-        },
-        last_verified_at: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'date-time'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Last Verified At'
-        },
-        last_verify_error: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Last Verify Error'
-        },
-        created_by_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Created By Id'
-        },
-        minting_credential_count: {
-            type: 'integer',
-            title: 'Minting Credential Count',
-            default: 0
-        },
-        live_minted_key_count: {
-            type: 'integer',
-            title: 'Live Minted Key Count',
-            default: 0
-        },
-        delete_blocked: {
-            type: 'boolean',
-            title: 'Delete Blocked',
-            default: false
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        }
-    },
-    type: 'object',
-    required: ['id', 'name', 'provider_type', 'config', 'created_at', 'updated_at'],
-    title: 'ProviderAdminCredentialPublic',
-    description: `Admin-facing projection. **Never** includes the secret.
-
-\`\`has_secret\`\` rather than a nullable secret field, copying
-\`\`MailServerConfigPublic\`\`: a projection that carries the value's *slot* is
-one refactor away from carrying the value.`
-} as const;
-
-export const ProviderAdminCredentialUpdateSchema = {
-    properties: {
-        name: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255,
-                    minLength: 1
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Name'
-        },
-        secret: {
-            anyOf: [
-                {
-                    type: 'string',
-                    minLength: 1
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Secret'
-        },
-        config: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/ProviderAdminCredentialConfig'
-                },
-                {
-                    type: 'null'
-                }
-            ]
-        }
-    },
-    type: 'object',
-    title: 'ProviderAdminCredentialUpdate',
-    description: `Partial update. Every field's omission is representable and means "leave
-it alone" — in particular, omitting \`\`secret\`\` keeps the stored one, so the
-admin surface never has to round-trip a secret in order to rename a record.`
-} as const;
-
-export const ProviderAdminCredentialVerifyResultSchema = {
-    properties: {
-        ok: {
-            type: 'boolean',
-            title: 'Ok'
-        },
-        account_ref: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Account Ref'
-        },
-        spend_limit_enforcing: {
-            type: 'boolean',
-            title: 'Spend Limit Enforcing',
-            default: false
-        },
-        spend_limit_cents: {
-            anyOf: [
-                {
-                    type: 'integer'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Spend Limit Cents'
-        },
-        error: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Error'
-        }
-    },
-    type: 'object',
-    required: ['ok'],
-    title: 'ProviderAdminCredentialVerifyResult',
-    description: `Outcome of a Verify press.
-
-Two questions, one answer object, because they fail independently and an
-admin who fixes one wants to see the other: is the secret good, and does the
-project carry a hard spend limit?
-
-\`\`spend_limit_enforcing\`\` keeps its name for wire compatibility, but it
-answers "is this project capped", not "is the cap currently biting" — see
-:attr:\`SpendLimitStatus.is_capped\`.`
-} as const;
-
 export const ProvisioningModeSchema = {
     type: 'string',
     enum: ['shared', 'minted'],
     title: 'ProvisioningMode',
     description: `How a parent record gets each member their key.
 
-- \`\`shared\`\` — the administrator pastes one key and every member's child row
-  holds a copy of it. The historical behaviour and the default; the only mode
-  available for a provider whose API cannot create keys.
+- \`\`shared\`\` — one key, copied onto every member's child row. A manual
+  record (no provider) is always \`\`shared\`\`; so is a provider-owned record
+  whose provider is \`\`fixed_key\`\`.
 - \`\`minted\`\` — each member gets their **own** key, created at the provider
-  through a :class:\`ProviderAdminCredential\`. The parent holds no key of its
-  own, which is why \`\`encrypted_data\`\` is nullable.`
+  through an :class:\`app.models.credentials.provider_admin_credential.AIProvider\`
+  whose \`\`kind\`\` is \`\`minted\`\`. The parent holds no key of its own, which is
+  why \`\`encrypted_data\`\` is nullable.
+
+**No longer a stored column.** It is derived from the owning provider's
+\`\`kind\`\` and stays on :class:\`ManagedAICredentialPublic\` as a computed
+field, so a record and its provider cannot disagree about it.`
 } as const;
 
 export const PublishRequestSchema = {

@@ -161,7 +161,7 @@ function RecommendationResult({
           The draft generator failed.
         </p>
         <p className="mt-1 text-xs break-words text-muted-foreground">
-          {result.error || "The provider gave no reason."}
+          {result.error || "The model API gave no reason."}
         </p>
       </div>
     )

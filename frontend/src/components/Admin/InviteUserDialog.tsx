@@ -1,23 +1,26 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { UserPlus } from "lucide-react"
 import { useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
 import {
-  AdminLlmProvidersService,
+  AdminAiProvidersService,
+  type AIProviderPublic,
   type InviteUserRequest,
   type InviteUserResponse,
-  type ManagedAICredentialPublic,
   ServerConfigService,
   UsersService,
 } from "@/client"
 import { InviteSuccessPanel } from "@/components/Admin/InviteSuccessPanel"
 import {
+  AI_PROVIDERS_QUERY_KEY,
+  aiProviderKindLabel,
   MANAGED_CREDENTIALS_QUERY_PREFIX,
-  managedCredentialsQueryKey,
 } from "@/components/Admin/LlmProviders/providerTypes"
+import { useProviderAdapters } from "@/components/Admin/LlmProviders/useProviderAdapters"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -101,21 +104,22 @@ type FormData = z.infer<typeof formSchema>
 type Step = "who" | "provisioning"
 
 /**
- * Which managed credentials a role would have been auto-provisioned anyway.
+ * Which providers a role would have been auto-provisioned anyway.
  *
  * Derived from `auto_provision_roles` — the *same* field
- * `AccountProvisioningService._provision` filters on — so the wizard's
- * pre-ticked set and an account arriving through Google or signup end up with
- * the same keys. Re-deriving this from anything else is how an invited
- * `agent-user` and a self-registered one silently diverge.
+ * `AccountProvisioningService._provision` filters on, now read off the provider
+ * that owns the rule — so the wizard's pre-ticked set and an account arriving
+ * through Google or signup end up with the same keys. Re-deriving this from
+ * anything else is how an invited `agent-user` and a self-registered one
+ * silently diverge.
  */
-function defaultCredentialIds(
-  records: ManagedAICredentialPublic[] | undefined,
+function defaultProviderIds(
+  providers: AIProviderPublic[] | undefined,
   role: string,
 ): string[] {
-  return (records ?? [])
-    .filter((record) => (record.auto_provision_roles ?? []).includes(role))
-    .map((record) => record.id)
+  return (providers ?? [])
+    .filter((provider) => (provider.auto_provision_roles ?? []).includes(role))
+    .map((provider) => provider.id)
 }
 
 const InviteUserDialog = () => {
@@ -130,7 +134,7 @@ const InviteUserDialog = () => {
   // same auto-provision predicate every other arrival path runs. An empty
   // array means the admin deliberately unticked everything. Keeping the two
   // apart matters when the credential list never loaded — see `onSubmit`.
-  const [credentialIds, setCredentialIds] = useState<string[] | null>(null)
+  const [providerIds, setProviderIds] = useState<string[] | null>(null)
   // `null` means "follow the instance default". Held rather than resolved on
   // entering step 2, because an admin who opens the dialog and clicks Next
   // before the server config lands would otherwise be shown `true` on an
@@ -154,18 +158,27 @@ const InviteUserDialog = () => {
 
   const role = form.watch("role")
 
-  // Same key the AI Credentials page and the auto-provision matrix use, so the
-  // wizard reads whatever those surfaces last wrote.
+  // Same key the Providers tab and the Access tab's card use, so the wizard
+  // reads whatever those surfaces last wrote.
+  //
+  // It lists **providers**, not managed credentials: a manual managed
+  // credential is not grantable at invite time, because the wizard grants key
+  // *sources* and a manual record is not one.
   const {
-    data: credentials,
-    isPending: credentialsPending,
-    isError: credentialsError,
+    data: providers,
+    isPending: providersPending,
+    isError: providersError,
   } = useQuery({
-    queryKey: managedCredentialsQueryKey(),
-    queryFn: () => AdminLlmProvidersService.listManagedAiCredentials({}),
+    queryKey: AI_PROVIDERS_QUERY_KEY,
+    queryFn: () => AdminAiProvidersService.listAiProviders(),
     staleTime: 30_000,
     enabled: isOpen,
   })
+
+  // The adapters endpoint is the authority on how a vendor is spelled. Cheap
+  // to add here: the query is keyed and cached for five minutes across every
+  // admin surface, so the wizard usually reads it out of the cache.
+  const { typeLabel } = useProviderAdapters(isOpen)
 
   const { data: serverConfig } = useQuery({
     queryKey: ["serverConfig"],
@@ -182,8 +195,8 @@ const InviteUserDialog = () => {
     includeDesktopChoice ?? serverConfig?.invite_include_desktop_default ?? true
 
   const suggestedIds = useMemo(
-    () => defaultCredentialIds(credentials, role),
-    [credentials, role],
+    () => defaultProviderIds(providers, role),
+    [providers, role],
   )
 
   const mutation = useMutation({
@@ -203,10 +216,11 @@ const InviteUserDialog = () => {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] })
-      // A grant changes each managed credential's member list.
+      // A grant changes the member list of the credential each provider owns.
       queryClient.invalidateQueries({
         queryKey: MANAGED_CREDENTIALS_QUERY_PREFIX,
       })
+      queryClient.invalidateQueries({ queryKey: AI_PROVIDERS_QUERY_KEY })
     },
   })
 
@@ -215,7 +229,7 @@ const InviteUserDialog = () => {
     setStep("who")
     setResult(null)
     setDuplicateEmail(false)
-    setCredentialIds(null)
+    setProviderIds(null)
     setIncludeDesktopChoice(null)
   }
 
@@ -231,12 +245,12 @@ const InviteUserDialog = () => {
     // Seed the tick marks from the role's auto-provision set the moment the
     // step opens. Only meaningful once the list has loaded; without it the
     // selection stays `null` and the backend decides, which is the same answer.
-    setCredentialIds(credentials ? suggestedIds : null)
+    setProviderIds(providers ? suggestedIds : null)
     setStep("provisioning")
   }
 
-  const toggleCredential = (id: string, checked: boolean) => {
-    setCredentialIds((current) => {
+  const toggleProvider = (id: string, checked: boolean) => {
+    setProviderIds((current) => {
       const base = current ?? suggestedIds
       return checked
         ? Array.from(new Set([...base, id]))
@@ -260,7 +274,7 @@ const InviteUserDialog = () => {
       role: data.role,
       auth_hint: data.auth_hint,
       send_email: data.send_email,
-      // Same rule as `managed_credential_ids` below, and for the same reason.
+      // Same rule as `provider_ids` below, and for the same reason.
       // `null` is "not stated", and the server answers it with
       // `ServerConfig.invite_include_desktop_default` — the one place that
       // policy is stored. Sending the render-time fallback instead would make
@@ -269,12 +283,10 @@ const InviteUserDialog = () => {
       // an instance whose stored default is `false`.
       include_desktop: serverConfig ? includeDesktop : null,
       // Send the explicit list only when the admin actually saw one. If the
-      // credential query failed or is still in flight, "not stated" is the
-      // honest answer and lets the server apply its own predicate — sending
-      // `[]` there would silently grant nothing.
-      managed_credential_ids: credentials
-        ? (credentialIds ?? suggestedIds)
-        : null,
+      // provider query failed or is still in flight, "not stated" is the honest
+      // answer and lets the server apply its own predicate — sending `[]` there
+      // would silently grant nothing.
+      provider_ids: providers ? (providerIds ?? suggestedIds) : null,
     })
   }
 
@@ -290,6 +302,7 @@ const InviteUserDialog = () => {
         {result ? (
           <InviteSuccessPanel
             result={result}
+            providers={providers ?? []}
             onDone={() => handleOpenChange(false)}
             onInviteAnother={resetAll}
           />
@@ -491,59 +504,68 @@ const InviteUserDialog = () => {
                 disabled={mutation.isPending}
               >
                 <div className="space-y-2">
-                  <Label>AI credentials</Label>
+                  <Label>AI providers</Label>
                   <p className="text-xs text-muted-foreground">
                     Pre-selected from what a {userRoleLabel(role)} is
                     auto-provisioned. Adjust for this person only.
                   </p>
-                  {credentialsPending && (
+                  {providersPending && (
                     <p className="text-sm text-muted-foreground">
-                      Loading credentials…
+                      Loading providers…
                     </p>
                   )}
-                  {credentialsError && (
+                  {providersError && (
                     <p className="text-sm text-muted-foreground">
-                      Could not load managed credentials. The invitation will
-                      still be sent, and the account gets whatever a{" "}
+                      Could not load AI providers. The invitation will still be
+                      sent, and the account gets whatever a{" "}
                       {userRoleLabel(role)} is auto-provisioned.
                     </p>
                   )}
-                  {credentials?.length === 0 && (
+                  {providers?.length === 0 && (
                     <p className="text-sm text-muted-foreground">
-                      No managed AI credentials exist yet. Add one on the LLM
-                      Providers page.
+                      No AI providers are connected yet.{" "}
+                      <Link
+                        to="/admin/ai-credentials"
+                        hash="providers"
+                        className="text-primary hover:underline"
+                      >
+                        Add one on the AI Credentials page.
+                      </Link>
                     </p>
                   )}
                   {/* A selection checklist in a wizard step, not a list in a
-                      card: it must show every credential the admin can grant,
-                      so its length is bounded by scroll rather than by a cap
-                      that would hide choices. */}
+                      card: it must show every provider the admin can grant, so
+                      its length is bounded by scroll rather than by a cap that
+                      would hide choices. */}
                   <div className="max-h-[40vh] space-y-2 overflow-y-auto">
-                    {(credentials ?? []).map((record) => {
-                      const selected = (credentialIds ?? suggestedIds).includes(
-                        record.id,
+                    {(providers ?? []).map((provider) => {
+                      const selected = (providerIds ?? suggestedIds).includes(
+                        provider.id,
                       )
                       return (
-                        <div key={record.id} className="flex items-start gap-2">
+                        <div key={provider.id} className="flex items-start gap-2">
                           <Checkbox
-                            id={`credential-${record.id}`}
+                            id={`provider-${provider.id}`}
                             checked={selected}
                             onCheckedChange={(checked) =>
-                              toggleCredential(record.id, checked === true)
+                              toggleProvider(provider.id, checked === true)
                             }
                             className="mt-0.5"
                           />
                           <Label
-                            htmlFor={`credential-${record.id}`}
+                            htmlFor={`provider-${provider.id}`}
                             className="min-w-0 flex-1 cursor-pointer font-normal"
                           >
-                            {record.name}
-                            {record.default_model && (
-                              <span className="text-muted-foreground">
-                                {" "}
-                                · {record.default_model}
-                              </span>
-                            )}
+                            {provider.name}
+                            {/* Kind and type are what an admin ticking a box
+                                needs to know. The default model, which used to
+                                be the only fact shown, is not. */}
+                            <span className="text-muted-foreground">
+                              {" · "}
+                              {aiProviderKindLabel(provider.kind)}
+                              {" · "}
+                              {typeLabel(provider.type)}
+                            </span>
                           </Label>
                         </div>
                       )
