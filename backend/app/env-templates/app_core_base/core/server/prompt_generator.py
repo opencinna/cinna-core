@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
+from .skill_manifest import scan_skills_root
+
 logger = logging.getLogger(__name__)
 
 # Total character budget for inline personal-memory injection (App Data tier).
@@ -41,14 +43,20 @@ class PromptGenerator:
     - Cache loaded prompts for performance
     """
 
-    def __init__(self, workspace_dir: str):
+    def __init__(self, workspace_dir: str, supports_skills: bool = True):
         """
         Initialize PromptGenerator.
 
         Args:
             workspace_dir: Path to workspace directory
+            supports_skills: Whether the calling adapter's engine indexes agent
+                skills natively (``BaseSDKAdapter.SUPPORTS_SKILLS``). Both
+                shipped engines do, so the default is a no-op; an adapter that
+                does not gets the degraded ``## Agent Skills`` prompt block
+                instead (see :meth:`_get_agent_skills_section`).
         """
         self.workspace_dir = Path(workspace_dir)
+        self.supports_skills = supports_skills
 
         # Load static prompts that don't change during runtime
         self.building_agent_prompt = self._load_building_agent_prompt()
@@ -602,6 +610,49 @@ class PromptGenerator:
 
         return "\n".join(lines)
 
+    def _get_agent_skills_section(self) -> Optional[str]:
+        """Fallback skills index for an engine with no native Skill tool.
+
+        Returns ``None`` — costing exactly zero tokens — whenever the engine
+        indexes skills itself (both shipped engines do) or the agent has no
+        valid skills. That is the whole point of the projection: the model sees
+        names and descriptions from the engine's own index and reads a body only
+        when it invokes one, which no prompt block can reproduce.
+
+        When an adapter opts out (``SUPPORTS_SKILLS = False``) the names and
+        descriptions are inlined here instead, with the instruction to read the
+        SKILL.md before use — progressive disclosure by convention rather than
+        by tool.
+        """
+        if self.supports_skills:
+            return None
+
+        try:
+            entries = [
+                entry
+                for entry in scan_skills_root(self.workspace_dir / "skills")
+                if entry.is_valid
+            ]
+        except Exception as e:  # noqa: BLE001 — never break prompt generation
+            logger.warning(f"Could not scan agent skills for the prompt: {e}")
+            return None
+
+        if not entries:
+            return None
+
+        lines = [
+            "\n\n---\n\n## Agent Skills\n",
+            "This agent carries the skills below. Each is a folder under "
+            "`./skills/` with a `SKILL.md` describing how to perform the task.",
+            "**Read `skills/<name>/SKILL.md` before using a skill** — this list "
+            "is only the index; the instructions live in the file.\n",
+        ]
+        for entry in entries:
+            lines.append(f"- **{entry.name}** — {entry.description}")
+
+        logger.info(f"Included agent skills fallback block ({len(entries)} skill(s))")
+        return "\n".join(lines)
+
     def _get_environment_context(self) -> str:
         """
         Get environment context section for both building and conversation modes.
@@ -738,6 +789,12 @@ class PromptGenerator:
         # Append environment context
         building_prompt += self._get_environment_context()
         logger.info("Included environment context in building mode prompt")
+
+        # Append the agent-skills fallback index (no-op when the engine has a
+        # native skill index, which both shipped engines do).
+        skills_section = self._get_agent_skills_section()
+        if skills_section:
+            building_prompt += skills_section
 
         # Append server-verified session context
         session_context_section = self.build_session_context_section(session_context)
@@ -894,6 +951,12 @@ class PromptGenerator:
             logger.info(
                 f"Appended personalization block ({len(personalization_lines)} line(s))"
             )
+
+        # Append the agent-skills fallback index (no-op when the engine has a
+        # native skill index, which both shipped engines do).
+        skills_section = self._get_agent_skills_section()
+        if skills_section:
+            conversation_prompt_parts.append(skills_section)
 
         # Append the per-install personal memory (App Data tier), if any.
         # True no-op when the memory area is empty — zero added tokens, exactly

@@ -139,6 +139,16 @@ class AgentBundleRevision(SQLModel, table=True):
         sa_column=Column(JSON, nullable=False, server_default=text("'[]'::json")),
     )
 
+    # Derived summary of the agent skills captured in this revision's
+    # workspace tree: ``[{name, description, has_scripts}]``, built at publish
+    # from ``skills/`` and never authored. NULL (not ``[]``) on a revision
+    # published before the feature existed — the same missing-key discipline
+    # every other additive column here follows, so "predates skills" stays
+    # distinguishable from "has no skills".
+    skills_summary: list | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+
     # ── Agent-row definitional metadata (schema_version 2, additive) ──
     # Snapshot of agent-level config that defines the published agent beyond the
     # prompts / SDK selections above. All nullable so revisions published before
@@ -201,6 +211,9 @@ class AgentBundleRevisionPublic(SQLModel):
     required_credential_specs: list = []
     schedules: list = []
     plugin_specs: list = []
+    #: ``None`` on a revision published before agent skills existed; ``[]`` on
+    #: one published from an agent that simply has none.
+    skills_summary: list | None = None
     published_by_user_id: uuid.UUID | None
     published_at: datetime
     release_notes: str | None = None

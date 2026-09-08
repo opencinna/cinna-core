@@ -63,6 +63,12 @@ services:
       # backend container recreation, else git-versioning baselines are lost
       # and the dirty check silently reports "no changes"
       - ${HOST_BUNDLE_STORAGE_DIR:-./backend/data/bundles}:/app/data/bundles
+      # Skills catalog snapshots + archive cache (SKILL_STORAGE_DIR) — must
+      # persist across backend container recreation: a published revision is
+      # immutable and every catalog-installed skill re-fetches its archive from
+      # here on each plugin sync, so an unmounted path would silently lose the
+      # content behind every install
+      - ${HOST_SKILL_STORAGE_DIR:-./backend/data/skills}:/app/data/skills
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
       interval: 10s

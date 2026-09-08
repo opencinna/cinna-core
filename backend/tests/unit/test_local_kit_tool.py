@@ -316,6 +316,70 @@ def test_validate_json_report_is_machine_readable(scaffolded_agent: Path) -> Non
     assert payload["schema"].endswith("cinna-agent.schema.json")
 
 
+def test_a_skills_folder_scaffolds_and_validates_clean(scaffolded_agent: Path) -> None:
+    """Contract 1.1.0's `skills/<name>/SKILL.md`, end to end through the tool.
+
+    `validate` has no allowlist of top-level folders, so accepting `skills/`
+    took no code change — which is exactly why it needs a test. The checks that
+    *do* walk the whole tree would each be a plausible way for a new folder to
+    fail: `_validate_secrets` hunts stray key material under it, and
+    `_validate_scripts_catalog` demands a catalog entry for every `.py` under
+    `scripts/`. A skill's own `scripts/check.py` lives under `skills/`, not
+    `scripts/`, so it is deliberately not catalogued there — pin that, because
+    the obvious "fix" (widen the catalog walk to the whole tree) would warn on
+    every skill anyone ever writes.
+    """
+    skill = scaffolded_agent / "skills" / "timeoff-check"
+    (skill / "scripts").mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: timeoff-check\n"
+        "description: Check an employee's time-off balance and history.\n---\n\n"
+        "# Time-off check\n",
+        encoding="utf-8",
+    )
+    (skill / "scripts" / "check.py").write_text("print('ok')\n", encoding="utf-8")
+
+    result = run_kit("validate", str(scaffolded_agent), "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True, payload
+    assert payload["errors"] == [], payload["errors"]
+    assert not [item for item in payload["warnings"] if "skill" in item.lower()], payload[
+        "warnings"
+    ]
+    # The scaffold ships the folder's own README, so a skills-less agent still
+    # has somewhere the convention is written down.
+    assert (scaffolded_agent / "skills" / "README.md").is_file()
+
+
+def test_the_knowledge_rung_is_adopted_by_skills_alone(
+    kit_module, scaffolded_agent: Path
+) -> None:
+    """The rung is "Knowledge & local skills"; since 1.1.0 either half adopts it.
+
+    `_rungs_present` used to look only at `knowledge/`, so an author who put
+    every capability in `skills/` and wrote no domain docs would be told by
+    `kit.py list` that they had not climbed a rung they had — and the ladder
+    check (`README.md`) would then send them back to the guide they had just
+    followed. The false negative is the reason this is a test and not a comment.
+
+    The `README.md` exclusion is the other half: the scaffold ships one in
+    *both* folders, so a rung counted by file presence alone would report every
+    freshly created agent as having adopted it.
+    """
+    manifest = json.loads((scaffolded_agent / "cinna-agent.json").read_text(encoding="utf-8"))
+
+    assert "knowledge" not in kit_module._rungs_present(scaffolded_agent, manifest)
+
+    skill = scaffolded_agent / "skills" / "timeoff-check"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: timeoff-check\ndescription: Check time off.\n---\n", encoding="utf-8"
+    )
+
+    assert "knowledge" in kit_module._rungs_present(scaffolded_agent, manifest)
+
+
 def test_new_refuses_to_overwrite_an_existing_agent(tmp_path: Path) -> None:
     assert run_kit("new", "dup-agent", "--root", str(tmp_path)).returncode == 0
     second = run_kit("new", "dup-agent", "--root", str(tmp_path))
@@ -1816,7 +1880,22 @@ def test_version_authority_is_one_value_in_three_places(kit_module) -> None:
     kit_json = json.loads((KIT_DIR / "kit.json").read_text(encoding="utf-8"))
     layout = json.loads((KIT_DIR / "layout.json").read_text(encoding="utf-8"))
 
-    assert stamped == "1.0.0"
+    # The MAJOR is pinned, not the whole string. The major is the compatibility
+    # gate — `check_contract_compatibility` compares majors and nothing else — so
+    # a change to it is a breaking change that must be a deliberate edit here.
+    # A minor is additive by definition (contract 1.1.0 added the `skills` folder
+    # role), and pinning the full literal only meant every additive bump broke a
+    # test that was never asking about the minor.
+    parsed = kit_module.parse_semver(stamped)
+    assert parsed is not None, f"CONTRACT_VERSION is not a semver: {stamped!r}"
+    assert parsed[0] == 1, stamped
+    # What the dropped literal was accidentally buying: a version cannot move
+    # without someone saying why. Asserted against the heading rather than the
+    # number, so it holds for every future bump instead of one.
+    changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert re.search(rf"^## {re.escape(stamped)}\b", changelog, re.M), (
+        f"contract {stamped} ships without a CHANGELOG.md entry"
+    )
     assert kit_json["contract_version"] == stamped
     assert layout["contract_version"] == stamped
     assert kit_module.contract_version() == stamped

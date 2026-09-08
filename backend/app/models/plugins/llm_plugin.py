@@ -151,10 +151,20 @@ class PluginSource(str, Enum):
     - ``bundle`` — files delivered inside the install's bundle revision snapshot
       and seeded into the env workspace. ``plugin_id`` is NULL (no marketplace
       needed); identity/coordinates come from the snapshot fields.
+    - ``catalog`` — a skill package from this instance's skills catalog. The
+      container fetches a signed archive of the pinned
+      ``SkillPackageRevision`` from the backend and extracts it under
+      ``plugins/cinna-skills/<package name>/``. ``plugin_id`` is NULL;
+      identity comes from the snapshot fields and the revision FK.
+
+    Only ``marketplace`` links resolve a live ``plugin`` row — every other
+    source is snapshot-identified, which is why identity resolution branches on
+    "is this marketplace?" rather than on each source in turn.
     """
 
     marketplace = "marketplace"
     bundle = "bundle"
+    catalog = "catalog"
 
 
 class LLMPluginMarketplacePluginBase(SQLModel):
@@ -275,8 +285,21 @@ class AgentPluginLink(AgentPluginLinkBase, table=True):
         index=True,
         nullable=True,
     )
-    # Origin of this link: marketplace (git-fetched) or bundle (snapshot-seeded).
+    # Origin of this link: marketplace (git-fetched), bundle (snapshot-seeded)
+    # or catalog (archive fetched from this instance's skills catalog).
     source: PluginSource = Field(default=PluginSource.marketplace, sa_type=sa.String())
+    # Catalog-sourced identity (NULL for every other source): the pinned skill
+    # package revision. ``SET NULL`` so deleting a package orphans the link
+    # (rendered as "source unavailable") instead of silently uninstalling a
+    # skill from someone's agent. Also the update signal: an update is
+    # available when ``package.latest_revision_id != skill_package_revision_id``.
+    skill_package_revision_id: Optional[uuid.UUID] = Field(
+        default=None,
+        foreign_key="skill_package_revision.id",
+        ondelete="SET NULL",
+        index=True,
+        nullable=True,
+    )
     # Bundle-sourced identity (NULL for marketplace links): the on-disk dir
     # segment + manifest label, and a frozen copy of plugin.json for the UI.
     snapshot_marketplace_name: Optional[str] = None
@@ -318,6 +341,7 @@ class AgentPluginLinkPublic(SQLModel):
     snapshot_marketplace_name: Optional[str] = None
     snapshot_plugin_name: Optional[str] = None
     snapshot_config: Optional[dict] = None
+    skill_package_revision_id: Optional[uuid.UUID] = None
     installed_version: Optional[str]
     installed_commit_hash: Optional[str]
     conversation_mode: bool
@@ -334,7 +358,20 @@ class AgentPluginLinkWithPlugin(AgentPluginLinkPublic):
 
 
 class AgentPluginLinkWithUpdateInfo(AgentPluginLinkPublic):
-    """Extended schema including update availability info."""
+    """Extended schema including update availability info.
+
+    The display fields are **projections**, not columns, and each source has to
+    fill all of them or the row renders nameless:
+
+    * ``marketplace`` — the live ``LLMPluginMarketplacePlugin`` +
+      ``LLMPluginMarketplace`` rows; ``has_update`` compares commit hashes.
+    * ``bundle`` — the frozen ``snapshot_*`` fields; never has an update of its
+      own (bundle apply-update is the only path).
+    * ``catalog`` — the ``SkillPackage`` behind the pinned revision: its
+      ``display_name``/``name``, its ``description``, category ``"skill"``, and
+      ``latest_version`` from the package's latest revision; ``has_update`` is
+      ``package.latest_revision_id != link.skill_package_revision_id``.
+    """
 
     has_update: bool = False
     latest_version: Optional[str] = None
@@ -343,6 +380,9 @@ class AgentPluginLinkWithUpdateInfo(AgentPluginLinkPublic):
     plugin_description: Optional[str] = None
     plugin_category: Optional[str] = None
     marketplace_name: Optional[str] = None
+    #: Catalog links only — the package this skill came from, so the Plugins
+    #: tab can link a row to its catalog page without a second lookup.
+    skill_package_id: Optional[uuid.UUID] = None
 
 
 class AgentPluginLinksPublic(SQLModel):

@@ -107,6 +107,9 @@ def _fake_env(**overrides):
 _CRED_SPECS = [{"name": "api_key", "type": "api_key", "provided_by": "user"}]
 _SCHEDULE_SPECS = [{"name": "nightly", "cron_string": "0 0 * * *", "enabled": True}]
 _PLUGIN_SPECS = [{"marketplace_name": "mkt", "plugin_name": "p", "disabled": False}]
+_SKILLS_SUMMARY = [
+    {"name": "pdf-report", "description": "Build a PDF report.", "has_scripts": True}
+]
 
 
 # ── build_manifest ──────────────────────────────────────────────────────────────
@@ -119,6 +122,7 @@ def test_build_manifest_shape_with_env() -> None:
         cred_specs=_CRED_SPECS,
         schedule_specs=_SCHEDULE_SPECS,
         plugin_specs=_PLUGIN_SPECS,
+        skills_summary=_SKILLS_SUMMARY,
         revision_number=3,
         version="1.2",
         release_notes="notes",
@@ -144,6 +148,8 @@ def test_build_manifest_shape_with_env() -> None:
     assert manifest["required_credential_specs"] == _CRED_SPECS
     assert manifest["schedules"] == _SCHEDULE_SPECS
     assert manifest["plugin_specs"] == _PLUGIN_SPECS
+    # Derived at publish from the workspace tree — never authored.
+    assert manifest["skills_summary"] == _SKILLS_SUMMARY
     # schema_version-2 agent-row definitional metadata block.
     assert manifest["metadata"] == _EXPECTED_METADATA
     # content_hash is added by write_tree, not build_manifest.
@@ -157,6 +163,7 @@ def test_build_manifest_no_env_nulls_sdk_slots() -> None:
         cred_specs=[],
         schedule_specs=[],
         plugin_specs=[],
+        skills_summary=None,
         revision_number=1,
         version=None,
         release_notes=None,
@@ -193,6 +200,7 @@ def test_write_tree_captures_workspace_and_writes_manifest(tmp_path: Path) -> No
         cred_specs=_CRED_SPECS,
         schedule_specs=[],
         plugin_specs=[],
+        skills_summary=[],
         revision_number=1,
         version="1.0",
         release_notes=None,
@@ -224,6 +232,7 @@ def test_write_tree_no_env_creates_empty_workspace(tmp_path: Path) -> None:
         cred_specs=[],
         schedule_specs=[],
         plugin_specs=[],
+        skills_summary=None,
         revision_number=1,
         version=None,
         release_notes=None,
@@ -244,6 +253,7 @@ def test_write_tree_git_manifest_filename(tmp_path: Path) -> None:
         cred_specs=[],
         schedule_specs=[],
         plugin_specs=[],
+        skills_summary=[],
         revision_number=1,
         version="1.0",
         release_notes=None,
@@ -278,6 +288,7 @@ def test_read_manifest_round_trip(tmp_path: Path) -> None:
         cred_specs=_CRED_SPECS,
         schedule_specs=_SCHEDULE_SPECS,
         plugin_specs=_PLUGIN_SPECS,
+        skills_summary=_SKILLS_SUMMARY,
         revision_number=2,
         version="1.1",
         release_notes="changelog",
@@ -302,6 +313,7 @@ def test_read_manifest_round_trip(tmp_path: Path) -> None:
         "required_credential_specs": _CRED_SPECS,
         "schedules": _SCHEDULE_SPECS,
         "plugin_specs": _PLUGIN_SPECS,
+        "skills_summary": _SKILLS_SUMMARY,
         "version": "1.1",
         "release_notes": "changelog",
         "description": "A test agent.",
@@ -382,6 +394,10 @@ def test_manifest_to_revision_fields_tolerates_missing_sections() -> None:
     assert fields["required_credential_specs"] == []
     assert fields["schedules"] == []
     assert fields["plugin_specs"] == []
+    # NOT ``[]``: an absent key means the revision predates agent skills, which
+    # the restore side must not read as "this bundle ships no skills". This
+    # assertion IS the missing-key discipline.
+    assert fields["skills_summary"] is None
     assert fields["version"] is None
 
 

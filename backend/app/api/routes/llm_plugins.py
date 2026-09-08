@@ -30,6 +30,7 @@ from app.models.plugins.llm_plugin import (
     PluginSyncResponse,
 )
 from app.services.plugins.llm_plugin_service import LLMPluginService
+from app.services.skills.exceptions import SkillCatalogError, http_error_for
 
 logger = logging.getLogger(__name__)
 
@@ -423,11 +424,18 @@ async def upgrade_agent_plugin(
     """
     LLMPluginService.verify_agent_access(session, agent_id, current_user)
 
-    link = LLMPluginService.upgrade_agent_plugin(
-        session=session,
-        agent_id=agent_id,
-        link_id=link_id,
-    )
+    try:
+        link = LLMPluginService.upgrade_agent_plugin(
+            session=session,
+            agent_id=agent_id,
+            link_id=link_id,
+        )
+    except SkillCatalogError as exc:
+        # A catalog-sourced link upgrades by re-pinning to its package's latest
+        # revision, and that can fail for reasons a marketplace link has no
+        # word for ("the catalog entry is gone"). Map the code rather than
+        # letting it read as a missing link.
+        raise http_error_for(exc)
     if not link:
         raise HTTPException(status_code=404, detail="Plugin link not found")
 

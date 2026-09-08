@@ -244,6 +244,12 @@ class PublishService:
                 session, install, env_workspace_root
             )
 
+            # Pre-flight: every skill in ``skills/`` must be valid and free of
+            # key material. Both are hard blocks, and both run BEFORE anything
+            # is written: a revision is immutable, so a snapshot carrying a
+            # broken skill (or somebody's ``.env``) can never be taken back.
+            PublishService._ensure_publisher_skills_publishable(env_workspace_root)
+
             # All pre-flight validators passed. The DB-bound collectors below
             # build the manifest body; they MUST stay on the event loop (the
             # sync ``Session`` is not safe to touch from a worker thread). The
@@ -269,6 +275,14 @@ class PublishService:
             # ``_write_snapshot_to_disk`` (run via ``asyncio.to_thread``).
             plugin_specs = PublishService._collect_plugin_specs(session, install)
 
+            # Derived summary of the agent's skills. Read off the publisher's
+            # live workspace — the same tree the snapshot is about to copy —
+            # rather than out of the finished snapshot, so the hard block above
+            # and this summary can never describe different trees.
+            skills_summary = PublishService._collect_skills_summary(
+                env_workspace_root
+            )
+
             # Build the manifest + serialize the revision tree through the
             # single canonical (de)serializer. ``write_tree`` performs the
             # full-tree capture into ``tmp_dir/workspace/`` (schema_version 2 —
@@ -280,6 +294,7 @@ class PublishService:
                 cred_specs=cred_specs,
                 schedule_specs=schedule_specs,
                 plugin_specs=plugin_specs,
+                skills_summary=skills_summary,
                 revision_number=revision_number,
                 version=version,
                 release_notes=release_notes,
@@ -984,6 +999,107 @@ class PublishService:
                 "Cannot publish: plugin files are missing from the publisher "
                 f"environment for: {names}. Start the environment so the plugins "
                 "install, then publish again."
+            )
+
+    @staticmethod
+    def _skills_root(env_workspace_root: Path | None) -> Path | None:
+        """The publisher workspace's ``skills/`` directory, if there is one."""
+        if env_workspace_root is None:
+            return None
+        return env_workspace_root / WORKSPACE_ROOT_REL / "skills"
+
+    @staticmethod
+    def _collect_skills_summary(env_workspace_root: Path | None) -> list[dict]:
+        """Derive ``skills_summary`` from the publisher workspace.
+
+        ``[{name, description, has_scripts}]`` — enough for a catalog card to
+        answer "does this bundle come with skills?", and nothing more. The skill
+        *files* travel in the snapshot tree like every other workspace file;
+        this is metadata only, and it is derived rather than authored (same
+        discipline as ``content_hash``), so a publisher cannot claim a skill the
+        tree does not contain.
+
+        Returns ``[]`` for a prompts-only revision (no env): accurate, and still
+        distinguishable from the ``None`` a pre-feature revision carries.
+        """
+        from app.services.agents.skill_manifest import scan_skills_root
+
+        skills_root = PublishService._skills_root(env_workspace_root)
+        if skills_root is None or not skills_root.is_dir():
+            return []
+        return [
+            {
+                "name": entry.name,
+                "description": entry.description,
+                "has_scripts": entry.has_scripts,
+            }
+            for entry in scan_skills_root(skills_root)
+            if entry.is_valid
+        ]
+
+    @staticmethod
+    def _ensure_publisher_skills_publishable(
+        env_workspace_root: Path | None,
+    ) -> None:
+        """Hard-block publish on an invalid or secret-bearing skill.
+
+        Two refusals, one gate:
+
+        * an ``error`` on any skill — the same posture as an unresolvable
+          plugin. A revision is immutable and consumers cannot fix a publisher's
+          broken frontmatter, so shipping one would strand every install.
+          ``budget`` is the one excepted code; see the comment below.
+        * a file inside ``skills/`` that looks like key material — the predicate
+          the agent page already warns on, so the refusal can never surprise a
+          publisher who read their own card.
+
+        Both messages name the offending skill (and file), because "publish
+        failed" without a name is a bug report rather than a fix.
+
+        Raises ``ValueError`` (→ 400) rather than the coded 422 of plan §9: that
+        422 belongs to the Phase-3 ``publish_skill`` verb, which publishes one
+        named skill and whose dialog needs to branch on the outcome. This is
+        *bundle* publish, where the sibling pre-flight
+        (:meth:`_ensure_publisher_plugin_files`) already answers 400 with a
+        sentence, and one publish form reporting two failure classes two
+        different ways would be worse than either.
+        """
+        from app.services.agents.skill_manifest import scan_skills_root
+
+        skills_root = PublishService._skills_root(env_workspace_root)
+        if skills_root is None or not skills_root.is_dir():
+            return
+
+        entries = scan_skills_root(skills_root)
+
+        # ``budget`` is deliberately not a blocker: it is an index-presentation
+        # state (§9 calls it an exclusion), the content is perfectly valid, and
+        # an agent with 51 skills would otherwise be unable to publish at all
+        # with no route to a fix. The overflow skills still travel in the
+        # snapshot; they are simply absent from the derived summary.
+        invalid = [
+            f"{entry.name} ({entry.error.message})"
+            for entry in entries
+            if entry.error is not None and entry.error.code != "budget"
+        ]
+        if invalid:
+            raise ValueError(
+                "Cannot publish: these skills are not valid — "
+                + "; ".join(sorted(invalid))
+                + ". Fix them in the agent workspace, then publish again."
+            )
+
+        offending: list[str] = []
+        for entry in entries:
+            offending.extend(
+                f"{entry.path}/{relative}" for relative in entry.secret_paths
+            )
+        if offending:
+            raise ValueError(
+                "Cannot publish: these files inside skills/ look like "
+                "credentials and must not be shipped — "
+                + ", ".join(sorted(offending))
+                + "."
             )
 
     # Credential types whose ``credential_data`` is intrinsically per-user

@@ -658,6 +658,37 @@ block — same entries, same order. A fallback that diverges is a silent
 hash-parity break: the two hosts hash different file sets and the drift
 indicator never clears.
 
+### Contract 1.1.0 — the `skills` role
+
+The contract's `agent` member list gained
+`{path: "skills", kind: "directory", role: "skills", survives_update: true}`,
+and the `docs` role text dropped "one doc per local skill". A skill is
+`skills/<name>/SKILL.md` shaped like the open Agent Skills standard; see
+[agent_skills](../../agents/agent_skills/agent_skills.md) and its
+[tech reference](../../agents/agent_skills/agent_skills_tech.md).
+
+- **Additive, so a minor bump.** Majors match, so a tool built against `1.0.0`
+  still operates a `1.1.0` folder and no existing agent folder needs a change.
+  All three declarations move together — `CONTRACT_VERSION`, `kit.json` and
+  `layout.json` — or both contract representations 503.
+- **`skills/` is not in `cloud_import_excludes`**: it is part of what the agent
+  *is*, so it travels to the cloud like `docs/` and `scripts/`.
+- **`_rungs_present`** now adopts the "Knowledge & local skills" rung on
+  authored files under `knowledge/` **or** `skills/`, each folder's scaffolded
+  `README.md` excluded. Checking only `knowledge/` would tell an author who went
+  all-in on skills that they had not climbed a rung they had, and the ladder
+  check would then send them back to the guide they followed.
+- **The scaffold gains `templates/agent/skills/README.md`**, picked up by the
+  contract tarball automatically (`templates/**` is a declared member subset).
+- **`templates/agent/AGENTS.md` carries an explicit read-the-`SKILL.md` rule.**
+  Nothing on the user's machine registers `skills/` with their coding assistant,
+  so locally the progressive disclosure the folder exists for is an
+  *instruction*, not machinery. Do not document local auto-discovery.
+- **`docs/skill_<name>.md` is legacy, not removed** — still shipped, still <!-- nocheck -->
+  imported, still read when the workflow prompt points at it. Guide 08 carries a
+  five-step per-capability migration, deliberately not a sweep: a capability
+  living in both places is two sources of truth.
+
 ### Exclude-pattern semantics (`matches_pattern`, `is_excluded`)
 
 A port of the desktop's `matchesPattern` (`src/main/kit/layout.ts`), and it has

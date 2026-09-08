@@ -114,6 +114,33 @@ def set_environment_status(
     db.flush()
 
 
+def set_environment_auth_token(
+    db: Session,
+    env_id: str | uuid.UUID,
+    token: str = "test-env-callback-token",
+) -> str:
+    """Stamp a known env-callback token into ``AgentEnvironment.config``.
+
+    Same documented-seam rationale as ``set_environment_status``: the token an
+    environment presents on its callbacks (``/environments/{id}/
+    workspace-files-changed`` and friends) is minted inside the real container
+    setup path, which the suite stubs out, and there is no API that hands it
+    back to a test. The verbatim ``config["auth_token"]`` compare in
+    ``_resolve_agent_env_context`` is what accepts it, so writing the column is
+    the whole setup. Returns the token for the caller's Authorization header.
+    """
+    from app.models import AgentEnvironment
+
+    if isinstance(env_id, str):
+        env_id = uuid.UUID(env_id)
+    env = db.get(AgentEnvironment, env_id)
+    assert env is not None, f"Environment {env_id} not found"
+    env.config = {**(env.config or {}), "auth_token": token}
+    db.add(env)
+    db.flush()
+    return token
+
+
 def age_environment_status_changed_at(
     db: Session,
     env_id: str | uuid.UUID,

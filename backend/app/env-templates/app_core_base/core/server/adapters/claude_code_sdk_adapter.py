@@ -140,7 +140,9 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
         super().__init__(config)
 
         # Initialize prompt generator
-        self.prompt_generator = PromptGenerator(self.workspace_dir)
+        self.prompt_generator = PromptGenerator(
+            self.workspace_dir, supports_skills=self.SUPPORTS_SKILLS
+        )
 
         # Initialize event logger (shared JSONL format, same as OpenCode)
         dump_llm_session = os.getenv("DUMP_LLM_SESSION", "false").lower() == "true"
@@ -163,6 +165,7 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
         system_prompt: Optional[str] = None,
         mode: str = "conversation",
         session_state: Optional[dict] = None,
+        skills_changed: bool = False,
     ) -> AsyncIterator[SDKEvent]:
         """
         Send message to Claude SDK and stream responses as SDKEvents.
@@ -173,6 +176,10 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
             backend_session_id: Backend session ID for tracking
             system_prompt: Custom system prompt
             mode: "building" or "conversation"
+            skills_changed: Accepted for interface parity and deliberately
+                unused — each message spawns a fresh CLI subprocess, which
+                rescans ~/.claude/skills on start, so a skill added between two
+                messages is already in this message's index.
 
         Yields:
             SDKEvent objects
@@ -240,9 +247,14 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
 
                 # Build pre-allowed tools — PascalCase is required by the Claude
                 # SDK config. Normalized to lowercase at tools_init emission.
+                # `Skill` invokes an agent skill projected into
+                # ~/.claude/skills (see skills_projection). Pre-allowed because
+                # a skill's body is content the owner authored or installed
+                # through the plugin pipeline — the tools that body then asks
+                # for are still gated by can_use_tool and allowed_tools.
                 pre_allowed_tools = [
                     "Read", "Edit", "Glob", "Grep", "Bash", "Write",
-                    "WebFetch", "WebSearch", "TodoWrite"
+                    "WebFetch", "WebSearch", "TodoWrite", "Skill"
                 ]
 
                 # Get user-approved allowed tools

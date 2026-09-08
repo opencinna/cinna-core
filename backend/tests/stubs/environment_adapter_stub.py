@@ -164,6 +164,16 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
     async def get_plugins_settings(self) -> dict:
         return {}
 
+    async def get_skills_index(self) -> dict:
+        # Scenario tests set ``skills_index`` to drive the skills cache; the
+        # default is "the agent has no skills", which is the shape an agent
+        # with no ``skills/`` folder produces.
+        return getattr(self, "skills_index", None) or {
+            "hash": "",
+            "skills": [],
+            "errors": [],
+        }
+
     async def set_mcp_servers(self, manifest: dict) -> bool:
         # Capture the per-mode MCP-provider manifest pushed by the lifecycle
         # so scenario tests can assert what reached the (stubbed) container.

@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card"
 import { AgentHandovers } from "./AgentHandovers"
 import { AgentSchedulesCard } from "./AgentSchedulesCard"
+import { AgentSkillsCard } from "./AgentSkillsCard"
 import { AgentStatusCard } from "./AgentStatusCard"
 import { BundleInstallationCard } from "./BundleInstallationCard"
 import { EditDescriptionModal } from "./EditDescriptionModal"
@@ -135,6 +136,14 @@ export function AgentConfigTab({
             </div>
           </CardContent>
         </Card>
+
+        {/* Skills — the folders under ``skills/`` the engine can invoke by
+            name. Deliberately NOT gated on ``showOperationalSettings`` or on
+            ``readOnly``: knowing what an installed agent can actually do is a
+            use capability, so a consumer of a foreign install sees the card
+            too. The publish verb it will grow in Phase 3 is gated by the
+            server's ``can_publish``, not by the host. */}
+        <AgentSkillsCard agentId={agent.id} />
 
         {/* Bundle installation — foreign installs only (the card self-hides via
             the same ``bundle_uuid && !is_publisher_install`` rule that makes

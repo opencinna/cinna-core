@@ -516,16 +516,37 @@ class TestOpenCodePluginArtifacts:
         svc, _ = self._service_with_active_plugin(
             tmp_path,
             commands=["do.md", "go.md", "notes.txt"],  # only *.md collected
-            caps=["skills", "hooks"],
+            caps=["agents", "hooks"],
         )
         art = svc.get_opencode_plugin_artifacts("conversation")
         assert sorted(Path(c).name for c in art["command_files"]) == ["do.md", "go.md"]
-        assert sorted(u["capability"] for u in art["unsupported"]) == ["hooks", "skills"]
+        assert sorted(u["capability"] for u in art["unsupported"]) == ["agents", "hooks"]
         # Each unsupported entry carries identifying + message fields.
         for u in art["unsupported"]:
             assert u["plugin_name"] == "tool"
             assert u["marketplace_name"] == "acme"
             assert "not yet supported under OpenCode" in u["message"]
+
+    def test_plugin_skills_dir_is_a_config_path_not_an_unsupported_report(
+        self, tmp_path
+    ):
+        """`skills` left _OPENCODE_UNSUPPORTED_DIRS when OpenCode gained skills.
+
+        Reporting it as unsupported after we started handing OpenCode the path
+        would be a lie the user acts on (rebuild, switch engine), so the two
+        must move together: the dir appears in `skill_dirs` and nowhere in
+        `unsupported`.
+        """
+        svc, pdir = self._service_with_active_plugin(tmp_path, caps=["skills"])
+        art = svc.get_opencode_plugin_artifacts("conversation")
+        assert [str(d) for d in art["skill_dirs"]] == [str(pdir / "skills")]
+        assert art["unsupported"] == []
+
+    def test_empty_plugin_skills_dir_is_not_registered(self, tmp_path):
+        svc, pdir = self._service_with_active_plugin(tmp_path)
+        (pdir / "skills").mkdir()
+        art = svc.get_opencode_plugin_artifacts("conversation")
+        assert art["skill_dirs"] == []
 
     def test_inactive_mode_returns_nothing(self, tmp_path):
         svc, _ = self._service_with_active_plugin(
@@ -633,7 +654,16 @@ class TestOpenCodeConfigMaterialization:
         assert "knowledge" in runtime_cfg["mcp"]  # bridge preserved
         assert "plugin_acme_tool_weather" in runtime_cfg["mcp"]  # plugin merged
         assert (ad._runtime_dir / "command" / "do.md").exists()  # command copied
-        assert [u["capability"] for u in unsupported] == ["skills"]
+        # The plugin's skills/ dir becomes an OpenCode skills path — the agent's
+        # OWN skills are projected into ~/.claude/skills instead, so they must
+        # NOT appear here (listing both would index every skill twice).
+        # OpenCode's schema declares `skills` as an object with a `paths` array
+        # (additionalProperties: false at both levels) — an array here would be
+        # a config the pinned OPENCODE_CONFIG file cannot load.
+        assert runtime_cfg["skills"] == {
+            "paths": [str(ws / "plugins" / "acme" / "tool" / "skills")]
+        }
+        assert unsupported == []
         # Advertised tool keys are only the plugin_* servers.
         assert ad._active_plugin_mcp_keys() == ["plugin_acme_tool_weather"]
 

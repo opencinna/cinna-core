@@ -105,74 +105,18 @@ class AgentStatusService:
     async def _ensure_environment_running(
         cls, environment: AgentEnvironment, agent: "Agent | None"
     ) -> None:
+        """Wake a suspended env before a user-initiated force refresh.
+
+        Thin delegation to the shared
+        :func:`~app.services.agents.environment_resolver.wake_suspended_environment`
+        — the same helper the skills refresh uses, so both user-facing refresh
+        buttons wake an environment the same way.
         """
-        On user-initiated force refresh, wake a suspended environment so the
-        status pre-command and the STATUS.md fetch can actually run instead of
-        serving a stale cached snapshot. Mirrors the auto-resume behavior of the
-        message-send / CLI / session paths.
-
-        No-op when the env is already running, when no agent is available, or for
-        statuses other than ``suspended`` (``stopped`` / ``error`` envs keep the
-        existing "environment not running" warning path — they need a heavier
-        full start that a status poll shouldn't trigger).
-
-        Best-effort: any activation failure is swallowed so the caller falls back
-        to the normal not-running handling. Because activation rotates the env's
-        auth token, the refreshed ``status`` and ``config`` are copied back onto
-        the passed ``environment`` so the downstream exec/fetch use current
-        values. Concurrency-safe: if a parallel request already woke (or is
-        waking) the env, the latest DB status/config is still copied back.
-        """
-        if environment.status == "running" or agent is None:
-            return
-        if environment.status != "suspended":
-            return
-
-        from app.services.environments.environment_lifecycle import (
-            EnvironmentLifecycleManager,
+        from app.services.agents.environment_resolver import (
+            wake_suspended_environment,
         )
-        from app.models.agents.agent import Agent as AgentModel
-        from app.core.db import create_session
 
-        try:
-            lifecycle = EnvironmentLifecycleManager()
-            with create_session() as sess:
-                fresh_env = sess.get(AgentEnvironment, environment.id)
-                if fresh_env is None:
-                    return
-                if fresh_env.status == "suspended":
-                    fresh_agent = sess.get(AgentModel, fresh_env.agent_id)
-                    if fresh_agent is None:
-                        return
-                    logger.info(
-                        "agent_status_resume_environment agent_id=%s env_id=%s "
-                        "action=activating",
-                        environment.agent_id, environment.id,
-                    )
-                    await lifecycle.activate_suspended_environment(
-                        db_session=sess,
-                        environment=fresh_env,
-                        agent=fresh_agent,
-                        emit_events=True,
-                    )
-                # Copy the latest status/config back onto the caller's instance
-                # (covers both our own activation and a concurrent one).
-                # ``status_changed_at`` travels WITH ``status`` — this is a value
-                # copy of an already-recorded transition, not a new one, so it
-                # must not go through ``_set_status`` (that would re-stamp the
-                # clock on a different session's row and hide the real age from
-                # the status-repair reconciler); but leaving the timestamp behind
-                # would pair a fresh status with a stale clock if this instance
-                # is ever flushed.
-                environment.status = fresh_env.status
-                environment.status_changed_at = fresh_env.status_changed_at
-                environment.config = fresh_env.config
-        except Exception as exc:
-            logger.warning(
-                "agent_status_resume_environment agent_id=%s env_id=%s "
-                "action=failed reason=%s",
-                environment.agent_id, environment.id, exc,
-            )
+        await wake_suspended_environment(environment, agent, log_prefix="agent_status")
 
     @classmethod
     async def _run_refresh_command(

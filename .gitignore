@@ -13,6 +13,7 @@ a2a-samples-main/
 backend/data/uploads/
 backend/data/agents/
 backend/data/bundles/
+backend/data/skills/
 notes.txt
 
 # The Local Agent Kit ships a scaffold whose `.claude/` contents are CONTENT,

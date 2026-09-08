@@ -5416,6 +5416,18 @@ export const AgentBundleRevisionPublicSchema = {
             title: 'Plugin Specs',
             default: []
         },
+        skills_summary: {
+            anyOf: [
+                {
+                    items: {},
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skills Summary'
+        },
         published_by_user_id: {
             anyOf: [
                 {
@@ -7026,6 +7038,18 @@ export const AgentPluginLinkPublicSchema = {
             ],
             title: 'Snapshot Config'
         },
+        skill_package_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill Package Revision Id'
+        },
         installed_version: {
             anyOf: [
                 {
@@ -7180,6 +7204,18 @@ export const AgentPluginLinkWithUpdateInfoSchema = {
             ],
             title: 'Snapshot Config'
         },
+        skill_package_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill Package Revision Id'
+        },
         installed_version: {
             anyOf: [
                 {
@@ -7294,12 +7330,36 @@ export const AgentPluginLinkWithUpdateInfoSchema = {
                 }
             ],
             title: 'Marketplace Name'
+        },
+        skill_package_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill Package Id'
         }
     },
     type: 'object',
     required: ['id', 'agent_id', 'plugin_id', 'installed_version', 'installed_commit_hash', 'conversation_mode', 'building_mode', 'disabled', 'created_at', 'updated_at'],
     title: 'AgentPluginLinkWithUpdateInfo',
-    description: 'Extended schema including update availability info.'
+    description: `Extended schema including update availability info.
+
+The display fields are **projections**, not columns, and each source has to
+fill all of them or the row renders nameless:
+
+* \`\`marketplace\`\` — the live \`\`LLMPluginMarketplacePlugin\`\` +
+  \`\`LLMPluginMarketplace\`\` rows; \`\`has_update\`\` compares commit hashes.
+* \`\`bundle\`\` — the frozen \`\`snapshot_*\`\` fields; never has an update of its
+  own (bundle apply-update is the only path).
+* \`\`catalog\`\` — the \`\`SkillPackage\`\` behind the pinned revision: its
+  \`\`display_name\`\`/\`\`name\`\`, its \`\`description\`\`, category \`\`"skill"\`\`, and
+  \`\`latest_version\`\` from the package's latest revision; \`\`has_update\`\` is
+  \`\`package.latest_revision_id != link.skill_package_revision_id\`\`.`
 } as const;
 
 export const AgentPluginLinksPublicSchema = {
@@ -7906,6 +7966,79 @@ export const AgentSdkConfigSchema = {
     type: 'object',
     title: 'AgentSdkConfig',
     description: 'Schema for agent SDK configuration'
+} as const;
+
+export const AgentSkillsPublicSchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        environment_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Environment Id'
+        },
+        skills: {
+            items: {
+                '$ref': '#/components/schemas/SkillEntryPublic'
+            },
+            type: 'array',
+            title: 'Skills',
+            default: []
+        },
+        hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Hash'
+        },
+        fetched_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Fetched At'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        can_publish: {
+            type: 'boolean',
+            title: 'Can Publish',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'AgentSkillsPublic',
+    description: "The agent's cached skill index, as read from its environment."
 } as const;
 
 export const AgentStatusListPublicSchema = {
@@ -11760,6 +11893,18 @@ export const CatalogEntryPublicSchema = {
             type: 'array',
             title: 'Required Credential Specs',
             default: []
+        },
+        skills: {
+            anyOf: [
+                {
+                    items: {},
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skills'
         },
         publisher_ai_credential_conversation_id: {
             anyOf: [
@@ -22225,7 +22370,7 @@ reported, never silently listed-but-absent.`
 
 export const PluginSourceSchema = {
     type: 'string',
-    enum: ['marketplace', 'bundle'],
+    enum: ['marketplace', 'bundle', 'catalog'],
     title: 'PluginSource',
     description: `Origin of an installed agent plugin link.
 
@@ -22234,7 +22379,16 @@ export const PluginSourceSchema = {
   the resolvable marketplace plugin row.
 - \`\`bundle\`\` — files delivered inside the install's bundle revision snapshot
   and seeded into the env workspace. \`\`plugin_id\`\` is NULL (no marketplace
-  needed); identity/coordinates come from the snapshot fields.`
+  needed); identity/coordinates come from the snapshot fields.
+- \`\`catalog\`\` — a skill package from this instance's skills catalog. The
+  container fetches a signed archive of the pinned
+  \`\`SkillPackageRevision\`\` from the backend and extracts it under
+  \`\`plugins/cinna-skills/<package name>/\`\`. \`\`plugin_id\`\` is NULL;
+  identity comes from the snapshot fields and the revision FK.
+
+Only \`\`marketplace\`\` links resolve a live \`\`plugin\`\` row — every other
+source is snapshot-identified, which is why identity resolution branches on
+"is this marketplace?" rather than on each source in turn.`
 } as const;
 
 export const PluginSourceTypeSchema = {
@@ -25109,6 +25263,11 @@ export const SessionCommandPublicSchema = {
                 }
             ],
             title: 'Resolved Command'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind',
+            default: 'command'
         }
     },
     type: 'object',
@@ -26210,6 +26369,791 @@ export const SharedUserPublicSchema = {
     required: ['user_id', 'email', 'shared_at'],
     title: 'SharedUserPublic',
     description: 'User who has access to this credential via share'
+} as const;
+
+export const SkillContentPublicSchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        content: {
+            type: 'string',
+            title: 'Content'
+        },
+        truncated: {
+            type: 'boolean',
+            title: 'Truncated',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['agent_id', 'name', 'path', 'content'],
+    title: 'SkillContentPublic',
+    description: "The text of one skill's ``SKILL.md``, as the model sees it."
+} as const;
+
+export const SkillEntryPublicSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            type: 'string',
+            title: 'Description',
+            default: ''
+        },
+        source: {
+            type: 'string',
+            title: 'Source',
+            default: 'local'
+        },
+        plugin_ref: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Plugin Ref'
+        },
+        path: {
+            type: 'string',
+            title: 'Path',
+            default: ''
+        },
+        has_scripts: {
+            type: 'boolean',
+            title: 'Has Scripts',
+            default: false
+        },
+        user_invocable: {
+            type: 'boolean',
+            title: 'User Invocable',
+            default: true
+        },
+        model_invocable: {
+            type: 'boolean',
+            title: 'Model Invocable',
+            default: true
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes',
+            default: 0
+        },
+        error: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/SkillIssuePublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        warning: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/SkillIssuePublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        secret_paths: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Secret Paths',
+            default: []
+        },
+        can_publish: {
+            type: 'boolean',
+            title: 'Can Publish',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'SkillEntryPublic',
+    description: "One skill in the agent's index."
+} as const;
+
+export const SkillInstallRequestSchema = {
+    properties: {
+        package_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Package Id'
+        },
+        revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revision Number'
+        },
+        conversation_mode: {
+            type: 'boolean',
+            title: 'Conversation Mode',
+            default: true
+        },
+        building_mode: {
+            type: 'boolean',
+            title: 'Building Mode',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['package_id'],
+    title: 'SkillInstallRequest',
+    description: 'Body of ``POST /agents/{agent_id}/skills/install``.'
+} as const;
+
+export const SkillIssuePublicSchema = {
+    properties: {
+        code: {
+            type: 'string',
+            title: 'Code'
+        },
+        message: {
+            type: 'string',
+            title: 'Message',
+            default: ''
+        },
+        paths: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Paths',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['code'],
+    title: 'SkillIssuePublic',
+    description: `A flagged condition on a skill: a stable code plus a human sentence.
+
+Clients pick their status tone from \`\`code\`\` and never match on \`\`message\`\`
+— the codes are the contract, the sentence is the copy. \`\`paths\`\` is
+populated only for \`\`code="secrets"\`\` and lists the offending files
+relative to the skill folder, so the card can name them before a publish is
+attempted rather than after it is refused.
+
+Error codes: \`\`not_a_directory\`\`, \`\`missing_skill_md\`\`, \`\`unreadable\`\`,
+\`\`invalid_frontmatter\`\`, \`\`missing_name\`\`, \`\`invalid_name\`\`,
+\`\`name_mismatch\`\`, \`\`reserved_name\`\`, \`\`missing_description\`\`,
+\`\`description_too_long\`\`, \`\`budget\`\`, \`\`projection_error\`\`.
+Warning codes: \`\`secrets\`\`, \`\`shadowed\`\`, \`\`oversized\`\`.`
+} as const;
+
+export const SkillPackageDetailPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        package_id: {
+            type: 'string',
+            title: 'Package Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        publisher_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher User Id'
+        },
+        publisher_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Name'
+        },
+        publisher_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Email'
+        },
+        publisher_email_confirmed: {
+            type: 'boolean',
+            title: 'Publisher Email Confirmed',
+            default: false
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        latest_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Id'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        latest_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Version'
+        },
+        visibility: {
+            type: 'string',
+            title: 'Visibility'
+        },
+        is_listed: {
+            type: 'boolean',
+            title: 'Is Listed'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        latest_revision: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/SkillPackageRevisionPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        install_count: {
+            type: 'integer',
+            title: 'Install Count',
+            default: 0
+        },
+        installed_in_agent_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Installed In Agent Ids',
+            default: []
+        },
+        can_manage: {
+            type: 'boolean',
+            title: 'Can Manage',
+            default: false
+        },
+        revisions: {
+            items: {
+                '$ref': '#/components/schemas/SkillPackageRevisionPublic'
+            },
+            type: 'array',
+            title: 'Revisions',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['id', 'package_id', 'name', 'display_name', 'visibility', 'is_listed', 'created_at', 'updated_at'],
+    title: 'SkillPackageDetailPublic',
+    description: 'A package plus its full revision history, newest first.'
+} as const;
+
+export const SkillPackageEntrySchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        package_id: {
+            type: 'string',
+            title: 'Package Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        publisher_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher User Id'
+        },
+        publisher_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Name'
+        },
+        publisher_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Email'
+        },
+        publisher_email_confirmed: {
+            type: 'boolean',
+            title: 'Publisher Email Confirmed',
+            default: false
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        latest_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Id'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        latest_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Version'
+        },
+        visibility: {
+            type: 'string',
+            title: 'Visibility'
+        },
+        is_listed: {
+            type: 'boolean',
+            title: 'Is Listed'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        latest_revision: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/SkillPackageRevisionPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        install_count: {
+            type: 'integer',
+            title: 'Install Count',
+            default: 0
+        },
+        installed_in_agent_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            title: 'Installed In Agent Ids',
+            default: []
+        },
+        can_manage: {
+            type: 'boolean',
+            title: 'Can Manage',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['id', 'package_id', 'name', 'display_name', 'visibility', 'is_listed', 'created_at', 'updated_at'],
+    title: 'SkillPackageEntry',
+    description: 'A catalog row, resolved for the calling user.'
+} as const;
+
+export const SkillPackageRevisionPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        package_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Package Id'
+        },
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        frontmatter: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Frontmatter',
+            default: {}
+        },
+        content_hash: {
+            type: 'string',
+            title: 'Content Hash',
+            default: ''
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes',
+            default: 0
+        },
+        release_notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Release Notes'
+        },
+        published_by_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Published By User Id'
+        },
+        published_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Published At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'package_id', 'revision_number', 'published_at'],
+    title: 'SkillPackageRevisionPublic',
+    description: `One published revision of a skill package.
+
+Carries every field the package-detail revision rows render: \`\`version\`\`,
+\`\`published_at\`\`, \`\`size_bytes\`\`, \`\`release_notes\`\` and \`\`content_hash\`\`.
+\`\`frontmatter\`\` rides along because the catalog card shows the skill's own
+description, which lives there and not on the package when a publisher has
+edited the package blurb.`
+} as const;
+
+export const SkillPackageUpdateSchema = {
+    properties: {
+        display_name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        visibility: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Visibility'
+        },
+        is_listed: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Listed'
+        }
+    },
+    type: 'object',
+    title: 'SkillPackageUpdate',
+    description: 'Publisher-editable fields on a package.'
+} as const;
+
+export const SkillPackagesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/SkillPackageEntry'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'SkillPackagesPublic',
+    description: 'List response for the skills catalog.'
+} as const;
+
+export const SkillPublishRequestSchema = {
+    properties: {
+        version: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        release_notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Release Notes'
+        },
+        visibility: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Visibility'
+        },
+        package_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Package Id'
+        }
+    },
+    type: 'object',
+    title: 'SkillPublishRequest',
+    description: 'Body of ``POST /agents/{agent_id}/skills/{name}/publish``.'
+} as const;
+
+export const SkillRevisionContentPublicSchema = {
+    properties: {
+        package_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Package Id'
+        },
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        content: {
+            type: 'string',
+            title: 'Content'
+        },
+        truncated: {
+            type: 'boolean',
+            title: 'Truncated',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['package_id', 'revision_number', 'name', 'content'],
+    title: 'SkillRevisionContentPublic',
+    description: 'The ``SKILL.md`` of one published revision — the catalog preview.'
 } as const;
 
 export const SourceStatusSchema = {

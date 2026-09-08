@@ -13,6 +13,7 @@ from app.services.agents.commands.webapp_command import WebappCommandHandler
 from app.services.agents.commands.rebuild_env_command import RebuildEnvCommandHandler
 from app.services.agents.commands.agent_status_command import AgentStatusCommandHandler
 from app.services.agents.commands.run_command import RunCommandHandler, RunListCommandHandler
+from app.services.agents.commands.skills_command import SkillsCommandHandler
 
 # Register all command handlers
 CommandService.register(FilesCommandHandler())
@@ -25,3 +26,4 @@ CommandService.register(RebuildEnvCommandHandler())
 CommandService.register(AgentStatusCommandHandler())
 CommandService.register(RunCommandHandler())
 CommandService.register(RunListCommandHandler())
+CommandService.register(SkillsCommandHandler())

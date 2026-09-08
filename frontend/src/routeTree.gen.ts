@@ -64,9 +64,11 @@ import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/ad
 import { Route as LayoutAdminLlmProvidersRouteImport } from './routes/_layout/admin/llm-providers'
 import { Route as LayoutAdminAiCredentialsRouteImport } from './routes/_layout/admin/ai-credentials'
 import { Route as LayoutAdminAgentEnvsRouteImport } from './routes/_layout/admin/agent-envs'
+import { Route as LayoutCatalogSkillsIndexRouteImport } from './routes/_layout/catalog/skills/index'
 import { Route as LayoutSessionsAgentAgentIdRouteImport } from './routes/_layout/sessions/agent/$agentId'
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
 import { Route as LayoutEnvironmentEnvIdDatabaseRouteImport } from './routes/_layout/environment/$envId/database'
+import { Route as LayoutCatalogSkillsPackageIdRouteImport } from './routes/_layout/catalog/skills/$packageId'
 import { Route as LayoutCatalogAgentsInstallRouteImport } from './routes/_layout/catalog/agents/install'
 import { Route as LayoutAgentAgentIdConversationsRouteImport } from './routes/_layout/agent/$agentId/conversations'
 import { Route as LayoutAdminMarketplaceMarketplaceIdRouteImport } from './routes/_layout/admin/marketplace/$marketplaceId'
@@ -357,6 +359,12 @@ const LayoutAdminAgentEnvsRoute = LayoutAdminAgentEnvsRouteImport.update({
   path: '/admin/agent-envs',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutCatalogSkillsIndexRoute =
+  LayoutCatalogSkillsIndexRouteImport.update({
+    id: '/skills/',
+    path: '/skills/',
+    getParentRoute: () => LayoutCatalogRoute,
+  } as any)
 const LayoutSessionsAgentAgentIdRoute =
   LayoutSessionsAgentAgentIdRouteImport.update({
     id: '/agent/$agentId',
@@ -374,6 +382,12 @@ const LayoutEnvironmentEnvIdDatabaseRoute =
     id: '/environment/$envId/database',
     path: '/environment/$envId/database',
     getParentRoute: () => LayoutRoute,
+  } as any)
+const LayoutCatalogSkillsPackageIdRoute =
+  LayoutCatalogSkillsPackageIdRouteImport.update({
+    id: '/skills/$packageId',
+    path: '/skills/$packageId',
+    getParentRoute: () => LayoutCatalogRoute,
   } as any)
 const LayoutCatalogAgentsInstallRoute =
   LayoutCatalogAgentsInstallRouteImport.update({
@@ -464,9 +478,11 @@ export interface FileRoutesByFullPath {
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
+  '/catalog/skills/$packageId': typeof LayoutCatalogSkillsPackageIdRoute
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
   '/sessions/agent/$agentId': typeof LayoutSessionsAgentAgentIdRoute
+  '/catalog/skills': typeof LayoutCatalogSkillsIndexRoute
   '/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
   '/catalog/agents/install/$bundleId': typeof LayoutCatalogAgentsInstallBundleIdRoute
 }
@@ -524,9 +540,11 @@ export interface FileRoutesByTo {
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
+  '/catalog/skills/$packageId': typeof LayoutCatalogSkillsPackageIdRoute
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
   '/sessions/agent/$agentId': typeof LayoutSessionsAgentAgentIdRoute
+  '/catalog/skills': typeof LayoutCatalogSkillsIndexRoute
   '/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
   '/catalog/agents/install/$bundleId': typeof LayoutCatalogAgentsInstallBundleIdRoute
 }
@@ -590,9 +608,11 @@ export interface FileRoutesById {
   '/_layout/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/_layout/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/_layout/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
+  '/_layout/catalog/skills/$packageId': typeof LayoutCatalogSkillsPackageIdRoute
   '/_layout/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/_layout/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
   '/_layout/sessions/agent/$agentId': typeof LayoutSessionsAgentAgentIdRoute
+  '/_layout/catalog/skills/': typeof LayoutCatalogSkillsIndexRoute
   '/_layout/admin/marketplace/plugin/$pluginId': typeof LayoutAdminMarketplacePluginPluginIdRoute
   '/_layout/catalog/agents/install/$bundleId': typeof LayoutCatalogAgentsInstallBundleIdRoute
 }
@@ -656,9 +676,11 @@ export interface FileRouteTypes {
     | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
     | '/catalog/agents/install'
+    | '/catalog/skills/$packageId'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
     | '/sessions/agent/$agentId'
+    | '/catalog/skills'
     | '/admin/marketplace/plugin/$pluginId'
     | '/catalog/agents/install/$bundleId'
   fileRoutesByTo: FileRoutesByTo
@@ -716,9 +738,11 @@ export interface FileRouteTypes {
     | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
     | '/catalog/agents/install'
+    | '/catalog/skills/$packageId'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
     | '/sessions/agent/$agentId'
+    | '/catalog/skills'
     | '/admin/marketplace/plugin/$pluginId'
     | '/catalog/agents/install/$bundleId'
   id:
@@ -781,9 +805,11 @@ export interface FileRouteTypes {
     | '/_layout/admin/marketplace/$marketplaceId'
     | '/_layout/agent/$agentId/conversations'
     | '/_layout/catalog/agents/install'
+    | '/_layout/catalog/skills/$packageId'
     | '/_layout/environment/$envId/database'
     | '/_layout/environment/$envId/file'
     | '/_layout/sessions/agent/$agentId'
+    | '/_layout/catalog/skills/'
     | '/_layout/admin/marketplace/plugin/$pluginId'
     | '/_layout/catalog/agents/install/$bundleId'
   fileRoutesById: FileRoutesById
@@ -1198,6 +1224,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminAgentEnvsRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/catalog/skills/': {
+      id: '/_layout/catalog/skills/'
+      path: '/skills'
+      fullPath: '/catalog/skills'
+      preLoaderRoute: typeof LayoutCatalogSkillsIndexRouteImport
+      parentRoute: typeof LayoutCatalogRoute
+    }
     '/_layout/sessions/agent/$agentId': {
       id: '/_layout/sessions/agent/$agentId'
       path: '/agent/$agentId'
@@ -1218,6 +1251,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/environment/$envId/database'
       preLoaderRoute: typeof LayoutEnvironmentEnvIdDatabaseRouteImport
       parentRoute: typeof LayoutRoute
+    }
+    '/_layout/catalog/skills/$packageId': {
+      id: '/_layout/catalog/skills/$packageId'
+      path: '/skills/$packageId'
+      fullPath: '/catalog/skills/$packageId'
+      preLoaderRoute: typeof LayoutCatalogSkillsPackageIdRouteImport
+      parentRoute: typeof LayoutCatalogRoute
     }
     '/_layout/catalog/agents/install': {
       id: '/_layout/catalog/agents/install'
@@ -1286,11 +1326,15 @@ const LayoutCatalogAgentsRouteWithChildren =
 interface LayoutCatalogRouteChildren {
   LayoutCatalogAgentsRoute: typeof LayoutCatalogAgentsRouteWithChildren
   LayoutCatalogIndexRoute: typeof LayoutCatalogIndexRoute
+  LayoutCatalogSkillsPackageIdRoute: typeof LayoutCatalogSkillsPackageIdRoute
+  LayoutCatalogSkillsIndexRoute: typeof LayoutCatalogSkillsIndexRoute
 }
 
 const LayoutCatalogRouteChildren: LayoutCatalogRouteChildren = {
   LayoutCatalogAgentsRoute: LayoutCatalogAgentsRouteWithChildren,
   LayoutCatalogIndexRoute: LayoutCatalogIndexRoute,
+  LayoutCatalogSkillsPackageIdRoute: LayoutCatalogSkillsPackageIdRoute,
+  LayoutCatalogSkillsIndexRoute: LayoutCatalogSkillsIndexRoute,
 }
 
 const LayoutCatalogRouteWithChildren = LayoutCatalogRoute._addFileChildren(

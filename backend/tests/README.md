@@ -189,7 +189,7 @@ tests/
     bundle.py              # publish_bundle(), install_bundle(), make_bundle_public(), bundle credential helpers
     credential.py          # create_random_credential(), share_credential_via_api(), set_credential_sharing(), get_credential()
     desktop_auth.py        # obtain_desktop_tokens() — full authorize/consent/exchange dance
-    environment.py         # set_environment_status(), link_ai_credential_to_environment() (documented DB-seam helpers)
+    environment.py         # set_environment_status(), set_environment_auth_token(), link_ai_credential_to_environment() (documented DB-seam helpers)
     fixtures.py            # shared stub fixtures, CREATE_SESSION_TARGETS_*, BACKGROUND_TASK_TARGETS_* patch lists
     mail_server.py         # create_imap_server(), create_smtp_server() — superuser-only route
     managed_ai_credential.py # /admin/llm-providers CRUD wrappers
@@ -198,6 +198,7 @@ tests/
     query_counter.py       # count_queries() — counts the SQL a block issues (N+1 guards; observes, never injects)
     security_event.py      # events_of_type() — reads a user's own (self-scoped) security feed
     session.py             # get_agent_session(), get_session(), list_sessions()
+    skill_catalog.py       # skills catalog: workspace seeding, publish/install/manage wrappers
     message.py             # get_messages_by_role(), list_messages()
     knowledge_source.py    # create/get/list/update/delete/enable/disable_knowledge_source()
 ```

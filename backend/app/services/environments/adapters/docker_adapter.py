@@ -604,6 +604,27 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             logger.error(f"Failed to get plugins settings: {e}")
             raise Exception(f"Failed to get plugins settings: {e}")
 
+    async def get_skills_index(self) -> dict:
+        """Fetch the agent's skill index from env-core.
+
+        A container built before this feature has no ``/config/skills`` route
+        and answers 404; that surfaces here as an exception, which the cache
+        service records as ``adapter_error`` — the signal behind the card's
+        "rebuild the environment to enable skills" copy.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/config/skills",
+                    headers=self._get_headers(),
+                    timeout=15.0,
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.warning(f"Failed to get skills index: {e}")
+            raise Exception(f"Failed to get skills index: {e}")
+
     def get_local_workspace_file_path(self, relative_path: str) -> Path | None:
         """
         Return the absolute path to a workspace file on the local host filesystem.

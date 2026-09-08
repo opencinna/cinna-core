@@ -66,6 +66,11 @@ function AgentDetail() {
     const subId = eventService.subscribe(EventTypes.AGENT_UPDATED, (event) => {
       const eventAgentId = event.meta?.agent_id ?? event.model_id
       if (eventAgentId && eventAgentId !== agentId) return
+      // Prefix match, not an exact one: this also invalidates every key nested
+      // under the agent — ["agent", agentId, "skills"] and the SKILL.md bodies
+      // below it — which is what makes the Skills card live-update on the
+      // AGENT_UPDATED the skills cache emits with changed_fields: ["skills"].
+      // Adding `exact: true` here would silently break that card.
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] })
       queryClient.invalidateQueries({ queryKey: ["agents"] })
     })

@@ -223,6 +223,12 @@ class SessionCommandPublic(SQLModel):
     description: str
     is_available: bool
     resolved_command: str | None = None  # Raw shell command for /run:<name> entries; None for static commands
+    # What kind of entry this is, so the popup can label it. ``"command"`` is a
+    # registered platform handler; ``"skill"`` is an agent skill, which is NOT a
+    # handler — the text reaches the model, which decides to use the skill. The
+    # distinction is user-visible (and read out by screen readers), so it is a
+    # server-supplied field rather than a name-prefix guess in the client.
+    kind: str = "command"
 
 
 class SessionCommandsPublic(SQLModel):

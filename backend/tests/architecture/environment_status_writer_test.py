@@ -86,7 +86,7 @@ _ALLOWED = {
     # A value copy of an already-recorded transition from a different session's
     # row, which copies status_changed_at across in the same breath rather than
     # re-stamping it. Documented in place.
-    ("services/agents/agent_status_service.py", "_ensure_environment_running"),
+    ("services/agents/environment_resolver.py", "wake_suspended_environment"),
 }
 
 

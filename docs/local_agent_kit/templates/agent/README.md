@@ -49,6 +49,7 @@ make help
 | Folder | Contents |
 |--------|----------|
 | `docs/` | Prompts, `CLI_COMMANDS.yaml`, domain documentation. |
+| `skills/` | One folder per capability. See `skills/README.md`. |
 | `scripts/` | The Python that does the work. See `scripts/README.md`. |
 | `config/` | Tunable parameters you may edit. |
 | `knowledge/` | Static reference material. |

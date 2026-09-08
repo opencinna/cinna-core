@@ -261,6 +261,12 @@ from .agents.agent_status import (
     AgentStatusPublic,
     AgentStatusListPublic,
 )
+from .agents.agent_skills import (
+    SkillIssuePublic,
+    SkillEntryPublic,
+    AgentSkillsPublic,
+    SkillContentPublic,
+)
 from .sessions.session import (
     Session,
     SessionCreate,
@@ -382,6 +388,25 @@ from .knowledge.knowledge import (
     ArticleListItem,
     ArticleContent,
 )
+from .skills.skill_package import (
+    SkillPackage,
+    SkillPackageVisibility,
+    CATALOG_MARKETPLACE_NAME,
+)
+from .skills.skill_package_revision import (
+    SkillPackageRevision,
+)
+from .skills.schemas import (
+    SkillPackagePublic,
+    SkillPackageEntry,
+    SkillPackagesPublic,
+    SkillPackageDetailPublic,
+    SkillPackageRevisionPublic,
+    SkillPackageUpdate,
+    SkillPublishRequest,
+    SkillInstallRequest,
+    SkillRevisionContentPublic,
+)
 from .plugins.llm_plugin import (
     LLMPluginMarketplace,
     LLMPluginMarketplaceCreate,
@@ -402,6 +427,8 @@ from .plugins.llm_plugin import (
     PluginSourceType,
     PluginSource,
     PluginInstallResult,
+    PluginSyncResponse,
+    EnvironmentSyncStatus,
 )
 from .a2a.agent_access_token import (
     AgentAccessToken,
@@ -954,6 +981,11 @@ __all__ = [
     "GenerateRouterTriggerPromptResponse",
     "RouterTriggerPromptUpdate",
     "UpdateMode",
+    # Agent skills
+    "SkillIssuePublic",
+    "SkillEntryPublic",
+    "AgentSkillsPublic",
+    "SkillContentPublic",
     # Credentials
     "Credential",
     "CredentialCreate",
@@ -1216,11 +1248,27 @@ __all__ = [
     "AgentPluginLinkPublic",
     "AgentPluginLinkWithPlugin",
     "AgentPluginLinkWithUpdateInfo",
+    # Skills catalog (Phase 3: agent skills)
+    "SkillPackage",
+    "SkillPackageVisibility",
+    "CATALOG_MARKETPLACE_NAME",
+    "SkillPackageRevision",
+    "SkillPackagePublic",
+    "SkillPackageEntry",
+    "SkillPackagesPublic",
+    "SkillPackageDetailPublic",
+    "SkillPackageRevisionPublic",
+    "SkillPackageUpdate",
+    "SkillPublishRequest",
+    "SkillInstallRequest",
+    "SkillRevisionContentPublic",
     "AgentPluginLinksPublic",
     "MarketplaceStatus",
     "PluginSourceType",
     "PluginSource",
     "PluginInstallResult",
+    "PluginSyncResponse",
+    "EnvironmentSyncStatus",
     # Agent Access Tokens
     "AgentAccessToken",
     "AgentAccessTokenCreate",

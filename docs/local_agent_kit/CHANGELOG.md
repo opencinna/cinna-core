@@ -16,6 +16,47 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.1.0 — skills are folders
+
+Additive. Every existing agent folder is still valid and needs no change; a tool
+built against 1.0.0 keeps operating a 1.1.0 folder, because the majors match.
+
+### Added
+
+- **`skills/` — one folder per skill, at the agent root.** A skill is one
+  standalone capability, packaged as `skills/<name>/SKILL.md` (YAML frontmatter
+  plus a markdown body) with optional `scripts/`, `references/` and `assets/`
+  beside it. It is shaped like the open Agent Skills standard, which is what
+  buys the behaviour the folder exists for: the engine reads only every skill's
+  `name` and `description` up front and loads a body when that skill is actually
+  invoked, so a capability can be as long as it needs to be without sitting in
+  the prompt all the time. `layout.json` declares the folder with role `skills`
+  and `survives_update: true`, and `templates/agent/skills/README.md` explains
+  the layout in the scaffold. Two frontmatter fields are validated: `name`
+  (`^[a-z0-9]+(-[a-z0-9]+)*$`, 1–64 characters, and it must equal the folder
+  name) and `description` (1–1024 characters). Everything else in the
+  frontmatter is passed through untouched. Caps: 50 skills per agent, 16 MB
+  across `skills/`; a body over 64 KB is still shipped but flagged. A skill name
+  may not collide with a platform command name (`files`, `files-all`, `run`,
+  `run-list`, `skills`, `session-recover`, `session-reset`, `session-improve`,
+  `webapp`, `rebuild-env`, `agent-status`). `skills/` is **not** in
+  `cloud_import_excludes`: it is part of what the agent *is*, so it travels.
+
+### Changed
+
+- **`docs/` is no longer where a local skill is documented.** Its `layout.json`
+  role text drops "one doc per local skill" — `docs/` is the three
+  document-backed prompts and the command catalog. **The `docs/skill_*.md` form
+  is legacy, not removed**: those files still ship, still travel to the cloud,
+  and are still read by an agent whose workflow prompt points at them. What they
+  do not get is the engine's own progressive disclosure, because nothing but the
+  prompt knows they exist. `guides/08-knowledge-and-local-skills.md` is rewritten
+  around the folder convention and carries the five-step migration for one
+  legacy doc — to be applied when you next touch that capability, never as a
+  sweep. Half a migration is worse than none: a capability living in both
+  `docs/skill_x.md` and `skills/x/SKILL.md` is two sources of truth, and the
+  agent follows whichever it reads first.
+
 ## 1.0.0 — first contract release
 
 The kit's conventions become a versioned **contract**, so a second host — Cinna

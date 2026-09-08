@@ -559,6 +559,56 @@ def test_every_declared_contract_member_reaches_the_tree(client: TestClient) -> 
     )
 
 
+def test_a_new_scaffold_subdirectory_reaches_the_contract_tarball(
+    client: TestClient,
+) -> None:
+    """`templates/agent/skills/` (contract 1.1.0) is packed with no packer change.
+
+    The membership rule is a **prefix test on the rendered path**
+    (`_is_contract_member`), not a glob, so a directory added anywhere under
+    `templates/` is picked up the moment it holds a file. That is worth an
+    explicit test rather than an assumption, because the neighbouring rule in
+    `layout.json` — `cloud_import_excludes` — is glob-matched and has the
+    opposite property: a `**/`-prefixed directory pattern there cannot match at
+    the root, which is why those entries are listed twice. Two matchers, two
+    behaviours, one tree; a reader who learns the glob rule first will guess
+    wrong about this one.
+
+    A scaffold subdirectory also only ships if it holds a *file*: the packer
+    reads regular files, so an empty `templates/agent/skills/` would be a
+    silent 200 with nothing in it. `skills/README.md` is that file.
+    """
+    members = _contract_tarball_members(client)
+
+    assert "templates/agent/skills/README.md" in members, sorted(
+        rel for rel in members if rel.startswith("templates/agent/")
+    )
+    assert b"SKILL.md" in members["templates/agent/skills/README.md"]
+
+
+def test_layout_declares_the_skills_folder_role(client: TestClient) -> None:
+    """`layout.json` is the folder model; a folder the scaffold creates is in it.
+
+    The scaffold and the declaration are two statements of one fact, made in
+    two files by two different edits — `templates/agent/skills/` and
+    `layout.json`'s `agent.roles`. A host that reads the declaration (Cinna
+    Desktop) and a host that copies the template (`kit.py new`) must agree, and
+    the only moment the divergence is cheap is this one.
+    """
+    layout = json.loads(client.get("/api/agent-start/kit/layout.json").content)
+
+    roles = {entry["path"]: entry for entry in layout["agent"]["roles"]}
+    assert roles["skills"]["role"] == "skills"
+    assert roles["skills"]["kind"] == "directory"
+    assert roles["skills"]["survives_update"] is True
+    # It carries what the agent IS, so it travels: never an exclude.
+    assert not [
+        pattern
+        for pattern in layout["cloud_import_excludes"]
+        if pattern.strip("*/") == "skills"
+    ], layout["cloud_import_excludes"]
+
+
 def test_contract_tarball_bytes_are_deterministic(client: TestClient) -> None:
     """Two builds of the same contract must be byte-identical.
 

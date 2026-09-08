@@ -11,6 +11,7 @@ from app.api.routes import (
     agent_api,
     agent_api_public,
     agent_git,
+    agent_skills,
     agent_status,
     agent_webhooks,
     app_data,
@@ -59,6 +60,7 @@ from app.api.routes import (
     server_channels,
     sessions,
     shared_workspace,
+    skills,
     ssh_keys,
     task_agent_api,
     task_triggers,
@@ -93,6 +95,12 @@ api_router.include_router(mfa.router)
 api_router.include_router(app_data.router)  # Must be after users.router (shares /users/me/* prefix space)
 api_router.include_router(utils.router)
 api_router.include_router(agent_status.router)   # Must be before agents.router — /agents/status vs /agents/{id}
+api_router.include_router(agent_skills.router)
+# Skills catalog. Two routers under one `skills` tag → one SkillsService in the
+# generated client: the catalog itself, and the agent-scoped publish/install
+# verbs that write catalog state.
+api_router.include_router(skills.router)
+api_router.include_router(skills.agent_router)
 api_router.include_router(agents.router)
 api_router.include_router(installs.router)  # Bundle install actions on /agents/{id}
 api_router.include_router(agent_git.router)  # Git-backed checkout/pull/push on /agents

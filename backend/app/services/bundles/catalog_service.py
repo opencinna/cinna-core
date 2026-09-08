@@ -133,6 +133,7 @@ class CatalogService:
         latest_version: str | None = None
         latest_published_at: datetime | None = None
         cred_specs: list = []
+        skills: list | None = None
         if bundle.latest_revision_id:
             rev = session.get(AgentBundleRevision, bundle.latest_revision_id)
             if rev:
@@ -140,6 +141,9 @@ class CatalogService:
                 latest_version = rev.version
                 latest_published_at = rev.published_at
                 cred_specs = rev.required_credential_specs or []
+                # Left as ``None`` when the revision predates agent skills, so
+                # the card can tell "ships no skills" from "we don't know".
+                skills = rev.skills_summary
 
         # Install count — how many distinct users currently have a consumer
         # install. Publisher installs (the publisher's dev / source copy) are
@@ -207,6 +211,7 @@ class CatalogService:
                 bool(user_install.pending_update) if user_install else False
             ),
             required_credential_specs=cred_specs,
+            skills=skills,
             publisher_ai_credential_conversation_id=(
                 bundle.publisher_ai_credential_conversation_id
             ),

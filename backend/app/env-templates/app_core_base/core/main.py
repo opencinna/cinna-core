@@ -24,12 +24,19 @@ logger = logging.getLogger(__name__)
 #   - prompt files                       → agent.workflow_prompt / entrypoint_prompt / refiner_prompt
 #   - docs/CLI_COMMANDS.yaml             → CLICommandsService cached list
 #   - app-data/storage/STATUS.md         → AgentStatusService cached snapshot
+#   - skills/                            → AgentSkillsService cached index
+#
+# An entry ending in "/" is a DIRECTORY: it is watched by its skill-manifest
+# tree hash (path + size + mtime of every file beneath it) instead of one
+# file's mtime, because a skill is a folder and an edit anywhere inside it —
+# including adding or deleting a file — has to count as a change.
 _WATCHED_FILES = [
     "docs/WORKFLOW_PROMPT.md",
     "docs/ENTRYPOINT_PROMPT.md",
     "docs/REFINER_PROMPT.md",
     "docs/CLI_COMMANDS.yaml",
     "app-data/storage/STATUS.md",
+    "skills/",
 ]
 # How often to poll for mtime changes (seconds)
 _POLL_INTERVAL = 5
@@ -56,6 +63,11 @@ async def _workspace_files_watcher() -> None:
         logger.warning("httpx not available — workspace file watcher disabled")
         return
 
+    # The same hash the projection and the backend cache compare on, so a
+    # directory the watcher calls "changed" is exactly a directory the index
+    # would report differently.
+    from core.server.skill_manifest import tree_hash as _tree_hash
+
     workspace_root = Path(os.getenv("WORKSPACE_ROOT", "/app/workspace"))
     backend_url = os.getenv("BACKEND_URL", "http://host.docker.internal:8000")
     auth_token = os.getenv("AGENT_AUTH_TOKEN", "")
@@ -71,17 +83,32 @@ async def _workspace_files_watcher() -> None:
         "X-Agent-Env-Id": env_id,
     }
 
-    # snapshot: path → mtime at last known state
-    prev_mtimes: dict[str, float] = {}
-    # path → mtime at last change (for debounce)
-    pending_change: dict[str, float] = {}
+    # snapshot: path → change token at last known state (mtime for a file,
+    # tree hash for a directory entry — both are just "did this move?" values)
+    prev_mtimes: dict[str, float | str] = {}
+    # path → change token at last change (for debounce)
+    pending_change: dict[str, float | str] = {}
     # path → how many stable polls since change was detected
     stable_count: dict[str, int] = {}
 
-    def _read_mtimes() -> dict[str, float]:
-        result = {}
+    def _read_mtimes() -> dict[str, float | str]:
+        result: dict[str, float | str] = {}
         for rel in _WATCHED_FILES:
             p = workspace_root / rel
+            if rel.endswith("/"):
+                # Directory entry: hash the tree. Unlike a missing FILE, a
+                # missing directory is still recorded — `tree_hash` of an
+                # absent root is the empty digest, which is also what an empty
+                # directory hashes to. Recording it is what makes DELETING the
+                # whole folder a change the backend hears about; omitting it
+                # (the file rule) would leave the cache advertising skills that
+                # no longer exist. Creating an empty folder still fires
+                # nothing, because nothing about the index moved.
+                try:
+                    result[rel] = _tree_hash(p)
+                except OSError:
+                    continue
+                continue
             try:
                 result[rel] = p.stat().st_mtime
             except FileNotFoundError:

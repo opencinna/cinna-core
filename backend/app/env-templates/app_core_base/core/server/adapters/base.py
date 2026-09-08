@@ -172,6 +172,18 @@ class BaseSDKAdapter(ABC):
     ADAPTER_TYPE: str = "base"  # Override in subclasses (e.g., "claude-code", "opencode")
     SUPPORTED_PROVIDERS: list[str] = []  # Override in subclasses
 
+    # Whether the engine has a native Agent Skills index (name + description
+    # surfaced to the model, body loaded on invocation). Both shipped engines
+    # do, which is the whole point of projecting into their skill root instead
+    # of pasting skill text into the system prompt.
+    #
+    # An adapter that sets this False gets the fallback instead: the prompt
+    # generator appends a `## Agent Skills` block listing name — description
+    # and telling the model to read `skills/<name>/SKILL.md` before use. That
+    # costs tokens on every turn and loses progressive disclosure, so it is the
+    # degraded path, never the default.
+    SUPPORTS_SKILLS: bool = True
+
     def __init__(self, config: SDKConfig):
         """
         Initialize the adapter with configuration.
@@ -192,6 +204,7 @@ class BaseSDKAdapter(ABC):
         system_prompt: Optional[str] = None,
         mode: str = "conversation",
         session_state: Optional[dict] = None,
+        skills_changed: bool = False,
     ) -> AsyncIterator[SDKEvent]:
         """
         Send a message and stream responses as SDKEvents.
@@ -206,6 +219,10 @@ class BaseSDKAdapter(ABC):
             system_prompt: Optional custom system prompt
             mode: "building" or "conversation"
             session_state: Backend-managed state context (e.g., previous_result_state)
+            skills_changed: True when the skills projection changed the engine's
+                skill root for this message. Adapters that memoize the skill
+                list (OpenCode) must invalidate it; adapters that rescan per
+                message (Claude Code) can ignore it.
 
         Yields:
             SDKEvent objects representing adapter responses
@@ -234,6 +251,11 @@ class BaseSDKAdapter(ABC):
     def supports_provider(cls, provider: str) -> bool:
         """Check if this adapter supports a given provider."""
         return provider in cls.SUPPORTED_PROVIDERS
+
+    @property
+    def supports_skills(self) -> bool:
+        """Whether this adapter's engine indexes agent skills natively."""
+        return self.SUPPORTS_SKILLS
 
 
 class AdapterRegistry:

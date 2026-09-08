@@ -185,6 +185,12 @@ content.
   - **`REFINER_PROMPT.md`** - Instructions for refining incoming task descriptions (default values, mandatory fields, enhancement guidelines)
   - **IMPORTANT**: Update these files as you develop the workflow to reflect its actual capabilities
 
+- **`/app/workspace/skills/`** - **Agent skills**: reusable, self-contained procedures the model can pull in on demand
+  - One folder per skill: `skills/<skill-name>/SKILL.md` (plus optional `scripts/`, `references/`, `assets/`)
+  - The engine sees only each skill's **name and description** up front and loads the body when the skill
+    is actually used — so a skill costs almost nothing until it is needed, unlike prompt text
+  - See "Agent Skills" below for the `SKILL.md` contract and when to create one
+
 - **`/app/workspace/knowledge/`** - Static integration documentation included in the bundle (read-only at runtime).
 
 - **`/app/workspace/files/`** - **Static, publisher-shipped assets** (lookup tables, fixture CSVs, sample data
@@ -224,7 +230,7 @@ content.
 ### Persistence Rules (CRITICAL)
 
 - **Conversation-mode runs** SHOULD only write to `/tmp` or `/app/workspace/app-data/`. Anything written to
-  `/app/workspace/scripts/`, `/app/workspace/docs/`, `/app/workspace/knowledge/`, or `/app/workspace/files/` during a conversation will be lost the
+  `/app/workspace/scripts/`, `/app/workspace/docs/`, `/app/workspace/skills/`, `/app/workspace/knowledge/`, or `/app/workspace/files/` during a conversation will be lost the
   next time the publisher pushes an update.
 - **Building-mode runs** MAY write anywhere. The publisher's working install is what gets
   snapshotted on `Publish`, so changes you make to bundle-owned folders during building become
@@ -596,6 +602,66 @@ Keep descriptions SHORT and ACTIONABLE. Focus on what users need to know to use 
 - Expected columns/fields for CSVs and data structure for JSONs
 - Which scripts consume this output (create a clear chain)
 
+## Agent Skills (`/app/workspace/skills/`)
+
+A **skill** is a folder holding one self-contained procedure the agent can invoke by name. The engine
+indexes every skill's `name` and `description` and loads the body **only when the skill is invoked** — so
+ten skills cost roughly ten lines of context until one is actually used. That is the whole reason skills
+exist: `docs/WORKFLOW_PROMPT.md` is paid for on every single turn, a skill is not.
+
+### When to create a skill (and when not to)
+
+Create a skill when a procedure is:
+- **Occasional** — used in some conversations, not every one (invoice reconciliation, quarterly export)
+- **Long** — more than a handful of steps, or carrying reference material the model must consult
+- **Self-contained** — it has a clear trigger, a clear result, and does not need the rest of the workflow
+
+Keep it in `docs/WORKFLOW_PROMPT.md` instead when it is:
+- The agent's **identity or main workflow** — what it does on almost every message
+- **A few lines** — a rule, a default, a tone; a skill folder for that is overhead
+- Something the agent must apply **without being asked** — the model reaches for a skill deliberately
+
+Never put a script in a skill just to hide it: executable code belongs in `/app/workspace/scripts/` with a
+`README.md` entry. A skill's `scripts/` is for helpers that only that skill uses.
+
+### The SKILL.md contract
+
+```markdown
+---
+name: expense-report
+description: Turn a folder of receipts into a submitted expense report. Use when the user asks to file, submit or reconcile expenses.
+---
+
+# Expense Report
+
+## Steps
+1. Read the receipts from `./app-data/uploads/`.
+2. Run `python ${CLAUDE_SKILL_DIR}/scripts/extract_receipts.py --input <dir>`.
+3. ...
+```
+
+Rules the platform enforces — a skill that breaks one is **excluded** and shown with an error on the
+agent's page:
+
+- `name` is **required**, lowercase letters/digits with single hyphens (`^[a-z0-9]+(-[a-z0-9]+)*$`), at most
+  64 characters, and **must equal the folder name**
+- `name` must not be a platform command: `files`, `files-all`, `run`, `run-list`, `skills`,
+  `session-recover`, `session-reset`, `session-improve`, `webapp`, `rebuild-env`, `agent-status`
+- `description` is **required**, at most 1024 characters. This is the ONLY text the model sees before
+  invoking the skill — write it as "what it does **and when to use it**", not as a title
+- Keep the body under ~500 lines (hard flag above 64 KB). Move bulk material into `references/` and point
+  to it from the body, so it is read only when needed
+- Use `${CLAUDE_SKILL_DIR}` for paths inside the skill's own folder — never hard-code
+  `/app/workspace/skills/<name>`, which breaks the moment the skill is installed from a bundle or the catalog
+
+Optional frontmatter keys from the open Agent Skills standard (`allowed-tools`, `argument-hint`,
+`disable-model-invocation`, `user-invocable`, `model`, …) are passed through untouched.
+
+### Referring to skills from the workflow prompt
+
+`docs/WORKFLOW_PROMPT.md` stays the orchestration narrative. Refer to a skill by name — do **not** paste its
+steps into the prompt, because that gives back the context cost the skill was created to avoid.
+
 ## Workflow Documentation (`/app/workspace/docs/`)
 
 ### WORKFLOW_PROMPT.md
@@ -683,6 +749,36 @@ You monitor email inboxes for invoices and provide summaries.
 - Show example outputs from scripts (JSON structure, CSV columns)
 - Explain how to rephrase technical data for users
 - The conversation agent is a bridge between scripts and humans
+
+**Example: An agent whose workflow prompt is a skills index**
+
+When most of the work lives in `skills/`, the workflow prompt shrinks to routing — who the agent is, and
+which skill answers which kind of request. Everything else is loaded on demand.
+
+```markdown
+# Finance Operations Agent
+
+## Role
+You handle recurring finance operations for the user: expenses, invoices and month-end reporting.
+
+## How you work
+Each procedure below is a **skill** — a folder under `./skills/` with its own instructions. Pick the one
+that matches the request and follow it; do not improvise the steps from memory.
+
+- **expense-report** — the user wants to file, submit or reconcile expenses
+- **invoice-chase** — the user asks about unpaid or overdue invoices
+- **month-end-close** — the user asks for the monthly close or the month-end pack
+
+If no skill fits, answer directly and say which skill you would need.
+
+## Important
+- Follow the skill's steps in order; it is the authority for that procedure, not this file
+- If a skill's steps fail, report the failure — never substitute your own version of the procedure
+```
+
+**Key Points**:
+- The prompt names skills and their trigger conditions; the *steps* live in each `SKILL.md`
+- Adding a procedure means adding a skill folder, not growing the prompt every agent turn pays for
 
 ### ENTRYPOINT_PROMPT.md
 

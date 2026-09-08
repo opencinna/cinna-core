@@ -369,9 +369,11 @@ class EnvironmentLifecycleManager:
             db_session, environment, agent
         )
 
-        # Refresh the pull-only caches (STATUS.md, CLI_COMMANDS.yaml) so they are
-        # current at activation rather than waiting for the first action. Each is
-        # best-effort and env→DB only — a failed pull must never block env start.
+        # Refresh the pull-only caches (STATUS.md, CLI_COMMANDS.yaml, skills/)
+        # so they are current at activation rather than waiting for the first
+        # action. Each is best-effort and env→DB only — a failed pull must never
+        # block env start.
+        from app.services.agents.agent_skills_service import AgentSkillsService
         from app.services.agents.agent_status_service import AgentStatusService
         from app.services.agents.cli_commands_service import CLICommandsService
         try:
@@ -386,6 +388,12 @@ class EnvironmentLifecycleManager:
             )
         except Exception as e:
             logger.debug(f"CLI commands refresh during start sweep failed for env {environment.id}: {e}")
+        try:
+            await AgentSkillsService.refresh_after_action(
+                environment, db_session=db_session, force=True
+            )
+        except Exception as e:
+            logger.debug(f"Skills refresh during start sweep failed for env {environment.id}: {e}")
 
         # Sync credentials to environment
         _touch_progress(environment, "Syncing credentials...")
@@ -2727,6 +2735,12 @@ MODEL_CONVERSATION={model_conversation}
                 "provider": provider_config,
                 "permission": {
                     "*": "allow",
+                    # Agent skills are owner-authored or installed through the
+                    # plugin pipeline, so invoking one never needs an approval
+                    # round-trip. Without this OpenCode asks, and headless the
+                    # ask surfaces as the tools-approval flow instead of the
+                    # skill running.
+                    "skill": "allow",
                     "external_directory": {
                         "/app/workspace/**": "allow",
                         "/app/**": "allow",

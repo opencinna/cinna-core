@@ -351,6 +351,21 @@ class EnvironmentAdapter(ABC):
         pass
 
     @abstractmethod
+    async def get_skills_index(self) -> dict:
+        """Fetch the agent's skill index from the environment.
+
+        Returns:
+            ``{"hash": str, "skills": [entry dict], "errors": [str]}`` as
+            reported by env-core ``GET /config/skills``.
+
+        Raises:
+            Exception: when the environment is unreachable or predates the
+                endpoint. Callers treat any failure as "no index available"
+                and keep the last cached one.
+        """
+        pass
+
+    @abstractmethod
     async def set_mcp_servers(self, manifest: dict) -> bool:
         """
         Push the per-mode MCP-provider server manifest to the environment.

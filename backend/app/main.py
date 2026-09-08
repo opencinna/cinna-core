@@ -249,6 +249,7 @@ async def lifespan(app: FastAPI):
         bidirectional_files,
         pull_only_files,
     )
+    from app.services.agents.agent_skills_service import AgentSkillsService
     from app.services.agents.agent_status_service import AgentStatusService
     from app.services.agents.cli_commands_service import CLICommandsService
 
@@ -283,6 +284,7 @@ async def lifespan(app: FastAPI):
     _PULL_ONLY_HANDLERS = {
         "status": AgentStatusService.handle_post_action_event,
         "cli_commands": CLICommandsService.handle_post_action_event,
+        "skills": AgentSkillsService.handle_post_action_event,
     }
     for synced_file in pull_only_files():
         handler = _PULL_ONLY_HANDLERS.get(synced_file.key)

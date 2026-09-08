@@ -10,12 +10,14 @@ instructions live in `docs/WORKFLOW_PROMPT.md` and nowhere else.
    truth for how this agent behaves; nothing is duplicated here.
 2. Run scripts with `uv run scripts/<script>.py` from this folder. `scripts/README.md`
    is the catalog of what exists and what each script outputs.
-3. Get credentials through `scripts/cinna_credentials.py` — inside a script, never in
+3. When `docs/WORKFLOW_PROMPT.md` names a skill, read `skills/<name>/SKILL.md` and
+   follow it before acting. The prompt names skills; the skill holds the steps.
+4. Get credentials through `scripts/cinna_credentials.py` — inside a script, never in
    the conversation. **Never print, echo or log a credential value.**
-4. Write runtime output to `app-data/storage/`. Disposable snapshots go to
-   `app-data/cache/`. Never write to `docs/`, `scripts/`, `knowledge/` or `files/`
-   while acting as the agent.
-5. Read tunable parameters from `config/`, not from hardcoded values in scripts.
+5. Write runtime output to `app-data/storage/`. Disposable snapshots go to
+   `app-data/cache/`. Never write to `docs/`, `skills/`, `scripts/`, `knowledge/`
+   or `files/` while acting as the agent.
+6. Read tunable parameters from `config/`, not from hardcoded values in scripts.
 
 ## When the user asks to change or extend this agent
 

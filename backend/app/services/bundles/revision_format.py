@@ -4,7 +4,8 @@ A bundle revision on disk is a directory holding:
 
 * a **manifest** (``manifest.json`` for bundle storage, ``cinna.agent.json`` for
   git trees) — schema_version 2: prompts, SDK + model overrides,
-  ``required_credential_specs``, ``schedules``, ``plugin_specs``, a ``metadata``
+  ``required_credential_specs``, ``schedules``, ``plugin_specs``, a derived
+  ``skills_summary``, a ``metadata``
   block of agent-row definitional fields (``description``, ``example_prompts``,
   ``status_refresh_command``, ``agent_api_enabled``,
   ``agent_api_identity_enabled``, ``a2a_config``, ``agent_sdk_config``,
@@ -93,6 +94,7 @@ class RevisionFormat:
         cred_specs: list[dict],
         schedule_specs: list[dict],
         plugin_specs: list[dict],
+        skills_summary: list[dict] | None,
         revision_number: int,
         version: str | None,
         release_notes: str | None,
@@ -133,6 +135,11 @@ class RevisionFormat:
             "required_credential_specs": cred_specs,
             "schedules": schedule_specs,
             "plugin_specs": plugin_specs,
+            # Derived, never authored — same discipline as ``content_hash``.
+            # ``[]`` means "this agent has no skills"; the key being ABSENT
+            # (only possible on a revision published before the feature) is what
+            # ``manifest_to_revision_fields`` maps to a NULL column.
+            "skills_summary": skills_summary if skills_summary is not None else [],
             # Agent-row definitional metadata (additive, schema_version 2). These
             # are plain columns read off the publisher's ``Agent`` row — they
             # define the agent beyond its prompts/SDK and must survive a snapshot
@@ -258,6 +265,11 @@ class RevisionFormat:
             "required_credential_specs": manifest.get("required_credential_specs") or [],
             "schedules": manifest.get("schedules") or [],
             "plugin_specs": manifest.get("plugin_specs") or [],
+            # ``.get()`` with NO ``or []``: absent means "predates agent skills"
+            # and must stay NULL, while a published-with-none revision carries a
+            # real empty list. Collapsing the two would tell a consumer that an
+            # old bundle definitely ships no skills, which we do not know.
+            "skills_summary": manifest.get("skills_summary"),
             "version": manifest.get("version"),
             "release_notes": manifest.get("release_notes"),
             "description": metadata.get("description"),

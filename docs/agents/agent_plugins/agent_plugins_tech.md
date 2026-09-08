@@ -201,11 +201,12 @@ Environment Sync:
 - `_prune_plugin_dirs(wanted)` — Removes `<mkt>/<plugin>/` dirs under `plugins_dir` not in the manifest; safe-segment validation guards against traversal.
 - `_regenerate_plugin_settings(entries, allowed_tools)` — Builds `settings.json` only from entries where `disabled=False` AND `plugin_dir.exists()`. The existence guard is the belt-and-suspenders guarantee that the SDK never receives a missing path.
 - `get_active_plugins_for_mode(mode)` — Reads `settings.json`, filters by `conversation_mode` or `building_mode`.
-- `get_opencode_plugin_artifacts(mode)` — For each active plugin in the mode: reads `.mcp.json` or `.claude-plugin/plugin.json` for declared MCP servers; collects `commands/*.md` paths; detects unsupported capabilities (skills/agents/hooks dirs). Returns `{mcp_servers, command_files, unsupported}`.
+- `get_opencode_plugin_artifacts(mode)` — For each active plugin in the mode: reads `.mcp.json` or `.claude-plugin/plugin.json` for declared MCP servers; collects `commands/*.md` paths; collects a non-empty `skills/` dir; detects unsupported capabilities (agents/hooks dirs — `skills` left this list when OpenCode gained skills support). Returns `{mcp_servers, command_files, skill_dirs, unsupported}`.
 
 **Agent-Env: `opencode_sdk_adapter.py`** (container-side)
-- `_materialize_opencode_config(mode_config_dir)` — Calls `get_opencode_plugin_artifacts(mode)`, merges plugin MCP servers into `opencode.json` (namespaced `plugin_<mkt>_<plugin>_<server>` keys so they never clobber user-configured MCP servers), copies plugin `commands/*.md` into the runtime command dir.
-- `plugin_capability_warning` SYSTEM event — Emitted when any plugin has unsupported capabilities (skills/agents/hooks). Non-blocking; tells the owner rather than silently dropping.
+- `_materialize_opencode_config(mode_config_dir)` — Calls `get_opencode_plugin_artifacts(mode)`, merges plugin MCP servers into `opencode.json` (namespaced `plugin_<mkt>_<plugin>_<server>` keys so they never clobber user-configured MCP servers), adds each plugin's `skills/` dir to `skills.paths` (object shape — OpenCode's schema is closed at both levels), copies plugin `commands/*.md` into the runtime command dir. The agent's own `skills/` is NOT listed here: it reaches both engines through the `/root/.claude/skills` projection.
+- `plugin_capability_warning` SYSTEM event — Emitted when any plugin has unsupported capabilities (agents/hooks). Non-blocking; tells the owner rather than silently dropping.
+- `stop()` — Terminates the per-mode `opencode serve`. Invoked by `routes.install_plugins` (via `sdk_manager.stop_opencode_servers()`) only when the manifest actually changed something, since the server reads its plugin-derived config once at start and a restart both costs ~30s and drops a stream in flight.
 
 **Agent-Env: `sdk_manager.py`** (container-side)
 - In `send_message_stream()`: calls `get_active_plugins_for_mode(mode)`, builds `[{"type": "local", "path": ...}]` array, passes to `ClaudeAgentOptions(plugins=...)`.
@@ -223,7 +224,7 @@ Environment Sync:
         │   └── plugin.json
         ├── .mcp.json           # Plugin-declared MCP servers (optional)
         ├── commands/           # Slash commands (*.md) — copied into OpenCode runtime dir
-        ├── skills/             # Agent skills (OpenCode: unsupported, reported)
+        ├── skills/             # Agent skills (OpenCode: registered as a `skills.paths` entry)
         └── agents/             # Composed agents (OpenCode: unsupported, reported)
 ```
 

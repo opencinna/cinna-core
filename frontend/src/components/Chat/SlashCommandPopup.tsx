@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react"
 import type { SessionCommandPublic } from "@/client"
+import { Badge } from "@/components/ui/badge"
 import {
   Tooltip,
   TooltipContent,
@@ -67,7 +68,25 @@ export function SlashCommandPopup({
                       !isUnavailable && !isSelected ? "hover:bg-accent/50" : "",
                     ].join(" ")}
                   >
-                    <td className="px-3 py-1.5 font-mono text-sm font-medium whitespace-nowrap">{command.name}</td>
+                    <td className="px-3 py-1.5 font-mono text-sm font-medium whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5">
+                        {command.name}
+                        {/* Skills look like commands but are not registered
+                            handlers — the text goes to the model. The badge is
+                            visible text inside the `role="option"` row, so it
+                            is part of the option's accessible name and needs no
+                            `sr-only` twin. `h-5` keeps a badged row exactly as
+                            tall as an unbadged one. */}
+                        {command.kind === "skill" && (
+                          <Badge
+                            variant="outline"
+                            className="h-5 text-[10px] font-normal"
+                          >
+                            skill
+                          </Badge>
+                        )}
+                      </span>
+                    </td>
                     <td className="px-3 py-1.5 text-sm text-muted-foreground">{command.description}</td>
                     {isUnavailable && (
                       <td className="px-3 py-1.5 whitespace-nowrap">

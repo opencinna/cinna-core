@@ -965,6 +965,7 @@ export type AgentBundleRevisionPublic = {
     required_credential_specs?: Array<unknown>;
     schedules?: Array<unknown>;
     plugin_specs?: Array<unknown>;
+    skills_summary?: (Array<unknown> | null);
     published_by_user_id: (string | null);
     published_at: string;
     release_notes?: (string | null);
@@ -1378,6 +1379,7 @@ export type AgentPluginLinkPublic = {
     snapshot_config?: ({
     [key: string]: unknown;
 } | null);
+    skill_package_revision_id?: (string | null);
     installed_version: (string | null);
     installed_commit_hash: (string | null);
     conversation_mode: boolean;
@@ -1406,6 +1408,18 @@ export type AgentPluginLinkUpdate = {
 
 /**
  * Extended schema including update availability info.
+ *
+ * The display fields are **projections**, not columns, and each source has to
+ * fill all of them or the row renders nameless:
+ *
+ * * ``marketplace`` — the live ``LLMPluginMarketplacePlugin`` +
+ * ``LLMPluginMarketplace`` rows; ``has_update`` compares commit hashes.
+ * * ``bundle`` — the frozen ``snapshot_*`` fields; never has an update of its
+ * own (bundle apply-update is the only path).
+ * * ``catalog`` — the ``SkillPackage`` behind the pinned revision: its
+ * ``display_name``/``name``, its ``description``, category ``"skill"``, and
+ * ``latest_version`` from the package's latest revision; ``has_update`` is
+ * ``package.latest_revision_id != link.skill_package_revision_id``.
  */
 export type AgentPluginLinkWithUpdateInfo = {
     id: string;
@@ -1417,6 +1431,7 @@ export type AgentPluginLinkWithUpdateInfo = {
     snapshot_config?: ({
     [key: string]: unknown;
 } | null);
+    skill_package_revision_id?: (string | null);
     installed_version: (string | null);
     installed_commit_hash: (string | null);
     conversation_mode: boolean;
@@ -1431,6 +1446,7 @@ export type AgentPluginLinkWithUpdateInfo = {
     plugin_description?: (string | null);
     plugin_category?: (string | null);
     marketplace_name?: (string | null);
+    skill_package_id?: (string | null);
 };
 
 export type AgentPublic = {
@@ -1541,6 +1557,19 @@ export type AgentSchedulesPublic = {
 export type AgentSdkConfig = {
     sdk_tools?: Array<(string)>;
     allowed_tools?: Array<(string)>;
+};
+
+/**
+ * The agent's cached skill index, as read from its environment.
+ */
+export type AgentSkillsPublic = {
+    agent_id: string;
+    environment_id?: (string | null);
+    skills?: Array<SkillEntryPublic>;
+    hash?: (string | null);
+    fetched_at?: (string | null);
+    error?: (string | null);
+    can_publish?: boolean;
 };
 
 export type AgentsPublic = {
@@ -2648,6 +2677,7 @@ export type CatalogEntryPublic = {
     user_install_id: (string | null);
     user_install_pending_update?: boolean;
     required_credential_specs?: Array<unknown>;
+    skills?: (Array<unknown> | null);
     publisher_ai_credential_conversation_id?: (string | null);
     publisher_ai_credential_building_id?: (string | null);
 };
@@ -5456,8 +5486,17 @@ export type PluginInstallResult = {
  * - ``bundle`` — files delivered inside the install's bundle revision snapshot
  * and seeded into the env workspace. ``plugin_id`` is NULL (no marketplace
  * needed); identity/coordinates come from the snapshot fields.
+ * - ``catalog`` — a skill package from this instance's skills catalog. The
+ * container fetches a signed archive of the pinned
+ * ``SkillPackageRevision`` from the backend and extracts it under
+ * ``plugins/cinna-skills/<package name>/``. ``plugin_id`` is NULL;
+ * identity comes from the snapshot fields and the revision FK.
+ *
+ * Only ``marketplace`` links resolve a live ``plugin`` row — every other
+ * source is snapshot-identified, which is why identity resolution branches on
+ * "is this marketplace?" rather than on each source in turn.
  */
-export type PluginSource = 'marketplace' | 'bundle';
+export type PluginSource = 'marketplace' | 'bundle' | 'catalog';
 
 /**
  * Type of plugin source.
@@ -6129,6 +6168,7 @@ export type SessionCommandPublic = {
     description: string;
     is_available: boolean;
     resolved_command?: (string | null);
+    kind?: string;
 };
 
 export type SessionCommandsPublic = {
@@ -6337,6 +6377,185 @@ export type SharedUserPublic = {
     user_id: string;
     email: string;
     shared_at: string;
+};
+
+/**
+ * The text of one skill's ``SKILL.md``, as the model sees it.
+ */
+export type SkillContentPublic = {
+    agent_id: string;
+    name: string;
+    path: string;
+    content: string;
+    truncated?: boolean;
+};
+
+/**
+ * One skill in the agent's index.
+ */
+export type SkillEntryPublic = {
+    name: string;
+    description?: string;
+    source?: string;
+    plugin_ref?: (string | null);
+    path?: string;
+    has_scripts?: boolean;
+    user_invocable?: boolean;
+    model_invocable?: boolean;
+    size_bytes?: number;
+    error?: (SkillIssuePublic | null);
+    warning?: (SkillIssuePublic | null);
+    secret_paths?: Array<(string)>;
+    can_publish?: boolean;
+};
+
+/**
+ * Body of ``POST /agents/{agent_id}/skills/install``.
+ */
+export type SkillInstallRequest = {
+    package_id: string;
+    revision_number?: (number | null);
+    conversation_mode?: boolean;
+    building_mode?: boolean;
+};
+
+/**
+ * A flagged condition on a skill: a stable code plus a human sentence.
+ *
+ * Clients pick their status tone from ``code`` and never match on ``message``
+ * — the codes are the contract, the sentence is the copy. ``paths`` is
+ * populated only for ``code="secrets"`` and lists the offending files
+ * relative to the skill folder, so the card can name them before a publish is
+ * attempted rather than after it is refused.
+ *
+ * Error codes: ``not_a_directory``, ``missing_skill_md``, ``unreadable``,
+ * ``invalid_frontmatter``, ``missing_name``, ``invalid_name``,
+ * ``name_mismatch``, ``reserved_name``, ``missing_description``,
+ * ``description_too_long``, ``budget``, ``projection_error``.
+ * Warning codes: ``secrets``, ``shadowed``, ``oversized``.
+ */
+export type SkillIssuePublic = {
+    code: string;
+    message?: string;
+    paths?: Array<(string)>;
+};
+
+/**
+ * A package plus its full revision history, newest first.
+ */
+export type SkillPackageDetailPublic = {
+    id: string;
+    package_id: string;
+    name: string;
+    display_name: string;
+    description?: (string | null);
+    publisher_user_id?: (string | null);
+    publisher_name?: (string | null);
+    publisher_email?: (string | null);
+    publisher_email_confirmed?: boolean;
+    source_agent_id?: (string | null);
+    latest_revision_id?: (string | null);
+    latest_revision_number?: (number | null);
+    latest_version?: (string | null);
+    visibility: string;
+    is_listed: boolean;
+    created_at: string;
+    updated_at: string;
+    latest_revision?: (SkillPackageRevisionPublic | null);
+    install_count?: number;
+    installed_in_agent_ids?: Array<(string)>;
+    can_manage?: boolean;
+    revisions?: Array<SkillPackageRevisionPublic>;
+};
+
+/**
+ * A catalog row, resolved for the calling user.
+ */
+export type SkillPackageEntry = {
+    id: string;
+    package_id: string;
+    name: string;
+    display_name: string;
+    description?: (string | null);
+    publisher_user_id?: (string | null);
+    publisher_name?: (string | null);
+    publisher_email?: (string | null);
+    publisher_email_confirmed?: boolean;
+    source_agent_id?: (string | null);
+    latest_revision_id?: (string | null);
+    latest_revision_number?: (number | null);
+    latest_version?: (string | null);
+    visibility: string;
+    is_listed: boolean;
+    created_at: string;
+    updated_at: string;
+    latest_revision?: (SkillPackageRevisionPublic | null);
+    install_count?: number;
+    installed_in_agent_ids?: Array<(string)>;
+    can_manage?: boolean;
+};
+
+/**
+ * One published revision of a skill package.
+ *
+ * Carries every field the package-detail revision rows render: ``version``,
+ * ``published_at``, ``size_bytes``, ``release_notes`` and ``content_hash``.
+ * ``frontmatter`` rides along because the catalog card shows the skill's own
+ * description, which lives there and not on the package when a publisher has
+ * edited the package blurb.
+ */
+export type SkillPackageRevisionPublic = {
+    id: string;
+    package_id: string;
+    revision_number: number;
+    version?: (string | null);
+    frontmatter?: {
+        [key: string]: unknown;
+    };
+    content_hash?: string;
+    size_bytes?: number;
+    release_notes?: (string | null);
+    published_by_user_id?: (string | null);
+    published_at: string;
+};
+
+/**
+ * List response for the skills catalog.
+ */
+export type SkillPackagesPublic = {
+    data: Array<SkillPackageEntry>;
+    count: number;
+};
+
+/**
+ * Publisher-editable fields on a package.
+ */
+export type SkillPackageUpdate = {
+    display_name?: (string | null);
+    description?: (string | null);
+    visibility?: (string | null);
+    is_listed?: (boolean | null);
+};
+
+/**
+ * Body of ``POST /agents/{agent_id}/skills/{name}/publish``.
+ */
+export type SkillPublishRequest = {
+    version?: (string | null);
+    release_notes?: (string | null);
+    visibility?: (string | null);
+    package_id?: (string | null);
+};
+
+/**
+ * The ``SKILL.md`` of one published revision — the catalog preview.
+ */
+export type SkillRevisionContentPublic = {
+    package_id: string;
+    revision_number: number;
+    name: string;
+    content: string;
+    truncated?: boolean;
 };
 
 /**
@@ -7852,6 +8071,25 @@ export type AgentsGetAgentStatusData = {
 };
 
 export type AgentsGetAgentStatusResponse = (AgentStatusPublic);
+
+export type AgentsGetAgentSkillsData = {
+    agentId: string;
+};
+
+export type AgentsGetAgentSkillsResponse = (AgentSkillsPublic);
+
+export type AgentsRefreshAgentSkillsData = {
+    agentId: string;
+};
+
+export type AgentsRefreshAgentSkillsResponse = (AgentSkillsPublic);
+
+export type AgentsGetAgentSkillContentData = {
+    agentId: string;
+    name: string;
+};
+
+export type AgentsGetAgentSkillContentResponse = (SkillContentPublic);
 
 export type AgentsReadAgentsData = {
     limit?: number;
@@ -10500,6 +10738,57 @@ export type SharedWorkspaceViewSharedWorkspaceFileData = {
 };
 
 export type SharedWorkspaceViewSharedWorkspaceFileResponse = (unknown);
+
+export type SkillsListSkillCatalogResponse = (SkillPackagesPublic);
+
+export type SkillsGetSkillPackageData = {
+    packageId: string;
+};
+
+export type SkillsGetSkillPackageResponse = (SkillPackageDetailPublic);
+
+export type SkillsUpdateSkillPackageData = {
+    packageId: string;
+    requestBody: SkillPackageUpdate;
+};
+
+export type SkillsUpdateSkillPackageResponse = (SkillPackageEntry);
+
+export type SkillsDelistSkillPackageData = {
+    packageId: string;
+};
+
+export type SkillsDelistSkillPackageResponse = (SkillPackageEntry);
+
+export type SkillsGetSkillPackageRevisionContentData = {
+    packageId: string;
+    revisionNumber: number;
+};
+
+export type SkillsGetSkillPackageRevisionContentResponse = (SkillRevisionContentPublic);
+
+export type SkillsDownloadSkillPackageArchiveData = {
+    packageId: string;
+    revisionNumber: number;
+    xAgentEnvId?: (string | null);
+};
+
+export type SkillsDownloadSkillPackageArchiveResponse = (unknown);
+
+export type SkillsPublishAgentSkillData = {
+    agentId: string;
+    name: string;
+    requestBody: SkillPublishRequest;
+};
+
+export type SkillsPublishAgentSkillResponse = (SkillPackageRevisionPublic);
+
+export type SkillsInstallAgentSkillData = {
+    agentId: string;
+    requestBody: SkillInstallRequest;
+};
+
+export type SkillsInstallAgentSkillResponse = (PluginSyncResponse);
 
 export type SshKeysReadSshKeysResponse = (SSHKeysPublic);
 

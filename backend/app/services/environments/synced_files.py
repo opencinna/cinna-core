@@ -29,7 +29,9 @@ class SyncedFile:
     Attributes:
         key: Stable logical key (e.g. ``"workflow_prompt"``, ``"status"``).
         rel_path: Path relative to the workspace root, matching what env-core
-            watches and what the cache services fetch.
+            watches and what the cache services fetch. A **trailing slash**
+            marks a directory entry: env-core watches its content hash rather
+            than one file's mtime, because the unit of change is the folder.
         sync_class: ``"bidirectional"`` (reconcile + LWW) or ``"pull_only"``
             (env → DB cache, content-hash short-circuit).
     """
@@ -47,6 +49,8 @@ SYNCED_FILES: tuple[SyncedFile, ...] = (
     # Pull-only env-authoritative caches.
     SyncedFile("cli_commands", "docs/CLI_COMMANDS.yaml", "pull_only"),
     SyncedFile("status", "app-data/storage/STATUS.md", "pull_only"),
+    # Directory entry — see the trailing slash note on ``rel_path``.
+    SyncedFile("skills", "skills/", "pull_only"),
 )
 
 

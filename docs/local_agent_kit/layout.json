@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "description": "The folder model as data. Every host that creates, refreshes, exports or validates an agent folder reads its rules from here instead of hard-coding them.",
   "workshop": {
     "kit_dir": ".cinna-kit",
@@ -92,7 +92,14 @@
         "path": "docs",
         "kind": "directory",
         "role": "prompts_and_commands",
-        "description": "The three document-backed prompts, the command catalog, and one doc per local skill.",
+        "description": "The three document-backed prompts and the command catalog.",
+        "survives_update": true
+      },
+      {
+        "path": "skills",
+        "kind": "directory",
+        "role": "skills",
+        "description": "One folder per skill, `skills/<name>/SKILL.md`, shaped like the open Agent Skills standard, with optional `scripts/`, `references/` and `assets/` beside it. A skill is one standalone capability the engine loads only when it is invoked, which is why it is a folder here and not a doc under docs/. Travels to the cloud with the agent; the frontmatter contract is in guides/08 and the CHANGELOG entry for 1.1.0.",
         "survives_update": true
       },
       {

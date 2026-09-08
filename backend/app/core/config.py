@@ -926,6 +926,17 @@ class Settings(BaseSettings):
     BUNDLE_STORAGE_DIR: str = "/app/data/bundles"
     APP_DATA_STORAGE_DIR: str = "/app/data/app-data"
 
+    # Skills catalog snapshots (Phase 3 — agent skills).
+    #   <SKILL_STORAGE_DIR>/<package uuid>/<revision_number>/skills/<name>/…
+    #   <SKILL_STORAGE_DIR>/<package uuid>/<revision_number>.tar.gz  (archive cache)
+    # Created lazily with mode 0o755, same discipline as bundle storage.
+    #
+    # MUST be a persisted mount, not container-local scratch: a revision is
+    # immutable and a container re-ensures its files from here on every plugin
+    # sync, so losing this directory on redeploy would break every installed
+    # catalog skill. See the backend volume in ``docker-compose.yml``.
+    SKILL_STORAGE_DIR: str = "/app/data/skills"
+
     # Host-side path to ``APP_DATA_STORAGE_DIR`` for docker-compose volume
     # mounts. Mirrors ``HOST_AGENT_ENVIRONMENTS_DIR`` for Docker-in-Docker
     # setups; falls back to ``APP_DATA_STORAGE_DIR`` when None (local dev,

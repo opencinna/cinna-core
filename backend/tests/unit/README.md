@@ -70,3 +70,7 @@ docker compose exec backend python -m pytest tests/unit/ -q
   helpers (URI parsing, MIME guessing, prompt-line parsing, notification building).
 - `test_plugin_sync_propagation.py` — plugin-spec merge / propagation logic (service-level, no
   TestClient).
+- `test_skill_manifest.py` — agent-skills `SKILL.md` parsing/validation, the secret predicate, and
+  the env-core skills projection. Also holds the **drift guard** asserting
+  `app/services/agents/skill_manifest.py` and its vendored env-core copy stay byte-identical (same
+  role `test_synced_files_registry.py` plays for the synced-file registry).

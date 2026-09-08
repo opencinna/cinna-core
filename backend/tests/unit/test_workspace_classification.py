@@ -97,6 +97,24 @@ def test_runtime_denylisted_not_bundle_owned() -> None:
         assert is_bundle_owned_toplevel(name) is False, name
 
 
+def test_skills_is_bundle_owned_but_dot_claude_is_not() -> None:
+    """Agent skills live in top-level ``skills/``; ``.claude`` is engine state.
+
+    The pairing is the point. ``skills/`` is publisher content and travels in
+    every bundle snapshot, env seed and git commit; a workspace-level
+    ``.claude`` could only ever be per-env runtime junk (the real one is the
+    ``claude_sessions/`` mount at ``/root/.claude``), so it must be excluded
+    from all three. Getting this backwards would either drop an agent's skills
+    on publish or commit its engine state.
+    """
+    assert is_bundle_owned_toplevel("skills") is True
+    assert is_runtime_denylisted("skills") is False
+    assert is_env_migration_toplevel("skills") is True
+
+    assert is_runtime_denylisted(".claude") is True
+    assert is_bundle_owned_toplevel(".claude") is False
+
+
 def test_cinna_plugin_ref_not_denylisted() -> None:
     # Per-plugin marker is kept verbatim in snapshots.
     assert is_runtime_denylisted(".cinna_plugin_ref") is False

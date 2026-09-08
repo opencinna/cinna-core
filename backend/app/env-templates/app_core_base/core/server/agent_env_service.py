@@ -1449,6 +1449,9 @@ class AgentEnvService:
                ``plugins/<mkt>/<plugin>/``; skip when the ``.cinna_plugin_ref``
                marker already matches the ref.
              - ``bundle``: verify snapshot-seeded files exist (no git fetch).
+             - ``catalog``: download the pinned skill-package revision archive
+               from the backend with this env's token, verify its sha256, and
+               safe-extract it; skip when the marker already matches.
           3. Prune plugin dirs not in the manifest (uninstall).
           4. Regenerate ``settings.json`` from the manifest, including ONLY
              plugins whose files are present on disk (failed/missing excluded so
@@ -1509,6 +1512,10 @@ class AgentEnvService:
             try:
                 if source == "bundle":
                     status, error = self._ensure_bundle_plugin(plugin_dir)
+                elif source == "catalog":
+                    status, error = self._ensure_catalog_plugin(
+                        plugin_dir, entry
+                    )
                 else:
                     status, error = self._ensure_marketplace_plugin(
                         plugin_dir, entry.get("git") or {}
@@ -1718,6 +1725,231 @@ class AgentEnvService:
             return "installed", None
         return "failed", "Bundle plugin files missing from workspace snapshot"
 
+    # Ceilings on a downloaded skill archive: the compressed bytes, and the
+    # expanded tree.
+    #
+    # The download cap is deliberately ABOVE the backend's 16 MiB publish cap,
+    # which measures the UNCOMPRESSED tree. A skill made mostly of already
+    # compressed assets (PDFs, PNGs) gzips to roughly its own size plus tar
+    # headers, so equal numbers would make a 16 MiB skill publishable and then
+    # uninstallable — a failure discovered by the consumer, at every install,
+    # and unfixable without a re-publish. The headroom keeps the refusal where
+    # it belongs: at publish time, in front of the publisher.
+    #
+    # Neither cap is a re-run of the publish check; they bound a hostile or
+    # corrupt archive.
+    _CATALOG_ARCHIVE_MAX_BYTES = 24 * 1024 * 1024
+    _CATALOG_EXTRACT_MAX_BYTES = 64 * 1024 * 1024
+
+    def _ensure_catalog_plugin(
+        self, plugin_dir: Path, entry: dict
+    ) -> tuple[str, Optional[str]]:
+        """Materialize a skills-catalog plugin from its signed archive.
+
+        Steps: skip when the on-disk marker already names this revision;
+        download with this environment's own token; verify the sha256 the
+        backend put in the manifest; safe-extract into a staging dir; write the
+        synthesised ``.claude-plugin/plugin.json`` so both engines load the tree
+        as a plugin; swap it into place; write the marker.
+
+        Failures are returned, never raised — a skill that cannot be fetched
+        must not stop the other plugins in the manifest from installing.
+        """
+        import shutil as _shutil
+        import tarfile
+        import tempfile
+
+        archive = entry.get("archive") or {}
+        url = archive.get("url")
+        expected_sha = (archive.get("sha256") or "").lower()
+        ref = archive.get("ref")
+
+        if not (url and expected_sha and ref):
+            # The backend emitted the entry without coordinates: the package or
+            # the revision is gone. Report it rather than pruning the files —
+            # the agent keeps working with what it already has.
+            return "failed", "catalog_revision_missing"
+
+        marker = plugin_dir / self._PLUGIN_REF_MARKER
+        if plugin_dir.exists() and marker.exists():
+            try:
+                if marker.read_text(encoding="utf-8").strip() == ref:
+                    # Files are already the right revision, but plugin.json is
+                    # synthesised from EDITABLE package metadata — a publisher
+                    # renaming their package cuts no new revision, so the marker
+                    # would never move and the rename would never arrive. Cheap
+                    # to rewrite; skip the download, not the metadata.
+                    self._write_catalog_plugin_json(plugin_dir, entry, archive)
+                    return "skipped", None
+            except OSError:
+                pass  # fall through to a re-download
+
+        token = os.getenv("AGENT_AUTH_TOKEN")
+        env_id = os.getenv("ENV_ID")
+        if not token or not env_id:
+            return "failed", "Environment is not configured to reach the backend"
+
+        try:
+            import httpx
+        except ImportError:
+            return "failed", "httpx is not available in this environment"
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Agent-Env-Id": env_id,
+        }
+        chunks: list[bytes] = []
+        received = 0
+        try:
+            with httpx.Client(timeout=120.0, follow_redirects=False) as client:
+                # Streamed so the cap bounds MEMORY and not just the extraction:
+                # buffering first and measuring afterwards would let an
+                # oversized response be fully resident before it is refused.
+                with client.stream("GET", url, headers=headers) as response:
+                    if response.status_code != 200:
+                        return "failed", (
+                            f"Archive download failed with HTTP {response.status_code}"
+                        )
+                    for chunk in response.iter_bytes():
+                        received += len(chunk)
+                        if received > self._CATALOG_ARCHIVE_MAX_BYTES:
+                            limit_mb = self._CATALOG_ARCHIVE_MAX_BYTES // (1024 * 1024)
+                            return "failed", (
+                                f"Archive is larger than the {limit_mb} MB limit"
+                            )
+                        chunks.append(chunk)
+        except Exception as e:
+            return "failed", f"Archive download failed: {e}"
+
+        data = b"".join(chunks)
+
+        actual_sha = hashlib.sha256(data).hexdigest()
+        if actual_sha != expected_sha:
+            # Never extract unverified bytes: the whole trust story of a
+            # catalog skill is that the files match the revision the user
+            # installed.
+            logger.error(
+                "Catalog archive sha256 mismatch for %s (expected %s, got %s)",
+                plugin_dir.name, expected_sha, actual_sha,
+            )
+            return "failed", "Archive checksum mismatch — files were not installed"
+
+        staging = Path(tempfile.mkdtemp(prefix="cinna_skill_"))
+        try:
+            try:
+                with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+                    extracted = self._safe_extract_tar(tar, staging)
+            except tarfile.TarError as e:
+                return "failed", f"Archive could not be read: {e}"
+            except ValueError as e:
+                return "failed", f"Archive rejected: {e}"
+
+            if extracted == 0:
+                return "failed", "Archive contained no usable files"
+
+            self._write_catalog_plugin_json(staging, entry, archive)
+
+            if plugin_dir.exists():
+                _shutil.rmtree(plugin_dir, ignore_errors=True)
+            plugin_dir.parent.mkdir(parents=True, exist_ok=True)
+            _shutil.move(str(staging), str(plugin_dir))
+
+            try:
+                (plugin_dir / self._PLUGIN_REF_MARKER).write_text(
+                    ref, encoding="utf-8"
+                )
+            except OSError as e:
+                logger.warning(f"Could not write catalog plugin ref marker: {e}")
+
+            return "installed", None
+        except Exception as e:
+            return "failed", str(e)
+        finally:
+            _shutil.rmtree(staging, ignore_errors=True)
+
+    def _safe_extract_tar(self, tar: "tarfile.TarFile", dest: Path) -> int:
+        """Extract a tarball into ``dest``, refusing anything but plain files.
+
+        Rejected outright (the whole archive fails, rather than the member
+        being skipped, because a tarball containing one of these is not an
+        archive we understand): absolute paths, ``..`` components, symlinks and
+        hard links, devices, FIFOs, and a total expanded size over the cap.
+        Directories are created as needed; nothing else is honoured.
+
+        Returns the number of files written.
+        """
+        import shutil as _shutil
+
+        written = 0
+        total = 0
+        dest_root = dest.resolve()
+        for member in tar.getmembers():
+            name = member.name
+            if name.startswith("/") or name.startswith("\\"):
+                raise ValueError(f"absolute path in archive: {name}")
+            parts = Path(name).parts
+            if ".." in parts or any(p.startswith("/") for p in parts):
+                raise ValueError(f"path traversal in archive: {name}")
+            if member.issym() or member.islnk():
+                raise ValueError(f"link in archive: {name}")
+            if member.ischr() or member.isblk() or member.isfifo() or member.isdev():
+                raise ValueError(f"device node in archive: {name}")
+
+            target = (dest_root / name).resolve()
+            try:
+                target.relative_to(dest_root)
+            except ValueError:
+                raise ValueError(f"path escapes extraction root: {name}")
+
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isreg():
+                raise ValueError(f"unsupported entry type in archive: {name}")
+
+            total += member.size
+            if total > self._CATALOG_EXTRACT_MAX_BYTES:
+                raise ValueError("archive expands beyond the size limit")
+
+            source = tar.extractfile(member)
+            if source is None:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "wb") as handle:
+                _shutil.copyfileobj(source, handle)
+            # Only the executable bit is honoured, and only as 0755/0644: a
+            # skill's scripts/ is meant to be runnable (a catalog install that
+            # dropped the bit would behave differently from the same skill in a
+            # local skills/ folder), while setuid/setgid/sticky from an archive
+            # are exactly the privilege surface not to inherit.
+            os.chmod(target, 0o755 if member.mode & 0o111 else 0o644)
+            written += 1
+        return written
+
+    def _write_catalog_plugin_json(
+        self, root: Path, entry: dict, archive: dict
+    ) -> None:
+        """Synthesise ``.claude-plugin/plugin.json`` for a catalog skill.
+
+        Generated here rather than shipped inside the archive because the
+        fields are package metadata a publisher can edit without cutting a new
+        revision — writing them into the immutable snapshot would freeze the
+        first version of the text forever.
+        """
+        plugin_json = {
+            "name": entry.get("plugin_name") or "skill",
+            "version": entry.get("version") or "0.0.0",
+            "description": archive.get("description")
+            or f"Skill installed from the {entry.get('marketplace_name')} catalog",
+        }
+        try:
+            meta_dir = root / ".claude-plugin"
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            with open(meta_dir / "plugin.json", "w", encoding="utf-8") as f:
+                json.dump(plugin_json, f, indent=2)
+        except OSError as e:
+            logger.warning(f"Could not write catalog plugin.json: {e}")
+
     def _prune_plugin_dirs(self, wanted: set[tuple[str, str]]) -> None:
         """Remove plugin directories under plugins_dir not present in the manifest.
 
@@ -1877,8 +2109,12 @@ class AgentEnvService:
 
     # Plugin capabilities OpenCode has no equivalent for (yet). Detected and
     # reported as "unsupported under OpenCode" rather than silently dropped.
-    # Tracked as a documented fast-follow (skills/agents/hooks parity).
-    _OPENCODE_UNSUPPORTED_DIRS = ("skills", "agents", "hooks")
+    #
+    # ``skills`` used to be here. It no longer is: a plugin's ``skills/`` dir is
+    # now handed to OpenCode through its ``skills`` config paths (see
+    # ``skill_dirs`` below and ``_materialize_opencode_config``), so reporting
+    # it as unsupported would be a lie the user acts on.
+    _OPENCODE_UNSUPPORTED_DIRS = ("agents", "hooks")
 
     def get_opencode_plugin_artifacts(self, mode: str) -> dict:
         """Collect OpenCode-consumable artifacts from active plugins for a mode.
@@ -1889,23 +2125,32 @@ class AgentEnvService:
             — NOT a python3 wrapper of the plugin dir;
           - lists the plugin's ``commands/*.md`` files (to copy into OpenCode's
             per-mode command dir);
-          - detects capabilities OpenCode can't map (skills / agents / hooks) and
+          - lists the plugin's ``skills/`` dir (registered as an OpenCode
+            ``skills`` config path, so plugin skills work on both engines);
+          - detects capabilities OpenCode can't map (agents / hooks) and
             reports them as ``unsupported`` (non-blocking) instead of dropping.
 
         Returns:
             ``{"mcp_servers": {name: cfg}, "command_files": [Path...],
+               "skill_dirs": [Path...],
                "unsupported": [{plugin_name, marketplace_name, capability,
                                 message}...]}``.
         """
         mcp_servers: dict = {}
         command_files: list[Path] = []
+        skill_dirs: list[Path] = []
         unsupported: list[dict] = []
 
         try:
             active_plugins = self.get_active_plugins_for_mode(mode)
         except Exception as e:
             logger.warning(f"Could not enumerate active plugins for {mode}: {e}")
-            return {"mcp_servers": {}, "command_files": [], "unsupported": []}
+            return {
+                "mcp_servers": {},
+                "command_files": [],
+                "skill_dirs": [],
+                "unsupported": [],
+            }
 
         for plugin in active_plugins:
             path = plugin.get("path") or ""
@@ -1939,7 +2184,14 @@ class AgentEnvService:
                     if md.is_file():
                         command_files.append(md)
 
-            # 3) Unsupported capabilities → report, don't drop.
+            # 3) Skills directory → an OpenCode `skills` config path. Claude
+            #    Code discovers plugin skills on its own; OpenCode needs the
+            #    path spelled out.
+            skills_dir = plugin_dir / "skills"
+            if skills_dir.is_dir() and any(skills_dir.iterdir()):
+                skill_dirs.append(skills_dir)
+
+            # 4) Unsupported capabilities → report, don't drop.
             for cap in self._OPENCODE_UNSUPPORTED_DIRS:
                 cap_dir = plugin_dir / cap
                 if cap_dir.exists() and cap_dir.is_dir() and any(cap_dir.iterdir()):
@@ -1957,7 +2209,136 @@ class AgentEnvService:
         return {
             "mcp_servers": mcp_servers,
             "command_files": command_files,
+            "skill_dirs": skill_dirs,
             "unsupported": unsupported,
+        }
+
+    def build_skills_index(self) -> dict:
+        """Build the agent's skill index: local ``skills/`` + every plugin's.
+
+        Returns ``{"hash": str, "skills": [entry dict], "errors": [str]}`` — the
+        body of ``GET /config/skills``.
+
+        Two sources, one list:
+
+        * ``workspace/skills/`` — the agent's own, bundle-owned skills. These
+          are what ``skills_projection`` mirrors into the engine, so the
+          ``hash`` reported here is *their* tree hash and nothing else: the
+          backend cache short-circuits on it, and folding plugin state into it
+          would make every plugin toggle look like a workspace edit.
+        * ``<plugin>/skills/`` for every active plugin, in ANY mode. Mode is not
+          filtered here because the index is what a person reads on the agent
+          page — a skill that only runs in building mode still exists — and the
+          engines resolve per-mode enablement themselves.
+
+        A name present in both is flagged ``shadowed`` on BOTH rows: which copy
+        an engine loads differs between Claude Code (namespaced) and OpenCode
+        (first wins), so the honest report is "there are two", not a guess at
+        which one runs.
+
+        Never raises: a plugin whose tree cannot be read is reported in
+        ``errors`` and the rest of the index is still returned.
+        """
+        from .skill_manifest import (
+            SkillIssue,
+            apply_budget,
+            pick_warning,
+            scan_skills_root,
+            tree_hash,
+        )
+
+        skills_root = self.workspace_dir / "skills"
+        errors: list[str] = []
+
+        try:
+            entries = scan_skills_root(skills_root)
+        except Exception as e:  # noqa: BLE001 — a broken tree must not 500
+            logger.warning(f"Could not scan workspace skills: {e}")
+            entries = []
+            # Label only — §4: the served index never carries exception text.
+            errors.append("workspace")
+
+        try:
+            active_plugins = self.get_plugins_settings().get("active_plugins", [])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not enumerate plugins for the skill index: {e}")
+            active_plugins = []
+            errors.append("plugins")
+
+        seen_plugin_refs: set[str] = set()
+        for plugin in active_plugins:
+            path = plugin.get("path") or ""
+            if not path:
+                continue
+            marketplace_name = plugin.get("marketplace_name") or ""
+            plugin_name = plugin.get("plugin_name") or Path(path).name
+            plugin_ref = f"{marketplace_name}/{plugin_name}"
+            # settings.json carries one row per mode-enabled plugin, so the same
+            # plugin can appear twice; its skills must not.
+            if plugin_ref in seen_plugin_refs:
+                continue
+            seen_plugin_refs.add(plugin_ref)
+            plugin_dir = Path(path)
+            plugin_skills_root = plugin_dir / "skills"
+            # ``path`` on a plugin entry has to be the real workspace-relative
+            # location, not ``skills/<name>``: it is what the backend reads the
+            # SKILL.md back through, and the agent's own folder may hold a
+            # different skill under the same name.
+            try:
+                rel_root = plugin_skills_root.relative_to(self.workspace_dir).as_posix()
+            except ValueError:
+                rel_root = plugin_skills_root.as_posix()
+            try:
+                entries.extend(
+                    scan_skills_root(
+                        plugin_skills_root,
+                        source="plugin",
+                        plugin_ref=plugin_ref,
+                        rel_root=rel_root,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Could not scan skills for plugin {plugin_ref}: {e}")
+                errors.append(plugin_ref)
+
+        # A valid skill the projector could not copy is invisible to the model,
+        # whatever the folder looks like. Local skills only: plugin skills are
+        # loaded from the plugin path and never travel through the projection.
+        try:
+            from .skills_projection import projection_failures
+
+            failed_to_project = projection_failures()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Could not read the skills projection state: {e}")
+            failed_to_project = set()
+        if failed_to_project:
+            for entry in entries:
+                if (
+                    entry.source == "local"
+                    and entry.error is None
+                    and entry.name in failed_to_project
+                ):
+                    entry.error = SkillIssue("projection_error")
+
+        # Name order first, then the caps — the caps are per AGENT, so they are
+        # applied once over the merged list rather than once per root, and the
+        # list has to be in its final order before anything is excluded.
+        entries.sort(key=lambda e: (e.name, e.source, e.plugin_ref or ""))
+        apply_budget(entries)
+
+        duplicated = {
+            name
+            for name in {entry.name for entry in entries}
+            if sum(1 for entry in entries if entry.name == name) > 1
+        }
+        for entry in entries:
+            if entry.name in duplicated and entry.error is None:
+                entry.warning = pick_warning(entry.warning, SkillIssue("shadowed"))
+
+        return {
+            "hash": tree_hash(skills_root),
+            "skills": [entry.to_dict() for entry in entries],
+            "errors": errors,
         }
 
     def _read_plugin_mcp_servers(self, plugin_dir: Path) -> dict:

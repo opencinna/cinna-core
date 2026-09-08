@@ -42,6 +42,11 @@ class CatalogEntryPublic(SQLModel):
     # action instead of "Open". False/absent when not installed or up to date.
     user_install_pending_update: bool = False
     required_credential_specs: list = []
+    #: Skills the bundle ships, derived from the latest revision's
+    #: ``skills_summary`` (``[{name, description, has_scripts}]``). ``None``
+    #: when the latest revision predates agent skills — the card renders
+    #: nothing rather than claiming the bundle has no skills.
+    skills: list | None = None
     # Publisher-provided AI credential FKs mirrored straight from the bundle
     # row (Phase 1 of the install redesign). Phase 2+ uses these to skip
     # the AI credential picker on the install screen and link the

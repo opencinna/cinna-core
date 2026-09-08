@@ -108,6 +108,16 @@ class AgentEnvironment(SQLModel, table=True):
     cli_commands_parsed: list | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     cli_commands_fetched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     cli_commands_error: str | None = Field(default=None, sa_column=Column(sa.String(256), nullable=True))
+    # Agent skills index cache (from workspace ``skills/`` + plugin skills, as
+    # reported by env-core ``GET /config/skills``). Mirrors the CLI-commands
+    # cache above: env-authoritative, pull-only, refreshed by
+    # ``AgentSkillsService``. ``skills_hash`` is the workspace tree hash and is
+    # what the refresh short-circuits on, so an unchanged tree costs one HTTP
+    # call and no writes.
+    skills_parsed: list | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    skills_hash: str | None = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    skills_fetched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    skills_error: str | None = Field(default=None, sa_column=Column(sa.String(256), nullable=True))
     # Agent REST API (cinna_api) spec + policy cache. Mirrors the CLI commands
     # cache: the harvested OpenAPI spec and the parsed policy.yaml are cached on
     # the env row so consumers, the spec viewer, and client generation can read

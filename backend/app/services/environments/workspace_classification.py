@@ -81,6 +81,12 @@ RUNTIME_NAME_DENYLIST: frozenset[str] = frozenset(
     {
         ".opencode",
         ".cache",
+        # Defensive: the canonical home for agent skills is the top-level
+        # ``skills/`` directory (bundle-owned, captured normally). ``.claude``
+        # is engine state — a workspace-level copy would be per-env runtime
+        # junk, never publisher content, so it never travels in a bundle
+        # snapshot, an env seed or a git commit.
+        ".claude",
     }
 )
 

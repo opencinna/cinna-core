@@ -21,7 +21,7 @@ from typing import Callable, TYPE_CHECKING
 from sqlmodel import Session as DBSession
 
 if TYPE_CHECKING:
-    from app.models import AgentEnvironment
+    from app.models import Agent, AgentEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,72 @@ def get_active_environment(
     if not agent or not agent.active_environment_id:
         return None
     return session.get(AgentEnvironment, agent.active_environment_id)
+
+
+async def wake_suspended_environment(
+    environment: "AgentEnvironment",
+    agent: "Agent | None",
+    *,
+    log_prefix: str = "environment",
+) -> None:
+    """Wake a *suspended* environment in place, best-effort.
+
+    The light counterpart to :func:`ensure_environment_running`: it activates a
+    suspended env and returns, rather than polling to a running state and
+    raising. That is what a user-initiated **refresh** wants — a cache pull
+    should wake a sleeping agent, but must never turn into a 120-second request
+    or a 500 because the container is unhealthy.
+
+    No-op when the env is already running, when no agent is available, or for
+    any status other than ``suspended``: ``stopped`` / ``error`` need a heavier
+    full start that a refresh button has no business triggering.
+
+    Activation rotates the env auth token, so the refreshed ``status`` /
+    ``status_changed_at`` / ``config`` are copied back onto the caller's
+    instance — including when a *parallel* request did the activation, which is
+    why the copy-back happens unconditionally. ``status_changed_at`` travels
+    with ``status`` as a value copy: re-stamping it here would hide the real
+    age of the transition from the status-repair reconciler.
+
+    Never raises: a failure leaves the caller on its normal not-running path.
+    """
+    if agent is None or environment.status != "suspended":
+        return
+
+    from app.core.db import create_session
+    from app.models import Agent as AgentModel, AgentEnvironment
+    from app.services.environments.environment_lifecycle import (
+        EnvironmentLifecycleManager,
+    )
+
+    try:
+        lifecycle = EnvironmentLifecycleManager()
+        with create_session() as session:
+            fresh_env = session.get(AgentEnvironment, environment.id)
+            if fresh_env is None:
+                return
+            if fresh_env.status == "suspended":
+                fresh_agent = session.get(AgentModel, fresh_env.agent_id)
+                if fresh_agent is None:
+                    return
+                logger.info(
+                    "%s_resume_environment agent_id=%s env_id=%s action=activating",
+                    log_prefix, environment.agent_id, environment.id,
+                )
+                await lifecycle.activate_suspended_environment(
+                    db_session=session,
+                    environment=fresh_env,
+                    agent=fresh_agent,
+                    emit_events=True,
+                )
+            environment.status = fresh_env.status
+            environment.status_changed_at = fresh_env.status_changed_at
+            environment.config = fresh_env.config
+    except Exception as exc:  # noqa: BLE001 — best-effort by contract
+        logger.warning(
+            "%s_resume_environment agent_id=%s env_id=%s action=failed reason=%s",
+            log_prefix, environment.agent_id, environment.id, exc,
+        )
 
 
 async def ensure_environment_running(

@@ -101,6 +101,9 @@ OPENCODE_MODE_PORTS = {
 # How long to wait for opencode serve to become healthy on first start (seconds)
 OPENCODE_STARTUP_TIMEOUT = 30
 
+# How long to wait for a terminated opencode serve to exit before killing it
+OPENCODE_STOP_TIMEOUT = 10
+
 # How long to wait without meaningful SSE events (text, tool, done) before
 # timing out.  Heartbeats keep the socket alive but don't count as progress.
 OPENCODE_PROGRESS_TIMEOUT = 120  # seconds
@@ -151,7 +154,9 @@ class OpenCodeAdapter(BaseSDKAdapter):
     def __init__(self, config: SDKConfig):
         super().__init__(config)
 
-        self.prompt_generator = PromptGenerator(self.workspace_dir)
+        self.prompt_generator = PromptGenerator(
+            self.workspace_dir, supports_skills=self.SUPPORTS_SKILLS
+        )
 
         # Agent env service for plugin management (mirrors ClaudeCodeAdapter)
         self.agent_env_service = AgentEnvService(self.workspace_dir)
@@ -185,6 +190,12 @@ class OpenCodeAdapter(BaseSDKAdapter):
         # Prevents Python GC from collecting the task reference mid-flight and
         # raising "Task was destroyed but it is pending!" warnings.
         self._background_tasks: set[asyncio.Task] = set()
+
+        # Set once when opencode answered 404 to /instance/dispose, so an older
+        # build logs the gap once instead of on every message. Never reset —
+        # not even by stop() — because the gap belongs to the installed binary,
+        # not to the process: see _dispose_instance.
+        self._dispose_unsupported = False
 
         # Pending interactive `question` tools, keyed by opencode session id.
         # Populated when a `question.asked` requestID is captured during a
@@ -342,11 +353,16 @@ class OpenCodeAdapter(BaseSDKAdapter):
             f"{OPENCODE_STARTUP_TIMEOUT}s. Last error: {last_error}"
         )
 
-    async def _ensure_server_running(self) -> None:
+    async def _ensure_server_running(self) -> bool:
         """
         Ensure the opencode server is running. Starts it if not running.
 
         Uses a lock to prevent multiple concurrent starts.
+
+        Returns True when this call actually launched the server. Callers use
+        that to skip work a fresh process has already done — a just-started
+        server has read the current skills projection, so disposing its
+        instance to force a rescan would be pure waste.
         """
         async with self._start_lock:
             # Check if process exists and is still alive
@@ -355,15 +371,113 @@ class OpenCodeAdapter(BaseSDKAdapter):
                 and self._server_process.returncode is None
             )
 
-            if not process_alive:
-                if self._server_process is not None:
-                    logger.warning(
-                        "opencode serve process exited (code=%d), restarting...",
-                        self._server_process.returncode,
-                    )
-                # Clear stale session ID so the next request creates a fresh session
+            if process_alive:
+                return False
+
+            if self._server_process is not None:
+                logger.warning(
+                    "opencode serve process exited (code=%d), restarting...",
+                    self._server_process.returncode,
+                )
+            # Clear stale session ID so the next request creates a fresh session
+            self._current_session_id = None
+            await self._start_opencode_server()
+            return True
+
+    async def stop(self) -> bool:
+        """Terminate this mode's opencode server so it relaunches lazily.
+
+        The server materializes its config once at start (plugin MCP servers,
+        plugin ``skills`` paths, plugin slash commands), so a plugin change
+        only takes effect after a relaunch. ``routes.install_plugins`` calls
+        this via ``sdk_manager.stop_opencode_servers()``; the next message pays
+        the startup cost once and gets the new plugin set.
+
+        Returns True when a live process was actually stopped.
+        """
+        async with self._start_lock:
+            process = self._server_process
+            if process is None or process.returncode is not None:
+                self._server_process = None
+                return False
+
+            logger.info(
+                "Stopping opencode serve for mode=%s (pid=%d) after a plugin change",
+                self._mode, process.pid,
+            )
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                self._server_process = None
                 self._current_session_id = None
-                await self._start_opencode_server()
+                return False
+
+            try:
+                await asyncio.wait_for(process.wait(), timeout=OPENCODE_STOP_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "opencode serve (mode=%s) did not exit in %ds — killing it",
+                    self._mode, OPENCODE_STOP_TIMEOUT,
+                )
+                try:
+                    process.kill()
+                    await process.wait()
+                except ProcessLookupError:
+                    pass
+
+            self._server_process = None
+            # The sessions belonged to the dead process; the next message must
+            # create a fresh one rather than resume an id the new server never
+            # heard of.
+            self._current_session_id = None
+            return True
+
+    async def _dispose_instance(self) -> None:
+        """POST /instance/dispose so OpenCode rebuilds its per-workspace state.
+
+        Used after the skills projection changed: OpenCode memoizes the skill
+        list per workspace instance, and disposing is the cheap way to make it
+        rescan without the ~30s of a full server relaunch.
+
+        Best-effort by design — a build without the endpoint answers 404, which
+        is logged once per adapter instance and otherwise ignored. Once, not
+        once per server: ``stop()`` replaces the process but not the adapter,
+        and the missing endpoint is a property of the installed opencode
+        binary, which a relaunch inside the same container cannot change — so
+        re-arming the warning would only repeat what was already reported. The
+        skills then become visible at the next server start, and
+        ``/rebuild-env`` is the user-facing fix.
+        """
+        aiohttp = _import_aiohttp()
+        if aiohttp is None:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self._base_url}/instance/dispose",
+                    params={"directory": self.workspace_dir},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 404:
+                        if not self._dispose_unsupported:
+                            self._dispose_unsupported = True
+                            logger.warning(
+                                "opencode build has no POST /instance/dispose; "
+                                "projected skills become visible at the next "
+                                "server start (mode=%s)", self._mode,
+                            )
+                        return
+                    if resp.status >= 400:
+                        logger.warning(
+                            "POST /instance/dispose failed (%d)", resp.status
+                        )
+                        return
+            logger.info(
+                "Disposed opencode instance for mode=%s after a skills change",
+                self._mode,
+            )
+        except Exception as e:  # noqa: BLE001 — never break the message path
+            logger.warning("Could not dispose opencode instance: %s", e)
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -486,9 +600,15 @@ class OpenCodeAdapter(BaseSDKAdapter):
         The base config is the read-only per-mode ``opencode.json`` (model,
         provider, permissions, the knowledge/agent_task MCP bridges). We fold in
         each active plugin's *declared* MCP servers (from its ``.mcp.json`` /
-        ``plugin.json`` — NOT a python3 wrapper of the plugin dir) and copy the
+        ``plugin.json`` — NOT a python3 wrapper of the plugin dir), register each
+        plugin's ``skills/`` dir as an OpenCode skills path, and copy the
         plugin's ``commands/*.md`` into the runtime command dir so OpenCode loads
         them as slash commands.
+
+        The agent's OWN skills are NOT listed here: they are projected into
+        ``/root/.claude/skills`` before every message (see skills_projection),
+        which OpenCode already reads, and listing them a second time would make
+        every skill appear twice in the index.
 
         Returns the list of unsupported-capability reports (skills/agents/hooks)
         for non-blocking surfacing at session start.
@@ -512,7 +632,12 @@ class OpenCodeAdapter(BaseSDKAdapter):
             artifacts = self.agent_env_service.get_opencode_plugin_artifacts(self._mode)
         except Exception as e:  # noqa: BLE001
             logger.warning("Could not build plugin artifacts: %s", e)
-            artifacts = {"mcp_servers": {}, "command_files": [], "unsupported": []}
+            artifacts = {
+                "mcp_servers": {},
+                "command_files": [],
+                "skill_dirs": [],
+                "unsupported": [],
+            }
 
         # 1) Merge plugin MCP servers into the config's mcp section. Plugin keys
         #    are namespaced (plugin_<mkt>_<plugin>_<server>) so they never clobber
@@ -546,10 +671,37 @@ class OpenCodeAdapter(BaseSDKAdapter):
                 self._mode, len(user_mcp),
             )
 
-        # 2) Copy plugin command markdown into the runtime command dir.
+        # 2) Register each active plugin's skills/ dir as an OpenCode skills
+        #    path. Absolute, order-preserving and deduped; merged with anything
+        #    the base config already declared so a hand-tuned template keeps its
+        #    entries.
+        plugin_skill_dirs = artifacts.get("skill_dirs") or []
+        if plugin_skill_dirs:
+            # Shape matters: opencode's config schema declares `skills` as an
+            # OBJECT (`{"paths": [...], "urls": [...]}`) with
+            # `additionalProperties: false` at both levels, and OPENCODE_CONFIG
+            # pins this file — a wrong shape is not quietly ignored, it can stop
+            # the server from starting. Merge into any `paths` the base template
+            # already declared rather than replacing them.
+            existing = config.get("skills")
+            skills_section = dict(existing) if isinstance(existing, dict) else {}
+            existing_paths = skills_section.get("paths")
+            paths = [p for p in existing_paths if isinstance(p, str)] if isinstance(existing_paths, list) else []
+            for skills_dir in plugin_skill_dirs:
+                path_str = str(skills_dir)
+                if path_str not in paths:
+                    paths.append(path_str)
+            skills_section["paths"] = paths
+            config["skills"] = skills_section
+            logger.info(
+                "OpenCode %s: registered %d plugin skills path(s)",
+                self._mode, len(plugin_skill_dirs),
+            )
+
+        # 3) Copy plugin command markdown into the runtime command dir.
         self._copy_plugin_commands(artifacts.get("command_files") or [])
 
-        # 3) Collect unsupported capabilities for reporting.
+        # 4) Collect unsupported capabilities for reporting.
         unsupported = artifacts.get("unsupported") or []
 
         # Write the merged config into the runtime dir (real file, replaces any
@@ -727,12 +879,15 @@ class OpenCodeAdapter(BaseSDKAdapter):
         system_prompt: Optional[str] = None,
         mode: str = "conversation",
         session_state: Optional[dict] = None,
+        skills_changed: bool = False,
     ) -> AsyncIterator[SDKEvent]:
         """
         Send a message via the OpenCode server and stream back SDKEvents.
 
         Flow:
         1. Resolve per-mode port/dir and ensure opencode serve is running.
+        1b. Dispose the workspace instance when the skills projection changed,
+            so OpenCode rebuilds its memoized skill list for this message.
         2. Create or resume session.
         3. Register session with active_session_manager for interrupt support.
         4. Write session_context.json for MCP bridge servers.
@@ -755,7 +910,15 @@ class OpenCodeAdapter(BaseSDKAdapter):
         try:
             # 1. Resolve per-mode port/dir and ensure server is running
             self._resolve_mode(mode)
-            await self._ensure_server_running()
+            server_just_started = await self._ensure_server_running()
+
+            # 1b. OpenCode memoizes the skill list per workspace instance, so a
+            # skill projected since the last message is invisible until the
+            # instance is disposed. Only on an actual change — disposing on
+            # every message would throw away warm state for nothing — and never
+            # right after a start, which already read the current projection.
+            if skills_changed and not server_just_started:
+                await self._dispose_instance()
 
             # 2. Create or resume session
             is_new_session = not session_id

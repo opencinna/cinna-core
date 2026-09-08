@@ -191,11 +191,19 @@ class CommandService:
           behind them, so submission would be rejected anyway.
         - Dynamic ``/run:<name>`` entries are appended from the env's CLI
           commands cache (with ``resolved_command`` populated for the tooltip).
+        - Dynamic ``/<skill>`` entries are appended from the env's skills cache
+          with ``kind="skill"``. These are deliberately NOT registered handlers:
+          ``is_command()`` does not match them, so the text goes to the model,
+          where Claude Code reads a leading ``/<skill>`` as an explicit skill
+          invocation and OpenCode reads it as an ordinary request. The reserved
+          -name check in ``skill_manifest`` is what keeps a skill from shadowing
+          a real command here.
         """
         from sqlmodel import select
 
         from app.models import AgentEnvironment, Session as ChatSessionModel
         from app.models.sessions.session import SessionCommandPublic
+        from app.services.agents.agent_skills_service import AgentSkillsService
         from app.services.agents.cli_commands_service import CLICommandsService
         from app.services.sessions.active_streaming_manager import active_streaming_manager
 
@@ -205,10 +213,18 @@ class CommandService:
         # Resolve environment + CLI commands cache once — used for the
         # /run-list visibility check and for the dynamic /run:<name> entries.
         cli_commands: list = []
+        skills: list = []
         if chat_session.environment_id:
             environment = db.get(AgentEnvironment, chat_session.environment_id)
             if environment:
                 cli_commands = CLICommandsService.get_cached_commands(environment)
+                skills = [
+                    entry
+                    for entry in AgentSkillsService.get_cached_entries(environment)
+                    # Invalid skills are not projected, so offering them would
+                    # promise something the engine cannot deliver.
+                    if entry.is_valid and entry.user_invocable
+                ]
 
         # Determine /rebuild-env availability — unavailable if any session on
         # the same environment is actively streaming (mirrors the check in
@@ -268,6 +284,23 @@ class CommandService:
                     description=cmd.description if cmd.description else cmd.command[:80],
                     is_available=True,
                     resolved_command=cmd.command,
+                )
+            )
+
+        # A duplicate name is possible (a local skill and a plugin skill can
+        # share one); the popup shows one row, because typing the name can only
+        # mean one thing to the user.
+        seen_skill_names: set[str] = set()
+        for skill in skills:
+            if skill.name in seen_skill_names:
+                continue
+            seen_skill_names.add(skill.name)
+            commands.append(
+                SessionCommandPublic(
+                    name=f"/{skill.name}",
+                    description=skill.description,
+                    is_available=True,
+                    kind="skill",
                 )
             )
 

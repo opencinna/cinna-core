@@ -40,7 +40,11 @@ const menuItems: Item[] = [
 function CatalogMenu() {
   const { isMobile, setOpenMobile } = useSidebar()
   const router = useRouterState()
-  const isActive = router.location.pathname === "/catalog"
+  // `startsWith`, not equality: the Catalog destination now has two sections
+  // (`/catalog` for agent bundles, `/catalog/skills` for skills) plus the
+  // bundle install route beneath it, and one sidebar entry has to stay lit on
+  // all of them — a second entry per section is how a nav grows a row per route.
+  const isActive = router.location.pathname.startsWith("/catalog")
 
   const handleMenuClick = () => {
     if (isMobile) {

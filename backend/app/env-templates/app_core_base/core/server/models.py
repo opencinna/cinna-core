@@ -186,6 +186,21 @@ class PluginGitCoords(BaseModel):
     subdir: str = ""              # Subdirectory within the repo holding the plugin files
 
 
+class PluginArchiveCoords(BaseModel):
+    """Where a ``catalog`` plugin's files are fetched from, and how to trust them.
+
+    ``sha256`` is over the exact bytes the backend will serve and is verified
+    before anything is extracted; ``ref`` is the immutable skill-package
+    revision id, which doubles as the ``.cinna_plugin_ref`` idempotency marker
+    (unlike a git branch it can never move, so a matching marker is proof the
+    files on disk are the right ones).
+    """
+    url: str
+    sha256: str
+    ref: str
+    description: str | None = None
+
+
 class PluginManifestEntry(BaseModel):
     """One plugin in the workspace plugin manifest.
 
@@ -194,8 +209,12 @@ class PluginManifestEntry(BaseModel):
     """
     marketplace_name: str
     plugin_name: str
-    source: str = "marketplace"   # "marketplace" | "bundle"
-    git: PluginGitCoords | None = None  # None for bundle source (files pre-seeded)
+    source: str = "marketplace"   # "marketplace" | "bundle" | "catalog"
+    git: PluginGitCoords | None = None  # None for bundle/catalog source
+    # Set only for source="catalog". None on a catalog entry means the backend
+    # could not resolve the revision (package or snapshot gone) — the installer
+    # reports it as a failure rather than pruning the skill away.
+    archive: PluginArchiveCoords | None = None
     conversation_mode: bool = True
     building_mode: bool = True
     disabled: bool = False
@@ -268,6 +287,54 @@ class McpServersResponse(BaseModel):
     status: str
     conversation_count: int = 0
     building_count: int = 0
+
+
+class SkillIssuePublic(BaseModel):
+    """One flagged condition on a skill: a stable code plus a human sentence.
+
+    Mirrors ``skill_manifest.SkillIssue``. The ``code`` is the contract a client
+    branches on (status tone, disabled verbs); ``message`` is what a person
+    reads; ``paths`` is populated only for ``code="secrets"``.
+    """
+    code: str
+    message: str = ""
+    paths: list[str] = []
+
+
+class SkillEntry(BaseModel):
+    """One row of the agent's skill index, as env-core reports it.
+
+    Shape-identical to ``skill_manifest.SkillEntry.to_dict()`` — the parser is
+    the authority, this model only types it for FastAPI. ``frontmatter`` is
+    deliberately absent: the index is metadata for the UI, and a skill body's
+    custom keys are none of the backend's business until the catalog publishes
+    them.
+    """
+    name: str
+    description: str = ""
+    source: str = "local"          # "local" | "plugin" | "catalog"
+    plugin_ref: str | None = None  # "<marketplace>/<plugin>" for plugin skills
+    path: str = ""
+    has_scripts: bool = False
+    user_invocable: bool = True
+    model_invocable: bool = True
+    size_bytes: int = 0
+    error: SkillIssuePublic | None = None
+    warning: SkillIssuePublic | None = None
+    secret_paths: list[str] = []
+
+
+class SkillsIndexResponse(BaseModel):
+    """Response of GET /config/skills.
+
+    ``hash`` is the workspace ``skills/`` tree hash — the backend cache
+    short-circuits on it, so it must move whenever the tree does and must NOT
+    move for anything else (plugin skills are therefore not folded into it;
+    a plugin change already forces its own resync).
+    """
+    hash: str
+    skills: list[SkillEntry] = []
+    errors: list[str] = []
 
 
 class CommandStreamRequest(BaseModel):

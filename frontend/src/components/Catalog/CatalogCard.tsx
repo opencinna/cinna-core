@@ -18,6 +18,7 @@ import {
   Download,
   ExternalLink,
   Globe,
+  GraduationCap,
   Loader2,
   Lock,
   Users,
@@ -44,6 +45,29 @@ interface CatalogCardProps {
   entry: CatalogEntryPublic
 }
 
+/** Names shown on the skills line before the "+N more" tail. */
+const MAX_SKILL_NAMES = 3
+
+/**
+ * The revision's `skills_summary`, narrowed to the names the card prints.
+ *
+ * The generated type is `Array<unknown> | null` — the backend derives the
+ * summary as plain dicts, so there is no `SkillSummaryPublic` to import — and
+ * `null` deliberately means "this revision predates agent skills", which is
+ * not the same as "ships none". Both render nothing; neither may throw on a
+ * shape the server changes later.
+ */
+function skillNames(skills: CatalogEntryPublic["skills"]): string[] {
+  if (!Array.isArray(skills)) return []
+  return skills
+    .map((skill) =>
+      skill && typeof skill === "object" && "name" in skill
+        ? (skill as { name?: unknown }).name
+        : null,
+    )
+    .filter((name): name is string => typeof name === "string" && name !== "")
+}
+
 const VISIBILITY_ICONS: Record<string, ReactNode> = {
   public: <Globe className="h-3 w-3" />,
   users: <Users className="h-3 w-3" />,
@@ -56,6 +80,7 @@ export function CatalogCard({ entry }: CatalogCardProps) {
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const visibilityIcon = VISIBILITY_ICONS[entry.visibility] ?? null
   const quickInstall = useQuickInstall(entry.bundle_id)
+  const skillNameList = skillNames(entry.skills)
 
   const applyUpdate = useMutation({
     mutationFn: () =>
@@ -174,6 +199,20 @@ export function CatalogCard({ entry }: CatalogCardProps) {
             </Badge>
           ) : null}
         </div>
+        {/* "Does this bundle come with skills?" — one muted line rather than a
+            badge per skill: the grid is `auto-rows-fr`, so the tallest card
+            sets the height of every card in it. Capped at three names, so no
+            amount of data can change the card's shape. */}
+        {skillNameList.length > 0 && (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground truncate">
+            <GraduationCap className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              {skillNameList.slice(0, MAX_SKILL_NAMES).join(" · ")}
+              {skillNameList.length > MAX_SKILL_NAMES &&
+                ` +${skillNameList.length - MAX_SKILL_NAMES} more`}
+            </span>
+          </p>
+        )}
         <code
           className="block font-mono text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded truncate"
           title={entry.bundle_id}

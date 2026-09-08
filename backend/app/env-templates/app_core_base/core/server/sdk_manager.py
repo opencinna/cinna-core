@@ -22,10 +22,12 @@ to dictionaries for backward compatibility with the backend streaming protocol.
 """
 
 import os
+import asyncio
 import logging
 import contextvars
 from typing import AsyncIterator, Optional
 
+from . import skills_projection
 from .adapters import (
     AdapterRegistry,
     SDKConfig,
@@ -76,6 +78,22 @@ class SDKManager:
     def __init__(self):
         """Initialize the SDK Manager."""
         self._adapters: dict[str, BaseSDKAdapter] = {}
+
+        # Last skills-projection identity each MODE has been told about.
+        #
+        # Per mode, not global: building and conversation run separate engine
+        # processes with separate memoized skill lists, so a skill projected
+        # during a building message must still register as a change for the
+        # conversation adapter. A single shared flag would lose exactly the
+        # feature's headline flow — build a skill in building mode, use it in
+        # conversation.
+        #
+        # The identity, not the tree hash: it also moves when a previously
+        # failed skill finally lands (which the hash cannot see), and it holds
+        # still while a durable failure keeps retrying (which a "did this run
+        # report errors" gate could not, and which would otherwise dispose the
+        # OpenCode instance on every single turn).
+        self._skills_state_by_mode: dict[str, str] = {}
 
         # Log available adapters
         available = AdapterRegistry.list_adapters()
@@ -182,6 +200,35 @@ class SDKManager:
                 f"(type={adapter.ADAPTER_TYPE}) for mode '{mode}'"
             )
 
+            # Project the workspace's skills into the engine's skill root
+            # BEFORE the adapter runs, so this message already sees a skill the
+            # agent wrote during the previous one. Engine-agnostic and
+            # hash-short-circuited: unchanged trees cost one stat walk. Never
+            # raises — a projection failure degrades to "the model does not see
+            # the new skill", never to a failed turn.
+            #
+            # Off the event loop: the fast path is a stat walk, but a real
+            # re-projection copies up to the 16 MB skills budget, and this
+            # process also serves every other session's SSE stream.
+            projection = await asyncio.to_thread(
+                skills_projection.refresh, adapter.workspace_dir
+            )
+
+            # A mode is "up to date" only once IT has been told about an
+            # identity. An empty identity means the projection could not
+            # determine anything at all — say nothing changed rather than
+            # asking the engine to rebuild on no evidence.
+            skills_changed = bool(projection.identity) and (
+                projection.identity != self._skills_state_by_mode.get(mode)
+            )
+            if projection.identity:
+                self._skills_state_by_mode[mode] = projection.identity
+            # Latched before the adapter runs, so an engine that cannot act on
+            # the signal (an older OpenCode with no /instance/dispose) is not
+            # told again for the life of this process. That is the documented
+            # degradation — the skills appear at the next server start, and
+            # /rebuild-env is the user-facing fix — not a silent loss.
+
             # Stream events from adapter and convert to dicts
             async for event in adapter.send_message_stream(
                 message=message,
@@ -190,6 +237,7 @@ class SDKManager:
                 system_prompt=system_prompt,
                 mode=mode,
                 session_state=session_state,
+                skills_changed=skills_changed,
             ):
                 # Convert SDKEvent to dict for backward compatibility
                 yield self._event_to_dict(event)
@@ -224,6 +272,35 @@ class SDKManager:
             Dictionary representation
         """
         return event.to_dict()
+
+    async def stop_opencode_servers(self) -> list[str]:
+        """Terminate every running OpenCode server so it relaunches lazily.
+
+        OpenCode reads its plugin-derived config (MCP servers, plugin ``skills``
+        paths, slash commands) once, at ``opencode serve`` start. A plugin
+        install/uninstall/toggle therefore has no effect until the server
+        restarts — so ``routes.install_plugins`` calls this after a successful
+        manifest install and the next message pays the ~30s relaunch once,
+        instead of the agent silently running with the previous plugin set.
+
+        Claude Code adapters are untouched: they spawn a fresh CLI per message
+        and pick up plugin changes on their own.
+
+        Returns the modes whose server was actually stopped.
+        """
+        stopped: list[str] = []
+        for mode, adapter in self._adapters.items():
+            stop = getattr(adapter, "stop", None)
+            if stop is None:
+                continue
+            try:
+                if await stop():
+                    stopped.append(mode)
+            except Exception as e:  # noqa: BLE001 — never break plugin install
+                logger.warning(f"Failed to stop {mode} adapter server: {e}")
+        if stopped:
+            logger.info(f"Stopped OpenCode server(s) for mode(s): {stopped}")
+        return stopped
 
     def get_adapter_info(self, mode: str) -> dict:
         """

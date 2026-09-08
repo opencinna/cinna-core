@@ -126,6 +126,9 @@ def _revision_to_public(
         required_credential_specs=revision.required_credential_specs or [],
         schedules=revision.schedules or [],
         plugin_specs=revision.plugin_specs or [],
+        # No ``or []``: ``None`` means "this revision predates agent skills",
+        # which is not the same claim as "it ships none".
+        skills_summary=revision.skills_summary,
         published_by_user_id=revision.published_by_user_id,
         published_at=revision.published_at,
         release_notes=revision.release_notes,

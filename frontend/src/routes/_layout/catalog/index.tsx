@@ -4,8 +4,12 @@ import { Store } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
 import { CatalogService } from "@/client"
-import { CatalogFilters, type CatalogFilter } from "@/components/Catalog/CatalogFilters"
+import {
+  type CatalogFilter,
+  CatalogFilters,
+} from "@/components/Catalog/CatalogFilters"
 import { CatalogGrid } from "@/components/Catalog/CatalogGrid"
+import { CatalogSectionTabs } from "@/components/Catalog/CatalogSectionTabs"
 import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
 import { APP_NAME } from "@/utils"
@@ -70,6 +74,9 @@ function Catalog() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto space-y-6">
       <div className="mx-auto max-w-7xl space-y-4">
+        {/* One Catalog destination, two sections — the skills catalog is
+            reachable from here rather than from a second sidebar entry. */}
+        <CatalogSectionTabs />
         <CatalogFilters value={filter} onChange={setFilter} />
 
         {filtered.length === 0 ? (

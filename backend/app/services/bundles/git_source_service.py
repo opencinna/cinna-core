@@ -2267,12 +2267,18 @@ class GitSourceService:
             GitSourceService._next_revision_number(session, bundle.id)
             if bundle else 1
         )
+        # ``cinna.agent.json`` and ``manifest.json`` are the same schema by
+        # contract, so the derived skills summary is built here from the same
+        # live workspace ``PublishService`` reads — a git push and a publish of
+        # the same agent must not describe different skills.
+        env_workspace_root = Path(settings.ENV_INSTANCES_DIR) / str(env.id)
         return RevisionFormat.build_manifest(
             install=install,
             env=env,
             cred_specs=PublishService._collect_credential_specs(session, install),
             schedule_specs=PublishService._collect_schedule_specs(session, install),
             plugin_specs=PublishService._collect_plugin_specs(session, install),
+            skills_summary=PublishService._collect_skills_summary(env_workspace_root),
             revision_number=rev_number,
             version=version,
             release_notes=release_notes,

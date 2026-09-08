@@ -40,6 +40,7 @@ from .models import (
     PluginsSettingsResponse,
     McpServerManifest,
     McpServersResponse,
+    SkillsIndexResponse,
     CommandStreamRequest,
 )
 from .sdk_manager import sdk_manager
@@ -828,6 +829,41 @@ async def update_credentials(credentials: CredentialsUpdate):
         )
 
 
+def _active_plugin_signature() -> list[tuple]:
+    """Identity of the per-mode active plugin set, for change detection.
+
+    Deliberately excludes ``allowed_tools`` (which shares ``settings.json`` but
+    has no bearing on the OpenCode config) so approving a tool is not mistaken
+    for a plugin change.
+    """
+    # The whole body is guarded, not just the read: settings.json lives in the
+    # agent-writable workspace, so a hand-edited entry (a null `path`, say)
+    # must not 500 a plugin install through a helper whose only job is deciding
+    # whether to restart a server.
+    try:
+        active = agent_env_service.get_plugins_settings().get("active_plugins") or []
+        return sorted(
+            (
+                str(p.get("marketplace_name") or ""),
+                str(p.get("plugin_name") or ""),
+                str(p.get("path") or ""),
+                bool(p.get("conversation_mode")),
+                bool(p.get("building_mode")),
+            )
+            for p in active
+            if isinstance(p, dict)
+        )
+    except Exception as e:  # noqa: BLE001 — a signature is never worth failing on
+        # Logged, because the consequence is a restart that silently does not
+        # happen. An unreadable settings.json also means the next server start
+        # would see nothing either, so skipping the restart loses nothing — but
+        # the decision should still leave a trace.
+        logger.warning(
+            "Could not read plugin settings for change detection: %s", e
+        )
+        return []
+
+
 @router.post(
     "/config/plugins",
     dependencies=[Depends(verify_auth_token)],
@@ -851,6 +887,14 @@ async def install_plugins(manifest: PluginManifest) -> PluginsInstallResponse:
     - Environment start / rebuild (re-ensure from the persisted manifest)
     - Plugin install / uninstall / toggle / upgrade
     """
+    # Snapshot the per-mode active-plugin set so we can tell a real plugin
+    # change from a no-op re-ensure. This endpoint is NOT only the plugin
+    # mutation path: env start and every tool approval reach it through
+    # `adapter.set_plugins`, and the container routine is idempotent, so the
+    # result statuses alone would report "nothing happened" for an uninstall or
+    # a per-mode toggle and "something happened" for neither.
+    plugins_before = _active_plugin_signature()
+
     try:
         results = agent_env_service.install_plugins(manifest.model_dump())
     except Exception as e:
@@ -865,6 +909,21 @@ async def install_plugins(manifest: PluginManifest) -> PluginsInstallResponse:
     installed = sum(1 for r in results if r.get("status") == "installed")
     failed = sum(1 for r in results if r.get("status") == "failed")
     skipped = sum(1 for r in results if r.get("status") == "skipped")
+
+    # OpenCode reads its plugin-derived config (MCP servers, plugin `skills`
+    # paths, slash commands) once, when `opencode serve` starts. Stop the
+    # per-mode servers so the next message relaunches with what we just
+    # installed; without this a freshly installed plugin's skills stay invisible
+    # until the container restarts. Claude Code needs nothing — it spawns a
+    # fresh CLI per message.
+    #
+    # Gated, because a restart costs ~30s AND kills any stream in flight: only
+    # when files were fetched (install / upgrade / a failure that may have left
+    # a partial tree) or the active set itself moved (uninstall, per-mode
+    # toggle). A tool approval or an env-start re-ensure changes neither and
+    # must leave a live server alone.
+    if installed or failed or _active_plugin_signature() != plugins_before:
+        await sdk_manager.stop_opencode_servers()
 
     return PluginsInstallResponse(
         status="ok",
@@ -906,6 +965,23 @@ async def get_plugins_settings() -> PluginsSettingsResponse:
     ]
 
     return PluginsSettingsResponse(active_plugins=active_plugins)
+
+
+@router.get("/config/skills", dependencies=[Depends(verify_auth_token)])
+async def get_skills_index() -> SkillsIndexResponse:
+    """Return the agent's skill index — local ``skills/`` plus plugin skills.
+
+    The engine builds its OWN index from the projection (D5); this endpoint
+    exists so the platform can show, cache and command over the same set. The
+    ``hash`` is the workspace ``skills/`` tree hash, which is what the backend
+    cache short-circuits on.
+
+    Never 500s on a malformed skill: an unparseable folder comes back as a row
+    carrying an ``error`` code, because a card that renders the problem is more
+    useful than an endpoint that disappears on it.
+    """
+    index = agent_env_service.build_skills_index()
+    return SkillsIndexResponse(**index)
 
 
 @router.post(

@@ -23,6 +23,7 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.users.user import User
 from app.models.plugins.llm_plugin import (
@@ -256,15 +257,19 @@ class LLMPluginService:
     ) -> Agent:
         """Verify an agent exists and the caller may access it, or raise.
 
-        Owner OR superuser. Raises:
-            HTTPException(404): agent not found.
-            HTTPException(403): caller is neither owner nor superuser.
+        Owner OR superuser. A caller who is neither gets the same 404 as a
+        caller naming an id that does not exist: agent ids are guessable and
+        every verb behind this helper is a write, so a 403 here would confirm
+        that somebody else's agent exists. This is
+        :meth:`AgentService.assert_can_build`'s no-existence-leak rule, which
+        these routes reach only after this check, applied at the check itself.
+
+        Raises:
+            HTTPException(404): agent not found, or not the caller's.
         """
         agent = session.get(Agent, agent_id)
-        if not agent:
+        if not agent or (agent.owner_id != user.id and not user.is_superuser):
             raise HTTPException(status_code=404, detail="Agent not found")
-        if agent.owner_id != user.id and not user.is_superuser:
-            raise HTTPException(status_code=403, detail="Not enough permissions")
         return agent
 
     @staticmethod
@@ -871,8 +876,10 @@ class LLMPluginService:
 
         result = []
         for link in links:
-            is_bundle = link.source == PluginSource.bundle
-            plugin = None if is_bundle else link.plugin
+            # Only marketplace links resolve a live plugin row; every other
+            # source is snapshot-identified.
+            is_marketplace = link.source == PluginSource.marketplace
+            plugin = link.plugin if is_marketplace else None
             marketplace = plugin.marketplace if plugin else None
 
             # Check for updates by comparing commit hashes. Bundle plugins never
@@ -898,6 +905,41 @@ class LLMPluginService:
             display_mkt = (
                 marketplace.name if marketplace else link.snapshot_marketplace_name
             )
+            skill_package_id = None
+            latest_version = plugin.version if plugin else None
+
+            # Catalog links have no marketplace row at all, so the fields above
+            # would leave the row nameless. Project them from the live package
+            # (its display name and blurb, which the publisher can edit without
+            # re-publishing) and take the update signal from the package's
+            # latest revision rather than from a commit hash it does not have.
+            if link.source == PluginSource.catalog:
+                from app.models.skills.skill_package_revision import (
+                    SkillPackageRevision,
+                )
+                from app.services.skills.skill_catalog_service import (
+                    SkillCatalogService,
+                )
+
+                package = SkillCatalogService.package_of_link(session, link)
+                if package is not None:
+                    skill_package_id = package.id
+                    display_name = package.display_name or package.name
+                    display_desc = package.description or display_desc
+                    has_update = (
+                        package.latest_revision_id is not None
+                        and package.latest_revision_id
+                        != link.skill_package_revision_id
+                    )
+                    if package.latest_revision_id:
+                        latest = session.get(
+                            SkillPackageRevision, package.latest_revision_id
+                        )
+                        latest_version = latest.version if latest else None
+                # "skill" rather than the package's own (absent) category: the
+                # tab groups rows by what they are, and a catalog row is always
+                # one skill.
+                display_cat = display_cat or "skill"
 
             result.append(AgentPluginLinkWithUpdateInfo(
                 id=link.id,
@@ -907,6 +949,7 @@ class LLMPluginService:
                 snapshot_marketplace_name=link.snapshot_marketplace_name,
                 snapshot_plugin_name=link.snapshot_plugin_name,
                 snapshot_config=link.snapshot_config,
+                skill_package_revision_id=link.skill_package_revision_id,
                 installed_version=link.installed_version,
                 installed_commit_hash=link.installed_commit_hash,
                 conversation_mode=link.conversation_mode,
@@ -915,12 +958,13 @@ class LLMPluginService:
                 created_at=link.created_at,
                 updated_at=link.updated_at,
                 has_update=has_update,
-                latest_version=plugin.version if plugin else None,
+                latest_version=latest_version,
                 latest_commit_hash=plugin.commit_hash if plugin else None,
                 plugin_name=display_name,
                 plugin_description=display_desc,
                 plugin_category=display_cat,
                 marketplace_name=display_mkt,
+                skill_package_id=skill_package_id,
             ))
 
         return result
@@ -995,6 +1039,22 @@ class LLMPluginService:
         if not link:
             return None
 
+        # Catalog links upgrade by re-pinning to the package's latest revision;
+        # they have no marketplace commit to chase. Delegating keeps the one
+        # upgrade route working for every source without the route knowing
+        # which it is holding.
+        if link.source == PluginSource.catalog:
+            from app.services.skills.skill_catalog_service import (
+                SkillCatalogService,
+            )
+
+            # ``SkillCatalogError`` is allowed to propagate: the route maps its
+            # code to a status. Collapsing it to None here would answer "Plugin
+            # link not found" for a link that plainly exists — the caller needs
+            # to hear that the catalog entry behind it is gone, which is a
+            # different problem with a different fix.
+            return SkillCatalogService.upgrade_link(session, link)
+
         plugin = link.plugin
         if not plugin:
             return None
@@ -1039,6 +1099,12 @@ class LLMPluginService:
                 subdir: ""} (branch as fallback ref)
           - ``source=bundle``: ``git=null``; identity from the link's snapshot
             fields (files are seeded from the bundle snapshot, no fetch).
+          - ``source=catalog``: ``git=null`` + ``archive`` coordinates (URL of
+            the pinned skill revision's tarball, its sha256, and the revision
+            id as the idempotency ref). An orphaned link — its revision or
+            package deleted — still emits an entry with ``archive=null`` so the
+            container reports ``catalog_revision_missing`` as a per-plugin
+            failure rather than the skill silently vanishing (§9).
 
         Args:
             session: Database session.
@@ -1075,6 +1141,10 @@ class LLMPluginService:
                     "version": link.installed_version,
                     "commit_hash": link.installed_commit_hash,
                 }
+            elif link.source == PluginSource.catalog:
+                entry = LLMPluginService._build_catalog_entry(session, link)
+                if entry is None:
+                    continue
             else:
                 # Marketplace-sourced: resolve git coordinates from DB rows.
                 plugin = link.plugin
@@ -1115,6 +1185,65 @@ class LLMPluginService:
         manifest: dict = {"plugins": entries}
         manifest["allowed_tools"] = allowed_tools
         return manifest
+
+    @staticmethod
+    def _build_catalog_entry(session: Session, link: AgentPluginLink) -> dict | None:
+        """Manifest entry for a ``source=catalog`` link, or None if unusable.
+
+        The archive URL is built from ``AGENT_ENV_BACKEND_URL`` — the
+        container-visible address of this backend, the same one written into
+        every agent's ``.env`` as ``BACKEND_URL`` — because the consumer of
+        this URL is the container, not a browser.
+        """
+        from app.models.skills.skill_package import CATALOG_MARKETPLACE_NAME
+        from app.models.skills.skill_package_revision import SkillPackageRevision
+        from app.services.skills.skill_catalog_service import SkillCatalogService
+
+        plugin_name = link.snapshot_plugin_name
+        if not plugin_name:
+            logger.warning(
+                f"Skipping catalog plugin link {link.id} with no package name"
+            )
+            return None
+
+        revision = (
+            session.get(SkillPackageRevision, link.skill_package_revision_id)
+            if link.skill_package_revision_id
+            else None
+        )
+
+        archive: dict | None = None
+        if revision is not None:
+            sha256 = SkillCatalogService.archive_sha256(revision)
+            if sha256:
+                base = (settings.AGENT_ENV_BACKEND_URL or "").rstrip("/")
+                archive = {
+                    "url": (
+                        f"{base}/api/v1/skills/packages/{revision.package_id}"
+                        f"/revisions/{revision.revision_number}/archive"
+                    ),
+                    "sha256": sha256,
+                    # The idempotency marker: the container skips the download
+                    # when the on-disk `.cinna_plugin_ref` already names this
+                    # revision. A revision is immutable, so unlike a git branch
+                    # the marker can be trusted without re-fetching.
+                    "ref": str(revision.id),
+                    "description": (link.snapshot_config or {}).get("description"),
+                }
+
+        return {
+            "marketplace_name": link.snapshot_marketplace_name
+            or CATALOG_MARKETPLACE_NAME,
+            "plugin_name": plugin_name,
+            "source": PluginSource.catalog.value,
+            "git": None,
+            "archive": archive,
+            "conversation_mode": link.conversation_mode,
+            "building_mode": link.building_mode,
+            "disabled": link.disabled,
+            "version": link.installed_version,
+            "commit_hash": None,
+        }
 
     @staticmethod
     def _resolve_plugin_git_coords(
@@ -1221,6 +1350,7 @@ class LLMPluginService:
             snapshot_marketplace_name=link.snapshot_marketplace_name,
             snapshot_plugin_name=link.snapshot_plugin_name,
             snapshot_config=link.snapshot_config,
+            skill_package_revision_id=link.skill_package_revision_id,
             installed_version=link.installed_version,
             installed_commit_hash=link.installed_commit_hash,
             conversation_mode=link.conversation_mode,

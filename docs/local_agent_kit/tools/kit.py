@@ -2847,11 +2847,24 @@ def _rungs_present(agent_dir: Path, manifest: dict) -> list[str]:
         if names:
             rungs.append("cli_commands")
 
+    # The rung is "Knowledge & local skills" and, since contract 1.1.0, it is
+    # satisfiable two ways: domain docs under `knowledge/`, or capabilities under
+    # `skills/`. Either alone adopts it. Checking only `knowledge/` would tell an
+    # author who went all-in on skills that they had not climbed a rung they had,
+    # and the ladder check would then send them back to the guide they followed.
+    # `README.md` is excluded from both: the scaffold ships one in each folder, so
+    # counting it would report every fresh agent as having adopted the rung.
     knowledge_dir = agent_dir / "knowledge"
-    if knowledge_dir.is_dir():
-        knowledge_files = [p for p in iter_files(knowledge_dir) if p.name != "README.md"]
-        if knowledge_files:
-            rungs.append("knowledge")
+    skills_dir = agent_dir / "skills"
+    authored = [
+        path
+        for directory in (knowledge_dir, skills_dir)
+        if directory.is_dir()
+        for path in iter_files(directory)
+        if path.name != "README.md"
+    ]
+    if authored:
+        rungs.append("knowledge")
 
     if manifest.get("handovers"):
         rungs.append("multi_agent")

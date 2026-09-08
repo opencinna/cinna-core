@@ -45,6 +45,7 @@ expensive.
 |--------|-------|----------|-------------------------|
 | `scripts/` | author | Python that does the work | replaced on update |
 | `docs/` | author | prompts, `CLI_COMMANDS.yaml`, domain docs | replaced on update |
+| `skills/` | author | one folder per capability, `skills/<name>/SKILL.md` | replaced on update |
 | `knowledge/` | author | static reference material, read-only at runtime | replaced on update |
 | `files/` | author | **static shipped assets**: lookup tables, fixtures, sample data | replaced on update |
 | `config/` | author | user-tunable parameters | replaced on update |

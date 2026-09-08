@@ -45,8 +45,8 @@ sentence properly in step 4 either way; starting from a true one is cheaper than
 starting from a placeholder you have to notice.
 
 Look at what you got before writing anything: `AGENTS.md`, `README.md`, `Makefile`,
-`cinna-agent.json`, `docs/`, `scripts/`, `config/`, `credentials/`, `knowledge/`,
-`files/`, `app-data/`. Each folder has a defined meaning — see
+`cinna-agent.json`, `docs/`, `skills/`, `scripts/`, `config/`, `credentials/`,
+`knowledge/`, `files/`, `app-data/`. Each folder has a defined meaning — see
 `03-scripts-and-data.md`. Do not invent new top-level folders.
 
 ## 3. The build loop

@@ -70,10 +70,18 @@ def _resolve_link_identity(
     """Resolve (marketplace_name, plugin_name, config) for a publisher link.
 
     Marketplace links resolve from the live ``plugin`` + ``marketplace`` rows;
-    bundle links use the frozen snapshot fields. The frozen ``config`` is the
-    plugin's ``plugin.json`` (used for consumer-side UI display).
+    every other source is snapshot-identified and uses the frozen fields. The
+    frozen ``config`` is the plugin's ``plugin.json`` (used for consumer-side
+    UI display).
+
+    The test is "is this marketplace?", not "is this bundle?", deliberately: a
+    ``catalog`` link also carries ``plugin_id=NULL``, so an is-bundle test would
+    send it down the marketplace branch, resolve to ``(None, None, None)``, and
+    make ``_ensure_publisher_plugin_files`` hard-block bundle publish for every
+    agent that has a catalog skill installed. Consumers receive catalog skills
+    as ordinary bundle plugins (plan §5.3, "Bundle interplay").
     """
-    if link.source == PluginSource.bundle:
+    if link.source != PluginSource.marketplace:
         return (
             link.snapshot_marketplace_name,
             link.snapshot_plugin_name,
