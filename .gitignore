@@ -46,3 +46,8 @@ docs/local_agent_kit/**/*.pyc
 
 # UI review screenshots (frontend/scripts/ui-shot.mjs)
 frontend/.ui-shots/
+
+# TanStack Router's dev-server scratch dir (frontend/.tanstack/tmp) — a build
+# artifact of `npm run dev`, unlike the generated routeTree.gen.ts, which IS
+# committed
+frontend/.tanstack/
