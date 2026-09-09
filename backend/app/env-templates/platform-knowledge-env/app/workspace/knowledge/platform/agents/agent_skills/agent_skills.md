@@ -45,10 +45,16 @@ untouched:
 | `description` | required; 1–1024 chars after trim. The only text the model sees before it decides to open the skill |
 
 Optional standard keys (`allowed-tools`, `argument-hint`, `model`, `license`, …)
-are preserved verbatim. Exactly two of them are *interpreted* by the platform:
-`user-invocable: false` hides the skill from the slash-command popup, and
+are preserved verbatim. Three of them are *interpreted* by the platform:
+`user-invocable: false` hides the skill from the slash-command popup,
 `disable-model-invocation: true` records that the model may not reach for it
-unprompted.
+unprompted, and **`version`** is read into `SkillEntry.version` — the only
+optional key the platform also **writes** (see "Versions live in the header"
+below).
+
+| Field | Rule |
+|-------|------|
+| `version` | optional; free text on **one line**, at most 64 characters. Nothing validates its *shape* and nothing refuses a skill without one, but a newline or any other control character is refused — the catalog writes this key back into the block, where a newline would inject top-level keys. A header longer than 64 is truncated on read; a request body longer than 64 is a 422. An unquoted `1.0` arrives as a float and is stringified, so the header and the row say the same thing |
 
 ### Three sources, one index
 
@@ -119,9 +125,9 @@ both places is two sources of truth.
 
 ### 2. Seeing what an agent carries
 
-- **"Plugins and skills" card** — agent page › **Addons** tab. Rows show name, a
-  status dot, source flags, description behind a row-info affordance, and a
-  Details action that opens the `SKILL.md` viewer. Capped at five rows with a
+- **"Plugins and skills" card** — agent page › **Addons** tab. Rows show name,
+  version and author badges and a status dot; clicking the row opens Details
+  with the `SKILL.md` viewer. Capped at five rows with a
   "Show all (N)" sheet; sorted **errors first, then warnings, then
   alphabetically**, so a row that needs a decision is always in the preview. The
   card is rendered for consumers of a foreign install too — knowing what an
@@ -144,8 +150,10 @@ both places is two sources of truth.
 
 ### 3. Reading a SKILL.md
 
-The card's row action opens a dialog with the raw `SKILL.md` — the text the model
-reads. The path comes from the cached index, never from the requested name, so a
+Clicking the card's row opens a dialog with the `SKILL.md` rendered as markdown
+(frontmatter split off). A plugin that
+ships several skills lists them as rows, each opening its own dialog. The path
+comes from the cached index, never from the requested name, so a
 plugin's skill resolves inside the plugin folder rather than the agent's own, and
 the endpoint can never be used as a general workspace file reader.
 
@@ -294,12 +302,62 @@ The `skills_summary` is derived from the **live publisher workspace before any
 disk write** — the same tree the snapshot is about to copy — so the hard block
 and the summary provably describe the same bytes.
 
+### Versions live in the header, and publishing is what writes them
+
+A skill's version is a line in its own `SKILL.md`, not a field of a database row
+a reader of the folder cannot see. The publisher is never asked to invent one:
+
+- **Deriving it.** One sentence: *the header's version, unless it has already
+  been published — then the next one after the newest release.* So a hand-written
+  `2.0.0` is honoured exactly once and then continued from; a skill with no
+  version anywhere starts at `1.0.0`. The successor is the last run of digits
+  incremented (`1.0.0`→`1.0.1`, `1.2`→`1.3`, `v3`→`v4`), because the field is
+  free text and a strict semver parser would refuse most of those. A release
+  with no digits at all (`2.0.0-beta`) gets `.1` appended rather than restarting
+  the series — restarting at `1.0.0` would publish a *next* revision numbered
+  below its own predecessor and stamp that into the author's header. `1.0.0` is
+  reached only when there is no release to continue from. A version explicitly
+  named in the publish body always wins and is never de-duplicated — two
+  revisions may legitimately carry one version — but it must be a single line:
+  a newline is refused at the request boundary, because this value is written
+  into a frontmatter block where it would inject top-level keys.
+- **Writing it back.** The resolved version is written into
+  `skills/<name>/SKILL.md` on the publisher's workspace **before** the snapshot
+  is taken, so the published bytes carry their own version and the next publish
+  reads it back. It is a surgical one-line edit — the block is never
+  re-serialised from the parsed mapping, which would rewrite the author's
+  quoting and drop their comments. A write that cannot happen (a read-only
+  workspace, a file with no fence) is logged and **not** fatal: the revision
+  still carries the version, and its *stored frontmatter* then deliberately
+  omits it, so the row never claims a version the snapshot does not have.
+- **Showing it.** The index the addon row reads is built inside the container,
+  and `app/core/` is copied out of the template at environment *creation* — so
+  an environment made before skills carried a version would report none forever.
+  The host backfills it for local skills from the same workspace file the
+  publish reads, and never overrides a version the container did report — but
+  only on an index *fetch*, so on those environments the version appears after a
+  Refresh, a start sweep or a publish, never on a first page load. A row with no
+  version renders no badge at all, exactly like every other absent fact; the
+  detail dialog says "No version in SKILL.md" in words, and the Share dialog
+  fills one in before the publisher has to think about it.
+
 ### Catalog identity and visibility
 
 - `package_id` is reverse-DNS, unique on the instance, and **immutable** once
   published: a re-publish naming a different id is refused (`package_id_immutable`),
   never silently ignored, because every install and every container manifest
   references it.
+- The **derived** id is `<reversed FRONTEND_HOST>.skill.<skill name>` — the same
+  reversed-host prefix a bundle id gets, with a fixed `skill` segment as the
+  thing that says which family it belongs to. It carries **no publisher slug**,
+  because an id gets pasted into READMEs and the common case is the only person
+  on the instance with a skill by that name. When it *is* taken, the publisher's
+  own 8-hex slug is appended (then a counter) rather than the publish being
+  refused with `package_id_taken` — a refusal whose only fix would be "invent a
+  reverse-DNS name", asked of somebody who did nothing wrong. `GET
+  /agents/{id}/skills/{name}/publish-preview` returns the id that will be used
+  and whether it was disambiguated, so the Share dialog shows it before the
+  press rather than after.
 - A skill `name` is unique **per publisher**, not globally. Two people may both
   publish `pdf-report`; `package_id` disambiguates them. But one agent has a
   single `plugins/cinna-skills/<name>/` directory, so two publishers' same-named
@@ -324,13 +382,30 @@ and the summary provably describe the same bytes.
 - The package **description** follows the skill's frontmatter until a publisher
   edits it in the catalog; after that a re-publish leaves the edited blurb alone.
 
-### Install counts are computed, excluding the publisher
+### Install counts are computed, per person, excluding the publisher
 
 There is no `install_count` column. An install is an `AgentPluginLink` row that
 vanishes with its agent through `ON DELETE CASCADE`, which a stored counter
 cannot observe — it would drift upward forever. The count is derived at
-projection time and excludes the publisher's own agents, so dogfooding does not
-inflate it (the same rule the bundle catalog uses).
+projection time, and it counts two things away:
+
+- **The publisher's own agents**, entirely, so dogfooding does not inflate it
+  (the same rule the bundle catalog uses).
+- **Repeats by one person.** It is one per *user*, however many of their agents
+  carry the skill. The question the catalog number answers is "how many other
+  people adopted this", and one enthusiast with six agents is one adopter, not
+  six — counting agents let a single consumer outvote a dozen real ones.
+
+Which makes `Catalog installs 0` the correct answer for a publisher who has just
+put their own skill into three of their own agents — and a baffling one on its
+own. The same payload already carries `installed_in_agent_ids` ("which of *your*
+agents have it", viewer-scoped and unaffected by the per-person rule, because it
+answers a different question), so both catalog surfaces show it: the grid card
+says "Used in N of my agents", and the package card carries **Catalog installs**
+and **Used in my agents** as two facts, plus — for the publisher only, and only
+when the publisher has installs of their own — the sentence that reconciles
+them. A number
+whose definition the reader cannot see is not a fact, it is a contradiction.
 
 ### Trust boundary
 

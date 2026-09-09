@@ -56,7 +56,7 @@ Each file below documents one API domain.
 | Server Channels | [server_channels.md](./server_channels.md) | 16 |
 | Server Config | [server_config.md](./server_config.md) | 5 |
 | Sessions | [sessions.md](./sessions.md) | 9 |
-| Skills | [skills.md](./skills.md) | 11 |
+| Skills | [skills.md](./skills.md) | 12 |
 | Ssh Keys | [ssh_keys.md](./ssh_keys.md) | 6 |
 | Task Triggers | [task_triggers.md](./task_triggers.md) | 16 |
 | Tasks | [tasks.md](./tasks.md) | 25 |

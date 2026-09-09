@@ -97,6 +97,17 @@ Auto-generated from OpenAPI spec. Tag: `skills`
 
 ---
 
+## GET `/api/v1/agents/{agent_id}/skills/{name}/publish-preview`
+**Preview Agent Skill Publish**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `name`: string
+
+**Response:** `SkillPublishPreview`
+
+---
+
 ## POST `/api/v1/agents/{agent_id}/skills/{name}/publish`
 **Publish Agent Skill**
 

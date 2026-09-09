@@ -230,6 +230,18 @@ Prepare the folder before either:
   verdict. A broken skill is refused by the publish call, with `skill_invalid`
   naming the rule it broke.
 
+- **A `version` in the frontmatter, or none — either is fine.** Publish never
+  refuses over a version. If `SKILL.md` carries a `version:` that has not been
+  published yet, that is the version published. If it has been (or there is no
+  line at all), publish takes the next one after the last release — `1.0.0` for
+  a skill that has never been published, `1.0.1` after `1.0.0` — and **writes it
+  back into `skills/<name>/SKILL.md` on the cloud workspace** before
+  snapshotting, so the published bytes carry their own version. The consequence
+  worth knowing: that write lands on the *cloud* copy, so your local folder
+  keeps whatever version it had until the next `cinna dev` sync brings the line
+  back down. Set the line by hand only when you want a particular number — a
+  `2.0.0` you write is honoured over the automatic `1.0.1`.
+
 Then publish it from the account:
 
 ```bash
