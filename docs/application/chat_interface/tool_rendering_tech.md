@@ -22,6 +22,7 @@
 - `frontend/src/components/Chat/KnowledgeQueryToolBlock.tsx` — Shows `query` + optional `article_ids` list
 - `frontend/src/components/Chat/AgentHandoverToolBlock.tsx` — Shows `target_agent_name`/`target_agent_id` + `task_message`, differentiates direct handover from inbox task
 - `frontend/src/components/Chat/UpdateSessionStateToolBlock.tsx` — Shows `state` (completed/needs_input/error) + `summary`
+- `frontend/src/components/Chat/SkillToolBlock.tsx` — "Loading skill *name*" for the `skill` tool, with the `GraduationCap` glyph the addons surfaces use for a skill, and Claude Code's optional `args` on a labelled second line. Compact variant inline, matching the Read/Edit compact rows. **Two input shapes, both confirmed:** OpenCode sends `{name}` (observed in recorded sessions) and Claude Code sends `{skill, args}` (its live tool schema); `ToolCallBlock` tries `name` → `skill` → `skill_name` and, finding none, falls through to the default renderer. The *tool name* needs no such fallback — `core/server/adapters/tool_name_registry.py` maps `Skill → skill`, so both engines arrive lowercase — but that registry maps **names only**, never input keys, which is why the key chain exists. Adding an engine, or an adapter that reshapes `tool_input`, is what would silently un-fire this block. See [agent_skills](../../agents/agent_skills/agent_skills.md)
 - `frontend/src/components/Chat/WebappActionBlock.tsx` — Shows action name + data payload (rendered in StreamEventRenderer, not ToolCallBlock dispatcher)
 
 ### Supporting Components
@@ -66,6 +67,8 @@ MessageBubble receives message
 3. Add condition before the default renderer: `if (toolNameLower === "newtool" && toolInput?.required_field) { return <NewToolBlock ... /> }`
 4. For compact mode support: check `isCompact` and return simplified JSX or a dedicated compact component
 5. Unrecognized tools always fall through to the default JSON renderer — the new block is purely an enhancement
+6. **Add the block to the list above.** This file is the only inventory of which tools have a renderer; a block that is not listed here is one nobody can find. (`SkillToolBlock` shipped without this step and was caught by a docs audit, not by anyone reading the code.)
+7. **Check the tool's input shape per engine.** `tool_name_registry.py` unifies tool *names* across Claude Code and OpenCode; it does **not** touch `tool_input`, so the same tool can arrive with different keys from each engine. Match the keys you have evidence for and let the rest fall through — never guess a key and let the block render a partial state
 
 ## Styling Conventions
 

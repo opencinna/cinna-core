@@ -1,19 +1,20 @@
-import { Wrench, FileText, FileEdit } from "lucide-react"
+import { FileEdit, FileText, Wrench } from "lucide-react"
+import { AgentHandoverToolBlock } from "./AgentHandoverToolBlock"
+import { ApplyPatchToolBlock } from "./ApplyPatchToolBlock"
+import { AskUserQuestionToolBlock } from "./AskUserQuestionToolBlock"
+import { BashToolBlock } from "./BashToolBlock"
+import { CompactBashBlock } from "./CompactBashBlock"
+import { EditToolBlock } from "./EditToolBlock"
+import { GlobToolBlock } from "./GlobToolBlock"
+import { KnowledgeQueryToolBlock } from "./KnowledgeQueryToolBlock"
 import { MarkdownRenderer } from "./MarkdownRenderer"
 import { ReadToolBlock } from "./ReadToolBlock"
+import { SkillToolBlock } from "./SkillToolBlock"
 import { TodoWriteToolBlock } from "./TodoWriteToolBlock"
-import { WriteToolBlock } from "./WriteToolBlock"
-import { EditToolBlock } from "./EditToolBlock"
-import { AskUserQuestionToolBlock } from "./AskUserQuestionToolBlock"
-import { GlobToolBlock } from "./GlobToolBlock"
-import { WebSearchToolBlock } from "./WebSearchToolBlock"
-import { BashToolBlock } from "./BashToolBlock"
-import { KnowledgeQueryToolBlock } from "./KnowledgeQueryToolBlock"
-import { AgentHandoverToolBlock } from "./AgentHandoverToolBlock"
 import { UpdateSessionStateToolBlock } from "./UpdateSessionStateToolBlock"
-import { CompactBashBlock } from "./CompactBashBlock"
 import { WebFetchToolBlock } from "./WebFetchToolBlock"
-import { ApplyPatchToolBlock } from "./ApplyPatchToolBlock"
+import { WebSearchToolBlock } from "./WebSearchToolBlock"
+import { WriteToolBlock } from "./WriteToolBlock"
 
 interface ToolCallBlockProps {
   toolName: string
@@ -21,7 +22,11 @@ interface ToolCallBlockProps {
   conversationModeUi?: string
 }
 
-export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detailed" }: ToolCallBlockProps) {
+export function ToolCallBlock({
+  toolName,
+  toolInput,
+  conversationModeUi = "detailed",
+}: ToolCallBlockProps) {
   const isCompact = conversationModeUi === "compact"
   const toolNameLower = toolName.toLowerCase()
 
@@ -39,11 +44,16 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
   const filePath = getInput("file_path")
   if (toolNameLower === "read" && filePath) {
     if (isCompact) {
-      const fileName = filePath.split('/').pop() || filePath
+      const fileName = filePath.split("/").pop() || filePath
       return (
         <div className="inline-flex items-center gap-2 text-sm text-muted-foreground/80 mb-1">
           <FileText className="h-3.5 w-3.5 flex-shrink-0" />
-          <span>Reading file <code className="font-mono bg-muted px-1 py-0.5 rounded text-xs">{fileName}</code></span>
+          <span>
+            Reading file{" "}
+            <code className="font-mono bg-muted px-1 py-0.5 rounded text-xs">
+              {fileName}
+            </code>
+          </span>
         </div>
       )
     }
@@ -59,7 +69,11 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
   // Special rendering for OpenCode apply_patch tool — render patch_text as a
   // proper diff instead of letting the default renderer markdown-flatten it.
   const patchText = getInput("patch_text")
-  if (toolNameLower === "apply_patch" && typeof patchText === "string" && patchText.trim()) {
+  if (
+    toolNameLower === "apply_patch" &&
+    typeof patchText === "string" &&
+    patchText.trim()
+  ) {
     return <ApplyPatchToolBlock patchText={patchText} isCompact={isCompact} />
   }
 
@@ -68,15 +82,27 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
   const newString = getInput("new_string")
   if (toolNameLower === "edit" && filePath && oldString && newString) {
     if (isCompact) {
-      const fileName = filePath.split('/').pop() || filePath
+      const fileName = filePath.split("/").pop() || filePath
       return (
         <div className="inline-flex items-center gap-2 text-sm text-muted-foreground/80 mb-1">
           <FileEdit className="h-3.5 w-3.5 flex-shrink-0" />
-          <span>Editing file <code className="font-mono bg-muted px-1 py-0.5 rounded text-xs">{fileName}</code> ...</span>
+          <span>
+            Editing file{" "}
+            <code className="font-mono bg-muted px-1 py-0.5 rounded text-xs">
+              {fileName}
+            </code>{" "}
+            ...
+          </span>
         </div>
       )
     }
-    return <EditToolBlock filePath={filePath} oldString={oldString} newString={newString} />
+    return (
+      <EditToolBlock
+        filePath={filePath}
+        oldString={oldString}
+        newString={newString}
+      />
+    )
   }
 
   // Special rendering for TodoWrite tool
@@ -87,7 +113,11 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
 
   // Special rendering for AskUserQuestion tool
   const questions = getInput("questions")
-  if (toolNameLower === "askuserquestion" && questions && Array.isArray(questions)) {
+  if (
+    toolNameLower === "askuserquestion" &&
+    questions &&
+    Array.isArray(questions)
+  ) {
     return <AskUserQuestionToolBlock questions={questions} />
   }
 
@@ -121,15 +151,22 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
   // Special rendering for Knowledge Query tool
   const knowledgeQuery = getInput("query")
   const articleIds = getInput("article_ids")
-  if (toolNameLower === "mcp__knowledge__query_integration_knowledge" && knowledgeQuery) {
-    return <KnowledgeQueryToolBlock query={knowledgeQuery} articleIds={articleIds} />
+  if (
+    toolNameLower === "mcp__knowledge__query_integration_knowledge" &&
+    knowledgeQuery
+  ) {
+    return (
+      <KnowledgeQueryToolBlock query={knowledgeQuery} articleIds={articleIds} />
+    )
   }
 
   // Special rendering for Create Agent Task tool (handles both direct handover and inbox task)
   const taskTitle = getInput("title")
   if (toolNameLower === "mcp__agent_task__create_task" && taskTitle) {
     const description = getInput("description")
-    const fullMessage = description ? `${taskTitle}\n\n${description}` : taskTitle
+    const fullMessage = description
+      ? `${taskTitle}\n\n${description}`
+      : taskTitle
     return (
       <AgentHandoverToolBlock
         targetAgentId={undefined}
@@ -142,7 +179,33 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
   // Special rendering for Update Status tool
   const sessionState = getInput("status")
   if (toolNameLower === "mcp__agent_task__update_status" && sessionState) {
-    return <UpdateSessionStateToolBlock state={sessionState} summary={getInput("reason")} />
+    return (
+      <UpdateSessionStateToolBlock
+        state={sessionState}
+        summary={getInput("reason")}
+      />
+    )
+  }
+
+  // Special rendering for the Skill tool. OpenCode sends {name}, Claude Code
+  // sends {skill, args} — accept either shape.
+  if (toolNameLower === "skill") {
+    const skillName =
+      getInput("name") || getInput("skill") || getInput("skill_name")
+    if (typeof skillName === "string" && skillName.trim()) {
+      const skillArgs = getInput("args")
+      return (
+        <SkillToolBlock
+          skillName={skillName}
+          args={
+            typeof skillArgs === "string" && skillArgs.trim()
+              ? skillArgs
+              : undefined
+          }
+          isCompact={isCompact}
+        />
+      )
+    }
   }
 
   // Default rendering for other tools
@@ -151,7 +214,10 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
       <Wrench className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="font-medium text-foreground/90 mb-1">
-          Using tool: <code className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">{toolName}</code>
+          Using tool:{" "}
+          <code className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">
+            {toolName}
+          </code>
         </div>
         {toolInput && Object.keys(toolInput).length > 0 && (
           <div className="space-y-1 text-xs">
@@ -159,15 +225,19 @@ export function ToolCallBlock({ toolName, toolInput, conversationModeUi = "detai
               <div key={key} className="flex flex-col gap-0.5">
                 <span className="font-semibold text-foreground/80">{key}:</span>
                 <div className="pl-3 text-foreground/70">
-                  {typeof value === 'string' ? (
+                  {typeof value === "string" ? (
                     // Check if the value contains markdown-like content (code blocks, lists, etc.)
-                    value.includes('\n') || value.includes('```') || value.includes('- ') ? (
+                    value.includes("\n") ||
+                    value.includes("```") ||
+                    value.includes("- ") ? (
                       <MarkdownRenderer
                         content={value}
                         className="prose prose-xs dark:prose-invert max-w-none"
                       />
                     ) : (
-                      <span className="whitespace-pre-wrap break-words">{value}</span>
+                      <span className="whitespace-pre-wrap break-words">
+                        {value}
+                      </span>
                     )
                   ) : (
                     <pre className="whitespace-pre-wrap break-words font-mono">
