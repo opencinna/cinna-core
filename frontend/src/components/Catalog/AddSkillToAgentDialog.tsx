@@ -47,12 +47,14 @@ interface AddSkillToAgentDialogProps {
  * installs differently from a plugin — when the backend makes it *one* plugin
  * link either way — would be a second vocabulary for one act.
  *
- * The agent picker is `Common/AgentSelectorList` — the body of
- * `AgentSelectorDialog`, extracted so a form can hold it. It is the picker the
- * other eight agent-choosing surfaces use, colour presets and all, which is
- * how an agent is recognised at a glance rather than read off a list of names.
- * Never `AgentSelectorDialog` itself: that is a `Dialog`, and a picker dialog
- * on top of a form dialog is exactly what §2 "Disclosure depth" forbids.
+ * The agent picker is `Common/AgentSelectorList` in `single` mode — a select
+ * trigger carrying the chosen agent's badge, over the same search-and-pick
+ * cloud the other eight agent-choosing surfaces use, colour presets and all,
+ * which is how an agent is recognised at a glance rather than read off a list
+ * of names. One field, one line, and the list of every agent stays out of a
+ * form whose next field is the real question. The picker is a `Popover`
+ * anchored to the field, never a second `Dialog` on top of this one (§2
+ * "Disclosure depth").
  */
 export function AddSkillToAgentDialog({
   packageId,
@@ -185,19 +187,16 @@ export function AddSkillToAgentDialog({
               </p>
             ) : (
               <AgentSelectorList
-                // One agent is being installed into, so the picker collapses
-                // to that agent's badge once it is chosen and the rest of the
-                // form gets the height back.
+                // One agent is being installed into, so the field is a trigger
+                // showing that agent's badge and the picking happens in a
+                // popover hanging off it — the rest of the form keeps the
+                // height, and this dialog never opens a second one.
                 mode="single"
                 agents={agentOptions}
                 selectedAgentId={agentId}
                 onSelect={setAgentId}
                 disabled={isPending}
                 allowDeselect
-                // Shorter than the dialog's cap: while it is open it shares the
-                // body with two mode checkboxes, an Advanced disclosure and a
-                // footer.
-                maxHeightClassName="max-h-[168px]"
               />
             )}
             {/* Plan §10: the existing plugin sync wakes a suspended target, so
