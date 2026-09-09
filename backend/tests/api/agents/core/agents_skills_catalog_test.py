@@ -28,6 +28,12 @@ Scenarios:
      together, they are additive across re-publishes, the publisher's own
      address is skipped rather than refused, and one bad address fails the
      whole publish without leaving a half-published package behind.
+  9. The multi-file surfaces: the file listing names every file the archive
+     carries (and only files — never a symlink), it is per-revision rather than
+     per-package, and the user-facing download serves the same deterministic
+     bytes the container's ``/archive`` route does. Both are gated by ordinary
+     catalog visibility, so a stranger gets the package's 404 rather than a
+     file list.
   8. ``grant_emails`` on a publish whose EFFECTIVE visibility is not ``users``
      is refused (409 ``grants_require_users_visibility``) before anything is
      written — including the omitted-visibility shape, where the effective
@@ -66,9 +72,11 @@ from tests.utils.skill_catalog import (
     add_skill_package_grant,
     catalog_ids,
     delist_skill_package,
+    download_revision,
     entry_for,
     error_code,
     get_revision_content,
+    get_revision_files,
     get_skill_package,
     grant_emails_of,
     list_skill_catalog,
@@ -1272,3 +1280,114 @@ def test_grant_emails_are_refused_unless_the_visibility_is_users(
     assert grant_emails_of(
         list_skill_package_grants(client, pub_headers, package_uuid)
     ) == {colleague["email"], second["email"], third["email"]}
+
+
+# ── Scenario 9: what a revision ships, and taking it away ─────────────────
+
+
+def test_revision_files_and_download_describe_the_same_tree(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    A skill is a folder, and the catalog has to say so:
+
+      1. The listing names every file of the published snapshot — ``SKILL.md``
+         plus whatever ``scripts/`` and ``references/`` the author shipped —
+         with POSIX paths relative to the skill folder, sizes, and the
+         executable bit the archive preserves.
+      2. It is per REVISION: revision 1 keeps describing the tree it was
+         published with after revision 2 adds a file.
+      3. The download serves that same tree — every listed path appears in the
+         tarball under ``skills/<name>/`` and nothing else does, so "4 files"
+         on the card and what a reader unpacks cannot disagree.
+      4. Both routes are gated by ordinary visibility: a stranger gets the
+         package's own 404, not a file list.
+    """
+    import io
+    import tarfile
+
+    _user, headers = make_developer(client, superuser_token_headers)
+    agent_id, env_id = make_agent_with_env(client, headers, "Files-Publisher")
+
+    skill_dir = write_skill(
+        env_id,
+        "multi-file",
+        description="Ships more than a SKILL.md.",
+        extra={
+            "scripts/run.sh": "#!/bin/sh\necho hi\n",
+            "references/api.md": "# API\n",
+            "assets/logo.txt": "logo\n",
+        },
+    )
+    (skill_dir / "scripts" / "run.sh").chmod(0o755)
+    # A symlink is not published content: the listing and the archive share one
+    # walk, and that walk drops links so a snapshot can never hand out a path
+    # pointing off its own tree.
+    (skill_dir / "references" / "outside.md").symlink_to(skill_dir / "SKILL.md")
+
+    publish_skill(client, headers, agent_id, "multi-file", version="1.0")
+    package_uuid = list_skill_catalog(client, headers)[0]["id"]
+
+    listing = get_revision_files(client, headers, package_uuid, 1)
+    paths = [f["path"] for f in listing["data"]]
+    assert paths == [
+        "SKILL.md",
+        "assets/logo.txt",
+        "references/api.md",
+        "scripts/run.sh",
+    ], "sorted by path, and the symlink is not content"
+    assert listing["count"] == 4
+    assert listing["truncated"] is False
+    assert listing["total_size_bytes"] == sum(f["size_bytes"] for f in listing["data"])
+    assert all(f["size_bytes"] > 0 for f in listing["data"])
+    by_path = {f["path"]: f for f in listing["data"]}
+    assert by_path["scripts/run.sh"]["is_executable"] is True
+    assert by_path["references/api.md"]["is_executable"] is False
+
+    # ── Per revision, not per package ────────────────────────────────────
+    write_skill(
+        env_id,
+        "multi-file",
+        description="Ships more than a SKILL.md.",
+        extra={
+            "scripts/run.sh": "#!/bin/sh\necho hi\n",
+            "references/api.md": "# API\n",
+            "assets/logo.txt": "logo\n",
+            "references/changelog.md": "# Changes\n",
+        },
+    )
+    publish_skill(client, headers, agent_id, "multi-file", version="2.0")
+    assert get_revision_files(client, headers, package_uuid, 1)["count"] == 4, (
+        "revision 1 keeps describing the tree it was published with"
+    )
+    assert get_revision_files(client, headers, package_uuid, 2)["count"] == 5
+
+    # ── The download is the same tree ────────────────────────────────────
+    response = download_revision(client, headers, package_uuid, 1)
+    assert response.headers["content-type"] == "application/gzip"
+    assert 'filename="multi-file-1.tar.gz"' in (
+        response.headers["content-disposition"]
+    )
+    assert len(response.headers["x-content-sha256"]) == 64
+    with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as tar:
+        members = sorted(m.name for m in tar.getmembers())
+    assert members == [f"skills/multi-file/{path}" for path in paths]
+
+    # ── Visibility gates both ────────────────────────────────────────────
+    _stranger, stranger_headers = create_random_user_with_headers(client)
+    assert (
+        error_code(
+            get_revision_files(
+                client, stranger_headers, package_uuid, 1, expected_status=404
+            )
+        )
+        == "package_not_found"
+    )
+    download_revision(
+        client, stranger_headers, package_uuid, 1, expected_status=404
+    )
+
+    update_skill_package(client, headers, package_uuid, visibility="public")
+    assert get_revision_files(client, stranger_headers, package_uuid, 1)["count"] == 4
+    assert download_revision(client, stranger_headers, package_uuid, 1).content

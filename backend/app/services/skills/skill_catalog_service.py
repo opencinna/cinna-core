@@ -58,6 +58,7 @@ from app.models.skills.schemas import (
     SkillPackageEntry,
     SkillPackageRevisionPublic,
     SkillPackageUpdate,
+    SkillRevisionFilePublic,
 )
 from app.models.skills.skill_package import (
     CATALOG_MARKETPLACE_NAME,
@@ -100,6 +101,12 @@ MAX_PACKAGE_BYTES = DEFAULT_MAX_TOTAL_BYTES
 
 #: Cap on a served ``SKILL.md`` preview. Matches ``AgentSkillsService``.
 MAX_CONTENT_BYTES = 256 * 1024
+
+#: Cap on a served file listing. A skill is a folder somebody hand-writes, so
+#: five hundred entries is far past anything real; the cap exists so a
+#: pathological snapshot cannot turn one catalog page into a megabyte of JSON.
+#: Over it, the response says ``truncated`` rather than lying about the count.
+MAX_LISTED_FILES = 500
 
 #: The fixed segment that marks a reverse-DNS id as a *skill package* rather
 #: than a bundle. ``io.opencinna.cinna.skill.pdf-report``.
@@ -1320,6 +1327,71 @@ class SkillCatalogService:
             raw = raw[:MAX_CONTENT_BYTES]
         return raw.decode("utf-8", errors="replace"), truncated
 
+    @staticmethod
+    def list_revision_files(
+        revision: SkillPackageRevision,
+    ) -> tuple[list[SkillRevisionFilePublic], int, int]:
+        """What one revision ships: ``(files, total count, total bytes)``.
+
+        ``files`` is capped at :data:`MAX_LISTED_FILES`; the count and the byte
+        total always describe the whole snapshot, so a client can say "the list
+        below is the first 500 of 900" instead of printing a wrong number.
+
+        The catalog preview renders one file — ``SKILL.md`` — but a skill is a
+        folder, and a reader deciding whether to install one cannot see the
+        ``scripts/`` and ``references/`` that come with it. This is that list:
+        paths and sizes, never contents, so it stays a cheap directory walk of
+        an immutable tree and never a general file reader over the snapshot.
+
+        Read off disk rather than stored on the row: the snapshot is immutable,
+        so the walk cannot go stale, and a column would answer nothing for
+        every revision published before it existed.
+
+        ``total`` is the size of the whole snapshot, which is also
+        ``revision.size_bytes`` — computed here rather than read from the row
+        so a listing and its total describe the same walk.
+        """
+        skill_dir = SkillCatalogService.skill_dir_of(revision)
+        if not skill_dir.is_dir():
+            # Same code and same reasoning as ``read_revision_content``: an
+            # immutable snapshot that is not on disk will not be there on a
+            # retry either.
+            logger.error(
+                "skill_snapshot_missing revision=%s package=%s number=%s path=%s",
+                revision.id, revision.package_id, revision.revision_number,
+                skill_dir,
+            )
+            raise SkillCatalogError(
+                "snapshot_missing",
+                "The published files for this revision are no longer on disk.",
+            )
+
+        total_bytes = 0
+        total_count = 0
+        files: list[SkillRevisionFilePublic] = []
+        for path in SkillCatalogService.snapshot_files(skill_dir):
+            try:
+                stat_result = path.stat()
+            except OSError:
+                # A file that vanished between the walk and the stat is not a
+                # reason to lose the listing; it is simply not in it.
+                continue
+            total_bytes += stat_result.st_size
+            total_count += 1
+            if len(files) >= MAX_LISTED_FILES:
+                # Past the cap the file still counts towards the totals — the
+                # header describes the snapshot, not the page of it the client
+                # received.
+                continue
+            files.append(
+                SkillRevisionFilePublic(
+                    path=path.relative_to(skill_dir).as_posix(),
+                    size_bytes=stat_result.st_size,
+                    is_executable=bool(stat_result.st_mode & 0o111),
+                )
+            )
+        return files, total_count, total_bytes
+
     # ── Projections ────────────────────────────────────────────────────
 
     @staticmethod
@@ -1990,16 +2062,29 @@ class SkillCatalogService:
             logger.warning("skill_archive_cache_write_failed path=%s: %s", cache, exc)
 
     @staticmethod
+    def snapshot_files(skill_dir: Path) -> list[Path]:
+        """Every regular file of a snapshot, in archive order.
+
+        The one definition of "what this revision ships", shared by the
+        listing route and :meth:`_build_archive_bytes`. Two walks with the same
+        predicate written twice is how a card ends up saying "4 files" over a
+        tarball holding five — the symlink rule in particular is a security
+        decision (a snapshot must never hand out a link pointing off the tree),
+        and a second copy of it is a second place to get it wrong.
+        """
+        return sorted(
+            (
+                path
+                for path in skill_dir.rglob("*")
+                if path.is_file() and not path.is_symlink()
+            ),
+            key=lambda path: path.relative_to(skill_dir).as_posix(),
+        )
+
+    @staticmethod
     def _build_archive_bytes(skill_dir: Path, skill_name: str) -> bytes:
         raw = io.BytesIO()
-        files = sorted(
-            (
-                p
-                for p in skill_dir.rglob("*")
-                if p.is_file() and not p.is_symlink()
-            ),
-            key=lambda p: p.relative_to(skill_dir).as_posix(),
-        )
+        files = SkillCatalogService.snapshot_files(skill_dir)
         with tarfile.open(fileobj=raw, mode="w") as tar:
             for path in files:
                 rel = path.relative_to(skill_dir).as_posix()

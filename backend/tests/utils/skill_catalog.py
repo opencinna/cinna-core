@@ -209,6 +209,47 @@ def get_revision_content(
     return r.json()
 
 
+def get_revision_files(
+    client: TestClient,
+    headers: dict[str, str],
+    package_uuid: str,
+    revision_number: int,
+    *,
+    expected_status: int = 200,
+) -> dict:
+    r = client.get(
+        f"{API}/skills/packages/{package_uuid}/revisions/{revision_number}/files",
+        headers=headers,
+    )
+    assert r.status_code == expected_status, (
+        f"revision files: expected {expected_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def download_revision(
+    client: TestClient,
+    headers: dict[str, str],
+    package_uuid: str,
+    revision_number: int,
+    *,
+    expected_status: int = 200,
+):
+    """The user-facing archive download. Returns the whole response.
+
+    Not ``.json()`` like its neighbours: the body is a tarball, and the tests
+    that call this assert on the bytes and on ``Content-Disposition``.
+    """
+    r = client.get(
+        f"{API}/skills/packages/{package_uuid}/revisions/{revision_number}/download",
+        headers=headers,
+    )
+    assert r.status_code == expected_status, (
+        f"revision download: expected {expected_status}, got {r.status_code}"
+    )
+    return r
+
+
 # ── Manage ─────────────────────────────────────────────────────────────────
 
 

@@ -1,5 +1,14 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Download, EyeOff, GraduationCap, History, Pencil } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  ArrowDownToLine,
+  Download,
+  EyeOff,
+  Files,
+  GraduationCap,
+  History,
+  Loader2,
+  Pencil,
+} from "lucide-react"
 import { useState } from "react"
 
 import type { SkillPackageDetailPublic } from "@/client"
@@ -29,9 +38,20 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { getErrorMessage } from "@/utils"
+import {
+  fetchAuthenticatedResponse,
+  filenameFromResponse,
+  getErrorMessage,
+  saveBlobAs,
+} from "@/utils"
 import {
   SKILL_VISIBILITY_OPTIONS,
   skillPackageVersionLabel,
@@ -41,6 +61,7 @@ import {
 import { AddSkillToAgentDialog } from "./AddSkillToAgentDialog"
 import { AllSkillRevisionsSheet } from "./AllSkillRevisionsSheet"
 import { EditSkillPackageDialog } from "./EditSkillPackageDialog"
+import { SkillRevisionFilesSheet } from "./SkillRevisionFilesSheet"
 
 interface SkillPackageCardProps {
   pkg: SkillPackageDetailPublic
@@ -84,6 +105,7 @@ export function SkillPackageCard({
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [addOpen, setAddOpen] = useState(false)
   const [revisionsOpen, setRevisionsOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [delistOpen, setDelistOpen] = useState(false)
 
@@ -103,6 +125,50 @@ export function SkillPackageCard({
     },
     onError: (err) =>
       showErrorToast(getErrorMessage(err, "Failed to delist the package")),
+  })
+
+  // What the shown revision ships. Its own read rather than a field on the
+  // package: the file list is a walk of an immutable snapshot on disk, it
+  // changes with the revision the reader has pinned, and the catalog grid —
+  // which renders the same package as a card — must not pay a directory walk
+  // per row for a number nobody reads there.
+  const {
+    data: files,
+    isLoading: filesLoading,
+    isError: filesError,
+  } = useQuery({
+    queryKey: [
+      "skills-catalog",
+      "package",
+      pkg.id,
+      "files",
+      selectedRevisionNumber,
+    ],
+    queryFn: () =>
+      SkillsService.listSkillPackageRevisionFiles({
+        packageId: pkg.id,
+        revisionNumber: selectedRevisionNumber as number,
+      }),
+    enabled: selectedRevisionNumber != null,
+  })
+
+  const downloadMutation = useMutation({
+    mutationFn: async () => {
+      // Not through the generated SDK: it parses every response as JSON, and
+      // this one is a tarball. Same helpers as the knowledge-source export.
+      const response = await fetchAuthenticatedResponse(
+        `/api/v1/skills/packages/${pkg.id}/revisions/${selectedRevisionNumber}/download`,
+      )
+      saveBlobAs(
+        await response.blob(),
+        filenameFromResponse(
+          response,
+          `${pkg.name}-${selectedRevisionNumber}.tar.gz`,
+        ),
+      )
+    },
+    onError: (err) =>
+      showErrorToast(getErrorMessage(err, "Failed to download this skill")),
   })
 
   const versionLabel = skillPackageVersionLabel(pkg) ?? "No revision yet"
@@ -133,6 +199,37 @@ export function SkillPackageCard({
   // single number, which is why there is not one.
   const catalogInstalls = pkg.install_count ?? 0
   const myInstalls = pkg.installed_in_agent_ids?.length ?? 0
+  const fileCount = files?.count ?? 0
+  const fileCountLabel = `${fileCount} file${fileCount === 1 ? "" : "s"}`
+  // The whole archive, built server-side by its own endpoint — it does not walk
+  // the listing above, so it still works when the listing failed. That is why
+  // it survives into the unavailable state instead of disappearing with the
+  // count.
+  const downloadButton = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6"
+          aria-label={`Download ${shownVersionLabel} as a .tar.gz`}
+          disabled={downloadMutation.isPending}
+          onClick={() => downloadMutation.mutate()}
+        >
+          {downloadMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ArrowDownToLine className="h-3.5 w-3.5" />
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {downloadMutation.isPending
+          ? "Preparing the download…"
+          : `Download ${shownVersionLabel} as a .tar.gz`}
+      </TooltipContent>
+    </Tooltip>
+  )
 
   return (
     <Card>
@@ -219,6 +316,53 @@ export function SkillPackageCard({
               </span>
             )}
           </div>
+          {/* The SKILL.md panel beside this card is one file of what a skill
+              ships; a skill that carries `scripts/` and `references/` looked
+              from here exactly like one that carries nothing. This is the rest
+              of the answer at the density the decision needs — a count, the
+              names behind it, and the folder itself.
+
+              A failed read says so here rather than taking the line with it: a
+              fact list is one of the two places §2 "Absent facts" allows an
+              absence to be written, and a row that silently disappears is the
+              one thing §6 forbids an error to look like. It cannot delegate the
+              recovery to the SKILL.md panel's Retry either — that button
+              refetches its own `content` observer and never touches this
+              `files` query. The skeleton is still only for the in-flight read,
+              and the error branch asks for there being nothing to show, so a
+              failed background refetch does not blank a count already in
+              hand. */}
+          {selectedRevisionNumber != null && (
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-xs text-muted-foreground shrink-0">
+                Content
+              </span>
+              {filesError && !files ? (
+                <span className="flex min-w-0 items-center gap-1">
+                  <span className="truncate text-sm font-medium text-muted-foreground">
+                    Unavailable
+                  </span>
+                  {downloadButton}
+                </span>
+              ) : filesLoading || !files ? (
+                <Skeleton className="h-4 w-20" />
+              ) : (
+                <span className="flex min-w-0 items-center gap-1">
+                  <button
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-label={`${fileCountLabel}. Show every file`}
+                    onClick={() => setFilesOpen(true)}
+                    className="flex min-w-0 items-center gap-1.5 rounded-sm text-sm font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  >
+                    <span className="truncate">{fileCountLabel}</span>
+                    <Files className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                  {downloadButton}
+                </span>
+              )}
+            </div>
+          )}
           {/* People, not agents, and never the publisher — so a publisher
               dogfooding their skill does not read this as adoption. */}
           <Fact label="Catalog installs" value={String(catalogInstalls)} />
@@ -257,6 +401,16 @@ export function SkillPackageCard({
       {editOpen && (
         <EditSkillPackageDialog pkg={pkg} open onOpenChange={setEditOpen} />
       )}
+
+      <SkillRevisionFilesSheet
+        files={files?.data ?? []}
+        count={files?.count ?? 0}
+        totalSizeBytes={files?.total_size_bytes ?? 0}
+        truncated={files?.truncated ?? false}
+        revisionLabel={shownRevision ? shownVersionLabel : null}
+        open={filesOpen}
+        onOpenChange={setFilesOpen}
+      />
 
       <AllSkillRevisionsSheet
         revisions={revisions}

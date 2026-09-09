@@ -6702,6 +6702,38 @@ export type SkillRevisionContentPublic = {
 };
 
 /**
+ * One file inside a published revision's snapshot.
+ *
+ * ``path`` is relative to the skill folder and always POSIX-shaped
+ * (``SKILL.md``, ``scripts/run.sh``) — the same string the archive carries
+ * under ``skills/<name>/``, so what the catalog lists and what a download
+ * unpacks cannot describe different trees.
+ */
+export type SkillRevisionFilePublic = {
+    path: string;
+    size_bytes: number;
+    is_executable?: boolean;
+};
+
+/**
+ * Everything one published revision ships, newest-first-independent.
+ *
+ * A separate read from ``SkillRevisionContentPublic``: the ``SKILL.md``
+ * preview is up to 256 KB of prose, and the package card needs only the
+ * count — asking for the body to render "4 files" would make the left column
+ * wait on the right one's payload.
+ */
+export type SkillRevisionFilesPublic = {
+    package_id: string;
+    revision_number: number;
+    name: string;
+    data?: Array<SkillRevisionFilePublic>;
+    count?: number;
+    total_size_bytes?: number;
+    truncated?: boolean;
+};
+
+/**
  * Status of a knowledge source.
  */
 export type SourceStatus = 'pending' | 'connected' | 'error' | 'disconnected';
@@ -10923,6 +10955,20 @@ export type SkillsGetSkillPackageRevisionContentData = {
 };
 
 export type SkillsGetSkillPackageRevisionContentResponse = (SkillRevisionContentPublic);
+
+export type SkillsListSkillPackageRevisionFilesData = {
+    packageId: string;
+    revisionNumber: number;
+};
+
+export type SkillsListSkillPackageRevisionFilesResponse = (SkillRevisionFilesPublic);
+
+export type SkillsDownloadSkillPackageRevisionData = {
+    packageId: string;
+    revisionNumber: number;
+};
+
+export type SkillsDownloadSkillPackageRevisionResponse = (unknown);
 
 export type SkillsDownloadSkillPackageArchiveData = {
     packageId: string;

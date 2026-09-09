@@ -708,7 +708,7 @@ additionally refreshes the skills catalog's `install_count` /
 |------|--------|
 | `backend/tests/api/agents/core/agents_addons_projection_test.py` | The fold: one row per catalog install, plugin skills folding into their plugin row, orphan rows (both kinds), `skills_error` while plugin rows still return, capabilities false on a foreign install and for non-developers |
 | `backend/tests/api/agents/core/agents_marketplace_formats_test.py` | Codex and skills parsers, `supported` / `unsupported_reason`, unknown type 422, path traversal refused at sync |
-| `backend/tests/api/agents/core/agents_skills_catalog_test.py` | Grants, `users` visibility, publish with `grant_emails` |
+| `backend/tests/api/agents/core/agents_skills_catalog_test.py` | Grants, `users` visibility, publish with `grant_emails`; the revision files listing and the user-facing download describing the same tree (sorted paths, symlinks dropped, per-revision, executable bit, visibility gating both) |
 | `backend/tests/api/agents/core/agents_skills_catalog_install_test.py` | Install / upgrade / uninstall through the catalog link |
 | `backend/tests/api/agents/core/agents_resilient_plugins_test.py` | Install refusal for unsupported entries; the cascade and snapshot behaviour |
 | `backend/tests/unit/test_plugin_manifest_normaliser.py` | The normaliser's four branches, the catalog exception, `manifest_write_failed` |

@@ -197,6 +197,35 @@ immutable storage and appends a `SkillPackageRevision`.
 - The dialog's success panel links to the catalog entry; it never opens another
   dialog.
 
+### 5b. Reading a package in the catalog
+
+The package route shows what the skill *is* before anybody installs it: the
+Package card (publisher, version, installs, visibility, package id) beside a
+`SKILL.md` panel rendered as markdown.
+
+`SKILL.md` is one file, and a skill is a folder. The card's **Content** fact is
+the rest of that answer:
+
+- it names how many files the shown revision ships (`4 files`), and opens a
+  Sheet listing every one of them — path, size, and a flag on anything the
+  archive keeps the executable bit for;
+- beside it, a **download** takes the whole revision as the same deterministic
+  `.tar.gz` an agent installs, so what a reader inspects is what an agent would
+  run. The reader may take it whenever they may see the package — visibility is
+  the only gate.
+
+The listing is paths and sizes, never contents: deciding whether to install a
+skill needs to know that it ships three scripts and two references, and a
+per-file viewer would turn the catalog into a general reader over other
+people's published trees. Both surfaces follow the revision the Version fact
+has pinned, so reading `v1` lists `v1`'s files.
+
+The Sheet caps at 500 listed files; past that the file count and total size
+still describe the whole revision, and the Sheet says so ("showing the first
+500") rather than silently dropping the rest. The download is unaffected —
+it always carries every file — so a reader who needs what the list could not
+show still gets it by taking the whole folder.
+
 ### 6. Installing a catalog skill
 
 From the skills catalog, a user picks one of their own agents. This creates an

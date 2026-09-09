@@ -731,6 +731,17 @@ occupies that skill name in this agent — one agent has a single
 **Uninstall** is deliberately not a verb here: it is
 `DELETE /llm-plugins/agents/{agent_id}/plugins/{link_id}` like every other plugin.
 
+**File listing** — `list_revision_files(revision) -> (files, total_count,
+total_bytes)` walks the snapshot through `snapshot_files(skill_dir)`, the one
+definition of "what this revision ships" that both this route and the archive
+builder call — a second copy of the symlink-refusing predicate is a second
+place to get it wrong, and would let the file count and the tarball describe
+different trees. `files` is capped at `MAX_LISTED_FILES` (500); `total_count`
+and `total_bytes` always describe the whole snapshot, so a truncated response
+can say "first 500 of 900" rather than print a wrong count. Same
+`snapshot_missing` (410) as the content preview when the immutable files are
+gone from disk.
+
 **Archive** — `build_archive(revision) -> (bytes, sha256)`. The tarball holds the
 snapshot verbatim under `skills/<name>/` and **not** the
 `.claude-plugin/plugin.json` §8 mentioned: that file is package metadata a
@@ -781,6 +792,8 @@ Two routers, one `skills` tag → one `SkillsService` in the generated client.
 | `PATCH /skills/packages/{package_id}` | publisher | `display_name` / `description` / `visibility` / `is_listed` |
 | `POST /skills/packages/{package_id}/delist` | superuser | hide, never delete |
 | `GET /skills/packages/{package_id}/revisions/{n}/content` | `CurrentUser` + visibility | `SKILL.md` preview |
+| `GET /skills/packages/{package_id}/revisions/{n}/files` | `CurrentUser` + visibility | `SkillRevisionFilesPublic` — every file of the snapshot as `{path, size_bytes, is_executable}`, plus `count` / `total_size_bytes` / `truncated`. Paths and sizes only: the catalog is not a reader over other people's published trees. A directory walk of an immutable snapshot, capped at `MAX_LISTED_FILES` (500), with the totals still describing the whole tree |
+| `GET /skills/packages/{package_id}/revisions/{n}/download` | `CurrentUser` + visibility | the same deterministic tarball the container gets, for a **person** in a browser. A second route rather than a second auth branch on `/archive`: that one is authorised by the calling environment's install and must stay so (a publisher going private must not break existing installs), this one by ordinary catalog visibility. `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff` |
 | `GET /skills/packages/{package_id}/revisions/{n}/archive` | `AgentEnvContextDep` | tarball; `X-Content-SHA256` header. 403 (not 404) when the env authenticated fine but holds no install of that revision |
 | `GET /agents/{agent_id}/skills/{name}/publish-preview` | owner + developer gate | `SkillPublishPreview` — the version and `package_id` a publish would take, from the same code that will take them. Runs the authorization gate and the workspace lookup but **not** the three content checks: a preview that refused would leave the Share dialog with nothing to show for a skill whose row already carries the warning |
 | `POST /agents/{agent_id}/skills/{name}/publish` | owner + developer gate | `SkillPackageRevisionPublic` |
@@ -876,8 +889,10 @@ Wire schemas: `backend/app/models/skills/schemas.py` — `SkillPackagePublic`,
 other control character — the value is written into a frontmatter block, where
 a newline injects top-level keys into the author's header),
 `SkillPublishPreview`,
-`SkillInstallRequest`, `SkillRevisionContentPublic`. All re-exported from
-`app.models`.
+`SkillInstallRequest`, `SkillRevisionContentPublic`, `SkillRevisionFilePublic`
+(`path`, `size_bytes`, `is_executable`) and `SkillRevisionFilesPublic`
+(`data`, `count`, `total_size_bytes`, `truncated` — the response of the
+`.../files` route below). All re-exported from `app.models`.
 
 ### Plugin manifest and the container installer
 
@@ -1012,7 +1027,10 @@ The Phase-3 surfaces shipped. Two of the rows below were then **superseded by
 S11's `Agents/InstalledPluginRow.tsx` / `AllInstalledPluginsSheet.tsx` were
 deleted into `Addons/AddonRow.tsx` / `AllAddonsSheet.tsx`. The package detail
 route (S7) additionally gained `Catalog/SkillPackageAccessCard.tsx` and its
-grant row / dialog / sheet:
+grant row / dialog / sheet, and later a **Content** fact on the Package card
+(a file count, e.g. "4 files") opening `Catalog/SkillRevisionFilesSheet.tsx` —
+the `.../files` listing rendered as rows — beside a **download** action that
+fetches `.../download`:
 
 | # | Surface | New files (per the spec) |
 |---|---------|--------------------------|

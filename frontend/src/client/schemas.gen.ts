@@ -27677,6 +27677,83 @@ export const SkillRevisionContentPublicSchema = {
     description: 'The ``SKILL.md`` of one published revision — the catalog preview.'
 } as const;
 
+export const SkillRevisionFilePublicSchema = {
+    properties: {
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes'
+        },
+        is_executable: {
+            type: 'boolean',
+            title: 'Is Executable',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['path', 'size_bytes'],
+    title: 'SkillRevisionFilePublic',
+    description: `One file inside a published revision's snapshot.
+
+\`\`path\`\` is relative to the skill folder and always POSIX-shaped
+(\`\`SKILL.md\`\`, \`\`scripts/run.sh\`\`) — the same string the archive carries
+under \`\`skills/<name>/\`\`, so what the catalog lists and what a download
+unpacks cannot describe different trees.`
+} as const;
+
+export const SkillRevisionFilesPublicSchema = {
+    properties: {
+        package_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Package Id'
+        },
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        data: {
+            items: {
+                '$ref': '#/components/schemas/SkillRevisionFilePublic'
+            },
+            type: 'array',
+            title: 'Data',
+            default: []
+        },
+        count: {
+            type: 'integer',
+            title: 'Count',
+            default: 0
+        },
+        total_size_bytes: {
+            type: 'integer',
+            title: 'Total Size Bytes',
+            default: 0
+        },
+        truncated: {
+            type: 'boolean',
+            title: 'Truncated',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['package_id', 'revision_number', 'name'],
+    title: 'SkillRevisionFilesPublic',
+    description: `Everything one published revision ships, newest-first-independent.
+
+A separate read from \`\`SkillRevisionContentPublic\`\`: the \`\`SKILL.md\`\`
+preview is up to 256 KB of prose, and the package card needs only the
+count — asking for the body to render "4 files" would make the left column
+wait on the right one's payload.`
+} as const;
+
 export const SourceStatusSchema = {
     type: 'string',
     enum: ['pending', 'connected', 'error', 'disconnected'],

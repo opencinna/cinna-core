@@ -39,6 +39,7 @@ from app.models import (
     SkillPublishPreview,
     SkillPublishRequest,
     SkillRevisionContentPublic,
+    SkillRevisionFilesPublic,
 )
 from app.models.skills.skill_package import SkillPackage
 from app.services.plugins.llm_plugin_service import LLMPluginService
@@ -168,6 +169,104 @@ def get_skill_package_revision_content(
         name=package.name,
         content=content,
         truncated=truncated,
+    )
+
+
+@router.get(
+    "/packages/{package_id}/revisions/{revision_number}/files",
+    response_model=SkillRevisionFilesPublic,
+)
+def list_skill_package_revision_files(
+    package_id: uuid.UUID,
+    revision_number: int,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """What one revision ships — paths and sizes, never contents.
+
+    The catalog preview renders ``SKILL.md`` and nothing else, which is the
+    whole of a one-file skill and a fraction of a skill that carries
+    ``scripts/`` and ``references/``. This is the rest of the answer, at the
+    density a reader deciding whether to install actually needs: a list of
+    names.
+
+    Same visibility gate as the content preview — the file names of a package
+    the caller cannot see are not public information — and the same
+    ``snapshot_missing`` (410) when the immutable files are gone from disk.
+    """
+    try:
+        package = SkillCatalogService.get_package(session, package_id, current_user)
+        revision = SkillCatalogService.get_revision(
+            session, package, revision_number
+        )
+        files, count, total_bytes = SkillCatalogService.list_revision_files(
+            revision
+        )
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
+    return SkillRevisionFilesPublic(
+        package_id=package.id,
+        revision_number=revision.revision_number,
+        name=package.name,
+        data=files,
+        count=count,
+        total_size_bytes=total_bytes,
+        truncated=count > len(files),
+    )
+
+
+@router.get(
+    "/packages/{package_id}/revisions/{revision_number}/download",
+    response_class=Response,
+)
+def download_skill_package_revision(
+    package_id: uuid.UUID,
+    revision_number: int,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Response:
+    """Serve a revision's tarball to a **person**, from the browser.
+
+    Deliberately a second route rather than a second auth branch on
+    ``/archive``: that one is authorised by the calling environment's install
+    and must stay that way (a publisher flipping a package to private must not
+    break agents that already have it), while this one is authorised by
+    ordinary catalog visibility — if the reader may see the package and read
+    its ``SKILL.md``, they may take the folder those instructions live in. One
+    route with two unrelated authorisation rules is how the weaker of the two
+    eventually answers for both.
+
+    The bytes are the same deterministic archive the container downloads, and
+    ``X-Content-SHA256`` is the digest of exactly those bytes — the one the
+    manifest carries and the container re-checks before extraction. (Not
+    ``revision.content_hash``, which hashes the snapshot tree rather than the
+    tarball; the two are different functions over different inputs.)
+    """
+    try:
+        package = SkillCatalogService.get_package(session, package_id, current_user)
+        revision = SkillCatalogService.get_revision(
+            session, package, revision_number
+        )
+        data, sha256 = SkillCatalogService.build_archive(revision)
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
+
+    logger.info(
+        "skill_archive_user_download user_id=%s package_id=%s revision=%s bytes=%s",
+        current_user.id, package.package_id, revision_number, len(data),
+    )
+    return Response(
+        content=data,
+        media_type="application/gzip",
+        headers={
+            "X-Content-SHA256": sha256,
+            # Never let the browser sniff a publisher's bytes into something
+            # it would render in this origin.
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": (
+                f'attachment; filename="{package.name}-{revision_number}.tar.gz"'
+            ),
+        },
     )
 
 

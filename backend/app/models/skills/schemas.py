@@ -218,6 +218,44 @@ class SkillRevisionContentPublic(SQLModel):
     truncated: bool = False
 
 
+class SkillRevisionFilePublic(SQLModel):
+    """One file inside a published revision's snapshot.
+
+    ``path`` is relative to the skill folder and always POSIX-shaped
+    (``SKILL.md``, ``scripts/run.sh``) — the same string the archive carries
+    under ``skills/<name>/``, so what the catalog lists and what a download
+    unpacks cannot describe different trees.
+    """
+
+    path: str
+    size_bytes: int
+    #: Whether the snapshot's copy is executable. The archive preserves the
+    #: bit (``_build_archive_bytes``), so a reader deciding whether to trust a
+    #: skill can see that it ships something meant to be run.
+    is_executable: bool = False
+
+
+class SkillRevisionFilesPublic(SQLModel):
+    """Everything one published revision ships, newest-first-independent.
+
+    A separate read from ``SkillRevisionContentPublic``: the ``SKILL.md``
+    preview is up to 256 KB of prose, and the package card needs only the
+    count — asking for the body to render "4 files" would make the left column
+    wait on the right one's payload.
+    """
+
+    package_id: uuid.UUID
+    revision_number: int
+    name: str
+    data: list[SkillRevisionFilePublic] = []
+    #: Files in the snapshot, which is ``len(data)`` unless ``truncated``.
+    count: int = 0
+    total_size_bytes: int = 0
+    #: True when the snapshot holds more files than the listing cap, so the
+    #: client can say the list is partial rather than print a wrong count.
+    truncated: bool = False
+
+
 # =============================================================================
 # Access grants (``visibility='users'``)
 # =============================================================================
