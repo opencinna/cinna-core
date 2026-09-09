@@ -245,7 +245,23 @@ once at the top and leaves most entries blank — or the catalog package's
 publisher; the same badge the Add addon list
 shows, so an entry reads the same before and after install), a status dot with
 the server's own sentence, an update flag when one is available, and the `⋯`
-menu. **The row itself opens Details** — click, or Enter / Space — a read-only
+menu.
+
+A **local** row — one of the agent's own `skills/<name>/` folders — says two
+things no other source can. **Local** is a badge, taking the slot `author`
+fills on every other row: a list merging four origins has no unmarked default,
+and a local skill has neither a marketplace nor an author to put there.
+**Published** is a `RowFlag` beside the update flag once the skill has a package
+behind it (`published_package_id`) — a glyph rather than a third badge, because
+the title line is capped at the two §2 grants by exception and "it is in the
+catalog" is a passive per-row fact, which is exactly what a flag is for. The two
+are not alternatives: a published skill is still a local one, and both are
+unconditional once true. An **absent** version renders nothing, like every other
+absent fact — the publisher is not left guessing, because the Share dialog fills
+one in and says so (see
+[agent_skills § Versions live in the header](../agent_skills/agent_skills.md#versions-live-in-the-header-and-publishing-is-what-writes-them)).
+Details repeats the `Local` badge and states the published fact and the missing
+version in words. **The row itself opens Details** — click, or Enter / Space — a read-only
 dialog with the facts (source, format, marketplace, a link to the original
 repository when the marketplace data names one, install time, modes with their
 icons, the commit hash as a click-to-copy value), and
@@ -298,6 +314,18 @@ a re-publish appends a revision to an immutable package rather than editing it.
 
 The dialog chooses a visibility — **Everyone**, **Only me**, or **People** — and,
 for People, picks users. See [Sharing with named people](#6-sharing-with-named-people).
+
+**The publisher is not asked to invent a version or an id.** On open, the dialog
+reads `GET /agents/{id}/skills/{name}/publish-preview` — the same derivations the
+publish will perform — and shows both: the version field arrives filled in
+(overtypable, and an emptied field simply lets the server derive it again), and a
+line above the form names the package id and the revision number this publish
+would become. When the derived id collided with another publisher's, the line
+says so rather than letting a suffixed id appear unexplained. Release notes stay
+optional, and the **Advanced** disclosure still holds the one immutable field —
+now placeholdered with the id that will actually be used, so the field reads as
+an override rather than a requirement. Sharing then writes the version into the
+skill's own `SKILL.md`.
 
 ### 5. Publishing — what actually gets published
 

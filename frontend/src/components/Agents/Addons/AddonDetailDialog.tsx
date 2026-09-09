@@ -32,6 +32,7 @@ import {
 } from "@/utils/addons"
 import { skillRevisionLabel } from "@/utils/skillCatalog"
 import { formatSkillSize, skillKey, skillRowStatus } from "@/utils/skills"
+import { AddonLocalBadge } from "./AddonBadges"
 import { SkillDetailDialog } from "./SkillDetailDialog"
 
 interface AddonDetailDialogProps {
@@ -204,13 +205,35 @@ export function AddonDetailDialog({
         {/* Block 3 — the facts, in the two-column shape the package card uses
             so the two read as one product. */}
         <div className="space-y-1.5">
+          {/* The row's own badge, repeated rather than left behind: a dialog
+              opened from a badged row that drops the badge reads as a
+              different thing than the row it came from. "Published" is a flag
+              on the row and a fact below, so it is not repeated here. */}
+          {addon.source === "local" && (
+            <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
+              <AddonLocalBadge addon={addon} />
+            </div>
+          )}
           {addon.description && (
             <p className="text-sm break-words text-muted-foreground">
               {addon.description}
             </p>
           )}
-          {addon.version && (
+          {addon.version ? (
             <Fact label="Version" value={`v${addon.version}`} />
+          ) : (
+            // Same rule as the row: an absent version is a fact on a local
+            // skill and noise on a marketplace entry.
+            addon.source === "local" && (
+              <Fact
+                label="Version"
+                value={
+                  <span className="text-muted-foreground">
+                    No version in SKILL.md
+                  </span>
+                }
+              />
+            )
           )}
           {formatLabel && <Fact label="Format" value={formatLabel} />}
           {addon.marketplace_name && addon.source !== "local" && (
@@ -288,6 +311,17 @@ export function AddonDetailDialog({
           )}
           {soleSkill?.has_scripts && (
             <Fact label="Scripts" value="Ships scripts the agent can run" />
+          )}
+          {addon.published_package_id && (
+            // The word the row no longer spends a badge on. Deliberately NOT
+            // labelled "Package id": `published_package_id` is the package's
+            // **uuid**, while "package id" means the reverse-domain handle
+            // everywhere else in the product (`SkillPackageCard` prints
+            // `localhost.skill.dad-jokes` under exactly that label). Printing
+            // a uuid there gave one label two meanings. The handle is one
+            // click away through the catalog link below, which is where a
+            // publisher goes to copy it anyway.
+            <Fact label="Published" value="In the skills catalog" />
           )}
           {/* Links onward rather than opening the catalog in a second dialog. */}
           {(addon.published_package_id ?? packageId) && (

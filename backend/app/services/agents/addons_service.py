@@ -372,6 +372,11 @@ class AddonsService:
             name=entry.name,
             display_name=entry.name,
             description=entry.description or "",
+            # A local skill's version is the one in its own ``SKILL.md``
+            # header, so the row reads the same as every other source's — the
+            # catalog writes that header on publish, which is what keeps a
+            # published skill's badge and its catalog revision agreeing.
+            version=entry.version,
             skills=[skill],
             # Both halves are server-side: the capability, and whether this
             # particular skill is clean enough to publish.

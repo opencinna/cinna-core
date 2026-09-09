@@ -36,6 +36,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { addonNoun, addonRowStatus } from "@/utils/addons"
+import { AddonLocalBadge, AddonPublishedFlag } from "./AddonBadges"
 import { AddonDetailDialog } from "./AddonDetailDialog"
 import { ShareSkillDialog } from "./ShareSkillDialog"
 import { type SyncReporter, useAddonRowMutations } from "./useAddonRowMutations"
@@ -274,11 +275,12 @@ export function AddonRow({
         muted={!!link?.disabled}
         status={addonRowStatus(addon)}
         title={name}
-        // Two badges, on purpose: the version people scan an install list by,
-        // and the author — in a list that merges four sources, *who made it*
-        // is the fact that tells two same-named entries apart. The same pair
-        // the Add addon list shows, so an entry reads the same before and
-        // after it is installed.
+        // The version people scan an install list by, and the author — in a
+        // list that merges four sources, *who made it* is the fact that tells
+        // two same-named entries apart. The same pair the Add addon list
+        // shows, so an entry reads the same before and after it is installed.
+        // `AddonBadges` adds the two words only a local row can say, and only
+        // on a local row; no row carries the author badge *and* those.
         badges={
           <>
             {addon.version && (
@@ -286,6 +288,17 @@ export function AddonRow({
                 v{addon.version}
               </Badge>
             )}
+            {/* An absent version renders nothing, like every other absent fact
+                on this row. It briefly rendered as a "No version" chip, which
+                is the failure §2 already names for "Active": until a skill is
+                published *every* local row would carry it — the most repeated
+                and least informative word in the list, on the rows with the
+                least other information. The publisher is not left guessing:
+                the Share dialog fills the version in and says so, and Details
+                states the absence in words. */}
+            {/* Local rows only, and it lands in the slot `author` fills on
+                every other source's row. */}
+            <AddonLocalBadge addon={addon} />
             {/* Which modes it runs in, as the two glyphs the install step and
                 Details use for them — read at a glance down the list, and the
                 only place the row says anything about modes now that the
@@ -307,13 +320,19 @@ export function AddonRow({
           </>
         }
         flags={
-          link?.has_update ? (
-            <RowFlag
-              icon={ArrowUpCircle}
-              tone="warning"
-              label={updateFlagLabel}
-            />
-          ) : undefined
+          <>
+            {/* "It is in the catalog" is a passive per-row fact the user reads
+                and cannot click, so it is a glyph here rather than a third
+                badge on the contested title line. */}
+            <AddonPublishedFlag addon={addon} />
+            {link?.has_update && (
+              <RowFlag
+                icon={ArrowUpCircle}
+                tone="warning"
+                label={updateFlagLabel}
+              />
+            )}
+          </>
         }
       >
         {/* A write in flight takes the menu's slot: a spinner where the `⋯`
