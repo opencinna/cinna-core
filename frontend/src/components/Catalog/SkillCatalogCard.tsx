@@ -158,7 +158,10 @@ export function SkillCatalogCard({ entry }: SkillCatalogCardProps) {
         <CardFooter className="pt-2">
           <Button variant="outline" className="w-full" onClick={handleAdd}>
             <Download className="h-4 w-4 mr-2" />
-            {installedCount > 0 ? "Add to another agent" : "Add to agent"}
+            {/* One label whatever the state: "Add to another agent" made the
+                button change under a reader whose only news was that they had
+                installed it once, and the card already says so a line above. */}
+            Add to agent
           </Button>
         </CardFooter>
       </Card>

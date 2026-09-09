@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Download, EyeOff, GraduationCap, Pencil } from "lucide-react"
+import { Download, EyeOff, GraduationCap, History, Pencil } from "lucide-react"
 import { useState } from "react"
 
 import type { SkillPackageDetailPublic } from "@/client"
@@ -36,12 +36,18 @@ import {
   SKILL_VISIBILITY_OPTIONS,
   skillPackageVersionLabel,
   skillPublisherLabel,
+  skillRevisionLabel,
 } from "@/utils/skillCatalog"
 import { AddSkillToAgentDialog } from "./AddSkillToAgentDialog"
+import { AllSkillRevisionsSheet } from "./AllSkillRevisionsSheet"
 import { EditSkillPackageDialog } from "./EditSkillPackageDialog"
 
 interface SkillPackageCardProps {
   pkg: SkillPackageDetailPublic
+  /** The revision the SKILL.md panel is showing — what the Version fact names. */
+  selectedRevisionNumber: number | null
+  /** Pin a revision into that panel. Called from the revisions Sheet. */
+  onSelectRevision: (revisionNumber: number) => void
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
@@ -56,16 +62,28 @@ function Fact({ label, value }: { label: string; value: string }) {
 /**
  * "What is this package, and do I want it" — the left column of S7.
  *
- * Four blocks: the five facts, the copyable id, the primary action, and the
+ * Four blocks: the facts, the copyable id, the primary action, and the
  * publisher's `⋯`. The publisher's verbs are in that menu and nowhere else
  * (A5): Edit and Delist are exactly the actions §1 "View" says must not be
  * visible controls on a surface whose story is *read this and decide*.
+ *
+ * The Version fact is also the way into the history: it opens
+ * `AllSkillRevisionsSheet` with every publish of the package. That history used
+ * to be a third card in the right column, under a SKILL.md panel whose height is
+ * the length of somebody's prose — so on any real skill it started below the
+ * fold and stayed there. A version is what a reader looks at to ask "which one
+ * am I reading", which makes it the right door, and it costs no height.
  */
-export function SkillPackageCard({ pkg }: SkillPackageCardProps) {
+export function SkillPackageCard({
+  pkg,
+  selectedRevisionNumber,
+  onSelectRevision,
+}: SkillPackageCardProps) {
   const queryClient = useQueryClient()
   const { user } = useAuth()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [addOpen, setAddOpen] = useState(false)
+  const [revisionsOpen, setRevisionsOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [delistOpen, setDelistOpen] = useState(false)
 
@@ -97,7 +115,17 @@ export function SkillPackageCard({ pkg }: SkillPackageCardProps) {
         ?.label ?? "Private"
     return pkg.is_listed ? base : `${base}, delisted`
   })()
-  const revisionCount = pkg.revisions?.length ?? 0
+  const revisions = pkg.revisions ?? []
+  // What the SKILL.md panel is showing, which is not always the latest — the
+  // fact would otherwise say `v2` at somebody reading `v1`. No count beside it:
+  // how many times a skill has been republished is not a fact anyone decides on,
+  // and the Sheet this opens says it anyway.
+  const shownRevision = revisions.find(
+    (rev) => rev.revision_number === selectedRevisionNumber,
+  )
+  const shownVersionLabel = shownRevision
+    ? skillRevisionLabel(shownRevision)
+    : versionLabel
   // Two different questions, so two facts. `install_count` is **other people**,
   // one per person however many agents they use it in; `installed_in_agent_ids`
   // is the viewer's own agents. A publisher who has just installed their own
@@ -170,8 +198,27 @@ export function SkillPackageCard({ pkg }: SkillPackageCardProps) {
               />
             </span>
           </div>
-          <Fact label="Latest version" value={versionLabel} />
-          <Fact label="Revisions" value={String(revisionCount)} />
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-xs text-muted-foreground shrink-0">
+              Version
+            </span>
+            {revisions.length > 0 ? (
+              <button
+                type="button"
+                aria-haspopup="dialog"
+                aria-label={`Version ${shownVersionLabel}. Show every revision`}
+                onClick={() => setRevisionsOpen(true)}
+                className="flex min-w-0 items-center gap-1.5 rounded-sm text-sm font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              >
+                <span className="truncate">{shownVersionLabel}</span>
+                <History className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              </button>
+            ) : (
+              <span className="text-sm font-medium truncate">
+                {versionLabel}
+              </span>
+            )}
+          </div>
           {/* People, not agents, and never the publisher — so a publisher
               dogfooding their skill does not read this as adoption. */}
           <Fact label="Catalog installs" value={String(catalogInstalls)} />
@@ -210,6 +257,15 @@ export function SkillPackageCard({ pkg }: SkillPackageCardProps) {
       {editOpen && (
         <EditSkillPackageDialog pkg={pkg} open onOpenChange={setEditOpen} />
       )}
+
+      <AllSkillRevisionsSheet
+        revisions={revisions}
+        latestRevisionId={pkg.latest_revision_id}
+        selectedRevisionNumber={selectedRevisionNumber}
+        onView={onSelectRevision}
+        open={revisionsOpen}
+        onOpenChange={setRevisionsOpen}
+      />
 
       {/* Owned by the card rather than nested in the menu item that opens it:
           a `DropdownMenuItem` unmounts on select and would take the confirm's

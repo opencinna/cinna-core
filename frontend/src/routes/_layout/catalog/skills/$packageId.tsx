@@ -6,7 +6,6 @@ import { useEffect, useState } from "react"
 import { SkillsService } from "@/client"
 import { SkillPackageAccessCard } from "@/components/Catalog/SkillPackageAccessCard"
 import { SkillPackageCard } from "@/components/Catalog/SkillPackageCard"
-import { SkillRevisionsCard } from "@/components/Catalog/SkillRevisionsCard"
 import { SkillSourceCard } from "@/components/Catalog/SkillSourceCard"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Button } from "@/components/ui/button"
@@ -110,15 +109,20 @@ function SkillPackageRoute() {
           {isLoading || !pkg ? (
             <>
               <Skeleton className="h-[340px] w-full rounded-xl" />
-              <div className="space-y-6">
-                <Skeleton className="h-[320px] w-full rounded-xl" />
-                <Skeleton className="h-[240px] w-full rounded-xl" />
-              </div>
+              <Skeleton className="h-[320px] w-full rounded-xl" />
             </>
           ) : (
             <>
               <div className="lg:order-1">
-                <SkillPackageCard pkg={pkg} />
+                {/* The revision history hangs off this card's Version fact,
+                    not off a card of its own: as a third card it sat under the
+                    SKILL.md panel, whose height is the length of somebody's
+                    prose, so it was permanently below the fold. */}
+                <SkillPackageCard
+                  pkg={pkg}
+                  selectedRevisionNumber={selectedRevisionNumber}
+                  onSelectRevision={setPinnedRevision}
+                />
               </div>
               <div className="lg:order-2 space-y-6">
                 <SkillSourceCard
@@ -129,12 +133,6 @@ function SkillPackageRoute() {
                       ? skillRevisionLabel(selectedRevision)
                       : null
                   }
-                />
-                <SkillRevisionsCard
-                  revisions={revisions}
-                  latestRevisionId={pkg.latest_revision_id}
-                  selectedRevisionNumber={selectedRevisionNumber}
-                  onView={setPinnedRevision}
                 />
                 {/* Last in the column, and only for the publisher: a card that
                     appears and disappears with `visibility` must sit at the

@@ -1016,11 +1016,11 @@ grant row / dialog / sheet:
 
 | # | Surface | New files (per the spec) |
 |---|---------|--------------------------|
-| S6 | `/catalog/skills` route + `CatalogSectionTabs` (Agents · Skills pills on both catalog routes, `AppSidebar` `isActive` widened to `startsWith("/catalog")`) | `routes/_layout/catalog/skills.tsx`, `Catalog/SkillCatalogCard.tsx`, `SkillCatalogGrid.tsx`, `SkillCatalogFilters.tsx`, `CatalogSectionTabs.tsx` |
-| S7 | Package detail route — Package card, `SKILL.md` card, Revisions `PreviewList` | `routes/_layout/catalog/skills/$packageId.tsx`, `Catalog/SkillPackageCard.tsx`, `SkillRevisionRow.tsx`, `AllSkillRevisionsSheet.tsx`, `SkillSource.tsx` |
+| S6 | `/catalog/skills` route + `CatalogSectionTabs` (Agents · Skills segmented control on both catalog routes, beside the `Filters` menu in one toolbar row; `AppSidebar` `isActive` widened to `startsWith("/catalog")`) | `routes/_layout/catalog/skills.tsx`, `Catalog/SkillCatalogCard.tsx`, `SkillCatalogGrid.tsx`, `SkillCatalogFilters.tsx`, `CatalogFilterMenu.tsx`, `CatalogSectionTabs.tsx` |
+| S7 | Package detail route — Package card (its Version fact opens the revisions Sheet) + `SKILL.md` card | `routes/_layout/catalog/skills/$packageId.tsx`, `Catalog/SkillPackageCard.tsx`, `SkillRevisionRow.tsx`, `AllSkillRevisionsSheet.tsx`, `SkillSource.tsx` |
 | S8 | Edit package details dialog | (in the detail route) |
 | S9 | Publish skill dialog, opened from the S1 row `⋯` only | `Agents/PublishSkillDialog.tsx` |
-| S10 | Add-skill-to-agent dialog (`Common/AgentSelectorList` in `mode="single"`, never a nested picker dialog) | `Catalog/AddSkillToAgentDialog.tsx` |
+| S10 | Add-skill-to-agent dialog (`Common/AgentSelectorList` in `mode="single"` — a select trigger over a `Popover`, never a nested picker dialog) | `Catalog/AddSkillToAgentDialog.tsx` |
 | S11 | Installed Plugins card rebuilt on `ListRow` / `PreviewList` / `RowActionsMenu` (A10 fix-on-touch) | `Agents/InstalledPluginRow.tsx`, `AllInstalledPluginsSheet.tsx` |
 
 Query keys: `["skills-catalog", filter]`, `["skill-package", packageId]`;
