@@ -68,8 +68,10 @@ function SkillsCatalog() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto space-y-6">
       <div className="mx-auto max-w-7xl space-y-4">
-        <CatalogSectionTabs />
-        <SkillCatalogFilters value={filter} onChange={setFilter} />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <CatalogSectionTabs />
+          <SkillCatalogFilters value={filter} onChange={setFilter} />
+        </div>
 
         {/* `isError` is gated on there being no data, so a failed background
             refetch keeps the grid on screen instead of blanking the page; a

@@ -39,7 +39,7 @@
 - `frontend/src/routes/_layout/catalog/agents/install/$bundleId.tsx` — `/catalog/agents/install/$bundleId` — renders `<InstallPage context={...} />` (Phase 3 rewrite; previously the Install Wizard route)
 - `frontend/src/components/Catalog/CatalogGrid.tsx` — catalog grid
 - `frontend/src/components/Catalog/CatalogCard.tsx` — single catalog entry card. The whole card body is clickable (navigates to the install page when not installed, or the agent detail page when installed). The footer button is "Quick Install" for uninstalled bundles (fires `useQuickInstall`, shows a `Loader2` spinner with "Installing…" label while pending), "Open" for installed bundles that are up-to-date, or an amber **"Update to v\<latest_version\>"** button when `user_install_pending_update` is `true` (clicking it calls `POST /agents/{id}/apply-update` via `InstallsService.applyUpdate`, shows an inline spinner with "Updating…" label, then on success shows a toast and invalidates the catalog query so the card reverts to "Open"). All footer buttons `stopPropagation` so they don't trigger the card-body navigation; card-body clicks are no-op while a Quick Install or update is in flight
-- `frontend/src/components/Catalog/CatalogFilters.tsx` — filter controls
+- `frontend/src/components/Catalog/CatalogFilters.tsx` — the catalog grid's subset options, rendered by the shared `CatalogFilterMenu.tsx` (one `Filters` dropdown button, not a pill row)
 - `frontend/src/components/Install/InstallPage.tsx` — two-column install page container (left sticky agent header, right scrollable setup form, single Install button at bottom)
 - `frontend/src/components/Install/InstallAgentHeaderCard.tsx` — left-column sticky card showing bundle icon, name, version, publisher, description, credential summary, Bundle ID
 - `frontend/src/components/Install/InstallSetupForm.tsx` — right-column form; orchestrates AI section + service section + Install button; owns form state and submit logic. Post-install side effects (query invalidation, setup-status check, dashboard-vs-credentials redirect) are delegated to `useBundleInstallNavigation`
@@ -613,7 +613,7 @@ The consumer reader dispatches on layout shape: when `snapshot_path/workspace/` 
 ### Catalog
 - `CatalogGrid` — renders a responsive grid of `CatalogCard` components; consumes `GET /catalog/` via React Query key `["catalog"]`
 - `CatalogCard` — bundle name, description, publisher name + email (falling back to the truncated handle), version badge (`v<latest_version>`, falling back to `rev <n>`). The install-count badge has been removed from the card. "Install" button (or "Open" if already installed)
-- `CatalogFilters` — filter by visibility, installed status
+- `CatalogFilters` — filter by visibility, installed status; a single `Filters` menu button (`CatalogFilterMenu`) sharing one toolbar row with `CatalogSectionTabs`
 
 ### Install Page (Phase 3 — replaces the Install Wizard)
 - `InstallPage` — two-column layout (`lg+`: left sticky + right scrollable; `md` and below: stacked). Receives a `CatalogInstallContext` from the route and renders `InstallAgentHeaderCard` + `InstallSetupForm`

@@ -30,7 +30,7 @@ function Catalog() {
       <div className="min-w-0">
         <h1 className="text-lg font-semibold truncate">Catalog</h1>
         <p className="text-xs text-muted-foreground truncate">
-          Install agent bundles published on this instance
+          Agent bundles and skills published on this instance
         </p>
       </div>,
     )
@@ -74,10 +74,13 @@ function Catalog() {
   return (
     <div className="p-6 md:p-8 overflow-y-auto space-y-6">
       <div className="mx-auto max-w-7xl space-y-4">
-        {/* One Catalog destination, two sections — the skills catalog is
-            reachable from here rather than from a second sidebar entry. */}
-        <CatalogSectionTabs />
-        <CatalogFilters value={filter} onChange={setFilter} />
+        {/* One toolbar row: where you are on the left, how much of it you
+            are looking at on the right. Two stacked rows of pills was the
+            page saying both in the same voice. */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <CatalogSectionTabs />
+          <CatalogFilters value={filter} onChange={setFilter} />
+        </div>
 
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center py-16">

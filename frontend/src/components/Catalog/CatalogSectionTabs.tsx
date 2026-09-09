@@ -1,7 +1,6 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
 import { Bot, GraduationCap } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 /**
@@ -9,9 +8,14 @@ import { cn } from "@/lib/utils"
  *
  * The sidebar has **one** Catalog entry and always will — two entries for one
  * destination is how a nav grows a row per route. So the second section is
- * reachable from inside the page, through the same pill vocabulary
- * `CatalogFilters` already uses on both routes: identical shape, one row above
- * the filters, so the eye reads "which catalog" then "which subset".
+ * reachable from inside the page.
+ *
+ * A **segmented control**: one bordered track, the current section raised out
+ * of it. It used to be two `Button`s in the same pill vocabulary as the filter
+ * row directly beneath, which put eight identical controls on the page — half
+ * of them navigation, half of them a filter, and nothing but their labels
+ * saying which was which. One track that visibly holds exactly two choices
+ * cannot be mistaken for the single `Filters` button beside it.
  *
  * Rendered at the top of both catalog routes. `AppSidebar`'s `CatalogMenu`
  * matches `startsWith("/catalog")` so the sidebar item stays lit on either.
@@ -25,7 +29,12 @@ export function CatalogSectionTabs() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
 
   return (
-    <div className="flex items-center gap-2">
+    // `nav`, not a toggle group: these are links, and a screen-reader user gets
+    // "navigation" rather than a set of buttons that happen to change the page.
+    <nav
+      aria-label="Catalog sections"
+      className="inline-flex items-center gap-1 rounded-lg border bg-muted/50 p-1"
+    >
       {SECTIONS.map((section) => {
         // "Agents" is the index route, so it can only match exactly — the
         // bundle install route lives under /catalog/agents and must not light
@@ -35,23 +44,27 @@ export function CatalogSectionTabs() {
           : pathname.startsWith(section.to)
         const Icon = section.icon
         return (
-          <Button
+          <RouterLink
             key={section.to}
-            asChild
-            variant={active ? "default" : "outline"}
-            size="sm"
-            className={cn("gap-1.5", !active && "text-muted-foreground")}
+            to={section.to}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium",
+              "transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              // The current section is the brand colour, not a raised
+              // `bg-background` tile: on the dark skin that tile is darker than
+              // the track it sits in, so the selected tab read as a hole rather
+              // than as the thing that is on.
+              active
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
           >
-            <RouterLink
-              to={section.to}
-              aria-current={active ? "page" : undefined}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {section.label}
-            </RouterLink>
-          </Button>
+            <Icon className="h-3.5 w-3.5" />
+            {section.label}
+          </RouterLink>
         )
       })}
-    </div>
+    </nav>
   )
 }
