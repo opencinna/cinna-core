@@ -4,7 +4,8 @@ import { ChevronDown, ChevronRight, MessageCircle, Wrench } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import { AgentsService, SkillsService } from "@/client"
-import { SearchableSelect } from "@/components/Common/SearchableSelect"
+import { AgentSelectorList } from "@/components/Common/AgentSelectorDialog"
+import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -46,8 +47,11 @@ interface AddSkillToAgentDialogProps {
  * installs differently from a plugin — when the backend makes it *one* plugin
  * link either way — would be a second vocabulary for one act.
  *
- * The agent picker is `Common/SearchableSelect`, a `Popover` anchored to the
- * field. Never `AgentSelectorDialog`: that is a `Dialog`, and a picker dialog
+ * The agent picker is `Common/AgentSelectorList` — the body of
+ * `AgentSelectorDialog`, extracted so a form can hold it. It is the picker the
+ * other eight agent-choosing surfaces use, colour presets and all, which is
+ * how an agent is recognised at a glance rather than read off a list of names.
+ * Never `AgentSelectorDialog` itself: that is a `Dialog`, and a picker dialog
  * on top of a form dialog is exactly what §2 "Disclosure depth" forbids.
  */
 export function AddSkillToAgentDialog({
@@ -65,7 +69,12 @@ export function AddSkillToAgentDialog({
   const [revisionNumber, setRevisionNumber] = useState<string>("latest")
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
-  const { data: agentsData, isLoading: isLoadingAgents } = useQuery({
+  const {
+    data: agentsData,
+    isLoading: isLoadingAgents,
+    isError: isAgentsError,
+    refetch: refetchAgents,
+  } = useQuery({
     queryKey: ["agents"],
     queryFn: () => AgentsService.readAgents(),
     enabled: open,
@@ -81,8 +90,15 @@ export function AddSkillToAgentDialog({
   })
 
   const agents = agentsData?.data ?? []
+  // The picker's own shape: it renders the colour pill, so it needs the preset
+  // rather than a value/label pair.
   const agentOptions = useMemo(
-    () => agents.map((agent) => ({ value: agent.id, label: agent.name })),
+    () =>
+      agents.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        colorPreset: agent.ui_color_preset,
+      })),
     [agents],
   )
   const selectedAgent = agents.find((agent) => agent.id === agentId)
@@ -131,7 +147,7 @@ export function AddSkillToAgentDialog({
         if (!isPending) onOpenChange(next)
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add {packageName} to an agent</DialogTitle>
           <DialogDescription>
@@ -140,9 +156,24 @@ export function AddSkillToAgentDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="add-skill-agent">Agent</Label>
-            {isLoadingAgents ? (
+          {/* A `fieldset`, not a `div role="group"`: the picker is a set of
+              buttons rather than one labelled control, and the semantic
+              element is what `Label` above it can name. */}
+          <fieldset className="space-y-1.5">
+            <Label asChild>
+              <legend>Agent</legend>
+            </Label>
+            {isAgentsError ? (
+              // Before the empty-state test, never after it: a failed read
+              // that falls through to "you don't have an agent" sends someone
+              // to create one they already own (R10).
+              <QueryErrorAlert
+                error={null}
+                fallback="Couldn't load your agents"
+                onRetry={() => refetchAgents()}
+                compact
+              />
+            ) : isLoadingAgents ? (
               <p className="text-sm text-muted-foreground">Loading agents…</p>
             ) : agents.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -153,15 +184,20 @@ export function AddSkillToAgentDialog({
                 .
               </p>
             ) : (
-              <SearchableSelect
-                value={agentId}
-                onChange={setAgentId}
-                options={agentOptions}
-                placeholder="Choose an agent"
-                searchPlaceholder="Search agents…"
-                emptyText="No agents match."
+              <AgentSelectorList
+                // One agent is being installed into, so the picker collapses
+                // to that agent's badge once it is chosen and the rest of the
+                // form gets the height back.
+                mode="single"
+                agents={agentOptions}
+                selectedAgentId={agentId}
+                onSelect={setAgentId}
                 disabled={isPending}
-                className="w-full"
+                allowDeselect
+                // Shorter than the dialog's cap: while it is open it shares the
+                // body with two mode checkboxes, an Advanced disclosure and a
+                // footer.
+                maxHeightClassName="max-h-[168px]"
               />
             )}
             {/* Plan §10: the existing plugin sync wakes a suspended target, so
@@ -169,7 +205,7 @@ export function AddSkillToAgentDialog({
             <p className="text-xs text-muted-foreground">
               A suspended agent is woken to install the skill.
             </p>
-          </div>
+          </fieldset>
 
           <div className="space-y-3 pt-2 border-t">
             <Label className="text-sm font-medium">Enable for:</Label>
