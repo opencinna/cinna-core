@@ -4,7 +4,8 @@
 
 The agent has three or more distinct capabilities, or needs domain documentation
 longer than a page. Also read it when `docs/WORKFLOW_PROMPT.md` has grown into a wall
-of text nobody can follow.
+of text nobody can follow, or when a finished skill is worth publishing to the
+catalog for other agents to install.
 
 ## Two different things
 
@@ -147,6 +148,119 @@ Use the `timeoff-check` skill.
 | A user could ask about it in isolation | Only meaningful as part of another flow |
 | Needs more than 5–10 lines to describe | Fits in one line |
 
+### Designing around skills
+
+The split table above judges one capability at a time. Use it the other way round
+when the agent is still being designed: if it has several distinct internal
+workflows, **the default is one skill per workflow**, and `docs/WORKFLOW_PROMPT.md`
+keeps only the orchestration — what the agent is, and which trigger reaches which
+skill.
+
+Worked example — an agent that reconciles vendor bills:
+
+- **"Generate the reconciliation report"** → a **skill**. Its own trigger, its own
+  multi-step procedure, its own scripts, a report format nothing else produces:
+  `skills/bill-reconciliation/SKILL.md`.
+- **"Answer questions about a bill"** → **stays in the workflow prompt**. It is what
+  the agent does on almost every message; there is no separate trigger to name and
+  no separate artefact to produce.
+
+That default holds unless a workflow argues its way out of it. The tiebreak, for the
+ones that do: **separate trigger + separate output + reusable by another agent ⇒
+skill.** All three is a skill without further thought. Two out of three usually still
+is — a workflow with its own trigger and its own output earns a folder even if no
+other agent would ever want it. One out of three is a paragraph in the workflow
+prompt.
+
+When the user describes the agent as "it does X, and also Y, and also Z", that is
+three skill folders and one short prompt — not one prompt with three chapters.
+
+### Publishing a skill
+
+A skill that would serve *another* agent belongs in the platform's skills catalog,
+where whoever the owner chooses — everyone on the instance, or a named few — can
+install it into their **cloud** agents. Publishing is a deliberate act by the owner
+and it goes through the platform.
+
+**Publishing reads the cloud agent, not this folder.** The command resolves the
+agent's environment on the instance and packages the `skills/<name>/` it finds in
+*that* workspace. Nothing in the path ever reads your local kit. Two consequences,
+and the second is the one that bites quietly:
+
+- **The agent has to be in the cloud already.** `cinna skills publish` looks the
+  agent up in your account's cloud listing, so a local-only agent never reaches the
+  server at all — the CLI stops first with *"No accessible agent matches
+  '<slug>'"*, followed by the agents it does know and a nudge to run
+  `cinna account agents`. If you see that, the missing rung is
+  `guides/11-go-cloud.md`, three above this one; go and climb it first. A cloud
+  agent whose environment has never been started gets a different answer, from the
+  server: *"This agent's workspace is not on disk yet. Start the environment once
+  so its files are materialised, then publish."*
+- **The local edit has to have travelled first.** If you changed `skills/<name>/`
+  here after the last import or sync, publish packages the *older cloud copy* — and a
+  published revision is immutable, so you cannot replace it, only append another
+  beside it. Push first — `cinna agent import --update` from the workshop, or, once
+  you have moved to the account workspace's copy under `agents/<slug>`, `cinna dev`
+  (guide 11 step 9; `cinna dev` syncs that copy, not this folder). Then publish, then
+  report what you published.
+
+Prepare the folder before either:
+
+- **Self-contained.** Every path the skill needs is inside `skills/<name>/` or is an
+  explicit, documented input. Nothing reaches back into this agent's top-level
+  `scripts/`, `docs/` or `config/`.
+- **No secrets — and nothing checks the contents for you.** Publish refuses a skill
+  containing a file *named* like a credential (`.env`, `*.pem`, `id_rsa` and
+  friends), and that is the whole of the automated gate: no tool reads inside the
+  files. A token pasted into `SKILL.md`, a customer name in a fixture, an internal
+  hostname in a script — all publish cleanly. Read the folder yourself before you
+  call it ready; it is copied verbatim into someone else's agent.
+- **A `description` written for discovery.** Someone browsing the catalog reads that
+  one sentence and nothing else, so it must say what the skill does and when to use
+  it without assuming this agent's context.
+- **Valid by the rules publish actually enforces.** `name` matches the folder
+  exactly, keeps the shape in the table above, and is not one of the reserved
+  platform command names; `description` is present and at most 1024 characters; the
+  folder is at most 16 MB — plus the structural failures that speak for themselves,
+  a missing `SKILL.md`, frontmatter that will not parse, a file that cannot be read.
+  Those are refusals; the two-field table above and `skills/README.md` in the
+  scaffold carry the same rules, because they are the ones that keep a skill in the
+  engine's index. A body over 64 KB is only a flag: it publishes. **`kit.py validate` checks
+  none of it** — it has no `SKILL.md` validator at all, so its silence is not a
+  verdict. A broken skill is refused by the publish call, with `skill_invalid`
+  naming the rule it broke.
+
+Then publish it from the account:
+
+```bash
+cinna skills publish <slug> <name> --visibility public
+```
+
+**Name the audience or nobody gets it.** A package is `private` by default, so the
+bare command succeeds, prints a catalog URL, and shares the skill with no one. Pass
+`--visibility public` for everyone on the instance, or `--visibility users --grant
+<email>` for a named few.
+
+`--grant` without `--visibility users` is refused before anything is sent: a grant
+is consulted only under the `users` visibility, so a private or public package
+ignores its grant list entirely. The CLI says so and stops — *"--grant only has an
+effect on a package whose visibility is 'users'… Re-run with --visibility users
+(harmless on a package that already is), or drop --grant."* Naming the visibility
+again on a package that is already `users` costs a re-publish nothing. The server
+enforces the same rule for any other caller, refusing the publish with
+`grants_require_users_visibility` rather than writing grants that share nothing.
+
+The same act is in the web UI on the agent's page: the **Addons** tab, then the
+skill row's **Share…** (**Update published skill…** once it has been published
+before). Both create an immutable revision in the catalog; publishing again appends
+a new revision rather than editing the old one, so a consumer's install never
+changes underneath them.
+
+Once a skill is in the catalog, other people get it by installing it from there.
+Copying `skills/<name>/` into a second agent folder forks one capability into two
+files that drift apart, and it is the wrong move for any agent that could reach the
+catalog instead.
+
 ### The legacy form: `docs/skill_<name>.md`
 
 Kits before contract 1.1.0 taught one *doc* per skill, under `docs/`:
@@ -224,3 +338,6 @@ later — when you do, update every path in `docs/WORKFLOW_PROMPT.md`,
 - If scripts are foldered, `scripts/README.md` is grouped the same way and every
   path in every file points at the real location.
 - No secret or personal data anywhere under `knowledge/`, `docs/` or `skills/`.
+- Any skill worth sharing reaches **other people** through the catalog
+  (`cinna skills publish`, once the agent is in the cloud), not through a copy of
+  its folder.

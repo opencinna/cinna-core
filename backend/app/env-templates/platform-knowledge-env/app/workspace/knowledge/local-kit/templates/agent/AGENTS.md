@@ -42,6 +42,11 @@ make validate          # kit validation for this agent
 - One step per script. Small, parameterised, composable.
 - Secrets never appear in output, commits, `STATUS.md` or chat.
 - `cinna-agent.json` describes this agent; keep it true.
+- A skill worth sharing reaches other people through the catalog —
+  `cinna skills publish <slug> <name> --visibility public`, which reads the agent's
+  **cloud** workspace, so the agent must be in the cloud and the skill must have
+  travelled there. Without a visibility the package is private and nobody else sees
+  it; `--visibility users --grant <email>` shares it with named people instead.
 - `app-data/desktop.json` is **Cinna Desktop's**, and read-only to you: never write it,
   never commit it, never print its contents. It holds a bearer token. Read
   `api_base_url` and `agent_token` if you need them, and nothing else in the file.

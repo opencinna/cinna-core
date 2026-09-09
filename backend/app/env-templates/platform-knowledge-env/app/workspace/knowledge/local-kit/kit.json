@@ -52,7 +52,7 @@
     {
       "rung": "knowledge",
       "doc": "guides/08-knowledge-and-local-skills.md",
-      "trigger": "three or more distinct capabilities, or domain docs longer than a page"
+      "trigger": "three or more distinct capabilities, domain docs longer than a page, or a finished skill worth publishing to the catalog"
     },
     {
       "rung": "multi_agent",

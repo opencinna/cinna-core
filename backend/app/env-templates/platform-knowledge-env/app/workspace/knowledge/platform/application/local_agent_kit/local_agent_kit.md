@@ -153,6 +153,27 @@ agent into it with one command.
   and still reads the older flat layout (`Cloud/.cinna/account.json`) where it
   exists — a workshop that silently stopped being listed would look like data
   loss to the person whose workshop it is.
+- **Publishing a skill** — Guide 08 (`guides/08-knowledge-and-local-skills.md`)
+  covers both ends of a skill's life: *Designing around skills* (an agent with
+  several distinct internal workflows gets one skill folder per workflow by
+  default, and a prompt that only routes between them; the tiebreak for a
+  workflow that argues otherwise is separate trigger + separate output + reusable
+  by another agent) and *Publishing a skill* to the platform's skills catalog
+  with `cinna skills publish <slug> <name>`, or from the agent page's **Addons**
+  tab. `templates/agent/AGENTS.md` carries the rule in one line. Three facts the
+  guide exists to state, because each is quiet and each bites: **publishing reads
+  the cloud agent's workspace, never this folder** — so the agent must already be
+  in the cloud (`guides/11-go-cloud.md`) *and* the local edit must have travelled
+  there, since a stale local copy publishes the older cloud content as an
+  immutable revision that can only be appended beside; **a package is private by
+  default**, so the bare command succeeds, prints a catalog URL and shares the
+  skill with nobody; and **the secret gate is filename-only** — nothing reads
+  inside the files, so a token pasted into `SKILL.md` publishes cleanly.
+  Guidance only: no folder role, manifest field or validation rule moved, which
+  is why this sits under contract **1.1.0** rather than bumping it, and why the
+  capability ladder's `knowledge` rung only widened its *trigger* (it now fires
+  on "a finished skill worth publishing to the catalog") rather than gaining a
+  rung of its own. See [agent_addons](../../agents/agent_addons/agent_addons.md).
 - **Go-cloud** — The migration playbook (`guides/11-go-cloud.md`). From here on
   an account is required: `cinna login <host> --dir Cloud/<host>` turns that
   folder into a real
@@ -375,6 +396,12 @@ publishing the kit — see **Business Rules** below.
   `cinna-agent.json`'s `credentials[]` / `schedules[]` / `prompts` blocks mirror
   the definitional metadata a bundle revision carries, so a local agent has
   exactly the shape a publish would snapshot.
+- **[Agent Addons](../../agents/agent_addons/agent_addons.md)** — guide 08 and
+  `templates/agent/AGENTS.md` carry the "designing around skills" and "publishing
+  a skill" guidance in the local vocabulary; the same two subsections were added
+  to the cloud building prompt, so a builder gets the same advice whether it runs
+  in a container or on a laptop. `cinna skills list|publish` are the CLI verbs
+  the guide hands over.
 - **[Getting Started](../getting_started/getting_started.md)** — new article
   (`local-first`) and a Rotating Hints entry, both gated on the public probe.
 - **[Server Configuration](../server_configuration/disclaimer.md)** — the
@@ -387,6 +414,21 @@ publishing the kit — see **Business Rules** below.
   origin-root reverse-proxy block (like the `.well-known/*` routes); the
   `/api/agent-start` alias is the fallback that already works through the universal
   `/api/` block on every deployment.
+- **The `platform-knowledge-env` snapshot** — `docs/local_agent_kit/` is the
+  authoring source; `make sync-platform-knowledge`
+  (`.cinna-core-kit/scripts/sync_platform_knowledge.py`) `rmtree`s and rewrites
+  the template's `knowledge/local-kit/` tree from it, alongside the `docs/agents/`,
+  `docs/application/` and `docs/README.md` snapshots and the `openapi.json`-derived
+  `knowledge/platform/api_reference/`. **Editing the snapshot directly is erased
+  by the next sync.**
+
+  > **Known gap.** Nothing verifies the two trees agree — no test, and this
+  > repository has no CI. Worse, `backend/tests/unit/test_local_kit_tool.py`
+  > resolves its kit directory to `docs/local_agent_kit/` **first**, with the
+  > snapshot only as a fallback, so a drifted snapshot passes every test while
+  > `/agent-start` serves stale bytes to every user. Keeping them in step depends
+  > on somebody remembering to run the sync.
+
 - **Cinna Desktop (separate repo, external consumer)** — the contract's second
   host. It pulls `/agent-start/contract.tar.gz`, detects a contract tree by
   `kit.json` + `layout.json` at the root, pins `contract_version` through the

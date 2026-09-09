@@ -8,7 +8,7 @@ Extends agent capabilities by installing plugins from curated Git-based marketpl
 
 - **Marketplace** — A Git repository containing a plugin catalog (`marketplace.json`). Admins register marketplaces by URL; the backend syncs and parses the catalog to record plugin metadata (including Git coordinates) in Postgres. Syncs use a throwaway temp clone — no backend-side persistent cache.
 - **Plugin** — An individual capability extension defined within a marketplace. Has a source type (`local` or `url`), version, category, and author.
-- **AgentPluginLink** — The installed relationship between an agent and a plugin. Carries version pinning, per-mode activation flags, and a `source` indicating whether it came from a marketplace (`git`-fetched by the container) or a bundle (files seeded from the snapshot).
+- **AgentPluginLink** — The installed relationship between an agent and a plugin. Carries version pinning, per-mode activation flags, and a `source` indicating whether it came from a marketplace (`git`-fetched by the container), a bundle (files seeded from the snapshot) or the skills catalog (an archive fetched by the container).
 - **Plugin Manifest** — `/app/workspace/plugins/manifest.json` (bind-mounted, persistent) — the SSOT living in the env workspace. The backend writes git coordinates and per-mode flags; the container's install routine reads it to materialize files and regenerate `settings.json`. Mirrors how `workspace_requirements.txt` works for Python deps.
 - **Container Install Routine** — `agent_env_service.install_plugins(manifest)` — runs inside the container at every setup (new container, post-rebuild) and on every plugin change. Fetches/ensures files, prunes removed plugins, regenerates `settings.json`. Returns a per-plugin `PluginInstallResult` — errors are results, not exceptions.
 - **Conversation Mode** — Plugin is active during workflow execution.
@@ -21,8 +21,11 @@ Every `AgentPluginLink` has a `source`:
 
 - **`marketplace`** — files are fetched by the container at install time via `git clone` at the pinned commit. Git coordinates come from the Postgres marketplace rows, not a backend file cache. On rebuild the container re-fetches from the persisted manifest.
 - **`bundle`** — files were seeded into the env workspace from a bundle revision snapshot. `plugin_id` is NULL (no marketplace needed). Identity comes from `snapshot_marketplace_name` / `snapshot_plugin_name`.
+- **`catalog`** — a skills-catalog install: one skill package fetched as a sha256-verified archive under the synthetic marketplace `cinna-skills`. See [agent_skills](../agent_skills/agent_skills.md).
 
-Both sources produce identical on-disk layout (`/app/workspace/plugins/<mkt>/<plugin>/`) and identical `settings.json` entries, so the adapters are source-agnostic.
+**Every source now snapshots its directory identity at install time**, marketplace included. That identity — `<marketplace>/<plugin>`, the segment under `plugins/` — is what survives the marketplace row being deleted, and what the addons projection folds skills onto. See [agent_addons](../agent_addons/agent_addons.md).
+
+All three sources produce identical on-disk layout (`/app/workspace/plugins/<mkt>/<plugin>/`) and identical `settings.json` entries, so the adapters are source-agnostic. A directory that arrives without a `.claude-plugin/plugin.json` — a Codex plugin, a bare-skill entry from a `skills` marketplace — has one synthesised in the container; an authored manifest is never touched.
 
 ## Failure Mode This Feature Fixes
 
@@ -39,17 +42,17 @@ The resilient system removes the backend cache entirely from the hot path. Plugi
 4. Marketplace becomes visible to users with the appropriate discovery setting.
 
 ### User: Discover and Install a Plugin
-1. User opens an agent's Plugins tab and browses the "Discover Plugins" grid.
-2. Clicks Install on a plugin; selects Conversation Mode and/or Building Mode.
+1. User opens an agent's **Addons** tab and clicks **Add addon**, which searches plugin discovery and the skills catalog together.
+2. Picks an entry; selects Conversation Mode and/or Building Mode.
 3. Backend creates an `AgentPluginLink` (source=marketplace) pinned to the current version and commit hash; builds the manifest with git coordinates; pushes it to running/suspended environments via `POST /config/plugins`.
 4. Each receiving container's install routine clones the plugin at the pinned commit into `/app/workspace/plugins/<mkt>/<plugin>/`, regenerates `settings.json`, and returns per-plugin results.
 
 ### User: Manage Installed Plugins
-- **Enable/Disable**: Toggle the switch on the Installed Plugins table. The manifest is updated; on the next install the plugin dir stays but the plugin is excluded from `settings.json`.
+- **Enable/Disable**: Toggle on the addon row. The manifest is updated; on the next install the plugin dir stays but the plugin is excluded from `settings.json`.
 - **Mode toggles**: Enable per-mode (Conversation / Building) independently.
 - **Upgrade**: When a newer commit is available (for marketplace plugins), an Upgrade button appears. Explicit action required — plugins never auto-update.
 - **Uninstall**: Removes the plugin link, rebuilds the manifest, and on the next container install the directory is pruned.
-- **Bundle plugins**: Source badge shows "From bundle". Upgrade/Uninstall buttons are hidden; enable/disable and per-mode toggles still work (consumer-local, survive bundle apply-update).
+- **Bundle plugins**: Source flag reads "Delivered by the bundle — managed by its publisher". Upgrade/Uninstall are hidden; enable/disable and per-mode toggles still work (consumer-local, survive bundle apply-update). Note the row's `can_manage` is **true** for a bundle — "no uninstall for a bundle source" is a client rule read off the source, not part of the capability flag.
 
 ### Plugin Sync on Changes
 1. Any install, uninstall, upgrade, or enable/disable action triggers a sync.
@@ -64,6 +67,8 @@ When a container is rebuilt (or newly created), `_setup_new_container` calls `_s
 ## Business Rules
 
 - **Two marketplace visibility levels**: `public_discovery=true` makes plugins discoverable by all users; private marketplaces are only accessible to the owner.
+- **Deleting a marketplace entry orphans its links, it does not uninstall them**: `plugin_id` is `ON DELETE SET NULL`. This only became true when the ORM cascade was fixed — see [tech](agent_plugins_tech.md#the-plugin_id-cascade-fix). An orphaned link keeps its name from the install-time snapshot, cannot be upgraded (**409 `source_unavailable`**), and re-attaches automatically if the entry reappears upstream on a marketplace row that **predates the install** and names the **same repository** — a name alone is not proof of provenance. A link with no recorded repository URL never re-attaches, and neither does an install whose marketplace was deleted and re-registered, since the new row is younger than the link. Both re-install by hand.
+- **An entry the last sync marked unsupported is refused at install** (`409 plugin_unsupported`) and skipped by the manifest builder for existing installs, which is what makes its addon row read `source_unavailable`.
 - **Version pinning at install time**: `installed_version` (display) and `installed_commit_hash` (exact reproducibility) are stored. Container installs use the pinned commit, not the latest.
 - **No auto-updates**: Marketplace plugins require explicit user action to upgrade. Bundle plugins are updated when the user applies a bundle update.
 - **Disabled ≠ Uninstalled**: Disabled plugins keep their files on disk but are excluded from `settings.json`. Enables quick toggling without re-cloning.
@@ -133,4 +138,6 @@ A failed plugin install triggers two side-effects (both best-effort, never block
 - **System Notifications** — `PLUGIN_SYNC_FAILED` in the Notification Catalog mirrors `MODEL_DEPRECATED` (same dedup / throttle / email pattern). See [system_notifications](../../application/system_notifications/system_notifications.md).
 - **Model Freshness** — The amber-banner + notification pattern is established here and mirrored by the plugin system. See [model_freshness](../agent_environments/model_freshness.md).
 - **SSH Keys** — Private marketplace repos use the same `ssh_key_id` pattern as knowledge source Git repos.
-- **Plugin Marketplaces** — Marketplace sync populates the Postgres rows the manifest builder reads; no persistent git cache involved at plugin-use time. See [plugin_marketplaces](../../application/plugin_marketplaces/plugin_marketplaces.md).
+- **Plugin Marketplaces** — Marketplace sync populates the Postgres rows the manifest builder reads; no persistent git cache involved at plugin-use time. Marketplaces now come in three formats (`claude`, `codex`, `skills`) and flag entries this platform cannot install. See [plugin_marketplaces](../../application/plugin_marketplaces/plugin_marketplaces.md).
+- **Agent Addons** — The Plugins tab was replaced by the **Addons** tab, which lists plugin links and workspace skills as one server-deduplicated list. Every install / uninstall / upgrade / toggle route here is reused **unchanged**; there are no addon verbs. The cascade fix and the install-time name snapshots landed in this feature. See [agent_addons](../agent_addons/agent_addons.md).
+- **Agent Skills** — A `source=catalog` link wraps exactly one published skill; a plugin's own `skills/` directory is registered with both engines. See [agent_skills](../agent_skills/agent_skills.md).

@@ -65,6 +65,38 @@ Auto-generated from OpenAPI spec. Tag: `skills`
 
 ---
 
+## GET `/api/v1/skills/packages/{package_id}/grants`
+**List Skill Package Grants**
+
+**Path parameters:**
+- `package_id`: uuid
+
+**Response:** `SkillPackageAccessGrantsPublic`
+
+---
+
+## POST `/api/v1/skills/packages/{package_id}/grants`
+**Add Skill Package Grant**
+
+**Path parameters:**
+- `package_id`: uuid
+
+**Request body** (`SkillPackageAccessGrantCreate`):
+  - `email`: string (required)
+
+**Response:** `SkillPackageAccessGrantPublic`
+
+---
+
+## DELETE `/api/v1/skills/packages/{package_id}/grants/{user_id}`
+**Revoke Skill Package Grant**
+
+**Path parameters:**
+- `package_id`: uuid
+- `user_id`: uuid
+
+---
+
 ## POST `/api/v1/agents/{agent_id}/skills/{name}/publish`
 **Publish Agent Skill**
 
@@ -76,6 +108,7 @@ Auto-generated from OpenAPI spec. Tag: `skills`
   - `version`: string | null
   - `release_notes`: string | null
   - `visibility`: string | null
+  - `grant_emails`: string[]
   - `package_id`: string | null
 
 **Response:** `SkillPackageRevisionPublic`

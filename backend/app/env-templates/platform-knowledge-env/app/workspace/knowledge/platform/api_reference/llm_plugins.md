@@ -10,7 +10,7 @@ Auto-generated from OpenAPI spec. Tag: `llm-plugins`
   - `git_branch`: string
   - `ssh_key_id`: string | null
   - `public_discovery`: boolean
-  - `type`: string
+  - `type`: "claude" | "codex" | "skills"
 
 **Response:** `LLMPluginMarketplacePublic`
 
@@ -83,6 +83,8 @@ Auto-generated from OpenAPI spec. Tag: `llm-plugins`
 **Query parameters:**
 - `search`: string | null
 - `category`: string | null
+- `plugin_type`: string | null
+- `marketplace_id`: string | null
 - `skip`: integer, default: `0`
 - `limit`: integer, default: `30`
 

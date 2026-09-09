@@ -56,6 +56,26 @@ Auto-generated from OpenAPI spec. Tag: `agents`
 
 ---
 
+## GET `/api/v1/agents/{agent_id}/addons`
+**Get Agent Addons**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AgentAddonsPublic`
+
+---
+
+## POST `/api/v1/agents/{agent_id}/addons/refresh`
+**Refresh Agent Addons**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AgentAddonsPublic`
+
+---
+
 ## GET `/api/v1/agents/`
 **Read Agents**
 

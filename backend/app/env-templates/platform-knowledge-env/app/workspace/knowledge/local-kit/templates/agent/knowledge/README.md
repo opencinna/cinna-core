@@ -23,5 +23,7 @@ Do not put here:
 - credentials, hostnames with tokens in them, or personal data.
 
 Add this folder only when the ladder's **Knowledge & local skills** trigger has
-fired — three or more distinct capabilities, or domain documentation longer than a
-page. See `.cinna-kit/guides/08-knowledge-and-local-skills.md`.
+fired; for *this* folder that means three or more distinct capabilities, or domain
+documentation longer than a page. The rung's full trigger is in the ladder
+(`.cinna-kit/README.md`); the guide is
+`.cinna-kit/guides/08-knowledge-and-local-skills.md`.

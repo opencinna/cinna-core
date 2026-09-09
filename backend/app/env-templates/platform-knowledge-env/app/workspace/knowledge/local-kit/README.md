@@ -17,7 +17,7 @@ Kit version `{{KIT_VERSION}}` · contract version in `CONTRACT_VERSION` · insta
 | `guides/05-schedules.md` | The user says daily / weekly / every / at …, or wants unattended runs. |
 | `guides/06-status-reporting.md` | The agent runs unattended, or the user wants to know it is healthy. |
 | `guides/07-cli-commands.md` | The same operation gets run repeatedly and deserves a name. |
-| `guides/08-knowledge-and-local-skills.md` | The agent has 3+ distinct capabilities, or domain docs longer than a page. |
+| `guides/08-knowledge-and-local-skills.md` | The agent has 3+ distinct capabilities, domain docs longer than a page, or a finished skill worth publishing. |
 | `guides/09-multi-agent.md` | A second agent appears, or one agent should hand work to another. |
 | `guides/10-testing-locally.md` | Before declaring anything finished, and before going cloud. |
 | `guides/11-go-cloud.md` | The user asks to move an agent to {{INSTANCE_NAME}}. |
@@ -56,7 +56,7 @@ concrete artefacts. Walk the table top-down after every substantive change.
 | **Schedules** | the user says daily / weekly / every / at …, or the agent should run unattended | manifest `schedules[]`, `docs/ENTRYPOINT_PROMPT.md` becomes mandatory, a `run-<name>` Makefile target |
 | **Status reporting** | the agent runs unattended, or performs long-running checks | `scripts/update_status.py` usage, `app-data/storage/STATUS.md`, `status_refresh_command`, a `status` CLI command |
 | **CLI commands** | the same operation is run repeatedly by name | `docs/CLI_COMMANDS.yaml` entries + matching Makefile targets |
-| **Knowledge & local skills** | 3+ distinct capabilities, or domain docs beyond a page | `knowledge/<topic>/`, `skills/<name>/SKILL.md`, per-skill `scripts/` |
+| **Knowledge & local skills** | 3+ distinct capabilities, domain docs beyond a page, or a finished skill worth publishing | `knowledge/<topic>/`, `skills/<name>/SKILL.md`, per-skill `scripts/` |
 | **Multi-agent** | a second agent appears, or one agent should delegate | root orchestrator conventions, manifest `handovers[]` |
 | **Go cloud** | the user asks, or the agent needs 24/7, email/chat channels, sharing or webapps | everything in `guides/11-go-cloud.md` |
 

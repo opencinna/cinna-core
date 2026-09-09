@@ -119,12 +119,17 @@ both places is two sources of truth.
 
 ### 2. Seeing what an agent carries
 
-- **Skills card** — agent page › Configuration tab. Rows show name, description,
-  a status dot, source flags, and a "View SKILL.md" action. Capped at five rows
-  with a "Show all (N)" sheet; sorted **errors first, then warnings, then
+- **"Plugins and skills" card** — agent page › **Addons** tab. Rows show name, a
+  status dot, source flags, description behind a row-info affordance, and a
+  Details action that opens the `SKILL.md` viewer. Capped at five rows with a
+  "Show all (N)" sheet; sorted **errors first, then warnings, then
   alphabetically**, so a row that needs a decision is always in the preview. The
   card is rendered for consumers of a foreign install too — knowing what an
   installed agent can do is a *use* capability.
+  **This replaced the Configuration tab's Skills card**, which showed skills
+  alone and so listed a catalog install twice, once here and once on the
+  Plugins tab. The unified list and its dedupe rule are
+  [agent_addons](../agent_addons/agent_addons.md).
 - **`/skills`** — a chat slash command rendering the same index as a markdown
   table (`Skill | Source | What it does | Invoke`). Reads the cache, so it
   answers instantly and works on a sleeping agent. Its output goes into the next
@@ -157,15 +162,30 @@ same discipline as `content_hash` — and blocks on two conditions (see
 
 ### 5. Publishing a skill to the catalog
 
-From the agent's Skills card, a developer publishes one named skill. The service
-reads the skill from the **publisher's workspace on disk**, validates it,
-snapshots it atomically into immutable storage and appends a
-`SkillPackageRevision`.
+From the Addons tab's row menu (**Share…**, or **Update published skill…** once
+this agent has published it before) — or with `cinna skills publish <agent>
+<name>` — a developer publishes one named skill. The service reads the skill from
+the **publisher's workspace on disk**, validates it, snapshots it atomically into
+immutable storage and appends a `SkillPackageRevision`.
 
 - A **suspended or stopped** environment publishes exactly like a running one —
   the workspace is bind-mounted on the host, so nothing needs waking.
+- **The workspace read is the *cloud* agent's environment workspace**, resolved
+  through `active_environment_id`. There is no local-folder branch anywhere in
+  the publish path, so a stale local copy publishes the **older cloud content** —
+  as an immutable revision that can only be appended beside, never replaced.
 - The first publish creates the `SkillPackage` (reverse-DNS `package_id`,
-  visibility `private` unless asked otherwise); later publishes append revisions.
+  visibility **`private` unless a visibility is supplied** — a bare publish
+  succeeds, prints a catalog URL and shares the skill with nobody); later
+  publishes append revisions.
+- **Three refusals, and only three:** the skill's index entry carries an `error`
+  (`skill_invalid`), the folder holds a file *named* like a credential
+  (`skill_contains_secrets`), or the folder exceeds 16 MB (`skill_too_large`,
+  strictly greater-than — exactly 16 MB passes). The 64 KB `SKILL.md` body limit
+  is a non-blocking `oversized` **warning** the publish path never reads.
+- **The secret gate is filename-only.** Nothing reads file contents; the only
+  file the validator opens at all is `SKILL.md`, and only for its frontmatter. A
+  token pasted inside `SKILL.md` publishes cleanly.
 - The dialog's success panel links to the catalog entry; it never opens another
   dialog.
 
@@ -289,6 +309,18 @@ and the summary provably describe the same bytes.
   no product reason to read an unshared skill body. The one bypass is keyed on
   *visibility*, not listing: an admin may still see a package that was public and
   has been delisted, so delisting is not a trapdoor that hides its own output.
+- **`users` is the third visibility**, added by
+  [agent_addons](../agent_addons/agent_addons.md): a per-user allowlist mirroring
+  `BundleAccessGrant`. A grant confers **catalog visibility only** — archive
+  download is authorised by "this environment holds an install of this revision",
+  so revoking never breaks a running install. It respects `is_listed` exactly like
+  a public package, and there is **no superuser bypass**: delisting beats a grant.
+  A publish that names people while it would leave the package on any visibility
+  other than `users` is **refused** (409) rather than writing rows that share
+  nothing; granting through the package's own grant routes stays allowed at any
+  visibility, since that is how a publisher prepares an audience before flipping.
+  Grants are additive on re-publish, and survive a visibility change away from
+  `users` (inert and reversible).
 - The package **description** follows the skill's frontmatter until a publisher
   edits it in the catalog; after that a re-publish leaves the edited blurb alone.
 
@@ -356,6 +388,7 @@ regex.
 |---------|---------------------------|
 | [agent_environment_core](../agent_environment_core/agent_environment_core.md) | New `skills_projection` module and vendored parser; `sdk_manager` projects before every message; both adapters take a `skills_changed` signal; new `GET /config/skills` |
 | [agent_prompts](../agent_prompts/agent_prompts.md) | `BUILDING_AGENT.md` gains the authoring section. No change to the three synced prompt docs or their reconcile. The prompt generator's `## Agent Skills` fallback block is a **no-op for both shipped engines** — it only fires for an adapter that sets `SUPPORTS_SKILLS = False` |
+| [agent_addons](../agent_addons/agent_addons.md) | The index is one of the two inputs to the addons projection; the Skills card moved into the Addons tab; `visibility=users` + `SkillPackageAccessGrant` extend the catalog; `cinna skills list|publish` |
 | [agent_plugins](../agent_plugins/agent_plugins.md) | `skills` left the OpenCode "unsupported" list; each active plugin's `skills/` is registered as an OpenCode `skills.paths` entry; new `PluginSource.catalog` with archive coordinates; the per-mode OpenCode server is stopped after a real manifest change |
 | [agent_bundles](../agent_bundles/agent_bundles.md) | `skills/` is captured by the existing denylist walk (no change); derived `skills_summary` in manifest, revision and catalog entry; publish hard-blocks on invalid or secret-bearing skills |
 | [agent_environment_data_management](../agent_environment_data_management/agent_environment_data_management.md) | `.claude` joined `RUNTIME_NAME_DENYLIST` — see the consequence below |
@@ -403,11 +436,12 @@ sweep skips denylisted names — it simply never travels again.
 
 ## Out of Scope
 
-- `cinna skills publish|install` CLI verbs and desktop-kit integration beyond the
-  layout/guide changes.
+- `cinna skills install` (the CLI installing a catalog skill into a cloud agent)
+  and local install of catalog skills into a kit workspace. `cinna skills list`
+  and `cinna skills publish` **do** exist — see
+  [agent_addons](../agent_addons/agent_addons.md).
 - Consumer-authored skills that survive a bundle apply-update (would need a
   `skills/` merge branch like the plugins tree).
-- `visibility=users` allowlist grants on skill packages.
 - OpenCode hot-reload of plugin skills without a server relaunch.
 - Skill usage analytics from `skill` tool events.
 - Skill-level `hooks` / `agents` parity for OpenCode.
