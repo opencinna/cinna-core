@@ -868,7 +868,7 @@ Use case: give MCP access to a script or tool that has no platform account, scop
 - `backend/tests/api/mcp_integration/test_mcp_file_upload.py` — File upload tool and endpoint tests
 - `backend/tests/api/mcp_integration/test_mcp_resources.py` — Workspace resource tests (URI parsing, tree filtering, file reading, WorkspaceResourceManager, registration)
 - `backend/tests/api/mcp_integration/test_mcp_prompts.py` — Agent example prompts tests (parsing, DB fetch, handler registration, list/get/not-found/empty)
-- `backend/tests/api/mcp_integration/test_mcp_notifications.py` — Resource change notification tests (capability, send_message notification, broadcast, session tracking)
+- `backend/tests/unit/test_mcp_notifications.py` — Resource change notification tests (capability, send_message notification, broadcast, session tracking)
 - `backend/tests/api/mcp_integration/test_mcp_progress_notifications.py` — Progress and content streaming notification tests (multi-step progress, capping, throttling, failure resilience)
 - `backend/tests/api/mcp_integration/test_mcp_session_meta.py` — MCPSessionMeta tests (creation, reuse, session context enrichment, owner vs authenticated user, error resilience)
 - `backend/tests/utils/mcp.py` — Test utilities

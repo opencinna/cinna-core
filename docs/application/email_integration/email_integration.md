@@ -1,3 +1,10 @@
+---
+feature: email_integration
+domain: application
+one_liner: "Routes inbound and outbound mail for a shared organizational mailbox as one of the Server Channels transports, alongside Google Chat."
+docs:
+  tech: email_integration_tech.md
+---
 # Email Integration
 
 ## Email is a server channel

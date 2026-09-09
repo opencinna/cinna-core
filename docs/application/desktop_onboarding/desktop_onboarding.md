@@ -1,3 +1,10 @@
+---
+feature: desktop_onboarding
+domain: application
+one_liner: "Lets a newly created user get Cinna Desktop installed, connected, and signed in with one click, without a terminal or an invite token."
+docs:
+  tech: desktop_onboarding_tech.md
+---
 # Desktop One-Click Onboarding
 
 ## Overview

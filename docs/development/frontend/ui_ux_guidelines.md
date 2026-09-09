@@ -1,3 +1,9 @@
+---
+feature: ui_ux_guidelines
+domain: development
+one_liner: "Reference for structuring any frontend surface: user stories, placement thresholds, house patterns, anti-patterns, and the review checklist."
+primary_label: reference
+---
 # UI/UX Guidelines — the house pattern library
 
 This is the single source of truth for **how a surface is structured**: which user story it serves, where it lives (card / dialog / sheet / page), how dense it may be, which controls are visible, and which house pattern it reuses. It is read by:
@@ -86,7 +92,7 @@ Each pattern names a reference implementation in this codebase. Reuse the refere
 
 ### P2. Summary row → edit dialog
 **Use for:** a small set (1–4) of named settings, each with a few fields. The inline `Pencil` is the "only action" case of §2 Row actions: the moment a row also gets Delete / Disable / Set-default it becomes a P3 row with a `⋯` menu.
-**Reference:** `frontend/src/components/UserSettings/AICredentials.tsx` — "Default SDK Preferences" rows + `SDKModeEditDialog`.
+**Reference:** `frontend/src/components/UserSettings/AICredentials/SdkPreferencesCard.tsx` — "Default SDK Preferences" rows + `SDKModeEditDialog`.
 **Skeleton:** per setting, `div.flex.items-start.justify-between.gap-3.rounded-md.border.px-3.py-2.5` with an icon tile, a label (`text-xs text-muted-foreground`), the current value (`text-sm font-medium`) and secondary lines; a single `Button variant="ghost" size="icon" className="h-7 w-7"` with `Pencil` opening the dialog. The dialog holds the whole form for that setting.
 **States:** skeleton rows while loading; the value line says "Not configured" when empty.
 

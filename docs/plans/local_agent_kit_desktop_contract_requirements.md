@@ -207,7 +207,7 @@ it, one of them a user-facing frontend surface: `backend/app/services/cli/local_
 "What it creates" folder tree), `.cinna-core-kit/scripts/check_docs_references.py:285`
 (comment), `docs/application/local_agent_kit/local_agent_kit.md:83,205`,
 `docs/application/local_agent_kit/local_agent_kit_tech.md:338` — all five must change too.
-`docs/drafts/local-agent-kit_plan.md` is a historical artefact and is deliberately left
+`docs/drafts/local-agent-kit_plan.md` is a historical artefact and is deliberately left <!-- nocheck -->
 alone.]
 
 ### D9 — Contract tarball layout and version endpoint shape

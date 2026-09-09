@@ -1,3 +1,22 @@
+---
+feature: agent_credentials
+domain: agents
+one_liner: "Syncs an owner's credentials into their agent environments with whitelisting and redaction, and lets them share, template, or blast-radius-gate delete credentials across users and published bundles."
+docs:
+  tech: agent_credentials_tech.md
+  oauth: oauth_credentials.md
+  whitelist: credentials_whitelist.md
+  whitelist tech: credentials_whitelist_tech.md
+  google SA: google_service_account.md
+  google SA tech: google_service_account_tech.md
+  ssh key: ssh_key_credentials.md
+  ssh key tech: ssh_key_credentials_tech.md
+  sharing: credential_sharing.md
+  sharing tech: credential_sharing_tech.md
+  security hardening: credential_security_hardening.md
+  security hardening tech: credential_security_hardening_tech.md
+  add credential widget: add_credential_widget.md
+---
 # Agent Credentials
 
 ## Purpose

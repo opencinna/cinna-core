@@ -28,11 +28,11 @@
 
 **Components:**
 - `frontend/src/components/UserSettings/AnthropicCredentialsModal.tsx` - Instructions modal (API Key setup article + OAuth setup article)
-- `frontend/src/components/UserSettings/AICredentialDialog.tsx:92-101` - `useEffect` for auto-fill expiry on OAuth token input
-- `frontend/src/components/UserSettings/AICredentialDialog.tsx:226-241` - Anthropic info banner with "Instructions" button
-- `frontend/src/components/UserSettings/AICredentialDialog.tsx:277-303` - Expiry date input field
-- `frontend/src/components/UserSettings/AICredentials.tsx:49-89` - `getExpiryBadgeProps()` function (color coding logic)
-- `frontend/src/components/UserSettings/AICredentials.tsx:249-267` - Expiry badge rendering in credential rows
+- `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` / `frontend/src/components/UserSettings/AICredentials/EditAICredentialDialog.tsx` - expiry date handling (`toDateInput`, `expiry_notification_date`) on create and edit
+- `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` - Anthropic guidance shown while adding an Anthropic credential
+- `frontend/src/components/UserSettings/AICredentials/EditAICredentialDialog.tsx` - Expiry date input field
+- `frontend/src/components/UserSettings/AICredentials/AICredentialRow.tsx` - `describeExpiry()` drives the expiry badge (variant + fact text)
+- `frontend/src/components/UserSettings/AICredentials/AICredentialRow.tsx` - Expiry badge rendering in credential rows
 - `frontend/src/components/Common/RelativeTime.tsx` - Extended with `asBadge`, `icon`, `showTooltip`, `colorCode` parameters
 
 ## Detection Logic

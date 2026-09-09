@@ -166,8 +166,8 @@ All routes in `backend/app/api/routes/llm_plugins.py`:
 - `POST /api/v1/llm-plugins/marketplaces/{id}/sync` — Trigger re-sync (temp-clone, parse, discard)
 
 **Plugin Discovery**
-- `GET /api/v1/llm-plugins/discover` — Discover plugins (search/filter across accessible marketplaces — reads Postgres, not disk)
-- `GET /api/v1/llm-plugins/marketplaces/{id}/plugins` — List plugins in a marketplace
+- `GET /api/v1/llm-plugins/discover` — Discover plugins (search/filter across accessible marketplaces — reads Postgres, not disk); pass `marketplace_id` to scope the results to one marketplace
+- `GET /api/v1/llm-plugins/plugins/{plugin_id}` — Get one plugin's detail by id
 
 **Agent Plugin Management** (all return `PluginSyncResponse` except GET)
 - `GET /api/v1/llm-plugins/agents/{agent_id}/plugins` → `AgentPluginLinksPublic` (includes `has_update`, `disabled` flags, `source`, snapshot fields)

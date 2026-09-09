@@ -21,7 +21,7 @@
 - `backend/app/alembic/versions/a1b2c3d4e5f7_add_default_credential_fields_to_user.py`
 
 **Frontend — Components:**
-- `frontend/src/components/UserSettings/AICredentials.tsx`
+- `frontend/src/components/UserSettings/AICredentials/SdkPreferencesCard.tsx`
 - `frontend/src/components/Environments/AddEnvironment.tsx`
 - `frontend/src/components/Environments/EnvironmentCard.tsx`
 
@@ -129,7 +129,7 @@ Regression tests: `backend/tests/api/agents/core/agents_ai_credential_slot_misma
 
 ## Frontend Components
 
-**`frontend/src/components/UserSettings/AICredentials.tsx`:**
+**`frontend/src/components/UserSettings/AICredentials/SdkPreferencesCard.tsx`:**
 - Two-panel layout: AI Credentials list (left) and Default SDK Preferences (right)
 - Default SDK Preferences panel renders two bordered sections (Conversation Mode, Building Mode), each with three cascading controls: SDK Engine select, Credential select, Model Override input
 - SDK Engine options: `claude-code` ("Claude Code"), `opencode` ("OpenCode")

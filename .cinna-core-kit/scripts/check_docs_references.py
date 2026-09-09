@@ -13,7 +13,7 @@ Usage:
 Options:
     --verbose, -v        Show each broken reference as it's found
     --files FILE...      Check only specific files (paths relative to project root)
-    --include-incomplete Also scan docs/drafts/ (excluded by default)
+    --include-incomplete Also scan docs/drafts/ and docs/plans/ (excluded by default)
 
 Suppressing false positives:
     1. Pattern-based (automatic) — path segments that look like template/direction
@@ -95,7 +95,7 @@ def is_skippable_path(path):
 
     Lines can also be individually suppressed with an inline <!-- nocheck --> comment.
     """
-    if "..." in path:
+    if "..." in path or "\u2026" in path:
         return True
     if "[" in path or "]" in path:
         return True
@@ -278,6 +278,11 @@ def main():
             drafts_dir = os.path.join(docs_dir, "drafts")
             if os.path.isdir(drafts_dir):
                 exclude_dirs.append(drafts_dir)
+            # Historical plans reference files as they were when the plan was
+            # written; they are frozen artifacts, not living docs.
+            plans_dir = os.path.join(docs_dir, "plans")
+            if os.path.isdir(plans_dir):
+                exclude_dirs.append(plans_dir)
 
         # docs/local_agent_kit/ is shipped content, not repo documentation. Its
         # paths are resolved on the *user's* machine against a scaffolded agent
@@ -322,7 +327,7 @@ def main():
     if verbose:
         print("Project root: %s" % project_root)
         if not specific_files and not include_incomplete:
-            print("Note: docs/drafts/ excluded (use --include-incomplete to scan it)")
+            print("Note: docs/drafts/ and docs/plans/ excluded (use --include-incomplete to scan them)")
         print()
 
     all_issues = []

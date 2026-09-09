@@ -1,3 +1,14 @@
+---
+feature: agent_sessions
+domain: application
+one_liner: "Persistent chat conversations between users or external systems and an agent's environment, with streaming responses and lifecycle tracking."
+docs:
+  tech: agent_sessions_tech.md
+  env panel widget: app_env_panel_widget.md
+  channel ingestion: channel_ingestion.md
+  channel ingestion tech: channel_ingestion_tech.md
+  ask user question widget: tool_answer_questions_widget.md
+---
 # Agent Sessions
 
 ## Purpose

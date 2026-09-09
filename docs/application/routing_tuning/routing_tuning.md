@@ -1,3 +1,10 @@
+---
+feature: routing_tuning
+domain: application
+one_liner: "Gives superusers durable, replayable traces of every LLM-mediated routing decision so they can see why a channel, email, or App MCP message did or didn't reach an agent."
+docs:
+  tech: routing_tuning_tech.md
+---
 # Auto Routing Tuning
 
 ## Purpose

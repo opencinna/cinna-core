@@ -1,3 +1,9 @@
+---
+feature: ai_functions
+domain: development
+one_liner: "Reference for building fast LLM-powered utility functions with multi-provider cascade fallback for reliability."
+primary_label: reference
+---
 # AI Functions Development Guide
 
 ## Overview
@@ -71,7 +77,7 @@ AI_FUNCTIONS_PROVIDERS=gemini
    - Refines task descriptions based on user feedback for task queue execution
    - Takes context: current description, agent workflow prompt, agent refiner prompt, user comment, refinement history, selected text
    - Returns JSON: `{success: true, refined_description: "...", feedback_message: "..."}` or `{success: false, error: "..."}`
-   - Used in: `backend/app/api/routes/input_tasks.py` (POST `/api/v1/tasks/refine-task`)
+   - Used in: `backend/app/api/routes/input_tasks.py` (POST `/api/v1/tasks/{id}/refine`)
    - **Agent-aware refinement**: Uses agent's `refiner_prompt` for context-specific task enhancement:
      - Default values for common parameters
      - Mandatory fields that must be clarified

@@ -1,3 +1,10 @@
+---
+feature: a2a_access_tokens
+domain: application
+one_liner: "Scoped JWT tokens that let an external A2A client access one agent's conversation or building mode without full user credentials."
+docs:
+  tech: a2a_access_tokens_tech.md
+---
 # A2A Access Tokens
 
 ## Purpose

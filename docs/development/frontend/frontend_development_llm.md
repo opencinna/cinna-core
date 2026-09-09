@@ -1,3 +1,9 @@
+---
+feature: frontend_patterns
+domain: development
+one_liner: "Reference for frontend development patterns: component conventions, hooks, and TanStack Router and Query usage."
+primary_label: reference
+---
 # Frontend Development - LLM Quick Reference
 
 ## Toast Notifications
@@ -176,7 +182,7 @@ Inline editing in the row is allowed only for a **single-field** quick edit (ren
 ### Reference implementations
 
 - `frontend/src/components/Admin/UserActionsMenu.tsx` — the per-row overflow menu (invitation actions first, Edit, Delete)
-- `frontend/src/components/UserSettings/AICredentials.tsx` — "Default SDK Preferences" summary rows + `SDKModeEditDialog` (guideline P2)
+- `frontend/src/components/UserSettings/AICredentials/SdkPreferencesCard.tsx` — "Default SDK Preferences" summary rows + `SDKModeEditDialog` (guideline P2)
 - `frontend/src/components/Credentials/AddCredential.tsx` — type picker → detail route (guideline P4)
 
 - `frontend/src/components/Agents/HandoverRow.tsx` / `ScheduleRow.tsx` — the two P3 rows (menu, off-only badge, `AlertDialog` confirm) over `Common/PreviewList.tsx`

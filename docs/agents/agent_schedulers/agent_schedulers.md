@@ -1,3 +1,10 @@
+---
+feature: agent_schedulers
+domain: agents
+one_liner: "Lets a user configure multiple named cron-style schedules per agent from natural language, each firing a prompt session or a conditional script trigger."
+docs:
+  tech: agent_schedulers_tech.md
+---
 # Agent Schedulers
 
 ## Purpose

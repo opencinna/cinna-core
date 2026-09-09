@@ -239,8 +239,13 @@ backfill-router-trigger-prompts-dry-run: # dry-run: report what backfill-router-
 	docker compose exec backend python -m app.scripts.backfill_router_trigger_prompts --dry-run
 
 .PHONY: check-docs
-check-docs: # check documentation for broken file references
+check-docs: # check docs: broken file references + index/frontmatter/route/orphan checks
 	python3 .cinna-core-kit/scripts/check_docs_references.py
+	python3 .cinna-core-kit/scripts/docs_index.py check
+
+.PHONY: docs-registry
+docs-registry: # regenerate the Feature Registry block in docs/README.md from doc frontmatter
+	python3 .cinna-core-kit/scripts/docs_index.py registry
 
 .PHONY: sync-platform-knowledge
 sync-platform-knowledge: # sync docs + auto-generate API reference into platform-knowledge env template

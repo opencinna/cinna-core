@@ -124,7 +124,8 @@ ExternalAgentCatalogService.list_targets()
 ## Descriptor Flow: A2A Card Endpoint
 
 ```
-GET /api/v1/external/a2a/{type}/{id}/
+GET /api/v1/external/a2a/agent/{agent_id}/
+GET /api/v1/external/a2a/identity/{owner_id}/
         │
         ▼
 ExternalA2AService.build_card()

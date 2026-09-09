@@ -1,3 +1,10 @@
+---
+feature: tools_approval
+domain: tasks
+one_liner: "Gates tools a plugin introduces behind explicit one-time user approval, stored per agent and merged with the always-allowed core SDK tools."
+docs:
+  tech: tools_approval_management_tech.md
+---
 # Tools Approval Management
 
 ## Purpose

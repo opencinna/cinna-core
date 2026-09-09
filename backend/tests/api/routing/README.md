@@ -58,7 +58,7 @@ domain's own `README.md` for what each stub is for.
   `.../traces/{id}/replay` write the second, and those rows are the only ones
   carrying `actor_user_id` (the admin who ran it) and, for a hand-typed
   simulate, a NULL `channel_id`. `AppMCPRoutingService.route_message` writes
-  the third — phase 6 of `docs/plans/channels_identity_unification/` — with a
+  the third — phase 6 of `drafts/channels_identity_unification/` — with a
   populated `channel_id` (App MCP is a singleton `ServerChannel`), and it is
   the one origin with a per-origin write setting,
   `ROUTING_TRACE_APP_MCP_MODE` (`off` | `metadata` | `full`, default
@@ -137,7 +137,7 @@ domain's own `README.md` for what each stub is for.
 - **Assignment-gated reachability is now an identity-only concern.**
   `AppAgentRoute` / `AppAgentRouteAssignment` (and `create_admin_route` /
   `create_user_route`, the test helpers that drove them) are deleted — phase 5
-  of `docs/plans/channels_identity_unification/`. The identity equivalent
+  of `drafts/channels_identity_unification/`. The identity equivalent
   survives: `create_identity_binding(assigned_user_ids=[...])` alone produces a
   binding nobody can reach until the *recipient* turns the contact on via
   `toggle_identity_contact` (`auto_enable=True` on the binding, superuser-only,

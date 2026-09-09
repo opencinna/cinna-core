@@ -1,3 +1,10 @@
+---
+feature: status_repair
+domain: system
+one_liner: "Background sweep that finds database rows stuck in a transitional status after a crash and repairs them only once live evidence confirms they are actually dead."
+docs:
+  tech: status_repair_tech.md
+---
 # System Status Repair Scheduler
 
 ## Purpose

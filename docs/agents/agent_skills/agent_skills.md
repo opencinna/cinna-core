@@ -1,3 +1,10 @@
+---
+feature: agent_skills
+domain: agents
+one_liner: "Lets an agent carry reusable skill folders that the engine loads on demand, publishable to and installable from a server-wide skills catalog."
+docs:
+  tech: agent_skills_tech.md
+---
 # Agent Skills
 
 Agents carry a set of **agent skills** — folders shaped like the open Agent Skills

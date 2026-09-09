@@ -1,3 +1,10 @@
+---
+feature: app_sync
+domain: application
+one_liner: "Syncs a native client's personal data (notes, jobs, folders) across devices as opaque end-to-end encrypted ciphertext the server can never read."
+docs:
+  tech: app_sync_tech.md
+---
 # App Sync (Native Client Data Sync)
 
 ## Overview

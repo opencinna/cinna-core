@@ -10,11 +10,17 @@ This document provides context and instructions for LLM assistants working on th
 
 ## User Shortcuts
 
-- **"read core ..."** — When the user says "read core" (optionally followed by a topic), read `docs/README.md` first. This is the base for documentation discovery; use it to find the relevant feature docs for the topic mentioned.
+- **"read core ..."** — When the user says "read core" (optionally followed by a topic), run `python3 .cinna-core-kit/scripts/docs_index.py summary` first (one line per feature, ~5k tokens) and, for a topic, `docs_index.py search "<topic>"`. Open `docs/README.md` only for the Core Idea, Glossary and Domain Map. Then read the relevant feature docs.
 
 ## Documentation Strategy
 
-`docs/README.md` is the entrypoint to all feature documentation. When planning a task or exploring unfamiliar territory, start there to identify which features are involved and how they relate.
+`docs/README.md` is the entrypoint to all feature documentation. Its Feature Registry block is **generated** from the YAML frontmatter each feature's primary doc carries (`feature`, `domain`, `one_liner`, `docs`, optional `affects`) — never edit that block by hand; edit the frontmatter and run `make docs-registry`. When planning a task or exploring unfamiliar territory, start with `docs_index.py summary` / `search` to identify which features are involved, then read their docs.
+
+Docs tooling (`.cinna-core-kit/scripts/docs_index.py`, details in `docs/development/docs_tooling.md`):
+- `summary` / `search TERM` — compact index and text search for LLM navigation
+- `impact` — which docs cover the files in the current diff (plus one hop along `affects`); run before touching docs after a code change
+- `path A B` / `graph` — feature graph derived from doc links + authored `affects`
+- `check` (part of `make check-docs`) — registry freshness, frontmatter validity, undocumented modules, route citations vs OpenAPI, tech-doc anchoring
 
 From the README, pick the most relevant feature docs and read those business logic files first. If something remains unclear, follow the integration point links to adjacent features and read those next. Expand only as far as needed — not every feature requires full coverage.
 

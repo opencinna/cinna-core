@@ -157,6 +157,7 @@ Key patterns from reference:
 3. **Read Service File** - Check for missing abstractions
 4. **Compare Patterns** - Match against reference implementation
 5. **Check New Storage Paths** - If the diff introduces or reads/writes a new on-disk path (new config dir setting, new subdirectory under existing storage roots, etc.), check `docker-compose.yml`/override/prod compose for a matching volume mount (see §5 above)
+5b. **Check Docs Impact** - Run `python3 .cinna-core-kit/scripts/docs_index.py impact`. If it lists docs that name changed files (or `affects` hops) and none of them is in the diff, report it as a finding: either the docs were updated, or the review states why no doc change is needed. A changed route path with a doc citation that `docs_index.py check` now flags is a Major finding.
 6. **Generate Report** - List issues and recommendations
 7. **Propose Changes** - Describe specific refactoring steps
 

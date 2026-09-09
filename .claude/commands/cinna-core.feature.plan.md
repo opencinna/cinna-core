@@ -15,7 +15,7 @@ You **MUST** consider the user input before proceeding (if not empty). This is t
 You are working with a **Full Stack FastAPI + React application** (cinna-core). Feature implementation plans are comprehensive architectural documents that describe HOW to implement features.
 
 ### Document Organization
-- **Location**: `docs/drafts/` for implementation plans
+- **Location**: `drafts/` for implementation plans
 - **Format**: Single markdown file with complete implementation architecture
 - **Naming**: `[feature-name-kebab-case]_plan.md`
 - **Purpose**: Blueprint for developers/LLMs to implement the feature step-by-step

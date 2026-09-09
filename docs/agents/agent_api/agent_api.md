@@ -1,3 +1,12 @@
+---
+feature: agent_api
+domain: agents
+one_liner: "Lets a producer agent expose a capability-narrowed REST API from its own code, so other agents or outside callers can use it as a normal credentialed API without touching its underlying secrets."
+docs:
+  tech: agent_api_tech.md
+  spec viewer: spec_viewer.md
+  spec viewer tech: spec_viewer_tech.md
+---
 # Agent REST API
 
 ## Purpose

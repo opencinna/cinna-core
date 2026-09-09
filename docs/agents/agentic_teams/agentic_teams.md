@@ -1,3 +1,10 @@
+---
+feature: agentic_teams
+domain: agentic_teams
+one_liner: "Lets a user build a visual org chart of their own agents with directed handover connections, currently a static blueprint with no execution."
+docs:
+  tech: agentic_teams_tech.md
+---
 # AgenticTeams
 
 ## Overview

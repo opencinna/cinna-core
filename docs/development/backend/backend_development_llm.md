@@ -1,3 +1,12 @@
+---
+feature: backend_patterns
+domain: development
+one_liner: "Reference for backend development patterns: SQLModel models, routes, services, CRUD, and migrations."
+docs:
+  development guidelines: ../development_guidelines_llm.md
+  debug docker sigkill: debug_docker_sigkill_events.md
+primary_label: reference
+---
 # Backend Development - LLM Quick Reference
 
 ## Project Structure

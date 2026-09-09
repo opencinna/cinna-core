@@ -1,3 +1,10 @@
+---
+feature: mail_servers
+domain: application
+one_liner: "Lets admins configure reusable, server-scoped IMAP and SMTP connections that email channels reference for receiving and sending mail."
+docs:
+  tech: mail_servers_tech.md
+---
 # Mail Servers
 
 ## Purpose

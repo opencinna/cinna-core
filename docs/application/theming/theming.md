@@ -1,3 +1,10 @@
+---
+feature: theming
+domain: application
+one_liner: "Lets a user personalize color mode and visual skin for their own device, applying instantly across the app with no backend model."
+docs:
+  tech: theming_tech.md
+---
 # Theming
 
 ## Purpose

@@ -1,3 +1,19 @@
+---
+feature: agent_environment_core
+domain: agents
+one_liner: "Runs the server-side core inside every agent's Docker container — HTTP API, prompt generation, and adapters for the Claude Code and OpenCode SDK engines across multiple LLM providers."
+docs:
+  tech: agent_environment_core_tech.md
+  multi-sdk: multi_sdk.md
+  multi-sdk tech: multi_sdk_tech.md
+  knowledge tool: knowledge_tool.md
+  create agent task tool: create_agent_task_tool.md
+  session state tools: session_state_tools.md
+  opencode interactive questions: opencode_interactive_questions.md
+  opencode interactive questions tech: opencode_interactive_questions_tech.md
+  claude code interactive tools: claude_code_interactive_tools.md
+  claude code interactive tools tech: claude_code_interactive_tools_tech.md
+---
 # Agent Environment Core
 
 ## Purpose

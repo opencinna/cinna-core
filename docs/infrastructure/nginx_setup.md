@@ -1,3 +1,9 @@
+---
+feature: nginx_setup
+domain: infrastructure
+one_liner: "Reference for the nginx location blocks the platform requires in production and in the frontend container, with links to the features that depend on them."
+primary_label: reference
+---
 # Nginx Setup
 
 ## Purpose

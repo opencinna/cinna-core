@@ -33,7 +33,7 @@
 
 ### Frontend
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` - A2A toggle + Agent Card URL display
-- `frontend/src/components/Agents/AccessTokensCard.tsx` - Access token management UI
+- `frontend/src/components/Agents/A2aAccessTokensManager.tsx` - Access token management UI
 - `frontend/src/routes/_layout/agent/$agentId.tsx` - Agent detail page with Integrations tab
 
 ### Test Client

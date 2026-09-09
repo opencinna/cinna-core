@@ -1,3 +1,12 @@
+---
+feature: server_channels
+domain: application
+one_liner: "Lets people outside the platform, such as Google Chat or email users, message platform agents through admin-configured, whitelisted inbound channels."
+docs:
+  tech: server_channels_tech.md
+  debug monitor: channel_debug_monitor.md
+  debug monitor tech: channel_debug_monitor_tech.md
+---
 # Server Channels
 
 ## Purpose

@@ -1,0 +1,3 @@
+# Service/route modules that `docs_index.py check` may skip in the
+# "every module is named by at least one doc" check. One glob per line,
+# root-relative, with a reason. Prefer documenting the module over listing it.

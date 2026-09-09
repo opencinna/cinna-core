@@ -31,7 +31,7 @@
 ### Frontend
 
 - `frontend/src/components/UserSettings/IdentityServerCard.tsx` -- Settings > Channels tab card for identity owner management (list bindings, add/edit/delete, manage user assignments). **As of Phase 5, this is the sole creation entry point**: an "Add Agent" button in the card header opens an "Add Agent to Identity" dialog (agent picker via `AgentSelectorDialog`, trigger prompt, session mode, `UserAllowlistPicker`). `McpConnectorsCard.tsx` no longer offers an "Identity MCP Server Integration" option at all
-- `frontend/src/components/UserSettings/UserChannelsCard.tsx` -- renders the identity-contacts list (received identity contacts with per-person enable/disable toggle); the sole surface for it since `AppAgentRoutesCard` (renamed `AppMcpServerCard.tsx` in Phase 7) was stripped down to just the MCP Server URL
+- `frontend/src/components/UserSettings/Channels/UserChannelsCard.tsx` -- renders the identity-contacts list (received identity contacts with per-person enable/disable toggle); the sole surface for it since `AppAgentRoutesCard` (renamed `AppMcpServerCard.tsx` in Phase 7) was stripped down to just the MCP Server URL
 
 ## Database Schema
 

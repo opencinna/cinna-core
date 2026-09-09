@@ -1,3 +1,12 @@
+---
+feature: agent_file_management
+domain: agents
+one_liner: "Lets users upload, browse, and download files in an agent's workspace and chat history, under a per-user storage quota with daily garbage collection of deleted files."
+docs:
+  tech: agent_file_management_tech.md
+  remote db viewer: remote_database_viewer.md
+  remote db viewer tech: remote_database_viewer_tech.md
+---
 # Agent File Management
 
 ## Purpose

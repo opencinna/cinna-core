@@ -1,3 +1,10 @@
+---
+feature: getting_started
+domain: application
+one_liner: "Guides new users and new instances through initial setup: configuring an AI credential, learning core concepts, and discovering supplementary features."
+docs:
+  tech: getting_started_tech.md
+---
 # Getting Started
 
 ## Purpose

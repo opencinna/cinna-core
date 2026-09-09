@@ -1,3 +1,10 @@
+---
+feature: agent_activities
+domain: application
+one_liner: "Persistent per-user activity feed and sidebar bell that surface session, task, and error events, including ones missed while disconnected."
+docs:
+  tech: agent_activities_tech.md
+---
 # Agent Activities
 
 ## Purpose

@@ -1,3 +1,10 @@
+---
+feature: ssh_keys
+domain: application
+one_liner: "Lets users store SSH key pairs so the platform can clone and sync private Git repositories on their behalf."
+docs:
+  tech: ssh_keys_tech.md
+---
 # SSH Keys
 
 ## Purpose

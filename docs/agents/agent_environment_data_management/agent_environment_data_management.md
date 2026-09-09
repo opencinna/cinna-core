@@ -1,3 +1,10 @@
+---
+feature: agent_environment_data_management
+domain: agents
+one_liner: "Defines which workspace data is bundle-owned, per-user App Data, credentials, or runtime data, and keeps that split consistent across install, apply-update, and environment migration."
+docs:
+  tech: agent_environment_data_management_tech.md
+---
 # Environment Data Management
 
 ## Purpose

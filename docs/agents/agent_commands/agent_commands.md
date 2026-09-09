@@ -1,3 +1,17 @@
+---
+feature: agent_commands
+domain: agents
+one_liner: "Lets a user run instant, deterministic slash commands during an agent session without an LLM call, with an autocomplete popup that also lists invocable skills."
+docs:
+  tech: agent_commands_tech.md
+  files: files_command.md
+  recovery: session_recovery_command.md
+  reset: session_reset_command.md
+  rebuild-env: rebuild_env_command.md
+  webapp: webapp_command.md
+  autocomplete: slash_command_autocomplete.md
+  non-llm context bridging tech: non_llm_context_bridging_tech.md
+---
 # Agent Commands
 
 ## Purpose

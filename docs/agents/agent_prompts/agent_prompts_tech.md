@@ -142,7 +142,7 @@ The `AgentEnvironment` table (defined in `backend/app/models/environments/enviro
 `backend/app/services/environments/synced_files.py`
 
 - `SyncedFile(key, rel_path, sync_class)` — frozen dataclass; `sync_class` is `"bidirectional"` or `"pull_only"`
-- `SYNCED_FILES` — 5 entries: three bidirectional prompt docs + `"cli_commands"` (`docs/CLI_COMMANDS.yaml`) + `"status"` (`app-data/storage/STATUS.md`)
+- `SYNCED_FILES` — 5 entries: three bidirectional prompt docs + `"cli_commands"` (`docs/CLI_COMMANDS.yaml`) + `"status"` (`app-data/storage/STATUS.md`) <!-- nocheck -->
 - `watched_rel_paths()` — all `rel_path`s; mirrors env-core `_WATCHED_FILES` (drift is caught by a unit test)
 - `bidirectional_files()` / `pull_only_files()` — filtered views
 
@@ -213,7 +213,7 @@ The `AgentEnvironment` table (defined in `backend/app/models/environments/enviro
 
 ## Tests
 
-- `backend/tests/unit/test_prompt_sync.py` — unit tests for `decide()` across the full decision table (NOOP, PULL, PUSH, SEED_PUSH, SEED_PULL, CONFLICT_PULL, CONFLICT_PUSH, empty-file/blank cases)
+- `backend/tests/unit/test_prompt_sync_decide.py` — unit tests for `decide()` across the full decision table (NOOP, PULL, PUSH, SEED_PUSH, SEED_PULL, CONFLICT_PULL, CONFLICT_PUSH, empty-file/blank cases)
 - `backend/tests/unit/test_synced_files_registry.py` — **drift-guard test**: asserts that env-core `_WATCHED_FILES` equals the `SYNCED_FILES` registry `rel_path`s. Parses `app_core_base/core/main.py` via the AST so the check works without importing the env-core module; fails the suite if the two lists diverge
 
 ## Security

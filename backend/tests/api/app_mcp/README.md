@@ -5,7 +5,7 @@ App MCP is the MCP server the platform exposes to a user's own MCP client
 message, and the platform routes it to one of their agents — or, when they have
 opted in, to a *person* whose agents then answer on their behalf.
 
-Since phase 5 of `docs/plans/channels_identity_unification/` App MCP is a
+Since phase 5 of `drafts/channels_identity_unification/` App MCP is a
 `ServerChannel` like Google Chat and email — a **singleton** one
 (`adapters/app_mcp.py`, `is_singleton=True`), materialized lazily rather than
 created by anybody — so the admin kill switch, the channel's visibility + grant

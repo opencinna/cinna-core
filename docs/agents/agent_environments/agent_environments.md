@@ -1,3 +1,13 @@
+---
+feature: agent_environments
+domain: agents
+one_liner: "Provides the isolated Docker container runtime each agent executes in, split into a system layer and a user-workspace layer so platform updates never destroy user work."
+docs:
+  tech: agent_environments_tech.md
+  multi-image: agent_multi_image_environments.md
+  credential rebuild: affected_environments_rebuild.md
+  sdk session persistence: sdk_session_persistence.md
+---
 # Agent Environments
 
 ## Purpose

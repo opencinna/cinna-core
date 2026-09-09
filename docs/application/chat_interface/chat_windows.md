@@ -1,3 +1,25 @@
+---
+feature: chat_windows
+domain: application
+one_liner: "Renders streaming agent chat — markdown, tool blocks, auto-scroll — across session pages, guest shares, webapp widgets, and dashboard prompt actions."
+docs:
+  tech: chat_windows_tech.md
+  tool rendering: tool_rendering.md
+  tool tech: tool_rendering_tech.md
+  markdown: markdown_rendering.md
+  markdown tech: markdown_rendering_tech.md
+  auto-scroll: auto_scroll_and_streaming_display.md
+  auto-scroll tech: auto_scroll_and_streaming_display_tech.md
+  ask user question: tool_answer_questions_widget.md
+  tool approval: tool_approval_widget.md
+  tool approval tech: tool_approval_widget_tech.md
+  webapp widget: webapp_chat_widget.md
+  webapp widget tech: webapp_chat_widget_tech.md
+  file sending: file_sending_and_ui.md
+  file sending tech: file_sending_and_ui_tech.md
+  dashboard prompt actions: dashboard_prompt_actions.md
+  dashboard prompt actions tech: dashboard_prompt_actions_tech.md
+---
 # Chat Windows
 
 ## Purpose

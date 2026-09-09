@@ -1,3 +1,10 @@
+---
+feature: guest_sharing
+domain: sharing
+one_liner: "Lets an agent owner create disposable, optionally code-protected links so anonymous visitors can chat with the owner's live agent without an account."
+docs:
+  tech: guest_sharing_tech.md
+---
 # Guest Sharing
 
 ## Purpose

@@ -14,6 +14,7 @@
 
 **Services:**
 - `backend/app/services/agents/agent_handover_service.py` — `AgentHandoverService` with handover config CRUD, access verification, prompt generation; exception hierarchy (`HandoverError`, `HandoverNotFoundError`, `AgentNotFoundError`, `PermissionDeniedError`)
+- `backend/app/services/agents/handover_connection_sync_service.py` — `HandoverConnectionSyncService`, the single place that keeps `AgentHandoverConfig` and `AgenticTeamConnection` bidirectionally in sync: creating/deleting a handover creates/deletes the matching connection on every team where both agents are nodes, creating/updating/deleting a team connection does the reverse on the handover config, and adding a node to a team backfills connections from any pre-existing handover configs between it and the team's other nodes
 - `backend/app/services/agents/agent_service.py` — `sync_agent_handover_config()`, `create_agent_task()`
 - `backend/app/services/tasks/input_task_service.py` — `create_task()`, `create_task_with_auto_refine()`, `execute_task()`, `link_session()`
 - `backend/app/services/sessions/session_service.py` — `create_session()`, `send_session_message()`

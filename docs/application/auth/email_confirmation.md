@@ -1,3 +1,10 @@
+---
+feature: email_confirmation
+domain: application
+one_liner: "Requires a user to confirm their email address before the platform sends outbound mail on their behalf, and ties agent-creation limits to that status."
+docs:
+  tech: email_confirmation_tech.md
+---
 # Email Confirmation
 
 ## Purpose

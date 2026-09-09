@@ -1,3 +1,10 @@
+---
+feature: identity_routing
+domain: application
+one_liner: "Lets a user expose themselves as a routable identity so callers on App MCP or Server Channels can address them by name and reach one of their agents."
+docs:
+  tech: identity_routing_tech.md
+---
 # Identity Routing
 
 ## Purpose

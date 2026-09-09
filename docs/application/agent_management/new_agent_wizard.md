@@ -335,7 +335,7 @@ When extending the wizard, test these scenarios:
 **Related SDK Configuration:**
 - Environment Service: `backend/app/services/environments/environment_service.py` (SDK validation, defaults)
 - Environment Lifecycle: `backend/app/services/environments/environment_lifecycle.py` (SDK settings file generation)
-- User Settings: `frontend/src/components/UserSettings/AICredentials.tsx` (API key management)
+- User Settings: `frontend/src/components/UserSettings/AICredentials/AICredentialsCard.tsx` (API key management)
 
 ## Related Documentation
 

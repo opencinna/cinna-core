@@ -105,7 +105,7 @@ Deleted outright, no compatibility shim:
 
 **Routes**
 - `app/api/routes/email_integration.py` and its registration in `api/main.py`
-- `POST /api/v1/tasks/{id}/send-answer`
+- `POST /api/v1/tasks/{id}/send-answer` (deleted) <!-- nocheck -->
 
 **Frontend**
 - `components/Agents/EmailIntegrationCard.tsx`
@@ -325,6 +325,16 @@ connection leak on pooled connections).
   retried — a misconfigured channel does not improve with a retry.
 - `send_pending_emails`, MIME building, and the retry loop (`MAX_RETRIES = 3`)
   are otherwise unchanged from before this phase.
+
+## `backend/app/services/email/sending_scheduler.py`
+
+A separate, pre-existing `BackgroundScheduler` (APScheduler, not the async
+main-loop pattern the poll scheduler uses) that drives the outbound half:
+every `SEND_INTERVAL_MINUTES = 2` it opens its own DB session and calls
+`EmailSendingService.send_pending_emails`, logging the sent count (or a debug
+line when a batch sends nothing — including the case where every entry in
+the batch failed terminally). `start_scheduler()` / `shutdown_scheduler()`
+are wired into app startup/shutdown; unchanged by this refactor.
 
 ## A real, non-obvious gap: `email_subject` context
 

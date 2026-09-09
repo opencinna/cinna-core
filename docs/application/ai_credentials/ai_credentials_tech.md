@@ -43,8 +43,8 @@
 ### Frontend
 
 **Components:**
-- `frontend/src/components/UserSettings/AICredentials.tsx` - Main credentials list with expiry badges, set-default, delete actions; houses `SDKModeEditDialog`
-- `frontend/src/components/UserSettings/AICredentialDialog.tsx` - Add/edit dialog with type selector, auto-fill expiry
+- `frontend/src/components/UserSettings/AICredentials/AICredentialsCard.tsx` (+ `AICredentialRow.tsx`) - Main credentials list with expiry badges, set-default, delete actions; houses `SDKModeEditDialog`
+- `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` / `EditAICredentialDialog.tsx` - Add wizard and edit dialog with type selector, auto-fill expiry
 - `frontend/src/components/UserSettings/AnthropicCredentialsModal.tsx` - Instructions modal for Anthropic API Key / OAuth setup
 - `frontend/src/components/UserSettings/AffectedEnvironmentsDialog.tsx` - Post-update rebuild dialog
 - `frontend/src/components/Environments/AddEnvironment.tsx` - Environment creation dialog with compact summary rows + `EnvModeEditDialog` modal for SDK/credential/model selection per mode
@@ -310,7 +310,7 @@ concrete saved credential and lets the user pick a model directly into a Model O
 It is used by two call sites:
 
 1. `EnvModeEditDialog` in `frontend/src/components/Environments/EnvironmentConfigForm.tsx` — the per-mode edit dialog for existing agent environments.
-2. `SDKModeEditDialog` in `frontend/src/components/UserSettings/AICredentials.tsx` — the per-mode editor in Default SDK Preferences (Settings).
+2. `SDKModeEditDialog` (`frontend/src/components/UserSettings/AICredentials/SDKModeEditDialog.tsx`, hosted by `SdkPreferencesCard.tsx`) — the per-mode editor in Default SDK Preferences (Settings).
 
 **Props:**
 

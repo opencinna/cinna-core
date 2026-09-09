@@ -149,12 +149,13 @@ Not every feature needs the full 3-layer treatment. For simple features or stand
    - Create `{feature}_widget.md` only if there are notable widgets
    - Create aspect files only if needed for complex sub-topics
    - Create `{name}_llm.md` when the target audience is LLMs, not humans (e.g., development guides, coding conventions)
-5. **Update `docs/README.md`**: Add/update the feature entry in the registry
+5. **Frontmatter + registry**: Put the frontmatter block at the top of `{feature}.md` (`feature`, `domain`, `one_liner` ≤ 200 chars, `docs:` mapping of every other doc of the feature, optional `affects`), then run `python3 .cinna-core-kit/scripts/docs_index.py registry`. Never edit the README registry block by hand. See `docs/development/docs_tooling.md`.
 6. **If refactoring**: After creating new files, note which old files were replaced (don't delete them automatically - report to user)
 7. **Verify references**: Run the docs reference checker on all created/updated files:
    ```
    python3 .cinna-core-kit/scripts/check_docs_references.py --files docs/{domain}/{feature}/{feature}.md docs/{domain}/{feature}/{feature}_tech.md
    ```
+   Then run `python3 .cinna-core-kit/scripts/docs_index.py check` and fix what concerns your feature (frontmatter, undocumented modules, route citations, tech-doc anchoring).
    If broken references are found, fix them before finishing. Common issues:
    - Typos in file paths (verify paths exist with glob/grep)
    - References to files that were renamed or moved

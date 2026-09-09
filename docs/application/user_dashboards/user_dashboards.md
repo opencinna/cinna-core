@@ -1,3 +1,10 @@
+---
+feature: user_dashboards
+domain: application
+one_liner: "Lets a user build a personal grid of monitoring blocks for their agents, showing webapp views, session summaries, or task lists across workspaces."
+docs:
+  tech: user_dashboards_tech.md
+---
 # User Dashboards
 
 ## Overview

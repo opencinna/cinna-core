@@ -1,3 +1,10 @@
+---
+feature: agent_improvement_requests
+domain: application
+one_liner: "Lets a session owner consent-share a frozen transcript and runtime context with the agent's publisher so they can fix what went wrong."
+docs:
+  tech: agent_improvement_requests_tech.md
+---
 # Agent Improvement Requests
 
 ## Purpose

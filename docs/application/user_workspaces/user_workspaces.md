@@ -1,3 +1,10 @@
+---
+feature: user_workspaces
+domain: [application, sharing]
+one_liner: "Lets a user split their agents, credentials, sessions, and tasks into separate named contexts to reduce clutter, with workspace filtering optional per user."
+docs:
+  tech: user_workspaces_tech.md
+---
 # User Workspaces
 
 ## Purpose

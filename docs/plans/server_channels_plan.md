@@ -228,8 +228,8 @@ Errors: domain exceptions in the service (`ChannelVerificationError`, `ChannelAc
 
 `frontend/src/routes/_layout/admin/server-configuration.tsx`: add HashTabs entry `{ value: "channels", title: "Channels" }` (existing pattern: one tab per concern; disclaimer keeps its "interface" tab). The tab renders a 2-column grid:
 
-1. **`ServerChannelsCard`** (`frontend/src/components/Admin/ServerChannelsCard.tsx`) — list of channel instances: name, type badge, enabled switch (inline mutation), edit/delete actions, empty state ("No channels configured. Add Google Chat to let your team talk to agents."), "Add Channel" button. Modeled on `MailServerSettings` card structure.
-2. **`AutoInstallAgentsCard`** (`frontend/src/components/Admin/AutoInstallAgentsCard.tsx`) — the server-wide auto-install list: rows with bundle name, reverse-DNS id, visibility badge (amber warning when not PUBLIC: "not installable by external users until made public/granted"; amber when missing a router trigger prompt: "will never match routing"), remove button; add-picker populated from the catalog listing (`CatalogService` client) filtered to installable bundles.
+1. **`ServerChannelsCard`** (`frontend/src/components/Admin/ServerChannelsCard.tsx`) — list of channel instances: name, type badge, enabled switch (inline mutation), edit/delete actions, empty state ("No channels configured. Add Google Chat to let your team talk to agents."), "Add Channel" button. Modeled on `MailServerSettings` card structure. <!-- nocheck -->
+2. **`AutoInstallAgentsCard`** (`frontend/src/components/Admin/AutoInstallAgentsCard.tsx`) — the server-wide auto-install list: rows with bundle name, reverse-DNS id, visibility badge (amber warning when not PUBLIC: "not installable by external users until made public/granted"; amber when missing a router trigger prompt: "will never match routing"), remove button; add-picker populated from the catalog listing (`CatalogService` client) filtered to installable bundles. <!-- nocheck -->
 
 **`ServerChannelDialog`** (create/edit, react-hook-form + zod, modeled on `ManagedCredentialDialog`):
 - Type select (only "Google Chat" for now), name, enabled.
@@ -316,7 +316,7 @@ No changes to existing tables.
 
 ## 11. Shared Refactors (small, each earns its keep — implement as part of this feature)
 
-1. **Email-pattern matcher**: extract the fnmatch logic from `backend/app/services/email/routing_service.py` (`_match_email_pattern`) into a shared util (e.g. `backend/app/utils.py` or `services/common`), consumed by both email routing and the channel whitelist. One source of truth for pattern semantics.
+1. **Email-pattern matcher**: extract the fnmatch logic from `backend/app/services/email/routing_service.py` (`_match_email_pattern`) into a shared util (e.g. `backend/app/utils.py` or `services/common`), consumed by both email routing and the channel whitelist. One source of truth for pattern semantics. <!-- nocheck -->
 2. **Google JWKS verifier**: generalize `verify_google_token`'s JWKS fetch/cache in `backend/app/core/security.py` into a parameterized helper (certs URL, issuer(s), audience) used by both Google OAuth and the Google Chat adapter.
 3. **`UserService.create_external_user(*, session, email, confirmed: bool, provenance: str)`**: unify `create_email_user` and channel auto-registration (both idempotent, passwordless, whitelist-exempt get-or-creates; differ only in `email_confirmed` and audit provenance). Migrate the email path to it.
 4. Pass-2 catalog routing deliberately lives in `ChannelInboundService`, NOT in `AppMCPRoutingService` — per the codebase's own "≥ 2 callers" rule; move it only when a second consumer appears.

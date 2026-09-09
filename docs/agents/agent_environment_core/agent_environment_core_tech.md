@@ -107,7 +107,7 @@ No dedicated database tables - the environment core runs inside Docker container
 | Endpoint | File |
 |----------|------|
 | `POST /api/v1/sessions/{session_id}/messages/stream` | `backend/app/api/routes/messages.py` |
-| `GET/POST /api/v1/agents/{agent_id}/prompts` | `backend/app/api/routes/agents.py` |
+| `POST /api/v1/agents/{id}/sync-prompts` | `backend/app/api/routes/agents.py` — calls `EnvironmentService.sync_agent_prompts_to_environment`, which `POST`s to the env's `/config/agent-prompts`. The reverse direction (`GET /config/agent-prompts`, reading env files back into the DB) is not exposed on its own route — it runs internally from `EnvironmentService.reconcile_agent_prompts` / `sync_agent_prompts_from_environment` during environment lifecycle events (e.g. after a building session completes) |
 
 ## Services & Key Methods
 

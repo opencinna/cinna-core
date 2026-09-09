@@ -59,7 +59,7 @@ When given a task, **always start** by reading `docs/README.md` to understand th
 
 When asked to develop a complete feature with a feature description:
 
-1. **Read Context**: Read `docs/README.md`, identify relevant feature docs, read only those.
+1. **Read Context**: Run `python3 .cinna-core-kit/scripts/docs_index.py summary` (and `search "<topic>"`) to identify relevant feature docs, read only those; open `docs/README.md` only for the Core Idea, Glossary and Domain Map.
 2. **Plan**: Invoke `cinna-core-feature-planner` with the feature description and relevant context. Wait for the plan.
    - **2b. UI design** — if the plan lists any frontend surface (page, tab, card, dialog, row), invoke `cinna-core-ui-designer` in **design mode** with the plan path. It appends a `## UI Specification` to the plan (story, placement, pattern, density budget, verification mode per surface). Skip for backend-only plans. The plan and its specification are approved together.
 3. **Develop**: split by layer.

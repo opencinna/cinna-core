@@ -134,6 +134,7 @@ Index: `ix_agent_environment_sync_active` (partial, `WHERE sync_active = true`)
 | WS | `/api/v1/cli/agents/{agent_id}/sync-stream` | Mutagen tunnel WebSocket. Route is a thin controller: scope check + `CLIService.run_sync_tunnel(websocket, cli_ctx)` which owns env readiness, tracker register/unregister, env-core `/sync/exec` proxy, and the 30 s heartbeat loop |
 | POST | `/api/v1/cli/agents/{agent_id}/exec` | Streaming SSE — body `{command, timeout?}` where `timeout` is optional wall-clock seconds (1–86400, defaults to `CLIService.DEFAULT_CLI_EXEC_TIMEOUT_SECONDS` = 1800); first event emits `exec_id`; delegates to env-core `/command/stream` |
 | GET | `/api/v1/cli/agents/{agent_id}/sync-runtime` | Returns pinned `{mutagen_version, mutagen_agent_sha256, platform_api_version, cinna_cli_version}` for version verification |
+| GET | `/api/v1/cli/git-coordinates` | Returns `CliGitCoordinates` (`vcs_enabled`, `repo_url`, `subdir`, `ref`, `sync_direction`, `last_synced_commit`, `auth_hint`) for the CLI token's agent, so the CLI can sparse-checkout the same git remote the agent is linked to. `auth_hint` (`"ssh"`/`"https"`) is derived from the `repo_url` scheme. Carries no deploy key or private-key material — the developer authenticates to the remote with their own git/SSH client. Consumption is planned on the `cinna-cli` side |
 
 ### Env-core callback (bearer + X-Agent-Env-Id header)
 

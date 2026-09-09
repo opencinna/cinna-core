@@ -1,3 +1,18 @@
+---
+feature: agent_webapp
+domain: agents
+one_liner: "Lets an agent serve a lightweight HTML/JS dashboard from its workspace over a shareable URL, backed by dynamic Python data endpoints."
+docs:
+  tech: agent_webapp_tech.md
+  chat widget: webapp_chat.md
+  chat tech: webapp_chat_tech.md
+  chat context: webapp_chat_context.md
+  chat context tech: webapp_chat_context_tech.md
+  chat actions: webapp_chat_actions.md
+  chat actions tech: webapp_chat_actions_tech.md
+  actions context: webapp_actions_context.md
+  actions context tech: webapp_actions_context_tech.md
+---
 # Agent Webapp
 
 ## Purpose
@@ -72,7 +87,7 @@ Data scripts:
 3. In a chat session, asks the agent to build a dashboard
 4. Agent creates files in `/app/workspace/webapp/`
 5. Owner clicks "Web App" link in environment panel dropdown (opens in new tab)
-6. Owner preview URL: `GET /api/v1/agents/{agent_id}/webapp/` serves index.html
+6. Owner preview URL: `GET /api/v1/agents/{agent_id}/webapp/{path}` with an empty `path` serves index.html
 
 ### Owner Shares Webapp
 

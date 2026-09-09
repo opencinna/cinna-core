@@ -1,3 +1,9 @@
+---
+feature: user_selector_pattern
+domain: development
+one_liner: "Reference for the shared user-picker component and search endpoint that every user-sharing surface on the platform reuses."
+primary_label: reference
+---
 # User Selector Pattern (shared)
 
 ## Purpose

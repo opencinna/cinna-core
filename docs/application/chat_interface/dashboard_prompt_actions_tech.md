@@ -196,7 +196,7 @@ If the room is already subscribed (from a previous action that is still streamin
 |-----------|-------------------|-------------|
 | Mount restore | `DashboardsService.getBlockLatestSession({ dashboardId, blockId })` | `GET /api/v1/dashboards/{id}/blocks/{block_id}/latest-session` |
 | Session creation | `SessionsService.createSession({ requestBody: { agent_id, mode: "conversation", dashboard_block_id } })` | `POST /api/v1/sessions/` |
-| Send message | `MessagesService.sendMessageStream({ sessionId, requestBody: { content, file_ids, page_context? } })` | `POST /api/v1/messages/{session_id}/stream` |
+| Send message | `MessagesService.sendMessageStream({ sessionId, requestBody: { content, file_ids, page_context? } })` | `POST /api/v1/sessions/{session_id}/messages/stream` |
 | Prompt action CRUD | `DashboardsService.createPromptAction / updatePromptAction / deletePromptAction` | `/api/v1/dashboards/{id}/blocks/{block_id}/prompt-actions` |
 
 `MessagesService.sendMessageStream()` uses the standard user authentication (Bearer JWT from `localStorage["access_token"]`). There is no special scoping — it is the same endpoint used by the full session page.

@@ -45,7 +45,7 @@
 - `frontend/src/components/Agents/AgentEnvironmentsTab.tsx` — renders `EnvironmentCard` (badge included via composition)
 - `frontend/src/components/Admin/Environments/AdminEnvTable.tsx` — `model_health_warning` column beside the stale column; `ModelHealthCell` renders the flag
 - `frontend/src/components/Environments/EnvironmentConfigForm.tsx` — model override input `<datalist>` prefers `available_models` (admin curated) when non-empty, otherwise falls back to `discovered_models`
-- `frontend/src/components/UserSettings/AICredentials.tsx` — model override input `<datalist>` same preference (`available_models` → `discovered_models`)
+- `frontend/src/components/UserSettings/AICredentials/AICredentialsSettings.tsx` — model override input `<datalist>` same preference (`available_models` → `discovered_models`)
 
 ---
 

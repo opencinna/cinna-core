@@ -1,3 +1,10 @@
+---
+feature: input_tasks
+domain: tasks
+one_liner: "Lets a user or agent submit, AI-refine, execute, and track a task through comments, attachments, status history, and team subtask delegation."
+docs:
+  tech: input_tasks_tech.md
+---
 # Input Tasks
 
 ## Purpose
