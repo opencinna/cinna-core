@@ -60,11 +60,16 @@ class SkillPackageEntry(SkillPackagePublic):
     """A catalog row, resolved for the calling user."""
 
     latest_revision: SkillPackageRevisionPublic | None = None
-    #: Distinct consumer installs across the instance. Excludes the publisher's
-    #: own agents, so a publisher dogfooding their skill does not inflate it.
+    #: How many **people other than the publisher** use this package — one per
+    #: user, however many of their agents carry it, because the number answers
+    #: "how many others adopted this" and one enthusiast with six agents is not
+    #: six adopters. The publisher's own agents are excluded entirely, so
+    #: dogfooding cannot inflate it. Surfaced as **Catalog installs**.
     install_count: int = 0
-    #: The caller's own agents that already carry this package. Ids only — a
-    #: grid of cards cannot afford a name lookup per card (§ UI spec gap 7).
+    #: The caller's own agents that already carry this package — viewer-scoped,
+    #: never publisher-scoped, so it reads as "used in my agents" for anybody.
+    #: Ids only: a grid of cards cannot afford a name lookup per card
+    #: (§ UI spec gap 7).
     installed_in_agent_ids: list[uuid.UUID] = []
     #: Whether the caller may edit this package (rename, re-describe, change
     #: visibility). A capability reply, so the client never has to reproduce

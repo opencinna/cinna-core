@@ -200,7 +200,13 @@ export function AddAddonResultDetailDialog({
             />
           )}
           {pkg && (pkg.install_count ?? 0) > 0 && (
-            <Fact label="Installs" value={String(pkg.install_count)} />
+            // People, not installs — the same number the row above prints as
+            // "Used by N people". The server counts one per user, so "Installs
+            // 3" here made one dialog give two answers for one number.
+            <Fact
+              label="Catalog installs"
+              value={`${pkg.install_count} people`}
+            />
           )}
           {pkg && (
             <Button asChild variant="link" className="h-auto px-0">

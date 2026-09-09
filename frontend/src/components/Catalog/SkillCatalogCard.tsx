@@ -150,7 +150,7 @@ export function SkillCatalogCard({ entry }: SkillCatalogCardProps) {
             a grid of cards cannot afford a name lookup per card. */}
           {installedCount > 0 && (
             <p className="text-xs text-muted-foreground">
-              In {installedCount} of your agents
+              Used in {installedCount} of my agents
             </p>
           )}
         </CardContent>

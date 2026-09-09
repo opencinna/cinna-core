@@ -480,7 +480,12 @@ export function buildAddonResults({
         origin: "From the skills catalog",
         author: skillPublisherLabel(pkg),
         facts: [
-          (pkg.install_count ?? 0) > 0 && `${pkg.install_count} installs`,
+          // People, not installs: the server counts one per user, so "6
+          // installs" would over-report a single consumer with six agents.
+          (pkg.install_count ?? 0) > 0 &&
+            `Used by ${pkg.install_count} ${
+              pkg.install_count === 1 ? "person" : "people"
+            }`,
         ],
         package: pkg,
         supported: true,

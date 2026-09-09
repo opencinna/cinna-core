@@ -33,6 +33,7 @@ import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { getErrorMessage } from "@/utils"
 import {
+  SKILL_VISIBILITY_OPTIONS,
   skillPackageVersionLabel,
   skillPublisherLabel,
 } from "@/utils/skillCatalog"
@@ -87,8 +88,23 @@ export function SkillPackageCard({ pkg }: SkillPackageCardProps) {
   })
 
   const versionLabel = skillPackageVersionLabel(pkg) ?? "No revision yet"
+  // Three visibilities since `users` shipped, and a delisting on top of any of
+  // them. The old two-branch expression printed "Private" for a package shared
+  // with named people — telling its publisher the opposite of what they did.
+  const visibilityLabel = (() => {
+    const base =
+      SKILL_VISIBILITY_OPTIONS.find((option) => option.value === pkg.visibility)
+        ?.label ?? "Private"
+    return pkg.is_listed ? base : `${base}, delisted`
+  })()
   const revisionCount = pkg.revisions?.length ?? 0
-  const installCount = pkg.install_count ?? 0
+  // Two different questions, so two facts. `install_count` is **other people**,
+  // one per person however many agents they use it in; `installed_in_agent_ids`
+  // is the viewer's own agents. A publisher who has just installed their own
+  // skill in three of their agents is 0 and 3 — true, and unreadable as a
+  // single number, which is why there is not one.
+  const catalogInstalls = pkg.install_count ?? 0
+  const myInstalls = pkg.installed_in_agent_ids?.length ?? 0
 
   return (
     <Card>
@@ -156,20 +172,24 @@ export function SkillPackageCard({ pkg }: SkillPackageCardProps) {
           </div>
           <Fact label="Latest version" value={versionLabel} />
           <Fact label="Revisions" value={String(revisionCount)} />
-          {/* Excludes the publisher's own installs, so a publisher dogfooding
-              their skill does not read this as adoption. */}
-          <Fact label="Installs" value={String(installCount)} />
-          <Fact
-            label="Visibility"
-            value={
-              pkg.visibility === "public"
-                ? pkg.is_listed
-                  ? "Public"
-                  : "Public, delisted"
-                : "Private"
-            }
-          />
+          {/* People, not agents, and never the publisher — so a publisher
+              dogfooding their skill does not read this as adoption. */}
+          <Fact label="Catalog installs" value={String(catalogInstalls)} />
+          {myInstalls > 0 && (
+            <Fact label="Used in my agents" value={String(myInstalls)} />
+          )}
+          <Fact label="Visibility" value={visibilityLabel} />
         </div>
+
+        {/* Only for the publisher, and only when the two numbers disagree:
+            "Installs 0" beside "In your agents 3" is a contradiction until
+            somebody says which agents each one counts. */}
+        {pkg.can_manage && myInstalls > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Catalog installs counts other people, one each — your own agents are
+            never counted, so dogfooding cannot inflate it.
+          </p>
+        )}
 
         <CopyableValue label="Package id" value={pkg.package_id} />
 

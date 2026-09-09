@@ -1380,10 +1380,11 @@ class SkillCatalogService:
         install_counts: dict[uuid.UUID, int] = {}
         installed_in: dict[uuid.UUID, list[uuid.UUID]] = {}
         if package_ids:
-            # Consumer installs per package. The publisher-exclusion is applied
-            # in Python rather than in SQL because it is per package (each row
-            # has its own publisher) and a correlated condition would defeat
-            # the grouping this method exists for.
+            # Consumer installs per package, counted **one per person**. The
+            # publisher-exclusion is applied in Python rather than in SQL
+            # because it is per package (each row has its own publisher) and a
+            # correlated condition would defeat the grouping this method exists
+            # for.
             rows = session.exec(
                 select(
                     SkillPackageRevision.package_id,
@@ -1402,11 +1403,15 @@ class SkillCatalogService:
             publisher_by_package = {
                 p.id: p.publisher_user_id for p in packages
             }
+            # Owners, not agents: the catalog number answers "how many other
+            # people use this", and somebody who puts one skill into six of
+            # their own agents is one adopter, not six. Counting agents let a
+            # single enthusiastic consumer outvote a dozen real ones.
             counted: dict[uuid.UUID, set[uuid.UUID]] = {}
             for pkg_id, agent_id, owner_id in rows:
                 publisher_id = publisher_by_package.get(pkg_id)
                 if publisher_id is None or owner_id != publisher_id:
-                    counted.setdefault(pkg_id, set()).add(agent_id)
+                    counted.setdefault(pkg_id, set()).add(owner_id)
                 if owner_id == user.id:
                     mine = installed_in.setdefault(pkg_id, [])
                     if agent_id not in mine:

@@ -6,8 +6,9 @@ Scenarios:
      the ``has_update`` signal when the publisher cuts a new revision, the
      re-pin on upgrade, and the prune when the link goes away.
   2. ``install_count`` is a projection, not a column: it counts DISTINCT
-     consumer agents and excludes the publisher's own installs, and it drops
-     when an install disappears with its agent.
+     consumer **users** — one per person however many of their agents carry it
+     — excludes the publisher's own installs entirely, and drops when a
+     consumer's last install disappears with its agent.
   3. ``already_installed`` (the same package twice) and ``name_conflict`` (a
      DIFFERENT publisher's package of the same skill name) are two different
      409s — an agent has one ``plugins/cinna-skills/<name>/`` directory, so the
@@ -263,21 +264,24 @@ def test_install_upgrade_and_uninstall_a_catalog_skill(
 # ── Scenario 2: install_count is computed, publisher excluded ──────────────
 
 
-def test_install_count_counts_distinct_consumer_agents_only(
+def test_install_count_counts_distinct_consumer_users_only(
     client: TestClient,
     superuser_token_headers: dict[str, str],
     patch_environment_adapter,
 ) -> None:
     """
-    ``install_count`` is derived at projection time, not stored:
+    ``install_count`` is derived at projection time, not stored, and counts
+    **people** rather than agents:
       1. The publisher installs their own skill into two of their agents →
-         the count stays 0 (dogfooding must not inflate the catalog).
-      2. Two consumer agents owned by one consumer → 2, and that consumer's
-         ``installed_in_agent_ids`` names both.
-      3. A second consumer adds one more → 3, and their own
+         the count stays 0 (dogfooding must not inflate the catalog), while
+         their own ``installed_in_agent_ids`` names both.
+      2. One consumer with *two* agents is **1**, not 2 — the number answers
+         "how many others adopted this", and one enthusiast is one adopter.
+         Their ``installed_in_agent_ids`` still names both agents.
+      3. A second consumer takes it to 2, and their own
          ``installed_in_agent_ids`` names only their agent.
-      4. Uninstalling one drops the count back to 2 — a stored counter could
-         not do that, which is why there is no column.
+      4. Removing one of the first consumer's two agents leaves the count at
+         2 — they still use it. Removing their last one would drop it.
     """
     _pub, pub_headers, pub_agent, _pub_env, _rev, entry = _publish_package(
         client, superuser_token_headers, agent_name="Count-Publisher"
@@ -296,7 +300,7 @@ def test_install_count_counts_distinct_consumer_agents_only(
         [pub_agent, pub_agent_2]
     )
 
-    # ── Phase 2: one consumer, two agents ────────────────────────────────
+    # ── Phase 2: one consumer, two agents → ONE ──────────────────────────
     _c1, c1_headers = make_developer(client, superuser_token_headers)
     c1_agent_a, _ = make_agent_with_env(client, c1_headers, "C1-A")
     c1_agent_b, _ = make_agent_with_env(client, c1_headers, "C1-B")
@@ -304,7 +308,9 @@ def test_install_count_counts_distinct_consumer_agents_only(
     install_skill(client, c1_headers, c1_agent_b, package_uuid)
 
     c1_entry = entry_for(list_skill_catalog(client, c1_headers), package_uuid)
-    assert c1_entry["install_count"] == 2
+    assert c1_entry["install_count"] == 1
+    # Their own agent list is unaffected by the per-person rule: that field
+    # answers a different question ("used in my agents").
     assert sorted(c1_entry["installed_in_agent_ids"]) == sorted(
         [c1_agent_a, c1_agent_b]
     )
@@ -316,17 +322,17 @@ def test_install_count_counts_distinct_consumer_agents_only(
     install_skill(client, c2_headers, c2_agent, package_uuid)
 
     c2_entry = entry_for(list_skill_catalog(client, c2_headers), package_uuid)
-    assert c2_entry["install_count"] == 3
+    assert c2_entry["install_count"] == 2
     assert c2_entry["installed_in_agent_ids"] == [c2_agent]
     # The publisher sees the same total from their own vantage point.
     assert (
         entry_for(list_skill_catalog(client, pub_headers), package_uuid)[
             "install_count"
         ]
-        == 3
+        == 2
     )
 
-    # ── Phase 4: removing an install lowers the count ────────────────────
+    # ── Phase 4: one of a consumer's two agents leaves; they still count ──
     link_id = list_agent_plugins(client, c1_headers, c1_agent_b)[0]["id"]
     uninstall_agent_plugin(client, c1_headers, c1_agent_b, link_id)
     assert (
@@ -334,6 +340,17 @@ def test_install_count_counts_distinct_consumer_agents_only(
             "install_count"
         ]
         == 2
+    )
+
+    # ── Phase 5: their LAST agent leaves → the count drops ───────────────
+    # A stored counter could not do this, which is why there is no column.
+    link_id = list_agent_plugins(client, c1_headers, c1_agent_a)[0]["id"]
+    uninstall_agent_plugin(client, c1_headers, c1_agent_a, link_id)
+    assert (
+        entry_for(list_skill_catalog(client, pub_headers), package_uuid)[
+            "install_count"
+        ]
+        == 1
     )
 
 
