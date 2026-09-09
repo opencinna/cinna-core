@@ -69,8 +69,25 @@ STATUS_ERROR = "error"
 # ── Builders ───────────────────────────────────────────────────────────────
 
 
+#: One fixed clock for the whole file.
+#:
+#: The rule under test is an ORDERING between two timestamps, so both of them
+#: have to be decided here rather than by when the test happens to run. Reading
+#: the wall clock in a builder while a module-level constant holds the read
+#: time makes this file pass alone and fail inside the full suite: the constant
+#: freezes at collection, ``now()`` keeps moving, and once the suite takes
+#: longer than the gap between them the "index read" lands BEFORE the link it
+#: is meant to have seen — which the rule then reports, correctly, as ``ok``.
+THE_INSTALL = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+#: An index read AFTER any link this file builds. The rule needs the ordering:
+#: the addons projection serves the CACHED index, so "no skills on this row" is
+#: only evidence of absence when the cache was filled after the link last
+#: changed. A read that predates the install has not looked yet.
+AFTER_THE_LINK = THE_INSTALL + timedelta(minutes=5)
+
+
 def _link(source: PluginSource = PluginSource.catalog, **overrides):
-    now = datetime.now(UTC)
     fields = dict(
         id=uuid.uuid4(),
         agent_id=uuid.uuid4(),
@@ -81,8 +98,8 @@ def _link(source: PluginSource = PluginSource.catalog, **overrides):
         conversation_mode=True,
         building_mode=True,
         disabled=False,
-        created_at=now,
-        updated_at=now,
+        created_at=THE_INSTALL,
+        updated_at=THE_INSTALL,
     )
     if source == PluginSource.catalog:
         fields["skill_package_revision_id"] = uuid.uuid4()
@@ -116,13 +133,6 @@ def _row(
         link=link,
         orphan=orphan,
     )
-
-
-#: An index read AFTER any link this file builds. The rule needs the ordering:
-#: the addons projection serves the CACHED index, so "no skills on this row" is
-#: only evidence of absence when the cache was filled after the link last
-#: changed. A read that predates the install has not looked yet.
-AFTER_THE_LINK = datetime.now(UTC) + timedelta(minutes=5)
 
 
 def _settle(
