@@ -215,6 +215,55 @@ const [isOpen, setIsOpen] = useState(false)
 </Dialog>
 ```
 
+A dialog whose body is **data-driven** (fact lists, a list of items, a document pane) needs three more things, all learned from the addons detail dialog (2026-09-09):
+
+```tsx
+<DialogContent
+  // grows with the data → scrolls inside the viewport; `DialogContent` is a CSS
+  // grid, so `[&>*]:min-w-0` stops one long word or `truncate` row widening it
+  className="max-h-[85vh] overflow-x-hidden overflow-y-auto sm:max-w-2xl [&>*]:min-w-0"
+  // Radix focuses the first focusable element on open; if that control has a
+  // Tooltip (a click-to-copy value) the tooltip opens over nothing — focus the
+  // body instead. Tab still reaches every control.
+  onOpenAutoFocus={(e) => {
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement | null)?.focus()
+  }}
+>
+```
+
+Long prose inside gets `break-words`; a wide table or code block scrolls in its own `overflow-x-auto` pane, never the dialog.
+
+## Timestamps
+The backend serialises naive UTC (`2026-09-09T10:00:00`, no `Z`). `new Date()` reads that as **local** time, so any label built from it is off by the viewer's UTC offset. Never `formatDistanceToNow(new Date(x))` on a wire value.
+
+```tsx
+import { RelativeTime, formatRelativeTimestamp, parseTimestamp } from "@/components/Common/RelativeTime"
+
+<RelativeTime timestamp={link.created_at} showTooltip />        // rendered: "3 hours ago", full local date on hover
+const ago = formatRelativeTimestamp(link.created_at)            // string, for a RowInfo fact or a description line
+const date = parseTimestamp(x)                                   // Date | null — the one parser
+```
+
+## Click to copy
+A value that is already on screen and exists to be pasted (a commit hash, an id) is **its own** copy control — no second boxed input:
+
+```tsx
+<Tooltip>
+  <TooltipTrigger asChild>
+    <button type="button" className="max-w-full cursor-pointer truncate font-mono text-sm hover:underline"
+      aria-label="Copy the commit hash" onClick={() => copy(hash)}>
+      {hash}
+    </button>
+  </TooltipTrigger>
+  <TooltipContent side="top" className="text-xs">Click to copy</TooltipContent>
+</Tooltip>
+```
+`copy` wraps `navigator.clipboard.writeText` in try/catch with `showSuccessToast` / `showErrorToast` — the clipboard is undefined outside a secure context and rejects on denied permission. `Common/CopyableValue` (label + boxed value + button) is for values the user reads *as a field* and that are not otherwise shown.
+
+## Wire strings
+An absent string arrives as `""` as often as `null`. Display fallbacks use `||`, not `??`: `` `v${link.latest_version ?? "latest"}` `` printed "v" for a plugin whose manifest had no version.
+
 ## Utilities Pattern
 - Shared constants/helpers: `src/utils/` directory
 - Export types and functions

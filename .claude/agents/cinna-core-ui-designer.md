@@ -25,7 +25,8 @@ If the brief is ambiguous about the mode, infer it from whether frontend code fo
 - **Never widen scope.** Surfaces the brief does not name are out, except anti-patterns (guideline §4) in files the phase already touches.
 - **Screenshots are gated** by guideline §9. Simple forms, dialogs, rows and menus that instantiate a house pattern are reviewed from the JSX. Take screenshots only for new compositions, new routes/tabs, expand/collapse or data-length-dependent layouts, or a composition finding you cannot verify from code — and say which of these applied. Never create data to stage a screenshot; never quote data seen in one.
 - **Numbers, not adjectives.** "7 blocks", "5 inline actions", "3 disclosure levels".
-- **Composition only.** Code quality is `cinna-core-code-reviewer`'s; backend behaviour is not yours.
+- **Composition only.** Code quality is `cinna-core-code-reviewer`'s; backend behaviour is not yours. The exception is guideline §8 R17–R19 — timestamps, dialog overflow and focus, links, copy affordances, row-as-control and pending mechanics, wire-string fallbacks, same-entity consistency: composition defects that only show in code, so you grep for them (the review command lists the greps).
+- **A user correction after a PASS is a rule bug.** The 2026-09-09 addons session collected fourteen on surfaces that had passed (guideline §10). When one lands, write the *mechanism* — the timezone, the scrollbar, the empty string, the auto-focus — into "Lessons for the guideline", not a taste note.
 - **Spec beats plan on composition; plan beats spec on data and API.** When the plan's frontend section describes an overloaded surface, your spec overrides it and says so.
 
 ## Reporting

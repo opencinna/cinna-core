@@ -41,11 +41,16 @@ A state the tool cannot reach (typed input, data the dev database lacks) is repo
 Then view the PNGs under `frontend/.ui-shots/` with the Read tool. The dev servers must be running; if they are not, report "screenshots skipped: app not running" and review from code. Never create or edit data to stage a screenshot. Never quote data seen in a screenshot.
 
 ### 3. Walk the checklist
-For each surface answer R1–R15 of guideline §8 with **yes / no / n/a** and a `file:line` (or screenshot name) as evidence. Count blocks, rows, inline actions, disclosure levels — write the numbers down. Compare the component's skeleton with the reference pattern's skeleton (R12) and with the spec (R13).
+For each surface answer R1–R19 of guideline §8 with **yes / no / n/a** and a `file:line` (or screenshot name) as evidence. Count blocks, rows, inline actions, disclosure levels — write the numbers down. Compare the component's skeleton with the reference pattern's skeleton (R12) and with the spec (R13).
+
+R17–R19 are the **mechanism gates** added 2026-09-09 after a PASSed surface collected fourteen user corrections (guideline §10). They cannot be judged from composition alone, so grep for them explicitly in every touched file:
+- `new Date(` on a value that came from `@/client` → R17 *no* (A11). `formatDistanceToNow` outside `Common/RelativeTime.tsx` is the same finding.
+- A `DialogContent` whose children map over data without `max-h` + `overflow-y-auto` + `[&>*]:min-w-0` → R18 *no*. A first focusable control with a `Tooltip` and no `onOpenAutoFocus` → R18 *no*. A list of *n* items each swapping a document pane into the same dialog → R18 *no*.
+- `ExternalLink` beside a URL inside a fact list; `CopyableValue` for a value that is also a fact line; `??` on a wire string used for display; a clickable row wrapper with `rounded-*` inside a `ListRowGroup`; a row that is a control and does not guard `currentTarget.contains(target)` / `closest("button")` / pending; a row mutation whose only pending feedback is a disabled trigger; the same entity badged or glyphed differently in two lists; a "things to add" list that still shows what is added → R19 *no*.
 
 ### 4. Score and verdict
-Score = 10 − (number of *no* among R1–R10); *n/a* counts as satisfied. R11–R15 are gates: a *no* is a finding that blocks PASS but does not change the score. Verdict per surface:
-- **PASS** — score ≥ 8, none of R4 / R5 / R7 / R8 is *no*, and no R11–R15 finding is open.
+Score = 10 − (number of *no* among R1–R10); *n/a* counts as satisfied. R11–R19 are gates: a *no* is a finding that blocks PASS but does not change the score. Verdict per surface:
+- **PASS** — score ≥ 8, none of R4 / R5 / R7 / R8 is *no*, and no R11–R19 finding is open.
 - **ITERATE** — score 6–7, or any of R4 / R5 / R7 / R8 is *no*, or a gate finding is open.
 - **FAIL** — score ≤ 5.
 Overall verdict = the worst surface. When ≥ 7 checks are n/a (a small dialog), say so next to the score.
@@ -91,5 +96,6 @@ Anything the rules missed, over-flagged, or could not decide. One line each, rea
 - Judge the finished surface, not the diff. A phase that adds a sixth icon to a row is responsible for the row.
 - One finding per rule per surface; do not restate the same overload as R2, R5 and R7.
 - A surface that follows its reference skeleton and its spec is a PASS even if you would have designed it differently. Taste is not a finding; a rule is.
-- Do not review code quality, accessibility internals, or backend behaviour here.
+- Do not review code quality, accessibility internals, or backend behaviour here. The R17–R19 greps are the exception: they are composition defects that only show in code (a timezone, a scrollbar, an empty string), so you look for them.
+- A surface the user calls wrong after a PASS is a **missing rule first**: write the mechanism into "Lessons for the guideline" rather than a taste note.
 - Do not make changes. Report and stop.

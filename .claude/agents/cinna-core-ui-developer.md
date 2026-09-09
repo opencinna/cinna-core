@@ -27,6 +27,15 @@ List the files you will create or modify, one line each, and which spec surface 
 ### 3. Build to the specification
 - Story, placement, pattern, density budget, interaction model and states come from the spec. If the spec is silent, the guideline decides; if both are silent, choose the *less dense* option and note it in your report.
 - Hard rules you never break, whatever the spec says: no `window.confirm` (use `AlertDialog`); no hand-rolled toggles/menus (use `Switch`, `DropdownMenu`); every icon-only button has a `Tooltip`; every card header follows the shared card skeleton (guideline §3 preamble: one lucide icon `h-5 w-5` + noun title, description below) and matches its grid siblings; no card spans two grid columns; `isError` handled separately from empty; no `any`; types from `@/client` only; no edits under `src/client/`.
+- Mechanism rules, each a user-caught bug once (guideline §2 rows dated 2026-09-09, gates R17–R19):
+  - **Timestamps:** `RelativeTime` for a rendered value, `formatRelativeTimestamp` / `parseTimestamp` (`Common/RelativeTime.tsx`) for a string. Never `new Date(x)` on a wire value — the server sends naive UTC and the label lands hours off.
+  - **Data-driven dialog bodies:** `DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden … [&>*]:min-w-0"`, `break-words` on prose, `overflow-x-auto` on any wide pane. If the first focusable control carries a `Tooltip`, add `onOpenAutoFocus` that focuses the body. *n* items with a document each drill down to their own read-only dialog; never swap a pane in place.
+  - **Fact lists:** links are plain text (no `ExternalLink` glyph); a visible pasteable value is its own click-to-copy button with a "Click to copy" tooltip and toasts — no `CopyableValue` box beside a fact line.
+  - **Rows that open Details:** the row is the control (wrapper `div role="button"` with a written `biome-ignore`), **no `rounded-*` on the wrapper** (it rounds the group's hairline), guard with `currentTarget.contains(target)` and `closest("button")`, ignore clicks while pending. Pending on a row is a `Loader2` in the `⋯` slot with a tooltip naming the mutation.
+  - **Wire strings:** `||` for display fallbacks, not `??` (empty string arrives). Read the backend field's docstring for what "absent" looks like.
+  - **Same entity, two lists:** badge and glyph set identical on both; the "add" list excludes what is already added; step 2 of a wizard is titled by the chosen thing.
+  - **Capped scrolling lists:** `pr-2` on the scroll container; a control the user must click goes after the badges, not at the far edge under the scrollbar.
+  - **Documents:** markdown a user reads is rendered (`Chat/MarkdownRenderer`, frontmatter split off), not a `<pre>`.
 - When you touch a file listed in guideline §4 (anti-patterns), fix the anti-pattern if the spec says so; otherwise leave it and mention it.
 - Keep components small: a surface's row, its menu, and its edit dialog are separate components. A file over ~400 lines is a signal to split.
 - Do not add features, controls, or "while I'm here" refactors the spec does not ask for.
@@ -34,7 +43,8 @@ List the files you will create or modify, one line each, and which spec surface 
 ### 4. Verify
 1. **Typecheck** the files you touched: `cd frontend && npx tsc --noEmit 2>&1 | grep -E "(FileA|FileB)" | head -20` (never the whole tree unfiltered).
 2. **Screenshots — only when the spec's Verification column says `checklist + screenshots`** (guideline §9: new composition, new route/tab, expand/collapse or data-length-dependent layout). Run `node frontend/scripts/ui-shot.mjs --url "<route>" --out <name>` for each listed target, then **look at the PNGs** with the Read tool and fix what you see (overflow, misalignment, a card taller than its neighbours) before hand-off. For surfaces marked `checklist`, do not take screenshots.
-3. **Walk guideline §8 yourself** for each surface (R1–R13) and write the counts into your report: blocks per card, rows shown, inline actions per row, menu items, disclosure depth.
+3. **Walk guideline §8 yourself** for each surface (R1–R19) and write the counts into your report: blocks per card, rows shown, inline actions per row, menu items, disclosure depth. For R17–R19 grep your touched files for `new Date(`, `formatDistanceToNow`, `ExternalLink`, `CopyableValue`, `??` on display strings and `rounded-` on row wrappers, and say what you found.
+4. **Try it once with a non-UTC clock in mind:** any relative time you render — would it be right for a viewer in Berlin? If it came from `new Date(x)`, it is not.
 
 ### 5. Review loop
 - Request `cinna-core-ui-designer` (review mode) with the plan path and your touched files. Fix every ITERATE/FAIL finding, re-verify, re-request. Stop after three rounds and escalate the remaining findings with the score.

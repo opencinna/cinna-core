@@ -51,7 +51,7 @@ For **Frontend** changes, check:
 - **TypeScript**: No `any` types, proper type imports from `@/client`
 - **Styling**: Tailwind CSS + shadcn/ui components
 - **No manual edits** to `src/client/` (auto-generated)
-- **Composition is not yours**: card density, action visibility, dialogs vs inline, list caps are reviewed by `cinna-core-ui-designer` against `docs/development/frontend/ui_ux_guidelines.md`. Flag only code-level issues here, except the guideline's hard rules that are also code smells: `window.confirm`, hand-rolled toggles/menus, icon buttons without `Tooltip`, `isError` folded into the empty state
+- **Composition is not yours**: card density, action visibility, dialogs vs inline, list caps are reviewed by `cinna-core-ui-designer` against `docs/development/frontend/ui_ux_guidelines.md`. Flag only code-level issues here, except the guideline's hard rules that are also code smells: `window.confirm`, hand-rolled toggles/menus, icon buttons without `Tooltip`, `isError` folded into the empty state, `new Date(<wire timestamp>)` / `formatDistanceToNow` outside `Common/RelativeTime.tsx` (naive UTC read as local — guideline A11), `??` as a display fallback on a wire string (empty string arrives), a `rounded-*` wrapper around a `ListRow` inside a `ListRowGroup`, and a clickable row that does not guard `currentTarget.contains(target)` against portaled children
 
 For **Tests**, check:
 - API-only tests (no direct DB access)
