@@ -1,4 +1,6 @@
-# Plugin Marketplaces — Technical Reference
+# Addon Marketplaces — Technical Reference
+
+> The admin surface was renamed to **Addon Marketplaces**; the feature id, the route and every table name are unchanged. The `codex` / `skills` formats and the `supported` verdict came in with [agent_addons](../../agents/agent_addons/agent_addons_tech.md), which carries the parser details.
 
 ## File Locations
 
@@ -34,7 +36,7 @@ Defined via `LLMPluginMarketplaceBase`:
 | `status_message` | Human-readable error or status detail |
 | `sync_commit_hash` | HEAD commit at last successful sync |
 | `last_sync_at` | Timestamp of last sync |
-| `type` | Marketplace format (`"claude"` only currently) |
+| `type` | Marketplace format: `claude` (default) \| `codex` \| `skills`. Stored as a plain string; typed as a `Literal` on create/update, so an unknown value is a **422** |
 | `name`, `description` | Extracted from `marketplace.json` during sync |
 | `owner_name`, `owner_email` | Extracted from `author` field in `marketplace.json` |
 | `plugin_count` | Cached count of plugins (updated on sync) |
@@ -49,12 +51,15 @@ Defined via `LLMPluginMarketplacePluginBase`:
 | `name`, `description`, `version`, `category` | Plugin metadata |
 | `author_name`, `author_email` | Plugin author from `plugin.json` |
 | `source_type` | `local` or `url` |
+| `plugin_type` | Inherited from the marketplace `type` on every upsert: `claude` \| `codex` \| `skills` |
+| `supported` | **New.** `bool`, not null, default `true`. Sync-time verdict: can our containers install this entry? Re-derived on every sync, never sticky |
+| `unsupported_reason` | **New.** `String(64)`, nullable. One of `npm_source`, `app_connector_only`, `no_skill_md`, `unknown_source`, `unsafe_path` |
 | `source_path` | Relative path (local plugins) |
 | `source_url`, `source_branch` | External repo details (url plugins) |
 | `source_commit_hash` | Pinned commit from external repo (url plugins) |
 | `commit_hash` | Commit hash when this plugin config was last parsed |
 | `homepage` | Optional external link |
-| `config` | Full `plugin.json` stored as JSON blob |
+| `config` | Full `plugin.json` stored as JSON blob. `codex`: the whole entry verbatim, including `policy` (stored, **not enforced**) and the `.codex-plugin/plugin.json` `interface` block, plus a `skills` list of the plugin's own skill folders. `skills` format: `{"skill": {name, description, has_scripts}}` |
 
 These rows are the source of git coordinates consumed by `LLMPluginService.build_plugin_manifest()` at agent plugin install time. There is no companion cache directory on disk.
 
@@ -63,7 +68,7 @@ These rows are the source of git coordinates consumed by `LLMPluginService.build
 - `LLMPluginMarketplaceUpdate` — All fields optional; `public_discovery` is the most commonly edited field post-creation
 - `LLMPluginMarketplacePublic` — Full public representation including `plugin_count`, `last_sync_at`, `owner_name/email`
 - `LLMPluginMarketplacesPublic` — Paginated list wrapper
-- `LLMPluginMarketplacePluginPublic` — Public plugin representation (includes `source_url`, `source_commit_hash`)
+- `LLMPluginMarketplacePluginPublic` — Public plugin representation (includes `source_url`, `source_commit_hash`, and now `supported`, `unsupported_reason`, `skill_summary: PluginSkillSummary | None`)
 - `LLMPluginMarketplacePluginsPublic` — Paginated plugins list wrapper
 
 ## API Endpoints
@@ -97,12 +102,17 @@ Marketplace lifecycle:
   7. `_upsert_plugins()` → writes to Postgres.
   8. Updates marketplace `status`, `sync_commit_hash`, `last_sync_at`.
   9. `finally: shutil.rmtree(temp_dir, ignore_errors=True)` — discard clone.
-- `_parse_claude_marketplace(repo_path)` — Reads `.claude-plugin/marketplace.json`, parses local and URL source types, returns `{"metadata": {...}, "plugins": [...]}`.
+- `_get_parser_for_type(marketplace_type)` — dict lookup over `claude` / `codex` / `skills`. **Raises `MarketplaceFormatError` on a miss** — it no longer falls back to the Claude parser. `MarketplaceCatalogError` subclasses it (`marketplace_catalog_unreadable`); `routes/llm_plugins.py` maps both to **422** with `{code, message}`.
+- `_parse_claude_marketplace(repo_path)` — Reads `.claude-plugin/marketplace.json`, parses local and URL source types, returns `{"metadata": {...}, "plugins": [...]}`. Now also runs `_safe_entry_path` on each declared path (`unsafe_path` on escape).
+- `_parse_codex_marketplace(repo_path)` / `_parse_skills_marketplace(repo_path)` — the two new parsers. Details in [agent_addons_tech](../../agents/agent_addons/agent_addons_tech.md#marketplace-parsers--backendappservicespluginsllm_plugin_servicepy).
+- `_rename_link_snapshots()` / `_reattach_orphaned_links()` — keep an installed link's directory identity true across a marketplace rename and across an entry disappearing and coming back. Re-attaching requires the returning marketplace to name the **same repository** as the install's `snapshot_repository_url` (NULL fails closed), on top of the name snapshots and the `created_at` guard. Both wrapped so neither can fail a sync.
+
+**Deletion safety:** because the parser raises *before* `_upsert_plugins` runs, and stale-row deletion lives only inside `_upsert_plugins`, an unreadable catalog **deletes nothing**.
 - `_upsert_plugins()` — Compares parsed plugin list with existing DB records: inserts new, updates changed (by `name` key), deletes removed; updates `plugin_count`.
 - `delete_marketplace()` — Deletes DB record + cascades to plugin rows. Comment in code confirms: "No persistent cache to clean up — marketplace sync uses a throwaway temp clone that is discarded immediately after parsing."
 
 Discovery:
-- `discover_plugins(search, category)` — Queries `LLMPluginMarketplacePlugin` joined with `LLMPluginMarketplace` where `public_discovery=true` OR `owner_id = current_user`; supports text search on name/description/author/category. Reads Postgres only.
+- `discover_plugins(search, category, plugin_type)` — Queries `LLMPluginMarketplacePlugin` joined with `LLMPluginMarketplace` where `public_discovery=true` OR `owner_id = current_user`; supports text search on name/description/author/category. Reads Postgres only.
 
 ## Frontend Components
 
@@ -110,6 +120,7 @@ Discovery:
 
 - Route: `/_layout/admin/marketplaces`
 - Query key: `["marketplaces"]` via `LlmPluginsService.listMarketplaces({ includePublic: true })`
+- Page `h1` / subtitle: **"Addon Marketplaces"** / "Manage plugin and skill repositories and sync their entries"; `Sidebar/AdminMenu.tsx` label follows (route and `Store` icon unchanged)
 - Renders `DataTable` with `marketplaceColumns` + `AddMarketplace` button in page header
 - Uses `Suspense` + `PendingItems` fallback
 
@@ -118,7 +129,8 @@ Discovery:
 Column definitions for `LLMPluginMarketplacePublic` list:
 - **Name** — Linked to `/admin/marketplace/$marketplaceId`
 - **Repository URL** — Monospace, truncated
-- **Type** — Badge (`claude`)
+- **Format** — `Badge variant="secondary"`: "Claude plugins" / "Codex plugins" / "Skills repository", labels shared with the create dialog via `frontend/src/utils/marketplace.ts` so the two cannot drift
+- **Status** — repainted on touch onto the `--success` / `--warning` / `--destructive` tokens (it hard-coded `green` / `yellow` / `red` classes)
 - **Status** — `StatusBadge` with icon (connected / pending / error / disconnected)
 - **Plugins** — `plugin_count`, muted if zero
 - **Visibility** — Badge (Public / Private from `public_discovery`)
@@ -128,7 +140,10 @@ Column definitions for `LLMPluginMarketplacePublic` list:
 
 Dialog triggered from page header. Fields:
 - `url` — Required, validated against HTTPS or SSH git URL pattern (`/^(https?:\/\/.+|git@[^:]+:.+)$/`)
+- `type` — **Format** `Select` (three options, default `claude`) with a `text-xs text-muted-foreground` help line naming the file each format expects. One dialog, one section — the format changes only the help sentence, never the field set
 - `ssh_key_id` — Optional select from `SshKeysService.readSshKeys()` (loaded lazily when dialog opens); "none" value mapped to `undefined` in submit
+
+Dialog title: **"Add addon marketplace"**.
 
 Mutations: `LlmPluginsService.createMarketplace()` → invalidates `["marketplaces"]` on settled.
 
@@ -156,7 +171,11 @@ Displays plugins for this marketplace. Only renders when `marketplace.status ===
 
 Data: calls `LlmPluginsService.discoverPlugins({})` (all accessible plugins), then filters client-side by `plugin.marketplace_id === marketplaceId`. Query key: `["marketplace-plugins", marketplaceId]`.
 
-Table columns: Name (linked to plugin detail `/admin/marketplace/plugin/$pluginId`), Description (truncated to 80 chars), Author, Type (`Local` / `Remote` badge based on `source_type`).
+Table columns: Name (linked to plugin detail `/admin/marketplace/plugin/$pluginId`), Description (truncated to 80 chars), Author, Type (`Local` / `Remote` badge based on `source_type`), **Supported** (tone dot + label on `--success` / `--destructive`, with the `unsupported_reason` sentence in a `Tooltip`) and **Skills** (the entry's skill count from `config`).
+
+An error branch (`QueryErrorAlert` with Retry) was added on touch — the tab previously had none, so a failed query was indistinguishable from an empty catalog.
+
+> **Known gaps here, accepted in review rather than fixed:** this table is a hand-rolled `Table` rather than the shared `DataTable` the UI specification named, `Common/StatusDot` still is not extracted although the tone dot now has three consumers, and the per-plugin **detail** route still has no query-error branch.
 
 Empty states:
 - Marketplace not connected → instruction to sync in Configuration tab
@@ -169,6 +188,8 @@ Empty states:
 | `["marketplaces"]` | Full marketplace list |
 | `["marketplace", marketplaceId]` | Single marketplace detail |
 | `["marketplace-plugins", marketplaceId]` | Plugin list for a marketplace (filtered from discover) |
+
+All three sync call sites (the Configuration tab's button, the detail page's header menu, the list's row menu) go through the single `frontend/src/hooks/useMarketplaceSync.ts` mutation. They previously each carried their own `onSuccess` and had drifted to three different invalidation sets, so a re-sync of an already-connected marketplace left the entries table showing the previous sync's Supported reasons and Skills counts until a page reload.
 | `["ssh-keys"]` | SSH keys for AddMarketplace dialog (lazy) |
 
 ## Security

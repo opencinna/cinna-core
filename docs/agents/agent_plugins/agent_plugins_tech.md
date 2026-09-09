@@ -28,10 +28,13 @@
 - `frontend/src/components/Admin/AddMarketplace.tsx` — Create marketplace dialog
 - `frontend/src/components/Admin/MarketplaceConfigurationTab.tsx` — Edit marketplace settings
 - `frontend/src/components/Admin/MarketplacePluginsTab.tsx` — View plugins in a marketplace
-- `frontend/src/components/Agents/AgentPluginsTab.tsx` — Agent plugins tab (installed + discover; source badge; `plugin_results` error surface)
-- `frontend/src/components/Agents/PluginCard.tsx` — Plugin card in the discovery grid
-- `frontend/src/components/Agents/InstallPluginModal.tsx` — Mode selection dialog during install
+- `frontend/src/components/Agents/Addons/AgentAddonsTab.tsx` — the Addons tab; owns the `PLUGIN_SYNC_WARNING` banner and the sync-issues dialog (replaced `AgentPluginsTab.tsx`)
+- `frontend/src/components/Agents/Addons/AddonsCard.tsx`, `AddonRow.tsx`, `AllAddonsSheet.tsx`, `useAddonRowMutations.ts` — the installed list and its mutations (replaced `InstalledPluginsCard.tsx`, `InstalledPluginRow.tsx`, `AllInstalledPluginsSheet.tsx`)
+- `frontend/src/components/Agents/Addons/AddAddonDialog.tsx` and its step components — unified plugin + skill search and mode selection (replaced `PluginCard.tsx` and `InstallPluginModal.tsx`)
+- `frontend/src/hooks/useMarketplaceSync.ts` — the one sync mutation shared by all three admin call sites
 - `frontend/src/client/sdk.gen.ts` — Auto-generated `LlmPluginsService`
+
+Surface details are in [agent_addons_tech.md](../agent_addons/agent_addons_tech.md#frontend--frontendsrccomponentsagentsaddons); the mutations they call are unchanged.
 
 ## Database Schema
 
@@ -65,15 +68,51 @@
 |-------|---------|
 | `agent_id` | FK → `agent` (CASCADE) |
 | `plugin_id` | FK → `llm_plugin_marketplace_plugin` (`ON DELETE SET NULL`); **nullable** — NULL for bundle-sourced links |
-| `source` | `PluginSource` enum: `marketplace` \| `bundle` |
-| `snapshot_marketplace_name` | Bundle: on-disk dir segment + manifest label (also used for display) |
-| `snapshot_plugin_name` | Bundle: plugin dir name |
+| `source` | `PluginSource` enum: `marketplace` \| `bundle` \| `catalog` |
+| `snapshot_marketplace_name` | On-disk dir segment + manifest label (also used for display). Written on **every** source since [agent_addons](../agent_addons/agent_addons_tech.md#cascade-and-snapshots) — bundle, catalog (`cinna-skills`) **and marketplace** — and backfilled for existing rows by `c8d2e5b71a04_backfill_marketplace_link_name_snapshots` |
+| `snapshot_plugin_name` | Plugin dir name; same rule |
+| `snapshot_repository_url` | The git URL an install was actually made from — **security identity, not display**. Marketplace path only (bundle and catalog links have no upstream repo); backfilled from the live marketplace rows by `d7b41e0c9a35_add_agent_plugin_link_repository_snapshot`. Required to match before an orphan is re-adopted; see [agent_addons](../agent_addons/agent_addons_tech.md#cascade-and-snapshots) |
 | `snapshot_config` | Bundle: frozen `plugin.json` JSON (for UI display when marketplace row unavailable) |
 | `installed_version`, `installed_commit_hash` | Version pinning at install time |
 | `conversation_mode`, `building_mode` | Per-mode activation flags |
 | `disabled` | Files on disk but excluded from `settings.json` when true |
 
 Uniqueness: `idx_agent_plugin_unique(agent_id, plugin_id, UNIQUE)` covers marketplace links (plugin_id NOT NULL). Bundle links (plugin_id NULL) are deduped at service layer by `(agent_id, snapshot_marketplace_name, snapshot_plugin_name)` — Postgres treats NULLs as distinct in a unique index.
+
+### The `plugin_id` cascade fix
+
+`plugin_id` has always declared `ON DELETE SET NULL`, but the ORM never let it
+fire: `LLMPluginMarketplacePlugin.agent_links` declared
+`sa_relationship_kwargs={"cascade": "all, delete-orphan"}`, which deleted the
+link rows in Python **before** the database rule applied. Deleting a marketplace
+entry — or a whole marketplace — therefore silently **uninstalled** every user's
+copy of that plugin (memory: `project_plugin_link_cascade_bug`).
+
+The relationship is now `sa_relationship_kwargs={"passive_deletes": True}`, so
+the FK's `SET NULL` applies and a deleted entry **orphans** the link instead. For
+contrast, `LLMPluginMarketplace.plugins` still cascades — deleting a marketplace
+*should* delete its entry rows, and that is precisely what NULLs the links.
+
+Two mechanisms keep an orphan usable, both in `LLMPluginService` and both wrapped
+so neither can fail a sync:
+
+- `_rename_link_snapshots()` — follows a marketplace rename through to its live links.
+- `_reattach_orphaned_links()` — re-points an orphan when its entry reappears
+  upstream. Candidates are `plugin_id IS NULL` + `source == marketplace` + both
+  snapshot names; adoption additionally requires **repository identity**
+  (`_same_repository(link.snapshot_repository_url, marketplace.url)`, a NULL
+  snapshot failing closed) and the **`link.created_at >= marketplace.created_at`**
+  guard. The age guard alone covers one direction only — a *rename* can move a
+  freed marketplace name onto an **older** row, which would otherwise adopt
+  somebody else's orphans and deliver code from a repository the owner never
+  chose. Links orphaned before migration `d7b41e0c9a35` have no URL and never
+  re-attach; the remedy is uninstall and re-install. A `taken` set of existing
+  `(agent_id, plugin_id)` pairs keeps `idx_agent_plugin_unique` intact.
+
+Without the snapshot columns an orphaned link had no name left: it rendered as an
+unknown plugin, and the skills the environment still loaded from its directory
+landed on a *second*, synthetic row in the addons projection — one directory, two
+rows, neither nameable.
 
 **Table: `agent_bundle_revision`** — new column, migration `2ca38822e945`
 

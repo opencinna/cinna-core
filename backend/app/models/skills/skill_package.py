@@ -22,14 +22,19 @@ from sqlmodel import Column, Field, SQLModel
 class SkillPackageVisibility:
     """Catalog visibility levels.
 
-    Deliberately only two: a skill package is either the publisher's own
-    (``private``) or offered to everyone on the instance (``public``). The
-    bundle catalog's third level (``users``, an explicit allowlist) is listed
-    in the plan's out-of-scope section and would need its own grant table.
+    Three, matching the bundle catalog exactly: the publisher's own
+    (``private``), offered to everyone on the instance (``public``), or offered
+    to named people (``users``, an explicit allowlist held in
+    :class:`~app.models.skills.skill_package_access_grant.SkillPackageAccessGrant`).
+
+    A ``users`` package with no grants is not an error — it is simply private
+    until someone is added, which is what makes "publish now, share later" a
+    single flow rather than two.
     """
 
     PRIVATE = "private"
     PUBLIC = "public"
+    USERS = "users"
 
 
 #: Marketplace dir segment every catalog-installed skill lands under, both on

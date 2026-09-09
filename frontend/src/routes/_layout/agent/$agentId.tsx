@@ -9,7 +9,7 @@ import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { AgentConfigTab } from "@/components/Agents/AgentConfigTab"
 import { AgentIntegrationsTab } from "@/components/Agents/AgentIntegrationsTab"
 import { AgentCredentialsTab } from "@/components/Agents/AgentCredentialsTab"
-import { AgentPluginsTab } from "@/components/Agents/AgentPluginsTab"
+import { AgentAddonsTab } from "@/components/Agents/Addons/AgentAddonsTab"
 import { AgentEnvironmentsTab } from "@/components/Agents/AgentEnvironmentsTab"
 import { AgentInterfaceTab } from "@/components/Agents/AgentInterfaceTab"
 import { AgentBundleTab } from "@/components/Agents/AgentBundleTab"
@@ -264,7 +264,7 @@ function AgentDetail() {
     },
     { value: "integrations", title: "Integrations", content: <AgentIntegrationsTab agent={agent} /> },
     { value: "credentials", title: "Credentials", content: <AgentCredentialsTab agentId={agent.id} /> },
-    { value: "plugins", title: "Plugins", content: <AgentPluginsTab agentId={agent.id} /> },
+    { value: "addons", title: "Addons", content: <AgentAddonsTab agentId={agent.id} /> },
     { value: "environments", title: "Environments", content: <AgentEnvironmentsTab agentId={agent.id} /> },
     { value: "interface", title: "Interface", content: <AgentInterfaceTab agent={agent} /> },
     { value: "bundle", title: "Bundle", content: <AgentBundleTab agent={agent} /> },
@@ -278,7 +278,8 @@ function AgentDetail() {
   //   - ``environments``  (install→chat entry point, active sessions)
   //   - ``integrations``  (simplified — only the MCP Connectors card)
   //   - ``interface``     (per-install cosmetic settings)
-  // The remaining developer-tier tabs (plugins / bundle) stay hidden. In
+  //   - ``addons``        (read-only view of the plugins and skills it carries)
+  // The remaining developer-tier tab (bundle) stays hidden. In
   // particular the Bundle tab is publisher-only (publish, visibility,
   // revisions) and the agent-user tab set excludes it, so a publisher's own
   // consumer install never sees it either.
@@ -290,6 +291,14 @@ function AgentDetail() {
       "environments",
       "integrations",
       "interface",
+      // Not developer-tier, unlike the ``plugins`` tab it replaces: this is
+      // now the only place a consumer of a foreign install can see what the
+      // agent they installed can actually do, because the Skills card moved
+      // off the Configuration tab and into it. The server answers
+      // ``can_add=false`` / ``can_manage=false`` / ``can_share=false`` here,
+      // so the tab degrades to read-only on its own — the gate is this list,
+      // never a client-side role check inside the tab.
+      "addons",
     ])
     tabs = allTabs.filter((tab) => agentUserTabs.has(tab.value))
   }

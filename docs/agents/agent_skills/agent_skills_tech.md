@@ -587,7 +587,7 @@ that has a catalog skill installed.
 | `publisher_user_id` | UUID FK `user.id` | `ON DELETE SET NULL` — ownerless, not deleted |
 | `source_agent_id` | UUID FK `agent.id` | `ON DELETE SET NULL`, provenance only |
 | `latest_revision_id` | UUID FK `skill_package_revision.id` | `ON DELETE SET NULL` |
-| `visibility` | `String(16)` | `private` \| `public`; default `private`; indexed |
+| `visibility` | `String(16)` | `private` \| `public` \| `users`; default `private`; indexed. `users` was added by [agent_addons](../agent_addons/agent_addons_tech.md) — no DDL, the level set is enforced by `_normalise_visibility` (422 `invalid_visibility`) |
 | `is_listed` | bool | default `true` |
 | `created_at`, `updated_at` | `DateTime` (naive) | |
 
@@ -666,9 +666,13 @@ release_notes, visibility, package_id)`:
    30–120 s and change nothing about the bytes. Three distinguishable 4xx:
    `no_environment` (409), `workspace_unavailable` (409), `skill_not_found`
    (404). `SKILL_NAME_RE` guards the path join as much as it validates the name.
-3. One `parse_skill_dir`, three refusals: `skill_invalid` /
-   `skill_contains_secrets` (with paths) / `skill_too_large` — all 422, all
-   **before** anything is written.
+3. One `parse_skill_dir`, three content refusals: `skill_invalid` /
+   `skill_contains_secrets` (with paths) / `skill_too_large` — all 422. A fourth,
+   **409 `grants_require_users_visibility`**, fires inside the publish lock when
+   the call carries resolved `grant_emails` while the *effective* visibility
+   (requested, else the package's current, else `private`) is not `users` — see
+   [agent_addons_tech](../agent_addons/agent_addons_tech.md#visibility-and-grants).
+   All four run **before** anything is written.
 4. Under a per-`(publisher, skill name)` `asyncio.Lock` (locking on the package
    uuid would leave the create path — the one that races into a unique-constraint
    violation — unguarded): resolve or create the package, allocate
@@ -768,6 +772,19 @@ Two routers, one `skills` tag → one `SkillsService` in the generated client.
 | `POST /agents/{agent_id}/skills/{name}/publish` | owner + developer gate | `SkillPackageRevisionPublic` |
 | `POST /agents/{agent_id}/skills/install` | owner | creates the link, then `LLMPluginService.sync_plugins_to_agent_environments(message_prefix="Skill added.")` → `PluginSyncResponse` |
 | `POST /agents/{agent_id}/plugins/{link_id}/upgrade` | existing route | now maps `SkillCatalogError` through `http_error_for` |
+| `GET`/`POST` `/skills/packages/{package_id}/grants`, `DELETE .../grants/{user_id}` | publisher (`_get_managed_package`; **no superuser bypass**) | `users`-visibility allowlist — see [agent_addons_tech](../agent_addons/agent_addons_tech.md) |
+
+`POST /skills/packages/{package_id}/delist` was hardened when the grants landed:
+it now checks `is_superuser` **before** loading the package and then loads without
+a visibility check. It previously loaded through the visibility-gated path, which
+was both an existence oracle and the reason a `users` package could not be
+delisted.
+
+`SkillPublishRequest` gained `grant_emails: list[str]` (max 50) and
+`SkillPackageEntry` gained `is_granted`. A publish carrying grant targets is
+refused (**409 `grants_require_users_visibility`**) unless it leaves the package
+on `users`; the standalone grant routes above stay deliberately permissive, so
+granting ahead of a visibility flip still works.
 
 The three agent-scoped rows resolve the agent through
 `LLMPluginService.verify_agent_access`, shared with the `llm-plugins` router.
@@ -884,14 +901,23 @@ plainly exists.
 
 ### Phase 2 (implemented)
 
+> **Superseded by [agent_addons](../agent_addons/agent_addons_tech.md).** The four
+> skills-only components below were **deleted** when the Addons tab replaced the
+> Configuration tab's Skills card: `AgentSkillsCard.tsx`, `SkillRow.tsx`,
+> `AllSkillsSheet.tsx` and `SkillContentDialog.tsx`. Their behaviour lives on in
+> `components/Agents/Addons/` (`AddonsCard`, `AddonRow`, `AllAddonsSheet`,
+> `AddonDetailDialog`) and in the shared `Agents/SkillContentBody.tsx`. The rows
+> are kept here because the *rules* they encode still hold and are the reason the
+> replacements are shaped the way they are. `utils/skills.ts` survives unchanged.
+
 | File | Role |
 |------|------|
-| `frontend/src/components/Agents/AgentSkillsCard.tsx` | The Skills card. Query key `["agent", agentId, "skills"]`; Refresh mutation. A 200 with `result.error` toasts a **failure** — the route never fails on an unreachable env, so "Skills refreshed" over an error banner would say the opposite of the truth |
-| `frontend/src/components/Agents/SkillRow.tsx` | `ListRow` + `RowFlag` + `RowInfo`; owns its dialog, mounted only while open |
-| `frontend/src/components/Agents/AllSkillsSheet.tsx` | "Show all (N)" |
-| `frontend/src/components/Agents/SkillContentDialog.tsx` | `SKILL.md` viewer |
-| `frontend/src/utils/skills.ts` | `skillsIndexErrorCopy`, `skillRowStatus`, `formatSkillSize`, `sortSkills`, `skillKey` — shared so the card, the row and the sheet cannot drift on sort order or on what a dot means |
-| `frontend/src/components/Agents/AgentConfigTab.tsx` | Hosts the card. Deliberately **not** gated on `showOperationalSettings` or `readOnly` |
+| ~~`Agents/AgentSkillsCard.tsx`~~ → `Agents/Addons/AddonsCard.tsx` | Query key was `["agent", agentId, "skills"]`, now `["agent", agentId, "addons"]`; Refresh mutation. A 200 with `result.error` toasts a **failure** — the route never fails on an unreachable env, so "Skills refreshed" over an error banner would say the opposite of the truth |
+| ~~`Agents/SkillRow.tsx`~~ → `Agents/Addons/AddonRow.tsx` | `ListRow` + `RowFlag` + `RowInfo`; owns its dialog, mounted only while open. `AddonRow` deliberately does **not** reuse `SkillRow`: no `meta` line, a different status precedence, a different action budget |
+| ~~`Agents/AllSkillsSheet.tsx`~~ → `Agents/Addons/AllAddonsSheet.tsx` | "Show all (N)" |
+| ~~`Agents/SkillContentDialog.tsx`~~ → `Agents/SkillContentBody.tsx` | `SKILL.md` viewer, now a body rendered inside `AddonDetailDialog` rather than a second dialog |
+| `frontend/src/utils/skills.ts` | `skillsIndexErrorCopy`, `skillRowStatus`, `formatSkillSize`, `sortSkills`, `skillKey` — shared so the card, the row and the sheet cannot drift on sort order or on what a dot means. Still live: `utils/addons.ts` builds on it rather than duplicating it |
+| `frontend/src/components/Agents/AgentConfigTab.tsx` | Hosted the card until the Addons tab took it. Was deliberately **not** gated on `showOperationalSettings` or `readOnly`, which is why `"addons"` had to join the `agentUserTabs` set in the same change |
 | `frontend/src/components/Chat/SlashCommandPopup.tsx` | `kind === "skill"` renders a `h-5` outline `Badge`, visible text inside the `role="option"` row (so it is part of the accessible name and needs no `sr-only` twin) |
 | `frontend/src/components/Catalog/CatalogCard.tsx` | One muted `GraduationCap` line, ≤3 names + `+N more`. `skills` is typed `Array<unknown> \| null` (there is no `SkillSummaryPublic` to import), narrowed defensively |
 
@@ -901,8 +927,14 @@ React reuse one row's dialog state for the other.
 
 ### Phase 3 (specification — code still landing)
 
-The Phase-3 surfaces are being built by a separate pass and are **described here
-from the plan's `## UI Specification`, not verified against code**:
+The Phase-3 surfaces shipped. Two of the rows below were then **superseded by
+[agent_addons](../agent_addons/agent_addons_tech.md)**: S9's
+`Agents/PublishSkillDialog.tsx` became `Agents/Addons/ShareSkillDialog.tsx` (plus
+`ShareSkillSuccessPanel`, and the `users` visibility with its people picker), and
+S11's `Agents/InstalledPluginRow.tsx` / `AllInstalledPluginsSheet.tsx` were
+deleted into `Addons/AddonRow.tsx` / `AllAddonsSheet.tsx`. The package detail
+route (S7) additionally gained `Catalog/SkillPackageAccessCard.tsx` and its
+grant row / dialog / sheet:
 
 | # | Surface | New files (per the spec) |
 |---|---------|--------------------------|

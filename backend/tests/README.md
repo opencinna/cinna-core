@@ -199,6 +199,10 @@ tests/
     security_event.py      # events_of_type() — reads a user's own (self-scoped) security feed
     session.py             # get_agent_session(), get_session(), list_sessions()
     skill_catalog.py       # skills catalog: workspace seeding, publish/install/manage wrappers
+    llm_plugin.py          # plugin marketplaces: create/sync (fixture-repo clone stub), discover,
+                           #   install/upgrade, manifest capture, three documented DB seams
+                           #   (force_marketplace_type, force_plugin_type, orphan_plugin_link)
+    addons.py              # agent addons projection: get/refresh, row lookups
     message.py             # get_messages_by_role(), list_messages()
     knowledge_source.py    # create/get/list/update/delete/enable/disable_knowledge_source()
 ```

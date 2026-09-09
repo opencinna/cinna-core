@@ -29,7 +29,10 @@ from app.models.plugins.llm_plugin import (
     AgentPluginLinksPublic,
     PluginSyncResponse,
 )
-from app.services.plugins.llm_plugin_service import LLMPluginService
+from app.services.plugins.llm_plugin_service import (
+    LLMPluginService,
+    MarketplaceFormatError,
+)
 from app.services.skills.exceptions import SkillCatalogError, http_error_for
 
 logger = logging.getLogger(__name__)
@@ -189,6 +192,18 @@ def sync_marketplace(
             user_id=marketplace.user_id,  # Use marketplace owner for SSH key access
         )
         return LLMPluginService.get_marketplace_public(session, synced)
+    except MarketplaceFormatError as e:
+        # Nothing was read: either the marketplace declares a format this
+        # platform has no parser for, or the repository's catalog is missing /
+        # unreadable (`MarketplaceCatalogError`, which carries its own code).
+        # Either way the row already holds `status=error` carrying this
+        # sentence, and not one plugin was touched — 422 rather than the 404 below, which
+        # means "no such marketplace". Coded so a client can branch without
+        # matching prose.
+        raise HTTPException(
+            status_code=422,
+            detail={"code": e.code, "message": str(e)},
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -207,6 +222,8 @@ def discover_plugins(
     current_user: CurrentUser,
     search: str | None = None,
     category: str | None = None,
+    plugin_type: str | None = None,
+    marketplace_id: uuid.UUID | None = None,
     skip: int = 0,
     limit: int = 30,
 ) -> Any:
@@ -217,9 +234,16 @@ def discover_plugins(
     - User's private marketplaces
     - Public marketplaces
 
+    Entries this platform cannot install are included, last, carrying
+    `supported=false` and a `unsupported_reason` code — hiding them would make
+    a half-broken marketplace look empty. Installing one is refused with a 409.
+
     Optional filters:
     - search: Search in name/description/author/category
     - category: Filter by category
+    - plugin_type: Filter by marketplace format (claude | codex | skills)
+    - marketplace_id: Scope to one marketplace (an id the caller cannot see
+      returns an empty page rather than an error)
     - skip: Pagination offset (default 0)
     - limit: Maximum items per page (default 30)
     """
@@ -228,6 +252,8 @@ def discover_plugins(
         user_id=current_user.id,
         search=search,
         category=category,
+        plugin_type=plugin_type,
+        marketplace_id=marketplace_id,
         skip=skip,
         limit=limit,
     )

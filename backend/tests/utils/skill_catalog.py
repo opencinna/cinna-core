@@ -132,6 +132,7 @@ def publish_skill(
     release_notes: str | None = None,
     visibility: str | None = None,
     package_id: str | None = None,
+    grant_emails: list[str] | None = None,
     expected_status: int = 200,
 ) -> dict:
     """POST ``/agents/{agent_id}/skills/{name}/publish``."""
@@ -144,6 +145,8 @@ def publish_skill(
         body["visibility"] = visibility
     if package_id is not None:
         body["package_id"] = package_id
+    if grant_emails is not None:
+        body["grant_emails"] = grant_emails
     r = client.post(
         f"{API}/agents/{agent_id}/skills/{name}/publish", headers=headers, json=body
     )
@@ -316,6 +319,79 @@ def uninstall_agent_plugin(
         f"uninstall: expected {expected_status}, got {r.status_code}: {r.text}"
     )
     return r.json()
+
+
+# ── Access grants (``visibility='users'``) ─────────────────────────────────
+
+
+def mixed_case(email: str) -> str:
+    """The same address a colleague would type it — ``Jo.Blogs@Example.COM``.
+
+    Accounts are stored lowercased, and every lookup that forgets to lowercase
+    both sides silently fails to find a real user. Grant tests type the address
+    genuinely mixed-case so that bug cannot pass here.
+    """
+    return "".join(
+        ch.upper() if index % 2 == 0 else ch for index, ch in enumerate(email)
+    )
+
+
+def list_skill_package_grants(
+    client: TestClient,
+    headers: dict[str, str],
+    package_uuid: str,
+    *,
+    expected_status: int = 200,
+) -> dict:
+    """GET ``/skills/packages/{id}/grants``."""
+    r = client.get(f"{API}/skills/packages/{package_uuid}/grants", headers=headers)
+    assert r.status_code == expected_status, (
+        f"list grants: expected {expected_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def add_skill_package_grant(
+    client: TestClient,
+    headers: dict[str, str],
+    package_uuid: str,
+    email: str,
+    *,
+    expected_status: int = 200,
+) -> dict:
+    """POST ``/skills/packages/{id}/grants``."""
+    r = client.post(
+        f"{API}/skills/packages/{package_uuid}/grants",
+        headers=headers,
+        json={"email": email},
+    )
+    assert r.status_code == expected_status, (
+        f"add grant: expected {expected_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
+
+def revoke_skill_package_grant(
+    client: TestClient,
+    headers: dict[str, str],
+    package_uuid: str,
+    user_id: str,
+    *,
+    expected_status: int = 204,
+) -> dict | None:
+    """DELETE ``/skills/packages/{id}/grants/{user_id}``."""
+    r = client.delete(
+        f"{API}/skills/packages/{package_uuid}/grants/{user_id}", headers=headers
+    )
+    assert r.status_code == expected_status, (
+        f"revoke grant: expected {expected_status}, got {r.status_code}: {r.text}"
+    )
+    return None if r.status_code == 204 else r.json()
+
+
+def grant_emails_of(payload: dict) -> set[str]:
+    """The set of addresses a grants listing names."""
+    return {g["user_email"] for g in payload["data"]}
 
 
 # ── Error-body reads ───────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ This is the largest test domain in the suite (80 files / 592 tests), so tests ar
 | `commands/` | Slash / CLI command surface: `/run`, CLI command sync, autocomplete, `/files` + env wakeup, non-LLM → LLM bridging, agent status + status refresh, `/skills` + skill entries in the popup |
 | `guest_shares/` | Guest share links: CRUD, auth flow, security code, guest session access |
 | `integrations/` | Inbound/outbound integrations: webhooks, capability flags, router trigger prompt |
-| `core/` | Everything without a better home: create-flow, creation limits, prompt sync, resilient plugins, AI-credential slot matching, credential categorization, team task delegation, env token scoping, A2A access tokens, agent skills routes, skills catalog (publish / visibility / install) |
+| `core/` | Everything without a better home: create-flow, creation limits, prompt sync, resilient plugins, addon marketplace formats (Codex / bare-skills parsers, unsupported entries), AI-credential slot matching, credential categorization, team task delegation, env token scoping, A2A access tokens, agent skills routes, skills catalog (publish / visibility / install) |
 
 **Placement rule.** New test files go into the group that matches their topic — never loose at the root of `tests/api/agents/`. Create a new group only for a genuinely new topic you expect to reach ~3 files; give it an `__init__.py` and add a row above. If `core/` grows past ~12 files, split it instead of letting it sprawl.
 

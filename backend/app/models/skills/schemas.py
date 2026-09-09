@@ -69,6 +69,11 @@ class SkillPackageEntry(SkillPackagePublic):
     #: visibility). A capability reply, so the client never has to reproduce
     #: the publisher rule — delisting is a separate, admin-only verb.
     can_manage: bool = False
+    #: Whether this row is visible to the caller *because someone granted it*
+    #: — a ``users``-visibility package they were named on. False for the
+    #: publisher's own row and for every public package, so the card can say
+    #: "Shared with you" only where that is actually the reason it is there.
+    is_granted: bool = False
 
 
 class SkillPackagesPublic(SQLModel):
@@ -98,10 +103,32 @@ class SkillPublishRequest(SQLModel):
 
     version: str | None = Field(default=None, max_length=64)
     release_notes: str | None = None
-    #: ``private`` (default) or ``public``. Only honoured on the first publish
-    #: and on an explicit change — a re-publish that omits it leaves the
-    #: package's current visibility alone.
+    #: ``private`` (default), ``users`` or ``public``. Only honoured on the
+    #: first publish and on an explicit change — a re-publish that omits it
+    #: leaves the package's current visibility alone.
     visibility: str | None = None
+    #: Email addresses to grant catalog visibility to, in the same transaction
+    #: as the publish. **Additive**: a re-publish adds the emails it names and
+    #: never revokes the ones it omits — revoking is its own verb
+    #: (``DELETE /skills/packages/{id}/grants/{user_id}``), so an out-of-date
+    #: dialog cannot silently take access away. An unknown address fails the
+    #: whole publish rather than half-sharing it.
+    #:
+    #: Only meaningful together with an effective visibility of ``users`` —
+    #: grants are consulted under that visibility and no other. Naming an
+    #: address **other than the publisher's own** while the package would stay
+    #: ``private`` or ``public`` is refused (409
+    #: ``grants_require_users_visibility``) rather than written as rows that do
+    #: nothing until somebody changes the visibility. The publisher's own
+    #: address resolves to no grant row at all, so it stays the no-op it is
+    #: under every visibility.
+    #:
+    #: Bounded because each address costs one case-insensitive user lookup with
+    #: no functional index behind it, and this list arrives from a request body:
+    #: an unbounded one turns a publish into an arbitrary number of sequential
+    #: scans. Fifty is well past the size of a dialog anybody fills in by hand,
+    #: and a wider audience is what ``visibility="public"`` is for.
+    grant_emails: list[str] = Field(default=[], max_length=50)
     #: Reverse-DNS id for the FIRST publish of a skill. On a re-publish it may
     #: only repeat the package's existing id — a mismatch is refused with
     #: ``package_id_immutable`` (409) rather than silently ignored, because
@@ -127,3 +154,37 @@ class SkillRevisionContentPublic(SQLModel):
     name: str
     content: str
     truncated: bool = False
+
+
+# =============================================================================
+# Access grants (``visibility='users'``)
+# =============================================================================
+
+
+class SkillPackageAccessGrantPublic(SQLModel):
+    """Response schema for one skill package access grant.
+
+    ``user_email`` is resolved from the ``User`` row rather than stored: the
+    grant is keyed on the user id, and an email the publisher typed months ago
+    must not outlive a change of address.
+    """
+
+    id: uuid.UUID
+    package_id: uuid.UUID
+    user_id: uuid.UUID
+    user_email: str | None = None
+    granted_by_user_id: uuid.UUID | None = None
+    created_at: datetime
+
+
+class SkillPackageAccessGrantsPublic(SQLModel):
+    """List response for a package's grants."""
+
+    data: list[SkillPackageAccessGrantPublic]
+    count: int
+
+
+class SkillPackageAccessGrantCreate(SQLModel):
+    """Body of ``POST /skills/packages/{package_id}/grants``."""
+
+    email: str

@@ -500,6 +500,59 @@ export type ActivityUpdate = {
 };
 
 /**
+ * Totals for the tab's "Show all (N)" affordances.
+ *
+ * Counted over **rows**, not over installs, and the two are deliberately not
+ * the same number:
+ *
+ * * ``plugins`` — every ``kind="plugin"`` row, *including orphans*. A
+ * ``skills``-format marketplace install is not one of them: it counts under
+ * ``skills``, with the noun its row prints. An orphan
+ * is a directory the engine still loads, so a count that omitted it would
+ * promise a shorter list than the one the user is about to open. It follows
+ * that ``plugins`` can exceed the number of installed plugin links, which
+ * is the point: the surplus is what needs attention.
+ * * ``skills`` — every ``kind="skill"`` row: catalog installs,
+ * ``skills``-format marketplace installs, *and* the agent's own
+ * ``skills/<name>/`` folders, because to the user they are one kind of thing
+ * with three origins.
+ * * ``local_skills`` — a **subset** of ``skills``, not a third bucket beside
+ * it: the folders the agent owns and can publish. ``skills`` minus
+ * ``local_skills`` is the catalog half.
+ *
+ * Skills that hang off a plugin row are counted nowhere: they are not rows,
+ * which is exactly the double listing this projection exists to remove.
+ */
+export type AddonCounts = {
+    plugins?: number;
+    skills?: number;
+    local_skills?: number;
+};
+
+/**
+ * One row of the addons list — a plugin, or a skill, never both.
+ */
+export type AddonPublic = {
+    key: string;
+    kind: string;
+    source: string;
+    name: string;
+    display_name: string;
+    description?: string;
+    version?: (string | null);
+    marketplace_name?: (string | null);
+    plugin_type?: (string | null);
+    link?: (AgentPluginLinkWithUpdateInfo | null);
+    skills?: Array<SkillEntryPublic>;
+    status?: string;
+    status_code?: (string | null);
+    orphan?: boolean;
+    can_share?: boolean;
+    can_manage?: boolean;
+    published_package_id?: (string | null);
+};
+
+/**
  * Enriched environment row for the admin console.
  *
  * Inherits every field of ``AgentEnvironmentPublic`` and adds admin-only
@@ -741,6 +794,19 @@ export type AgentAccessTokensPublic = {
 export type AgentAccessTokenUpdate = {
     name?: (string | null);
     is_revoked?: (boolean | null);
+};
+
+/**
+ * Everything one agent can do beyond its prompt, in one list.
+ */
+export type AgentAddonsPublic = {
+    agent_id: string;
+    environment_id?: (string | null);
+    addons?: Array<AddonPublic>;
+    counts?: AddonCounts;
+    skills_error?: (string | null);
+    fetched_at?: (string | null);
+    can_add?: boolean;
 };
 
 export type AgentApiAccessGrantCreate = {
@@ -4594,8 +4660,10 @@ export type LLMPluginMarketplaceCreate = {
     git_branch?: string;
     ssh_key_id?: (string | null);
     public_discovery?: boolean;
-    type?: string;
+    type?: 'claude' | 'codex' | 'skills';
 };
+
+export type type = 'claude' | 'codex' | 'skills';
 
 /**
  * Public schema for marketplace plugin.
@@ -4622,6 +4690,9 @@ export type LLMPluginMarketplacePluginPublic = {
 } | null);
     created_at: string;
     updated_at: string;
+    supported?: boolean;
+    unsupported_reason?: (string | null);
+    skill_summary?: (PluginSkillSummary | null);
     marketplace_name?: (string | null);
 };
 
@@ -4677,7 +4748,7 @@ export type LLMPluginMarketplaceUpdate = {
     git_branch?: (string | null);
     ssh_key_id?: (string | null);
     public_discovery?: (boolean | null);
-    type?: (string | null);
+    type?: ('claude' | 'codex' | 'skills' | null);
 };
 
 /**
@@ -5475,6 +5546,20 @@ export type PluginInstallResult = {
     source?: string;
     status: string;
     error_message?: (string | null);
+};
+
+/**
+ * The one skill a marketplace entry ships, when it ships exactly one.
+ *
+ * A ``skills``-format marketplace publishes one plugin per skill folder, so
+ * its rows have a skill to describe before anything is installed. Read off
+ * the parsed ``config["skill"]`` block rather than recomputed, because the
+ * repository is not on disk any more by the time anybody asks.
+ */
+export type PluginSkillSummary = {
+    name: string;
+    description?: string;
+    has_scripts?: boolean;
 };
 
 /**
@@ -6441,6 +6526,37 @@ export type SkillIssuePublic = {
 };
 
 /**
+ * Body of ``POST /skills/packages/{package_id}/grants``.
+ */
+export type SkillPackageAccessGrantCreate = {
+    email: string;
+};
+
+/**
+ * Response schema for one skill package access grant.
+ *
+ * ``user_email`` is resolved from the ``User`` row rather than stored: the
+ * grant is keyed on the user id, and an email the publisher typed months ago
+ * must not outlive a change of address.
+ */
+export type SkillPackageAccessGrantPublic = {
+    id: string;
+    package_id: string;
+    user_id: string;
+    user_email?: (string | null);
+    granted_by_user_id?: (string | null);
+    created_at: string;
+};
+
+/**
+ * List response for a package's grants.
+ */
+export type SkillPackageAccessGrantsPublic = {
+    data: Array<SkillPackageAccessGrantPublic>;
+    count: number;
+};
+
+/**
  * A package plus its full revision history, newest first.
  */
 export type SkillPackageDetailPublic = {
@@ -6465,6 +6581,7 @@ export type SkillPackageDetailPublic = {
     install_count?: number;
     installed_in_agent_ids?: Array<(string)>;
     can_manage?: boolean;
+    is_granted?: boolean;
     revisions?: Array<SkillPackageRevisionPublic>;
 };
 
@@ -6493,6 +6610,7 @@ export type SkillPackageEntry = {
     install_count?: number;
     installed_in_agent_ids?: Array<(string)>;
     can_manage?: boolean;
+    is_granted?: boolean;
 };
 
 /**
@@ -6544,6 +6662,7 @@ export type SkillPublishRequest = {
     version?: (string | null);
     release_notes?: (string | null);
     visibility?: (string | null);
+    grant_emails?: Array<(string)>;
     package_id?: (string | null);
 };
 
@@ -8090,6 +8209,18 @@ export type AgentsGetAgentSkillContentData = {
 };
 
 export type AgentsGetAgentSkillContentResponse = (SkillContentPublic);
+
+export type AgentsGetAgentAddonsData = {
+    agentId: string;
+};
+
+export type AgentsGetAgentAddonsResponse = (AgentAddonsPublic);
+
+export type AgentsRefreshAgentAddonsData = {
+    agentId: string;
+};
+
+export type AgentsRefreshAgentAddonsResponse = (AgentAddonsPublic);
 
 export type AgentsReadAgentsData = {
     limit?: number;
@@ -10089,6 +10220,8 @@ export type LlmPluginsSyncMarketplaceResponse = (LLMPluginMarketplacePublic);
 export type LlmPluginsDiscoverPluginsData = {
     category?: (string | null);
     limit?: number;
+    marketplaceId?: (string | null);
+    pluginType?: (string | null);
     search?: (string | null);
     skip?: number;
 };
@@ -10774,6 +10907,26 @@ export type SkillsDownloadSkillPackageArchiveData = {
 };
 
 export type SkillsDownloadSkillPackageArchiveResponse = (unknown);
+
+export type SkillsListSkillPackageGrantsData = {
+    packageId: string;
+};
+
+export type SkillsListSkillPackageGrantsResponse = (SkillPackageAccessGrantsPublic);
+
+export type SkillsAddSkillPackageGrantData = {
+    packageId: string;
+    requestBody: SkillPackageAccessGrantCreate;
+};
+
+export type SkillsAddSkillPackageGrantResponse = (SkillPackageAccessGrantPublic);
+
+export type SkillsRevokeSkillPackageGrantData = {
+    packageId: string;
+    userId: string;
+};
+
+export type SkillsRevokeSkillPackageGrantResponse = (void);
 
 export type SkillsPublishAgentSkillData = {
     agentId: string;

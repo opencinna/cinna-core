@@ -50,6 +50,7 @@ from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
 from app.models.skills.schemas import (
+    SkillPackageAccessGrantPublic,
     SkillPackageDetailPublic,
     SkillPackageEntry,
     SkillPackageRevisionPublic,
@@ -59,6 +60,9 @@ from app.models.skills.skill_package import (
     CATALOG_MARKETPLACE_NAME,
     SkillPackage,
     SkillPackageVisibility,
+)
+from app.models.skills.skill_package_access_grant import (
+    SkillPackageAccessGrant,
 )
 from app.models.skills.skill_package_revision import SkillPackageRevision
 from app.models.users.user import User
@@ -117,6 +121,9 @@ class _EntryContext:
     publishers: dict[uuid.UUID, "User"] = field(default_factory=dict)
     install_counts: dict[uuid.UUID, int] = field(default_factory=dict)
     installed_in: dict[uuid.UUID, list[uuid.UUID]] = field(default_factory=dict)
+    #: Packages of this listing the viewer holds an access grant on. Also
+    #: viewer-bound, for the same reason ``installed_in`` is.
+    granted_package_ids: set[uuid.UUID] = field(default_factory=set)
 
 
 def _publish_lock_for(key: str) -> asyncio.Lock:
@@ -172,8 +179,11 @@ class SkillCatalogService:
     # ── Visibility / capability ────────────────────────────────────────
 
     @staticmethod
-    def user_can_see(package: SkillPackage, user: User) -> bool:
-        """The publisher; anyone once listed and public; an admin once public.
+    def user_can_see(
+        session: Session, package: SkillPackage, user: User
+    ) -> bool:
+        """The publisher; anyone once listed and public; a granted user; an
+        admin once public.
 
         §4 says ``private`` means "the publisher only", and that is honoured
         literally: a private package is prompt text its author has not chosen
@@ -185,11 +195,21 @@ class SkillCatalogService:
         own output would 404 for the admin who produced it, a second delist
         would not be idempotent, and a publisher could re-list at will with the
         admin unable to look at what they were re-listing.
+
+        A ``users`` package is visible to the people named on it, and — like a
+        public one — only while it is listed: delisting is the administrator's
+        one lever over a harmful package, and a grant must not be a way around
+        it. The admin bypass is not extended here: ``users`` is an explicit
+        allowlist, and an administrator is not on it.
         """
         if package.publisher_user_id and package.publisher_user_id == user.id:
             return True
         if package.visibility == SkillPackageVisibility.PUBLIC:
             return package.is_listed or user.is_superuser
+        if package.visibility == SkillPackageVisibility.USERS:
+            return package.is_listed and SkillCatalogService.user_has_grant(
+                session, package, user.id
+            )
         return False
 
     @staticmethod
@@ -218,6 +238,7 @@ class SkillCatalogService:
         release_notes: str | None = None,
         visibility: str | None = None,
         package_id: str | None = None,
+        grant_emails: list[str] | None = None,
     ) -> SkillPackageRevision:
         """Publish ``skills/<skill_name>/`` from ``agent`` as a new revision.
 
@@ -264,8 +285,65 @@ class SkillCatalogService:
 
         visibility = SkillCatalogService._normalise_visibility(visibility)
 
+        # 4. Resolve the people to share with BEFORE anything is written. An
+        #    address that resolves to nobody is a typo, and a typo must not
+        #    leave behind a published revision that cannot be un-published —
+        #    the same reason every other validator above runs first.
+        grant_targets = SkillCatalogService._resolve_grant_targets(
+            session, grant_emails, publisher_user_id=user.id
+        )
+
         lock = _publish_lock_for(f"{user.id}:{skill_name}")
         async with lock:
+            # 5. Refuse addresses that a grant row could not act on. Grants are
+            #    consulted by ``user_can_see`` and ``is_granted`` under
+            #    ``visibility == "users"`` and nowhere else, so writing them under
+            #    any other visibility does not share the skill — it leaves latent
+            #    rows that a later :meth:`update_package` flipping the visibility to
+            #    ``users`` turns into access nobody asked for. The one client that
+            #    sends this field drops the emails itself; a second client (the CLI,
+            #    a script) has to be told, and told before anything is written:
+            #    ``_resolve_package`` below commits a package row.
+            #
+            #    Keyed on the EFFECTIVE visibility, never on the requested field
+            #    alone. ``visibility=None`` is the documented "leave the package's
+            #    current visibility alone" shape, so "re-publish an already-``users``
+            #    package and add an address" has to keep working, while "add
+            #    addresses to a ``public`` package without restating the visibility"
+            #    has to be refused. Hence a read-only lookup of the package that
+            #    already exists, and ``PRIVATE`` — the new-package default — when
+            #    there is none.
+            #
+            #    Inside the publish lock, not in front of it: the lock is keyed on
+            #    the same skill this reads the package for, so a second publish
+            #    of it cannot commit a visibility change between this read and
+            #    the grant write below. (A concurrent :meth:`update_package`
+            #    still can — that path takes no lock — which is a narrower race
+            #    than the one this closes, and inherent to a check-then-act.)
+            #
+            #    Keyed on the resolved targets rather than the raw list, because
+            #    those are the rows this publish would actually write: a request
+            #    naming only the publisher's own address writes nothing, and
+            #    :meth:`_resolve_grant_targets` deliberately treats that as a no-op
+            #    inside a publish rather than a refusal.
+            if grant_targets:
+                existing_package = SkillCatalogService._find_publisher_package(
+                    session, publisher_user_id=user.id, entry_name=entry.name
+                )
+                effective_visibility = visibility or (
+                    existing_package.visibility
+                    if existing_package is not None
+                    else SkillPackageVisibility.PRIVATE
+                )
+                if effective_visibility != SkillPackageVisibility.USERS:
+                    raise SkillCatalogError(
+                        "grants_require_users_visibility",
+                        "Sharing a skill with named people only takes effect when "
+                        "its visibility is 'users', and this publish would leave it "
+                        f"'{effective_visibility}'. Set the visibility to 'users', "
+                        "or publish without the email addresses.",
+                    )
+
             package, created = SkillCatalogService._resolve_package(
                 session,
                 user=user,
@@ -320,6 +398,8 @@ class SkillCatalogService:
                 created=created,
                 visibility=visibility,
                 agent=agent,
+                grant_targets=grant_targets,
+                granted_by=user,
             )
 
         logger.info(
@@ -384,12 +464,80 @@ class SkillCatalogService:
         if visibility not in (
             SkillPackageVisibility.PRIVATE,
             SkillPackageVisibility.PUBLIC,
+            SkillPackageVisibility.USERS,
         ):
             raise SkillCatalogError(
                 "invalid_visibility",
-                "Visibility must be either 'private' or 'public'.",
+                "Visibility must be 'private', 'users' or 'public'.",
             )
         return visibility
+
+    @staticmethod
+    def _resolve_grant_targets(
+        session: Session,
+        emails: list[str] | None,
+        *,
+        publisher_user_id: uuid.UUID,
+    ) -> list[User]:
+        """Resolve publish-time ``grant_emails`` to users, deduplicated.
+
+        An address that resolves to nobody raises ``user_not_found`` on the
+        first bad one, before the caller has written anything — a typo must not
+        be able to leave an immutable revision behind.
+
+        The publisher's own address is the one refusal that is **dropped** here
+        rather than raised. On the dedicated grant endpoint it is a 409, where
+        the whole request was "share with this person" and answering it is the
+        point. Inside a publish it names a no-op, and failing an expensive,
+        one-way operation over a redundant entry would be the wrong trade.
+
+        Addresses are deduplicated **before** the lookups, not after. The
+        resolved-user dedupe below still catches two spellings of one account,
+        but only once each spelling has cost its own ``lower(email)`` scan —
+        and that column has no functional index. Folding the list to a set of
+        trimmed, lowercased addresses first makes one address repeated cost one
+        query, which is what a client that submits its dialog twice sends.
+        """
+        addresses = dict.fromkeys(
+            trimmed.lower()
+            for trimmed in ((email or "").strip() for email in emails or [])
+            if trimmed
+        )
+
+        targets: list[User] = []
+        seen: set[uuid.UUID] = {publisher_user_id}
+        for email in addresses:
+            target = SkillCatalogService.resolve_grant_user(
+                session, email, publisher_user_id=None
+            )
+            if target.id in seen:
+                continue
+            seen.add(target.id)
+            targets.append(target)
+        return targets
+
+    @staticmethod
+    def _find_publisher_package(
+        session: Session,
+        *,
+        publisher_user_id: uuid.UUID,
+        entry_name: str,
+    ) -> SkillPackage | None:
+        """This publisher's package for ``entry_name``, or ``None``. Read-only.
+
+        Package identity is per publisher, so that pair is the whole key. Split
+        out because the publish path needs the lookup twice with two different
+        rights: the grant pre-flight has to read the package's *current*
+        visibility while nothing may be written yet, and
+        :meth:`_resolve_package` creates and commits a row when the lookup
+        misses. One query, one predicate, no chance of the two drifting.
+        """
+        return session.exec(
+            select(SkillPackage).where(
+                SkillPackage.publisher_user_id == publisher_user_id,
+                SkillPackage.name == entry_name,
+            )
+        ).first()
 
     @staticmethod
     def _resolve_package(
@@ -406,12 +554,9 @@ class SkillCatalogService:
         Returns ``(package, created)``. Identity is per publisher (§9): two
         people may both publish ``pdf-report``; ``package_id`` disambiguates.
         """
-        existing = session.exec(
-            select(SkillPackage).where(
-                SkillPackage.publisher_user_id == user.id,
-                SkillPackage.name == entry_name,
-            )
-        ).first()
+        existing = SkillCatalogService._find_publisher_package(
+            session, publisher_user_id=user.id, entry_name=entry_name
+        )
 
         if existing is not None:
             if (
@@ -542,6 +687,8 @@ class SkillCatalogService:
         created: bool,
         visibility: str | None,
         agent: Agent,
+        grant_targets: list[User] | None = None,
+        granted_by: User | None = None,
     ) -> None:
         """Point the package at the new revision and refresh its metadata.
 
@@ -568,6 +715,28 @@ class SkillCatalogService:
             package.visibility = visibility
         package.updated_at = datetime.now(UTC)
         session.add(package)
+
+        # Grants ride the same commit as the package row — the FINAL commit of
+        # the publish, not the one that wrote the revision. A publish that says
+        # "share this with Ana" therefore cannot land as a published package
+        # Ana cannot see, but the revision row is already committed by the time
+        # we get here: if this commit fails, the grants roll back together with
+        # ``latest_revision_id`` and the visibility change, leaving an orphan
+        # revision behind. That window is pre-existing — the revision has always
+        # been committed separately — and grants only add another passenger to
+        # it, so it is documented here rather than papered over with a partial
+        # restructure. What the resolution order *does* guarantee is that a bad
+        # address never gets this far: ``_resolve_grant_targets`` runs before
+        # the lock and before anything is written.
+        #
+        # Additive — a re-publish never revokes an address it omits, because
+        # the dialog it came from may simply be out of date.
+        if granted_by is not None:
+            for target in grant_targets or []:
+                SkillCatalogService.grant_to_user(
+                    session, package, target, granted_by, commit=False
+                )
+
         session.commit()
         session.refresh(package)
 
@@ -589,6 +758,24 @@ class SkillCatalogService:
         packages: dict[uuid.UUID, SkillPackage] = {
             p.id: p for p in session.exec(visible_stmt).all()
         }
+        # Packages shared with this user by name. Listed-only, exactly like
+        # public ones: a grant is the publisher's lever, delisting is the
+        # administrator's, and a grant must not be a way around it.
+        granted_stmt = (
+            select(SkillPackage)
+            .join(
+                SkillPackageAccessGrant,
+                SkillPackageAccessGrant.package_id == SkillPackage.id,
+            )
+            .where(
+                SkillPackage.is_listed == True,  # noqa: E712
+                SkillPackage.visibility == SkillPackageVisibility.USERS,
+                SkillPackageAccessGrant.user_id == user.id,
+            )
+        )
+        for package in session.exec(granted_stmt).all():
+            packages[package.id] = package
+
         own_stmt = select(SkillPackage).where(
             SkillPackage.publisher_user_id == user.id
         )
@@ -623,7 +810,9 @@ class SkillCatalogService:
         existence is not public information.
         """
         package = session.get(SkillPackage, package_uuid)
-        if package is None or not SkillCatalogService.user_can_see(package, user):
+        if package is None or not SkillCatalogService.user_can_see(
+            session, package, user
+        ):
             raise SkillCatalogError("package_not_found", "Skill package not found")
         return package
 
@@ -804,12 +993,24 @@ class SkillCatalogService:
             for agent_ids in installed_in.values():
                 agent_ids.sort(key=str)
 
+        granted_package_ids: set[uuid.UUID] = set()
+        if package_ids:
+            granted_package_ids = set(
+                session.exec(
+                    select(SkillPackageAccessGrant.package_id).where(
+                        SkillPackageAccessGrant.package_id.in_(package_ids),
+                        SkillPackageAccessGrant.user_id == user.id,
+                    )
+                ).all()
+            )
+
         return _EntryContext(
             viewer_id=user.id,
             revisions=revisions,
             publishers=publishers,
             install_counts=install_counts,
             installed_in=installed_in,
+            granted_package_ids=granted_package_ids,
         )
 
     @staticmethod
@@ -872,6 +1073,11 @@ class SkillCatalogService:
             install_count=ctx.install_counts.get(package.id, 0),
             installed_in_agent_ids=ctx.installed_in.get(package.id, []),
             can_manage=SkillCatalogService.user_can_manage(package, user),
+            is_granted=(
+                package.visibility == SkillPackageVisibility.USERS
+                and package.publisher_user_id != user.id
+                and package.id in ctx.granted_package_ids
+            ),
         )
 
     @staticmethod
@@ -946,6 +1152,204 @@ class SkillCatalogService:
             "skill_package_delisted package_id=%s by=%s", package.package_id, user.id
         )
         return package
+
+    # ── Access grants (``visibility='users'``) ──────────────────────────
+
+    @staticmethod
+    def user_has_grant(
+        session: Session, package: SkillPackage, user_id: uuid.UUID
+    ) -> bool:
+        return (
+            session.exec(
+                select(SkillPackageAccessGrant).where(
+                    SkillPackageAccessGrant.package_id == package.id,
+                    SkillPackageAccessGrant.user_id == user_id,
+                )
+            ).first()
+            is not None
+        )
+
+    @staticmethod
+    def list_grants(
+        session: Session, package: SkillPackage
+    ) -> list[SkillPackageAccessGrant]:
+        """Every grant on one package, newest first."""
+        return list(
+            session.exec(
+                select(SkillPackageAccessGrant)
+                .where(SkillPackageAccessGrant.package_id == package.id)
+                .order_by(SkillPackageAccessGrant.created_at.desc())
+            ).all()
+        )
+
+    @staticmethod
+    def resolve_grant_user(
+        session: Session, email: str, *, publisher_user_id: uuid.UUID | None
+    ) -> User:
+        """The user behind an email a publisher typed, or a coded refusal.
+
+        The comparison lowercases **both sides**. Addresses are stored
+        lowercased today, but they have not always been, and a publisher types
+        an address the way their colleague writes it — a case-sensitive match
+        would silently fail to share with a real account, which looks to the
+        publisher like the person does not exist.
+        """
+        normalised = (email or "").strip()
+        if not normalised:
+            raise SkillCatalogError(
+                "user_not_found", "No user with that email exists on this instance."
+            )
+        target = session.exec(
+            select(User).where(func.lower(User.email) == func.lower(normalised))
+        ).first()
+        if target is None:
+            raise SkillCatalogError(
+                "user_not_found",
+                f"No user with the email '{normalised}' exists on this instance.",
+            )
+        if publisher_user_id is not None and target.id == publisher_user_id:
+            raise SkillCatalogError(
+                "self_grant",
+                "You publish this skill, so you can already see it — there is "
+                "nothing to grant.",
+            )
+        return target
+
+    @staticmethod
+    def grant_access(
+        session: Session,
+        package: SkillPackage,
+        email: str,
+        granted_by: User,
+    ) -> SkillPackageAccessGrant:
+        """Grant catalog visibility to the user behind an email. Idempotent.
+
+        Deliberately **permissive about visibility**, where publish is not: a
+        publisher who grants three colleagues on a still-``private`` package and
+        then flips it to ``users`` is preparing it, and that is the ordinary way
+        the dialog is used. What publish refuses is the *side effect* — a
+        request whose stated visibility contradicts the addresses it carries, so
+        the rows would be written by a caller that never asked for them. Here
+        the whole request is "let this person see it", stated per person, which
+        is intent a route has no business second-guessing.
+        """
+        target = SkillCatalogService.resolve_grant_user(
+            session, email, publisher_user_id=package.publisher_user_id
+        )
+        return SkillCatalogService.grant_to_user(
+            session, package, target, granted_by
+        )
+
+    @staticmethod
+    def grant_to_user(
+        session: Session,
+        package: SkillPackage,
+        target: User,
+        granted_by: User,
+        *,
+        commit: bool = True,
+    ) -> SkillPackageAccessGrant:
+        """Write one grant. The single place the idempotency rule lives.
+
+        Re-granting somebody who already holds a grant returns the existing row
+        rather than refusing: the publisher's intent ("this person can see it")
+        is already true, and a 409 would make a retried request look like a
+        failure.
+
+        ``commit=False`` leaves the row pending in the caller's transaction —
+        that is how publish makes the grants and the package land together or
+        not at all.
+        """
+        existing = session.exec(
+            select(SkillPackageAccessGrant).where(
+                SkillPackageAccessGrant.package_id == package.id,
+                SkillPackageAccessGrant.user_id == target.id,
+            )
+        ).first()
+        if existing is not None:
+            return existing
+
+        grant = SkillPackageAccessGrant(
+            package_id=package.id,
+            user_id=target.id,
+            granted_by_user_id=granted_by.id,
+        )
+        session.add(grant)
+        if commit:
+            session.commit()
+            session.refresh(grant)
+        return grant
+
+    @staticmethod
+    def revoke_grant(
+        session: Session, package: SkillPackage, user_id: uuid.UUID
+    ) -> None:
+        """Remove one user's grant.
+
+        Keyed on the *user*, not on the grant id: the publisher's mental model
+        is "remove this person", and a card that has to hold a grant id to do
+        that breaks the moment the list is refetched.
+
+        This hides the package from that user's catalog. It does **not** touch
+        an install they already made — the archive route authorises on the
+        install, never on visibility, so a running agent keeps working.
+        """
+        grant = session.exec(
+            select(SkillPackageAccessGrant).where(
+                SkillPackageAccessGrant.package_id == package.id,
+                SkillPackageAccessGrant.user_id == user_id,
+            )
+        ).first()
+        if grant is None:
+            raise SkillCatalogError(
+                "grant_not_found", "That user has no access to this skill."
+            )
+        session.delete(grant)
+        session.commit()
+
+    @staticmethod
+    def list_grants_public(
+        session: Session, package: SkillPackage
+    ) -> list[SkillPackageAccessGrantPublic]:
+        """Every grant on one package, projected in two queries.
+
+        The per-grant email lookup is resolved once for the whole list: a
+        sharing card is a list, and one query per row is how a small card
+        becomes the slowest thing on a page.
+        """
+        grants = SkillCatalogService.list_grants(session, package)
+        if not grants:
+            return []
+        users = {
+            u.id: u
+            for u in session.exec(
+                select(User).where(User.id.in_([g.user_id for g in grants]))
+            ).all()
+        }
+        return [
+            SkillCatalogService.grant_to_public(
+                session, grant, users.get(grant.user_id)
+            )
+            for grant in grants
+        ]
+
+    @staticmethod
+    def grant_to_public(
+        session: Session,
+        grant: SkillPackageAccessGrant,
+        user: User | None = None,
+    ) -> SkillPackageAccessGrantPublic:
+        """Project a grant, resolving the granted user's current email."""
+        if user is None:
+            user = session.get(User, grant.user_id)
+        return SkillPackageAccessGrantPublic(
+            id=grant.id,
+            package_id=grant.package_id,
+            user_id=grant.user_id,
+            user_email=user.email if user is not None else None,
+            granted_by_user_id=grant.granted_by_user_id,
+            created_at=grant.created_at,
+        )
 
     # ── Install / upgrade / uninstall ───────────────────────────────────
 

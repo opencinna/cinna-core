@@ -29,12 +29,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from app.models.environments.environment import AgentEnvironment
 from app.services.agents.skill_manifest import SkillEntry, issue_from_dict
 from app.services.environments.synced_files import SYNCED_FILES
+
+if TYPE_CHECKING:  # pragma: no cover — import cycle guard, typing only
+    from app.models.agents.agent_skills import SkillEntryPublic, SkillIssuePublic
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +255,53 @@ class AgentSkillsService:
                 )
             )
         return entries
+
+    @staticmethod
+    def issue_to_public(issue) -> "SkillIssuePublic | None":
+        """Project one flagged condition, or ``None``."""
+        from app.models.agents.agent_skills import SkillIssuePublic
+
+        if issue is None:
+            return None
+        return SkillIssuePublic(
+            code=issue.code, message=issue.message, paths=list(issue.paths)
+        )
+
+    @classmethod
+    def entry_to_public(
+        cls, entry: SkillEntry, *, can_publish: bool
+    ) -> "SkillEntryPublic":
+        """Project one cached entry, resolving its per-entry publish capability.
+
+        ``can_publish`` here is the agent-level capability; the entry adds the
+        condition that the skill itself is publishable — clean, and locally
+        owned (a plugin's skill belongs to the plugin's publisher, not to this
+        agent).
+
+        Lives on the service rather than in a route because two surfaces
+        project the same rows — the skills index and the addons projection —
+        and a second copy of this mapping is how one of them would end up
+        offering a verb the other refuses.
+        """
+        from app.models.agents.agent_skills import SkillEntryPublic
+
+        return SkillEntryPublic(
+            name=entry.name,
+            description=entry.description,
+            source=entry.source,
+            plugin_ref=entry.plugin_ref,
+            path=entry.path,
+            has_scripts=entry.has_scripts,
+            user_invocable=entry.user_invocable,
+            model_invocable=entry.model_invocable,
+            size_bytes=entry.size_bytes,
+            error=cls.issue_to_public(entry.error),
+            warning=cls.issue_to_public(entry.warning),
+            secret_paths=list(entry.secret_paths),
+            can_publish=(
+                can_publish and entry.source == "local" and entry.is_publishable
+            ),
+        )
 
     # ── Refresh triggers ───────────────────────────────────────────────
 

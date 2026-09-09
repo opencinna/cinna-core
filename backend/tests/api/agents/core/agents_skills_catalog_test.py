@@ -19,6 +19,21 @@ Scenarios:
   5. Publisher-editable metadata: the catalog blurb survives a re-publish once
      it has been edited, and the manage verbs are publisher-only while
      ``delist`` is superuser-only.
+  6. ``visibility='users'``: a grant is what makes the package visible, a
+     mixed-case address still finds the account, and the grant routes' four
+     refusals (``self_grant`` / ``user_not_found`` / ``grant_not_found`` /
+     ``not_publisher``). Re-publishing and changing visibility both KEEP the
+     grants.
+  7. Publishing with ``grant_emails``: the grants and the revision land
+     together, they are additive across re-publishes, the publisher's own
+     address is skipped rather than refused, and one bad address fails the
+     whole publish without leaving a half-published package behind.
+  8. ``grant_emails`` on a publish whose EFFECTIVE visibility is not ``users``
+     is refused (409 ``grants_require_users_visibility``) before anything is
+     written — including the omitted-visibility shape, where the effective
+     value comes from the package that already exists. The standalone grant
+     route stays permissive: granting ahead of flipping the visibility is
+     legitimate preparation.
 
 Test seam:
   Publishing reads the host-side workspace
@@ -48,17 +63,22 @@ from tests.utils.environment import (
     set_environment_status,
 )
 from tests.utils.skill_catalog import (
+    add_skill_package_grant,
     catalog_ids,
     delist_skill_package,
     entry_for,
     error_code,
     get_revision_content,
     get_skill_package,
+    grant_emails_of,
     list_skill_catalog,
+    list_skill_package_grants,
     make_agent_with_env,
     make_developer,
+    mixed_case,
     patched_skill_storage,
     publish_skill,
+    revoke_skill_package_grant,
     update_skill_package,
     workspace_root,
     write_skill,
@@ -606,7 +626,12 @@ def test_unknown_package_ids_are_not_found(
     client: TestClient,
     superuser_token_headers: dict[str, str],
 ) -> None:
-    """A package uuid nobody published is a 404 on every read route."""
+    """A package uuid nobody published is a 404 on every read route.
+
+    ``delist`` is the exception that proves the ordering rule: it 404s for an
+    administrator and 403s for everybody else, so the refusal a non-admin sees
+    carries no information about whether the package exists.
+    """
     ghost = str(uuid.uuid4())
     assert (
         error_code(
@@ -622,3 +647,625 @@ def test_unknown_package_ids_are_not_found(
     delist_skill_package(
         client, superuser_token_headers, ghost, expected_status=404
     )
+
+    # …but only for the one caller entitled to tell the difference. A
+    # non-administrator is refused 403 BEFORE the package is looked up, so a
+    # missing id and a real private package answer identically. Checking the
+    # role after the load would answer 404 here and 403 for a package that
+    # exists — an existence oracle over every private skill on the instance,
+    # handed to any authenticated caller.
+    _nobody, nobody_headers = create_random_user_with_headers(client)
+    assert (
+        error_code(
+            delist_skill_package(
+                client, nobody_headers, ghost, expected_status=403
+            )
+        )
+        == "not_superuser"
+    )
+
+
+# ── Scenario 6: `users` visibility is an explicit allowlist ────────────────
+
+
+def test_users_visibility_is_governed_by_grants_and_survives_republish(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    A skill shared with named colleagues rather than with everybody:
+
+      1. Published ``users`` with nobody named → nobody but the publisher sees
+         it. That is allowed: the package is effectively private until a grant
+         exists.
+      2. Granted by a MIXED-CASE address → resolves to the account (stored
+         lowercase). The colleague now sees it, flagged ``is_granted``; the
+         publisher's own row is not.
+      3. Nobody else gains anything: a stranger 404s, and an administrator gets
+         no bypass — ``users`` is an allowlist and an admin is not on it.
+      4. The grant routes' refusals: a duplicate is an idempotent 200, the
+         publisher's own address is 409 ``self_grant``, an unknown address is
+         404 ``user_not_found``, revoking somebody who has none is 404
+         ``grant_not_found``, and a non-publisher who CAN see the package still
+         gets 403 ``not_publisher`` on all three verbs.
+      5. A granted package still respects ``is_listed``, whether the publisher
+         unlists it or an administrator delists it — and the administrator can
+         reach a ``users`` package they hold no grant on, which is the whole
+         point of that verb.
+      6. Re-publishing keeps the grants, and so does moving the visibility to
+         ``public`` and back — revoking is its own verb, never a side effect.
+      7. Revoking hides it: the colleague loses the catalog row and the detail
+         route.
+    """
+    publisher, pub_headers = make_developer(client, superuser_token_headers)
+    agent_id, env_id = make_agent_with_env(client, pub_headers, "Grants-Publisher")
+    write_skill(env_id, "team-notes", description="Files the team note.")
+
+    colleague, col_headers = create_random_user_with_headers(client)
+    _stranger, stranger_headers = create_random_user_with_headers(client)
+
+    # ── Phase 1: users-visibility with nobody named ──────────────────────
+    publish_skill(
+        client, pub_headers, agent_id, "team-notes", version="1.0",
+        visibility="users",
+    )
+    package_uuid = list_skill_catalog(client, pub_headers)[0]["id"]
+    assert get_skill_package(client, pub_headers, package_uuid)[
+        "visibility"
+    ] == "users"
+
+    for headers in (col_headers, stranger_headers, superuser_token_headers):
+        assert package_uuid not in catalog_ids(list_skill_catalog(client, headers))
+        assert (
+            error_code(
+                get_skill_package(client, headers, package_uuid, expected_status=404)
+            )
+            == "package_not_found"
+        )
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 0
+
+    # ── Phase 2: a grant typed the way a colleague writes it ─────────────
+    typed = mixed_case(colleague["email"])
+    assert typed != colleague["email"], "the address must be genuinely mixed-case"
+    grant = add_skill_package_grant(client, pub_headers, package_uuid, typed)
+    assert grant["user_id"] == colleague["id"], (
+        "a case-sensitive lookup would have missed a real account here"
+    )
+    assert grant["user_email"] == colleague["email"]
+    assert grant["package_id"] == package_uuid
+    assert grant["granted_by_user_id"] == publisher["id"]
+
+    entry = entry_for(list_skill_catalog(client, col_headers), package_uuid)
+    assert entry is not None, "the grant is what makes the package visible"
+    assert entry["is_granted"] is True
+    assert entry["can_manage"] is False
+    assert get_skill_package(client, col_headers, package_uuid)["name"] == "team-notes"
+    assert get_revision_content(client, col_headers, package_uuid, 1)["content"]
+
+    own_entry = entry_for(list_skill_catalog(client, pub_headers), package_uuid)
+    assert own_entry["is_granted"] is False, (
+        "'Shared with you' must not appear on your own publication"
+    )
+
+    # ── Phase 3: nobody else, administrator included ─────────────────────
+    for headers in (stranger_headers, superuser_token_headers):
+        assert package_uuid not in catalog_ids(list_skill_catalog(client, headers))
+        assert (
+            error_code(
+                get_skill_package(client, headers, package_uuid, expected_status=404)
+            )
+            == "package_not_found"
+        )
+
+    # ── Phase 4: the grant routes' refusals ──────────────────────────────
+    again = add_skill_package_grant(
+        client, pub_headers, package_uuid, colleague["email"]
+    )
+    assert again["id"] == grant["id"], "re-granting is idempotent, not a refusal"
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 1
+
+    self_grant = add_skill_package_grant(
+        client, pub_headers, package_uuid, publisher["email"], expected_status=409
+    )
+    assert error_code(self_grant) == "self_grant"
+
+    unknown = add_skill_package_grant(
+        client,
+        pub_headers,
+        package_uuid,
+        f"nobody-{uuid.uuid4().hex}@example.com",
+        expected_status=404,
+    )
+    assert error_code(unknown) == "user_not_found"
+
+    absent = revoke_skill_package_grant(
+        client, pub_headers, package_uuid, str(uuid.uuid4()), expected_status=404
+    )
+    assert error_code(absent) == "grant_not_found"
+
+    # The colleague CAN see the package, and still may not manage who else does.
+    assert (
+        error_code(
+            list_skill_package_grants(
+                client, col_headers, package_uuid, expected_status=403
+            )
+        )
+        == "not_publisher"
+    )
+    assert (
+        error_code(
+            add_skill_package_grant(
+                client,
+                col_headers,
+                package_uuid,
+                _stranger["email"],
+                expected_status=403,
+            )
+        )
+        == "not_publisher"
+    )
+    assert (
+        error_code(
+            revoke_skill_package_grant(
+                client,
+                col_headers,
+                package_uuid,
+                colleague["id"],
+                expected_status=403,
+            )
+        )
+        == "not_publisher"
+    )
+    # A stranger is not told the package exists at all.
+    assert (
+        error_code(
+            list_skill_package_grants(
+                client, stranger_headers, package_uuid, expected_status=404
+            )
+        )
+        == "package_not_found"
+    )
+
+    # ── Phase 5: a grant is not a way around `is_listed` ─────────────────
+    # The publisher's own lever first.
+    update_skill_package(client, pub_headers, package_uuid, is_listed=False)
+    assert package_uuid not in catalog_ids(list_skill_catalog(client, col_headers)), (
+        "an unlisted package leaves a granted user's catalog, exactly like a "
+        "public one — a grant is the publisher's lever, not a bypass"
+    )
+    assert (
+        error_code(
+            get_skill_package(client, col_headers, package_uuid, expected_status=404)
+        )
+        == "package_not_found"
+    )
+    assert package_uuid in catalog_ids(list_skill_catalog(client, pub_headers)), (
+        "the publisher always sees their own"
+    )
+    update_skill_package(client, pub_headers, package_uuid, is_listed=True)
+    assert package_uuid in catalog_ids(list_skill_catalog(client, col_headers))
+
+    # ── Phase 5b: the administrator's lever reaches a `users` package ────
+    # An admin is deliberately NOT on the allowlist — they cannot read this
+    # package (asserted in Phase 3) and hold no grant on it. Delist is loaded
+    # without a visibility check for exactly that reason: otherwise a publisher
+    # could put a harmful skill in front of named colleagues and nobody could
+    # pull it from circulation.
+    delisted = delist_skill_package(client, superuser_token_headers, package_uuid)
+    assert delisted["is_listed"] is False
+    assert get_skill_package(client, pub_headers, package_uuid)["is_listed"] is False
+    assert package_uuid not in catalog_ids(list_skill_catalog(client, col_headers)), (
+        "delisting must reach the granted users, or the lever is decorative"
+    )
+    assert package_uuid in catalog_ids(list_skill_catalog(client, pub_headers))
+    # Idempotent, and the publisher can put it back.
+    delist_skill_package(client, superuser_token_headers, package_uuid)
+    update_skill_package(client, pub_headers, package_uuid, is_listed=True)
+    assert package_uuid in catalog_ids(list_skill_catalog(client, col_headers))
+
+    # ── Phase 6: re-publish and visibility changes keep the grants ───────
+    write_skill(env_id, "team-notes", description="Files the team note.", body="v2")
+    publish_skill(client, pub_headers, agent_id, "team-notes", version="2.0")
+    grants = list_skill_package_grants(client, pub_headers, package_uuid)
+    assert grants["count"] == 1
+    assert grant_emails_of(grants) == {colleague["email"]}
+
+    update_skill_package(client, pub_headers, package_uuid, visibility="public")
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 1, (
+        "moving to public keeps the rows — the change is reversible"
+    )
+    update_skill_package(client, pub_headers, package_uuid, visibility="users")
+    assert entry_for(
+        list_skill_catalog(client, col_headers), package_uuid
+    ) is not None
+
+    # ── Phase 7: revoking hides it ───────────────────────────────────────
+    revoke_skill_package_grant(client, pub_headers, package_uuid, colleague["id"])
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 0
+    assert package_uuid not in catalog_ids(list_skill_catalog(client, col_headers))
+    assert (
+        error_code(
+            get_skill_package(client, col_headers, package_uuid, expected_status=404)
+        )
+        == "package_not_found"
+    )
+
+
+# ── Scenario 7: publishing with `grant_emails` ─────────────────────────────
+
+
+def test_publish_grant_emails_are_additive_and_all_or_nothing(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Sharing at publish time, in the same transaction as the revision:
+
+      1. First publish names one colleague AND the publisher's own address →
+         the colleague is granted, the publisher's entry is SKIPPED rather than
+         refused (inside a publish it names a no-op; on the dedicated grant
+         route the same address is a 409, which Scenario 6 pins).
+      2. The colleague can see the package immediately — the grants and the
+         revision landed together.
+      3. A re-publish naming a second colleague is ADDITIVE: two grants, the
+         first untouched. A re-publish naming nobody revokes nothing.
+      4. One address that resolves to no account fails the WHOLE publish: no
+         second package for a new skill name, and no extra revision on an
+         existing one. A typo must not leave an immutable revision behind.
+      5. The list is capped at fifty by the schema: fifty-one is a 422 that
+         writes nothing, fifty is accepted.
+    """
+    publisher, pub_headers = make_developer(client, superuser_token_headers)
+    agent_id, env_id = make_agent_with_env(client, pub_headers, "Grant-Emails")
+    write_skill(env_id, "shared-report", description="Shares a report.")
+
+    first, first_headers = create_random_user_with_headers(client)
+    second, _ = create_random_user_with_headers(client)
+
+    # ── Phase 1: the publisher's own address is skipped, spellings fold ──
+    # One account named twice — padded and mixed-case, then plainly — plus the
+    # publisher themselves. Addresses are trimmed, lowercased and deduplicated
+    # BEFORE any lookup, so a dialog submitted twice costs one query and
+    # produces one grant rather than one per spelling.
+    publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "shared-report",
+        version="1.0",
+        visibility="users",
+        grant_emails=[
+            f"  {mixed_case(first['email'])}  ",
+            first["email"],
+            publisher["email"],
+        ],
+    )
+    package_uuid = list_skill_catalog(client, pub_headers)[0]["id"]
+    grants = list_skill_package_grants(client, pub_headers, package_uuid)
+    assert grants["count"] == 1, (
+        "two spellings of one account are one grant, and the publisher already "
+        "sees their own skill — naming themselves is a no-op, not a failure"
+    )
+    assert grant_emails_of(grants) == {first["email"]}, (
+        "the grant is keyed on the account, so it reports the stored address "
+        "rather than whatever the publisher typed"
+    )
+
+    # ── Phase 2: visible right away ──────────────────────────────────────
+    entry = entry_for(list_skill_catalog(client, first_headers), package_uuid)
+    assert entry is not None and entry["is_granted"] is True
+
+    # ── Phase 3: additive across re-publishes ────────────────────────────
+    write_skill(env_id, "shared-report", description="Shares a report.", body="v2")
+    publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "shared-report",
+        version="2.0",
+        grant_emails=[second["email"]],
+    )
+    grants = list_skill_package_grants(client, pub_headers, package_uuid)
+    assert grants["count"] == 2
+    assert grant_emails_of(grants) == {first["email"], second["email"]}
+
+    write_skill(env_id, "shared-report", description="Shares a report.", body="v3")
+    publish_skill(
+        client, pub_headers, agent_id, "shared-report", version="3.0", grant_emails=[]
+    )
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 2, (
+        "a publish never revokes — an out-of-date dialog must not be able to "
+        "take access away"
+    )
+    assert get_skill_package(client, pub_headers, package_uuid)[
+        "latest_revision_number"
+    ] == 3
+
+    # ── Phase 4: one bad address fails the whole publish ─────────────────
+    ghost_email = f"nobody-{uuid.uuid4().hex}@example.com"
+
+    write_skill(env_id, "second-skill", description="Never gets published.")
+    refused = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "second-skill",
+        version="1.0",
+        visibility="users",
+        grant_emails=[first["email"], ghost_email],
+        expected_status=404,
+    )
+    assert error_code(refused) == "user_not_found"
+    assert not [
+        e for e in list_skill_catalog(client, pub_headers) if e["name"] == "second-skill"
+    ], "a typo must not leave a half-published package behind"
+
+    write_skill(env_id, "shared-report", description="Shares a report.", body="v4")
+    refused = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "shared-report",
+        version="4.0",
+        grant_emails=[ghost_email],
+        expected_status=404,
+    )
+    assert error_code(refused) == "user_not_found"
+    assert get_skill_package(client, pub_headers, package_uuid)[
+        "latest_revision_number"
+    ] == 3, "the refused publish must not have appended a revision"
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 2
+
+    # ── Phase 5: the list is bounded at the schema ───────────────────────
+    # Fifty is well past a hand-filled dialog; a wider audience is what
+    # visibility="public" is for. The cap is a schema rule, so it fires as a
+    # 422 before the route body runs — no lookups, nothing written.
+    write_skill(env_id, "shared-report", description="Shares a report.", body="v5")
+    too_many = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "shared-report",
+        version="5.0",
+        grant_emails=[f"user-{n}@example.com" for n in range(51)],
+        expected_status=422,
+    )
+    assert "grant_emails" in str(too_many["detail"]), (
+        "the validation error must name the field the caller has to shorten"
+    )
+    assert get_skill_package(client, pub_headers, package_uuid)[
+        "latest_revision_number"
+    ] == 3, "a refused body must not have appended a revision"
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 2
+
+    # Fifty exactly is accepted — the boundary is a cap, not an off-by-one.
+    publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "shared-report",
+        version="5.0",
+        grant_emails=[first["email"]] * 50,
+        expected_status=200,
+    )
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 2, (
+        "fifty repetitions of one address is still one account"
+    )
+
+
+# ── Scenario 8: grant emails require `users` visibility ────────────────────
+
+
+def test_grant_emails_are_refused_unless_the_visibility_is_users(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    A grant row only does something under ``visibility='users'``: that is the
+    one branch ``user_can_see`` and ``is_granted`` consult. Written under any
+    other visibility the rows are inert — but latent, and a later visibility
+    change to ``users`` turns access nobody asked for on. So the publish
+    refuses instead, before the first write:
+
+      1. First publish of a never-published skill, addresses named, visibility
+         omitted → the effective visibility is the new-package default
+         ``private``: 409, and nothing is published at all.
+      2. ``visibility='public'`` with addresses → 409, still nothing published.
+         An address that resolves to nobody is reported ahead of this refusal:
+         the addresses are resolved first, so a typo is named before the
+         combination is judged.
+      3. ``visibility='users'`` with the same addresses → published and granted.
+         The refusal is about the combination, not about the field.
+      4. A re-publish that names addresses and OMITS the visibility is allowed
+         on the now-``users`` package: "leave the visibility alone" is a
+         documented shape and must keep working.
+      5. A re-publish that flips the same package to ``public`` while naming an
+         address → 409, and no revision was appended.
+      6. Naming only the publisher's own address is not a refusal under any
+         visibility: it resolves to no grant row, so there is nothing latent to
+         refuse.
+      7. Omitting the visibility does NOT excuse the combination: a re-publish
+         that names an address on an already-``public`` package inherits
+         ``public`` and is refused. This is the shape a second client — the
+         CLI, a script — would send, and the one the "leave the visibility
+         alone" allowance in step 4 must not widen into a hole.
+      8. The standalone grant route is untouched by all of this — granting on a
+         ``private`` package ahead of flipping the visibility is how a
+         publisher prepares one.
+    """
+    publisher, pub_headers = make_developer(client, superuser_token_headers)
+    agent_id, env_id = make_agent_with_env(client, pub_headers, "Grant-Visibility")
+    write_skill(env_id, "gated-report", description="Shares a report.")
+
+    colleague, _ = create_random_user_with_headers(client)
+
+    # ── Phase 1: omitted visibility on a first publish means private ──────
+    refused = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="1.0",
+        grant_emails=[colleague["email"]],
+        expected_status=409,
+    )
+    assert error_code(refused) == "grants_require_users_visibility"
+    assert "users" in refused["detail"]["message"], (
+        "the sentence has to name the visibility the caller should set"
+    )
+    assert list_skill_catalog(client, pub_headers) == [], (
+        "the refusal fires before the package row is committed"
+    )
+
+    # ── Phase 2: an explicit non-users visibility is refused the same way ──
+    refused = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="1.0",
+        visibility="public",
+        grant_emails=[colleague["email"]],
+        expected_status=409,
+    )
+    assert error_code(refused) == "grants_require_users_visibility"
+    assert list_skill_catalog(client, pub_headers) == []
+
+    # ...and so is an explicit ``private``, which completes the matrix: the
+    # rule is about the effective visibility, not about which of the two ways
+    # of arriving at a non-``users`` one the caller took.
+    refused = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="1.0",
+        visibility="private",
+        grant_emails=[colleague["email"]],
+        expected_status=409,
+    )
+    assert error_code(refused) == "grants_require_users_visibility"
+    assert list_skill_catalog(client, pub_headers) == []
+
+    # A bad address still wins over this refusal: ``_resolve_grant_targets``
+    # runs first, so a caller with a typo AND a contradictory visibility is told
+    # about the typo. Pinned because the two refusals are adjacent and the order
+    # is a choice — the addresses have to resolve before "would these rows do
+    # anything" is even a well-posed question.
+    refused = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="1.0",
+        visibility="public",
+        grant_emails=[f"nobody-{uuid.uuid4().hex}@example.com"],
+        expected_status=404,
+    )
+    assert error_code(refused) == "user_not_found"
+    assert list_skill_catalog(client, pub_headers) == []
+
+    # ── Phase 3: the same request with users visibility goes through ───────
+    publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="1.0",
+        visibility="users",
+        grant_emails=[colleague["email"]],
+    )
+    package_uuid = list_skill_catalog(client, pub_headers)[0]["id"]
+    assert grant_emails_of(
+        list_skill_package_grants(client, pub_headers, package_uuid)
+    ) == {colleague["email"]}
+
+    # ── Phase 4: omitted visibility on an already-users package is fine ────
+    second, _ = create_random_user_with_headers(client)
+    write_skill(env_id, "gated-report", description="Shares a report.", body="v2")
+    publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="2.0",
+        grant_emails=[second["email"]],
+    )
+    grants = list_skill_package_grants(client, pub_headers, package_uuid)
+    assert grant_emails_of(grants) == {colleague["email"], second["email"]}
+
+    # ── Phase 5: flipping to public while naming an address is refused ─────
+    third, _ = create_random_user_with_headers(client)
+    write_skill(env_id, "gated-report", description="Shares a report.", body="v3")
+    refused = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="3.0",
+        visibility="public",
+        grant_emails=[third["email"]],
+        expected_status=409,
+    )
+    assert error_code(refused) == "grants_require_users_visibility"
+    assert get_skill_package(client, pub_headers, package_uuid)[
+        "latest_revision_number"
+    ] == 2, "the refused publish must not have appended a revision"
+    assert get_skill_package(client, pub_headers, package_uuid)["visibility"] == (
+        "users"
+    ), "and must not have changed the visibility either"
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 2
+
+    # ── Phase 6: the publisher's own address writes nothing, so it passes ──
+    publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="3.0",
+        visibility="public",
+        grant_emails=[publisher["email"]],
+    )
+    assert get_skill_package(client, pub_headers, package_uuid)["visibility"] == (
+        "public"
+    )
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 2
+
+    # ── Phase 7: omitting the visibility inherits public, and is refused ───
+    # The package is ``public`` after Phase 6. The allowance in Phase 4 is
+    # "leave the visibility alone", not "grants are fine when unstated" — the
+    # effective value comes from the package that already exists, and here that
+    # is ``public``. Without this the one shape a non-browser client is most
+    # likely to send (grant_emails, no visibility field) walks straight past
+    # the guard onto a public package.
+    fourth, _ = create_random_user_with_headers(client)
+    write_skill(env_id, "gated-report", description="Shares a report.", body="v4")
+    refused = publish_skill(
+        client,
+        pub_headers,
+        agent_id,
+        "gated-report",
+        version="4.0",
+        grant_emails=[fourth["email"]],
+        expected_status=409,
+    )
+    assert error_code(refused) == "grants_require_users_visibility"
+    assert "public" in refused["detail"]["message"], (
+        "the sentence has to name the visibility this publish would leave, "
+        "which the caller never wrote down"
+    )
+    package_now = get_skill_package(client, pub_headers, package_uuid)
+    assert package_now["latest_revision_number"] == 3, (
+        "the refusal fires before the revision is appended"
+    )
+    assert package_now["visibility"] == "public"
+    assert list_skill_package_grants(client, pub_headers, package_uuid)["count"] == 2
+
+    # ── Phase 8: the standalone grant route stays permissive ───────────────
+    # The package is public right now; granting on it is preparation for a
+    # later flip back to users, and the route has no business refusing it.
+    update_skill_package(client, pub_headers, package_uuid, visibility="private")
+    add_skill_package_grant(client, pub_headers, package_uuid, third["email"])
+    assert grant_emails_of(
+        list_skill_package_grants(client, pub_headers, package_uuid)
+    ) == {colleague["email"], second["email"], third["email"]}

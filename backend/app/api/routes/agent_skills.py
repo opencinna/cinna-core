@@ -1,13 +1,19 @@
-"""Agent Skills API routes.
+"""Agent Skills + Addons API routes.
 
 Routes:
   GET  /agents/{agent_id}/skills                  — cached skill index
   POST /agents/{agent_id}/skills/refresh          — wake + re-read, same shape
   GET  /agents/{agent_id}/skills/{name}/content   — one skill's SKILL.md text
+  GET  /agents/{agent_id}/addons                  — plugins + skills, deduped
+  POST /agents/{agent_id}/addons/refresh          — re-read, then re-project
 
-All three are owner-scoped. Reads are cache-first by design: the index is
+All of them are owner-scoped. Reads are cache-first by design: the index is
 env-authoritative but the environment may be asleep, and a card that renders
 the last known skills beats one that blocks on a container start.
+
+The addons routes live here rather than in ``agents.py`` because they read the
+same environment cache these do; the composition itself is ``AddonsService``,
+and this module only marshals it.
 """
 import logging
 import uuid
@@ -18,55 +24,20 @@ from fastapi import APIRouter, HTTPException
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
     Agent,
+    AgentAddonsPublic,
     AgentSkillsPublic,
     SkillContentPublic,
-    SkillEntryPublic,
-    SkillIssuePublic,
 )
+from app.services.agents.addons_service import AddonsService
 from app.services.agents.agent_skills_service import (
     AgentSkillsService,
     SkillsIndexUnavailableError,
 )
 from app.services.agents.agent_status_service import AgentStatusService
-from app.services.agents.skill_manifest import SkillEntry
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
-
-
-def _issue_to_public(issue) -> SkillIssuePublic | None:
-    if issue is None:
-        return None
-    return SkillIssuePublic(
-        code=issue.code, message=issue.message, paths=list(issue.paths)
-    )
-
-
-def _entry_to_public(entry: SkillEntry, *, can_publish: bool) -> SkillEntryPublic:
-    """Project one cached entry, resolving its per-entry publish capability.
-
-    ``can_publish`` here is the agent-level capability; the entry adds the
-    condition that the skill itself is publishable — clean, and locally owned
-    (a plugin's skill belongs to the plugin's publisher, not to this agent).
-    """
-    return SkillEntryPublic(
-        name=entry.name,
-        description=entry.description,
-        source=entry.source,
-        plugin_ref=entry.plugin_ref,
-        path=entry.path,
-        has_scripts=entry.has_scripts,
-        user_invocable=entry.user_invocable,
-        model_invocable=entry.model_invocable,
-        size_bytes=entry.size_bytes,
-        error=_issue_to_public(entry.error),
-        warning=_issue_to_public(entry.warning),
-        secret_paths=list(entry.secret_paths),
-        can_publish=(
-            can_publish and entry.source == "local" and entry.is_publishable
-        ),
-    )
 
 
 def _get_owned_agent(session: SessionDep, agent_id: uuid.UUID, user) -> Agent:
@@ -106,7 +77,10 @@ def _build_response(
     return AgentSkillsPublic(
         agent_id=agent.id,
         environment_id=environment.id,
-        skills=[_entry_to_public(e, can_publish=can_publish) for e in entries],
+        skills=[
+            AgentSkillsService.entry_to_public(e, can_publish=can_publish)
+            for e in entries
+        ],
         hash=environment.skills_hash,
         fetched_at=environment.skills_fetched_at,
         error=environment.skills_error,
@@ -211,3 +185,41 @@ async def get_agent_skill_content(
         content=content,
         truncated=truncated,
     )
+
+
+# =============================================================================
+# Addons — plugins and skills as one list
+# =============================================================================
+
+
+@router.get("/{agent_id}/addons", response_model=AgentAddonsPublic)
+def get_agent_addons(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Everything this agent carries beyond its prompt, deduplicated.
+
+    Cache-only and write-free, like the skills index it reads: safe to poll,
+    never wakes a container. A catalog skill appears once — as a skill — rather
+    than once per half of the system that knows about it.
+    """
+    agent = _get_owned_agent(session, agent_id, current_user)
+    return AddonsService.build(session, agent, current_user)
+
+
+@router.post("/{agent_id}/addons/refresh", response_model=AgentAddonsPublic)
+async def refresh_agent_addons(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Re-read the skill index from the environment, then re-project.
+
+    One call for the tab's Refresh action, so the plugin half and the skill
+    half of the list can never be one refresh apart. Never fails on an
+    unreachable environment — the reason comes back in ``skills_error`` with
+    the plugin rows intact.
+    """
+    agent = _get_owned_agent(session, agent_id, current_user)
+    return await AddonsService.refresh(session, agent, current_user)

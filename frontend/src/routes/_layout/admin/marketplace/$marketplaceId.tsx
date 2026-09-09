@@ -27,6 +27,7 @@ import { HashTabs } from "@/components/Common/HashTabs"
 import { MarketplaceConfigurationTab } from "@/components/Admin/MarketplaceConfigurationTab"
 import { MarketplacePluginsTab } from "@/components/Admin/MarketplacePluginsTab"
 import PendingItems from "@/components/Pending/PendingItems"
+import { useMarketplaceSync } from "@/hooks/useMarketplaceSync"
 import { usePageHeader } from "@/routes/_layout"
 
 export const Route = createFileRoute("/_layout/admin/marketplace/$marketplaceId")({
@@ -54,17 +55,9 @@ function MarketplaceDetailPage() {
     },
   })
 
-  const syncMutation = useMutation({
-    mutationFn: () => LlmPluginsService.syncMarketplace({ marketplaceId }),
-    onSuccess: () => {
-      showSuccessToast("Marketplace synced successfully")
-      queryClient.invalidateQueries({ queryKey: ["marketplace", marketplaceId] })
-      queryClient.invalidateQueries({ queryKey: ["marketplace-plugins", marketplaceId] })
-    },
-    onError: (error: any) => {
-      showErrorToast(error.message || "Failed to sync marketplace")
-    },
-  })
+  // Shared with the Configuration tab's button and the list's row menu, so the
+  // three cannot drift to three different invalidation sets again.
+  const syncMutation = useMarketplaceSync(marketplaceId)
 
   const {
     data: marketplace,
@@ -93,7 +86,7 @@ function MarketplaceDetailPage() {
             </Button>
             <div className="min-w-0">
               <h1 className="text-base font-semibold truncate">{marketplace.name}</h1>
-              <p className="text-xs text-muted-foreground">Plugin Marketplace</p>
+              <p className="text-xs text-muted-foreground">Addon marketplace</p>
             </div>
           </div>
           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -144,8 +137,11 @@ function MarketplaceDetailPage() {
       content: <MarketplaceConfigurationTab marketplace={marketplace} marketplaceId={marketplaceId} />,
     },
     {
+      // The hash stays `plugins` — it is an address, and every link and
+      // bookmark to this tab carries it. The title is copy, and a
+      // `skills`-format marketplace publishes no plugins at all.
       value: "plugins",
-      title: "Plugins",
+      title: "Plugins and skills",
       content: <MarketplacePluginsTab marketplace={marketplace} marketplaceId={marketplaceId} />,
     },
   ]

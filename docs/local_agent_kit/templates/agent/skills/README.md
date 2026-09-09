@@ -88,5 +88,7 @@ Never put a credential, a tokenised URL or personal data in a skill. `skills/`
 ships with the agent and travels to the cloud.
 
 Add this folder's contents only when the ladder's **Knowledge & local skills**
-trigger has fired — three or more distinct capabilities, or domain documentation
-longer than a page. See `.cinna-kit/guides/08-knowledge-and-local-skills.md`.
+trigger has fired; for *this* folder that means three or more distinct capabilities.
+The rung's full trigger is in the ladder (`.cinna-kit/README.md`); the guide is
+`.cinna-kit/guides/08-knowledge-and-local-skills.md`, which also covers publishing a
+finished skill to the catalog.

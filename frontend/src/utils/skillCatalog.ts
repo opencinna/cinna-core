@@ -80,21 +80,34 @@ export const SKILL_FAILURE_NEXT_STEP: Record<string, string> = {
   workspace_unavailable:
     "Start the environment once so its workspace is written to disk, then publish.",
   skill_contains_secrets:
-    "Move or delete these files, refresh the Skills card, then publish again.",
+    "Move or delete these files, refresh the Addons tab, then share it again.",
   skill_invalid:
-    "Fix the skill in the workspace, refresh the Skills card, then publish again.",
+    "Fix the skill in the workspace, refresh the Addons tab, then share it again.",
   skill_too_large: "Trim the skill folder, then publish again.",
   package_id_taken: "Choose a different package id under Advanced.",
   package_id_immutable:
     "Leave the package id as it is — every install and every container manifest references it.",
   package_id_invalid: "Use a reverse-DNS id, for example com.example.my-skill.",
   already_installed:
-    "That agent already has this skill. Pick another agent, or update it from the agent's Plugins tab.",
+    "That agent already has this skill. Pick another agent, or update it from the agent's Addons tab.",
   name_conflict:
     "Uninstall the other package from that agent first, or pick a different agent.",
   snapshot_missing:
     "This revision's files are no longer on the server. Pick a different revision.",
   no_revision: "This package has no published revision to install yet.",
+  // The Add addon dialog installs marketplace plugins through the same alert.
+  // An unsupported entry is unselectable in the list, so this 409 is reached
+  // only when a re-sync refused the entry while the dialog was open — which is
+  // exactly when the reader needs to be told the list has moved under them.
+  plugin_unsupported:
+    "Pick a different entry. Its marketplace has to publish it in a format this platform can fetch before it can be installed.",
+  // Grant refusals from `POST /skills/packages/{id}/grants`, which the share
+  // dialog also raises when it sends `grant_emails`.
+  user_not_found:
+    "No account on this instance has that address. Check the spelling, or ask them to sign up first.",
+  self_grant:
+    "You are the publisher — you can already see it. Remove yourself from the list.",
+  grant_not_found: "That person no longer has access; nothing to remove.",
 }
 
 /** "v1.3" when the publisher named a version, "rev 4" when they did not. */
@@ -143,15 +156,24 @@ export function skillPublisherLabel(pkg: {
 }
 
 /**
- * The two visibilities a skill package can have, with the consequence spelled
- * out — the publish dialog sets it and the edit dialog changes it, and a
+ * The three visibilities a skill package can have, with the consequence
+ * spelled out — the share dialog sets it and the edit dialog changes it, and a
  * second copy is how the same field acquires two different explanations.
+ *
+ * Ordered least to most visible, so the segments read as a scale rather than
+ * as three unrelated choices. "People" sits in the middle because that is
+ * where it belongs on that scale, not because it was added last.
  */
 export const SKILL_VISIBILITY_OPTIONS = [
   {
     value: "private",
     label: "Private",
     hint: "Private — only you can see and install it",
+  },
+  {
+    value: "users",
+    label: "People",
+    hint: "People — only the people you name can see and install it",
   },
   {
     value: "public",

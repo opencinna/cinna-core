@@ -3315,6 +3315,178 @@ export const ActivityUpdateSchema = {
     title: 'ActivityUpdate'
 } as const;
 
+export const AddonCountsSchema = {
+    properties: {
+        plugins: {
+            type: 'integer',
+            title: 'Plugins',
+            default: 0
+        },
+        skills: {
+            type: 'integer',
+            title: 'Skills',
+            default: 0
+        },
+        local_skills: {
+            type: 'integer',
+            title: 'Local Skills',
+            default: 0
+        }
+    },
+    type: 'object',
+    title: 'AddonCounts',
+    description: `Totals for the tab's "Show all (N)" affordances.
+
+Counted over **rows**, not over installs, and the two are deliberately not
+the same number:
+
+* \`\`plugins\`\` — every \`\`kind="plugin"\`\` row, *including orphans*. A
+  \`\`skills\`\`-format marketplace install is not one of them: it counts under
+  \`\`skills\`\`, with the noun its row prints. An orphan
+  is a directory the engine still loads, so a count that omitted it would
+  promise a shorter list than the one the user is about to open. It follows
+  that \`\`plugins\`\` can exceed the number of installed plugin links, which
+  is the point: the surplus is what needs attention.
+* \`\`skills\`\` — every \`\`kind="skill"\`\` row: catalog installs,
+  \`\`skills\`\`-format marketplace installs, *and* the agent's own
+  \`\`skills/<name>/\`\` folders, because to the user they are one kind of thing
+  with three origins.
+* \`\`local_skills\`\` — a **subset** of \`\`skills\`\`, not a third bucket beside
+  it: the folders the agent owns and can publish. \`\`skills\`\` minus
+  \`\`local_skills\`\` is the catalog half.
+
+Skills that hang off a plugin row are counted nowhere: they are not rows,
+which is exactly the double listing this projection exists to remove.`
+} as const;
+
+export const AddonPublicSchema = {
+    properties: {
+        key: {
+            type: 'string',
+            title: 'Key'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind'
+        },
+        source: {
+            type: 'string',
+            title: 'Source'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        description: {
+            type: 'string',
+            title: 'Description',
+            default: ''
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        marketplace_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Marketplace Name'
+        },
+        plugin_type: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Plugin Type'
+        },
+        link: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentPluginLinkWithUpdateInfo'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        skills: {
+            items: {
+                '$ref': '#/components/schemas/SkillEntryPublic'
+            },
+            type: 'array',
+            title: 'Skills',
+            default: []
+        },
+        status: {
+            type: 'string',
+            title: 'Status',
+            default: 'ok'
+        },
+        status_code: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Code'
+        },
+        orphan: {
+            type: 'boolean',
+            title: 'Orphan',
+            default: false
+        },
+        can_share: {
+            type: 'boolean',
+            title: 'Can Share',
+            default: false
+        },
+        can_manage: {
+            type: 'boolean',
+            title: 'Can Manage',
+            default: false
+        },
+        published_package_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Published Package Id'
+        }
+    },
+    type: 'object',
+    required: ['key', 'kind', 'source', 'name', 'display_name'],
+    title: 'AddonPublic',
+    description: 'One row of the addons list — a plugin, or a skill, never both.'
+} as const;
+
 export const AdminAIKeyKindSchema = {
     type: 'string',
     enum: ['per_user', 'shared'],
@@ -4388,6 +4560,76 @@ export const AgentAccessTokensPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'AgentAccessTokensPublic'
+} as const;
+
+export const AgentAddonsPublicSchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        environment_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Environment Id'
+        },
+        addons: {
+            items: {
+                '$ref': '#/components/schemas/AddonPublic'
+            },
+            type: 'array',
+            title: 'Addons',
+            default: []
+        },
+        counts: {
+            '$ref': '#/components/schemas/AddonCounts',
+            default: {
+                plugins: 0,
+                skills: 0,
+                local_skills: 0
+            }
+        },
+        skills_error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skills Error'
+        },
+        fetched_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Fetched At'
+        },
+        can_add: {
+            type: 'boolean',
+            title: 'Can Add',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'AgentAddonsPublic',
+    description: 'Everything one agent can do beyond its prompt, in one list.'
 } as const;
 
 export const AgentApiAccessGrantCreateSchema = {
@@ -18974,6 +19216,7 @@ export const LLMPluginMarketplaceCreateSchema = {
         },
         type: {
             type: 'string',
+            enum: ['claude', 'codex', 'skills'],
             title: 'Type',
             default: 'claude'
         }
@@ -19139,6 +19382,32 @@ export const LLMPluginMarketplacePluginPublicSchema = {
             type: 'string',
             format: 'date-time',
             title: 'Updated At'
+        },
+        supported: {
+            type: 'boolean',
+            title: 'Supported',
+            default: true
+        },
+        unsupported_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Unsupported Reason'
+        },
+        skill_summary: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/PluginSkillSummary'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         },
         marketplace_name: {
             anyOf: [
@@ -19408,7 +19677,8 @@ export const LLMPluginMarketplaceUpdateSchema = {
         type: {
             anyOf: [
                 {
-                    type: 'string'
+                    type: 'string',
+                    enum: ['claude', 'codex', 'skills']
                 },
                 {
                     type: 'null'
@@ -22366,6 +22636,34 @@ export const PluginInstallResultSchema = {
 Errors are surfaced as results, not exceptions: a \`\`failed\`\` plugin is
 excluded from \`\`settings.json\`\` (so the SDK never gets a missing path) and
 reported, never silently listed-but-absent.`
+} as const;
+
+export const PluginSkillSummarySchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            type: 'string',
+            title: 'Description',
+            default: ''
+        },
+        has_scripts: {
+            type: 'boolean',
+            title: 'Has Scripts',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'PluginSkillSummary',
+    description: `The one skill a marketplace entry ships, when it ships exactly one.
+
+A \`\`skills\`\`-format marketplace publishes one plugin per skill folder, so
+its rows have a skill to describe before anything is installed. Read off
+the parsed \`\`config["skill"]\`\` block rather than recomputed, because the
+repository is not on disk any more by the time anybody asks.`
 } as const;
 
 export const PluginSourceSchema = {
@@ -26567,6 +26865,95 @@ Error codes: \`\`not_a_directory\`\`, \`\`missing_skill_md\`\`, \`\`unreadable\`
 Warning codes: \`\`secrets\`\`, \`\`shadowed\`\`, \`\`oversized\`\`.`
 } as const;
 
+export const SkillPackageAccessGrantCreateSchema = {
+    properties: {
+        email: {
+            type: 'string',
+            title: 'Email'
+        }
+    },
+    type: 'object',
+    required: ['email'],
+    title: 'SkillPackageAccessGrantCreate',
+    description: 'Body of ``POST /skills/packages/{package_id}/grants``.'
+} as const;
+
+export const SkillPackageAccessGrantPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        package_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Package Id'
+        },
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        user_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Email'
+        },
+        granted_by_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Granted By User Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'package_id', 'user_id', 'created_at'],
+    title: 'SkillPackageAccessGrantPublic',
+    description: `Response schema for one skill package access grant.
+
+\`\`user_email\`\` is resolved from the \`\`User\`\` row rather than stored: the
+grant is keyed on the user id, and an email the publisher typed months ago
+must not outlive a change of address.`
+} as const;
+
+export const SkillPackageAccessGrantsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/SkillPackageAccessGrantPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'SkillPackageAccessGrantsPublic',
+    description: "List response for a package's grants."
+} as const;
+
 export const SkillPackageDetailPublicSchema = {
     properties: {
         id: {
@@ -26727,6 +27114,11 @@ export const SkillPackageDetailPublicSchema = {
         can_manage: {
             type: 'boolean',
             title: 'Can Manage',
+            default: false
+        },
+        is_granted: {
+            type: 'boolean',
+            title: 'Is Granted',
             default: false
         },
         revisions: {
@@ -26904,6 +27296,11 @@ export const SkillPackageEntrySchema = {
         can_manage: {
             type: 'boolean',
             title: 'Can Manage',
+            default: false
+        },
+        is_granted: {
+            type: 'boolean',
+            title: 'Is Granted',
             default: false
         }
     },
@@ -27106,6 +27503,15 @@ export const SkillPublishRequestSchema = {
                 }
             ],
             title: 'Visibility'
+        },
+        grant_emails: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            maxItems: 50,
+            title: 'Grant Emails',
+            default: []
         },
         package_id: {
             anyOf: [

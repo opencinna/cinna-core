@@ -141,6 +141,17 @@ export function EditSkillPackageDialog({
                 </TooltipToggleItem>
               ))}
             </ToggleGroup>
+            {/* The picker itself lives in "Who can see this" below, not here:
+                opening it from inside this dialog would be a dialog on a
+                dialog (guidelines R8). That card mounts off the *saved*
+                visibility, so on a first switch to People it is not on the
+                page yet — the hint says "once you save" rather than pointing
+                at something the reader cannot find. */}
+            {visibility === "users" && (
+              <p className="text-xs text-muted-foreground">
+                Save, then choose who in <em>Who can see this</em> below.
+              </p>
+            )}
           </div>
 
           <div className="flex items-center justify-between gap-3">

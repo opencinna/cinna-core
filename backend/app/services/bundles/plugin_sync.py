@@ -69,7 +69,8 @@ def _resolve_link_identity(
 ) -> tuple[str | None, str | None, dict | None]:
     """Resolve (marketplace_name, plugin_name, config) for a publisher link.
 
-    Marketplace links resolve from the live ``plugin`` + ``marketplace`` rows;
+    Marketplace links resolve from the live ``plugin`` + ``marketplace`` rows
+    (falling back to their own snapshot fields when that row has been deleted);
     every other source is snapshot-identified and uses the frozen fields. The
     frozen ``config`` is the plugin's ``plugin.json`` (used for consumer-side
     UI display).
@@ -89,7 +90,17 @@ def _resolve_link_identity(
         )
     plugin = link.plugin
     if plugin is None:
-        return (None, None, None)
+        # The marketplace plugin row is gone (deleted marketplace, or an entry
+        # dropped upstream) — ``plugin_id`` is ``SET NULL`` and the link
+        # survives. Its directory is still on disk, so fall back to the names
+        # the install snapshotted: naming it is what lets the publish
+        # pre-flight say *which* plugin it cannot find files for, and what
+        # keeps its directory in the bundle-collision set.
+        return (
+            link.snapshot_marketplace_name,
+            link.snapshot_plugin_name,
+            link.snapshot_config,
+        )
     marketplace = plugin.marketplace
     marketplace_name = marketplace.name if marketplace else None
     return (marketplace_name, plugin.name, plugin.config)

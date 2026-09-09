@@ -22,6 +22,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import useCustomToast from "@/hooks/useCustomToast"
+import { useMarketplaceSync } from "@/hooks/useMarketplaceSync"
 
 interface MarketplaceActionsMenuProps {
   marketplace: LLMPluginMarketplacePublic
@@ -33,16 +34,10 @@ export function MarketplaceActionsMenu({ marketplace }: MarketplaceActionsMenuPr
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
-  const syncMutation = useMutation({
-    mutationFn: () => LlmPluginsService.syncMarketplace({ marketplaceId: marketplace.id }),
-    onSuccess: () => {
-      showSuccessToast("Marketplace synced successfully")
-      queryClient.invalidateQueries({ queryKey: ["marketplaces"] })
-    },
-    onError: (error: any) => {
-      showErrorToast(error.message || "Failed to sync marketplace")
-    },
-  })
+  // Shared with the detail page's two sync buttons: this one used to refresh
+  // only the list it sits in, so a sync from here left an open detail page and
+  // its entries table on the previous sync's data.
+  const syncMutation = useMarketplaceSync(marketplace.id)
 
   const deleteMutation = useMutation({
     mutationFn: () => LlmPluginsService.deleteMarketplace({ marketplaceId: marketplace.id }),

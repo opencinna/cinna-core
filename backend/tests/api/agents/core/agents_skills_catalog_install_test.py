@@ -21,7 +21,11 @@ Scenarios:
   6. A container-side failure (checksum mismatch) surfaces as
      ``partial_failures`` with a ``failed`` plugin result — the op itself still
      succeeds, which is what drives the amber banner rather than an error page.
-  7. Bundle publish of an agent holding a catalog skill snapshots it as an
+  7. Revoking a ``users``-visibility grant hides the package from that user's
+     catalog and refuses a NEW install, while the archive their agent already
+     installed still downloads: visibility governs the catalog, the install
+     governs the bytes.
+  8. Bundle publish of an agent holding a catalog skill snapshots it as an
      ordinary bundle plugin, and a consumer installing that bundle receives it
      as ``source=bundle``. This is also the regression guard for
      ``_resolve_link_identity`` testing ``!= marketplace`` rather than
@@ -52,8 +56,11 @@ from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import install_bundle, make_bundle_public
 from tests.utils.environment import list_environments
 from tests.utils.skill_catalog import (
+    add_skill_package_grant,
+    catalog_ids,
     entry_for,
     error_code,
+    get_skill_package,
     install_skill,
     list_agent_plugins,
     list_skill_catalog,
@@ -61,6 +68,7 @@ from tests.utils.skill_catalog import (
     make_developer,
     patched_skill_storage,
     publish_skill,
+    revoke_skill_package_grant,
     uninstall_agent_plugin,
     upgrade_agent_plugin,
     workspace_root,
@@ -635,7 +643,82 @@ def test_a_checksum_mismatch_in_the_container_is_a_partial_failure(
     assert len(list_agent_plugins(client, con_headers, con_agent)) == 1
 
 
-# ── Scenario 7: bundle publish of an agent holding a catalog skill ─────────
+# ── Scenario 7: revoking hides the catalog row, never the install ──────────
+
+
+def test_revoking_a_grant_hides_the_skill_but_keeps_the_install_working(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+    db: Session,
+    skill_storage: Path,
+) -> None:
+    """
+    The promise the grants card makes in copy, pinned in behaviour:
+
+      1. A ``users``-visibility package granted to one consumer, installed into
+         one of their agents.
+      2. The publisher revokes → the package leaves the consumer's catalog and
+         its detail route 404s, and a NEW install is refused.
+      3. The agent that already has it is untouched: the link is still listed,
+         and its environment still downloads the archive it was pinned to.
+
+    Revoking hides; it never uninstalls. Archive authorisation is the install
+    (``env_may_download``), which is exactly why the two can disagree.
+    """
+    _pub, pub_headers, _pub_agent, _pub_env, _rev, entry = _publish_package(
+        client,
+        superuser_token_headers,
+        agent_name="Revoke-Publisher",
+        visibility="users",
+    )
+    package_uuid = entry["id"]
+
+    consumer, con_headers = make_developer(client, superuser_token_headers)
+    con_agent, _ = make_agent_with_env(client, con_headers, "Revoke-Consumer")
+    spare_agent, _ = make_agent_with_env(client, con_headers, "Revoke-Spare")
+    adapter = _capture_adapter(patch_environment_adapter)
+
+    # ── Phase 1: granted, then installed ─────────────────────────────────
+    assert package_uuid not in catalog_ids(list_skill_catalog(client, con_headers))
+    add_skill_package_grant(client, pub_headers, package_uuid, consumer["email"])
+    assert package_uuid in catalog_ids(list_skill_catalog(client, con_headers))
+
+    install_skill(client, con_headers, con_agent, package_uuid)
+    manifest_sha = _catalog_manifest_entry(adapter, "pdf-report")["archive"]["sha256"]
+    _env, env_headers = create_env_with_token(db, con_agent, consumer["id"])
+    archive_url = f"{API}/skills/packages/{package_uuid}/revisions/1/archive"
+    assert client.get(archive_url, headers=env_headers).status_code == 200
+
+    # ── Phase 2: revoked — the catalog forgets it ────────────────────────
+    revoke_skill_package_grant(client, pub_headers, package_uuid, consumer["id"])
+
+    assert package_uuid not in catalog_ids(list_skill_catalog(client, con_headers))
+    assert (
+        error_code(
+            get_skill_package(client, con_headers, package_uuid, expected_status=404)
+        )
+        == "package_not_found"
+    )
+    refused = install_skill(
+        client, con_headers, spare_agent, package_uuid, expected_status=404
+    )
+    assert error_code(refused) == "package_not_found"
+
+    # ── Phase 3: the existing install is untouched ───────────────────────
+    links = list_agent_plugins(client, con_headers, con_agent)
+    catalog_links = [link for link in links if link["source"] == "catalog"]
+    assert len(catalog_links) == 1, "revoking must not uninstall anything"
+
+    r = client.get(archive_url, headers=env_headers)
+    assert r.status_code == 200, (
+        "the archive is authorised by the install, not by the package's "
+        "visibility — revoking must never break a running agent"
+    )
+    assert r.headers["x-content-sha256"] == manifest_sha
+
+
+# ── Scenario 8: bundle publish of an agent holding a catalog skill ─────────
 
 
 def test_bundle_publish_snapshots_a_catalog_skill_as_a_bundle_plugin(

@@ -662,6 +662,69 @@ Optional frontmatter keys from the open Agent Skills standard (`allowed-tools`, 
 `docs/WORKFLOW_PROMPT.md` stays the orchestration narrative. Refer to a skill by name — do **not** paste its
 steps into the prompt, because that gives back the context cost the skill was created to avoid.
 
+### Designing around skills
+
+When an agent has several distinct internal workflows, the design question is not "how do I fit all of
+this into one prompt" — it is "which of these are skills". **The default is one skill folder per
+workflow**, with `docs/WORKFLOW_PROMPT.md` keeping only the orchestration: what the agent is, and which
+trigger reaches which skill.
+
+Worked example — an agent that reconciles vendor bills:
+
+- **"Generate the reconciliation report"** → a **skill**. It has its own trigger, its own multi-step
+  procedure, its own scripts and a report format nothing else produces.
+- **"Answer questions about a bill"** → stays in the **workflow prompt**. It is what the agent does on
+  almost every message, there is no separate trigger to name, and it produces no separate artifact.
+
+That default holds unless a workflow argues its way out of it. The tiebreak for the ones that do:
+**separate trigger + separate output + reusable by another agent ⇒ skill.** All three is a skill without
+further thought. Two out of three usually still is — a workflow with its own trigger and its own output
+earns a folder even if no other agent would ever want it. One out of three is a paragraph in the workflow
+prompt.
+
+Do this while designing, not afterwards. When the user describes the agent as "it does X, and also Y, and
+also Z", that is three skills and one short prompt — not one prompt with three chapters.
+
+### Publishing a skill
+
+A skill that would serve *another* agent can be published to the platform's skills catalog, where the
+users the owner chooses can install it into their own agents.
+
+**You never publish it yourself.** There is no in-agent publish command and no tool that does it —
+publishing is a deliberate act by the person who owns the agent. What you do is **prepare** the skill and
+then tell them it is ready:
+
+- **Self-contained folder.** Every path the skill needs is under `${CLAUDE_SKILL_DIR}` or is an explicit,
+  documented input. Nothing reaches back into this agent's `/app/workspace/scripts/` or `docs/`.
+- **No secrets in the folder — and nothing checks the contents for you.** Publishing refuses a skill that
+  contains a file *named* like a credential (`.env`, `*.pem`, `id_rsa` and friends), and that is the whole
+  of the automated gate: nothing reads inside the files. A token pasted into `SKILL.md`, a customer name in
+  a fixture, an internal hostname in a script — all publish cleanly. Read the folder yourself; it is copied
+  verbatim into someone else's agent.
+- **A description written for discovery.** Someone browsing the catalog reads that one sentence and
+  nothing else, so it must say what the skill does and when to use it without assuming this agent's
+  context.
+- **Valid by the rules publishing enforces.** `name` matches the folder exactly and is not one of the
+  reserved platform commands listed above; `description` is present and at most 1024 characters; the whole
+  folder is at most 16 MB — plus the structural failures that speak for themselves, a missing `SKILL.md`
+  or frontmatter that will not parse. Those are refusals: the same rules that exclude a skill from the
+  engine. A body over 64 KB is only a flag: it publishes, so keep it short for the reader's sake, not to
+  pass a gate.
+
+Then say so in one line, naming **this** agent and **this** skill — never the placeholders. For an agent
+whose slug is `vendor-bills` and a skill named `bill-reconciliation`:
+
+> The `bill-reconciliation` skill is ready to share. You can share it from the **Addons** tab on this
+> agent's page, or run `cinna skills publish vendor-bills bill-reconciliation --visibility public` from
+> your machine.
+
+The CLI form is `cinna skills publish <slug> <name> --visibility public`; substitute the real slug and the
+real skill name before you say it. **Never hand over the command without a visibility** — a package is
+private by default, so the bare form succeeds, prints a catalog URL, and shares the skill with nobody. Use
+`--visibility users --grant <email>` instead when the user named specific people.
+
+Never report that you published, shared or submitted a skill. You prepared it; the user shares it.
+
 ## Workflow Documentation (`/app/workspace/docs/`)
 
 ### WORKFLOW_PROMPT.md

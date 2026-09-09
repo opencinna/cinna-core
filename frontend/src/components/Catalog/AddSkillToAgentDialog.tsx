@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import useCustomToast from "@/hooks/useCustomToast"
+import { invalidateAddons } from "@/utils/addons"
 import { skillRevisionLabel } from "@/utils/skillCatalog"
 import { SkillCatalogErrorAlert } from "./SkillCatalogErrorAlert"
 
@@ -40,7 +41,7 @@ interface AddSkillToAgentDialogProps {
  * "Put this catalog skill into one of my agents" — S10.
  *
  * A Create story with three fields, so it is one dialog rather than a wizard,
- * built to `Agents/InstallPluginModal`'s skeleton: the two mode `Checkbox`es
+ * built to the same skeleton as the Addons tab's install step: the two mode `Checkbox`es
  * are literally the same control the marketplace install uses, and a skill that
  * installs differently from a plugin — when the backend makes it *one* plugin
  * link either way — would be a second vocabulary for one act.
@@ -106,17 +107,12 @@ export function AddSkillToAgentDialog({
       showSuccessToast(
         `Added ${packageName} to ${selectedAgent?.name ?? "the agent"}`,
       )
-      // The Plugins tab's installed list, and the catalog's own
-      // `installed_in_agent_ids` / `install_count`, both just changed.
-      queryClient.invalidateQueries({ queryKey: ["agent-plugins", agentId] })
-      queryClient.invalidateQueries({ queryKey: ["skills-catalog"] })
-      // So does the agent's skill index: a catalog install shows up there as
-      // `source: "catalog"` with its own row and flag. The index route is
-      // cache-only, so this may return the same list until the Skills card's
-      // Refresh re-reads the container — but `can_publish` and the row's flags
-      // are computed per request, so it is still strictly better than leaving
-      // a card that now names the wrong set.
-      queryClient.invalidateQueries({ queryKey: ["agent", agentId, "skills"] })
+      // Everything an install touches, through the one helper: the Addons
+      // tab's projection, the plugin-link list, the agent's skill index and
+      // the catalog's own `installed_in_agent_ids` / `install_count`. Naming
+      // the keys here instead is how this dialog silently stopped refreshing
+      // the projection it had just made stale.
+      invalidateAddons(queryClient, agentId, { catalog: true })
       onOpenChange(false)
     },
     // No `onError`: the refusal is coded and belongs in the dialog, where the

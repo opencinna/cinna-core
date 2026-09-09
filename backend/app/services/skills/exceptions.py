@@ -39,6 +39,17 @@ STATUS_BY_CODE: dict[str, int] = {
     "foreign_install": 403,
     "not_publisher": 403,
     "not_superuser": 403,
+    # Access grants (``visibility='users'``)
+    "user_not_found": 404,
+    "grant_not_found": 404,
+    # Granting the publisher access to their own package. 409 rather than 400:
+    # nothing about the request is malformed, the state already satisfies it.
+    "self_grant": 409,
+    # A publish that names people to share with while its effective visibility
+    # is not ``users``, where a grant row would have no effect. 409 for the same
+    # reason as ``self_grant``: each half of the request is well-formed, the
+    # combination contradicts itself.
+    "grants_require_users_visibility": 409,
     # Publish pre-flight — the environment side
     "no_environment": 409,
     "workspace_unavailable": 409,

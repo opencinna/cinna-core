@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { SkillsService } from "@/client"
+import { SkillPackageAccessCard } from "@/components/Catalog/SkillPackageAccessCard"
 import { SkillPackageCard } from "@/components/Catalog/SkillPackageCard"
 import { SkillRevisionsCard } from "@/components/Catalog/SkillRevisionsCard"
 import { SkillSourceCard } from "@/components/Catalog/SkillSourceCard"
@@ -135,6 +136,11 @@ function SkillPackageRoute() {
                   selectedRevisionNumber={selectedRevisionNumber}
                   onView={setPinnedRevision}
                 />
+                {/* Last in the column, and only for the publisher: a card that
+                    appears and disappears with `visibility` must sit at the
+                    end or it reflows everything under it each time it is
+                    toggled. It self-hides — see the card. */}
+                <SkillPackageAccessCard pkg={pkg} />
               </div>
             </>
           )}

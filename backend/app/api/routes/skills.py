@@ -28,6 +28,9 @@ from app.models import (
     Agent,
     PluginSyncResponse,
     SkillInstallRequest,
+    SkillPackageAccessGrantCreate,
+    SkillPackageAccessGrantPublic,
+    SkillPackageAccessGrantsPublic,
     SkillPackageDetailPublic,
     SkillPackageEntry,
     SkillPackageRevisionPublic,
@@ -102,9 +105,37 @@ def delist_skill_package(
 
     Installs that already point at one of its revisions keep working — which is
     exactly why an administrator gets this verb and not a delete button.
+
+    Loaded through ``_load_package``, **without** a visibility check, and
+    authorised by ``delist`` itself. Going through
+    ``SkillCatalogService.get_package`` would make the one lever an
+    administrator has over a harmful package depend on that package being
+    visible to them — a ``users`` package is an explicit allowlist an admin is
+    not on, so a publisher could put a workspace-exfiltrating skill in front of
+    two hundred named colleagues and it could never be pulled from
+    circulation. Widening ``user_can_see`` instead would fix this route by
+    leaking every ``users`` package into every other superuser read path, which
+    is the opposite of what the allowlist is for.
+
+    The role is therefore checked **before** the load, not only inside
+    ``delist``: an unconditional load that refused afterwards would answer 403
+    for a package that exists and 404 for one that does not, handing any
+    authenticated caller an existence oracle over every private package on the
+    instance. Refusing first makes a non-administrator's answer identical
+    either way, and leaves the 404 for the one caller entitled to tell the
+    difference. ``delist`` re-checks the role, so the route cannot be the only
+    thing standing between a caller and the verb.
     """
+    if not current_user.is_superuser:
+        raise http_error_for(
+            SkillCatalogError(
+                "not_superuser", "Only an administrator can delist a package."
+            )
+        )
+    package = _load_package(session, package_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Skill package not found")
     try:
-        package = SkillCatalogService.get_package(session, package_id, current_user)
         package = SkillCatalogService.delist(session, package, current_user)
     except SkillCatalogError as exc:
         raise http_error_for(exc)
@@ -205,12 +236,116 @@ def download_skill_package_archive(
     )
 
 
+# =============================================================================
+# Access grants (``visibility='users'``)
+# =============================================================================
+
+
+def _get_managed_package(
+    session, package_id: uuid.UUID, user
+) -> SkillPackage:
+    """Load a package the caller publishes, or raise the coded refusal.
+
+    Two gates in the established order: a package the caller cannot see is a
+    404 (its existence is not public information), and one they can see but do
+    not publish is a 403. An administrator gets no bypass here — their power
+    over a package is :func:`delist_skill_package`, and "hide something harmful"
+    must never widen into "hand somebody else's skill to a third party".
+    """
+    package = SkillCatalogService.get_package(session, package_id, user)
+    if not SkillCatalogService.user_can_manage(package, user):
+        raise SkillCatalogError(
+            "not_publisher",
+            "Only the publisher of a skill can manage who it is shared with.",
+        )
+    return package
+
+
+@router.get(
+    "/packages/{package_id}/grants",
+    response_model=SkillPackageAccessGrantsPublic,
+)
+def list_skill_package_grants(
+    package_id: uuid.UUID, session: SessionDep, current_user: CurrentUser
+) -> Any:
+    """Who this package is shared with. Publisher only."""
+    try:
+        package = _get_managed_package(session, package_id, current_user)
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
+    grants = SkillCatalogService.list_grants_public(session, package)
+    return SkillPackageAccessGrantsPublic(data=grants, count=len(grants))
+
+
+@router.post(
+    "/packages/{package_id}/grants",
+    response_model=SkillPackageAccessGrantPublic,
+)
+def add_skill_package_grant(
+    package_id: uuid.UUID,
+    data: SkillPackageAccessGrantCreate,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Share the package with one more person, by email.
+
+    Idempotent: re-adding somebody who already has access returns their grant
+    rather than refusing, because the publisher's intent is already true.
+    """
+    try:
+        package = _get_managed_package(session, package_id, current_user)
+        grant = SkillCatalogService.grant_access(
+            session, package, data.email, current_user
+        )
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
+    logger.info(
+        "skill_package_grant_added package_id=%s user_id=%s by=%s",
+        package.package_id, grant.user_id, current_user.id,
+    )
+    return SkillCatalogService.grant_to_public(session, grant)
+
+
+@router.delete(
+    "/packages/{package_id}/grants/{user_id}",
+    status_code=204,
+    response_class=Response,
+)
+def revoke_skill_package_grant(
+    package_id: uuid.UUID,
+    user_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Response:
+    """Stop sharing the package with one person.
+
+    Keyed on the user, not on the grant id — "remove this person" is the verb
+    the publisher has in mind. This hides the skill from their catalog; agents
+    they already installed it into keep working, because the container's
+    archive download is authorised by the install, never by visibility.
+    """
+    try:
+        package = _get_managed_package(session, package_id, current_user)
+        SkillCatalogService.revoke_grant(session, package, user_id)
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
+    logger.info(
+        "skill_package_grant_revoked package_id=%s user_id=%s by=%s",
+        package.package_id, user_id, current_user.id,
+    )
+    return Response(status_code=204)
+
+
 def _load_package(session, package_id: uuid.UUID) -> SkillPackage | None:
     """Load a package without a visibility check.
 
-    Used only by the archive route, whose authorisation is the calling
-    environment's install — not the calling *user's* view of the catalog. Every
-    other route goes through ``SkillCatalogService.get_package``.
+    For the two routes whose authorisation is not "may this user see it":
+
+    * the archive route, authorised by the calling environment's install;
+    * :func:`delist_skill_package`, authorised by the administrator role.
+
+    Every other route goes through ``SkillCatalogService.get_package``, whose
+    404-for-invisible is the rule rather than the exception.
     """
     return session.get(SkillPackage, package_id)
 
@@ -263,6 +398,7 @@ async def publish_agent_skill(
             release_notes=data.release_notes,
             visibility=data.visibility,
             package_id=data.package_id,
+            grant_emails=data.grant_emails,
         )
     except SkillCatalogError as exc:
         raise http_error_for(exc)

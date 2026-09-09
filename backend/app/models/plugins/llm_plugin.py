@@ -10,11 +10,25 @@ This module defines models for:
 import uuid
 from datetime import datetime, UTC
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 import sqlalchemy as sa
 from sqlalchemy import Column, Index, JSON
 from sqlmodel import Field, Relationship, SQLModel
+
+#: Repository formats this platform knows how to parse. Each value names a
+#: catalog layout and a parser:
+#:
+#: * ``claude`` — ``.claude-plugin/marketplace.json``;
+#: * ``codex``  — ``.agents/plugins/marketplace.json``;
+#: * ``skills`` — no catalog file at all, a directory of ``SKILL.md`` folders.
+#:
+#: The API input schemas type ``type`` as this Literal so an unknown format is
+#: a 422 at create/update time rather than a silent fall-back to the Claude
+#: parser at sync time. The stored column stays a plain string: rows written
+#: before this validation existed must still load, and the sync of such a row
+#: is what reports the problem (``status=error``).
+MarketplaceType = Literal["claude", "codex", "skills"]
 
 
 class MarketplaceStatus(str, Enum):
@@ -42,7 +56,9 @@ class LLMPluginMarketplaceBase(SQLModel):
     git_branch: str = Field(default="main")
     ssh_key_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user_ssh_keys.id")
     public_discovery: bool = Field(default=False)  # Indexed via idx_marketplace_public in __table_args__
-    type: str = Field(default="claude")  # Marketplace type (claude, openai, custom)
+    #: Repository format, one of :data:`MarketplaceType`. Stored as a plain
+    #: string so a row written before the format was validated still loads.
+    type: str = Field(default="claude")
     status: MarketplaceStatus = Field(default=MarketplaceStatus.pending, sa_type=sa.String())
     status_message: Optional[str] = None
     last_sync_at: Optional[datetime] = None
@@ -106,7 +122,9 @@ class LLMPluginMarketplaceCreate(SQLModel):
     git_branch: str = "main"
     ssh_key_id: Optional[uuid.UUID] = None
     public_discovery: bool = False
-    type: str = "claude"
+    #: Repository format — see :data:`MarketplaceType`. An unknown value is a
+    #: 422 here, never a marketplace that syncs with the wrong parser.
+    type: MarketplaceType = "claude"
 
 
 class LLMPluginMarketplaceUpdate(SQLModel):
@@ -120,7 +138,7 @@ class LLMPluginMarketplaceUpdate(SQLModel):
     git_branch: Optional[str] = None
     ssh_key_id: Optional[uuid.UUID] = None
     public_discovery: Optional[bool] = None
-    type: Optional[str] = None
+    type: Optional[MarketplaceType] = None
 
 
 class LLMPluginMarketplacesPublic(SQLModel):
@@ -201,15 +219,47 @@ class LLMPluginMarketplacePlugin(LLMPluginMarketplacePluginBase, table=True):
         foreign_key="llm_plugin_marketplace.id", ondelete="CASCADE", index=True
     )
     config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    # Sync-time verdict: can our containers install this entry at all? Written
+    # by the marketplace parser, never by an install. An unsupported entry is
+    # still listed — an admin whose marketplace is half-broken needs to see the
+    # rows and the reason, not an empty catalog.
+    supported: bool = Field(default=True, nullable=False)
+    # Stable code, not a sentence: the copy belongs to the client. One of
+    # ``npm_source`` | ``app_connector_only`` | ``no_skill_md`` |
+    # ``unknown_source`` | ``unsafe_path``.
+    unsupported_reason: Optional[str] = Field(default=None, max_length=64)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     # Relationships
     marketplace: Optional[LLMPluginMarketplace] = Relationship(back_populates="plugins")
+    # NO delete cascade, and passive deletes on purpose. ``plugin_id`` is
+    # declared ``ON DELETE SET NULL`` so that deleting a marketplace plugin
+    # orphans (but KEEPS) every agent's install — an admin's action on a
+    # catalog must never uninstall somebody else's skill. An ORM-side cascade
+    # deletes those rows in Python before the database rule is ever consulted,
+    # which is exactly what used to happen here; ``passive_deletes`` leaves the
+    # nulling to the constraint that documents it. Consumers of a link
+    # therefore have to tolerate ``plugin_id IS NULL`` — the addons projection
+    # reports such a row as ``source_unavailable``.
     agent_links: list["AgentPluginLink"] = Relationship(
         back_populates="plugin",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+        sa_relationship_kwargs={"passive_deletes": True},
     )
+
+
+class PluginSkillSummary(SQLModel):
+    """The one skill a marketplace entry ships, when it ships exactly one.
+
+    A ``skills``-format marketplace publishes one plugin per skill folder, so
+    its rows have a skill to describe before anything is installed. Read off
+    the parsed ``config["skill"]`` block rather than recomputed, because the
+    repository is not on disk any more by the time anybody asks.
+    """
+
+    name: str
+    description: str = ""
+    has_scripts: bool = False
 
 
 class LLMPluginMarketplacePluginPublic(SQLModel):
@@ -234,6 +284,15 @@ class LLMPluginMarketplacePluginPublic(SQLModel):
     config: Optional[dict]
     created_at: datetime
     updated_at: datetime
+    #: Sync-time verdict: can our containers install this entry? An
+    #: unsupported entry is listed (with its reason) and refused at install.
+    supported: bool = True
+    #: Stable code — ``npm_source`` | ``app_connector_only`` | ``no_skill_md``
+    #: | ``unknown_source`` | ``unsafe_path``. The sentence belongs to the
+    #: client.
+    unsupported_reason: Optional[str] = None
+    #: Present only for a one-skill entry (``skills`` format).
+    skill_summary: Optional[PluginSkillSummary] = None
     # Additional fields for discovery
     marketplace_name: Optional[str] = None
 
@@ -300,10 +359,29 @@ class AgentPluginLink(AgentPluginLinkBase, table=True):
         index=True,
         nullable=True,
     )
-    # Bundle-sourced identity (NULL for marketplace links): the on-disk dir
-    # segment + manifest label, and a frozen copy of plugin.json for the UI.
+    # The install's on-disk directory identity — ``plugins/<marketplace
+    # name>/<plugin name>/`` — plus a frozen copy of plugin.json for the UI.
+    # Written by EVERY source: bundle and catalog links have nothing else to
+    # resolve through, and a marketplace link (which resolves its names live)
+    # needs them the moment its plugin row is gone, which ``ON DELETE SET
+    # NULL`` makes a supported state. They are what names an orphaned row, what
+    # folds its skills onto it, and what lets a returning entry re-adopt it.
     snapshot_marketplace_name: Optional[str] = None
     snapshot_plugin_name: Optional[str] = None
+    #: The git URL of the repository this install was actually made from —
+    #: **security identity**, not display. A marketplace *name* is globally
+    #: unique only at any one instant: the unique index frees it the moment its
+    #: holder is deleted, which is exactly the event that orphans links, and a
+    #: sync reassigns ``marketplace.name`` from the repository's own
+    #: ``marketplace.json``. So a name can move to another row, and re-adopting
+    #: an orphaned link on the name alone would let a repository the agent's
+    #: owner never chose deliver code into their container. This is the identity
+    #: no rename can transfer, and ``_reattach_orphaned_links`` requires it to
+    #: match. Written by the marketplace install path only; bundle and catalog
+    #: links have no upstream repository of their own. NULL on links installed
+    #: before this column existed and already orphaned by then — they can never
+    #: be re-adopted, deliberately.
+    snapshot_repository_url: Optional[str] = None
     snapshot_config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     installed_version: Optional[str] = None  # Version string at installation time
     installed_commit_hash: Optional[str] = None  # Git commit hash for reproducibility

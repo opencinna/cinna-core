@@ -10,7 +10,7 @@ import re
 import tarfile
 import zipfile
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional, Tuple
 from datetime import datetime
 
@@ -1409,6 +1409,39 @@ class AgentEnvService:
     # idempotency skip; branch/tag names always re-fetch.
     _COMMIT_HASH_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
+    # Repository format of a marketplace plugin, as the backend's
+    # ``build_plugin_manifest`` labels it. A manifest written before the field
+    # existed carries no key at all and degrades to ``claude`` — exactly the
+    # behaviour those entries had when they were written.
+    # (``codex`` is a third value the backend emits; nothing here dispatches on
+    # it — a Codex plugin is recognised by the manifest file it ships, which
+    # stays right even if the entry says otherwise.)
+    _PLUGIN_TYPE_CLAUDE = "claude"
+    _PLUGIN_TYPE_SKILLS = "skills"
+
+    # The single failure the manifest normaliser can produce. Reported as a
+    # per-plugin result exactly like every other install failure (amber banner +
+    # PLUGIN_SYNC_FAILED); additionally keeps the plugin out of settings.json.
+    _MANIFEST_WRITE_FAILED = "manifest_write_failed"
+
+    # Prefix of the temp file plugin.json is written through, so a leftover
+    # from a killed write is recognisable and can be swept.
+    _MANIFEST_TMP_PREFIX = ".plugin.json."
+
+    # The only ``skills`` location a Codex manifest may name and still have its
+    # skills found, as ``PurePosixPath`` normalises it (so ``./skills`` and
+    # ``skills/`` are the same value). Anything else is reported, not chased —
+    # see ``_ensure_plugin_manifest``.
+    _CODEX_STANDARD_SKILLS_PATHS = ("skills",)
+
+    @classmethod
+    def _plugin_type(cls, entry: dict) -> str:
+        """Read a manifest entry's repository format, defaulting to ``claude``."""
+        value = entry.get("plugin_type")
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+        return cls._PLUGIN_TYPE_CLAUDE
+
     @classmethod
     def _is_safe_plugin_segment(cls, segment: str) -> bool:
         """Validate a marketplace/plugin name is a single safe path segment."""
@@ -1455,8 +1488,17 @@ class AgentEnvService:
           3. Prune plugin dirs not in the manifest (uninstall).
           4. Regenerate ``settings.json`` from the manifest, including ONLY
              plugins whose files are present on disk (failed/missing excluded so
-             the SDK never receives a missing path).
+             the SDK never receives a missing path) and whose plugin.json could
+             be normalised (``manifest_write_failed`` excluded — a dir without a
+             manifest is not loadable by Claude Code, files or no files).
           5. Return a per-plugin result list (errors are results, not raises).
+
+        ``marketplace`` sources additionally run the manifest normaliser
+        (``_ensure_plugin_manifest``) so a Codex plugin or a bare skill dir
+        carries the ``.claude-plugin/plugin.json`` both engines look for;
+        ``catalog`` sources write theirs unconditionally from package metadata
+        (``_write_catalog_plugin_json``). ``bundle`` sources get neither —
+        their files are the publisher's snapshot and are taken as authored.
 
         All filesystem writes are confined to ``plugins_dir``; unsafe names are
         rejected as ``failed`` results.
@@ -1483,6 +1525,9 @@ class AgentEnvService:
         results: list[dict] = []
         # Track the (mkt, plugin) pairs that belong on disk, for pruning.
         wanted: set[tuple[str, str]] = set()
+        # Pairs whose files are on disk but whose plugin.json could not be
+        # written: keep them out of settings.json (see step 4).
+        blocked: set[tuple[str, str]] = set()
 
         for entry in entries:
             marketplace_name = entry.get("marketplace_name") or ""
@@ -1518,10 +1563,18 @@ class AgentEnvService:
                     )
                 else:
                     status, error = self._ensure_marketplace_plugin(
-                        plugin_dir, entry.get("git") or {}
+                        plugin_dir, entry
                     )
                 result["status"] = status
                 result["error_message"] = error
+                if error == self._MANIFEST_WRITE_FAILED and not (
+                    self._plugin_manifest_is_loadable(plugin_dir)
+                ):
+                    # Only when the dir on disk really has no usable manifest.
+                    # A write that failed into a staging tree leaves the
+                    # previous revision installed and loadable — that one keeps
+                    # working, like every other kind of fetch failure here.
+                    blocked.add((marketplace_name, plugin_name))
             except Exception as e:
                 logger.error(
                     f"Unexpected error installing plugin {marketplace_name}/{plugin_name}: {e}"
@@ -1535,7 +1588,7 @@ class AgentEnvService:
         self._prune_plugin_dirs(wanted)
 
         # Step 4 — regenerate settings.json (files-present only).
-        self._regenerate_plugin_settings(entries, allowed_tools)
+        self._regenerate_plugin_settings(entries, allowed_tools, blocked)
 
         installed = sum(1 for r in results if r["status"] == "installed")
         failed = sum(1 for r in results if r["status"] == "failed")
@@ -1587,9 +1640,23 @@ class AgentEnvService:
         return f"https://{host.lower()}/{path}"
 
     def _ensure_marketplace_plugin(
-        self, plugin_dir: Path, git: dict
+        self, plugin_dir: Path, entry: dict
     ) -> tuple[str, Optional[str]]:
         """Ensure a marketplace plugin's files exist on disk at the pinned ref.
+
+        Where the fetched tree lands depends on the entry's ``plugin_type``:
+
+        * ``claude`` / ``codex`` → the tree IS the plugin, copied to
+          ``<plugin_dir>/``.
+        * ``skills`` → the source path is a single skill folder (a
+          ``skills``-format marketplace publishes one plugin per skill), copied
+          to ``<plugin_dir>/skills/<plugin>/`` so the on-disk layout matches a
+          catalog install: that is the shape the OpenCode ``skills.paths``
+          registration and ``build_skills_index`` already understand.
+
+        After the files are in place the manifest normaliser runs, so a Codex
+        or bare-skill plugin gets the ``.claude-plugin/plugin.json`` both
+        engines look for.
 
         Returns (status, error_message). status is "installed" | "skipped" |
         "failed". "skipped" means files already present at the requested ref.
@@ -1598,9 +1665,18 @@ class AgentEnvService:
         import subprocess
         import tempfile
 
+        git = entry.get("git") or {}
+        plugin_type = self._plugin_type(entry)
         url = git.get("url")
         ref = git.get("ref")
-        subdir = (git.get("subdir") or "").strip().lstrip("./")
+        subdir = (git.get("subdir") or "").strip()
+        # Only a leading "./" is dropped. ``lstrip("./")`` strips a character
+        # *set*, so it also ate the first character of any dot-directory —
+        # ".config/plugin" arrived as "config/plugin" and the clone step then
+        # looked for a directory that does not exist. The backend normalises
+        # the same way (``_normalize_subdir`` / ``_safe_entry_path``), and a
+        # leading dot is a legitimate first character of a directory name.
+        subdir = subdir[2:] if subdir.startswith("./") else subdir
 
         if not url:
             return "failed", "Missing git url for marketplace plugin"
@@ -1629,10 +1705,25 @@ class AgentEnvService:
             and marker.exists()
         ):
             try:
-                if marker.read_text(encoding="utf-8").strip() == ref:
-                    return "skipped", None
+                already_at_ref = marker.read_text(encoding="utf-8").strip() == ref
             except OSError:
-                pass  # fall through to re-clone
+                already_at_ref = False  # unreadable marker → re-clone
+
+            if already_at_ref:
+                # Files are already at the pinned ref, but the manifest
+                # normaliser is younger than some plugin dirs: /app/core is a
+                # per-environment copy, so an environment rebuilt onto newer
+                # core code keeps its already-materialised plugins. Re-running
+                # the normaliser here is a no-op when a plugin.json is present
+                # and back-fills one when it is not. Deliberately outside the
+                # marker's OSError guard: a normaliser failure is a reported
+                # failure, never a silent re-clone.
+                manifest_error = self._ensure_plugin_manifest(
+                    plugin_dir, entry, ref=ref
+                )
+                if manifest_error:
+                    return "failed", manifest_error
+                return "skipped", None
 
         tmp_clone = Path(tempfile.mkdtemp(prefix="cinna_plugin_"))
         try:
@@ -1688,12 +1779,30 @@ class AgentEnvService:
             if not src.exists() or not src.is_dir():
                 return "failed", f"Plugin subdir not found in repo: {subdir or '.'}"
 
+            # A `skills`-format entry publishes one skill per plugin: the
+            # fetched tree is the skill folder itself, so it lands one level
+            # down, under skills/<plugin>/. Everything else IS the plugin.
+            if plugin_type == self._PLUGIN_TYPE_SKILLS:
+                dest = plugin_dir / "skills" / plugin_dir.name
+                if not (src / "SKILL.md").is_file():
+                    # Not fatal — the files are still installed — but the skills
+                    # index looks exactly one level down, so without this line a
+                    # mis-resolved source path would install a plugin whose
+                    # skill is silently invisible.
+                    logger.warning(
+                        "Plugin %s is a skills-format entry but %s has no "
+                        "SKILL.md at its root — the skill will not be indexed.",
+                        plugin_dir.name, subdir or ".",
+                    )
+            else:
+                dest = plugin_dir
+
             # Replace the destination atomically-ish: remove old, copy new.
             if plugin_dir.exists():
                 _shutil.rmtree(plugin_dir, ignore_errors=True)
-            plugin_dir.parent.mkdir(parents=True, exist_ok=True)
+            dest.parent.mkdir(parents=True, exist_ok=True)
             _shutil.copytree(
-                src, plugin_dir,
+                src, dest,
                 ignore=_shutil.ignore_patterns(".git"),
             )
 
@@ -1704,6 +1813,12 @@ class AgentEnvService:
                 )
             except OSError as e:
                 logger.warning(f"Could not write plugin ref marker: {e}")
+
+            manifest_error = self._ensure_plugin_manifest(
+                plugin_dir, entry, ref=ref
+            )
+            if manifest_error:
+                return "failed", manifest_error
 
             return "installed", None
 
@@ -1773,16 +1888,24 @@ class AgentEnvService:
         marker = plugin_dir / self._PLUGIN_REF_MARKER
         if plugin_dir.exists() and marker.exists():
             try:
-                if marker.read_text(encoding="utf-8").strip() == ref:
-                    # Files are already the right revision, but plugin.json is
-                    # synthesised from EDITABLE package metadata — a publisher
-                    # renaming their package cuts no new revision, so the marker
-                    # would never move and the rename would never arrive. Cheap
-                    # to rewrite; skip the download, not the metadata.
-                    self._write_catalog_plugin_json(plugin_dir, entry, archive)
-                    return "skipped", None
+                already_at_ref = marker.read_text(encoding="utf-8").strip() == ref
             except OSError:
-                pass  # fall through to a re-download
+                already_at_ref = False  # unreadable marker → re-download
+
+            if already_at_ref:
+                # Files are already the right revision, but plugin.json is
+                # synthesised from EDITABLE package metadata — a publisher
+                # renaming their package cuts no new revision, so the marker
+                # would never move and the rename would never arrive. Cheap
+                # to rewrite; skip the download, not the metadata. Outside the
+                # marker's OSError guard: a manifest failure is reported, never
+                # a silent re-download.
+                manifest_error = self._write_catalog_plugin_json(
+                    plugin_dir, entry, archive
+                )
+                if manifest_error:
+                    return "failed", manifest_error
+                return "skipped", None
 
         token = os.getenv("AGENT_AUTH_TOKEN")
         env_id = os.getenv("ENV_ID")
@@ -1847,7 +1970,14 @@ class AgentEnvService:
             if extracted == 0:
                 return "failed", "Archive contained no usable files"
 
-            self._write_catalog_plugin_json(staging, entry, archive)
+            # Write the manifest into the staging tree, before the swap: a dir
+            # the engine could not load must never replace the revision already
+            # installed and working.
+            manifest_error = self._write_catalog_plugin_json(
+                staging, entry, archive
+            )
+            if manifest_error:
+                return "failed", manifest_error
 
             if plugin_dir.exists():
                 _shutil.rmtree(plugin_dir, ignore_errors=True)
@@ -1928,13 +2058,20 @@ class AgentEnvService:
 
     def _write_catalog_plugin_json(
         self, root: Path, entry: dict, archive: dict
-    ) -> None:
+    ) -> Optional[str]:
         """Synthesise ``.claude-plugin/plugin.json`` for a catalog skill.
 
         Generated here rather than shipped inside the archive because the
         fields are package metadata a publisher can edit without cutting a new
         revision — writing them into the immutable snapshot would freeze the
-        first version of the text forever.
+        first version of the text forever. This is why a catalog install writes
+        its manifest unconditionally instead of running the precedence chain in
+        ``_ensure_plugin_manifest``, whose first rule would keep the previous
+        install's copy and so never deliver a rename.
+
+        Returns ``None`` on success or ``manifest_write_failed`` — the write
+        itself is ``_write_plugin_manifest``, so a catalog manifest lands with
+        the same atomicity and symlink refusal as a synthesised one.
         """
         plugin_json = {
             "name": entry.get("plugin_name") or "skill",
@@ -1942,13 +2079,317 @@ class AgentEnvService:
             "description": archive.get("description")
             or f"Skill installed from the {entry.get('marketplace_name')} catalog",
         }
+        return self._write_plugin_manifest(root, plugin_json)
+
+    def _ensure_plugin_manifest(
+        self,
+        plugin_dir: Path,
+        entry: dict,
+        ref: Optional[str] = None,
+    ) -> Optional[str]:
+        """Make sure a materialized plugin dir carries ``.claude-plugin/plugin.json``.
+
+        Both engines locate a plugin through that file; a Codex repo names its
+        manifest elsewhere and a ``skills``-format repo has none at all. This
+        normalises the four cases into the one file, in strict precedence:
+
+        1. ``.claude-plugin/plugin.json`` is there and readable → return. An
+           authored manifest is never read-modified, never overwritten, never
+           followed through a symlink. A name that disagrees with the dir is
+           logged (Claude Code requires them to match) but left as the author
+           wrote it. A file that is not a JSON object counts as absent: no
+           engine can load it, and the likeliest way one appears is a write of
+           our own that ran out of disk.
+        2. ``.codex-plugin/plugin.json`` exists → synthesise from it. See
+           ``_manifest_from_codex`` for the field mapping and the ``skills``
+           path limitation.
+        3. ``SKILL.md`` at the dir root → a bare-skill plugin; synthesise with
+           ``name=<dir>``. Nothing is moved: the ``skills``-format install path
+           already copies such a tree into ``skills/<name>/``, and this branch
+           is what catches the same repo arriving through an older manifest
+           entry that carries no ``plugin_type`` (the dir then loads as a
+           plugin, though the skill sits at the root and so is not indexed).
+        4. Otherwise → a minimal manifest from the entry, so the SDK accepts
+           the dir instead of ignoring it silently.
+
+        Rules 3 and 4 take their ``description`` from the manifest ``entry`` —
+        the description the backend's marketplace row declares for this plugin,
+        which for a ``skills``-format repository is the skill's own frontmatter
+        description. A manifest entry written before that field existed carries
+        none, and rule 3 then falls back to ``Skill '<name>'``.
+
+        Writes only inside ``plugin_dir`` and only when no manifest is there.
+        A catalog install does not come through here: its manifest is
+        synthesised from editable package metadata on every sync, which is
+        ``_write_catalog_plugin_json`` (rule 1 would pin the first version of
+        that text forever).
+
+        Args:
+            plugin_dir: The materialized plugin tree.
+            entry: The manifest entry being installed.
+            ref: The pinned git ref, used as the version fallback.
+
+        Returns:
+            ``None`` on success (including "nothing to do"), or
+            ``manifest_write_failed`` when the file could not be written.
+        """
+        plugin_name = plugin_dir.name
+        claude_manifest = plugin_dir / ".claude-plugin" / "plugin.json"
+
+        # 1) Authored manifest — hands off. A link (at the file or at any
+        #    parent) is left exactly as it is and is never read through: the
+        #    engine may follow it, this code does not.
+        if claude_manifest.is_symlink() or (plugin_dir / ".claude-plugin").is_symlink():
+            if claude_manifest.is_file():
+                logger.warning(
+                    "Plugin %s reaches its plugin.json through a symlink — "
+                    "left untouched (links are never followed here)",
+                    plugin_name,
+                )
+                return None
+            # A linked .claude-plugin with no manifest behind it: nothing to
+            # keep, and nowhere this code is willing to write. Say so loudly
+            # rather than reporting an installed plugin no engine will load.
+            logger.error(
+                "Plugin %s has a symlinked .claude-plugin holding no "
+                "plugin.json — refusing to write through the link",
+                plugin_name,
+            )
+            return self._MANIFEST_WRITE_FAILED
+        if claude_manifest.is_file():
+            authored = self._read_json_object(claude_manifest)
+            if authored is not None:
+                declared = authored.get("name")
+                if isinstance(declared, str) and declared != plugin_name:
+                    logger.warning(
+                        "Plugin %s declares name %r in its own plugin.json; "
+                        "Claude Code expects it to match the directory name. "
+                        "Left as authored.", plugin_name, declared,
+                    )
+                return None
+            # Present but not a JSON object: no engine can load it, and the
+            # likeliest author is a half-finished write of our own (disk full
+            # mid-`manifest_write_failed`). Treat it as absent and rebuild —
+            # the never-overwrite guarantee protects authored manifests, and
+            # unparseable bytes are not one.
+            logger.warning(
+                "Plugin %s carries an unreadable .claude-plugin/plugin.json — "
+                "replacing it with a synthesised one", plugin_name,
+            )
+
+        codex_manifest = plugin_dir / ".codex-plugin" / "plugin.json"
+        codex = (
+            self._read_json_object(codex_manifest)
+            if self._is_contained_file(codex_manifest, plugin_dir)
+            else None
+        )
+
+        if codex is not None:
+            # 2) Codex plugin.
+            manifest = self._manifest_from_codex(codex, plugin_name, entry, ref)
+            reason = "from its Codex manifest"
+        else:
+            skill_md = plugin_dir / "SKILL.md"
+            is_bare_skill = self._is_contained_file(skill_md, plugin_dir)
+            manifest = {
+                "name": plugin_name,
+                "version": self._manifest_version(entry, ref),
+            }
+            description = entry.get("description")
+            if is_bare_skill:
+                # 3) Bare skill.
+                manifest["description"] = (
+                    description if isinstance(description, str) and description
+                    else f"Skill '{plugin_name}'"
+                )
+                reason = "for a bare-skill plugin"
+            else:
+                # 4) Nothing to read — a minimal manifest is still better than a
+                #    dir the engine refuses to load.
+                if isinstance(description, str) and description:
+                    manifest["description"] = description
+                reason = "with no manifest of its own"
+
+        error = self._write_plugin_manifest(plugin_dir, manifest)
+        if error:
+            return error
+        logger.info(
+            "Synthesised .claude-plugin/plugin.json for plugin %s (%s)",
+            plugin_name, reason,
+        )
+        return None
+
+    def _manifest_from_codex(
+        self, codex: dict, plugin_name: str, entry: dict, ref: Optional[str]
+    ) -> dict:
+        """Map a ``.codex-plugin/plugin.json`` onto the Claude plugin shape.
+
+        Carried over: ``version``, ``description``, ``author``, ``homepage``,
+        and ``mcpServers`` **only** when the Codex manifest holds them inline.
+        A ``mcpServers`` *path* is deliberately dropped here — the plugin's
+        ``.mcp.json`` is already read at session start by
+        ``_read_plugin_mcp_servers``, which is the one place that translation
+        lives.
+
+        ``name`` always comes from the directory, never from the Codex file:
+        Claude Code requires the two to match.
+
+        Limitation (deliberate, §8 of the addons plan): a Codex ``skills``
+        value pointing anywhere other than ``./skills`` is reported as a
+        ``plugin_capability_warning`` and left alone. Relocating or symlinking
+        another directory would put the normaliser in the business of
+        rewriting plugin trees; the general case is out of scope.
+        """
+        version = codex.get("version")
+        manifest: dict = {
+            "name": plugin_name,
+            "version": (
+                version.strip() if isinstance(version, str) and version.strip()
+                else self._manifest_version(entry, ref)
+            ),
+        }
+
+        for field in ("description", "homepage"):
+            value = codex.get(field)
+            if isinstance(value, str) and value.strip():
+                manifest[field] = value.strip()
+
+        author = codex.get("author")
+        if isinstance(author, str) and author.strip():
+            manifest["author"] = author.strip()
+        elif isinstance(author, dict) and author:
+            manifest["author"] = author
+
+        mcp_servers = codex.get("mcpServers")
+        if isinstance(mcp_servers, dict) and mcp_servers:
+            manifest["mcpServers"] = mcp_servers
+        elif isinstance(mcp_servers, str) and mcp_servers.strip():
+            logger.debug(
+                "Plugin %s declares mcpServers as a path (%s) — left to the "
+                ".mcp.json reader", plugin_name, mcp_servers,
+            )
+
+        skills = codex.get("skills")
+        if isinstance(skills, str) and skills.strip():
+            normalised = PurePosixPath(skills.strip()).as_posix()
+            if normalised not in self._CODEX_STANDARD_SKILLS_PATHS:
+                logger.warning(
+                    "plugin_capability_warning: plugin %s declares its skills "
+                    "at %r; only './skills' is supported, so its skills will "
+                    "not be found.", plugin_name, skills,
+                )
+
+        return manifest
+
+    def _manifest_version(self, entry: dict, ref: Optional[str]) -> str:
+        """Version for a synthesised manifest: entry, else short commit, else 0.0.0."""
+        version = entry.get("version")
+        if isinstance(version, str) and version.strip():
+            return version.strip()
+        if ref and self._COMMIT_HASH_RE.match(ref):
+            return ref[:7]
+        return "0.0.0"
+
+    def _is_contained_file(self, path: Path, root: Path) -> bool:
+        """True when ``path`` is a real file that really lives under ``root``.
+
+        The normaliser reads a plugin's own files and copies fields out of them
+        into a manifest; a symlink — at the file or at any parent — could point
+        that read at something outside the plugin tree. Resolving both sides and
+        comparing is what keeps "never follow symlinks" true for reads as well
+        as writes.
+        """
         try:
-            meta_dir = root / ".claude-plugin"
+            if path.is_symlink() or not path.is_file():
+                return False
+            resolved = path.resolve()
+            resolved.relative_to(root.resolve())
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def _read_json_object(self, path: Path) -> Optional[dict]:
+        """Read a JSON object from ``path``; ``None`` if unreadable or not an object."""
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.warning(f"Could not read {path}: {e}")
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _plugin_manifest_is_loadable(self, plugin_dir: Path) -> bool:
+        """True when the dir already carries a plugin.json an engine can load.
+
+        Used to decide whether a ``manifest_write_failed`` should also drop the
+        plugin from ``settings.json``: a failed write into a *staging* tree
+        leaves the previously installed, perfectly loadable revision in place,
+        and deactivating that would punish a working plugin for a transient
+        disk error.
+
+        A symlinked manifest counts as loadable when the link resolves to a
+        file — the engine follows it even though this code will not, so
+        "does it resolve" is as far as the question goes here.
+        """
+        manifest = plugin_dir / ".claude-plugin" / "plugin.json"
+        if manifest.is_symlink() or (plugin_dir / ".claude-plugin").is_symlink():
+            return manifest.is_file()
+        if not self._is_contained_file(manifest, plugin_dir):
+            return False
+        return self._read_json_object(manifest) is not None
+
+    def _write_plugin_manifest(self, plugin_dir: Path, manifest: dict) -> Optional[str]:
+        """Write ``.claude-plugin/plugin.json`` inside ``plugin_dir``.
+
+        Written to a temp file in the same directory and renamed into place, so
+        the failure this function exists to report (disk full, read-only
+        remount) cannot leave a truncated manifest behind: either the previous
+        file survives intact or the new one lands whole. ``mkstemp`` creates
+        with ``O_CREAT|O_EXCL`` and ``os.replace`` renames over the path itself,
+        so neither step can be redirected through a symlink.
+
+        Returns ``None`` on success or ``manifest_write_failed`` — the dir is
+        then reported as a failed install, and kept out of ``settings.json``
+        unless it still holds a loadable manifest of its own.
+        """
+        import tempfile
+
+        meta_dir = plugin_dir / ".claude-plugin"
+        if meta_dir.is_symlink():
+            logger.error(
+                "Refusing to write plugin.json: %s is a symlink", meta_dir,
+            )
+            return self._MANIFEST_WRITE_FAILED
+
+        target = meta_dir / "plugin.json"
+        tmp_path: Optional[str] = None
+        try:
             meta_dir.mkdir(parents=True, exist_ok=True)
-            with open(meta_dir / "plugin.json", "w", encoding="utf-8") as f:
-                json.dump(plugin_json, f, indent=2)
+            # A kill between mkstemp and os.replace leaves a temp behind, and
+            # the two skip paths never re-fetch the tree, so sweep before
+            # writing rather than accumulating one file per crash.
+            for stale in meta_dir.glob(f"{self._MANIFEST_TMP_PREFIX}*"):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(meta_dir), prefix=self._MANIFEST_TMP_PREFIX, suffix=".tmp"
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+            os.chmod(tmp_path, 0o644)
+            os.replace(tmp_path, target)
+            tmp_path = None
         except OSError as e:
-            logger.warning(f"Could not write catalog plugin.json: {e}")
+            logger.error(f"Could not write {target}: {e}")
+            return self._MANIFEST_WRITE_FAILED
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+        return None
 
     def _prune_plugin_dirs(self, wanted: set[tuple[str, str]]) -> None:
         """Remove plugin directories under plugins_dir not present in the manifest.
@@ -1985,19 +2426,31 @@ class AgentEnvService:
             logger.warning(f"Plugin prune enumeration failed: {e}")
 
     def _regenerate_plugin_settings(
-        self, entries: list[dict], allowed_tools: Optional[list[str]]
+        self,
+        entries: list[dict],
+        allowed_tools: Optional[list[str]],
+        blocked: Optional[set[tuple[str, str]]] = None,
     ) -> None:
         """Derive settings.json from the manifest, files-present only.
 
         A plugin is included in ``active_plugins`` only when it is not disabled
         AND its directory exists on disk — so a failed/missing plugin can never
         reach the SDK as a dangling path.
+
+        ``blocked`` names the (marketplace, plugin) pairs whose files are on
+        disk but whose ``plugin.json`` could not be written
+        (``manifest_write_failed``). Presence of files is not enough for those:
+        an engine cannot load a plugin dir without a manifest, so they are
+        excluded here too rather than handed over to fail at load time.
         """
+        blocked = blocked or set()
         active_plugins: list[dict] = []
         for entry in entries:
             marketplace_name = entry.get("marketplace_name") or ""
             plugin_name = entry.get("plugin_name") or ""
             if entry.get("disabled"):
+                continue
+            if (marketplace_name, plugin_name) in blocked:
                 continue
             plugin_dir = self._safe_plugin_dir(marketplace_name, plugin_name)
             if plugin_dir is None or not plugin_dir.exists():
@@ -2358,27 +2811,17 @@ class AgentEnvService:
         raw_servers: dict = {}
 
         mcp_json = plugin_dir / ".mcp.json"
-        if mcp_json.exists() and mcp_json.is_file():
-            try:
-                data = json.loads(mcp_json.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    servers = data.get("mcpServers")
-                    if isinstance(servers, dict):
-                        raw_servers.update(servers)
-            except (OSError, json.JSONDecodeError) as e:
-                logger.warning(f"Invalid .mcp.json in {plugin_dir.name}: {e}")
+        if mcp_json.is_file():
+            servers = (self._read_json_object(mcp_json) or {}).get("mcpServers")
+            if isinstance(servers, dict):
+                raw_servers.update(servers)
 
         plugin_json = plugin_dir / ".claude-plugin" / "plugin.json"
-        if plugin_json.exists() and plugin_json.is_file():
-            try:
-                data = json.loads(plugin_json.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    servers = data.get("mcpServers")
-                    if isinstance(servers, dict):
-                        for name, cfg in servers.items():
-                            raw_servers.setdefault(name, cfg)
-            except (OSError, json.JSONDecodeError) as e:
-                logger.warning(f"Invalid plugin.json in {plugin_dir.name}: {e}")
+        if plugin_json.is_file():
+            servers = (self._read_json_object(plugin_json) or {}).get("mcpServers")
+            if isinstance(servers, dict):
+                for name, cfg in servers.items():
+                    raw_servers.setdefault(name, cfg)
 
         result: dict = {}
         for name, cfg in raw_servers.items():

@@ -1,12 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
-import { Check, ChevronDown, ChevronRight, Copy, Upload } from "lucide-react"
+import { ChevronDown, ChevronRight, Upload } from "lucide-react"
 import { useState } from "react"
 
 import type { SkillEntryPublic, SkillPackageRevisionPublic } from "@/client"
 import { SkillsService } from "@/client"
 import { SkillCatalogErrorAlert } from "@/components/Catalog/SkillCatalogErrorAlert"
 import { TooltipToggleItem } from "@/components/Common/TooltipToggleItem"
+import {
+  UserAllowlistPicker,
+  type UserAllowlistSelectedItem,
+} from "@/components/Common/UserAllowlistPicker"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -21,90 +25,118 @@ import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup } from "@/components/ui/toggle-group"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import useCustomToast from "@/hooks/useCustomToast"
-import {
-  SKILL_VISIBILITY_OPTIONS,
-  skillRevisionLabel,
-} from "@/utils/skillCatalog"
+import { invalidateAddons } from "@/utils/addons"
+import { SKILL_VISIBILITY_OPTIONS } from "@/utils/skillCatalog"
+import { ShareSkillSuccessPanel } from "./ShareSkillSuccessPanel"
 
-interface PublishSkillDialogProps {
+interface ShareSkillDialogProps {
   agentId: string
   skill: SkillEntryPublic
+  /**
+   * The package this agent already published this skill as, from the addons
+   * projection. It changes the verbs — sharing a skill for the first time and
+   * appending a revision to an immutable package are different acts — and it
+   * is what the existing-grants list keys on.
+   */
+  publishedPackageId: string | null
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
 /**
- * "Share this skill on the server catalog" — S9.
+ * "Make this skill available to everyone, to a few named colleagues, or to no
+ * one yet" — S4.
  *
- * A Create story with three visible fields, so it is one dialog rather than a
- * wizard; the `package_id` has a sensible server-side default and lives behind
- * the one "Advanced" disclosure §1 allows.
+ * The former `PublishSkillDialog`, moved here and extended with the third
+ * visibility. Still a Create story with one section, so it is one dialog rather
+ * than a wizard; `package_id` keeps the one "Advanced" disclosure §1 allows.
  *
- * Reachable from the Skills card row's `⋯` **only**. It must never open from
- * S2's SKILL.md viewer: that is a dialog, and a dialog does not open a dialog
- * (§2 "Disclosure depth", A2). The same rule shapes the end of the flow — the
- * success state replaces this dialog's body and *links* to the catalog page
- * instead of opening one.
+ * Reachable from the addon row's `⋯` **only**. It must never open from the
+ * detail dialog: that is a dialog, and a dialog does not open a dialog (§2
+ * "Disclosure depth", A2). The same rule shapes both ends of the flow — the
+ * people picker is a `Popover` anchored to its own input rather than
+ * `BundlePermissionsAddUserModal`, and the success state replaces this body and
+ * *links* to the catalog page instead of opening one.
  */
-export function PublishSkillDialog({
+export function ShareSkillDialog({
   agentId,
   skill,
+  publishedPackageId,
   open,
   onOpenChange,
-}: PublishSkillDialogProps) {
+}: ShareSkillDialogProps) {
   const queryClient = useQueryClient()
-  const { showErrorToast } = useCustomToast()
 
   const [version, setVersion] = useState("")
   const [releaseNotes, setReleaseNotes] = useState("")
   // `null` means "the publisher has not touched this control". It cannot be
   // seeded with `useState(existing?.visibility)`: `existing` arrives from an
   // async query *after* the dialog mounts, so a seeded state would keep the
-  // "private" default it was initialised with and silently unpublish a public
+  // "private" default it was initialised with and silently unshare a public
   // package on the next republish.
   const [visibilityDraft, setVisibilityDraft] = useState<string | null>(null)
   const [packageIdDraft, setPackageIdDraft] = useState("")
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [people, setPeople] = useState<
+    Array<{ id: string; email: string; label: string }>
+  >([])
   const [published, setPublished] = useState<SkillPackageRevisionPublic | null>(
     null,
   )
-  const [copied, setCopied] = useState(false)
 
-  // Is this a republish? The catalog list is the only place that answers it —
-  // there is no "package for this skill name" route — and it is already the
-  // query the catalog page uses, so an open dialog costs at most one fetch.
-  // Matched on `can_manage` as well as the name because names are unique *per
-  // publisher*: somebody else's package of the same name is not this skill's.
+  const isRepublish = publishedPackageId != null
+
+  // The package's current visibility and its next revision number. The catalog
+  // list is the only place that answers it — there is no "package for this
+  // skill name" route — and it is already the query the catalog page uses, so
+  // an open dialog costs at most one fetch. Matched on `can_manage` as well as
+  // the name because names are unique *per publisher*: somebody else's package
+  // of the same name is not this skill's.
   const { data: catalog, isLoading: isCatalogLoading } = useQuery({
     queryKey: ["skills-catalog"],
     queryFn: () => SkillsService.listSkillCatalog(),
-    enabled: open,
   })
-  const existing = catalog?.data.find(
-    (entry) => entry.can_manage && entry.name === skill.name,
-  )
+  // The authoritative id first, the name scan only as a fallback for a package
+  // this projection has not caught up with. Matching on the name alone made
+  // the two halves of "is this a republish" disagree: a same-named package
+  // published from *another* of the user's agents would put the body into
+  // republish mode under a "Share …" title, and a package missing from the
+  // list (delisted, or a failed catalog read) would offer the immutable
+  // package-id field on a genuine republish.
+  const existing =
+    catalog?.data.find((entry) => entry.id === publishedPackageId) ??
+    catalog?.data.find((entry) => entry.can_manage && entry.name === skill.name)
 
   // What the toggle shows: the publisher's choice, else the package's current
-  // visibility on a republish, else the default for a first publish.
+  // visibility on a republish, else the default for a first share.
   const visibility = visibilityDraft ?? existing?.visibility ?? "private"
+  const isUsersVisibility = visibility === "users"
+
+  // Who can already see it. Read-only here on purpose: `grant_emails` is
+  // additive server-side, and revoking belongs on the package's own page where
+  // the consequence ("agents that already installed it keep working") is
+  // spelled out beside the list.
+  const { data: grants } = useQuery({
+    queryKey: [
+      "skills-catalog",
+      "package",
+      publishedPackageId ?? "none",
+      "grants",
+    ],
+    queryFn: () =>
+      SkillsService.listSkillPackageGrants({
+        packageId: publishedPackageId ?? "",
+      }),
+    enabled: isRepublish && isUsersVisibility,
+  })
+  const existingGrants = grants?.data ?? []
 
   // After a first publish the response carries only the revision, whose
   // `package_id` is the package's UUID. The handle the publisher pastes into a
   // README comes from the package itself, so the success panel reads it back.
   const { data: publishedPackage } = useQuery({
-    // A placeholder id rather than `undefined`: the key stays stable and
-    // inert either way, but `undefined` makes every un-published dialog share
-    // one cache entry.
     queryKey: ["skills-catalog", "package", published?.package_id ?? "none"],
     queryFn: () =>
-      // `enabled` guarantees this is set; `?? ""` keeps the call typed without
-      // asserting the narrowing away.
       SkillsService.getSkillPackage({
         packageId: published?.package_id ?? "",
       }),
@@ -122,13 +154,16 @@ export function PublishSkillDialog({
           // The draft, never the derived display value, and deliberately not
           // gated on `existing`: that arrives from an async query, so between
           // mount and resolution the gate would be false and this would post
-          // "private" — silently unpublishing a public package on the ordinary
-          // "open the dialog, press Publish" path, since every field here is
-          // optional. `null` is the right thing to send for "untouched" in
-          // both cases: the backend's `if visibility is not None` leaves a
-          // republished package alone, and a first publish is created private
-          // by default anyway. `existing` stays a *display* concern.
+          // "private" — silently unsharing a public package on the ordinary
+          // "open the dialog, press Share" path, since every field here is
+          // optional.
           visibility: visibilityDraft,
+          // Additive server-side, and only meaningful for `users`: sending the
+          // list while the publisher is on Public would create grants nobody
+          // asked for and nobody can see (they are inert under `public`).
+          grant_emails: isUsersVisibility
+            ? people.map((person) => person.email)
+            : [],
           // Only ever sent on a first publish: the id is immutable, and
           // re-sending it is refused with `package_id_immutable`.
           package_id: existing ? null : packageIdDraft.trim() || null,
@@ -136,9 +171,11 @@ export function PublishSkillDialog({
       }),
     onSuccess: (revision) => {
       setPublished(revision)
-      queryClient.invalidateQueries({ queryKey: ["skills-catalog"] })
-      // The index now knows this skill has a package behind it.
-      queryClient.invalidateQueries({ queryKey: ["agent", agentId, "skills"] })
+      // The projection now knows this skill has a package behind it, which
+      // changes the row's verb from "Share…" to "Update published skill…", and
+      // the catalog gained a package or a revision — both through the one
+      // helper rather than a hand-listed key beside it.
+      invalidateAddons(queryClient, agentId, { catalog: true })
     },
   })
 
@@ -153,16 +190,14 @@ export function PublishSkillDialog({
   const isResolvingPackage = isCatalogLoading
   const handle = publishedPackage?.package_id ?? null
 
-  const copyPackageId = async () => {
-    if (!handle) return
-    try {
-      await navigator.clipboard.writeText(handle)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      showErrorToast("Failed to copy the package id")
-    }
-  }
+  const title = isRepublish ? "Update published skill" : `Share ${skill.name}`
+  const submitLabel = isRepublish ? "Update published skill" : "Share"
+
+  const selectedPeople: UserAllowlistSelectedItem[] = people.map((person) => ({
+    id: person.id,
+    userId: person.id,
+    fallbackLabel: person.label,
+  }))
 
   return (
     <Dialog
@@ -174,73 +209,18 @@ export function PublishSkillDialog({
     >
       <DialogContent className="sm:max-w-md">
         {published ? (
-          <>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 min-w-0">
-                <Upload className="h-5 w-5 shrink-0" />
-                <span className="truncate">
-                  Published {skill.name} {skillRevisionLabel(published)}
-                </span>
-              </DialogTitle>
-              <DialogDescription>
-                It is in the skills catalog now. Anyone who can see it can add
-                it to one of their agents.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-3">
-              <Button asChild variant="link" className="h-auto px-0">
-                <Link
-                  to="/catalog/skills/$packageId"
-                  params={{ packageId: published.package_id }}
-                >
-                  Open in the skills catalog
-                </Link>
-              </Button>
-              {handle && (
-                <div className="space-y-1">
-                  <span className="text-xs text-muted-foreground">
-                    Package id
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 rounded border bg-background px-2 py-1.5 font-mono text-xs break-all">
-                      {handle}
-                    </code>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          aria-label="Copy package id"
-                          onClick={copyPackageId}
-                        >
-                          {copied ? (
-                            <Check className="h-3 w-3" />
-                          ) : (
-                            <Copy className="h-3 w-3" />
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Copy package id</TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <DialogFooter>
-              <Button type="button" onClick={() => onOpenChange(false)}>
-                Close
-              </Button>
-            </DialogFooter>
-          </>
+          <ShareSkillSuccessPanel
+            skillName={skill.name}
+            revision={published}
+            packageHandle={handle}
+            onClose={() => onOpenChange(false)}
+          />
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 min-w-0">
+              <DialogTitle className="flex min-w-0 items-center gap-2">
                 <Upload className="h-5 w-5 shrink-0" />
-                <span className="truncate">Publish {skill.name}</span>
+                <span className="truncate">{title}</span>
               </DialogTitle>
               <DialogDescription>
                 The skill folder is snapshotted as a new revision. Published
@@ -258,9 +238,9 @@ export function PublishSkillDialog({
               )}
 
               <div className="space-y-1.5">
-                <Label htmlFor="publish-skill-version">Version</Label>
+                <Label htmlFor="share-skill-version">Version</Label>
                 <Input
-                  id="publish-skill-version"
+                  id="share-skill-version"
                   value={version}
                   disabled={isPending}
                   placeholder="1.0.0"
@@ -269,12 +249,12 @@ export function PublishSkillDialog({
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="publish-skill-notes">
+                <Label htmlFor="share-skill-notes">
                   Release notes{" "}
                   <span className="text-muted-foreground">(optional)</span>
                 </Label>
                 <Textarea
-                  id="publish-skill-notes"
+                  id="share-skill-notes"
                   rows={3}
                   value={releaseNotes}
                   disabled={isPending}
@@ -315,6 +295,80 @@ export function PublishSkillDialog({
                 )}
               </div>
 
+              {isUsersVisibility && (
+                <div className="space-y-2">
+                  {/* Read-only on a republish: additions travel with this
+                      publish, removals live on the package's own page beside
+                      the sentence that says what removing costs. */}
+                  {existingGrants.length > 0 && (
+                    <div className="space-y-1.5">
+                      <span className="text-xs text-muted-foreground">
+                        Already shared with
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {existingGrants.map((grant) => (
+                          <span
+                            key={grant.id}
+                            className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground"
+                          >
+                            {grant.user_email ?? "Unknown user"}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Managed on the package's catalog page.
+                      </p>
+                    </div>
+                  )}
+
+                  <UserAllowlistPicker
+                    label={
+                      <Label className="text-xs text-muted-foreground">
+                        Add people
+                      </Label>
+                    }
+                    selected={selectedPeople}
+                    excludeUserIds={existingGrants.map(
+                      (grant) => grant.user_id,
+                    )}
+                    isAdding={isPending}
+                    isRemoving={isPending}
+                    onAdd={(user) =>
+                      setPeople((prev) =>
+                        prev.some((person) => person.id === user.id)
+                          ? prev
+                          : [
+                              ...prev,
+                              {
+                                id: user.id,
+                                email: user.email,
+                                label: user.full_name || user.email,
+                              },
+                            ],
+                      )
+                    }
+                    onRemove={(item) =>
+                      setPeople((prev) =>
+                        prev.filter((person) => person.id !== item.id),
+                      )
+                    }
+                    searchPlaceholder="Search people by name or email…"
+                  />
+
+                  {/* Not blocking (plan §9): a package with nobody on the list
+                      is effectively private, which is a legitimate state to
+                      publish into — but it is not what "People" sounds like. */}
+                  {people.length === 0 && existingGrants.length === 0 && (
+                    <Alert>
+                      <AlertDescription>
+                        Nobody can see it yet — add people here, or from the
+                        package's catalog page later.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </div>
+              )}
+
               {/* The one Advanced disclosure, holding the one field with a
                   server-side default. Hidden entirely on a republish: the id is
                   immutable, and an editable field that can only be refused is
@@ -338,11 +392,9 @@ export function PublishSkillDialog({
                   </Button>
                   {advancedOpen && (
                     <div className="space-y-1.5 pt-2">
-                      <Label htmlFor="publish-skill-package-id">
-                        Package id
-                      </Label>
+                      <Label htmlFor="share-skill-package-id">Package id</Label>
                       <Input
-                        id="publish-skill-package-id"
+                        id="share-skill-package-id"
                         value={packageIdDraft}
                         disabled={isPending}
                         placeholder="com.example.my-skill"
@@ -359,11 +411,14 @@ export function PublishSkillDialog({
 
               {/* The secret scan runs again server-side, so a stale index can
                   still produce `skill_contains_secrets` here — with the
-                  offending paths, which is what this alert renders. */}
+                  offending paths, which is what this alert renders. It also
+                  carries the grant refusals (`user_not_found`, `self_grant`):
+                  a publish that names a bad address fails whole, so the reason
+                  belongs beside the picker rather than in a toast. */}
               {publishMutation.isError && (
                 <SkillCatalogErrorAlert
                   error={publishMutation.error}
-                  fallback="Couldn't publish the skill"
+                  fallback="Couldn't share the skill"
                 />
               )}
             </div>
@@ -383,7 +438,7 @@ export function PublishSkillDialog({
                 disabled={isResolvingPackage}
                 onClick={() => publishMutation.mutate()}
               >
-                Publish
+                {submitLabel}
               </LoadingButton>
             </DialogFooter>
           </>

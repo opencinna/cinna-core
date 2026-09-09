@@ -267,6 +267,12 @@ from .agents.agent_skills import (
     AgentSkillsPublic,
     SkillContentPublic,
 )
+from .agents.addons import (
+    AddonSkillPublic,
+    AddonPublic,
+    AddonCounts,
+    AgentAddonsPublic,
+)
 from .sessions.session import (
     Session,
     SessionCreate,
@@ -396,6 +402,9 @@ from .skills.skill_package import (
 from .skills.skill_package_revision import (
     SkillPackageRevision,
 )
+from .skills.skill_package_access_grant import (
+    SkillPackageAccessGrant,
+)
 from .skills.schemas import (
     SkillPackagePublic,
     SkillPackageEntry,
@@ -406,6 +415,9 @@ from .skills.schemas import (
     SkillPublishRequest,
     SkillInstallRequest,
     SkillRevisionContentPublic,
+    SkillPackageAccessGrantPublic,
+    SkillPackageAccessGrantsPublic,
+    SkillPackageAccessGrantCreate,
 )
 from .plugins.llm_plugin import (
     LLMPluginMarketplace,
@@ -416,6 +428,7 @@ from .plugins.llm_plugin import (
     LLMPluginMarketplacePlugin,
     LLMPluginMarketplacePluginPublic,
     LLMPluginMarketplacePluginsPublic,
+    PluginSkillSummary,
     AgentPluginLink,
     AgentPluginLinkCreate,
     AgentPluginLinkUpdate,
@@ -986,6 +999,11 @@ __all__ = [
     "SkillEntryPublic",
     "AgentSkillsPublic",
     "SkillContentPublic",
+    # Agent addons projection
+    "AddonSkillPublic",
+    "AddonPublic",
+    "AddonCounts",
+    "AgentAddonsPublic",
     # Credentials
     "Credential",
     "CredentialCreate",
@@ -1241,6 +1259,7 @@ __all__ = [
     "LLMPluginMarketplacesPublic",
     "LLMPluginMarketplacePlugin",
     "LLMPluginMarketplacePluginPublic",
+    "PluginSkillSummary",
     "LLMPluginMarketplacePluginsPublic",
     "AgentPluginLink",
     "AgentPluginLinkCreate",
@@ -1262,6 +1281,10 @@ __all__ = [
     "SkillPublishRequest",
     "SkillInstallRequest",
     "SkillRevisionContentPublic",
+    "SkillPackageAccessGrant",
+    "SkillPackageAccessGrantPublic",
+    "SkillPackageAccessGrantsPublic",
+    "SkillPackageAccessGrantCreate",
     "AgentPluginLinksPublic",
     "MarketplaceStatus",
     "PluginSourceType",

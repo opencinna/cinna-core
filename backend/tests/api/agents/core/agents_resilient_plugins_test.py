@@ -32,12 +32,17 @@ Scenarios
      the agent plugin list.
   9. Regression: marketplace install / uninstall / upgrade / enable-disable API
      endpoints still work (status codes, response shape).
+ 10. Every manifest entry declares a ``plugin_type`` env-core has a branch for:
+     a legacy row holding a word from before that vocabulary existed goes on
+     the wire as ``claude``.
 """
+import json
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
@@ -45,6 +50,15 @@ from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.environment import list_environments
+from tests.utils.llm_plugin import (
+    capturing_plugin_manifest,
+    create_marketplace,
+    discover_plugins,
+    force_plugin_type,
+    install_agent_plugin,
+    plugins_by_name,
+    sync_marketplace,
+)
 from tests.utils.user import create_random_user, user_authentication_headers
 
 _API = settings.API_V1_STR
@@ -1160,7 +1174,11 @@ def test_url_type_plugin_manifest_carries_source_url(
       - git.ref = plugin.source_commit_hash OR plugin.source_branch — NEVER
         plugin.commit_hash (that's the MARKETPLACE repo's commit, invalid in the
         external source_url repo).
-      - git.subdir = "" (empty for external repos)
+      - git.subdir = plugin.source_path, which the Claude parser leaves empty
+        for a url source (the external repo's root IS the plugin). A Codex
+        ``git-subdir`` entry is the one url source that carries a path, and it
+        needs that path forwarded — hence subdir mirrors the column rather than
+        being hard-coded empty.
     """
     agent = create_agent_via_api(
         client, superuser_token_headers, name="URLTypePluginAgent"
@@ -1182,6 +1200,9 @@ def test_url_type_plugin_manifest_carries_source_url(
         mkt_id,
         name="url-plugin",
         source_type="url",
+        # What the Claude parser writes for a url source: the plugin is the
+        # external repo's root, so there is no subdirectory.
+        source_path="",
         source_url="https://github.com/external/url-plugin.git",
         commit_hash="extcommit555",
     )
@@ -1221,7 +1242,8 @@ def test_url_type_plugin_manifest_carries_source_url(
         f"git.url must be plugin.source_url for URL-type plugins, got: {git['url']}"
     )
     assert git.get("subdir", "") == "", (
-        f"git.subdir must be empty for URL-type plugins, got: {git.get('subdir')}"
+        "a url plugin with no source_path is the external repo's root, so the "
+        f"subdir stays empty; got: {git.get('subdir')}"
     )
     assert git.get("ref"), "git.ref must be set for URL-type plugins"
     # Regression: ref must NOT be the marketplace repo's commit (commit_hash);
@@ -1231,4 +1253,207 @@ def test_url_type_plugin_manifest_carries_source_url(
     )
     assert git["ref"] == "main", (
         f"git.ref should fall back to source_branch, got: {git['ref']}"
+    )
+
+
+# ── Scenario 10: Codex git-subdir round-trip through the manifest ─────────────
+
+
+def _codex_two_entry_repo(root: Path) -> None:
+    """A Codex marketplace with one ``local`` and one ``git-subdir`` entry."""
+    import json
+
+    catalog = root / ".agents" / "plugins" / "marketplace.json"
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    catalog.write_text(
+        json.dumps(
+            {
+                "name": "codex-mixed",
+                "plugins": [
+                    {
+                        "name": "house-style",
+                        "source": {"source": "local", "path": "./plugins/house-style"},
+                    },
+                    {
+                        "name": "reporter",
+                        "source": {
+                            "source": "git-subdir",
+                            "url": "https://github.com/external/monorepo.git",
+                            "path": "packages/reporter",
+                            "sha": "1122334455667788",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = root / "plugins" / "house-style" / ".codex-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps({"name": "house-style", "version": "2.0", "mcpServers": {"a": {}}}),
+        encoding="utf-8",
+    )
+
+
+def test_codex_entries_carry_their_format_and_subdir_into_the_manifest(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+) -> None:
+    """
+    The manifest is the contract with the container, and Codex added two
+    things to it:
+
+      1. Sync a Codex marketplace holding a ``local`` and a ``git-subdir``
+         entry (the real parser, only the clone stubbed), install both.
+      2. Every marketplace entry declares its ``plugin_type`` — the container
+         keys the "where does the fetched tree land" decision on it.
+      3. The ``git-subdir`` entry's path is forwarded as the clone's
+         ``subdir``. This is the value ``_resolve_plugin_git_coords`` used to
+         hard-code to ``""`` for url sources: without it the container would
+         clone the whole monorepo in as one plugin.
+      4. The ``local`` entry is unchanged by that fix — marketplace repo URL,
+         its own subdirectory, pinned to the install-time commit.
+
+    The plain-Claude url case (no ``source_path`` → empty subdir) is the
+    regression guard in ``test_url_type_plugin_manifest_carries_source_url``
+    above.
+    """
+    # ── Phase 1: a Codex marketplace, parsed for real ─────────────────────
+    agent = create_agent_via_api(client, superuser_token_headers, name="CodexManifest")
+    agent_id = agent["id"]
+    drain_tasks()
+
+    marketplace = create_marketplace(
+        client,
+        superuser_token_headers,
+        url="https://github.com/example/codex-mixed.git",
+        marketplace_type="codex",
+    )
+    sync_marketplace(
+        client,
+        superuser_token_headers,
+        marketplace["id"],
+        populate=_codex_two_entry_repo,
+        commit_hash="mkt0011223344",
+    )
+    rows = plugins_by_name(discover_plugins(client, superuser_token_headers))
+    assert set(rows) == {"house-style", "reporter"}
+
+    # ── Phase 2: install both, capturing the manifest the adapter gets ────
+    with capturing_plugin_manifest(patch_environment_adapter) as captured:
+        install_agent_plugin(
+            client, superuser_token_headers, agent_id, rows["house-style"]["id"]
+        )
+        install_agent_plugin(
+            client, superuser_token_headers, agent_id, rows["reporter"]["id"]
+        )
+
+    assert captured, "set_plugins was not called — no running environment?"
+    entries = {e["plugin_name"]: e for e in captured[-1]["plugins"]}
+    assert set(entries) == {"house-style", "reporter"}
+    assert [e["plugin_type"] for e in entries.values()] == ["codex", "codex"], (
+        "plugin_type is the container's only branch on repository format; it "
+        "must be on every entry"
+    )
+
+    # ── Phase 3: the git-subdir entry ─────────────────────────────────────
+    reporter = entries["reporter"]["git"]
+    assert reporter is not None
+    assert reporter["url"] == "https://github.com/external/monorepo.git"
+    assert reporter["ref"] == "1122334455667788", (
+        "a git-subdir entry pins the EXTERNAL repo's sha, never the "
+        "marketplace's commit"
+    )
+    assert reporter["subdir"] == "packages/reporter", (
+        "the plugin lives inside a larger repository; dropping the subdir "
+        "would clone the whole monorepo in as one plugin"
+    )
+
+    # ── Phase 4: the local entry is untouched by that ─────────────────────
+    house = entries["house-style"]["git"]
+    assert house is not None
+    assert house["url"] == "https://github.com/example/codex-mixed.git"
+    assert house["subdir"] == "plugins/house-style"
+    assert house["ref"] == "mkt0011223344"
+
+
+# ── Scenario 10: the manifest's plugin_type is a closed vocabulary ────────────
+
+
+def _one_local_plugin_repo(root: Path) -> None:
+    """A Claude marketplace with a single local entry."""
+    catalog = root / ".claude-plugin" / "marketplace.json"
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    catalog.write_text(
+        json.dumps(
+            {
+                "name": "legacy-tools",
+                "plugins": [
+                    {
+                        "name": "house-style",
+                        "description": "House style.",
+                        "version": "1.0",
+                        "source": "./plugins/house-style",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_legacy_plugin_type_reaches_the_container_as_claude(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+    db: Session,
+) -> None:
+    """
+    ``plugin_type`` is not a label — it is the container's only branch on
+    repository shape, deciding where a fetched tree lands inside the plugin
+    directory. A value env-core has no branch for is therefore a shape nothing
+    handles, and the column is a plain string copied from ``marketplace.type``,
+    whose documented values predate the ``Literal`` that closes it today
+    (``custom`` was one of them).
+
+    So the manifest builder passes the value through the same allowlist the
+    other branches use, and a legacy row goes on the wire as ``claude`` — the
+    reading always applied to those rows: the fetched tree *is* the plugin
+    directory.
+    """
+    agent = create_agent_via_api(client, superuser_token_headers, name="LegacyType")
+    agent_id = agent["id"]
+    drain_tasks()
+
+    marketplace = create_marketplace(
+        client,
+        superuser_token_headers,
+        url="https://github.com/example/legacy-tools.git",
+    )
+    sync_marketplace(
+        client,
+        superuser_token_headers,
+        marketplace["id"],
+        populate=_one_local_plugin_repo,
+        commit_hash="legacy00112233",
+    )
+    row = plugins_by_name(discover_plugins(client, superuser_token_headers))[
+        "house-style"
+    ]
+
+    # The row a much older sync wrote, before the vocabulary was closed.
+    force_plugin_type(db, row["id"], "custom")
+
+    with capturing_plugin_manifest(patch_environment_adapter) as captured:
+        install_agent_plugin(client, superuser_token_headers, agent_id, row["id"])
+
+    assert captured, "set_plugins was not called — no running environment?"
+    entry = captured[-1]["plugins"][0]
+    assert entry["plugin_name"] == "house-style"
+    assert entry["plugin_type"] == "claude", (
+        "an off-contract format on the manifest wire is a shape env-core has "
+        "no branch for; the guard the bundle branch always had belongs on "
+        "this one too"
     )

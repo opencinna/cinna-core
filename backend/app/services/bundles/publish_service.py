@@ -948,6 +948,11 @@ class PublishService:
     ) -> None:
         """Hard-block publish if any publisher plugin's files are not on disk.
 
+        Two refusals, because they have two different fixes: files that have
+        not been installed yet (start the environment) and files that are gone
+        for good because the marketplace entry behind them was deleted
+        (uninstall the plugin).
+
         Decided default (§14.3): ensure-then-copy the publisher's live workspace
         ``plugins/`` tree. A bundle is an immutable artifact, so every declared
         plugin's files MUST be present before we snapshot. If the publisher has
@@ -960,7 +965,7 @@ class PublishService:
         successfully installed that plugin — shipping it would create a broken
         immutable revision, so we fail loudly naming the plugin.
         """
-        from app.models.plugins.llm_plugin import AgentPluginLink
+        from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
 
         links = list(
             session.exec(
@@ -975,14 +980,25 @@ class PublishService:
         from app.services.bundles.plugin_sync import _resolve_link_identity
 
         missing: list[str] = []
+        # A link whose marketplace entry was deleted is a different problem
+        # with a different fix: its files were pruned on the last sync and no
+        # environment start will bring them back. Telling the publisher to
+        # start the environment would send them round a loop they cannot
+        # leave — the way out is to uninstall the plugin.
+        orphaned: list[str] = []
         for link in links:
             marketplace_name, plugin_name, _config = _resolve_link_identity(link)
             label = f"{marketplace_name or '?'}/{plugin_name or '?'}"
+            is_orphan = (
+                link.source == PluginSource.marketplace and link.plugin_id is None
+            )
             if env_workspace_root is None:
+                # No workspace at all: the missing environment is the problem
+                # to name, whatever else is true of the link.
                 missing.append(label)
                 continue
             if not (marketplace_name and plugin_name):
-                missing.append(label)
+                (orphaned if is_orphan else missing).append(label)
                 continue
             plugin_dir = (
                 env_workspace_root
@@ -991,7 +1007,15 @@ class PublishService:
                 / plugin_name
             )
             if not (plugin_dir.exists() and plugin_dir.is_dir() and any(plugin_dir.iterdir())):
-                missing.append(label)
+                (orphaned if is_orphan else missing).append(label)
+
+        if orphaned:
+            names = ", ".join(sorted(set(orphaned)))
+            raise ValueError(
+                "Cannot publish: the marketplace entry behind these installed "
+                f"plugins no longer exists, so their files are gone: {names}. "
+                "Uninstall them from this agent, then publish again."
+            )
 
         if missing:
             names = ", ".join(sorted(set(missing)))

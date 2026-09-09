@@ -8,7 +8,7 @@
  * is what makes the two sections of the catalog read as one page.
  */
 import { useNavigate } from "@tanstack/react-router"
-import { Download, Globe, GraduationCap, Lock } from "lucide-react"
+import { Download, Globe, GraduationCap, Lock, Users } from "lucide-react"
 import type { MouseEvent } from "react"
 import { useState } from "react"
 
@@ -40,7 +40,26 @@ export function SkillCatalogCard({ entry }: SkillCatalogCardProps) {
 
   const installedCount = entry.installed_in_agent_ids?.length ?? 0
   const versionLabel = skillPackageVersionLabel(entry)
-  const isPublic = entry.visibility === "public"
+
+  // One badge, three states — **not** a fourth chip. The tile already carries
+  // a version badge and a package-id chip, and a fourth thing to read is a
+  // fourth thing to read. `users` visibility re-labels the badge that is
+  // already here: "shared with you" answers the question a granted colleague
+  // actually has ("why can I see this?"), and the publisher sees the neutral
+  // word because the catalog list carries no grant count to name.
+  const visibilityBadge =
+    entry.visibility === "public"
+      ? { icon: Globe, label: "public" }
+      : entry.visibility === "users"
+        ? {
+            icon: Users,
+            label:
+              entry.is_granted && !entry.can_manage
+                ? "shared with you"
+                : "shared",
+          }
+        : { icon: Lock, label: "private" }
+  const VisibilityIcon = visibilityBadge.icon
 
   const openDetail = () => {
     navigate({
@@ -112,12 +131,8 @@ export function SkillCatalogCard({ entry }: SkillCatalogCardProps) {
           )}
           <div className="flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
             <Badge variant="outline" className="gap-1 font-normal">
-              {isPublic ? (
-                <Globe className="h-3 w-3" />
-              ) : (
-                <Lock className="h-3 w-3" />
-              )}
-              {isPublic ? "public" : "private"}
+              <VisibilityIcon className="h-3 w-3" />
+              {visibilityBadge.label}
             </Badge>
             {versionLabel && (
               <Badge variant="outline" className="font-normal">

@@ -22,7 +22,7 @@ export const Route = createFileRoute("/_layout/admin/marketplaces")({
   head: () => ({
     meta: [
       {
-        title: `Plugin Marketplaces - Admin - ${APP_NAME}`,
+        title: `Addon Marketplaces - Admin - ${APP_NAME}`,
       },
     ],
   }),
@@ -49,13 +49,13 @@ function AdminMarketplaces() {
     setHeaderContent(
       <>
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold truncate">Plugin Marketplaces</h1>
+          <h1 className="text-lg font-semibold truncate">Addon Marketplaces</h1>
           <p className="text-xs text-muted-foreground">
-            Manage plugin repositories and sync plugins
+            Manage plugin and skill repositories and sync their entries
           </p>
         </div>
         <AddMarketplace />
-      </>
+      </>,
     )
     return () => setHeaderContent(null)
   }, [setHeaderContent])

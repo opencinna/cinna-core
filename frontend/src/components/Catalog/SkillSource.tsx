@@ -1,5 +1,6 @@
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Skeleton } from "@/components/ui/skeleton"
+import { cn } from "@/lib/utils"
 
 interface SkillSourceProps {
   content: string | undefined
@@ -12,6 +13,13 @@ interface SkillSourceProps {
   errorFallback: string
   /** Rendered above the source — the shadowing note, a revision label. */
   notice?: React.ReactNode
+  /**
+   * Overrides the pane's height cap. The 60vh default is right for a host that
+   * shows nothing else; a dialog that stacks a skill list above this one needs
+   * a smaller share of the viewport, and the host is the only thing that knows
+   * how much room it has left.
+   */
+  className?: string
 }
 
 /**
@@ -23,7 +31,7 @@ interface SkillSourceProps {
  * engine is handed rather than a prettier version of it.
  *
  * Extracted at the second consumer, not before (§5): S2's dialog
- * (`Agents/SkillContentDialog`) had this block first, and the package route's
+ * (`Agents/SkillContentBody`) had this block first, and the package route's
  * "SKILL.md" card is the second — two real shapes that agreed, so the scroll
  * cap, the four states and the truncation note stop being two copies that can
  * drift. The frame around it stays with each caller: one is a dialog body, the
@@ -38,9 +46,15 @@ export function SkillSource({
   onRetry,
   errorFallback,
   notice,
+  className,
 }: SkillSourceProps) {
   return (
-    <div className="max-h-[60vh] overflow-y-auto rounded-md border bg-muted/30 p-3">
+    <div
+      className={cn(
+        "max-h-[60vh] overflow-y-auto rounded-md border bg-muted/30 p-3",
+        className,
+      )}
+    >
       {isError ? (
         // A failed read renders as a failure — never as an empty file.
         <QueryErrorAlert

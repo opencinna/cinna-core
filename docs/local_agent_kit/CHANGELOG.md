@@ -42,6 +42,28 @@ built against 1.0.0 keeps operating a 1.1.0 folder, because the majors match.
   `webapp`, `rebuild-env`, `agent-status`). `skills/` is **not** in
   `cloud_import_excludes`: it is part of what the agent *is*, so it travels.
 
+- **Two sections on designing around skills, and on publishing one.**
+  `guides/08-knowledge-and-local-skills.md` gains both. *Designing around skills*
+  turns the split table around for the design phase: an agent with several distinct
+  internal workflows gets one skill folder per workflow by default, and a prompt
+  that only routes between them; the tiebreak for a workflow that argues otherwise
+  is separate trigger + separate output + reusable by another agent. *Publishing a
+  skill* covers the other end — `cinna skills publish <slug> <name>`, or the
+  **Addons** tab's **Share…** on the agent's page. Two facts that section exists to
+  state: publishing reads the **cloud** agent's workspace, never this folder, so the
+  agent must already be in the cloud (`guides/11-go-cloud.md`) and the local edit
+  must have travelled there first — a revision is immutable, and publishing a stale
+  copy cannot be undone, only appended to. A package is also **private by default**,
+  so the bare command succeeds, prints a catalog URL and shares the skill with
+  nobody — the guide hands over `--visibility public` (or `--visibility users
+  --grant <email>`) and never the bare form. And the secret gate is filename-based
+  only: nothing reads inside the files. `templates/agent/AGENTS.md` carries the rule
+  in one line; the `knowledge` rung's `trigger` in `kit.json` (and its two
+  restatements in `README.md`) widens to fire on a finished skill worth publishing,
+  not only on three capabilities or a page of domain docs. Guidance only — no folder
+  role, manifest field or validation rule moved, which is why this sits under
+  contract 1.1.0 rather than bumping it.
+
 ### Changed
 
 - **`docs/` is no longer where a local skill is documented.** Its `layout.json`

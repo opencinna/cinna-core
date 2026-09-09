@@ -16,6 +16,7 @@ import {
 } from "lucide-react"
 
 import { LlmPluginsService } from "@/client"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -27,6 +28,8 @@ import {
 } from "@/components/ui/card"
 import PendingItems from "@/components/Pending/PendingItems"
 import { usePageHeader } from "@/routes/_layout"
+import { addonFormatLabel } from "@/utils/addons"
+import { unsupportedReasonSentence } from "@/utils/marketplace"
 
 export const Route = createFileRoute(
   "/_layout/admin/marketplace/plugin/$pluginId"
@@ -89,6 +92,14 @@ function PluginDetailPage() {
   }
 
   const isRemote = plugin.source_type === "url"
+  // Optional on the wire (server-side default), so an entry synced before the
+  // flag existed reads as installable rather than as broken — the same test
+  // the entries table makes.
+  const supported = plugin.supported !== false
+  // The entry's own format in words. Degrades to the stored code rather than
+  // to nothing: a row written by a newer server is still a real row, and an
+  // admin who can read its `plugin_type` can act on it.
+  const formatLabel = addonFormatLabel(plugin.plugin_type) ?? plugin.plugin_type
 
   return (
     <div className="p-6 md:p-8 overflow-y-auto">
@@ -115,10 +126,7 @@ function PluginDetailPage() {
                 )}
                 <Badge
                   variant="outline"
-                  className={isRemote
-                    ? "bg-blue-50 text-blue-700 border-blue-200"
-                    : "bg-gray-50 text-gray-700 border-gray-200"
-                  }
+                  className={isRemote ? undefined : "text-muted-foreground"}
                 >
                   {isRemote ? (
                     <>
@@ -136,6 +144,18 @@ function PluginDetailPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Why it cannot be installed — the question the entries table's
+                Supported column raises and sends the admin here to answer.
+                The server's own sentence, keyed off the stable code, so a
+                refusal reads the same here, in the entries table and in the
+                409 an install answers with. */}
+            {!supported && (
+              <Alert>
+                <AlertDescription>
+                  {unsupportedReasonSentence(plugin.unsupported_reason)}
+                </AlertDescription>
+              </Alert>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>Name</Label>
@@ -144,8 +164,25 @@ function PluginDetailPage() {
               <div>
                 <Label>Plugin Type</Label>
                 <Badge variant="secondary" className="mt-1">
-                  {plugin.plugin_type}
+                  {formatLabel}
                 </Badge>
+              </div>
+              <div>
+                {/* The label is the category, the value carries the word: the
+                    two values are the entries table's cell strings verbatim,
+                    but its *column header* would read as "Supported:
+                    Supported" over a single row. */}
+                <Label>Installation</Label>
+                <div className="flex items-center gap-2 mt-1">
+                  <span
+                    className={`size-2 shrink-0 rounded-full ${
+                      supported ? "bg-success" : "bg-destructive"
+                    }`}
+                  />
+                  <span className="text-sm">
+                    {supported ? "Supported" : "Not installable"}
+                  </span>
+                </div>
               </div>
               {plugin.marketplace_name && (
                 <div>
@@ -235,10 +272,7 @@ function PluginDetailPage() {
                 <Label>Source Type</Label>
                 <Badge
                   variant="outline"
-                  className={isRemote
-                    ? "bg-blue-50 text-blue-700 border-blue-200 mt-1"
-                    : "bg-gray-50 text-gray-700 border-gray-200 mt-1"
-                  }
+                  className={isRemote ? "mt-1" : "mt-1 text-muted-foreground"}
                 >
                   {isRemote ? (
                     <>

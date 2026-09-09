@@ -24,6 +24,7 @@ import {
 import { Label as UILabel } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
+import { useMarketplaceSync } from "@/hooks/useMarketplaceSync"
 
 interface MarketplaceConfigurationTabProps {
   marketplace: LLMPluginMarketplacePublic
@@ -76,16 +77,10 @@ export function MarketplaceConfigurationTab({
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
 
-  const syncMutation = useMutation({
-    mutationFn: () => LlmPluginsService.syncMarketplace({ marketplaceId }),
-    onSuccess: () => {
-      showSuccessToast("Marketplace synced successfully")
-      queryClient.invalidateQueries({ queryKey: ["marketplace", marketplaceId] })
-    },
-    onError: (error: any) => {
-      showErrorToast(error.message || "Failed to sync marketplace")
-    },
-  })
+  // The entries table's two empty panels point the admin at this button, so
+  // its invalidation set is shared with the other two sync call sites rather
+  // than written here (`useMarketplaceSync`).
+  const syncMutation = useMarketplaceSync(marketplaceId)
 
   const updateMutation = useMutation({
     mutationFn: (public_discovery: boolean) =>

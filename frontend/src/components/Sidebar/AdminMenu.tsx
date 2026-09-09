@@ -63,7 +63,7 @@ export function AdminMenu() {
           <DropdownMenuItem asChild>
             <RouterLink to="/admin/marketplaces" onClick={handleMenuClick}>
               <Store className="mr-2 h-4 w-4" />
-              Plugin Marketplaces
+              Addon Marketplaces
             </RouterLink>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
