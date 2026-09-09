@@ -53,8 +53,13 @@ export function useAddonRowMutations(
     title: string,
     ok: string,
   ) => {
+    // `unsupported_syncs` is not folded into `failed_syncs` by the backend —
+    // the link write succeeded, so `success` stays true — but an environment
+    // that predates the feature did not take the change, so it belongs in the
+    // sync-issues dialog and not behind a green toast.
     if (
       (result.failed_syncs && result.failed_syncs > 0) ||
+      (result.unsupported_syncs && result.unsupported_syncs > 0) ||
       result.partial_failures
     ) {
       onSyncResult(title, result)

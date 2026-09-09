@@ -75,7 +75,7 @@ import uuid
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from tests.utils.agent import create_agent_via_api
+from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import (
     install_bundle,
@@ -104,6 +104,7 @@ from tests.utils.cli import (
     revoke_account_token,
     revoke_cli_token,
 )
+from tests.utils.environment import delete_environment
 from tests.utils.workspace import create_random_workspace
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.user import (
@@ -2993,6 +2994,203 @@ def test_account_agent_api_call_restart_inspect(
     )
     assert r.status_code == 403, (
         f"restart-env by a demoted (agent-user) account token must be 403, got {r.status_code}: {r.text}"
+    )
+
+
+# ── Scenario 20c: POST /account/agents/{id}/rebuild-env ──────────────────────
+
+
+def test_account_rebuild_env_gating_and_was_running(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+) -> None:
+    """
+    ``cinna agent rebuild-env`` — the sibling of ``restart-env``, and NOT a
+    synonym for it. A restart re-runs the same image; a rebuild replaces
+    ``/app/core`` from the template, which is the only way a container built
+    before a feature grows that feature's routes. Until this route existed the
+    CLI's only path there was the raw ``environments/{uuid}/rebuild`` escape
+    hatch with a UUID the user had to go and dig out of the addons projection.
+
+    Phases:
+      1. A rebuild of a *running* environment reports ``was_running=true`` and
+         returns the environment's post-rebuild state.
+      2. ``CLI_ACCOUNT_ENV_REBUILT`` is audited — separately from the restart
+         it is routinely confused with — and records ``was_running``.
+      3. A rebuild of a *stopped* environment reports ``was_running=false``.
+         The rebuild restores the state it found, so this is a success the CLI
+         has to be able to explain rather than a silent no-op.
+      4. An agent with no active environment → 400, not a 500 and not a
+         pretend success.
+      5. Gating: ghost / other-owner agent → 404 (no leak); a demoted
+         (agent-user) account token on an agent it owns → 403; a plain user
+         JWT → 401.
+
+    Test seam:
+      Only the lifecycle manager's ``rebuild_environment`` is replaced — the
+      container recreation itself (template image build, docker compose down /
+      up) is the Docker work every test in this suite stubs out. The stub keeps
+      that method's real contract: it returns the ``was_running`` value it read
+      off the container, which is what the service hands back and the route
+      reports. Everything else runs for real — the ownership resolve, the
+      build-rights gate, the audit write and the response shape.
+    """
+    from app.services.environments.environment_lifecycle import RebuildOutcome
+    from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
+
+    lm = patch_environment_adapter
+    adapter = EnvironmentTestAdapter()
+    lm.get_adapter = lambda environment: adapter
+
+    rebuilt: list[str] = []
+
+    async def _stub_rebuild(db_session, environment, agent):
+        # Mirrors the real lifecycle contract rather than hardcoding an answer:
+        # ``rebuild_environment`` returns the ``was_running`` value it read and
+        # branched on, and it reads it from the container's LIVE status. Taking
+        # it from the same adapter reading keeps this stub honest across both
+        # phases below — a hardcoded return would make the running case pass
+        # while the stopped case asserts against a fiction.
+        was_running = (await lm.get_adapter(environment).get_status()) == "running"
+        rebuilt.append(str(environment.id))
+        environment.status = "running" if was_running else "stopped"
+        environment.status_message = "Rebuild complete"
+        db_session.add(environment)
+        db_session.commit()
+        return RebuildOutcome(was_running=was_running)
+
+    lm.rebuild_environment = _stub_rebuild
+
+    account_jwt, _ = bootstrap_account_token(
+        client, superuser_token_headers, machine_name="Rebuild Machine"
+    )
+    acc_headers = account_cli_headers(account_jwt)
+
+    agent = create_agent_via_api(client, superuser_token_headers, name="RebuildTarget")
+    drain_tasks()
+    agent_id = agent["id"]
+    env_id = get_agent(client, superuser_token_headers, agent_id)[
+        "active_environment_id"
+    ]
+    assert env_id, "the env stub must have created an active environment"
+
+    # ── Phase 1: a running container comes back running ──────────────────
+    adapter._status = "running"
+
+    r = client.post(
+        f"{_BASE}/account/agents/{agent_id}/rebuild-env", headers=acc_headers
+    )
+    assert r.status_code == 200, f"rebuild-env must be 200, got {r.status_code}: {r.text}"
+    result = r.json()
+    assert result["environment_id"] == env_id
+    assert result["status"], result
+    assert result["was_running"] is True, (
+        "was_running comes back FROM the rebuild — the flag it actually read "
+        "and branched on, not a second probe that a container starting or "
+        "stopping in between could make disagree with what happened. The CLI "
+        "needs it to explain why a successful rebuild can still leave the "
+        f"user with a container they must start: {result}"
+    )
+    assert rebuilt == [env_id], (
+        "the route must reach the real rebuild path, not the restart one"
+    )
+
+    # ── Phase 2: audited, and separately from a restart ──────────────────
+    r = client.get(
+        f"{_SEC}/",
+        headers=superuser_token_headers,
+        params={"event_type": "CLI_ACCOUNT_ENV_REBUILT"},
+    )
+    assert r.status_code == 200, r.text
+    events = r.json()
+    assert events["count"] >= 1, (
+        "a rebuild goes further than a restart — it recreates the container — "
+        "so it is audited on the same grounds and under its own event type"
+    )
+    event = events["data"][0]
+    assert event["event_type"] == "CLI_ACCOUNT_ENV_REBUILT"
+    assert event.get("agent_id") == agent_id
+    assert event["details"]["was_running"] is True
+    assert event["details"]["environment_id"] == env_id
+
+    # ── Phase 3: a stopped container is rebuilt and left stopped ─────────
+    adapter._status = "stopped"
+
+    r = client.post(
+        f"{_BASE}/account/agents/{agent_id}/rebuild-env", headers=acc_headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["was_running"] is False, (
+        "an environment that was stopped is rebuilt and left stopped — that is "
+        "a success, and the flag is the only thing that lets the CLI say so"
+    )
+
+    # ── Phase 4: nothing to rebuild is a 400 ─────────────────────────────
+    bare = create_agent_via_api(client, superuser_token_headers, name="RebuildBare")
+    drain_tasks()
+    bare_id = bare["id"]
+    bare_env = get_agent(client, superuser_token_headers, bare_id)[
+        "active_environment_id"
+    ]
+    delete_environment(client, superuser_token_headers, bare_env)
+
+    r = client.post(
+        f"{_BASE}/account/agents/{bare_id}/rebuild-env", headers=acc_headers
+    )
+    assert r.status_code == 400, (
+        f"an agent with no active environment must be a 400, got {r.status_code}: {r.text}"
+    )
+    assert "environment" in r.json()["detail"].lower()
+
+    # ── Phase 5: gating ──────────────────────────────────────────────────
+    # A ghost id is a 404 — the existence check runs before the rights gate.
+    ghost = str(uuid.uuid4())
+    assert client.post(
+        f"{_BASE}/account/agents/{ghost}/rebuild-env", headers=acc_headers
+    ).status_code == 404
+
+    # Somebody else's agent is the SAME 404: a 403 here would confirm the
+    # agent exists to a stranger.
+    other_user, other_headers = _make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, other_user["id"])
+    other_jwt, _ = bootstrap_account_token(
+        client, other_headers, machine_name="Rebuild Other Machine"
+    )
+    other_acc_headers = account_cli_headers(other_jwt)
+
+    r = client.post(
+        f"{_BASE}/account/agents/{agent_id}/rebuild-env", headers=other_acc_headers
+    )
+    assert r.status_code == 404, (
+        f"another owner's agent must be a no-leak 404, got {r.status_code}: {r.text}"
+    )
+
+    # A plain user JWT is not an account token.
+    assert client.post(
+        f"{_BASE}/account/agents/{agent_id}/rebuild-env",
+        headers=superuser_token_headers,
+    ).status_code == 401
+
+    # Build rights are re-checked per call: an owner demoted to agent-user
+    # gets a 403 on their OWN agent, which is unambiguously the rights gate
+    # rather than a missing resource.
+    other_agent = create_agent_via_api(client, other_headers, name="RebuildDemoted")
+    drain_tasks()
+    demote = client.patch(
+        f"{settings.API_V1_STR}/users/{other_user['id']}/role",
+        headers=superuser_token_headers,
+        json={"role": "agent-user"},
+    )
+    assert demote.status_code == 200, demote.text
+
+    r = client.post(
+        f"{_BASE}/account/agents/{other_agent['id']}/rebuild-env",
+        headers=other_acc_headers,
+    )
+    assert r.status_code == 403, (
+        f"rebuild-env by a demoted (agent-user) account token must be 403, "
+        f"got {r.status_code}: {r.text}"
     )
 
 

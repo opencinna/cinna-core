@@ -281,6 +281,9 @@ cinna connect agent-api --producer acme-orders --consumer crm-agent
 # Recover a wedged env / stuck producer API, or inspect what the runtime sees
 cinna agent restart-env acme-orders
 cinna agent show acme-orders --prompts
+
+# Different thing: make an old container pick up a platform feature it lacks
+cinna agent rebuild-env acme-orders --yes
 ```
 
 Each verb resolves `AGENT_REF` (name / slug / id) against the cached `cinna
@@ -294,6 +297,7 @@ to the same services the UI uses:
 | `cinna agent-api spec <agent> [-o file]` | `GET /account/agent-api/spec?agent_id=` | `AgentApiService.get_spec` | producer ownership (404 no-leak) |
 | `cinna agent-api call <agent> <path> [-X method] [--query k=v] [--json …]` | `POST /account/agent-api/call` | owner-preview proxy (`adapter.proxy_agent_api`, buffered) | producer ownership (404), `agent_api_enabled` (400), running env (503) |
 | `cinna agent restart-env <agent>` | `POST /account/agents/{id}/restart-env` | `EnvironmentService.restart_environment` | `can_build` (404 no-leak / 403); 400 if no active env. **Audited** (`CLI_ACCOUNT_ENV_RESTARTED`) |
+| `cinna agent rebuild-env <agent> [--yes]` | `POST /account/agents/{id}/rebuild-env` | `EnvironmentService.rebuild_environment` | `can_build` (404 no-leak / 403); 400 if no active env. **Audited** (`CLI_ACCOUNT_ENV_REBUILT`) |
 | `cinna agent show <agent> [--prompts]` | `GET /account/agents/{id}/inspect` | `Agent` fields + `CredentialsService.get_agent_credentials` (metadata only) | producer ownership (404 no-leak) |
 
 Behavioural notes:
@@ -324,6 +328,57 @@ Behavioural notes:
   or a stuck producer serving child, instead of the raw
   `environments/{id}/restart` escape hatch. It is `can_build`-gated and audited
   (`CLI_ACCOUNT_ENV_RESTARTED`); 400 if the agent has no active environment.
+- **`rebuild-env` is not a louder `restart-env`.** The two sit next to each other
+  in `--help` and are routinely confused, so state the difference plainly:
+
+  | | What it does | What it can fix |
+  |---|---|---|
+  | `restart-env` | Re-runs the **same image**. Seconds | A wedged container, a stuck serving child — anything where the code is right and the process is not |
+  | `rebuild-env` | Recreates the container and **replaces `/app/core` from the template**. Minutes | Everything above, **plus** the one thing a restart never can: a container built before a platform feature gaining that feature's routes |
+
+  A restart cannot add a route that was never built into the image. That is the
+  whole reason this verb exists — until it did, every surface that correctly
+  diagnosed a pre-feature container (`adapter_unsupported` on a skills refresh, an
+  `unsupported` plugin sync) could only tell the user to dig an environment UUID
+  out of the API and hand-roll `POST environments/<uuid>/rebuild`.
+
+  It wraps `EnvironmentService.rebuild_environment` — the same path as the UI's
+  rebuild menu item and the `/rebuild-env` session command. `can_build`-gated
+  (404 no-leak / 403), 400 if the agent has no active environment, audited as
+  **`CLI_ACCOUNT_ENV_REBUILT`**. It **blocks for the whole rebuild** (the client
+  raises its timeout to 30 minutes for this one call; returning early would hand
+  back a container mid-recreation).
+
+- **`--yes` skips one prompt, and only that one.** The command asks two separate
+  questions, and the flag answers exactly the first:
+
+  | Prompt | What it protects | `--yes` |
+  |---|---|---|
+  | "Rebuild …? This recreates the container and takes a few minutes." | The user's *time* — a heavier act than the restart beside it in `--help` | **skipped** |
+  | "Rebuild anyway?", after "this machine has N unsynced local change(s) / N conflict(s)" | The user's *unrecoverable local work* — the same D2 unsynced-changes guard `restart-env` runs, and it matters more here, because a rebuild re-materializes the backend scaffold over a freshly recreated container | **still asked** |
+
+  The asymmetry is deliberate. "Is it worth the minutes" is a question a script
+  can answer in advance; "may I overwrite edits that exist only on this machine"
+  is not, and a flag that silently disarmed it would make the destructive path
+  the convenient one. `restart-env` already behaves this way — it has no `--yes`
+  at all and always asks on a dirty workspace.
+
+  **Consequence for scripting:** `rebuild-env --yes` is *not* a general
+  non-interactive switch. On a dirty workspace it **aborts** rather than
+  proceeds — under `--no-input` the guard prompt takes its `False` default, and
+  with no terminal to ask, Click aborts. The way to script it safely is to leave
+  nothing for the guard to raise:
+
+  ```bash
+  cinna sync push --agent acme-orders    # settle local work first
+  cinna agent rebuild-env acme-orders --yes
+  ```
+
+  The response carries **`was_running`**, captured before the rebuild, because a
+  rebuild **restores the state it found**: an environment that was stopped comes
+  back stopped, successfully. Without that flag the CLI could not explain why a
+  rebuild that "worked" left the user with a container that still answers
+  nothing, so it prints a line saying so and how to start it.
 - **`show` answers "is what I edited actually live?"** It aggregates the agent's
   effective prompts (the DB fields synced verbatim into the runtime's prompt
   docs), enabled features, and connected credential metadata (name + type ONLY —
@@ -1034,6 +1089,7 @@ normal JWT auth.
 | `CLI_ACCOUNT_CONNECT_MCP` | Successful `cinna connect mcp` | consumer agent | `{connector_id, credential_id, ip}` |
 | `CLI_ACCOUNT_AGENT_API_ENABLED` | Successful `cinna agent-api enable` (and `--disable`) — the state-changing toggle. `refresh` / `spec` / `call` are diagnostic and **not** audited | producer agent | `{enabled, ip}` |
 | `CLI_ACCOUNT_ENV_RESTARTED` | Successful `cinna agent restart-env` — a build-rights state change (bounces the container). `agent show` is diagnostic and **not** audited | target agent | `{environment_id, ip}` |
+| `CLI_ACCOUNT_ENV_REBUILT` | Successful `cinna agent rebuild-env` — audited separately from the restart it is routinely confused with, because it goes further: it recreates the container and replaces `/app/core` from the template | target agent | `{environment_id, was_running, ip}` |
 | `CLI_ACCOUNT_API_PROXY_CALL` | Exclusion hit (`excluded_path` or `excluded_method`) on `api-proxy` — NOT on allowed calls or `malformed_path` | `None` | `{method, path, reason, account_token_id, ip}` |
 | `CLI_ACCOUNT_SCHEDULE_CREATED` | Successful `cinna agent schedule create` | target agent | `{schedule_id, schedule_type, ip}` |
 | `CLI_ACCOUNT_SCHEDULE_UPDATED` | Successful `cinna agent schedule update` (incl. toggle) | target agent | `{schedule_id, fields, ip}` |

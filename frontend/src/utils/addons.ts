@@ -69,7 +69,13 @@ export function invalidateAddons(
 }
 
 /**
- * Sentences for the two failures that belong to the *link*, not to a skill.
+ * Sentences for the failures that belong to the *link*, not to a skill.
+ *
+ * `not_materialized` and `unverified` are the two halves of "this row ships no
+ * skill": the index was read and the files are not there, or the index could
+ * not be read and nobody knows. They are separate codes because only the first
+ * is a defect — telling a user their install is broken because we could not
+ * reach the container would be the same overreach in the other direction.
  *
  * `orphan` deliberately does not name a marketplace: the service also emits a
  * degenerate orphan for an index entry with no `plugin_ref` at all, whose
@@ -92,6 +98,10 @@ const LINK_STATUS_COPY: Record<string, string> = {
     "Loaded by the engine but not installed — the next environment sync removes it.",
   source_unavailable:
     "Its source can no longer deliver files — it was removed, or this platform can no longer install it.",
+  not_materialized:
+    "Installed here, but its files never reached the environment — the model can't load it.",
+  unverified:
+    "Installed here. Whether its files reached the environment couldn't be checked.",
 }
 
 /** The sentence a skill contributed to the row's status, if one did. */

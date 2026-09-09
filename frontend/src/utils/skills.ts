@@ -21,7 +21,13 @@ import type { RowStatus } from "@/components/Common/ListRow"
 const INDEX_ERROR_COPY: Record<string, string> = {
   // Verbatim from the plan's copy list: a container built before agent skills
   // existed has no `/config/skills`, and no amount of refreshing adds one.
-  adapter_error: "Rebuild the environment to enable skills.",
+  adapter_unsupported: "Rebuild the environment to enable skills.",
+  // Not the rebuild sentence. This code now means a container that HAS the
+  // route and did not answer — a rebuild is minutes of downtime that cannot
+  // help, and sending people there was the mirror image of the CLI telling a
+  // pre-feature container to restart.
+  adapter_error:
+    "The environment isn't answering. Restart it, then refresh the skills.",
   env_not_running:
     "The environment is asleep. Refresh to wake it and re-read the skills.",
   parse_error: "Couldn't read the skills folder. Refresh to try again.",

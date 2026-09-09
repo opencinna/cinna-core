@@ -76,8 +76,9 @@ class AgentSkillsPublic(SQLModel):
     hash: str | None = None
     fetched_at: datetime | None = None
     #: Why the last read failed, if it did: ``env_not_running`` (asleep — a
-    #: refresh wakes it), ``adapter_error`` (unreachable, or a container built
-    #: before agent skills existed — needs a rebuild), ``parse_error``.
+    #: refresh wakes it), ``adapter_error`` (running but unreachable — a restart
+    #: recovers it), ``adapter_unsupported`` (a container built before agent
+    #: skills existed — only a rebuild adds the route), ``parse_error``.
     #: Cached rows are still returned alongside it.
     error: str | None = None
     #: Whether the caller may publish skills from this agent at all — the

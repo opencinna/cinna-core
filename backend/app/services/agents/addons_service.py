@@ -35,6 +35,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
@@ -228,9 +229,28 @@ class AddonsService:
                     rows.append(owner)
             owner.skills.append(skill)
 
+        # Can a row's EMPTY skill list be trusted as evidence of absence?
+        # Only when the index was actually read. ``None`` means we have nothing
+        # to compare against (no environment, or never read) and the row must
+        # stay silent rather than accuse an install that may well be fine.
+        if environment is None:
+            index_readable: bool | None = None
+        elif environment.skills_error is not None:
+            index_readable = False
+        elif environment.skills_parsed is None:
+            index_readable = None
+        else:
+            index_readable = True
+
         for row in rows:
             AddonsService._settle_status(
-                row, can_build=can_build, unfetchable=unfetchable
+                row,
+                can_build=can_build,
+                unfetchable=unfetchable,
+                index_readable=index_readable,
+                index_fetched_at=(
+                    environment.skills_fetched_at if environment else None
+                ),
             )
 
         rows.sort(key=lambda r: (_STATUS_RANK.get(r.status, 2), r.display_name.lower()))
@@ -411,6 +431,8 @@ class AddonsService:
         *,
         can_build: bool,
         unfetchable: set[uuid.UUID] | None = None,
+        index_readable: bool | None = None,
+        index_fetched_at: datetime | None = None,
     ) -> None:
         """Derive the row's status and its management capability.
 
@@ -419,6 +441,24 @@ class AddonsService:
         or revision, a marketplace plugin — often ships no skills at all, so
         waiting for a skill to complain would leave the most broken row in the
         list looking healthy.
+
+        ``index_readable`` carries the same reasoning one step further, for the
+        row that ships no skills because it never landed. It is a tri-state on
+        purpose: absence is only evidence when the index was read (``True``),
+        it is *unknown* while the read is failing (``False``), and it says
+        nothing at all before the first read (``None``).
+
+        Two conditions make an empty row's absence mean nothing, and both were
+        missing from the first cut of this rule:
+
+        * **A disabled link contributes no skills by design.** env-core builds
+          the index from ``active_plugins``, which skips every entry flagged
+          ``disabled`` — so a user turning a skill off (a supported verb) would
+          otherwise be told, permanently, that its files never arrived.
+        * **An index older than the link has not looked yet.** The addons read
+          is cache-only, so a fresh install is projected against whatever was
+          last fetched. Judging absence on a read that predates the install
+          reports every successful install as broken until the next refresh.
         """
         # A local skill has no link and therefore no toggles, no upgrade and
         # no uninstall — it is a folder in the workspace. Its verb is `Share`,
@@ -442,6 +482,39 @@ class AddonsService:
                 row.status_code = skill.error.code
                 return
 
+        # A skill row that contributes no skill did not land. The rule is
+        # restricted to ``kind="skill"`` because that row wraps exactly one
+        # SKILL.md by definition, so an empty list is a contradiction — whereas
+        # a plugin legitimately ships only commands or agents and contributes
+        # nothing here in perfect health. Local skill rows are built FROM an
+        # index entry and so always carry one; only a link row can be empty.
+        #
+        # Without this, an install whose files never reached the container read
+        # ``ok`` — the link was genuinely correct, and the row was reporting the
+        # link. The user was told the skill was fine while the model could not
+        # load it.
+        if (
+            row.kind == "skill"
+            and not row.skills
+            # A disabled link is absent from the index on purpose. Falling
+            # through leaves the row to the "off" tone it has always had, which
+            # the client only reaches because nothing flagged it first.
+            and not (row.link is not None and row.link.disabled)
+        ):
+            if index_readable and AddonsService._index_saw_link(
+                index_fetched_at, row.link
+            ):
+                row.status = STATUS_ERROR
+                row.status_code = "not_materialized"
+                return
+            if index_readable is False:
+                # The read failed, so we know the link and know nothing about
+                # the files. Claiming either "installed" or "missing" here would
+                # be inventing the half we could not see.
+                row.status = STATUS_WARNING
+                row.status_code = "unverified"
+                return
+
         for skill in row.skills:
             if skill.warning is not None:
                 row.status = STATUS_WARNING
@@ -450,6 +523,55 @@ class AddonsService:
 
         row.status = STATUS_OK
         row.status_code = None
+
+    @staticmethod
+    def _index_saw_link(
+        index_fetched_at: datetime | None,
+        link: AgentPluginLinkWithUpdateInfo | None,
+    ) -> bool:
+        """Was the index read recently enough to have seen this link's files?
+
+        The addons projection reads the CACHED index, so "no skills on this row"
+        is only evidence of absence if the cache was filled after the link last
+        changed. An install invalidates the client query and refetches
+        immediately, long before any refresh repopulates the cache — so without
+        this the common path (install a skill, watch the list update) reported
+        the install as broken.
+
+        Silent when the index has no timestamp, or the link has none: the
+        ordering cannot be established, so the absence cannot be claimed to
+        mean anything.
+
+        A row with **no link at all** is the opposite case and returns True.
+        The question this asks is whether some link change could postdate the
+        read; with no link there is no such event, so the read is trivially
+        current. Answering False there would conflate "no ordering information"
+        with "the index is stale" and suppress a real finding — and the install
+        race this guard exists for is specific to links, which every catalog
+        row has.
+        """
+        if index_fetched_at is None:
+            return False
+        if link is None:
+            return True
+        changed_at = getattr(link, "updated_at", None) or getattr(
+            link, "created_at", None
+        )
+        if changed_at is None:
+            return False
+        # Postgres can hand back naive datetimes depending on the column type,
+        # and comparing naive to aware raises. Both are written as UTC.
+        fetched = (
+            index_fetched_at.replace(tzinfo=UTC)
+            if index_fetched_at.tzinfo is None
+            else index_fetched_at
+        )
+        changed = (
+            changed_at.replace(tzinfo=UTC)
+            if changed_at.tzinfo is None
+            else changed_at
+        )
+        return fetched >= changed
 
     @staticmethod
     def _source_unavailable(

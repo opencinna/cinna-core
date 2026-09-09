@@ -282,6 +282,15 @@ class AgentStatusService:
         adapter = lifecycle_manager.get_adapter(environment)
 
         # ── Fetch file with metadata ──────────────────────────────────── #
+        # Deliberately no ``adapter_unsupported`` split here, unlike the skills
+        # and plugins fetches. That split reads a 404 from a reachable container
+        # as "this /app/core predates the route", which only holds for an
+        # endpoint that cannot 404 for any other reason.
+        # ``/workspace/download/{path}`` is path-parameterised and already
+        # spends its 404 on "no such file" — the adapter turns it into
+        # ``meta.exists=False``, the ``file_missing`` branch below — and the
+        # route has existed since the beginning, so there is no pre-feature
+        # container to detect here in the first place.
         try:
             meta, stream = await adapter.fetch_workspace_item_with_meta(cls.STATUS_FILE_PATH)
         except Exception as exc:

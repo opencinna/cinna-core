@@ -80,6 +80,7 @@ from app.models.events.security_event import (
     CLI_ACCOUNT_CREDENTIAL_UPDATED,
     CLI_ACCOUNT_DESKTOP_TOKEN_DENIED,
     CLI_ACCOUNT_DESKTOP_TOKEN_ISSUED,
+    CLI_ACCOUNT_ENV_REBUILT,
     CLI_ACCOUNT_ENV_RESTARTED,
     CLI_ACCOUNT_SCHEDULE_CREATED,
     CLI_ACCOUNT_SCHEDULE_DELETED,
@@ -1022,6 +1023,77 @@ class AccountCLIService:
             "environment_id": environment.id,
             "status": environment.status,
             "status_message": environment.status_message,
+        }
+
+    @staticmethod
+    async def rebuild_agent_env(
+        db: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        request: Request,
+    ) -> dict:
+        """Rebuild an agent's active environment — ``cinna agent rebuild-env``.
+
+        The verb this CLI was missing. A rebuild replaces the container's
+        ``/app/core`` from the template, which is the ONLY way a container built
+        before a feature grows that feature's routes — a restart re-runs the
+        same image. Until this existed, every surface that correctly diagnosed a
+        pre-feature container could only tell the user to dig an environment
+        UUID out of the addons projection and hand-roll
+        ``POST environments/<uuid>/rebuild``.
+
+        Wraps ``EnvironmentService.rebuild_environment`` (the same path as the
+        UI's rebuild menu item). Build-rights gated (``assert_can_build`` → 404
+        no-leak / 403); 400 if there is no active environment. Blocks until the
+        rebuild finishes — it takes minutes, and a caller that returned early
+        would be handing back a container mid-recreation.
+
+        ``was_running`` comes back FROM the rebuild, which restores the state it
+        found: an environment that was stopped is rebuilt and left stopped,
+        which is a success the CLI has to be able to explain rather than a
+        silent no-op. Taking a status reading here instead would be a second
+        opinion on the same question, and the rebuild's is the one that counts.
+
+        Emits ``CLI_ACCOUNT_ENV_REBUILT``.
+
+        Raises ``ValueError`` if the agent has no active environment (→ 400).
+        """
+        from app.services.agent_api.agent_api_service import AgentApiService
+        from app.services.environments.environment_service import EnvironmentService
+
+        # 404 no-leak existence/ownership check, then build-rights gate.
+        agent = AgentApiService.resolve_agent_only(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+        AgentService.assert_can_build(db, user, agent)
+
+        if not agent.active_environment_id:
+            raise ValueError("Agent has no active environment to rebuild.")
+
+        environment, was_running = await EnvironmentService.rebuild_environment(
+            session=db, env_id=agent.active_environment_id
+        )
+
+        await SecurityEventService.create_event(
+            session=db,
+            user_id=user.id,
+            data=SecurityEventCreate(
+                agent_id=agent_id,
+                event_type=CLI_ACCOUNT_ENV_REBUILT,
+                severity="medium",
+                details={
+                    "environment_id": str(environment.id),
+                    "was_running": was_running,
+                    "ip": client_ip(request),
+                },
+            ),
+        )
+
+        return {
+            "environment_id": environment.id,
+            "status": environment.status,
+            "status_message": environment.status_message,
+            "was_running": was_running,
         }
 
     @staticmethod

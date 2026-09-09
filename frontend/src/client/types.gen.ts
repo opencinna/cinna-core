@@ -412,6 +412,21 @@ export type AccountDesktopTokenResponse = {
 };
 
 /**
+ * Result of ``cinna agent rebuild-env`` — the env's post-rebuild state.
+ *
+ * Carries ``was_running`` because the rebuild deliberately restores the state
+ * it found: an environment that was stopped comes back stopped, successfully.
+ * Without that flag the CLI cannot tell the user why a rebuild that "worked"
+ * left them with a container they still have to start.
+ */
+export type AccountRebuildEnvResult = {
+    environment_id: string;
+    status: string;
+    status_message?: (string | null);
+    was_running?: boolean;
+};
+
+/**
  * Result of ``cinna agent restart-env`` — the env's post-restart state.
  */
 export type AccountRestartEnvResult = {
@@ -5605,6 +5620,7 @@ export type PluginSyncResponse = {
     failed_syncs?: number;
     plugin_results?: Array<PluginInstallResult>;
     partial_failures?: boolean;
+    unsupported_syncs?: number;
 };
 
 export type PrivateUserCreate = {
@@ -9107,6 +9123,12 @@ export type CliAccountRestartEnvData = {
 };
 
 export type CliAccountRestartEnvResponse = (AccountRestartEnvResult);
+
+export type CliAccountRebuildEnvData = {
+    agentId: string;
+};
+
+export type CliAccountRebuildEnvResponse = (AccountRebuildEnvResult);
 
 export type CliAccountInspectAgentData = {
     agentId: string;

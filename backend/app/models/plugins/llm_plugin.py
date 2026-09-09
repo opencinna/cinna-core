@@ -504,7 +504,12 @@ class EnvironmentSyncStatus(SQLModel):
 
     environment_id: uuid.UUID
     instance_name: str
-    status: str  # "success", "error", "activated_and_synced", "skipped"
+    # "unsupported" is not a flavour of "error": the container answered, it
+    # simply has no plugin endpoint because its core predates one. The write to
+    # the link row succeeded either way — what differs is the remedy, and a
+    # client that cannot tell them apart can only guess (and did: it told
+    # pre-feature containers to restart, which can never add the route).
+    status: str  # "success", "error", "unsupported", "activated_and_synced", "skipped"
     error_message: Optional[str] = None
     was_suspended: bool = False
     # Per-plugin install results from the container install routine for THIS
@@ -535,3 +540,8 @@ class PluginSyncResponse(SQLModel):
     # operation can still be `success=True` (env-level) while having
     # partial_failures=True (plugin-level).
     partial_failures: bool = False
+    # Environments that could not take the manifest because their core predates
+    # the endpoint. Counted apart from `failed_syncs` so a client can name the
+    # only remedy that works (rebuild) instead of the one that never could
+    # (restart) — and so it can say the link write itself was fine.
+    unsupported_syncs: int = 0

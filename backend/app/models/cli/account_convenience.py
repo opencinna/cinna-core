@@ -156,6 +156,21 @@ class AccountRestartEnvResult(SQLModel):
     status_message: str | None = None
 
 
+class AccountRebuildEnvResult(SQLModel):
+    """Result of ``cinna agent rebuild-env`` — the env's post-rebuild state.
+
+    Carries ``was_running`` because the rebuild deliberately restores the state
+    it found: an environment that was stopped comes back stopped, successfully.
+    Without that flag the CLI cannot tell the user why a rebuild that "worked"
+    left them with a container they still have to start.
+    """
+
+    environment_id: uuid.UUID
+    status: str
+    status_message: str | None = None
+    was_running: bool = False
+
+
 class AccountStatusRefreshCommandBody(SQLModel):
     """Set an agent's status-refresh pre-command — ``cinna agent status set-command``.
 

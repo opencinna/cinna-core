@@ -163,7 +163,8 @@ class AgentAddonsPublic(SQLModel):
     addons: list[AddonPublic] = []
     counts: AddonCounts = AddonCounts()
     #: Why the skill half is missing or stale (``env_not_running`` /
-    #: ``adapter_error`` / ``parse_error``). The plugin half is returned
+    #: ``adapter_error`` / ``adapter_unsupported`` / ``parse_error``). The
+    #: plugin half is returned
     #: regardless: a tab that blanks because the environment is asleep is a
     #: worse answer than a tab that says so.
     skills_error: str | None = None

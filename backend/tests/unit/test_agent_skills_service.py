@@ -20,10 +20,13 @@ import pytest
 from app.models.environments.environment import AgentEnvironment
 from app.services.agents.agent_skills_service import (
     ERROR_ADAPTER_ERROR,
+    ERROR_ADAPTER_UNSUPPORTED,
     ERROR_ENV_NOT_RUNNING,
+    SLEEPING_STATUSES,
     AgentSkillsService,
     SkillsIndexUnavailableError,
 )
+from app.services.environments.adapters.base import EndpointUnsupportedError
 
 
 def _environment(**overrides) -> AgentEnvironment:
@@ -335,6 +338,95 @@ class TestFetchIndex:
             await AgentSkillsService.fetch_index(env, db_session=session)
 
         assert env.skills_error == ERROR_ENV_NOT_RUNNING
+
+    @pytest.mark.anyio
+    async def test_a_container_with_no_such_route_is_adapter_unsupported(
+        self, stub_adapter
+    ):
+        # The container answered — it simply has no ``/config/skills``. That is
+        # a rebuild, not a restart, and the reason code is the only thing that
+        # tells the card and the CLI which of the two to name.
+        env = _environment(status="running")
+        stub_adapter(_FakeAdapter(error=EndpointUnsupportedError("/config/skills")))
+        session = _FakeSession(env)
+
+        with pytest.raises(SkillsIndexUnavailableError) as excinfo:
+            await AgentSkillsService.fetch_index(env, db_session=session)
+
+        assert env.skills_error == ERROR_ADAPTER_UNSUPPORTED
+        # The reason travels on the exception too — callers that never touch
+        # the row (the CLI, the refresh route) read it from there.
+        assert str(excinfo.value).startswith(ERROR_ADAPTER_UNSUPPORTED)
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("sleeping", sorted(SLEEPING_STATUSES))
+    async def test_unsupported_outranks_a_sleeping_environment(
+        self, stub_adapter, sleeping
+    ):
+        # THE ordering guard. ``EndpointUnsupportedError`` is classified BEFORE
+        # the status branch on purpose: a pre-feature container that also
+        # happens to be suspended still needs a rebuild, and "refresh to wake
+        # it" walks the user around a loop the wake can never break. Move the
+        # branch below the status check and this is the test that fails.
+        env = _environment(status=sleeping)
+        stub_adapter(_FakeAdapter(error=EndpointUnsupportedError("/config/skills")))
+        session = _FakeSession(env)
+
+        with pytest.raises(SkillsIndexUnavailableError):
+            await AgentSkillsService.fetch_index(env, db_session=session)
+
+        assert env.skills_error == ERROR_ADAPTER_UNSUPPORTED, (
+            f"a {sleeping} container that predates the route still needs a "
+            "rebuild — 'wake it and refresh' is the one remedy that cannot work"
+        )
+
+    @pytest.mark.anyio
+    async def test_a_non_404_http_failure_is_still_an_adapter_error(
+        self, stub_adapter
+    ):
+        # The exception the docker adapter raises for a 500: a container that
+        # HAS the endpoint and failed inside it. Sharing a code with the
+        # unsupported case is what made the card tell an unreachable
+        # environment to rebuild.
+        env = _environment(status="running")
+        stub_adapter(
+            _FakeAdapter(
+                error=Exception(
+                    "Failed to get skills index: Server error '500 Internal "
+                    "Server Error' for url 'http://agent-x:8000/config/skills'"
+                )
+            )
+        )
+        session = _FakeSession(env)
+
+        with pytest.raises(SkillsIndexUnavailableError):
+            await AgentSkillsService.fetch_index(env, db_session=session)
+
+        assert env.skills_error == ERROR_ADAPTER_ERROR
+        assert env.skills_error != ERROR_ADAPTER_UNSUPPORTED
+
+    @pytest.mark.anyio
+    async def test_an_unsupported_read_that_starts_answering_clears_the_banner(
+        self, stub_adapter
+    ):
+        # A rebuild is the fix, and after it the code must not survive — a
+        # sticky ``adapter_unsupported`` would keep asking for the rebuild
+        # that already happened.
+        env = _environment(status="running")
+        adapter = _FakeAdapter(error=EndpointUnsupportedError("/config/skills"))
+        stub_adapter(adapter)
+        session = _FakeSession(env)
+
+        with pytest.raises(SkillsIndexUnavailableError):
+            await AgentSkillsService.fetch_index(env, db_session=session)
+        assert env.skills_error == ERROR_ADAPTER_UNSUPPORTED
+
+        adapter._error = None
+        adapter._payload = _payload([_reported()])
+        await AgentSkillsService.fetch_index(env, db_session=session)
+
+        assert env.skills_error is None
+        assert [e["name"] for e in env.skills_parsed] == ["pdf-report"]
 
     @pytest.mark.anyio
     async def test_the_adapter_is_called_even_while_the_env_is_still_activating(

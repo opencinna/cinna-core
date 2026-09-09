@@ -10,6 +10,7 @@ import docker
 from docker.models.containers import Container
 
 from .base import (
+    EndpointUnsupportedError,
     EnvironmentAdapter,
     LocalFilesAccessInterface,
     EnvInitConfig,
@@ -546,6 +547,18 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
                 response.raise_for_status()
                 body = response.json()
                 return body.get("results", [])
+        except httpx.HTTPStatusError as e:
+            # Same reasoning as ``get_skills_index``: a 404 from a container
+            # that answered is "your core predates this route", which only a
+            # rebuild fixes. Every other status came from inside the endpoint.
+            if e.response.status_code == 404:
+                logger.info(
+                    "plugin manifest unsupported on env %s (pre-feature /app/core)",
+                    self.env_id,
+                )
+                raise EndpointUnsupportedError("/config/plugins") from e
+            logger.error(f"Failed to set plugins: {e}")
+            raise Exception(f"Failed to set plugins: {e}")
         except httpx.HTTPError as e:
             logger.error(f"Failed to set plugins: {e}")
             raise Exception(f"Failed to set plugins: {e}")
@@ -608,9 +621,13 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
         """Fetch the agent's skill index from env-core.
 
         A container built before this feature has no ``/config/skills`` route
-        and answers 404; that surfaces here as an exception, which the cache
-        service records as ``adapter_error`` — the signal behind the card's
-        "rebuild the environment to enable skills" copy.
+        and answers 404. That is raised as
+        :class:`~app.services.environments.adapters.base.EndpointUnsupportedError`
+        rather than a flat exception, because it is the one failure here whose
+        remedy is a *rebuild* — the cache service turns it into
+        ``adapter_unsupported`` so the card and the CLI can say so. Collapsing
+        it into the generic error is what made every surface tell the user to
+        restart a container that could never grow the route.
         """
         try:
             async with httpx.AsyncClient() as client:
@@ -621,6 +638,18 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
                 )
                 response.raise_for_status()
                 return response.json()
+        except httpx.HTTPStatusError as e:
+            # Only 404 means "no such route". Any other status is a container
+            # that HAS the endpoint and failed inside it — a rebuild is not the
+            # fix for that, so it must not borrow the rebuild copy.
+            if e.response.status_code == 404:
+                logger.info(
+                    "skills index unsupported on env %s (pre-feature /app/core)",
+                    self.env_id,
+                )
+                raise EndpointUnsupportedError("/config/skills") from e
+            logger.warning(f"Failed to get skills index: {e}")
+            raise Exception(f"Failed to get skills index: {e}")
         except httpx.HTTPError as e:
             logger.warning(f"Failed to get skills index: {e}")
             raise Exception(f"Failed to get skills index: {e}")

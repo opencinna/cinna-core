@@ -60,7 +60,7 @@ correct.
 | `link` | `AgentPluginLinkWithUpdateInfo \| None` | Every non-local row. Carries the per-mode toggles, `has_update` and `skill_package_id`, so row mutations stay on the existing plugin routes |
 | `skills` | `list[AddonSkillPublic]` | Local row: itself. Catalog row: its one skill. Plugin row: every skill it ships. Empty when the index could not be read |
 | `status` | `str` | `ok` \| `warning` \| `error` |
-| `status_code` | `str \| None` | The offending skill's issue code, or `orphan` / `source_unavailable` |
+| `status_code` | `str \| None` | The offending skill's issue code, or a link-level code: `orphan` / `source_unavailable` / `not_materialized` / `unverified`. Client sentences for the link-level four live in `frontend/src/utils/addons.ts::LINK_STATUS_COPY` |
 | `orphan` | `bool` | `False` |
 | `can_share` | `bool` | `False`. Local skills only |
 | `can_manage` | `bool` | `False` |
@@ -144,8 +144,30 @@ computed **first**, before any early return, so it is always set. Then:
 1. `orphan` → `error` / `"orphan"`
 2. `_source_unavailable` → `error` / `"source_unavailable"`
 3. first skill with an `error` → `error` / that code
-4. first skill with a `warning` → `warning` / that code
-5. otherwise `ok` / `None`
+4. `row.kind == "skill" and not row.skills` → depends on `index_readable`
+   (below); `kind="plugin"` skips this step entirely
+5. first skill with a `warning` → `warning` / that code
+6. otherwise `ok` / `None`
+
+#### `index_readable` — a tri-state, because absence is only sometimes evidence
+
+`_settle_status(row, *, can_build, unfetchable=None, index_readable=None)`.
+`project()` derives the flag once, from the environment, and passes the same
+value to every row:
+
+| Condition | `index_readable` | An empty `kind="skill"` row becomes |
+|-----------|------------------|-------------------------------------|
+| `environment is None` | `None` | untouched — falls through to `ok` |
+| `environment.skills_error is not None` | `False` | `warning` / `"unverified"` |
+| `environment.skills_parsed is None` | `None` | untouched — no read has happened |
+| otherwise | `True` | `error` / `"not_materialized"` |
+
+The rule is restricted to `kind="skill"` because such a row wraps exactly one
+`SKILL.md` by definition, so an empty list is a contradiction — whereas a plugin
+legitimately ships only commands or agents. Local skill rows are built *from* an
+index entry and always carry one, so only a link row can be empty. Before this,
+an install whose files never reached the container read `ok`: the link was
+correct and the row was reporting the link.
 
 `_source_unavailable(row, unfetchable)`:
 

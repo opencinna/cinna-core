@@ -78,6 +78,11 @@ CLI_ACCOUNT_AGENT_API_ENABLED = "CLI_ACCOUNT_AGENT_API_ENABLED"
 # and are not audited (mirrors ``_refresh`` / spec reads above).
 CLI_ACCOUNT_ENV_RESTARTED = "CLI_ACCOUNT_ENV_RESTARTED"
 
+# Rebuilding goes further than restarting — it replaces ``/app/core`` from the
+# template and recreates the container — so it is audited on the same grounds,
+# separately from the restart it is routinely confused with.
+CLI_ACCOUNT_ENV_REBUILT = "CLI_ACCOUNT_ENV_REBUILT"
+
 # ── Account-CLI schedule + status management ──────────────────────────
 # Schedule create / update / delete / run are discrete state changes to an
 # agent's automatic-execution config (run also spends tokens / spins a session),

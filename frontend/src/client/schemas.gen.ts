@@ -2905,6 +2905,45 @@ consume — same field names, same semantics, same refresh endpoint — plus
 without a second round-trip to \`\`/desktop-auth/userinfo\`\`.`
 } as const;
 
+export const AccountRebuildEnvResultSchema = {
+    properties: {
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        status_message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Message'
+        },
+        was_running: {
+            type: 'boolean',
+            title: 'Was Running',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['environment_id', 'status'],
+    title: 'AccountRebuildEnvResult',
+    description: `Result of \`\`cinna agent rebuild-env\`\` — the env's post-rebuild state.
+
+Carries \`\`was_running\`\` because the rebuild deliberately restores the state
+it found: an environment that was stopped comes back stopped, successfully.
+Without that flag the CLI cannot tell the user why a rebuild that "worked"
+left them with a container they still have to start.`
+} as const;
+
 export const AccountRestartEnvResultSchema = {
     properties: {
         environment_id: {
@@ -22795,6 +22834,11 @@ export const PluginSyncResponseSchema = {
             type: 'boolean',
             title: 'Partial Failures',
             default: false
+        },
+        unsupported_syncs: {
+            type: 'integer',
+            title: 'Unsupported Syncs',
+            default: 0
         }
     },
     type: 'object',

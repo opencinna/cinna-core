@@ -193,6 +193,12 @@ export function AgentAddonsTab({ agentId }: AgentAddonsTabProps) {
                           {env.status === "success" ||
                           env.status === "activated_and_synced" ? (
                             <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
+                          ) : env.status === "unsupported" ? (
+                            // The link write worked and the container is too
+                            // old to take it: a rebuild, not a retry. Warning
+                            // tone, because the backend deliberately keeps this
+                            // out of `failed_syncs`.
+                            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
                           ) : (
                             <XCircle className="h-4 w-4 shrink-0 text-destructive" />
                           )}
@@ -205,7 +211,13 @@ export function AgentAddonsTab({ agentId }: AgentAddonsTabProps) {
                           )}
                         </div>
                         {env.error_message && (
-                          <span className="max-w-[200px] truncate text-xs text-destructive">
+                          <span
+                            className={`max-w-[200px] truncate text-xs ${
+                              env.status === "unsupported"
+                                ? "text-warning"
+                                : "text-destructive"
+                            }`}
+                          >
                             {env.error_message}
                           </span>
                         )}

@@ -61,6 +61,27 @@ The resilient system removes the backend cache entirely from the hot path. Plugi
 4. A `PluginSyncResponse` is returned with per-environment status plus `plugin_results` (per-plugin install outcomes) and `partial_failures` (true when any plugin failed).
 5. Sync transport errors show a detailed dialog; per-plugin install failures are shown inline in the same dialog and also surface as a live amber banner (via `PLUGIN_SYNC_WARNING` realtime event).
 
+### A pre-feature environment is not a failed sync
+
+An environment whose `/app/core` predates the plugin endpoint answers **404** to
+the manifest push. The adapter raises `EndpointUnsupportedError` (only for a 404
+— see [agent_skills](../agent_skills/agent_skills_tech.md)), and the sync records
+it as its own outcome rather than an error:
+
+- `EnvironmentSyncStatus.status = "unsupported"` (beside `success` / `error` /
+  `activated_and_synced` / `skipped`), with the sentence "This environment was
+  built before this feature existed. Rebuild it to pick the change up."
+- counted in **`unsupported_syncs`**, **not** in `failed_syncs`
+- so `success` stays **`True`** — the write to the link row genuinely succeeded,
+  and there is nothing here to retry
+
+The separation exists so a client can name the remedy that works. Lumped in with
+transport failures, this state kept drawing "restart the environment and try
+again" — an instruction to repeat something that already worked, followed by an
+action no number of repetitions can change. The only fix is a rebuild
+(`cinna agent rebuild-env <agent>` / `/rebuild-env`), because a restart re-runs
+the same image and the missing route is in the image.
+
 ### Reinstall on Rebuild / Self-Heal
 When a container is rebuilt (or newly created), `_setup_new_container` calls `_sync_plugins_to_environment` after installing Python deps and system packages — exactly like the library install step. The container reads the persisted `manifest.json`, re-ensures every plugin at its pinned commit (skipping those already present via `.cinna_plugin_ref` idempotency marker), and regenerates `settings.json`. A rebuilt container deterministically ends with correct plugin files, sourced from the bind-mounted manifest.
 

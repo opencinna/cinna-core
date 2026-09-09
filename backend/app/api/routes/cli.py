@@ -66,6 +66,7 @@ from app.models.cli.account_convenience import (
     AccountCredentialShareBody,
     AccountCredentialTypesPublic,
     AccountCredentialUpdateBody,
+    AccountRebuildEnvResult,
     AccountRestartEnvResult,
     AccountStatusRefreshCommandBody,
     ContextPackageVersionPublic,
@@ -1083,6 +1084,46 @@ async def account_restart_env(
     except AgentApiError as e:  # resolve_agent_only → 404 no-leak
         raise HTTPException(status_code=e.status_code, detail=e.message)
     except AgentEnvironmentError as e:  # dangling env / lifecycle restart failure
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/account/agents/{agent_id}/rebuild-env",
+    response_model=AccountRebuildEnvResult,
+)
+async def account_rebuild_env(
+    agent_id: uuid.UUID,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Rebuild an agent's active environment (``cinna agent rebuild-env``).
+
+    The sibling of ``restart-env``, and not a synonym for it: a restart re-runs
+    the same image, a rebuild replaces ``/app/core`` from the template. That
+    distinction is the whole reason this route exists — a container built before
+    a feature can only gain that feature's routes here, and until this existed
+    the only way to do it from the CLI was the raw
+    ``environments/{id}/rebuild`` escape hatch with a UUID the user had to go
+    and find. Build-rights gated (``assert_can_build`` → 404 no-leak / 403);
+    400 if there is no active environment. Blocks for the whole rebuild.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+    from app.services.agents.agent_service import CanBuildError
+    from app.services.environments.environment_service import AgentEnvironmentError
+
+    try:
+        return await AccountCLIService.rebuild_agent_env(
+            db=db, user=account_ctx.user, agent_id=agent_id, request=request
+        )
+    except CanBuildError as e:
+        _raise_can_build_http(e)
+    except AgentApiError as e:  # resolve_agent_only → 404 no-leak
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except AgentEnvironmentError as e:  # dangling env / lifecycle rebuild failure
         raise HTTPException(status_code=e.status_code, detail=e.message)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

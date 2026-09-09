@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 from sqlmodel import Session, select
 from sqlalchemy.orm.attributes import flag_modified
-from typing import Optional
+from typing import NamedTuple, Optional
 from datetime import UTC, datetime, timedelta
 
 from app.models.environments.environment import AgentEnvironment
@@ -38,6 +38,22 @@ logger = logging.getLogger(__name__)
 # the id so a future re-failure re-emails. Reset on process restart is
 # acceptable (at most one extra email after deploy).
 _critical_warned_env_ids: set[str] = set()
+
+
+class RebuildOutcome(NamedTuple):
+    """What a completed rebuild has to tell its caller.
+
+    Named rather than returned bare because the value is a *state reading*, not
+    a verdict: a bare ``bool`` out of ``rebuild_environment`` reads as "it
+    worked", and a reader who assumes that is wrong in exactly the case the
+    flag exists for. Failure is signalled by raising, so there is no success
+    field here and must never be one — it would carry no information.
+    """
+
+    #: Whether the container was running when the rebuild started. The rebuild
+    #: restores the state it found, so this is what separates "rebuilt and left
+    #: stopped, as it was" from "should have come back up and did not".
+    was_running: bool
 
 
 def _set_status(
@@ -1357,7 +1373,7 @@ class EnvironmentLifecycleManager:
         db_session: Session,
         environment: AgentEnvironment,
         agent: Agent
-    ) -> bool:
+    ) -> RebuildOutcome:
         """
         Rebuild environment with updated core files while preserving workspace.
 
@@ -1379,7 +1395,10 @@ class EnvironmentLifecycleManager:
             agent: Agent instance
 
         Returns:
-            True if rebuild successful
+            A :class:`RebuildOutcome` carrying ``was_running``. It is handed out
+            from here rather than probed by the caller beforehand because this
+            is the reading the rebuild itself branched on, so the two can never
+            disagree about a container that started or stopped in between.
         """
         from app.services.events.event_service import event_service
         from app.models.events.event import EventType
@@ -1648,7 +1667,7 @@ class EnvironmentLifecycleManager:
                 )
 
             logger.info(f"Environment {environment.id} rebuilt successfully")
-            return True
+            return RebuildOutcome(was_running=was_running)
 
         except Exception as e:
             # Update status to error

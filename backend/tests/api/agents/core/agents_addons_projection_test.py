@@ -44,6 +44,10 @@ Scenarios:
      from; the same repository under that name does adopt, across the ``.git``
      spelling difference; an install with no recorded repository is never
      adopted at all; and the age guard still stands on its own.
+ 10. A row that ships no skill: the tri-state behind ``not_materialized`` /
+     ``unverified``, and the boundary that keeps a healthy plugin row green
+     on the same evidence. The decision table itself is unit-tested in
+     ``tests/unit/test_addons_settle_status.py``.
 
 Test seam:
   ``patch_environment_adapter`` (the agent-domain lifecycle-manager fixture) is
@@ -1693,3 +1697,135 @@ def test_a_marketplace_registered_after_the_install_never_adopts_it(
     )
     row = addons_by_name(get_agent_addons(client, headers, agent_id))["reporting"]
     assert row["status_code"] == "source_unavailable"
+
+
+# ── Scenario 10: a skill row that ships no skill ───────────────────────────
+
+
+def test_a_skill_row_that_ships_no_skill_is_not_healthy(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+) -> None:
+    """
+    A catalog install whose files never reached the container used to read
+    ``ok``: the link was genuinely correct, and the row was reporting the link.
+    The user was told the skill was fine while the model could not load it.
+
+    The rule that fixes it needs a tri-state, because an absence is only
+    evidence when somebody looked — and it must stop at ``kind="skill"``, since
+    a plugin legitimately ships commands or agents and no skills at all.
+
+    Phases:
+      1. A publisher publishes ``pdf-report``; a consumer installs it and a
+         marketplace plugin, and owns one local skill of its own.
+      2. The index is read and reports ONLY the local skill: the catalog row
+         did not land → ``error`` / ``not_materialized``, while the plugin row
+         beside it stays ``ok`` on the same evidence.
+      3. The index stops being readable → the same row drops to ``warning`` /
+         ``unverified``: we know the link and nothing about the files, so
+         neither "installed" nor "missing" may be claimed.
+      4. The files arrive → the row goes green, and the local skill was never
+         touched by any of it.
+
+    The third state — ``None``, "nobody looked" — is deliberately not asserted
+    here, because an agent that HAS an environment cannot be in it: the
+    env-start sweep reads the index once and persists an empty list, which is a
+    read. It is reachable only with no environment at all, which
+    ``test_an_unreadable_index_never_takes_the_plugin_rows_with_it`` covers,
+    and directly in ``tests/unit/test_addons_settle_status.py``.
+
+    The catalog link here is **enabled** throughout, and every index read is
+    taken AFTER the install. Both matter: a disabled link is absent from the
+    index by construction, and a cached index older than the link has not
+    looked yet — the rule treats each as "this absence means nothing". Those
+    two conditions belong to a separate in-flight fix and are not asserted
+    here; this scenario covers the case where neither applies.
+    """
+    # ── Phase 1: a consumer with a catalog skill, a plugin and a folder ───
+    publisher, pub_headers = make_developer(client, superuser_token_headers)
+    pub_agent, pub_env = make_agent_with_env(client, pub_headers, "Materialise-Pub")
+    write_skill(pub_env, "pdf-report", description="Renders a PDF report.")
+    publish_skill(
+        client, pub_headers, pub_agent, "pdf-report", version="1.0",
+        visibility="public",
+    )
+    package_uuid = list_skill_catalog(client, pub_headers)[0]["id"]
+
+    consumer, con_headers = make_developer(client, superuser_token_headers)
+    con_agent, con_env = make_agent_with_env(client, con_headers, "Materialise-Con")
+    adapter = _install_adapter(patch_environment_adapter)
+
+    marketplace = create_marketplace(client, superuser_token_headers)
+    plugin = seed_marketplace_plugin(
+        client, superuser_token_headers, marketplace["id"], name="reporting"
+    )
+    install_agent_plugin(client, con_headers, con_agent, plugin["id"])
+    install_skill(client, con_headers, con_agent, package_uuid)
+    write_skill(con_env, "zeta-local", description="Files the weekly note.")
+
+    # ── Phase 2: the index is read and the skill is not in it ─────────────
+    # The local folder is here so the list is not trivially empty: the rule
+    # must fire on the row that is missing while its neighbours are present,
+    # not merely on "the index reported nothing".
+    adapter.skills_index = _index([_row("zeta-local")], tree_hash="hash-2")
+    payload = refresh_agent_addons(client, con_headers, con_agent)
+    assert payload["skills_error"] is None
+
+    rows = addons_by_name(payload)
+    assert rows["pdf-report"]["status"] == "error"
+    assert rows["pdf-report"]["status_code"] == "not_materialized", (
+        "the index was read and this skill is not in it — the link is correct "
+        "and the files are not there"
+    )
+    assert skill_names(rows["pdf-report"]) == []
+
+    assert rows["reporting"]["status"] == "ok", (
+        "THE regression guard: a plugin ships commands or agents and often no "
+        "skills at all, in perfect health. If the rule leaked past "
+        "kind='skill' every healthy plugin row in the list would turn red"
+    )
+    assert rows["reporting"]["status_code"] is None
+    assert rows["zeta-local"]["status"] == "ok"
+
+    # ── Phase 3: the read fails → unknown, not missing ────────────────────
+    async def _unreachable():
+        raise RuntimeError("Failed to get skills index: connection refused")
+
+    adapter.get_skills_index = _unreachable
+
+    payload = refresh_agent_addons(client, con_headers, con_agent)
+    assert payload["skills_error"] == "adapter_error"
+
+    rows = addons_by_name(payload)
+    assert rows["pdf-report"]["status"] == "warning"
+    assert rows["pdf-report"]["status_code"] == "unverified", (
+        "the read failed, so we know the link and know nothing about the "
+        "files — claiming either would be inventing the half we could not see"
+    )
+    assert rows["reporting"]["status"] == "ok"
+
+    # ── Phase 4: the files arrive ─────────────────────────────────────────
+    async def _answers():
+        return _index(
+            [
+                _row("zeta-local"),
+                _row(
+                    "pdf-report",
+                    source="catalog",
+                    plugin_ref="cinna-skills/pdf-report",
+                    path="plugins/cinna-skills/pdf-report/skills/pdf-report",
+                ),
+            ],
+            tree_hash="hash-3",
+        )
+
+    adapter.get_skills_index = _answers
+
+    payload = refresh_agent_addons(client, con_headers, con_agent)
+    assert payload["skills_error"] is None
+    rows = addons_by_name(payload)
+    assert rows["pdf-report"]["status"] == "ok"
+    assert rows["pdf-report"]["status_code"] is None
+    assert skill_names(rows["pdf-report"]) == ["pdf-report"]
+    assert rows["zeta-local"]["status"] == "ok"

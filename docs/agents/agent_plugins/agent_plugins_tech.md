@@ -143,6 +143,7 @@ class PluginSource(str, Enum):
 |-------|---------|
 | `plugin_results` | `list[PluginInstallResult]` from the container install for this env |
 | `partial_failures` | True when any `plugin_results` entry is `"failed"` |
+| `status` | `"success"` \| `"error"` \| `"unsupported"` \| `"activated_and_synced"` \| `"skipped"`. `"unsupported"` is **not** a flavour of `"error"`: the container answered and simply has no plugin endpoint (`EndpointUnsupportedError`, raised on a 404 only). The link write succeeded either way; what differs is the remedy — rebuild, never restart |
 
 **`PluginSyncResponse`** — extended (non-table)
 
@@ -150,6 +151,7 @@ class PluginSource(str, Enum):
 |-------|---------|
 | `plugin_results` | Aggregated, deduplicated `failed` entries across all synced envs |
 | `partial_failures` | True when any plugin failed (env transport may still have succeeded) |
+| `unsupported_syncs` | `int`, default `0`. Environments whose core predates the endpoint. Counted apart from `failed_syncs` so `success` stays `True` and a client can name the rebuild instead of the restart. `message` gains "(N need rebuilding to pick this up)" |
 
 ## API Endpoints
 

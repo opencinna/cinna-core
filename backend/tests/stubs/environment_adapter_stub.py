@@ -10,6 +10,7 @@ from typing import AsyncIterator
 from datetime import datetime, UTC
 
 from app.services.environments.adapters.base import (
+    EndpointUnsupportedError,
     EnvironmentAdapter,
     EnvInitConfig,
     File,
@@ -41,6 +42,19 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
         self.config_set: dict = {}
         self.uploaded_files: list[File] = []
         self.agent_api_proxy_calls: list[dict] = []
+        # env-core routes this container does NOT have — the shape of a
+        # container whose ``/app/core`` was copied from the template before
+        # the route existed. Add "/config/skills" or "/config/plugins" to
+        # simulate a pre-feature container: the adapter then raises
+        # ``EndpointUnsupportedError``, exactly as the Docker adapter does on a
+        # 404, rather than a generic failure (which is a DIFFERENT condition
+        # with a different remedy — see tests/unit/
+        # test_adapter_endpoint_unsupported.py).
+        self.unsupported_endpoints: set[str] = set()
+
+    def _require_endpoint(self, endpoint: str) -> None:
+        if endpoint in getattr(self, "unsupported_endpoints", ()):
+            raise EndpointUnsupportedError(endpoint)
 
     # --- Lifecycle ---
 
@@ -149,6 +163,7 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
     async def set_plugins(self, manifest: dict) -> list[dict]:
         # New contract: returns a per-plugin install result list. The stub
         # reports every manifest entry as installed (no real git fetch).
+        self._require_endpoint("/config/plugins")
         self.plugins_set = manifest
         results = []
         for entry in (manifest.get("plugins") or []):
@@ -168,6 +183,7 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
         # Scenario tests set ``skills_index`` to drive the skills cache; the
         # default is "the agent has no skills", which is the shape an agent
         # with no ``skills/`` folder produces.
+        self._require_endpoint("/config/skills")
         return getattr(self, "skills_index", None) or {
             "hash": "",
             "skills": [],

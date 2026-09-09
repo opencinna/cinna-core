@@ -42,6 +42,7 @@ from app.services.agents.skill_manifest import (
     issue_from_dict,
     parse_frontmatter,
 )
+from app.services.environments.adapters.base import EndpointUnsupportedError
 from app.services.environments.synced_files import SYNCED_FILES
 from app.services.environments.workspace_classification import WORKSPACE_ROOT_REL
 
@@ -86,8 +87,16 @@ MAX_CONTENT_BYTES = 256 * 1024
 SLEEPING_STATUSES: frozenset[str] = frozenset({"suspended", "stopped", "error"})
 
 #: Values of ``AgentEnvironment.skills_error``.
+#:
+#: The split between ``adapter_error`` and ``adapter_unsupported`` is the whole
+#: point of this vocabulary: they are both "the call failed on a container that
+#: is not asleep", but one is fixed by a restart and the other only by a
+#: rebuild. While they shared a code, every surface had to pick one remedy and
+#: was therefore wrong half the time — the card told an unreachable env to
+#: rebuild, the CLI told a pre-feature container to restart.
 ERROR_ENV_NOT_RUNNING = "env_not_running"
 ERROR_ADAPTER_ERROR = "adapter_error"
+ERROR_ADAPTER_UNSUPPORTED = "adapter_unsupported"
 ERROR_PARSE_ERROR = "parse_error"
 
 
@@ -128,10 +137,13 @@ class AgentSkillsService:
         :meth:`SkillEntry.to_dict` produces).
 
         Raises:
-            SkillsIndexUnavailableError: the environment is unreachable, or its
-                ``/app/core`` predates the endpoint. Both are normal: a
-                suspended env and a pre-feature container are expected states,
-                not failures to shout about.
+            SkillsIndexUnavailableError: the environment is asleep
+                (``env_not_running``), unreachable (``adapter_error``), or its
+                ``/app/core`` predates the endpoint (``adapter_unsupported``).
+                All three are normal: a suspended env and a pre-feature
+                container are expected states, not failures to shout about.
+                The reason on the exception is what tells a caller which of the
+                three remedies to name.
         """
         from app.services.environments.environment_service import EnvironmentService
 
@@ -148,11 +160,24 @@ class AgentSkillsService:
         # unconditionally for exactly this reason.
         try:
             payload = await adapter.get_skills_index()
+        except EndpointUnsupportedError as exc:
+            # The container answered — it just has no such route, which means
+            # its ``/app/core`` predates the feature. Checked BEFORE the status
+            # branch on purpose: a pre-feature container that also happens to be
+            # suspended still needs a rebuild, and "refresh to wake it" would
+            # send the user around the same loop the wake never breaks.
+            logger.debug(
+                "skills_fetch_failure agent_id=%s env_id=%s reason=%s: %s",
+                environment.agent_id, environment.id,
+                ERROR_ADAPTER_UNSUPPORTED, exc,
+            )
+            cls._persist_error(environment, ERROR_ADAPTER_UNSUPPORTED, db_session)
+            raise SkillsIndexUnavailableError(f"{ERROR_ADAPTER_UNSUPPORTED}: {exc}")
         except Exception as exc:
             # A failure on a sleeping env is "asleep"; anywhere else it is
-            # unreachable or too old to answer. The two need different copy and
-            # different user actions (refresh vs. rebuild), and only the server
-            # can tell them apart.
+            # unreachable. Both are recoverable by getting the container back —
+            # unlike the unsupported case above, which no amount of restarting
+            # fixes. Only the server can tell the three apart.
             reason = (
                 ERROR_ENV_NOT_RUNNING
                 if environment.status in SLEEPING_STATUSES

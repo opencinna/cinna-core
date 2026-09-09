@@ -389,7 +389,22 @@ never exception text.
 | `skills_parsed` | JSON, nullable | list of index-entry dicts |
 | `skills_hash` | `String(64)`, nullable | workspace tree hash as reported |
 | `skills_fetched_at` | `DateTime(timezone=True)`, nullable | |
-| `skills_error` | `String(256)`, nullable | `env_not_running` / `adapter_error` / `parse_error` |
+| `skills_error` | `String(256)`, nullable | `env_not_running` / `adapter_error` / `adapter_unsupported` / `parse_error` |
+
+Constants live in `agent_skills_service.py`: `ERROR_ENV_NOT_RUNNING`,
+`ERROR_ADAPTER_ERROR`, `ERROR_ADAPTER_UNSUPPORTED`, `ERROR_PARSE_ERROR`.
+
+| Code | Raised from | Remedy the surfaces name |
+|------|-------------|--------------------------|
+| `env_not_running` | any adapter failure while `environment.status in SLEEPING_STATUSES` | refresh / send a message |
+| `adapter_error` | any other adapter failure — timeout, transport, non-404 status | `cinna agent restart-env` |
+| `adapter_unsupported` | `EndpointUnsupportedError` — a **404** from a reachable container | `cinna agent rebuild-env` / `/rebuild-env` |
+| `parse_error` | the payload could not be read | refresh |
+
+`adapter_error` and `adapter_unsupported` were one code. They are split because a
+restart re-runs the same image and can never add a route the image never had;
+only a rebuild replaces `/app/core` from the template. Every surface that had to
+choose one remedy for the shared code was wrong half the time.
 
 ### Behaviour
 
@@ -400,6 +415,12 @@ never exception text.
   `SLEEPING_STATUSES = {"suspended", "stopped", "error"}` deliberately excludes
   transitional statuses — telling a user to "refresh to wake it" instead of
   "rebuild it" sends them to the wrong fix.
+- **`EndpointUnsupportedError` is caught in its own `except` clause, ahead of the
+  generic one — and therefore ahead of the sleeping-status branch.** Ordering is
+  load-bearing: a pre-feature container that also happens to be suspended would
+  otherwise be classified `env_not_running`, and "refresh to wake it" would send
+  the user round a loop the wake never breaks. Its `/app/core` is the problem, and
+  waking it changes nothing about that.
 - **Write short-circuit on index CONTENT, not on the reported hash.** The hash
   covers only the workspace folder, while the index also carries plugin skills;
   trusting the hash would throw away a freshly installed plugin's skills and, for
@@ -468,8 +489,26 @@ Creating an empty folder still fires nothing, because nothing about the index
 moved.
 
 `DockerEnvironmentAdapter.get_skills_index()` (declared abstract on
-`EnvironmentAdapter`) GETs `/config/skills` with a 15 s timeout. A pre-feature
-container answers 404 → exception → `adapter_error`.
+`EnvironmentAdapter`) GETs `/config/skills` with a 15 s timeout.
+
+A pre-feature container answers **404**, and that one status is raised as
+`EndpointUnsupportedError` (`backend/app/services/environments/adapters/base.py`,
+re-exported from `adapters/__init__.py`) rather than a flat `Exception`:
+
+```
+httpx 404  →  EndpointUnsupportedError("/config/skills")  →  adapter_unsupported
+anything else → Exception(...)                            →  adapter_error
+```
+
+The distinction cannot be recovered downstream once the transport error is
+flattened to a string — "no such route" and "no such container" read identically
+— so it is raised as a type. `EndpointUnsupportedError` carries the `endpoint`
+that answered 404 and is deliberately narrow: **only** a 404 from a container
+that answered. Any other status came from *inside* an endpoint that exists, and a
+rebuild is not the fix for that.
+
+`DockerEnvironmentAdapter.set_plugins()` raises the same error, on the same 404
+rule, for `/config/plugins` — see [agent_plugins](../agent_plugins/agent_plugins_tech.md).
 
 ---
 
@@ -515,8 +554,22 @@ table `Skill | Source | What it does | Invoke`. Flagged rows sort last — the
 table is read top-down for "what can this agent do", and a broken skill is not an
 answer to that. Values pass through `_cell()`, which escapes `|` and newlines: a
 publisher-authored description with a pipe would otherwise shift every later
-column. Empty index + `skills_error == adapter_error` produces the rebuild copy
-(an error); an ordinary empty index is **not** an error.
+column. Empty index + `skills_error == adapter_unsupported` produces the rebuild
+copy (an error); an ordinary empty index is **not** an error. The client copy
+map (`frontend/src/utils/skills.ts::INDEX_ERROR_COPY`) is keyed on the same
+codes, and the rebuild sentence moved with the code:
+
+| Code | Sentence |
+|------|----------|
+| `adapter_unsupported` | "Rebuild the environment to enable skills." |
+| `adapter_error` | "The environment isn't answering. Restart it, then refresh the skills." |
+| `env_not_running` | "The environment is asleep. Refresh to wake it and re-read the skills." |
+| `parse_error` | "Couldn't read the skills folder. Refresh to try again." |
+
+The CLI keys the same four codes to remedies in `_index_error_remedy`
+(`cinna-cli`, `src/cinna/account.py`), which an unknown code falls through to a
+deliberately unhelpful default — naming a remedy this build cannot know is how a
+caller ends up in a loop that cannot close.
 
 `SessionCommandPublic` gains `kind: str = "command"`.
 `CommandService.list_for_session` appends `/<skill name>` entries with
@@ -1096,10 +1149,12 @@ by `make sync-platform-knowledge`.
 
 ## Rollout and Unverified Items
 
-- **Existing environments need `/rebuild-env`** (or the admin bulk rebuild):
+- **Existing environments need a rebuild** — `/rebuild-env` in a session,
+  `cinna agent rebuild-env <agent>` from the CLI, or the admin bulk rebuild.
   env-core ships in the per-environment `/app/core` copy, so a pre-feature
   container has no projection and no `/config/skills`, and its cache records
-  `adapter_error`.
+  `adapter_unsupported`. A **restart is not a substitute**: it re-runs the same
+  image, and the missing route is in the image.
 - **Operators need the new `/app/data/skills` compose mount** before Phase 3
   publishes anything (see [Storage layout](#storage-layout)).
 - **The OpenCode build is not pinned.** All three env Dockerfiles install it with

@@ -145,11 +145,15 @@ export function AddAddonDialog({
   const settleSync = (result: PluginSyncResponse, name: string) => {
     if (
       (result.failed_syncs && result.failed_syncs > 0) ||
+      (result.unsupported_syncs && result.unsupported_syncs > 0) ||
       result.partial_failures
     ) {
       // A partial failure is not a success with a footnote: it goes to the
       // tab's sync-issues dialog rather than to a toast that claims the install
-      // worked everywhere.
+      // worked everywhere. An *unsupported* sync counts here too: the link
+      // write succeeded, so `success` stays true and the count never reaches
+      // `failed_syncs` — but the environment did not take the change, and that
+      // dialog is the only surface that renders the backend's explanation.
       onSyncResult(`${name} installed`, result)
     } else {
       showSuccessToast(`${name} installed`)

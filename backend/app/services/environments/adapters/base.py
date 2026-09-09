@@ -6,6 +6,46 @@ from pydantic import BaseModel
 from datetime import datetime
 
 
+#: Why only SOME adapter methods raise :class:`EndpointUnsupportedError`.
+#:
+#: ``get_skills_index`` and ``set_plugins`` raise it; ``set_credentials``,
+#: ``set_config``, ``set_mcp_servers`` and ``get_plugins_settings`` still
+#: collapse a 404 into a generic exception. That asymmetry is about where the
+#: answer can be PUT, not about which routes can 404 — the others plausibly
+#: can, and ``set_mcp_servers`` demonstrably has (a stale ``/app/core`` 404s
+#: until the env is rebuilt).
+#:
+#: The split pays for itself only where a caller persists the reason and a
+#: surface reads it back: the skills cache writes ``skills_error`` onto the
+#: environment row, and the plugin sync returns ``unsupported_syncs`` to a
+#: client. The other four are fire-and-forget syncs with no cached reason
+#: column and no surface to carry a remedy, so classifying them would produce a
+#: more precise exception that nothing can act on. Giving them one means first
+#: giving them somewhere to report it — a bigger change than this, and a real
+#: follow-up rather than a decision already made.
+
+
+class EndpointUnsupportedError(Exception):
+    """The container answered, but does not have the endpoint that was called.
+
+    Raised only for a **404 from a reachable container**, which for env-core
+    means one thing: this container's ``/app/core`` was built before the route
+    existed. That is a different condition from "the environment is unreachable"
+    and it has a different fix — a rebuild replaces ``/app/core`` from the
+    template, a restart re-runs the same image and can never add a route.
+
+    It exists because callers cannot recover that distinction from a flattened
+    ``Exception(str(e))``: by the time the transport error is a string, "no such
+    route" and "no such container" look identical, and every surface downstream
+    then has to guess which remedy to name. Adapters raise this; the cache
+    services map it to their own ``adapter_unsupported`` reason code.
+    """
+
+    def __init__(self, endpoint: str, message: str | None = None):
+        self.endpoint = endpoint
+        super().__init__(message or f"Environment has no {endpoint} endpoint")
+
+
 class LocalFilesAccessInterface(ABC):
     """
     Optional mixin for adapters that can provide direct local filesystem access
@@ -359,9 +399,12 @@ class EnvironmentAdapter(ABC):
             reported by env-core ``GET /config/skills``.
 
         Raises:
-            Exception: when the environment is unreachable or predates the
-                endpoint. Callers treat any failure as "no index available"
-                and keep the last cached one.
+            EndpointUnsupportedError: the container answered 404 — its
+                ``/app/core`` predates this route and only a rebuild adds it.
+            Exception: any other failure (unreachable, timeout, transport).
+
+            Callers treat both as "no index available" and keep the last cached
+            one; they differ only in the remedy they name.
         """
         pass
 

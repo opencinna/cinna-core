@@ -2620,9 +2620,12 @@ class LLMPluginService:
         from app.services.environments.environment_service import EnvironmentService
         from sqlalchemy import or_
 
+        from app.services.environments.adapters.base import EndpointUnsupportedError
+
         environments_synced = []
         successful_syncs = 0
         failed_syncs = 0
+        unsupported_syncs = 0
         # Plugin-level failures aggregated across all environments (deduped).
         aggregated_failures: list[PluginInstallResult] = []
 
@@ -2712,6 +2715,44 @@ class LLMPluginService:
                     if r.status == "failed":
                         LLMPluginService._add_unique_failure(aggregated_failures, r)
 
+            except EndpointUnsupportedError as e:
+                # The container is reachable and its core is too old to take a
+                # plugin manifest. Not counted as a failed sync: nothing here is
+                # retryable and nothing about the link write went wrong, so a
+                # caller that lumped it in with transport failures would keep
+                # offering "restart and try again" for a state that outlives
+                # every restart.
+                logger.info(
+                    f"Environment {env.id} predates the plugin endpoint; "
+                    f"skipping sync: {e}"
+                )
+                # Put it back to sleep if we woke it. This branch is PERMANENT
+                # — no retry can make a missing route appear — so unlike the
+                # transport-error branch below there is nothing to stay awake
+                # for, and leaving it running would burn a container every time
+                # anyone toggles a link on a pre-feature agent. The error branch
+                # deliberately does not do this: a transport failure may well be
+                # transient and the next attempt benefits from a warm container.
+                if was_suspended:
+                    try:
+                        await lifecycle_manager.suspend_environment(session, env)
+                    except Exception as suspend_error:  # never mask the sync result
+                        logger.warning(
+                            f"Could not re-suspend environment {env.id} after an "
+                            f"unsupported plugin sync: {suspend_error}"
+                        )
+                environments_synced.append(EnvironmentSyncStatus(
+                    environment_id=env.id,
+                    instance_name=env.instance_name or str(env.id),
+                    status="unsupported",
+                    error_message=(
+                        "This environment was built before this feature "
+                        "existed. Rebuild it to pick the change up."
+                    ),
+                    was_suspended=was_suspended,
+                ))
+                unsupported_syncs += 1
+
             except Exception as e:
                 logger.error(f"Failed to sync plugins to environment {env.id}: {e}")
                 environments_synced.append(EnvironmentSyncStatus(
@@ -2730,9 +2771,32 @@ class LLMPluginService:
             plugin_link_public = LLMPluginService._link_to_public(plugin_link)
 
         partial_failures = len(aggregated_failures) > 0
-        message = f"Synced to {successful_syncs}/{len(environments)} environments"
-        if failed_syncs > 0:
-            message += f" ({failed_syncs} failed)"
+        if unsupported_syncs and unsupported_syncs == len(environments):
+            # Every environment was too old to take the manifest. Leading with
+            # "Synced to 0/N" would open on a number that reads as failure and
+            # then explain, in a parenthetical, that nothing failed — which is
+            # why three separate readers arrived at "this contradicts itself".
+            # The shared stem is right for every other path and stays untouched.
+            message = (
+                f"Not applied to {unsupported_syncs} environment(s): each was "
+                f"built before this feature existed and must be rebuilt to "
+                f"pick it up"
+            )
+        else:
+            message = (
+                f"Synced to {successful_syncs}/{len(environments)} environments"
+            )
+            if failed_syncs > 0:
+                message += f" ({failed_syncs} failed)"
+            if unsupported_syncs > 0:
+                # Phrased without a verb that has to agree with the count: the
+                # single-environment case is the common one, and "1 need
+                # rebuilding" is the reading most users would get.
+                # ``environment(s)`` matches the ``plugin(s)`` idiom below.
+                message += (
+                    f" ({unsupported_syncs} environment(s) must be rebuilt to "
+                    f"pick this up)"
+                )
         if partial_failures:
             names = ", ".join(
                 f"{r.marketplace_name}/{r.plugin_name}" for r in aggregated_failures
@@ -2749,4 +2813,5 @@ class LLMPluginService:
             failed_syncs=failed_syncs,
             plugin_results=aggregated_failures,
             partial_failures=partial_failures,
+            unsupported_syncs=unsupported_syncs,
         )
