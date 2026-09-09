@@ -1,3 +1,12 @@
+---
+feature: mcp_integration
+domain: application
+one_liner: "Exposes platform agents as remote MCP servers with OAuth 2.1 and per-user access control, so any MCP-compatible client can connect to and use them as tools."
+docs:
+  implementation: agent_mcp_connector.md
+  setup: mcp_connector_setup.md
+primary_label: architecture
+---
 # Agent MCP Connector — Architecture Overview
 
 ## What It Does

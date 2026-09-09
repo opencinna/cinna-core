@@ -1,3 +1,10 @@
+---
+feature: agent_addons
+domain: agents
+one_liner: "Gives an owner and any viewer one merged list of everything an agent carries beyond its prompt, folding plugins and skills that used to live on two separate tabs into one."
+docs:
+  tech: agent_addons_tech.md
+---
 # Agent Addons
 
 **Addon** is the user-facing umbrella over the two things an agent carries beyond
@@ -326,6 +333,13 @@ mode improves that mode's performance and the quality of its answers.
 An entry the last marketplace sync marked **unsupported** is shown but not
 installable, with the reason sentence. Hiding it would make an admin's
 half-broken marketplace look empty.
+
+The skills catalog's own "Add to agent" entry point (outside this tab, on a
+catalog package's own page) opens a separate `AddSkillToAgentDialog` that ends
+in the same `AgentPluginLink` write. Its agent picker is `Common/AgentSelectorList`
+in `single` mode — a select trigger carrying the chosen agent's badge over the
+same search-and-pick cloud every other agent-choosing surface uses, opened as a
+`Popover` anchored to the field rather than a second `Dialog` stacked on top.
 
 ### 3. Managing one
 

@@ -1,3 +1,8 @@
+---
+feature: external_agent_access
+domain: application
+one_liner: "REST and A2A surface that lets native clients like Cinna Desktop discover a user's own agents and identity contacts and chat with them without the web app."
+---
 # External Agent Access API
 
 ## Purpose
@@ -74,7 +79,7 @@ Native clients show "v1.0 → v1.2 update available" on installed agents and let
 
 **In scope to report here; out of scope to fix from inside this refactor** (`cinna-cli` is a separate repository at `/Users/evgenyl/dev/ml-llm/cinna-cli`).
 
-- **Removed entirely:** `GET|POST /api/v1/external/a2a/route/{route_id}/` and its `.well-known/agent-card.json` mirror.
+- **Removed entirely:** `GET|POST /api/v1/external/a2a/route/{route_id}/` and its `.well-known/agent-card.json` mirror. <!-- nocheck -->
 - **Removed:** the `"app_mcp_route"` value of `ExternalTargetPublic.target_type` — the type is now `Literal["agent", "identity"]`.
 - **`GET /external/agents` shape change:** the response used to carry three ordered sections (personal agents → MCP shared routes → identity contacts); it now carries **two** (personal agents → identity contacts). Any client-side code that indexed or counted sections positionally needs to drop the middle one.
 - **Accepted breakage:** a session created through the old `/a2a/route/{route_id}/` path may 404 on a follow-up card fetch, since the route target kind that resolved it no longer exists. This is deliberate (master plan §2.11 — sessions broken by the refactor may be dropped) and is not silently swallowed; the client will see a clear 404, not a wrong answer.
@@ -145,6 +150,12 @@ POST /api/v1/external/agents/{id}/apply-update     InstallService.apply_update()
 ```
 
 The `bundle_version` snapshot on discovery and the apply-update response are both built by the shared `ExternalAgentCatalogService.build_bundle_version_info(db, agent)`, so the list snapshot and the action response never diverge.
+
+## Implementation Notes
+
+- `backend/app/api/routes/external_a2a.py` — the route module for both A2A target kinds. Each target type exposes the same three endpoints (`GET {base}/` card, `GET {base}/.well-known/agent-card.json` mirror, `POST {base}/` JSON-RPC), built by a shared `_card_response` helper; the routes themselves stay thin, delegating access checks to `ExternalAccessPolicy` and request dispatch to `ExternalA2ARequestHandler`/`ExternalA2AService`.
+- `backend/app/services/external/external_access_policy.py` — `ExternalAccessPolicy`, the single access-check layer both target types funnel through: `resolve_agent` enforces the owner-only rule for personal agents (and optionally requires an active environment), and `require_identity_access` verifies the caller holds at least one active `IdentityAgentBinding` with the named identity owner. Raises typed `app.services.external.errors` exceptions rather than `ValueError`, which the route/handler layers translate to JSON-RPC or HTTP errors. Purely static — a namespace, not a service instance.
+- `backend/app/services/external/external_session_service.py` — `ExternalSessionService`, the read-only session-metadata surface behind `GET /external/sessions`, `GET /external/sessions/{id}`, `GET /external/sessions/{id}/messages`, and the soft-hide `DELETE`. `list_sessions_for_external` unions owner/caller/identity_caller sessions (capped at 200, filtered for `hidden_for_callers`); `_derive_target` maps a session's `integration_type` back to the `(target_type, target_id)` pair the client needs to reconnect, folding the old `app_mcp` route target onto the plain agent target now that the route family is gone.
 
 ---
 

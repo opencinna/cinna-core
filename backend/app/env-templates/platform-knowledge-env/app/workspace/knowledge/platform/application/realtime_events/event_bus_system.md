@@ -1,3 +1,11 @@
+---
+feature: realtime_events
+domain: application
+one_liner: "Backend-to-frontend and backend-to-backend event bus that broadcasts real-time updates over WebSockets and drives server-side event handlers."
+docs:
+  streaming: frontend_backend_agentenv_streaming.md
+primary_label: event bus
+---
 # Real-Time Event Bus System
 
 ## Overview
@@ -105,6 +113,7 @@ This ensures any sessions waiting for the environment (with `pending_stream` sta
 ### Backend
 - **`backend/app/models/events/event.py`** - Event models (`EventType`, `EventBase`, `EventPublic`, `EventBroadcast`)
 - **`backend/app/services/events/event_service.py`** - `EventService` class (connection management, event emission)
+- **`backend/app/services/events/socketio_connector.py`** - `SocketIOConnector`, an injectable wrapper that owns the `socketio.AsyncServer` instance and its outbound `emit()` / ASGI-mount surface, following the same dependency-injection pattern as `smtp_connector` / `imap_connector`; `EventService` calls into the module-level `socketio_connector` instance, and tests patch that instance with a stub instead of touching a real Socket.IO server
 - **`backend/app/api/routes/events.py`** - Event API routes (`/broadcast`, `/stats`, `/test`)
 - **`backend/app/main.py`** - Socket.IO mount at `/ws` path
 

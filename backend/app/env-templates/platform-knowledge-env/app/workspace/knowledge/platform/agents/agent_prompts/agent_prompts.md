@@ -1,3 +1,10 @@
+---
+feature: agent_prompts
+domain: agents
+one_liner: "Assembles an agent's building- and conversation-mode system prompts and keeps the editable prompt documents synced between the database and the environment."
+docs:
+  tech: agent_prompts_tech.md
+---
 # Agent Prompts
 
 ## Purpose

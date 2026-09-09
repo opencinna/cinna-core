@@ -1,3 +1,10 @@
+---
+feature: agent_plugins
+domain: agents
+one_liner: "Installs and manages plugins for an agent from git marketplaces, bundles, or the skills catalog, syncing manifest-driven files into the container with no backend cache."
+docs:
+  tech: agent_plugins_tech.md
+---
 # Agent Plugins
 
 ## Purpose

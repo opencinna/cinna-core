@@ -1,3 +1,10 @@
+---
+feature: user_roles
+domain: application
+one_liner: "Gates agent-building features behind a three-value role so most users just use agents while a smaller group of developers builds and publishes them."
+docs:
+  tech: user_roles_tech.md
+---
 # User Roles
 
 ## Purpose

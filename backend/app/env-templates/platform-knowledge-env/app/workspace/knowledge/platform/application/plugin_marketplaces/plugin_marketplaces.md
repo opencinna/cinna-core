@@ -1,3 +1,10 @@
+---
+feature: plugin_marketplaces
+domain: application
+one_liner: "Lets admins register Git-based marketplaces of plugins and skills that users install into their agents, syncing metadata into Postgres with no persistent file cache."
+docs:
+  tech: plugin_marketplaces_tech.md
+---
 # Addon Marketplaces
 
 > The admin surface is called **Addon Marketplaces** (sidebar, page title, create dialog). The feature id, the route (`/admin/marketplaces`) and every table name stay `marketplace` / `plugin`. "Addon" is the presentation-layer umbrella over plugins and skills — see [agent_addons](../../agents/agent_addons/agent_addons.md).

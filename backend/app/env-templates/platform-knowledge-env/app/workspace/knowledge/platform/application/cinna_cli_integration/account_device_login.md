@@ -1,3 +1,10 @@
+---
+feature: account_device_login
+domain: application
+one_liner: "Lets a developer refresh an expired account CLI token by approving a device-login code in the browser instead of pasting a new setup token."
+docs:
+  tech: account_device_login_tech.md
+---
 # Account Device Login (`cinna login`)
 
 ## Purpose

@@ -39,10 +39,13 @@ This feature is only active on the authenticated session page (`/session/:sessio
 | `/rebuild-env` | Conditional | Unavailable when any session on the same environment is actively streaming |
 | `/run-list` | Conditional | Hidden from the popup unless the agent has at least one CLI command configured in `docs/CLI_COMMANDS.yaml` | <!-- nocheck -->
 | `/run:<name>` | Dynamic | One entry per command in the agent's `CLI_COMMANDS.yaml` cache — always `is_available=true` |
+| `/<skill name>` | Dynamic | One entry per valid, user-invocable skill in the environment's cached skills index — always `is_available=true` |
 
 The availability of `/rebuild-env` mirrors the runtime check in `RebuildEnvCommandHandler.execute()`. The backend recomputes it on every call to the commands endpoint, so the popup reflects real-time state. `/run-list` visibility depends on `environment.cli_commands_parsed` being non-empty.
 
 `/run` is registered and invokable (manually typed, or sent by A2A clients as the discovery convention) but is **not surfaced in the popup**. Users discover commands via `/run-list` and execute them via `/run:<name>`. See [CLI Commands](../cli_commands/cli_commands.md) for the full story.
+
+**Skill entries are not commands.** `CommandService.list_for_session` also appends one `/<skill name>` row per valid, user-invocable entry in the environment's skills cache, tagged `kind="skill"` in `SessionCommandPublic`. These are deliberately **not registered handlers** — `CommandService.is_command()` does not match them, so typing one sends the text through to the model unchanged: Claude Code reads a leading `/<skill name>` as an explicit skill invocation, and OpenCode reads it as an ordinary request. A reserved-name check in the skill manifest keeps a skill from shadowing a real command name in this list. A duplicate skill name (a local skill and a plugin skill sharing one) collapses to a single popup row. See [Agent Skills](../agent_skills/agent_skills.md).
 
 ---
 

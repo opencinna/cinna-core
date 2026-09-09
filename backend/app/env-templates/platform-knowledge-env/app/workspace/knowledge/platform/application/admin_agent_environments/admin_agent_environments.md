@@ -1,3 +1,10 @@
+---
+feature: admin_agent_environments
+domain: application
+one_liner: "Superuser console that lists every fleet environment's staleness, model health, and bundle update status, with targeted and bulk rebuild."
+docs:
+  tech: admin_agent_environments_tech.md
+---
 # Admin Agent Environments
 
 ## Purpose

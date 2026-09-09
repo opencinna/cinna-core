@@ -1,3 +1,10 @@
+---
+feature: agent_management
+domain: application
+one_liner: "Owns an agent's persistent definition — identity, prompts, SDK, credentials, and integrations — the config entry point every platform feature builds on."
+docs:
+  creation wizard: new_agent_wizard.md
+---
 # Agent Management
 
 ## Purpose

@@ -114,7 +114,7 @@ All endpoints use the environment ID resolved from the session's active environm
 | `GET /api/v1/environments/{env_id}/workspace/tree` | `CurrentUserOrGuest` | Fetch full workspace tree (files, scripts, logs, docs, app_data sections) |
 | `GET /api/v1/environments/{env_id}/workspace/download/{path}` | `CurrentUserOrGuest` | Download file or folder (ZIP for folders) |
 | `GET /api/v1/environments/{env_id}/workspace/view-file/{path}` | `CurrentUserOrGuest` | Stream file content for viewer |
-| `GET /api/v1/environments/{env_id}/workspace/database/{path}/tables` | `CurrentUser` (owner-only) | Fetch SQLite table/view list |
+| `GET /api/v1/environments/{env_id}/database/tables/{path}` | `CurrentUser` (owner-only) | Fetch SQLite table/view list |
 | `GET /api/v1/environments/{env_id}` | `CurrentUser` | Environment details (skipped for guests) |
 | `GET /api/v1/agents/{agent_id}/credentials` | `CurrentUser` | Agent's linked credentials (skipped for guests) |
 | `GET /api/v1/credentials` | `CurrentUser` | All user credentials for checkbox list (skipped for guests) |

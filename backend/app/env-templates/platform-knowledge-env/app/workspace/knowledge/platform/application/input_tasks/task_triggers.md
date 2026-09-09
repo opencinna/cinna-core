@@ -1,3 +1,10 @@
+---
+feature: task_triggers
+domain: tasks
+one_liner: "Lets a task fire automatically on a CRON schedule, a one-time date, or an inbound webhook, appending a payload to the task description."
+docs:
+  tech: task_triggers_tech.md
+---
 # Task Triggers
 
 ## Purpose

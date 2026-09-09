@@ -1,3 +1,11 @@
+---
+feature: a2a_protocol
+domain: application
+one_liner: "Exposes platform agents as standard A2A protocol endpoints so external agents and A2A-compatible tools can discover and message them."
+docs:
+  tech: a2a_protocol_tech.md
+  v1 support: a2a_v1_support.md
+---
 # A2A Protocol Integration
 
 ## Purpose

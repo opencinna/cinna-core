@@ -1,3 +1,10 @@
+---
+feature: agent_message_attachments
+domain: agents
+one_liner: "Lets an agent attach files from its workspace to its own reply messages, rendered as inline preview cards and delivered to external clients via signed download links."
+docs:
+  tech: agent_message_attachments_tech.md
+---
 # Agent Message Attachments
 
 ## Purpose

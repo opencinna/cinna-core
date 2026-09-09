@@ -1,3 +1,10 @@
+---
+feature: agent_handover
+domain: agents
+one_liner: "Lets a conversational agent delegate work to another agent directly, or create an inbox task for the user to route manually, using AI-assisted prompt generation."
+docs:
+  tech: agent_handover_tech.md
+---
 # Agent Handover
 
 ## Purpose
@@ -113,4 +120,5 @@ Agent (conversation mode) uses create_agent_task tool
 - **Agent Bundles & Installs** — installed agents start with empty handover configs (not included in bundle revision snapshots); apply-update never overwrites handover configuration. See [Agent Bundles & Installs](../agent_bundles/agent_bundles.md)
 - **AI Functions** — prompt generation and task refinement use `AIFunctionsService`. See [AI Functions development guide](../../development/backend/ai_functions_development.md)
 - **Agent Activities** — Sessions created by direct handovers generate activities (running/completed/error) that notify the target agent's owner via the sidebar bell indicator. See [Agent Activities](../../application/agent_activities/agent_activities.md)
+- **Agentic Teams** — A handover config and a team connection between the same two agents are kept in sync in both directions (create/update/delete on either side propagates to the other; adding an agent to a team backfills connections from any pre-existing handover configs), so configuring a handover once is visible from both the agent's own Configuration tab and the team canvas. See [Agentic Teams](../agentic_teams/agentic_teams.md)
 

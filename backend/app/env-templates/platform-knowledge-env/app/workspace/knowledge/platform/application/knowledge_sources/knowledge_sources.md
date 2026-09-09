@@ -1,3 +1,10 @@
+---
+feature: knowledge_sources
+domain: [application, knowledge]
+one_liner: "Lets admins connect Git repositories of documentation that agents search semantically during sessions, public sources available to every user's agents."
+docs:
+  tech: knowledge_sources_tech.md
+---
 # Knowledge Sources
 
 ## Purpose

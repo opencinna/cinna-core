@@ -1,3 +1,10 @@
+---
+feature: agent_bundles
+domain: agents
+one_liner: "Lets a publisher ship an agent as a versioned bundle that other users install, update, and manage independently, with app-style visibility, grants, and automatic or manual update convergence."
+docs:
+  tech: agent_bundles_tech.md
+---
 # Agent Bundles & Installs
 
 ## Purpose

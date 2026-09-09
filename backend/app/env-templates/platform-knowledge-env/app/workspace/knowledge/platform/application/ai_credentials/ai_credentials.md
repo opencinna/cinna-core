@@ -1,3 +1,15 @@
+---
+feature: ai_credentials
+domain: credentials
+one_liner: "Stores encrypted per-user LLM provider API keys as named credentials with prioritized default resolution, environment linking, and sharing between users."
+docs:
+  tech: ai_credentials_tech.md
+  provider adapters tech: provider_adapters_tech.md
+  anthropic types: anthropic_credential_types.md
+  anthropic types tech: anthropic_credential_types_tech.md
+  affected envs: affected_environments_widget.md
+  ai functions routing: ai_functions_sdk_routing.md
+---
 # AI Credentials Management
 
 ## Purpose
@@ -139,6 +151,8 @@ The bare model ids inserted by the picker match the `discovered_models` cache an
 - **Base URL + Model required** - Only for `openai_compatible` type; base URL is optional for `google`
 - **Keys never exposed** - API responses show `has_api_key: true` instead of the actual key
 - **Share access control** - Shared credentials can only be used, not modified, by recipients
+- **A row that exists is usable** - There is no placeholder credential, no empty-key row, and no "preparing" state on `AICredential` itself; every row that exists is safe for the discovery cron, the desktop account-config bundle, and the environment credential bag to read unfiltered. Per-user key minting keeps its pre-key state on a separate membership row instead (see [Admin-Provisioned AI Credentials](admin_ai_credential_provisioning.md))
+- **No child of an admin-managed credential can be shared, in either provisioning mode** - `share_credential` refuses with `AICredentialNotShareableError` when `is_shareable(credential)` is false (the plain `is_admin_managed` column, so an orphaned child whose parent was force-deleted is refused too). A bundle wired to such a credential degrades to "user provides" instead of failing or redistributing the admin's key past the member list the admin curated
 - **Admin-managed credentials are read-only to the owner** - A credential provisioned by a superuser carries `is_admin_managed: true` in its public projection. The owner may use it and set it as their default, but cannot edit, delete, or re-key it (the backend returns `403`). In **Settings → AI Credentials** these rows render a **"Managed" badge** (shield icon, tooltip "Managed by your administrator…") and **hide the Edit/Delete buttons** (the set-default star stays, rendered after the type badge). See [Admin-Provisioned AI Credentials](admin_ai_credential_provisioning.md)
 
 ## Architecture Overview

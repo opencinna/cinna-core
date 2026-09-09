@@ -1,3 +1,10 @@
+---
+feature: desktop_auth
+domain: application
+one_liner: "OAuth 2.0 with PKCE authentication for Cinna Desktop and Cinna Mobile, covering token rotation, per-device revocation, and a consent-free grant linked from an existing CLI account token."
+docs:
+  tech: desktop_auth_tech.md
+---
 # Desktop App Authentication
 
 ## Overview

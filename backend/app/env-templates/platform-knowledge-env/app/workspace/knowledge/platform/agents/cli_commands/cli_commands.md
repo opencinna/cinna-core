@@ -1,3 +1,10 @@
+---
+feature: cli_commands
+domain: agents
+one_liner: "Lets an agent declare named shell commands in its workspace that users and A2A clients can run directly, bypassing the LLM."
+docs:
+  tech: cli_commands_tech.md
+---
 # CLI Commands Sync and Discovery
 
 Agents can expose a set of named shell commands that users and A2A clients invoke directly — without spending tokens on an LLM turn. These commands power the `/run:<name>` slash command in the chat UI, surface as A2A skills (`cinna.run.<name>`) in the authenticated agent card, appear in the slash-command autocomplete popup with a tooltip showing the resolved shell string, and feed output back into the LLM context on the next conversation turn. The popup also surfaces `/run-list` (discovery) whenever the agent has at least one CLI command configured.
@@ -109,7 +116,7 @@ The backend refreshes the CLI commands cache at five points:
 1. **Environment activation** — immediately after the environment comes online (`ENVIRONMENT_ACTIVATED` event). `CLICommandsService.handle_post_action_event` is registered for this event via the Synced Workspace File Registry in `backend/app/main.py`.
 2. **Post-action** — after every session stream (`STREAM_COMPLETED`, `STREAM_ERROR`) including `/run:*` command streams, and after every scheduled execution (`CRON_COMPLETED_OK`, `CRON_TRIGGER_SESSION`, `CRON_ERROR`).
 3. **After rebuild** — after a successful `/rebuild-env` operation completes.
-4. **File-watcher signal** — the env-core watcher polls `docs/CLI_COMMANDS.yaml` (along with prompt files and `STATUS.md`) every ~5 s and fires `WORKSPACE_FILES_CHANGED` with the changed paths whenever the file stabilises after a write. The CLI commands handler treats the file's presence in `changed_files` as direct evidence the cache is stale and **bypasses the rate limit** for that fetch — same auto-sync semantics the prompt files already use.
+4. **File-watcher signal** — the env-core watcher polls `docs/CLI_COMMANDS.yaml` (along with prompt files and `STATUS.md`) every ~5 s and fires `WORKSPACE_FILES_CHANGED` with the changed paths whenever the file stabilises after a write. The CLI commands handler treats the file's presence in `changed_files` as direct evidence the cache is stale and **bypasses the rate limit** for that fetch — same auto-sync semantics the prompt files already use. <!-- nocheck -->
 5. **Explicit `/run` or `/run-list`** — falls back to the cached list when invoked; the watcher-driven refresh above is the primary source of truth.
 6. **Start-time sweep** — `_sync_dynamic_data` (run on every env start, activation, and rebuild) now also calls `CLICommandsService.refresh_after_action(force=True)` directly as part of the start sweep, so the cache is current at the moment the environment becomes active (independent of the `ENVIRONMENT_ACTIVATED` event handler).
 
@@ -117,7 +124,7 @@ The backend refreshes the CLI commands cache at five points:
 
 A 30-second per-environment rate limit prevents redundant fetches when multiple speculative events fire in quick succession (e.g., a CRON event followed immediately by a STREAM_COMPLETED). The rate limit is shared with `AgentStatusService`, but they maintain independent rate-limit buckets.
 
-`WORKSPACE_FILES_CHANGED` events that explicitly name `docs/CLI_COMMANDS.yaml` in `meta.changed_files` bypass this rate limit — that signal is debounced at the watcher level (≥5 s) and means the file demonstrably changed, so dropping the fetch would leave the cache stale.
+`WORKSPACE_FILES_CHANGED` events that explicitly name `docs/CLI_COMMANDS.yaml` in `meta.changed_files` bypass this rate limit — that signal is debounced at the watcher level (≥5 s) and means the file demonstrably changed, so dropping the fetch would leave the cache stale. <!-- nocheck -->
 
 ### Cache Storage
 
@@ -267,5 +274,5 @@ See [non_llm_context_bridging_tech.md](../agent_commands/non_llm_context_bridgin
 - **[Non-LLM Context Bridging](../agent_commands/non_llm_context_bridging_tech.md)** — `/run:*` output is forwarded to the next LLM turn via `<prior_commands>` block
 - **[Slash Command Autocomplete](../agent_commands/slash_command_autocomplete.md)** — `/run:<name>` entries appear dynamically in the popup with tooltips
 - **[Agent Status Tracking](../agent_status_tracking/agent_status_tracking.md)** — uses the same post-action refresh pattern and rate-limit infrastructure; both are now classified as `pull_only` entries in the Synced Workspace File Registry. Additionally, the agent's `status_refresh_command` can reference a named CLI command via `/run:<name>`: when a forced/live status fetch runs, the platform resolves the name against `AgentEnvironment.cli_commands_parsed` (the cached `CLI_COMMANDS.yaml` list) before running the command inside the container
-- **[Agent Prompts](../agent_prompts/agent_prompts.md)** — `docs/CLI_COMMANDS.yaml` is one of the five files in the Synced Workspace File Registry (`synced_files.py`); the registry drives the `WORKSPACE_FILES_CHANGED` / post-action / `ENVIRONMENT_ACTIVATED` handler registrations in `backend/app/main.py` for all five files together
+- **[Agent Prompts](../agent_prompts/agent_prompts.md)** — `docs/CLI_COMMANDS.yaml` is one of the five files in the Synced Workspace File Registry (`synced_files.py`); the registry drives the `WORKSPACE_FILES_CHANGED` / post-action / `ENVIRONMENT_ACTIVATED` handler registrations in `backend/app/main.py` for all five files together <!-- nocheck -->
 - **[Realtime Events](../../application/realtime_events/event_bus_system.md)** — `CLI_COMMANDS_UPDATED` is now wired into `frontend/src/services/eventService.ts` `EventTypes`; `MessageInput.tsx` subscribes and invalidates `["sessionCommands", sessionId]` so the `/run:*` autocomplete popup updates live when the agent writes a new command without a page reload

@@ -1,3 +1,10 @@
+---
+feature: cinna_mcp_descriptor
+domain: application
+one_liner: "Lets Cinna Desktop present any reachable agent as an emulated MCP tool, using a descriptor carried on the agent's A2A card and discovery entry."
+docs:
+  tech: cinna_mcp_descriptor_tech.md
+---
 # `cinna.mcp` Descriptor
 
 ## Purpose

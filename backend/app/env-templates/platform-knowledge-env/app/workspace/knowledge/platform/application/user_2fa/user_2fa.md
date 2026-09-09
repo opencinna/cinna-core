@@ -1,3 +1,10 @@
+---
+feature: user_2fa
+domain: application
+one_liner: "Lets a user enroll a passkey or TOTP app as a required second login step, with recovery codes and per-browser trusted-device skip."
+docs:
+  tech: user_2fa_tech.md
+---
 # Two-Factor Authentication (2FA)
 
 Two-factor authentication adds an optional second verification step to password and Google OAuth login. After a user enrolls at least one factor — a WebAuthn passkey or a TOTP authenticator app — every subsequent login requires that second step before an access token is issued. 2FA is off by default; users opt in through **Settings > Security**.

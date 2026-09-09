@@ -1,3 +1,10 @@
+---
+feature: agent_webhooks
+domain: agents
+one_liner: "Lets an external system trigger an agent over an authenticated HTTP webhook, either starting a session or running a script, with invocation logging."
+docs:
+  tech: agent_webhooks_tech.md
+---
 # Agent Webhooks
 
 ## Purpose

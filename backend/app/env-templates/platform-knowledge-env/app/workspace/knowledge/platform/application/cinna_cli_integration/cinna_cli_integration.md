@@ -1,3 +1,11 @@
+---
+feature: cinna_cli_integration
+domain: application
+one_liner: "Local development CLI that syncs a user's editor with a remote agent workspace in real time, so agents can be built with local tools while credentials stay on the platform."
+docs:
+  tech: cinna_cli_integration_tech.md
+  local dev: local_cli_development.md
+---
 # Cinna CLI Integration
 
 ## Purpose
@@ -167,6 +175,7 @@ User's IDE          cinna CLI / Mutagen         Platform Backend        Agent en
 - **Frontend Integrations Tab** — LocalDevCard sits alongside A2A, MCP, Access Token cards in the agent detail page
 - **Account CLI Workspace** — Account-level bootstrap (Phase 1): one setup token bootstraps a multi-agent account workspace; account token mints per-agent child tokens on demand. See [account_cli_workspace.md](account_cli_workspace.md)
 - **Local Agent Kit** — The auth-free on-ramp that precedes any of this: `cinna login <host> --dir Cloud` (turning a folder into an account workspace, as above) and the new `cinna agent import Local/<slug>` verb are how an agent scaffolded on the public `/agent-start` surface — no account required until this step — moves onto the platform. `agent import` itself lives in the separate `cinna-cli` repo, layered entirely on the existing account-workspace endpoints (no new backend route). See [local_agent_kit.md](../local_agent_kit/local_agent_kit.md)
+- **Agent Git Versioning** — For a git-linked agent, the CLI can look up the linked repo's coordinates (URL, subdir, ref, auth hint) with the CLI token, so a sparse-checkout of the same remote can sit next to the synced workspace; the developer authenticates with their own git/SSH client, since no deploy key ever leaves the platform. See [agent_git_versioning](../../agents/agent_git_versioning/agent_git_versioning.md)
 
 ## Aspects
 

@@ -1,3 +1,10 @@
+---
+feature: agent_to_agent_mcp_connector
+domain: application
+one_liner: "Lets an agent connect to another platform agent, or any external server, as a live MCP tool provider injected directly into its SDK runtime."
+docs:
+  tech: agent_to_agent_mcp_connector_tech.md
+---
 # Agent-to-Agent MCP Connector
 
 ## Purpose

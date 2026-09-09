@@ -1,3 +1,11 @@
+---
+feature: agent_status_tracking
+domain: agents
+one_liner: "Lets an agent self-report a lightweight health status that the platform caches and surfaces on cards, REST, a slash command, and A2A."
+docs:
+  tech: agent_status_tracking_tech.md
+  /agent-status command: ../agent_commands/agent_status_command.md
+---
 # Agent Status Tracking
 
 ## Purpose

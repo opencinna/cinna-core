@@ -1,3 +1,10 @@
+---
+feature: agent_git_versioning
+domain: agents
+one_liner: "Version-controls an agent's workspace in an external git repo: checkout, connect, push, and pull with conflict resolution, plus a webhook for automatic pulls."
+docs:
+  tech: agent_git_versioning_tech.md
+---
 # Git-Backed Agent Versioning
 
 ## Purpose

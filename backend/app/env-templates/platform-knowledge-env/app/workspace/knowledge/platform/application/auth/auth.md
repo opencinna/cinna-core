@@ -1,3 +1,12 @@
+---
+feature: auth
+domain: application
+one_liner: "Authenticates users via JWT, password login, or Google OAuth, with password recovery, invitations, and an admin-configured registration and sign-in policy."
+docs:
+  tech: auth_tech.md
+  google oauth: google_oauth.md
+  google oauth tech: google_oauth_tech.md
+---
 # Authentication
 
 ## Purpose

@@ -1,3 +1,10 @@
+---
+feature: agent_env_critical_state
+domain: agents
+one_liner: "Flags a running-but-degraded environment for owner attention when provisioning fails after the container starts, pausing CRON runs and notifying the owner without disrupting chat or terminal access."
+docs:
+  tech: agent_env_critical_state_tech.md
+---
 # Agent Environment Critical State
 
 ## Purpose

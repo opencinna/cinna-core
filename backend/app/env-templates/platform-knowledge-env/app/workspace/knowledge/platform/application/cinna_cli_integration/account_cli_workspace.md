@@ -1,3 +1,10 @@
+---
+feature: account_cli_workspace
+domain: application
+one_liner: "Lets a developer bootstrap one account-wide CLI workspace that discovers, builds, and manages all their agents without per-agent setup."
+docs:
+  tech: account_cli_workspace_tech.md
+---
 # Account CLI Workspace
 
 ## Purpose

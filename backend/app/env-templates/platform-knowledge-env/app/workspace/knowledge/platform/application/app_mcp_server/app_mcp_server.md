@@ -1,3 +1,12 @@
+---
+feature: app_mcp_server
+domain: application
+one_liner: "One universal MCP endpoint per user that AI-classifies each message to the right agent or identity contact and streams back its reply."
+docs:
+  tech: app_mcp_server_tech.md
+  prompt examples: prompt_examples.md
+  prompt examples tech: prompt_examples_tech.md
+---
 # App MCP Server
 
 ## Purpose

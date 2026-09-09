@@ -1,3 +1,10 @@
+---
+feature: agent_app_data
+domain: agents
+one_liner: "Gives each user a persistent, private per-bundle storage volume that survives uninstall and reinstall, with manual wipe of orphaned copies and background cleanup once the account or install is gone."
+docs:
+  tech: agent_app_data_tech.md
+---
 # Agent App Data
 
 ## Purpose

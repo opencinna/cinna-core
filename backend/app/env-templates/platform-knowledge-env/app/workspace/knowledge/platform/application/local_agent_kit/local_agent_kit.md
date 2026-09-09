@@ -1,3 +1,10 @@
+---
+feature: local_agent_kit
+domain: application
+one_liner: "Gives anyone without a Cinna account a versioned starter kit for building local AI agents in a layout compatible with a future cloud agent workspace."
+docs:
+  tech: local_agent_kit_tech.md
+---
 # Local Agent Kit
 
 ## Purpose

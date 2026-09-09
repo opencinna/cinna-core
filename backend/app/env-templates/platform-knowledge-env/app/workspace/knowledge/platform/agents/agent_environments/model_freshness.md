@@ -1,3 +1,10 @@
+---
+feature: model_freshness
+domain: agents
+one_liner: "Detects when an environment's configured LLM model is deprecated or unavailable and nudges the owner with an amber badge and email, never auto-upgrading."
+docs:
+  tech: model_freshness_tech.md
+---
 # AI Model Freshness & Deprecation Nudges
 
 ## Purpose

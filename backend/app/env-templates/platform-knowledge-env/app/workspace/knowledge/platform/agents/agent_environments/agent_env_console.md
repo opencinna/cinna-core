@@ -1,3 +1,10 @@
+---
+feature: agent_env_console
+domain: agents
+one_liner: "Lets an owner or developer tail an environment's live container logs and open a full interactive terminal inside it, both in a right-side drawer, with terminal use fully audited."
+docs:
+  tech: agent_env_console_tech.md
+---
 # Agent Environment Console
 
 ## Purpose

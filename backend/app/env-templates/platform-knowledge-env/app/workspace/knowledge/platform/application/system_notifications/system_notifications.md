@@ -1,3 +1,10 @@
+---
+feature: system_notifications
+domain: application
+one_liner: "Generic platform notification layer that dispatches typed, throttled alerts like session errors to users based on their own notification preferences."
+docs:
+  tech: system_notifications_tech.md
+---
 # System Notifications
 
 ## Purpose

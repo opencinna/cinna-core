@@ -1,3 +1,10 @@
+---
+feature: email_sessions
+domain: application
+one_liner: "Keeps email conversations routed through Server Channels threaded correctly and delivers replies through a durable, retrying outbound queue."
+docs:
+  tech: email_sessions_tech.md
+---
 # Email Sessions
 
 ## Purpose

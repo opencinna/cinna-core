@@ -1,3 +1,10 @@
+---
+feature: admin_ai_credential_provisioning
+domain: credentials
+one_liner: "Superuser connects an AI provider (shared or per-user-minted key) that auto-provisions and reconciles per-user AI credentials for chosen roles."
+docs:
+  tech: admin_ai_credential_provisioning_tech.md
+---
 # AI Providers, Admin-Provisioned AI Credentials + Native Account-Config
 
 ## Purpose
