@@ -41,16 +41,18 @@ A state the tool cannot reach (typed input, data the dev database lacks) is repo
 Then view the PNGs under `frontend/.ui-shots/` with the Read tool. The dev servers must be running; if they are not, report "screenshots skipped: app not running" and review from code. Never create or edit data to stage a screenshot. Never quote data seen in a screenshot.
 
 ### 3. Walk the checklist
-For each surface answer R1–R19 of guideline §8 with **yes / no / n/a** and a `file:line` (or screenshot name) as evidence. Count blocks, rows, inline actions, disclosure levels — write the numbers down. Compare the component's skeleton with the reference pattern's skeleton (R12) and with the spec (R13).
+For each surface answer R1–R21 of guideline §8 with **yes / no / n/a** and a `file:line` (or screenshot name) as evidence. Count blocks, rows, inline actions, disclosure levels — write the numbers down. Compare the component's skeleton with the reference pattern's skeleton (R12) and with the spec (R13).
 
-R17–R19 are the **mechanism gates** added 2026-09-09 after a PASSed surface collected fourteen user corrections (guideline §10). They cannot be judged from composition alone, so grep for them explicitly in every touched file:
+R17–R21 are the **mechanism gates**. R17–R19 were added 2026-09-09 after a PASSed surface collected fourteen user corrections; R20–R21 were added the same day after five 9–10/10 surfaces still produced five rule gaps, every one of them a rule that existed but could not be reached from where the author stood (guideline §10). They cannot be judged from composition alone, so grep for them explicitly in every touched file:
 - `new Date(` on a value that came from `@/client` → R17 *no* (A11). `formatDistanceToNow` outside `Common/RelativeTime.tsx` is the same finding.
 - A `DialogContent` whose children map over data without `max-h` + `overflow-y-auto` + `[&>*]:min-w-0` → R18 *no*. A first focusable control with a `Tooltip` and no `onOpenAutoFocus` → R18 *no*. A list of *n* items each swapping a document pane into the same dialog → R18 *no*.
 - `ExternalLink` beside a URL inside a fact list; `CopyableValue` for a value that is also a fact line; `??` on a wire string used for display; a clickable row wrapper with `rounded-*` inside a `ListRowGroup`; a row that is a control and does not guard `currentTarget.contains(target)` / `closest("button")` / pending; a row mutation whose only pending feedback is a disabled trigger; the same entity badged or glyphed differently in two lists; a "things to add" list that still shows what is added → R19 *no*.
+- Three or more `Badge`s on one row's title line, or a second badge that is neither an identity nor an origin fact; a `Badge` whose text is an **absence** (`No version`, `Not set`, `None`); a fact label written as a predicate rather than a noun, or a bare number whose unit lives only in its label → R20 *no*. A code comment that argues with the guidelines (`// … on purpose (guidelines say one)`) is a **finding in its own right**: report the rule as under-specified rather than accepting the override, and say what the rule should be.
+- A `max-h-*` + `overflow-y-auto` container without `pr-2`; a one-of-n picker emitting `aria-pressed` instead of `role="radio"` + `aria-checked` (hand-rolled `<button>` clouds included — the rule is the semantics, not Radix); a control that unmounts on activation without moving focus → R21 *no*.
 
 ### 4. Score and verdict
-Score = 10 − (number of *no* among R1–R10); *n/a* counts as satisfied. R11–R19 are gates: a *no* is a finding that blocks PASS but does not change the score. Verdict per surface:
-- **PASS** — score ≥ 8, none of R4 / R5 / R7 / R8 is *no*, and no R11–R19 finding is open.
+Score = 10 − (number of *no* among R1–R10); *n/a* counts as satisfied. R11–R21 are gates: a *no* is a finding that blocks PASS but does not change the score. Verdict per surface:
+- **PASS** — score ≥ 8, none of R4 / R5 / R7 / R8 is *no*, and no R11–R21 finding is open.
 - **ITERATE** — score 6–7, or any of R4 / R5 / R7 / R8 is *no*, or a gate finding is open.
 - **FAIL** — score ≤ 5.
 Overall verdict = the worst surface. When ≥ 7 checks are n/a (a small dialog), say so next to the score.
@@ -96,6 +98,6 @@ Anything the rules missed, over-flagged, or could not decide. One line each, rea
 - Judge the finished surface, not the diff. A phase that adds a sixth icon to a row is responsible for the row.
 - One finding per rule per surface; do not restate the same overload as R2, R5 and R7.
 - A surface that follows its reference skeleton and its spec is a PASS even if you would have designed it differently. Taste is not a finding; a rule is.
-- Do not review code quality, accessibility internals, or backend behaviour here. The R17–R19 greps are the exception: they are composition defects that only show in code (a timezone, a scrollbar, an empty string), so you look for them.
+- Do not review code quality, accessibility internals, or backend behaviour here. The R17–R21 greps are the exception: they are composition defects that only show in code (a timezone, a scrollbar, an empty string), so you look for them.
 - A surface the user calls wrong after a PASS is a **missing rule first**: write the mechanism into "Lessons for the guideline" rather than a taste note.
 - Do not make changes. Report and stop.
