@@ -542,6 +542,8 @@ export type AddonPublic = {
     version?: (string | null);
     marketplace_name?: (string | null);
     plugin_type?: (string | null);
+    author?: (string | null);
+    repository_url?: (string | null);
     link?: (AgentPluginLinkWithUpdateInfo | null);
     skills?: Array<SkillEntryPublic>;
     status?: string;
@@ -4694,6 +4696,8 @@ export type LLMPluginMarketplacePluginPublic = {
     unsupported_reason?: (string | null);
     skill_summary?: (PluginSkillSummary | null);
     marketplace_name?: (string | null);
+    marketplace_owner?: (string | null);
+    repository_url?: (string | null);
 };
 
 /**

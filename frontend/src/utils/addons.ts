@@ -306,12 +306,22 @@ export interface AddAddonResult {
   name: string
   description: string | null
   version: string | null
-  /** The marketplace for a plugin, the publisher for a catalog skill. */
+  /** Where it comes from: the marketplace for a plugin, the catalog for a skill. */
   origin: string | null
+  /**
+   * Who made it — the plugin manifest's author, the package's publisher — as
+   * the row's second badge. Null when the source did not say.
+   */
+  author: string | null
   /** Everything true of the result that nobody scans a result list by. */
   facts: Array<string | false | null | undefined>
-  /** This agent already carries it. */
-  installed: boolean
+  /**
+   * The entry as its source returned it, for the row's Details dialog. Exactly
+   * one is set, by `source`; kept whole rather than flattened because the
+   * dialog reads a dozen fields the row never will.
+   */
+  plugin?: LLMPluginMarketplacePluginPublic
+  package?: SkillPackageEntry
   /**
    * This platform can install it. False only for a marketplace entry the
    * syncer refused — of any format, skills included:
@@ -330,16 +340,14 @@ export interface AddAddonResult {
 }
 
 /**
- * This result is in the list to be read, not to be picked.
- *
- * Two causes, one behaviour: the agent already carries it, or this platform
+ * This result is in the list to be read, not to be picked: this platform
  * cannot install it. Exported because the cap has to be able to tell the two
- * groups apart — capping a list that has just sorted both to the bottom would
- * delete exactly the rows both this module and `AddAddonResultRow` promise
- * never to hide.
+ * groups apart — capping a list that has just sorted the blocked rows to the
+ * bottom would delete exactly the rows both this module and
+ * `AddAddonResultRow` promise never to hide.
  */
 export function isAddonResultBlocked(result: AddAddonResult): boolean {
-  return result.installed || !result.supported
+  return !result.supported
 }
 
 /** Which kinds the dialog's filter is currently letting through. */
@@ -381,8 +389,10 @@ export function buildAddonResults({
   query,
   kind,
 }: BuildAddonResultsInput): AddAddonResult[] {
-  // What this agent already carries. Plugin links carry the marketplace
-  // plugin's id; a catalog install carries the package's.
+  // What this agent already carries — left out of the list. Plugin links carry
+  // the marketplace plugin's id; a catalog install carries the package's. An
+  // installed entry is a row on the Addons card already, so offering it again
+  // here, even muted, is a second row for the same thing.
   const installedPluginIds = new Set(
     installedAddons
       .map((addon) => addon.link?.plugin_id)
@@ -404,6 +414,7 @@ export function buildAddonResults({
   for (const plugin of plugins) {
     const entryKind = addonFormatKind(plugin.plugin_type)
     if (kind !== "all" && kind !== entryKind) continue
+    if (installedPluginIds.has(plugin.id)) continue
     // Optional on the wire, so an entry synced before the flag existed reads
     // as installable rather than as refused.
     const supported = plugin.supported !== false
@@ -418,14 +429,21 @@ export function buildAddonResults({
       origin: plugin.marketplace_name
         ? `From the marketplace ${plugin.marketplace_name}`
         : null,
+      // Manifest author, else the marketplace owner — the projection makes
+      // the same choice for the installed row, so the badge does not change
+      // the moment the entry is installed.
+      author:
+        plugin.author_name ||
+        plugin.author_email ||
+        plugin.marketplace_owner ||
+        null,
       facts: [
         // The same word the installed row prints for the same entry, from the
         // same table — which is the whole point of deriving the kind from it.
         addonFormatLabel(plugin.plugin_type),
         plugin.category && `Category ${plugin.category}`,
-        plugin.author_name && `By ${plugin.author_name}`,
       ],
-      installed: installedPluginIds.has(plugin.id),
+      plugin,
       supported,
       unsupportedReason: supported
         ? null
@@ -445,6 +463,12 @@ export function buildAddonResults({
         .join(" ")
         .toLowerCase()
       if (needle && !haystack.includes(needle)) continue
+      if (
+        installedPackageIds.has(pkg.id) ||
+        (pkg.installed_in_agent_ids ?? []).includes(agentId)
+      ) {
+        continue
+      }
       rows.push({
         key: `catalog:${pkg.id}`,
         kind: "skill",
@@ -453,24 +477,22 @@ export function buildAddonResults({
         name: pkg.display_name,
         description: pkg.description ?? null,
         version: skillPackageVersionLabel(pkg)?.replace(/^v/, "") ?? null,
-        origin: `By ${skillPublisherLabel(pkg)}`,
+        origin: "From the skills catalog",
+        author: skillPublisherLabel(pkg),
         facts: [
           (pkg.install_count ?? 0) > 0 && `${pkg.install_count} installs`,
         ],
-        installed:
-          installedPackageIds.has(pkg.id) ||
-          (pkg.installed_in_agent_ids ?? []).includes(agentId),
+        package: pkg,
         supported: true,
         unsupportedReason: null,
       })
     }
   }
 
-  // What you can act on first. Installed and unsupported rows both stay in the
-  // list — hiding an unsupported one would make an admin's half-broken
-  // marketplace look empty (plan §10), and hiding an installed one makes a
-  // user search twice for what they already have — but neither is selectable,
-  // so a list that opened on them would look like a list of nothing to do.
+  // What you can act on first. Unsupported rows stay in the list — hiding one
+  // would make an admin's half-broken marketplace look empty (plan §10) — but
+  // they are not selectable, so a list that opened on them would look like a
+  // list of nothing to do.
   rows.sort((a, b) => {
     const aBlocked = isAddonResultBlocked(a)
     const bBlocked = isAddonResultBlocked(b)

@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { useEffect, useMemo, useState } from "react"
 
 import type { AddonPublic, PluginSyncResponse } from "@/client"
 import { LlmPluginsService, SkillsService } from "@/client"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -32,9 +34,9 @@ type Step = "choose" | "modes"
 
 interface AddAddonDialogProps {
   agentId: string
-  /** What the agent already carries — the "already installed" marker. */
+  /** What the agent already carries — left out of the results. */
   installedAddons: AddonPublic[]
-  /** The projection failed, so nothing can be marked as already installed. */
+  /** The projection failed, so nothing can be filtered out as installed. */
   addonsUnavailable: boolean
   addonsError: unknown
   onRetryAddons: () => void
@@ -129,13 +131,12 @@ export function AddAddonDialog({
   )
 
   // The cap bounds what you can *pick*, not what you can read. Sorting
-  // installed and unsupported rows to the bottom and then slicing the bottom
-  // off would delete precisely the rows this dialog exists to keep visible —
-  // an unsupported entry has to stay so an admin's half-broken marketplace
-  // does not read as empty (plan §10), and an installed one so nobody searches
-  // twice for what they already have. So the slice runs over the selectable
-  // rows only and the blocked ones are appended whole; the fold already
-  // ordered both groups, so concatenating preserves that order.
+  // unsupported rows to the bottom and then slicing the bottom off would
+  // delete precisely the rows this dialog exists to keep visible — an
+  // unsupported entry has to stay so an admin's half-broken marketplace does
+  // not read as empty (plan §10). So the slice runs over the selectable rows
+  // only and the blocked ones are appended whole; the fold already ordered
+  // both groups, so concatenating preserves that order.
   const selectable = results.filter((result) => !isAddonResultBlocked(result))
   const blocked = results.filter(isAddonResultBlocked)
   const cappedResults = [...selectable.slice(0, RESULT_LIMIT), ...blocked]
@@ -248,14 +249,56 @@ export function AddAddonDialog({
               2 Modes
             </span>
           </p>
-          <DialogTitle>
-            {step === "choose" ? "Add addon" : "Enable it for"}
-          </DialogTitle>
-          <DialogDescription>
-            {step === "choose"
-              ? "Search the plugin marketplaces and the skills catalog together."
-              : "A suspended agent is woken to install it."}
-          </DialogDescription>
+          {/* Step 2 is titled by the thing being installed — its name, linked
+              to where it lives, its version — with its description under it.
+              The modes are the body's question; the header says what they are
+              being chosen for. */}
+          {step === "choose" || !selected ? (
+            <>
+              <DialogTitle>Add addon</DialogTitle>
+              <DialogDescription>
+                Search the plugin marketplaces and the skills catalog together.
+              </DialogDescription>
+            </>
+          ) : (
+            <>
+              <DialogTitle className="flex min-w-0 items-center gap-2">
+                {selected.source === "catalog" ? (
+                  <Link
+                    to="/catalog/skills/$packageId"
+                    params={{ packageId: selected.id }}
+                    target="_blank"
+                    className="truncate hover:underline"
+                  >
+                    {selected.name}
+                  </Link>
+                ) : selected.plugin?.repository_url ? (
+                  <a
+                    href={selected.plugin.repository_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="truncate hover:underline"
+                  >
+                    {selected.name}
+                  </a>
+                ) : (
+                  <span className="truncate">{selected.name}</span>
+                )}
+                {selected.version && (
+                  <Badge variant="secondary" className="h-5 shrink-0">
+                    v{selected.version}
+                  </Badge>
+                )}
+              </DialogTitle>
+              <DialogDescription className="line-clamp-2">
+                {selected.description ||
+                  selected.origin ||
+                  (selected.source === "catalog"
+                    ? "From the skills catalog"
+                    : "From a marketplace")}
+              </DialogDescription>
+            </>
+          )}
         </DialogHeader>
 
         {step === "choose" ? (

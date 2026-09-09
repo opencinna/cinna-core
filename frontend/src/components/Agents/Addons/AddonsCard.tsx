@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { formatDistanceToNow } from "date-fns"
 import { Blocks, Info, Loader2, Plus, RefreshCw } from "lucide-react"
 import { useState } from "react"
 
 import type { AddonPublic } from "@/client"
 import { AgentsService } from "@/client"
 import { PreviewList } from "@/components/Common/PreviewList"
+import { formatRelativeTimestamp } from "@/components/Common/RelativeTime"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -139,16 +139,12 @@ export function AddonsCard({ agentId, onSyncResult }: AddonsCardProps) {
     )
 
   const checkedAt = data?.fetched_at
-  let checkedLabel = "Not checked yet"
-  if (checkedAt) {
-    try {
-      checkedLabel = `Checked ${formatDistanceToNow(new Date(checkedAt), {
-        addSuffix: true,
-      })}`
-    } catch {
-      checkedLabel = "Checked at an unknown time"
-    }
-  }
+  const checkedAgo = checkedAt ? formatRelativeTimestamp(checkedAt) : null
+  const checkedLabel = !checkedAt
+    ? "Not checked yet"
+    : checkedAgo
+      ? `Checked ${checkedAgo}`
+      : "Checked at an unknown time"
 
   return (
     <Card>

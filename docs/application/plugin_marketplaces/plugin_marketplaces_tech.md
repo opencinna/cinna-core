@@ -38,7 +38,7 @@ Defined via `LLMPluginMarketplaceBase`:
 | `last_sync_at` | Timestamp of last sync |
 | `type` | Marketplace format: `claude` (default) \| `codex` \| `skills`. Stored as a plain string; typed as a `Literal` on create/update, so an unknown value is a **422** |
 | `name`, `description` | Extracted from `marketplace.json` during sync |
-| `owner_name`, `owner_email` | Extracted from `author` field in `marketplace.json` |
+| `owner_name`, `owner_email` | Extracted from the top-level `owner` object in `marketplace.json` (the Claude Code schema's key — the official marketplace uses it), falling back to the older `author` spelling; a bare string under either is a name. **Rows synced before this fallback existed hold `NULL` until their next sync** |
 | `plugin_count` | Cached count of plugins (updated on sync) |
 
 **Table: `llm_plugin_marketplace_plugin`** (`LLMPluginMarketplacePlugin`)
@@ -68,7 +68,7 @@ These rows are the source of git coordinates consumed by `LLMPluginService.build
 - `LLMPluginMarketplaceUpdate` — All fields optional; `public_discovery` is the most commonly edited field post-creation
 - `LLMPluginMarketplacePublic` — Full public representation including `plugin_count`, `last_sync_at`, `owner_name/email`
 - `LLMPluginMarketplacesPublic` — Paginated list wrapper
-- `LLMPluginMarketplacePluginPublic` — Public plugin representation (includes `source_url`, `source_commit_hash`, and now `supported`, `unsupported_reason`, `skill_summary: PluginSkillSummary | None`)
+- `LLMPluginMarketplacePluginPublic` — Public plugin representation (includes `source_url`, `source_commit_hash`, and now `supported`, `unsupported_reason`, `skill_summary: PluginSkillSummary | None`, plus two discovery-time derivations: `marketplace_owner` (the marketplace's owner name, else email — the Add addon author badge's fallback for a blank manifest `author`) and `repository_url` (`homepage`, else a `url` source's `source_url`, else the marketplace `url` rewritten from SSH to HTTPS for public hosts and dropped otherwise — `LLMPluginService.plugin_repository_url`))
 - `LLMPluginMarketplacePluginsPublic` — Paginated plugins list wrapper
 
 ## API Endpoints

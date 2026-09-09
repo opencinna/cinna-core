@@ -1,6 +1,8 @@
+import { MarkdownRenderer } from "@/components/Chat/MarkdownRenderer"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
+import { splitSkillFrontmatter } from "@/utils/skills"
 
 interface SkillSourceProps {
   content: string | undefined
@@ -23,12 +25,15 @@ interface SkillSourceProps {
 }
 
 /**
- * A `SKILL.md`, exactly as the model receives it.
+ * A `SKILL.md`, rendered.
  *
- * The **raw** file, frontmatter included, in a `<pre>`: rendering the markdown
- * would hide the frontmatter, reflow fenced blocks and add a viewer neither
- * consumer needs, and the stated intent on both surfaces is to show what the
- * engine is handed rather than a prettier version of it.
+ * The body is **rendered markdown** — a skill's instructions are prose with
+ * headings, lists and fenced examples, and a `<pre>` of that is a wall the
+ * reader has to parse by eye (it started raw; the switch was asked for after
+ * a many-skill plugin made the raw pane unreadable). The frontmatter is split
+ * off first: its two meaningful keys are already the dialog's title and
+ * description, and rendered as markdown it is a stray rule over `key: value`
+ * lines.
  *
  * Extracted at the second consumer, not before (§5): S2's dialog
  * (`Agents/SkillContentBody`) had this block first, and the package route's
@@ -51,7 +56,7 @@ export function SkillSource({
   return (
     <div
       className={cn(
-        "max-h-[60vh] overflow-y-auto rounded-md border bg-muted/30 p-3",
+        "max-h-[60vh] min-w-0 overflow-x-auto overflow-y-auto rounded-md border bg-muted/30 p-3",
         className,
       )}
     >
@@ -67,9 +72,10 @@ export function SkillSource({
       ) : (
         <>
           {notice}
-          <pre className="font-mono text-xs whitespace-pre-wrap break-words">
-            {content ?? ""}
-          </pre>
+          <MarkdownRenderer
+            content={splitSkillFrontmatter(content ?? "").body}
+            className="prose prose-sm dark:prose-invert max-w-none break-words"
+          />
           {truncated && (
             <p className="mt-2 text-xs text-muted-foreground">
               This file is longer than the viewer shows; the rest is on disk.

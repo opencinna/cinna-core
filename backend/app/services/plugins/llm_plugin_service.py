@@ -685,12 +685,24 @@ class LLMPluginService:
             marketplace_file, ".claude-plugin/marketplace.json"
         )
 
-        # Extract marketplace metadata
+        # Extract marketplace metadata. The Claude Code marketplace schema
+        # names the maintainer under ``owner`` (the official marketplace does);
+        # ``author`` is the older spelling this parser grew up on, and a bare
+        # string under either is a name.
+        owner = marketplace_data.get("owner")
+        if not isinstance(owner, (dict, str)) or not owner:
+            owner = marketplace_data.get("author")
+        if isinstance(owner, dict):
+            owner_name, owner_email = owner.get("name"), owner.get("email")
+        elif isinstance(owner, str):
+            owner_name, owner_email = owner, None
+        else:
+            owner_name, owner_email = None, None
         metadata = {
             "name": marketplace_data.get("name"),
             "description": marketplace_data.get("description"),
-            "owner_name": marketplace_data.get("author", {}).get("name") if isinstance(marketplace_data.get("author"), dict) else marketplace_data.get("author"),
-            "owner_email": marketplace_data.get("author", {}).get("email") if isinstance(marketplace_data.get("author"), dict) else None,
+            "owner_name": owner_name,
+            "owner_email": owner_email,
         }
 
         # Parse plugins
@@ -1540,6 +1552,7 @@ class LLMPluginService:
         marketplaces = LLMPluginService.list_marketplaces(session, user_id, include_public=True)
         marketplace_ids = [m.id for m in marketplaces]
         marketplace_names = {m.id: m.name for m in marketplaces}
+        marketplace_rows = {m.id: m for m in marketplaces}
 
         if not marketplace_ids:
             return [], 0
@@ -1588,7 +1601,9 @@ class LLMPluginService:
         # Convert to public schema with marketplace name
         result = [
             LLMPluginService.get_plugin_public(
-                p, marketplace_name=marketplace_names.get(p.marketplace_id)
+                p,
+                marketplace_name=marketplace_names.get(p.marketplace_id),
+                marketplace=marketplace_rows.get(p.marketplace_id),
             )
             for p in plugins
         ]
@@ -1606,15 +1621,18 @@ class LLMPluginService:
     def get_plugin_public(
         plugin: LLMPluginMarketplacePlugin,
         marketplace_name: str | None = None,
+        marketplace: LLMPluginMarketplace | None = None,
     ) -> LLMPluginMarketplacePluginPublic:
         """Project a marketplace plugin to its public schema.
 
         Parity with ``get_marketplace_public`` / ``_link_to_public``. When
         ``marketplace_name`` is omitted it is read from the plugin's marketplace
-        relationship.
+        relationship; ``marketplace`` lets a list caller pass the row it already
+        holds so the owner and repository fields do not lazy-load per plugin.
         """
-        if marketplace_name is None:
+        if marketplace is None:
             marketplace = plugin.marketplace
+        if marketplace_name is None:
             marketplace_name = marketplace.name if marketplace else None
         return LLMPluginMarketplacePluginPublic(
             id=plugin.id,
@@ -1640,7 +1658,51 @@ class LLMPluginService:
             unsupported_reason=plugin.unsupported_reason,
             skill_summary=LLMPluginService._skill_summary(plugin),
             marketplace_name=marketplace_name,
+            marketplace_owner=LLMPluginService.marketplace_owner_label(marketplace),
+            repository_url=LLMPluginService.plugin_repository_url(
+                plugin, marketplace.url if marketplace else None
+            ),
         )
+
+    @staticmethod
+    def marketplace_owner_label(
+        marketplace: LLMPluginMarketplace | None,
+    ) -> str | None:
+        """The marketplace's ``owner`` as one label: name, else email."""
+        if marketplace is None:
+            return None
+        return marketplace.owner_name or marketplace.owner_email or None
+
+    @staticmethod
+    def plugin_repository_url(
+        plugin: LLMPluginMarketplacePlugin | None,
+        marketplace_url: str | None,
+    ) -> str | None:
+        """Where an entry's source lives, as a URL a browser can open.
+
+        The most specific thing on record wins: the manifest's ``homepage``
+        (the official marketplace points each entry at its own folder), then a
+        ``url``-sourced entry's own repository, then the marketplace repository
+        itself. Only ``http(s)`` comes back — the marketplace URL is often the
+        SSH form it was registered with, which is rewritten for the public
+        hosts by the same helper the clone path uses and dropped otherwise, so
+        a private host's ``git@`` address is never handed to an anchor tag.
+        """
+        candidates: list[str | None] = []
+        if plugin is not None:
+            candidates.append(plugin.homepage)
+            if plugin.source_type == PluginSourceType.url:
+                candidates.append(plugin.source_url)
+        candidates.append(marketplace_url)
+        for candidate in candidates:
+            if not candidate:
+                continue
+            normalized = (
+                LLMPluginService._normalize_public_git_url(candidate) or ""
+            ).strip()
+            if normalized.startswith(("https://", "http://")):
+                return normalized
+        return None
 
     @staticmethod
     def _skill_summary(
@@ -1853,7 +1915,9 @@ class LLMPluginService:
                 marketplace.name if marketplace else link.snapshot_marketplace_name
             )
             skill_package_id = None
-            latest_version = plugin.version if plugin else None
+            # ``or None``: a manifest with no version syncs as ``""``, and an
+            # empty string is a version to a client that only checks for null.
+            latest_version = (plugin.version or None) if plugin else None
 
             # Catalog links have no marketplace row at all, so the fields above
             # would leave the row nameless. Project them from the live package
@@ -1882,7 +1946,7 @@ class LLMPluginService:
                         latest = session.get(
                             SkillPackageRevision, package.latest_revision_id
                         )
-                        latest_version = latest.version if latest else None
+                        latest_version = (latest.version or None) if latest else None
                 # "skill" rather than the package's own (absent) category: the
                 # tab groups rows by what they are, and a catalog row is always
                 # one skill.

@@ -70,6 +70,22 @@ class AddonPublic(SQLModel):
     #: was parsed as. Marketplace rows only; every other source has no format
     #: of its own.
     plugin_type: str | None = None
+    #: Who made it, as one label: the marketplace manifest's author (name,
+    #: else email), else the marketplace's owner (name, else email), for a
+    #: marketplace row — the official marketplace leaves ``author`` blank on
+    #: most entries and names itself once at the top; the package's publisher
+    #: (name, else email) for a catalog row. ``None`` for a bundle row (the
+    #: bundle's publisher *delivers* it, which is a different fact and already
+    #: the source flag), for a local skill and for an orphan. The same word the
+    #: Add addon dialog badges a result with, so an entry reads the same before
+    #: and after it is installed.
+    author: str | None = None
+    #: Where the source lives, browser-openable — marketplace rows only: the
+    #: manifest's ``homepage``, else a ``url``-sourced entry's repository,
+    #: else the marketplace repository (from the link's frozen
+    #: ``snapshot_repository_url`` when the marketplace row is gone). ``None``
+    #: when nothing on record is an ``http(s)`` URL.
+    repository_url: str | None = None
     #: The underlying link for every non-local row: per-mode toggles, update
     #: availability and ``skill_package_id`` all ride on it, so the row's
     #: mutations stay on the existing plugin routes rather than growing addon

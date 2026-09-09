@@ -238,10 +238,23 @@ same repository, and the original age guard. Consequences worth stating plainly:
 
 Agent page › **Addons** tab › the "Plugins and skills" card. One list, capped at
 five rows with a "Show all (N)" sheet, sorted errors → warnings → alphabetically.
-Each row carries a status dot with the server's own sentence, a source flag
-("From the marketplace X" · "Delivered by the bundle — managed by its publisher"
-· "Installed from the skills catalog" · "Built in this agent"), and its
-description behind a row-info affordance. **Refresh is offered to every viewer**,
+Each row is name · version · the mode icons it is enabled in (conversation,
+building) · **author badge** (the marketplace manifest's
+author, else the marketplace's owner — the official marketplace names itself
+once at the top and leaves most entries blank — or the catalog package's
+publisher; the same badge the Add addon list
+shows, so an entry reads the same before and after install), a status dot with
+the server's own sentence, an update flag when one is available, and the `⋯`
+menu. **The row itself opens Details** — click, or Enter / Space — a read-only
+dialog with the facts (source, format, marketplace, a link to the original
+repository when the marketplace data names one, install time, modes with their
+icons, the commit hash as a click-to-copy value), and
+what it ships: a single skill's `SKILL.md`, **rendered as markdown**, inline; a
+plugin's several skills as rows, each opening its own skill dialog ("Part of the
+plugin X") with that skill's facts and rendered `SKILL.md`. The source glyph,
+the published glyph and the info tooltip are gone from the row; those facts
+live in Details. The row carries **no per-mode toggle**: the modes are chosen at
+install time and read in Details. **Refresh is offered to every viewer**,
 including a consumer of a foreign install — the read gates on access, not on
 role, and a stale index nobody can re-read is a dead end.
 
@@ -250,8 +263,20 @@ role, and a stale index nobody can re-read is a dead end.
 The card's **Add addon** action opens a two-step dialog that searches plugin
 discovery and the skills catalog **together**, then picks the modes to enable.
 Both halves end in the same place — an `AgentPluginLink` plus the ordinary plugin
-sync — so per-mode toggles, disable-without-delete, the amber failure banner and
+sync — so disable-without-delete, the amber failure banner and
 prune-on-uninstall all work with no addon-specific transport.
+
+Each result row carries the version, an **author badge** (the plugin manifest's
+author, or the package's publisher) and a **Details** button opening a
+read-only dialog — for a catalog package with its latest revision's `SKILL.md`,
+rendered. What the agent **already carries is left out** of the results: it is
+a row on the card behind the dialog already.
+
+The modes step is titled by the chosen entry — its name linked to its
+repository (marketplace) or catalog page, its version badge, its description —
+and carries one note: a plugin meant only for developing the agent, not for
+running it, belongs in **building mode alone** — keeping it out of conversation
+mode improves that mode's performance and the quality of its answers.
 
 An entry the last marketplace sync marked **unsupported** is shown but not
 installable, with the reason sentence. Hiding it would make an admin's
@@ -259,9 +284,11 @@ half-broken marketplace look empty.
 
 ### 3. Managing one
 
-Toggle, per-mode enable, upgrade and uninstall are the **existing plugin
-mutations**, unchanged — the Addons tab calls exactly what the Plugins tab called.
-There are no addon verbs to keep in sync with them.
+Toggle, upgrade and uninstall are the **existing plugin mutations**, unchanged —
+the Addons tab calls exactly what the Plugins tab called. There are no addon
+verbs to keep in sync with them. Per-mode enable is still on the link and on
+its update route, but the row offers no control for it: modes are chosen when
+the addon is added.
 
 ### 4. Sharing a local skill
 

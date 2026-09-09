@@ -100,3 +100,28 @@ export function sortSkills(entries: SkillEntryPublic[]): SkillEntryPublic[] {
 export function skillKey(entry: SkillEntryPublic): string {
   return `${entry.source ?? "local"}:${entry.plugin_ref ?? ""}:${entry.name}`
 }
+
+/**
+ * Split a `SKILL.md` into its YAML frontmatter and the markdown body.
+ *
+ * The viewers render the body as markdown; the frontmatter (`name`,
+ * `description`, and whatever else the author wrote) is not prose and would
+ * render as a stray rule and a paragraph of `key: value` lines, and its two
+ * meaningful keys are already the dialog's title and description. The
+ * frontmatter is returned rather than dropped so a viewer can still show it.
+ *
+ * Tolerant on purpose: a file that does not open with `---` on its first
+ * line is all body, and an unterminated block is left in the body rather than
+ * swallowing the whole file.
+ */
+export function splitSkillFrontmatter(content: string): {
+  frontmatter: string | null
+  body: string
+} {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(content)
+  if (!match) return { frontmatter: null, body: content }
+  return {
+    frontmatter: match[1],
+    body: content.slice(match[0].length).replace(/^\s*\n/, ""),
+  }
+}

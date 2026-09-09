@@ -119,9 +119,9 @@ both places is two sources of truth.
 
 ### 2. Seeing what an agent carries
 
-- **"Plugins and skills" card** — agent page › **Addons** tab. Rows show name, a
-  status dot, source flags, description behind a row-info affordance, and a
-  Details action that opens the `SKILL.md` viewer. Capped at five rows with a
+- **"Plugins and skills" card** — agent page › **Addons** tab. Rows show name,
+  version and author badges and a status dot; clicking the row opens Details
+  with the `SKILL.md` viewer. Capped at five rows with a
   "Show all (N)" sheet; sorted **errors first, then warnings, then
   alphabetically**, so a row that needs a decision is always in the preview. The
   card is rendered for consumers of a foreign install too — knowing what an
@@ -144,8 +144,10 @@ both places is two sources of truth.
 
 ### 3. Reading a SKILL.md
 
-The card's row action opens a dialog with the raw `SKILL.md` — the text the model
-reads. The path comes from the cached index, never from the requested name, so a
+Clicking the card's row opens a dialog with the `SKILL.md` rendered as markdown
+(frontmatter split off). A plugin that
+ships several skills lists them as rows, each opening its own dialog. The path
+comes from the cached index, never from the requested name, so a
 plugin's skill resolves inside the plugin folder rather than the agent's own, and
 the endpoint can never be used as a general workspace file reader.
 

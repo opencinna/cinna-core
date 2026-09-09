@@ -338,26 +338,36 @@ def seed_marketplace_plugin(
     source_path: str | None = None,
     commit_hash: str = "abc123def456",
     version: str = "1.0",
+    author_name: str | None = "tester",
+    author_email: str | None = "tester@example.com",
+    homepage: str = "",
+    owner_name: str | None = None,
 ) -> dict:
     """Sync one plugin row into ``marketplace_id`` and return its discover row.
 
     The clone and the parser are stubbed; everything downstream of them — the
     upsert, the marketplace metadata, discover — is the real code path.
+
+    ``owner_name`` lands on the *marketplace* (its ``metadata``), which is
+    what a manifest with a blank ``author`` falls back to for its author label.
     """
     from app.models.plugins.llm_plugin import PluginSourceType
 
     source_path = source_path or f"plugins/{name}"
+    metadata: dict = {"name": marketplace_name}
+    if owner_name is not None:
+        metadata["owner_name"] = owner_name
     parsed = {
-        "metadata": {"name": marketplace_name},
+        "metadata": metadata,
         "plugins": [
             {
                 "name": name,
                 "description": description,
                 "version": version,
-                "author_name": "tester",
-                "author_email": "tester@example.com",
+                "author_name": author_name,
+                "author_email": author_email,
                 "category": "tools",
-                "homepage": "",
+                "homepage": homepage,
                 "source_path": source_path,
                 "source_type": PluginSourceType.local,
                 "source_url": None,

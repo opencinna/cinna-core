@@ -295,6 +295,15 @@ class LLMPluginMarketplacePluginPublic(SQLModel):
     skill_summary: Optional[PluginSkillSummary] = None
     # Additional fields for discovery
     marketplace_name: Optional[str] = None
+    #: The marketplace's ``owner`` (name, else email). The Add addon list
+    #: badges an entry with its author and falls back to this when the
+    #: manifest names none — the official marketplace leaves ``author`` blank
+    #: on most entries and says "Anthropic" once, at the top.
+    marketplace_owner: Optional[str] = None
+    #: Where the source lives, browser-openable: ``homepage``, else a
+    #: ``url``-sourced entry's repository, else the marketplace repository
+    #: (SSH form rewritten to HTTPS for the public hosts, dropped otherwise).
+    repository_url: Optional[str] = None
 
 
 class LLMPluginMarketplacePluginsPublic(SQLModel):

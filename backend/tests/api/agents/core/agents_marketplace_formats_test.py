@@ -192,6 +192,10 @@ def _claude_repo(*names: str):
             root / ".claude-plugin" / "marketplace.json",
             {
                 "name": "shared-tools",
+                # ``owner`` is the Claude Code schema's key (the official
+                # marketplace uses it); ``author`` was the parser's original
+                # reading. Both must land on ``owner_name``.
+                "owner": {"name": "Shared Tools Team", "email": "team@shared.test"},
                 "plugins": [
                     {
                         "name": name,
@@ -770,15 +774,21 @@ def test_a_catalog_file_gone_for_one_sync_deletes_nothing(
         superuser_token_headers,
         url="https://github.com/example/shared-tools.git",
     )
-    sync_marketplace(
+    synced = sync_marketplace(
         client,
         superuser_token_headers,
         marketplace["id"],
         populate=_claude_repo("reporting", "charting"),
         commit_hash="aaaa11112222",
     )
+    assert synced["owner_name"] == "Shared Tools Team", (
+        "the Claude schema's top-level ``owner`` is the marketplace owner"
+    )
     rows = plugins_by_name(discover_plugins(client, headers))
     assert set(rows) == {"reporting", "charting"}
+    assert rows["reporting"]["marketplace_owner"] == "Shared Tools Team", (
+        "discovery carries the owner so a blank manifest author still badges"
+    )
 
     install_agent_plugin(client, headers, agent_id, rows["reporting"]["id"])
     drain_tasks()

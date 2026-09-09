@@ -49,10 +49,10 @@ The resilient system removes the backend cache entirely from the hot path. Plugi
 
 ### User: Manage Installed Plugins
 - **Enable/Disable**: Toggle on the addon row. The manifest is updated; on the next install the plugin dir stays but the plugin is excluded from `settings.json`.
-- **Mode toggles**: Enable per-mode (Conversation / Building) independently.
+- **Modes**: Conversation / Building are chosen in the Add addon dialog and shown in the row's Details; the row itself carries no per-mode toggle (the link's two booleans and the update route are unchanged).
 - **Upgrade**: When a newer commit is available (for marketplace plugins), an Upgrade button appears. Explicit action required — plugins never auto-update.
 - **Uninstall**: Removes the plugin link, rebuilds the manifest, and on the next container install the directory is pruned.
-- **Bundle plugins**: Source flag reads "Delivered by the bundle — managed by its publisher". Upgrade/Uninstall are hidden; enable/disable and per-mode toggles still work (consumer-local, survive bundle apply-update). Note the row's `can_manage` is **true** for a bundle — "no uninstall for a bundle source" is a client rule read off the source, not part of the capability flag.
+- **Bundle plugins**: Source flag reads "Delivered by the bundle — managed by its publisher". Upgrade/Uninstall are hidden; enable/disable still works (consumer-local, survives bundle apply-update, as do the per-mode flags). Note the row's `can_manage` is **true** for a bundle — "no uninstall for a bundle source" is a client rule read off the source, not part of the capability flag.
 
 ### Plugin Sync on Changes
 1. Any install, uninstall, upgrade, or enable/disable action triggers a sync.

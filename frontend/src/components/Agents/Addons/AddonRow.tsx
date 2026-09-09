@@ -1,20 +1,20 @@
 import { Link } from "@tanstack/react-router"
-import { formatDistanceToNow } from "date-fns"
 import {
   ArrowUpCircle,
-  BookOpen,
   ExternalLink,
+  Loader2,
+  MessageCircle,
   Power,
   PowerOff,
   Trash2,
   Upload,
+  Wrench,
 } from "lucide-react"
 import { useState } from "react"
 
 import type { AddonPublic } from "@/client"
-import { ListRow, RowFlag, RowInfo } from "@/components/Common/ListRow"
+import { ListRow, RowFlag } from "@/components/Common/ListRow"
 import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
-import { TooltipToggleItem } from "@/components/Common/TooltipToggleItem"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,41 +26,19 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
-import { ToggleGroup } from "@/components/ui/toggle-group"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import {
-  addonFormatLabel,
-  addonNoun,
-  addonRowStatus,
-  addonSourceFlag,
-} from "@/utils/addons"
-import { formatSkillSize } from "@/utils/skills"
+import { addonNoun, addonRowStatus } from "@/utils/addons"
 import { AddonDetailDialog } from "./AddonDetailDialog"
 import { ShareSkillDialog } from "./ShareSkillDialog"
 import { type SyncReporter, useAddonRowMutations } from "./useAddonRowMutations"
-
-/**
- * The row's two mode segments. Short labels because the whole group must stay
- * ~130px so the name keeps its width at 1024 (§2 "Toggles on rows"); the full
- * sentence rides on the `aria-label` and the tooltip.
- */
-const MODE_SEGMENTS = [
-  {
-    value: "conversation",
-    short: "Chat",
-    label: "Enabled in conversation mode",
-  },
-  { value: "building", short: "Build", label: "Enabled in building mode" },
-]
 
 export type { SyncReporter }
 
@@ -75,16 +53,25 @@ interface AddonRowProps {
 /**
  * One addon — a plugin or a skill, never both — as the plain P3 house row.
  *
- * Grown from `InstalledPluginRow` (whose mutations, mode toggle and confirm it
- * carries over) and `SkillRow` (whose status dot and detail facts it absorbs),
- * so the two lists the agent page used to show became one without either half
- * losing an affordance.
+ * Grown from `InstalledPluginRow` (whose mutations and confirm it carries
+ * over) and `SkillRow` (whose status dot and detail facts it absorbs), so the
+ * two lists the agent page used to show became one without either half losing
+ * an affordance. The per-mode toggle the plugin row had is **not** on this row:
+ * the modes are read in Details and chosen at install time, and a list this
+ * mixed has no room for a segmented control on every row.
  *
  * **No `meta` line, on any row.** `SkillRow` put the skill's description there;
  * in a mixed list a metadata line on half the rows makes one list look like
  * two, which is the exact seam this projection exists to remove. Every
- * description goes to `RowInfo` — and that is why `SkillRow` is not reused
- * here rather than extended.
+ * description, source, format and install date lives in Details — and that is
+ * why `SkillRow` is not reused here rather than extended.
+ *
+ * **The row is the Details control**, as the Add addon result row is the
+ * selection control: click, or Enter / Space, opens the dialog. What is left
+ * on the right is one tone-coloured flag (an update is available) and the `⋯`
+ * menu, whose trigger stops the click so opening it never also opens Details.
+ * The source glyph, the published glyph and the info tooltip are gone from the
+ * row — the same shape the Add addon list has: name · version · author.
  *
  * Its three writes live in `useAddonRowMutations`, one observer set per row —
  * see that hook for why they are not shared with the card.
@@ -105,7 +92,6 @@ export function AddonRow({
   const isBundle = addon.source === "bundle"
   const isLocal = addon.source === "local"
   const canManage = !!addon.can_manage && !!link
-  const source = addonSourceFlag(addon)
   const skills = addon.skills ?? []
 
   const { update, upgrade, uninstall, isPending } = useAddonRowMutations(
@@ -115,32 +101,20 @@ export function AddonRow({
     () => setConfirmOpen(false),
   )
 
-  // The group is fully controlled off the server's two booleans, so Radix hands
-  // back this exact array plus or minus exactly one entry — the caller wants
-  // the one mode that moved, not the whole set.
-  const modes = link
-    ? [
-        ...(link.conversation_mode ? ["conversation"] : []),
-        ...(link.building_mode ? ["building"] : []),
-      ]
-    : []
-
-  const installedAt = (() => {
-    if (!link) return null
-    try {
-      return `Installed ${formatDistanceToNow(new Date(link.created_at), {
-        addSuffix: true,
-      })}`
-    } catch {
-      return null
-    }
-  })()
+  // An update is *commit*-based: a marketplace entry with no version string
+  // in its manifest (most of the official marketplace) still updates, so the
+  // label must not depend on a version to print — and the wire value for "no
+  // version" is `""` as often as `null`, which `??` would happily print as
+  // "v".
+  const latestVersion = link?.latest_version || null
+  const updateLabel = latestVersion
+    ? `Update to v${latestVersion}`
+    : "Update to the latest"
+  const updateFlagLabel = latestVersion
+    ? `Update available — v${latestVersion}`
+    : "Update available"
 
   const localSkill = isLocal ? skills[0] : undefined
-  // A row that *is* one skill (local, or a catalog install) carries that
-  // skill's own facts, exactly as `SkillRow` did — a plugin row that ships
-  // several has nothing single to say here and sends the reader to Details.
-  const soleSkill = skills.length === 1 ? skills[0] : undefined
   const shareBlockedReason = localSkill?.error
     ? "Fix the error before sharing"
     : localSkill?.warning?.code === "secrets"
@@ -172,7 +146,7 @@ export function AddonRow({
           }}
         >
           <ArrowUpCircle />
-          Update to v{link.latest_version ?? "latest"}
+          {updateLabel}
         </DropdownMenuItem>,
       )
     }
@@ -248,144 +222,128 @@ export function AddonRow({
     )
   }
 
+  // Only a click that lands in this row's own DOM opens Details. The menu's
+  // content and every dialog below are portals, and React bubbles their
+  // synthetic events up this tree regardless — without the `contains` check a
+  // click inside the uninstall confirm would open Details under it.
+  //
+  // A click on the `⋯` trigger is the menu's, not the row's: it is the one
+  // real button inside the row's DOM, so the guard is "did this start on a
+  // button" rather than a wrapper that stops propagation.
+  //
+  // And not while a write is in flight: the disabled menu trigger no longer
+  // receives the click, so it would land on the row and open Details on top
+  // of an update the user is waiting for.
+  const openDetails = (e: React.SyntheticEvent) => {
+    if (isPending) return
+    if (!e.currentTarget.contains(e.target as Node)) return
+    if ((e.target as HTMLElement).closest("button")) return
+    setDetailOpen(true)
+  }
+
+  // What the spinner stands for, so the wait has a name.
+  const pendingLabel = upgrade.isPending
+    ? "Updating…"
+    : uninstall.isPending
+      ? "Uninstalling…"
+      : update.isPending
+        ? "Saving…"
+        : null
+
   return (
-    <ListRow
-      // Disabled rows dim, and keep dimming when a warning outranks "off" on
-      // the dot — which is how the disabled fact survives the precedence.
-      muted={!!link?.disabled}
-      status={addonRowStatus(addon)}
-      title={name}
-      // At most one badge. The version is the word people scan an install list
-      // by; the source, the format and the description are flags or the detail
-      // tooltip, which cost the name no width.
-      badges={
-        addon.version ? (
-          <Badge variant="secondary" className="h-5">
-            v{addon.version}
-          </Badge>
-        ) : undefined
-      }
-      flags={
-        <>
-          <RowFlag icon={source.icon} label={source.label} />
-          {link?.has_update && (
+    // biome-ignore lint/a11y/useSemanticElements: `ListRow` renders `div`s, which a real `<button>` cannot contain — the same trade the catalog cards make.
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Details of the ${noun} ${name}`}
+      className="cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      onClick={openDetails}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return
+        if (isPending) return
+        if (!e.currentTarget.contains(e.target as Node)) return
+        // Only the row itself: Enter on the `⋯` trigger is the menu's.
+        if (e.target !== e.currentTarget) return
+        e.preventDefault()
+        setDetailOpen(true)
+      }}
+    >
+      <ListRow
+        // Disabled rows dim, and keep dimming when a warning outranks "off" on
+        // the dot — which is how the disabled fact survives the precedence.
+        muted={!!link?.disabled}
+        status={addonRowStatus(addon)}
+        title={name}
+        // Two badges, on purpose: the version people scan an install list by,
+        // and the author — in a list that merges four sources, *who made it*
+        // is the fact that tells two same-named entries apart. The same pair
+        // the Add addon list shows, so an entry reads the same before and
+        // after it is installed.
+        badges={
+          <>
+            {addon.version && (
+              <Badge variant="secondary" className="h-5">
+                v{addon.version}
+              </Badge>
+            )}
+            {/* Which modes it runs in, as the two glyphs the install step and
+                Details use for them — read at a glance down the list, and the
+                only place the row says anything about modes now that the
+                toggle is gone. */}
+            {link?.conversation_mode && (
+              <RowFlag
+                icon={MessageCircle}
+                label="Enabled in conversation mode"
+              />
+            )}
+            {link?.building_mode && (
+              <RowFlag icon={Wrench} label="Enabled in building mode" />
+            )}
+            {addon.author && (
+              <Badge variant="outline" className="h-5 max-w-[12rem]">
+                <span className="truncate">{addon.author}</span>
+              </Badge>
+            )}
+          </>
+        }
+        flags={
+          link?.has_update ? (
             <RowFlag
               icon={ArrowUpCircle}
               tone="warning"
-              label={`Update available — v${link.latest_version ?? "?"}`}
+              label={updateFlagLabel}
             />
-          )}
-          {addon.published_package_id && (
-            <RowFlag icon={Upload} label="Published to the skills catalog" />
-          )}
-          <RowInfo
-            facts={[
-              addon.description,
-              addonFormatLabel(addon.plugin_type),
-              addon.marketplace_name && !isLocal
-                ? `Marketplace ${addon.marketplace_name}`
-                : null,
-              installedAt,
-              skills.length > 1 && `Ships ${skills.length} skills`,
-              soleSkill?.path,
-              soleSkill?.has_scripts && "Ships scripts the agent can run",
-              soleSkill &&
-                (soleSkill.user_invocable
-                  ? `Invocable from chat as /${soleSkill.name}`
-                  : "Model-invoked only"),
-              soleSkill && formatSkillSize(soleSkill.size_bytes),
-            ]}
-          />
-        </>
-      }
-    >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            aria-label={`Details of the ${noun} ${name}`}
-            // Frozen while the dialog it opened is up, so the triggering
-            // control cannot stack a second one (§6 "Pending"). It is behind a
-            // modal overlay meanwhile, so nothing is lost by disabling it.
-            disabled={detailOpen}
-            onClick={() => setDetailOpen(true)}
-          >
-            <BookOpen className="h-3.5 w-3.5" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="top" className="text-xs">
-          Details
-        </TooltipContent>
-      </Tooltip>
-
-      {canManage && link && (
-        <ToggleGroup
-          type="multiple"
-          variant="outline"
-          size="sm"
-          // Only this row: the write is per-link, so freezing the rest of the
-          // list for one round trip would be a cost with no matching risk.
-          disabled={isPending || link.disabled}
-          value={modes}
-          onValueChange={(next) => {
-            // An addon enabled in no mode is one that is on and does nothing:
-            // the row would still read "Loaded" while the engine never loads
-            // it, and the install step refuses the same state at the other
-            // end. The backend has no such guard, so the floor is here — the
-            // last segment cannot be turned off, and its tooltip says which
-            // control does turn the addon off.
-            if (next.length === 0) return
-            const turnedOn = next.find((mode) => !modes.includes(mode))
-            if (turnedOn) {
-              update.mutate(
-                turnedOn === "conversation"
-                  ? { conversation_mode: true }
-                  : { building_mode: true },
-              )
-              return
-            }
-            const turnedOff = modes.find((mode) => !next.includes(mode))
-            if (turnedOff) {
-              update.mutate(
-                turnedOff === "conversation"
-                  ? { conversation_mode: false }
-                  : { building_mode: false },
-              )
-            }
-          }}
-          className="shrink-0"
-          aria-label={`Modes ${name} is enabled in`}
-        >
-          {MODE_SEGMENTS.map((mode) => {
-            const isOnlyMode = modes.length === 1 && modes[0] === mode.value
-            return (
-              <TooltipToggleItem
-                key={mode.value}
-                value={mode.value}
-                label={mode.label}
-                tooltip={
-                  isOnlyMode
-                    ? `${mode.label} — the only mode it runs in. Use Disable in the menu to turn it off.`
-                    : mode.label
-                }
-                className="px-2"
+          ) : undefined
+        }
+      >
+        {/* A write in flight takes the menu's slot: a spinner where the `⋯`
+            was, named by its tooltip, so an update that runs a container
+            sync is visibly happening rather than a greyed-out trigger. */}
+        {pendingLabel ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="flex h-7 w-7 items-center justify-center"
+                aria-live="polite"
               >
-                {mode.short}
-              </TooltipToggleItem>
-            )
-          })}
-        </ToggleGroup>
-      )}
-
-      {/* A menu that would hold nothing is not rendered: an orphan row and a
-          read-only foreign install both fall through to Details alone. */}
-      {menuItems.length > 0 && (
-        <RowActionsMenu label={`the ${noun} ${name}`} disabled={isPending}>
-          {menuItems}
-        </RowActionsMenu>
-      )}
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                <span className="sr-only">{pendingLabel}</span>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              {pendingLabel}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          // A menu that would hold nothing is not rendered: an orphan row and
+          // a read-only foreign install both fall through to Details alone.
+          menuItems.length > 0 && (
+            <RowActionsMenu label={`the ${noun} ${name}`}>
+              {menuItems}
+            </RowActionsMenu>
+          )
+        )}
+      </ListRow>
 
       {/* Every dialog and confirm a menu item opens is owned by the row, not
           nested in the `DropdownMenuItem`: the item unmounts on select and
@@ -443,6 +401,6 @@ export function AddonRow({
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </ListRow>
+    </div>
   )
 }

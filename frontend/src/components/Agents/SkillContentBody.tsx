@@ -1,18 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
-import { Copy } from "lucide-react"
-import { useState } from "react"
 
 import type { SkillEntryPublic } from "@/client"
 import { AgentsService } from "@/client"
 import { SkillSource } from "@/components/Catalog/SkillSource"
 import { CopyableValue } from "@/components/Common/CopyableValue"
-import { Button } from "@/components/ui/button"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import useCustomToast from "@/hooks/useCustomToast"
 
 interface SkillContentBodyProps {
   agentId: string
@@ -28,10 +19,10 @@ interface SkillContentBodyProps {
  *
  * Extracted from `SkillContentDialog`, whose whole body this was, when the
  * addon detail dialog became its consumer: S2 must show *n* skills and one
- * `SKILL.md` **without** opening a second dialog (guidelines R8), so the
- * document pane has to be a block it can swap in place rather than a dialog it
- * can stack. Keeping the fetch, the shadowing note and the copy affordance
- * here is what stops the two readers from drifting apart.
+ * `SKILL.md` as a block its host can place — inline for a single-skill row,
+ * inside `SkillDetailDialog` for one skill of a many-skill plugin. Keeping the
+ * fetch and the shadowing note here is what stops the readers from drifting
+ * apart.
  *
  * It owns its own query, keyed per skill, so swapping the selected skill is a
  * cache read after the first look rather than a refetch.
@@ -42,9 +33,6 @@ export function SkillContentBody({
   className,
   sourceClassName,
 }: SkillContentBodyProps) {
-  const { showSuccessToast, showErrorToast } = useCustomToast()
-  const [isCopying, setIsCopying] = useState(false)
-
   const { data, isLoading, isError, error, refetch } = useQuery({
     // Nested under `["agent", agentId, "skills"]` on purpose: every path that
     // re-reads the environment invalidates that prefix, and this body was read
@@ -65,46 +53,9 @@ export function SkillContentBody({
   // would present it as this entry's file; say which one arrived instead.
   const isShadowedByAnother = !!data && data.path !== expectedPath
 
-  const copyBody = async () => {
-    if (!data?.content) return
-    setIsCopying(true)
-    try {
-      await navigator.clipboard.writeText(data.content)
-      showSuccessToast("SKILL.md copied")
-    } catch {
-      // `navigator.clipboard` is undefined outside a secure context and
-      // `writeText` rejects on a denied permission; unhandled, both leave a
-      // button that visibly does nothing.
-      showErrorToast("Failed to copy SKILL.md")
-    } finally {
-      setIsCopying(false)
-    }
-  }
-
   return (
     <div className={className}>
-      <div className="flex items-end gap-2">
-        <div className="min-w-0 flex-1">
-          <CopyableValue label="Path" value={path} />
-        </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8 shrink-0"
-              aria-label="Copy SKILL.md"
-              disabled={!data?.content || isCopying}
-              onClick={copyBody}
-            >
-              <Copy className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            Copy SKILL.md
-          </TooltipContent>
-        </Tooltip>
-      </div>
+      <CopyableValue label="Path" value={path} />
 
       {/* The `<pre>`, its scroll cap and its four states are the shared
           `SkillSource` primitive's job. */}

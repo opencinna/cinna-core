@@ -3419,6 +3419,28 @@ export const AddonPublicSchema = {
             ],
             title: 'Plugin Type'
         },
+        author: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Author'
+        },
+        repository_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Repository Url'
+        },
         link: {
             anyOf: [
                 {
@@ -19419,6 +19441,28 @@ export const LLMPluginMarketplacePluginPublicSchema = {
                 }
             ],
             title: 'Marketplace Name'
+        },
+        marketplace_owner: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Marketplace Owner'
+        },
+        repository_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Repository Url'
         }
     },
     type: 'object',

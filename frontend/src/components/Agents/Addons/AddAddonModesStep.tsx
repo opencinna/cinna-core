@@ -1,9 +1,16 @@
 import { useQuery } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, MessageCircle, Wrench } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronRight,
+  Info,
+  MessageCircle,
+  Wrench,
+} from "lucide-react"
 import { useState } from "react"
 
 import { SkillsService } from "@/client"
 import { SkillCatalogErrorAlert } from "@/components/Catalog/SkillCatalogErrorAlert"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
@@ -73,17 +80,6 @@ export function AddAddonModesStep({
 
   return (
     <div className="space-y-4">
-      {/* The choice, echoed read-only — never a second search. */}
-      <div className="rounded-md border px-3 py-2">
-        <p className="truncate text-sm font-medium">{selected.name}</p>
-        <p className="truncate text-xs text-muted-foreground">
-          {selected.origin ??
-            (isCatalogPackage
-              ? "From the skills catalog"
-              : "From a marketplace")}
-        </p>
-      </div>
-
       <div className="space-y-3">
         <Label className="text-sm font-medium">Enable for:</Label>
         <div className="flex items-start space-x-3">
@@ -125,6 +121,18 @@ export function AddAddonModesStep({
             At least one mode must be enabled
           </p>
         )}
+        {/* The one rule of thumb the two boxes need: every addon the engine
+            loads costs the conversation context, so a development-only one
+            should not ride along on every chat turn. */}
+        <Alert>
+          <Info />
+          <AlertDescription>
+            Enable a plugin that is only meant for developing the agent, not for
+            running it, in building mode alone. Keeping it out of conversation
+            mode improves that mode's performance and the quality of its
+            answers.
+          </AlertDescription>
+        </Alert>
       </div>
 
       {isCatalogPackage && revisions.length > 1 && (

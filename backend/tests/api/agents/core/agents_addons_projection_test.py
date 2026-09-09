@@ -198,7 +198,7 @@ def test_addons_projection_dedupes_folds_and_orders_every_source(
       8. Auth and ownership guards; an unknown agent id is a 404.
     """
     # ── Phase 1: a published catalog skill ───────────────────────────────
-    _publisher, pub_headers = make_developer(client, superuser_token_headers)
+    publisher, pub_headers = make_developer(client, superuser_token_headers)
     pub_agent, pub_env = make_agent_with_env(client, pub_headers, "Addon-Publisher")
     write_skill(pub_env, "pdf-report", description="Renders a PDF report.")
     publish_skill(
@@ -305,6 +305,9 @@ def test_addons_projection_dedupes_folds_and_orders_every_source(
     assert catalog_row["link"]["source"] == "catalog"
     assert catalog_row["link"]["skill_package_id"] == package_uuid
     assert catalog_row["version"] == "1.0"
+    assert catalog_row["author"] == (
+        publisher.get("full_name") or publisher["email"]
+    ), "a catalog row's author is the package's publisher, name before email"
     assert skill_names(catalog_row) == ["pdf-report"], (
         "the catalog install's index entry folds into its own row — the "
         "double listing this projection exists to remove"
@@ -316,6 +319,13 @@ def test_addons_projection_dedupes_folds_and_orders_every_source(
     assert plugin_row["source"] == "marketplace"
     assert plugin_row["plugin_type"] == "claude"
     assert plugin_row["version"] == "2.3"
+    assert plugin_row["author"] == "tester", (
+        "a marketplace row's author is the manifest's author_name"
+    )
+    assert plugin_row["repository_url"] == "https://example.com/plugins.git", (
+        "no homepage and a local source: the marketplace repository is where "
+        "the source lives"
+    )
     assert skill_names(plugin_row) == ["alpha-report", "beta-tools"]
     assert plugin_row["status"] == "warning"
     assert plugin_row["status_code"] == "shadowed"
@@ -326,6 +336,8 @@ def test_addons_projection_dedupes_folds_and_orders_every_source(
     assert local_row["key"] == "skill:local:zeta-local"
     assert local_row["link"] is None, "a workspace folder has no link"
     assert local_row["marketplace_name"] is None
+    assert local_row["author"] is None, "a workspace folder names no author"
+    assert local_row["repository_url"] is None
     assert skill_names(local_row) == ["zeta-local"]
     assert local_row["published_package_id"] == local_revision["package_id"]
     assert local_row["status"] == "ok"
@@ -500,6 +512,78 @@ def test_an_unreadable_index_never_takes_the_plugin_rows_with_it(
     )
     assert payload["addons"] == []
     assert payload["counts"] == {"plugins": 0, "skills": 0, "local_skills": 0}
+
+
+# ── Scenario 2b: the author label and the repository link ─────────────────
+
+
+def test_a_blank_manifest_author_falls_back_to_the_marketplace_owner(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+) -> None:
+    """
+    The official marketplace leaves ``author`` blank on most entries and names
+    itself once, at the top. The row's ``author`` therefore falls back to the
+    marketplace owner, on the install list **and** in discovery, so the badge
+    an entry shows does not change the moment it is installed. A manifest
+    ``homepage`` is the repository link; without one, the marketplace
+    repository is — rewritten from its SSH form so a browser can open it.
+    """
+    _install_adapter(patch_environment_adapter)
+    _owner, headers = make_developer(client, superuser_token_headers)
+    agent_id, _env = make_agent_with_env(client, headers, "Author-Fallback")
+
+    marketplace = create_marketplace(
+        client, superuser_token_headers, url="git@github.com:acme/plugins.git"
+    )
+    blank = seed_marketplace_plugin(
+        client,
+        superuser_token_headers,
+        marketplace["id"],
+        name="blank-author",
+        author_name="",
+        author_email="",
+        owner_name="Acme Tools",
+    )
+    assert blank["marketplace_owner"] == "Acme Tools"
+    assert blank["author_name"] == ""
+    assert blank["repository_url"] == "https://github.com/acme/plugins.git", (
+        "the SSH form the marketplace was registered with is rewritten for a "
+        "browser, not handed to an anchor tag as-is"
+    )
+    install_agent_plugin(client, headers, agent_id, blank["id"])
+
+    # Its own marketplace: a second sync of the first one with a catalog that
+    # no longer lists ``blank-author`` would drop that row and orphan the link.
+    other = create_marketplace(
+        client, superuser_token_headers, url="https://github.com/acme/other.git"
+    )
+    named = seed_marketplace_plugin(
+        client,
+        superuser_token_headers,
+        other["id"],
+        name="named-author",
+        marketplace_name="other-marketplace",
+        author_name="Jo Author",
+        homepage="https://github.com/acme/plugins/tree/main/plugins/named-author",
+        owner_name="Acme Tools",
+    )
+    install_agent_plugin(client, headers, agent_id, named["id"])
+
+    rows = addons_by_name(get_agent_addons(client, headers, agent_id))
+    assert rows["blank-author"]["author"] == "Acme Tools", (
+        "a blank manifest author reads as the marketplace owner"
+    )
+    assert rows["blank-author"]["repository_url"] == (
+        "https://github.com/acme/plugins.git"
+    )
+    assert rows["named-author"]["author"] == "Jo Author", (
+        "a named manifest author outranks the marketplace owner"
+    )
+    assert rows["named-author"]["repository_url"] == (
+        "https://github.com/acme/plugins/tree/main/plugins/named-author"
+    ), "the manifest's homepage is the most specific place on record"
 
 
 # ── Scenario 3: capabilities are replies, not role guesses ─────────────────

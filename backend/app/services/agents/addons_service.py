@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 
 from sqlmodel import Session, select
 
@@ -46,6 +47,7 @@ from app.models.agents.agent import Agent
 from app.models.environments.environment import AgentEnvironment
 from app.models.plugins.llm_plugin import (
     AgentPluginLinkWithUpdateInfo,
+    LLMPluginMarketplace,
     LLMPluginMarketplacePlugin,
     PluginSource,
 )
@@ -61,6 +63,19 @@ from app.services.agents.skill_manifest import SkillEntry
 from app.services.plugins.llm_plugin_service import LLMPluginService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PluginFacts:
+    """What a marketplace link's row reads off its live plugin + marketplace.
+
+    One record per plugin id, from one joined query — a list endpoint must not
+    pay N queries for a badge, a link and a status.
+    """
+
+    plugin_type: str | None
+    author: str | None
+    repository_url: str | None
 
 #: The marketplace format whose entries *are* skills rather than plugins. A
 #: ``skills``-format repository ships one ``SKILL.md`` folder per entry, so an
@@ -134,15 +149,28 @@ class AddonsService:
         # inferred.
         can_build = AgentService.can_build(session, user, agent)
 
-        plugin_types, unfetchable = AddonsService._plugin_facts(session, links)
+        plugin_facts, unfetchable = AddonsService._plugin_facts(session, links)
+        package_publishers = AddonsService._package_publishers(session, links)
 
         rows: list[AddonPublic] = []
         #: plugin_ref → the row its skills belong to.
         by_ref: dict[str, AddonPublic] = {}
 
         for link in links:
+            facts = plugin_facts.get(link.plugin_id) if link.plugin_id else None
             row = AddonsService._link_row(
-                link, plugin_type=plugin_types.get(link.plugin_id)
+                link,
+                plugin_type=facts.plugin_type if facts else None,
+                author=(
+                    package_publishers.get(link.skill_package_id)
+                    if link.source == PluginSource.catalog
+                    else (facts.author if facts else None)
+                ),
+                repository_url=(
+                    facts.repository_url
+                    if facts
+                    else AddonsService._snapshot_repository_url(link)
+                ),
             )
             rows.append(row)
             ref = AddonsService._link_ref(link)
@@ -285,7 +313,11 @@ class AddonsService:
 
     @staticmethod
     def _link_row(
-        link: AgentPluginLinkWithUpdateInfo, *, plugin_type: str | None
+        link: AgentPluginLinkWithUpdateInfo,
+        *,
+        plugin_type: str | None,
+        author: str | None = None,
+        repository_url: str | None = None,
     ) -> AddonPublic:
         """One installed plugin link as an addon row."""
         is_catalog = link.source == PluginSource.catalog
@@ -319,6 +351,8 @@ class AddonsService:
             version=link.installed_version,
             marketplace_name=link.marketplace_name,
             plugin_type=plugin_type,
+            author=author,
+            repository_url=repository_url,
             link=link,
         )
 
@@ -458,10 +492,24 @@ class AddonsService:
     # ── Grouped lookups ────────────────────────────────────────────────
 
     @staticmethod
+    def _snapshot_repository_url(link: AgentPluginLinkWithUpdateInfo) -> str | None:
+        """The marketplace repository the install was made from, browser-openable.
+
+        The fallback for a marketplace link whose plugin row is gone: the link
+        froze the repository at install time, and that is still where the
+        source lived. Same ``http(s)``-only rule as ``plugin_repository_url``.
+        """
+        if link.source != PluginSource.marketplace:
+            return None
+        return LLMPluginService.plugin_repository_url(
+            None, getattr(link, "snapshot_repository_url", None)
+        )
+
+    @staticmethod
     def _plugin_facts(
         session: Session, links: list[AgentPluginLinkWithUpdateInfo]
-    ) -> tuple[dict[uuid.UUID, str], set[uuid.UUID]]:
-        """``(plugin_id → marketplace format, ids we can no longer fetch)``.
+    ) -> tuple[dict[uuid.UUID, "_PluginFacts"], set[uuid.UUID]]:
+        """``(plugin_id → the row's marketplace-derived facts, ids we can no longer fetch)``.
 
         Only marketplace links resolve a live plugin row; every other source
         has no format of its own, and a per-row lookup would make a list
@@ -483,17 +531,64 @@ class AddonsService:
         if not plugin_ids:
             return {}, set()
         rows = session.exec(
-            select(
-                LLMPluginMarketplacePlugin.id,
-                LLMPluginMarketplacePlugin.plugin_type,
-                LLMPluginMarketplacePlugin.supported,
-            ).where(LLMPluginMarketplacePlugin.id.in_(plugin_ids))
+            select(LLMPluginMarketplacePlugin, LLMPluginMarketplace)
+            .join(
+                LLMPluginMarketplace,
+                LLMPluginMarketplace.id == LLMPluginMarketplacePlugin.marketplace_id,
+            )
+            .where(LLMPluginMarketplacePlugin.id.in_(plugin_ids))
         ).all()
-        types = {
-            row[0]: LLMPluginService._manifest_plugin_type(row[1]) for row in rows
+        facts: dict[uuid.UUID, _PluginFacts] = {}
+        unfetchable: set[uuid.UUID] = set()
+        for plugin, marketplace in rows:
+            facts[plugin.id] = _PluginFacts(
+                plugin_type=LLMPluginService._manifest_plugin_type(
+                    plugin.plugin_type
+                ),
+                # Manifest author first (name, then email), the marketplace's
+                # owner as the fallback — the same precedence the discover
+                # payload gives the Add addon dialog, so the badge on an entry
+                # does not change the moment it is installed.
+                author=(
+                    plugin.author_name
+                    or plugin.author_email
+                    or LLMPluginService.marketplace_owner_label(marketplace)
+                ),
+                repository_url=LLMPluginService.plugin_repository_url(
+                    plugin, marketplace.url
+                ),
+            )
+            if not plugin.supported:
+                unfetchable.add(plugin.id)
+        return facts, unfetchable
+
+    @staticmethod
+    def _package_publishers(
+        session: Session, links: list[AgentPluginLinkWithUpdateInfo]
+    ) -> dict[uuid.UUID, str]:
+        """``package id → publisher label`` for the catalog links, one query.
+
+        The label is the publisher's full name, else their email — the same
+        precedence the catalog's own entries use (``skillPublisherLabel`` on
+        the client), so the badge on the installed row matches the one on the
+        catalog card. A package whose publisher account is gone yields no
+        entry, and the row's ``author`` stays ``None``.
+        """
+        package_ids = [
+            link.skill_package_id
+            for link in links
+            if link.source == PluginSource.catalog and link.skill_package_id
+        ]
+        if not package_ids:
+            return {}
+        rows = session.exec(
+            select(SkillPackage.id, User.full_name, User.email)
+            .join(User, User.id == SkillPackage.publisher_user_id)
+            .where(SkillPackage.id.in_(package_ids))
+        ).all()
+        return {
+            row[0]: (row[1] or row[2]) for row in rows if (row[1] or row[2])
         }
-        unfetchable = {row[0] for row in rows if not row[2]}
-        return types, unfetchable
 
     @staticmethod
     def _published_package_ids(

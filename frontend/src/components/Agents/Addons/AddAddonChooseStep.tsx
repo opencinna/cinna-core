@@ -43,7 +43,7 @@ interface AddAddonChooseStepProps {
   onSelect: (result: AddAddonResult) => void
   isLoading: boolean
   disabled: boolean
-  /** The addons projection failed: nothing can be marked already-installed. */
+  /** The addons projection failed: nothing can be filtered out as installed. */
   addonsUnavailable: boolean
   addonsError: unknown
   onRetryAddons: () => void
@@ -158,7 +158,9 @@ export function AddAddonChooseStep({
             </Alert>
           )}
 
-          <div className="max-h-[45vh] overflow-y-auto">
+          {/* Right padding keeps the rows' trailing flag clear of the
+              scrollbar the cap draws. */}
+          <div className="max-h-[45vh] overflow-y-auto pr-2">
             {isLoading ? (
               <div className="space-y-1.5">
                 <Skeleton className="h-[48px] w-full rounded-md" />

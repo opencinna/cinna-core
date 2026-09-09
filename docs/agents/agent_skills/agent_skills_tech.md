@@ -913,9 +913,9 @@ plainly exists.
 | File | Role |
 |------|------|
 | ~~`Agents/AgentSkillsCard.tsx`~~ → `Agents/Addons/AddonsCard.tsx` | Query key was `["agent", agentId, "skills"]`, now `["agent", agentId, "addons"]`; Refresh mutation. A 200 with `result.error` toasts a **failure** — the route never fails on an unreachable env, so "Skills refreshed" over an error banner would say the opposite of the truth |
-| ~~`Agents/SkillRow.tsx`~~ → `Agents/Addons/AddonRow.tsx` | `ListRow` + `RowFlag` + `RowInfo`; owns its dialog, mounted only while open. `AddonRow` deliberately does **not** reuse `SkillRow`: no `meta` line, a different status precedence, a different action budget |
+| ~~`Agents/SkillRow.tsx`~~ → `Agents/Addons/AddonRow.tsx` | `ListRow` with version + author badges; the row itself opens its dialog, mounted only while open. `AddonRow` deliberately does **not** reuse `SkillRow`: no `meta` line, no info tooltip, a different status precedence, a different action budget |
 | ~~`Agents/AllSkillsSheet.tsx`~~ → `Agents/Addons/AllAddonsSheet.tsx` | "Show all (N)" |
-| ~~`Agents/SkillContentDialog.tsx`~~ → `Agents/SkillContentBody.tsx` | `SKILL.md` viewer, now a body rendered inside `AddonDetailDialog` rather than a second dialog |
+| ~~`Agents/SkillContentDialog.tsx`~~ → `Agents/SkillContentBody.tsx` | `SKILL.md` viewer body, rendered inside `AddonDetailDialog` for a single-skill row and inside `Agents/Addons/SkillDetailDialog.tsx` for one skill of a many-skill plugin. Markdown-rendered through the shared `Catalog/SkillSource.tsx`, frontmatter split off |
 | `frontend/src/utils/skills.ts` | `skillsIndexErrorCopy`, `skillRowStatus`, `formatSkillSize`, `sortSkills`, `skillKey` — shared so the card, the row and the sheet cannot drift on sort order or on what a dot means. Still live: `utils/addons.ts` builds on it rather than duplicating it |
 | `frontend/src/components/Agents/AgentConfigTab.tsx` | Hosted the card until the Addons tab took it. Was deliberately **not** gated on `showOperationalSettings` or `readOnly`, which is why `"addons"` had to join the `agentUserTabs` set in the same change |
 | `frontend/src/components/Chat/SlashCommandPopup.tsx` | `kind === "skill"` renders a `h-5` outline `Badge`, visible text inside the `role="option"` row (so it is part of the accessible name and needs no `sr-only` twin) |
