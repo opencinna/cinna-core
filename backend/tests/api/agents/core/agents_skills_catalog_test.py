@@ -167,10 +167,13 @@ def test_publish_creates_a_package_then_appends_immutable_revisions(
     # Nobody has installed it, and the publisher is not "somebody".
     assert entry["install_count"] == 0
     assert entry["installed_in_agent_ids"] == []
-    # Default identity: <reversed host>.<8 hex of publisher>.<skill name>
-    assert entry["package_id"].endswith(f".{_user['id'][:8]}.pdf-report"), (
+    # Default identity: <reversed host>.skill.<skill name>. No publisher slug
+    # — that is only appended when the plain id is already taken, which it is
+    # not here.
+    assert entry["package_id"].endswith(".skill.pdf-report"), (
         entry["package_id"]
     )
+    assert _user["id"][:8] not in entry["package_id"]
 
     # ── Phase 4: detail + content ────────────────────────────────────────
     detail = get_skill_package(client, headers, package_uuid)

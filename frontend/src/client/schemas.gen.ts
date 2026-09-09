@@ -26796,6 +26796,17 @@ export const SkillEntryPublicSchema = {
             title: 'Size Bytes',
             default: 0
         },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
         error: {
             anyOf: [
                 {
@@ -27510,6 +27521,66 @@ export const SkillPackagesPublicSchema = {
     required: ['data', 'count'],
     title: 'SkillPackagesPublic',
     description: 'List response for the skills catalog.'
+} as const;
+
+export const SkillPublishPreviewSchema = {
+    properties: {
+        version: {
+            type: 'string',
+            title: 'Version'
+        },
+        header_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Header Version'
+        },
+        latest_published_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Published Version'
+        },
+        package_id: {
+            type: 'string',
+            title: 'Package Id'
+        },
+        package_id_disambiguated: {
+            type: 'boolean',
+            title: 'Package Id Disambiguated',
+            default: false
+        },
+        is_republish: {
+            type: 'boolean',
+            title: 'Is Republish',
+            default: false
+        },
+        next_revision_number: {
+            type: 'integer',
+            title: 'Next Revision Number',
+            default: 1
+        }
+    },
+    type: 'object',
+    required: ['version', 'package_id'],
+    title: 'SkillPublishPreview',
+    description: `Response of \`\`GET /agents/{agent_id}/skills/{name}/publish-preview\`\`.
+
+Everything the Share dialog needs to show the publisher what pressing the
+button will do, computed by the same code that will do it. Nothing here is
+a promise: the values are re-derived inside the publish lock, so a
+concurrent publish of the same skill can still move the revision number
+between this call and the next one.`
 } as const;
 
 export const SkillPublishRequestSchema = {

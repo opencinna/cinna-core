@@ -36,6 +36,8 @@ import gzip
 import hashlib
 import io
 import logging
+import os
+import re
 import shutil
 import tarfile
 import uuid
@@ -44,6 +46,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -67,9 +70,11 @@ from app.models.skills.skill_package_access_grant import (
 from app.models.skills.skill_package_revision import SkillPackageRevision
 from app.models.users.user import User
 from app.services.agents.agent_service import AgentService, CanBuildError
+from app.services.agents.agent_skills_service import AgentSkillsService
 from app.services.agents.skill_manifest import (
     DEFAULT_MAX_TOTAL_BYTES,
     SKILL_NAME_RE,
+    coerce_version,
     parse_skill_dir,
 )
 from app.services.bundles.bundle_id_service import BUNDLE_ID_REGEX, BundleIdService
@@ -95,6 +100,21 @@ MAX_PACKAGE_BYTES = DEFAULT_MAX_TOTAL_BYTES
 
 #: Cap on a served ``SKILL.md`` preview. Matches ``AgentSkillsService``.
 MAX_CONTENT_BYTES = 256 * 1024
+
+#: The fixed segment that marks a reverse-DNS id as a *skill package* rather
+#: than a bundle. ``io.opencinna.cinna.skill.pdf-report``.
+PACKAGE_ID_SKILL_SEGMENT = "skill"
+
+#: The version a skill that has never been versioned starts at.
+FIRST_VERSION = "1.0.0"
+
+#: Splits a version into "everything up to the last run of digits" + that run,
+#: which is what :func:`_bump_version` increments. Deliberately not a semver
+#: parser: the frontmatter ``version`` is free text by the Agent Skills
+#: standard, and ``1.0.0`` / ``1.2`` / ``v3`` / ``2026-09-09`` all have an
+#: obvious successor under this rule while a strict parser would reject three
+#: of the four and force the publisher to think of a number anyway.
+_VERSION_TAIL_RE = re.compile(r"^(?P<head>.*?)(?P<num>\d+)$")
 
 #: Per-``(publisher, skill name)`` publish locks. A package is identified by
 #: that pair before its row exists, so locking on the package uuid would leave
@@ -353,16 +373,35 @@ class SkillCatalogService:
                 requested_package_id=package_id,
             )
 
-            next_number = (
-                session.exec(
-                    select(
-                        func.coalesce(
-                            func.max(SkillPackageRevision.revision_number), 0
-                        )
-                    ).where(SkillPackageRevision.package_id == package.id)
-                ).one()
-                or 0
-            ) + 1
+            next_number, published_versions, latest_version = (
+                SkillCatalogService._version_history(session, package.id)
+            )
+
+            resolved_version = SkillCatalogService.resolve_version(
+                requested=version,
+                frontmatter_version=entry.version,
+                published_versions=published_versions,
+                latest_version=latest_version,
+            )
+
+            # Written back BEFORE the snapshot is taken, so the published
+            # bytes carry the version in their own header — the snapshot is
+            # immutable and there is no second chance to put it there. A
+            # failure here is logged and not fatal: the revision row still
+            # carries the version, and a workspace that cannot be written to
+            # is not a reason to refuse a publish that is otherwise valid.
+            version_written = await asyncio.to_thread(
+                SkillCatalogService._write_version_to_skill_md,
+                skill_dir / "SKILL.md",
+                resolved_version,
+            )
+            if not version_written:
+                logger.warning(
+                    "skill_version_writeback_failed agent_id=%s skill=%s "
+                    "version=%s — publishing anyway; the revision carries the "
+                    "version even though its SKILL.md does not",
+                    agent.id, entry.name, resolved_version,
+                )
 
             revision_dir = SkillCatalogService.revision_dir(package.id, next_number)
             content_hash, size_bytes, archive_sha256 = await asyncio.to_thread(
@@ -377,8 +416,24 @@ class SkillCatalogService:
             revision = SkillPackageRevision(
                 package_id=package.id,
                 revision_number=next_number,
-                version=version or None,
-                frontmatter=dict(entry.frontmatter or {}),
+                version=resolved_version,
+                # The frontmatter as the snapshot now carries it, not as it was
+                # parsed a moment ago: the write-back above added or changed
+                # the version key, and a revision whose stored frontmatter
+                # disagreed with its own snapshot would be a second answer to
+                # "what version is this".
+                #
+                # Which is exactly why the merge is conditional. On the
+                # degraded path the branch above tolerates — the workspace
+                # could not be written — the snapshot carries no ``version:``
+                # at all, so merging one in here would manufacture the
+                # disagreement this line exists to prevent. The revision's own
+                # ``version`` column still records what it was published as.
+                frontmatter=(
+                    {**(entry.frontmatter or {}), "version": resolved_version}
+                    if version_written
+                    else dict(entry.frontmatter or {})
+                ),
                 snapshot_path=str(revision_dir / "skills" / entry.name),
                 content_hash=content_hash,
                 archive_sha256=archive_sha256,
@@ -406,7 +461,131 @@ class SkillCatalogService:
             "skill_published package_id=%s revision=%s agent_id=%s size=%s",
             package.package_id, revision.revision_number, agent.id, size_bytes,
         )
+
+        # The write-back changed a file the index is a cache of, so the agent's
+        # own row would keep showing the previous version — or none — until
+        # something else happened to touch ``skills/``. Forced, because this is
+        # direct evidence rather than a guess.
+        #
+        # **Only while the environment is actually running.** Publishing from a
+        # SUSPENDED environment is a supported, pinned behaviour (the files are
+        # read off the host), but ``refresh_after_action`` does not wake a
+        # container — that is ``force_refresh`` — so on a sleeping env
+        # ``fetch_index`` fails and ``_persist_error`` *commits*
+        # ``skills_error="env_not_running"``. The exception is swallowed; the
+        # stamped error is not. A successful publish would then paint "the
+        # environment is asleep" over the Addons card until a manual Refresh.
+        # Nothing is lost by skipping: the host-side backfill reads the very
+        # header this publish just wrote, on the next read either way.
+        from app.models.environments.environment import AgentEnvironment
+        from app.services.agents.agent_skills_service import SLEEPING_STATUSES
+
+        env = (
+            session.get(AgentEnvironment, agent.active_environment_id)
+            if agent.active_environment_id
+            else None
+        )
+        if env is not None and env.status not in SLEEPING_STATUSES:
+            await AgentSkillsService.refresh_after_action(
+                env, db_session=session, force=True
+            )
+
         return revision
+
+    @staticmethod
+    def _version_history(
+        session: Session, package_uuid: uuid.UUID
+    ) -> tuple[int, set[str], str | None]:
+        """``(next revision number, every version used, the newest version)``.
+
+        One read for all three, because deriving them separately is how a
+        package could publish revision 4 as a version revision 3 already used.
+        Shared by the publish path and the preview the dialog prefills from, so
+        the number shown and the number written can never be two answers.
+        """
+        history = session.exec(
+            select(
+                SkillPackageRevision.revision_number,
+                SkillPackageRevision.version,
+            )
+            .where(SkillPackageRevision.package_id == package_uuid)
+            .order_by(SkillPackageRevision.revision_number.desc())
+        ).all()
+        next_number = (history[0][0] if history else 0) + 1
+        return (
+            next_number,
+            {v for _, v in history if v},
+            next((v for _, v in history if v), None),
+        )
+
+    @staticmethod
+    def publish_preview(
+        session: Session,
+        *,
+        agent: Agent,
+        user: User,
+        skill_name: str,
+    ) -> "SkillPublishPreview":
+        """What :meth:`publish_from_agent` would do if called with no body.
+
+        Exists because both of the values the Share dialog needs to *show* can
+        only be computed here. The version comes from the skill's own
+        ``SKILL.md`` header, which lives on the publisher's workspace and is
+        not on the wire anywhere; the package id has to be checked against
+        every package on the instance, including the ones this viewer cannot
+        see — a client-side uniqueness check over the catalog it is allowed to
+        list would happily derive an id that is already taken by somebody
+        else's private package.
+
+        Deliberately does **not** run the three content refusals
+        (``skill_invalid`` / ``skill_contains_secrets`` / ``skill_too_large``):
+        a preview that refused would leave the dialog with nothing to show for
+        a skill whose row already carries that warning, and the publish itself
+        is where a refusal belongs. What it does share with publish is the
+        authorization gate and the workspace lookup, so a dialog that opens is
+        a dialog whose Share button can work.
+        """
+        from app.models.skills.schemas import SkillPublishPreview
+
+        try:
+            AgentService.assert_can_build(session, user, agent)
+        except CanBuildError as exc:
+            raise SkillCatalogError(exc.reason, exc.message) from exc
+
+        skill_dir = SkillCatalogService._resolve_skill_dir(session, agent, skill_name)
+        entry = parse_skill_dir(skill_dir, rel_path=f"skills/{skill_name}")
+        # The directory name, not ``entry.name``: an invalid skill has no
+        # trustworthy frontmatter name, and the folder is what publish keys on.
+        existing = SkillCatalogService._find_publisher_package(
+            session, publisher_user_id=user.id, entry_name=skill_name
+        )
+
+        if existing is not None:
+            package_id = existing.package_id
+            disambiguated = False
+            next_number, published_versions, latest_version = (
+                SkillCatalogService._version_history(session, existing.id)
+            )
+        else:
+            package_id, disambiguated = SkillCatalogService.derive_package_id(
+                session, publisher_user_id=user.id, skill_name=skill_name
+            )
+            next_number, published_versions, latest_version = 1, set(), None
+
+        return SkillPublishPreview(
+            version=SkillCatalogService.resolve_version(
+                requested=None,
+                frontmatter_version=entry.version,
+                published_versions=published_versions,
+                latest_version=latest_version,
+            ),
+            header_version=entry.version,
+            latest_published_version=latest_version,
+            package_id=package_id,
+            package_id_disambiguated=disambiguated,
+            is_republish=existing is not None,
+            next_revision_number=next_number,
+        )
 
     @staticmethod
     def _resolve_skill_dir(
@@ -574,7 +753,9 @@ class SkillCatalogService:
             return existing, False
 
         package_id = (requested_package_id or "").strip() or (
-            SkillCatalogService.default_package_id(user.id, entry_name)
+            SkillCatalogService.derive_package_id(
+                session, publisher_user_id=user.id, skill_name=entry_name
+            )[0]
         )
         if not BUNDLE_ID_REGEX.match(package_id):
             raise SkillCatalogError(
@@ -582,10 +763,7 @@ class SkillCatalogService:
                 "A package id must be a reverse-DNS name, e.g. "
                 "io.example.team.pdf-report.",
             )
-        taken = session.exec(
-            select(SkillPackage).where(SkillPackage.package_id == package_id)
-        ).first()
-        if taken is not None:
+        if SkillCatalogService._package_id_taken(session, package_id):
             raise SkillCatalogError(
                 "package_id_taken",
                 f"The package id '{package_id}' is already in use on this "
@@ -603,20 +781,267 @@ class SkillCatalogService:
             is_listed=True,
         )
         session.add(package)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            # The check above is a read, and ``derive_package_id`` is
+            # read-then-write: two publishers of a same-named skill can both
+            # find the base id free and both insert. ``uq_skill_package_package_id``
+            # is what actually decides, and without this the loser got a raw
+            # 500 on an aborted session — while the tech doc promised them a
+            # coded ``package_id_taken``. The doc was right about the intent;
+            # only the handler was missing.
+            #
+            # The rollback is not optional: the session is aborted, and the
+            # publish path goes on to write a revision row.
+            session.rollback()
+            raise SkillCatalogError(
+                "package_id_taken",
+                f"The package id '{package_id}' was claimed by another "
+                "publish a moment ago. Try again — a fresh id will be "
+                "derived.",
+            ) from exc
         session.refresh(package)
         return package, True
 
     @staticmethod
-    def default_package_id(publisher_user_id: uuid.UUID, skill_name: str) -> str:
-        """``<reversed host>.<publisher slug>.<skill name>``.
+    def base_package_id(skill_name: str) -> str:
+        """``<reversed host>.skill.<skill name>``.
 
         Mirrors :meth:`BundleIdService.generate_bundle_id` — same reversed host
-        prefix, same 8-hex-char owner slug — so the two id families read as one
-        namespace rather than two conventions.
+        prefix — so bundle ids and package ids read as one namespace rather
+        than two conventions, with the fixed ``skill`` segment as the thing
+        that says which family an id belongs to.
+
+        Deliberately carries **no publisher slug**: the id a publisher pastes
+        into a README should be readable, and the common case is the only
+        person on the instance with a skill by that name. The slug is what
+        :meth:`derive_package_id` falls back to when that turns out not to
+        hold.
         """
         prefix = BundleIdService.reversed_host_prefix()
-        return f"{prefix}.{str(publisher_user_id)[:8]}.{skill_name}"
+        return f"{prefix}.{PACKAGE_ID_SKILL_SEGMENT}.{skill_name}"
+
+    @classmethod
+    def derive_package_id(
+        cls,
+        session: Session,
+        *,
+        publisher_user_id: uuid.UUID,
+        skill_name: str,
+    ) -> tuple[str, bool]:
+        """The free package id this skill would get, and whether it collided.
+
+        ``package_id`` is unique **instance-wide** while a package's identity
+        is per-publisher, so two people who each keep a ``pdf-report`` skill
+        derive the same base id and the second one's publish would die on
+        ``package_id_taken`` — a refusal whose only fix is "open Advanced and
+        invent a reverse-DNS name", asked of someone who did nothing wrong.
+
+        So the collision is resolved rather than reported: the publisher's own
+        8-hex slug (the one :meth:`BundleIdService.generate_bundle_id` uses) is
+        appended, then a counter if even that is taken. The second element of
+        the return is what the Share dialog needs to *show* the disambiguated
+        id rather than spring it on the publisher after the fact.
+
+        Read-then-write, so two simultaneous first publishes of the same skill
+        name can still both pick the same free id; the unique constraint is
+        what actually decides, and the loser sees ``package_id_taken``. The
+        publish lock is keyed per ``(publisher, skill)`` and cannot close a
+        race between two *different* publishers.
+        """
+        base = cls.base_package_id(skill_name)
+        if not cls._package_id_taken(session, base):
+            return base, False
+
+        owned = f"{base}.{publisher_user_id.hex[:8]}"
+        if not cls._package_id_taken(session, owned):
+            return owned, True
+
+        for suffix in range(2, 100):
+            candidate = f"{owned}-{suffix}"
+            if not cls._package_id_taken(session, candidate):
+                return candidate, True
+
+        # 98 packages by one publisher under one skill name is not a state
+        # anybody reaches; a random tail beats raising at this point.
+        return f"{owned}-{uuid.uuid4().hex[:8]}", True
+
+    @staticmethod
+    def _package_id_taken(session: Session, package_id: str) -> bool:
+        return (
+            session.exec(
+                select(SkillPackage).where(SkillPackage.package_id == package_id)
+            ).first()
+            is not None
+        )
+
+    # ── Versioning ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _bump_version(version: str) -> str | None:
+        """The obvious successor of ``version``, or ``None`` if it has none.
+
+        Increments the **last run of digits** in the string, so ``1.0.0`` →
+        ``1.0.1``, ``1.2`` → ``1.3``, ``v3`` → ``v4`` and ``2026-09-09`` →
+        ``2026-09-10``. A version with no digits at all (``alpha``) has no
+        successor and the caller starts a fresh series instead.
+        """
+        match = _VERSION_TAIL_RE.match(version.strip())
+        if match is None:
+            return None
+        return f"{match['head']}{int(match['num']) + 1}"
+
+    @classmethod
+    def resolve_version(
+        cls,
+        *,
+        requested: str | None,
+        frontmatter_version: str | None,
+        published_versions: set[str],
+        latest_version: str | None,
+    ) -> str:
+        """What this publish should be called.
+
+        The rule is one sentence: **the header's version, unless it has already
+        been published — then the next one after the newest release.**
+
+        That is what makes "press Share and get a sensible number" and "hand-edit
+        ``SKILL.md`` to 2.0.0 and have it honoured" the same rule rather than two
+        competing ones. An explicitly requested version always wins and is never
+        de-duplicated: the publisher typed it, and two revisions may legitimately
+        carry one version (a re-publish of the same release).
+
+        Args:
+            requested: What the caller asked for, if anything.
+            frontmatter_version: ``version:`` as it stands in ``SKILL.md`` now.
+            published_versions: Every version this package has already used.
+            latest_version: The newest revision's version, if it has one.
+        """
+        # Through the same normaliser the header goes through, never raw: this
+        # value is written into a frontmatter block, and ``coerce_version`` is
+        # where the one-line rule that makes that safe lives. A request whose
+        # version is nothing but control characters falls through to the
+        # derivation rather than publishing a blank.
+        explicit = coerce_version(requested)
+        if explicit:
+            return explicit
+
+        header = (frontmatter_version or "").strip()
+        if header and header not in published_versions:
+            return header
+
+        # The series to continue: the newest release, else the header (a
+        # package whose only releases were unversioned), else nothing.
+        seed = (latest_version or "").strip() or header
+        if seed:
+            # ``.1`` rather than ``FIRST_VERSION`` when a release exists but has
+            # no successor: a package whose latest revision is ``2.0.0-beta``
+            # would otherwise publish its *next* revision as ``1.0.0`` — lower
+            # than its predecessor — and stamp that into the author's header.
+            # Only a package with no releases at all starts a fresh series.
+            candidate = cls._bump_version(seed) or f"{seed}.1"
+        else:
+            candidate = FIRST_VERSION
+
+        # A bump can still land on a taken version — versions are not unique,
+        # so a publisher who hand-typed 1.0.5 before 1.0.4 was released leaves
+        # a hole the series walks into.
+        seen = 0
+        while candidate in published_versions and seen < 100:
+            candidate = cls._bump_version(candidate) or f"{candidate}.1"
+            seen += 1
+        return candidate
+
+    @staticmethod
+    def _write_version_to_skill_md(skill_md: Path, version: str) -> bool:
+        """Set ``version:`` in the frontmatter of ``skill_md``. Runs OFF the loop.
+
+        The version a skill was published as belongs **in the skill**, not only
+        in a database row: a reader of the folder, the snapshot inside the
+        published revision and the agent's own addon row should all say the
+        same number, and the next publish reads this line back to work out the
+        one after it.
+
+        A **surgical line edit**, never a re-serialisation. ``parse_frontmatter``
+        is a restricted-subset reader with no writer behind it, so rebuilding
+        the block from the parsed mapping would quietly rewrite the author's
+        quoting, drop their comments and flatten any shape the reader kept "as
+        text". One line is replaced or inserted and every other byte — the BOM,
+        the line endings, the body — survives.
+
+        Returns True when the file carries ``version`` afterwards — including
+        when it already did. False means the write genuinely did not happen
+        (an unreadable file, a missing fence, a read-only workspace), which is
+        the only case a caller should say anything about.
+        """
+        try:
+            raw = skill_md.read_bytes()
+        except OSError:
+            return False
+        had_bom = raw.startswith(b"\xef\xbb\xbf")
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return False
+
+        if not text.startswith("---"):
+            return False
+        newline = "\r\n" if "\r\n" in text else "\n"
+        trailing = newline if text.endswith(("\n", "\r")) else ""
+        lines = text.splitlines()
+
+        end_index: int | None = None
+        for index in range(1, len(lines)):
+            if lines[index].strip() in ("---", "..."):
+                end_index = index
+                break
+        if end_index is None:
+            return False
+
+        line = f"version: {version}"
+        # Only top-level keys: an indented ``version:`` belongs to a nested
+        # mapping the author wrote and is none of our business.
+        at: int | None = None
+        after_name: int | None = None
+        for index in range(1, end_index):
+            candidate = lines[index]
+            if candidate[:1].isspace():
+                continue
+            key = candidate.split(":", 1)[0].strip()
+            if key == "version":
+                at = index
+                break
+            if key == "name":
+                after_name = index
+
+        if at is not None:
+            if lines[at] == line:
+                return True
+            lines[at] = line
+        else:
+            # Beside ``name``, which is the key it qualifies. Falling back to
+            # the top of the block rather than the bottom keeps it above a
+            # multi-line ``description``, where a reader looks for it.
+            lines.insert((after_name + 1) if after_name is not None else 1, line)
+
+        updated = newline.join(lines) + trailing
+        payload = (b"\xef\xbb\xbf" if had_bom else b"") + updated.encode("utf-8")
+
+        # Atomic: a half-written SKILL.md is an unparseable skill, and this
+        # file belongs to the user, not to us. The temp name is dot-prefixed so
+        # a concurrent scan of the folder ignores it.
+        tmp = skill_md.with_name(f".{skill_md.name}.tmp")
+        try:
+            tmp.write_bytes(payload)
+            os.replace(tmp, skill_md)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass  # the temp file is already the failure being handled
+            return False
+        return True
 
     @staticmethod
     def _write_snapshot_to_disk(

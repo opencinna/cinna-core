@@ -97,6 +97,10 @@ SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
 
+#: Bound on the optional frontmatter ``version``. Mirrors
+#: ``SkillPublishRequest.version``.
+MAX_VERSION_LENGTH = 64
+
 #: ``SKILL.md`` bodies above this are still projected, but flagged ``oversized``.
 MAX_BODY_BYTES = 64 * 1024
 
@@ -305,6 +309,14 @@ class SkillEntry:
     #: predicate. Always present (empty = clean) so a consumer can test the
     #: scan result without having to first work out whether the scan ran.
     secret_paths: list[str] = field(default_factory=list)
+    #: The optional ``version`` key of the frontmatter, as a string.
+    #:
+    #: Optional by the Agent Skills standard and optional here: a skill without
+    #: one is valid, projectable and publishable. The catalog fills it in on
+    #: the first publish (writing the line back into ``SKILL.md``), so a
+    #: published skill carries its version in its own header rather than only
+    #: in a database row a reader of the folder cannot see.
+    version: str | None = None
     frontmatter: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -339,6 +351,7 @@ class SkillEntry:
             "error": self.error.to_dict() if self.error else None,
             "warning": self.warning.to_dict() if self.warning else None,
             "secret_paths": list(self.secret_paths),
+            "version": self.version,
         }
         if include_frontmatter:
             data["frontmatter"] = self.frontmatter
@@ -348,6 +361,44 @@ class SkillEntry:
 # ---------------------------------------------------------------------------
 # Frontmatter parsing (restricted YAML subset)
 # ---------------------------------------------------------------------------
+
+
+def coerce_version(raw: Any) -> str | None:
+    """Normalise a frontmatter ``version`` into a string, or ``None``.
+
+    Public because the catalog publish path reads the same key and has to
+    agree with the index on what counts as a version.
+
+    ``_coerce_scalar`` has already turned ``version: 2`` into an ``int`` and
+    ``version: 1.0`` into a ``float`` before this sees them, so a bare number
+    is stringified rather than dropped — ``1.0`` in the header and ``"1.0"`` on
+    the row are the same version, and a publisher who wrote the unquoted form
+    should not silently lose it. Anything that is not a scalar (a list, a
+    mapping) is not a version and becomes ``None``.
+    """
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        raw = str(raw)
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    # A version is ONE line, and this is load-bearing rather than tidy: the
+    # catalog writes this value back into a ``SKILL.md`` frontmatter block as
+    # ``version: <value>``, so a newline would inject arbitrary top-level keys
+    # into the author's own header — a ``name:`` that no longer matches the
+    # folder bricks the skill, a ``user-invocable: false`` silently unhooks it
+    # from the slash-command popup, and the published revision is immutable so
+    # it ships. Rejected outright rather than escaped or flattened: a version
+    # containing a control character is a mistake or an attack, never an
+    # intention, and silently changing it would publish something the caller
+    # did not ask for.
+    if any(ch in value for ch in "\r\n") or any(ch < " " for ch in value):
+        return None
+    # Same bound as ``SkillPublishRequest.version``: the two describe one
+    # field, and a header that outgrew the request body would publish a
+    # version the API could not have been asked for.
+    return value[:MAX_VERSION_LENGTH] or None
 
 
 def _coerce_scalar(raw: str) -> Any:
@@ -708,6 +759,7 @@ def parse_skill_dir(
         error=None,
         warning=warning,
         secret_paths=secret_paths,
+        version=coerce_version(frontmatter.get("version")),
         frontmatter=frontmatter,
     )
 

@@ -67,7 +67,12 @@ export function ShareSkillDialog({
 }: ShareSkillDialogProps) {
   const queryClient = useQueryClient()
 
-  const [version, setVersion] = useState("")
+  // `null` means "the publisher has not touched this field", exactly as
+  // `visibilityDraft` below: the suggestion arrives from an async query after
+  // the dialog mounts, so seeding `useState(preview.version)` would keep the
+  // empty string it was initialised with and post "no version" on the ordinary
+  // open-and-press-Share path.
+  const [versionDraft, setVersionDraft] = useState<string | null>(null)
   const [releaseNotes, setReleaseNotes] = useState("")
   // `null` means "the publisher has not touched this control". It cannot be
   // seeded with `useState(existing?.visibility)`: `existing` arrives from an
@@ -106,6 +111,37 @@ export function ShareSkillDialog({
   const existing =
     catalog?.data.find((entry) => entry.id === publishedPackageId) ??
     catalog?.data.find((entry) => entry.can_manage && entry.name === skill.name)
+
+  // What pressing Share would actually do — the version it would publish as
+  // and the package id it would take. Both answers are the server's alone: the
+  // version is read out of this skill's own `SKILL.md` on the agent's
+  // workspace, which is on no wire the client can see, and the id has to be
+  // checked for collisions against packages this viewer is not allowed to
+  // list. It is the same code the publish runs, so the number shown is the
+  // number written.
+  const {
+    data: preview,
+    isLoading: isPreviewLoading,
+    error: previewError,
+  } = useQuery({
+    queryKey: ["agent", agentId, "skills", skill.name, "publish-preview"],
+    queryFn: () =>
+      SkillsService.previewAgentSkillPublish({ agentId, name: skill.name }),
+    enabled: open,
+    // No `staleTime`. The stated worry — the number moving under a publisher
+    // mid-type — is already handled by `versionDraft ?? preview?.version`
+    // below, which stops reading the query the moment they touch the field.
+    // What an infinite staleTime bought instead was a *stale* suggestion: edit
+    // `version:` in SKILL.md, close and reopen Share inside `gcTime`, and the
+    // dialog still offered the old number — a small replay of the very bug
+    // this round exists to fix.
+    retry: false,
+  })
+
+  // The publisher's typing, else the server's suggestion. An emptied field
+  // posts `null`, which the server answers with this same suggestion — so
+  // clearing it is "let the server decide", never "publish without a version".
+  const version = versionDraft ?? preview?.version ?? ""
 
   // What the toggle shows: the publisher's choice, else the package's current
   // visibility on a republish, else the default for a first share.
@@ -149,6 +185,9 @@ export function ShareSkillDialog({
         agentId,
         name: skill.name,
         requestBody: {
+          // The draft the field shows, which is the server's own suggestion
+          // until the publisher overtypes it. Empty posts null and the server
+          // derives the same value again.
           version: version.trim() || null,
           release_notes: releaseNotes.trim() || null,
           // The draft, never the derived display value, and deliberately not
@@ -166,7 +205,7 @@ export function ShareSkillDialog({
             : [],
           // Only ever sent on a first publish: the id is immutable, and
           // re-sending it is refused with `package_id_immutable`.
-          package_id: existing ? null : packageIdDraft.trim() || null,
+          package_id: isRepublishShape ? null : packageIdDraft.trim() || null,
         },
       }),
     onSuccess: (revision) => {
@@ -179,6 +218,14 @@ export function ShareSkillDialog({
     },
   })
 
+  // The server's own `_find_publisher_package`, which is what the publish will
+  // key on, in preference to the two client-side guesses. It decides the one
+  // thing that must not be wrong: whether to offer the package-id field at all
+  // (an id is immutable, and an editable field that can only be refused is
+  // worse than no field). The catalog scan stays as the fallback for a preview
+  // that failed.
+  const isRepublishShape = preview?.is_republish ?? existing != null
+
   const isPending = publishMutation.isPending
   // Until the republish lookup settles, the dialog cannot tell a first publish
   // from a republish: it would offer the Advanced package-id field that a
@@ -187,11 +234,15 @@ export function ShareSkillDialog({
   // the button forever — it falls through to the first-publish shape, and a
   // wrong package id comes back as a coded `package_id_immutable` the alert
   // already explains.
-  const isResolvingPackage = isCatalogLoading
+  const isResolvingPackage = isCatalogLoading || isPreviewLoading
   const handle = publishedPackage?.package_id ?? null
 
-  const title = isRepublish ? "Update published skill" : `Share ${skill.name}`
-  const submitLabel = isRepublish ? "Update published skill" : "Share"
+  // The same answer the body's shape uses. Splitting them is what once put a
+  // republish body under a "Share …" title.
+  const title = isRepublishShape
+    ? "Update published skill"
+    : `Share ${skill.name}`
+  const submitLabel = isRepublishShape ? "Update published skill" : "Share"
 
   const selectedPeople: UserAllowlistSelectedItem[] = people.map((person) => ({
     id: person.id,
@@ -207,7 +258,9 @@ export function ShareSkillDialog({
         if (!isPending) onOpenChange(next)
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      {/* Capped and scrolling: the body is data-driven (an existing-grants
+          list, a people picker) and gained two blocks this round. */}
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md [&>*]:min-w-0">
         {published ? (
           <ShareSkillSuccessPanel
             skillName={skill.name}
@@ -229,12 +282,41 @@ export function ShareSkillDialog({
             </DialogHeader>
 
             <div className="space-y-4">
-              {existing && (
+              {/* What this publish will be called, before it happens: the id
+                  it takes and the revision it becomes. Both come from the
+                  preview so the sentence cannot disagree with the publish;
+                  the catalog scan is the fallback for a preview that failed,
+                  and it can only speak for a republish. */}
+              {preview ? (
                 <p className="text-xs text-muted-foreground">
-                  Republishing{" "}
-                  <span className="font-mono">{existing.package_id}</span> as
-                  revision {(existing.latest_revision_number ?? 0) + 1}.
+                  {preview.is_republish ? "Republishing " : "Publishing as "}
+                  <span className="font-mono break-all">
+                    {preview.package_id}
+                  </span>
+                  {preview.is_republish
+                    ? ` as revision ${preview.next_revision_number}.`
+                    : "."}
+                  {/* Said here rather than left for the publisher to notice:
+                      the id has a shape they did not choose, and the reason
+                      is that the plain one was already somebody else's. */}
+                  {preview.package_id_disambiguated && (
+                    <>
+                      {" "}
+                      Another package on this instance already uses the plain id
+                      for this name, so yours carries your own suffix.
+                    </>
+                  )}
                 </p>
+              ) : (
+                existing && (
+                  <p className="text-xs text-muted-foreground">
+                    Republishing{" "}
+                    <span className="font-mono break-all">
+                      {existing.package_id}
+                    </span>{" "}
+                    as revision {(existing.latest_revision_number ?? 0) + 1}.
+                  </p>
+                )
               )}
 
               <div className="space-y-1.5">
@@ -242,10 +324,22 @@ export function ShareSkillDialog({
                 <Input
                   id="share-skill-version"
                   value={version}
-                  disabled={isPending}
-                  placeholder="1.0.0"
-                  onChange={(e) => setVersion(e.target.value)}
+                  disabled={isPending || isPreviewLoading}
+                  placeholder={isPreviewLoading ? "Working it out…" : "1.0.0"}
+                  onChange={(e) => setVersionDraft(e.target.value)}
                 />
+                {/* The field is filled in already, so the hint's job is not to
+                    explain the format — it is to say the two things a
+                    pre-filled field cannot: where the number came from, and
+                    that sharing writes it back into the skill itself. */}
+                <p className="text-xs text-muted-foreground">
+                  {preview?.latest_published_version
+                    ? `Last published v${preview.latest_published_version}. `
+                    : ""}
+                  {preview
+                    ? "Filled in for you, and written into the skill's SKILL.md when you share. Overtype it if you want a different number."
+                    : "Leave it empty and the server picks the next version, and writes it into the skill's SKILL.md."}
+                </p>
               </div>
 
               <div className="space-y-1.5">
@@ -373,7 +467,7 @@ export function ShareSkillDialog({
                   server-side default. Hidden entirely on a republish: the id is
                   immutable, and an editable field that can only be refused is
                   worse than no field. */}
-              {!existing && (
+              {!isRepublishShape && (
                 <div>
                   <Button
                     type="button"
@@ -397,12 +491,18 @@ export function ShareSkillDialog({
                         id="share-skill-package-id"
                         value={packageIdDraft}
                         disabled={isPending}
-                        placeholder="com.example.my-skill"
+                        // The id it will really get, not a made-up example:
+                        // the placeholder is what happens if this is left
+                        // alone, which is the whole point of the field being
+                        // optional.
+                        placeholder={
+                          preview?.package_id ?? "com.example.my-skill"
+                        }
                         onChange={(e) => setPackageIdDraft(e.target.value)}
                       />
                       <p className="text-xs text-muted-foreground">
-                        Leave it empty and the server derives one. It can never
-                        be changed afterwards — every install references it.
+                        Leave it empty to take the id above. It can never be
+                        changed afterwards — every install references it.
                       </p>
                     </div>
                   )}
@@ -415,11 +515,23 @@ export function ShareSkillDialog({
                   carries the grant refusals (`user_not_found`, `self_grant`):
                   a publish that names a bad address fails whole, so the reason
                   belongs beside the picker rather than in a toast. */}
-              {publishMutation.isError && (
+              {publishMutation.isError ? (
                 <SkillCatalogErrorAlert
                   error={publishMutation.error}
                   fallback="Couldn't share the skill"
                 />
+              ) : (
+                // The preview shares the publish's gate and its workspace
+                // lookup, so its refusal is the refusal the button is about to
+                // produce — with the fix in it ("start the environment once").
+                // Shown up front rather than after a press, and never beside
+                // the publish's own error: two alerts for one cause.
+                previewError && (
+                  <SkillCatalogErrorAlert
+                    error={previewError}
+                    fallback="Couldn't work out the version and package id"
+                  />
+                )
               )}
             </div>
 

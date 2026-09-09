@@ -8,6 +8,7 @@ install count, "which of my agents already have this") that no column backs.
 import uuid
 from datetime import datetime
 
+from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
 
@@ -101,6 +102,11 @@ class SkillPackageUpdate(SQLModel):
 class SkillPublishRequest(SQLModel):
     """Body of ``POST /agents/{agent_id}/skills/{name}/publish``."""
 
+    #: Free text, but **one line**: it is written into the skill's own
+    #: ``SKILL.md`` frontmatter, where a newline would inject top-level keys
+    #: into the author's header. Refused at the boundary as well as normalised
+    #: in ``coerce_version``, so a client gets a 422 naming the field rather
+    #: than a silently-dropped version.
     version: str | None = Field(default=None, max_length=64)
     release_notes: str | None = None
     #: ``private`` (default), ``users`` or ``public``. Only honoured on the
@@ -134,6 +140,57 @@ class SkillPublishRequest(SQLModel):
     #: ``package_id_immutable`` (409) rather than silently ignored, because
     #: every install and every container manifest references that id.
     package_id: str | None = Field(default=None, max_length=255)
+
+    @field_validator("version")
+    @classmethod
+    def _version_is_one_line(cls, value: str | None) -> str | None:
+        """Refuse a version carrying a newline or any other control character.
+
+        The boundary check, paired with the normaliser in ``coerce_version``:
+        this value is written verbatim into a ``SKILL.md`` frontmatter block as
+        ``version: <value>``, so a newline injects top-level keys into the
+        author's own header — and the published revision is immutable, so it
+        ships. A 422 naming the field beats a version the server quietly
+        dropped.
+        """
+        if value is None:
+            return None
+        if any(ch == "\r" or ch == "\n" or ch < " " for ch in value):
+            raise ValueError(
+                "A version must be a single line with no control characters."
+            )
+        return value
+
+
+class SkillPublishPreview(SQLModel):
+    """Response of ``GET /agents/{agent_id}/skills/{name}/publish-preview``.
+
+    Everything the Share dialog needs to show the publisher what pressing the
+    button will do, computed by the same code that will do it. Nothing here is
+    a promise: the values are re-derived inside the publish lock, so a
+    concurrent publish of the same skill can still move the revision number
+    between this call and the next one.
+    """
+
+    #: The version this publish would use. Never null — a skill with no
+    #: version anywhere starts at ``1.0.0``.
+    version: str
+    #: ``version:`` as it stands in ``SKILL.md`` right now, if the author (or
+    #: an earlier publish) put one there.
+    header_version: str | None = None
+    #: The newest version this package has already released.
+    latest_published_version: str | None = None
+    #: The id this publish would use: the package's existing id on a
+    #: re-publish, otherwise a derived and verified-free one.
+    package_id: str
+    #: True when the plain ``<host>.skill.<name>`` id was already taken on this
+    #: instance and the publisher's own slug had to be appended. Surfaced so
+    #: the dialog can say so rather than showing an id whose shape the
+    #: publisher has no explanation for.
+    package_id_disambiguated: bool = False
+    #: Whether this skill already has a package behind it.
+    is_republish: bool = False
+    next_revision_number: int = 1
 
 
 class SkillInstallRequest(SQLModel):

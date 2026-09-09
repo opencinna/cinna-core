@@ -29,12 +29,21 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from app.core.config import settings
 from app.models.environments.environment import AgentEnvironment
-from app.services.agents.skill_manifest import SkillEntry, issue_from_dict
+from app.services.agents.skill_manifest import (
+    SKILL_NAME_RE,
+    SkillEntry,
+    coerce_version,
+    issue_from_dict,
+    parse_frontmatter,
+)
 from app.services.environments.synced_files import SYNCED_FILES
+from app.services.environments.workspace_classification import WORKSPACE_ROOT_REL
 
 if TYPE_CHECKING:  # pragma: no cover — import cycle guard, typing only
     from app.models.agents.agent_skills import SkillEntryPublic, SkillIssuePublic
@@ -166,6 +175,14 @@ class AgentSkillsService:
 
         new_hash = payload.get("hash") or ""
         entries = cls._normalise_entries(payload.get("skills"))
+        # In a thread: this is filesystem I/O inside an ``async def`` that runs
+        # after every stream completion, cron event and start sweep. A skill
+        # with no ``version:`` at all stays in the missing set forever (its
+        # backfill result is ``None`` again next time), so the cost is paid on
+        # every fetch — bounded by ``DEFAULT_MAX_SKILLS`` but not by anything
+        # that ever goes away. The publish-side write already does this; the
+        # read had no reason not to.
+        await asyncio.to_thread(cls._backfill_local_versions, environment, entries)
         changed = cls._entries_differ(environment.skills_parsed, entries)
 
         # Short-circuit on the CONTENT, not on the reported hash. The hash
@@ -252,6 +269,7 @@ class AgentSkillsService:
                     secret_paths=[
                         p for p in (row.get("secret_paths") or []) if isinstance(p, str)
                     ],
+                    version=coerce_version(row.get("version")),
                 )
             )
         return entries
@@ -295,6 +313,7 @@ class AgentSkillsService:
             user_invocable=entry.user_invocable,
             model_invocable=entry.model_invocable,
             size_bytes=entry.size_bytes,
+            version=entry.version,
             error=cls.issue_to_public(entry.error),
             warning=cls.issue_to_public(entry.warning),
             secret_paths=list(entry.secret_paths),
@@ -495,6 +514,79 @@ class AgentSkillsService:
         with create_session() as session:
             operation(session)
 
+    @staticmethod
+    def _backfill_local_versions(
+        environment: AgentEnvironment, entries: list[dict[str, Any]]
+    ) -> None:
+        """Fill in ``version`` for local skills the container did not report one for.
+
+        The index is built **inside** the container by env-core's vendored copy
+        of ``skill_manifest.py``, and ``app/core/`` is copied out of the
+        template at environment *creation* — not at every start. So every
+        environment created before skills carried a version reports rows with
+        no ``version`` key and would go on reporting none forever, however many
+        times its author edits ``SKILL.md`` and presses Refresh. The row would
+        say "No version" while the publish path — which reads the same file
+        from the host — published one, which is one surface giving two answers.
+
+        The host can read the file itself: a local skill's folder is bind-mounted
+        at ``<ENV_INSTANCES_DIR>/<env id>/app/workspace/skills/<name>/``, the
+        same path the catalog publishes from. So this reads the frontmatter
+        there for exactly the rows that are missing the field.
+
+        A **backfill, not an override**: a container that reports a version is
+        believed, because it is the thing that actually loaded the skill. And
+        best-effort throughout — a workspace that is not on disk (an environment
+        that has never started) simply leaves the rows as they came, and a
+        rebuilt container stops needing this at all.
+        """
+        missing = [
+            row
+            for row in entries
+            if row.get("source") == "local"
+            and not row.get("version")
+            # Guards the path join below as much as it validates the row: the
+            # name becomes a path segment, and the index is written by a
+            # process running inside the agent's own container.
+            and SKILL_NAME_RE.match(row.get("name") or "")
+        ]
+        if not missing:
+            return
+
+        try:
+            workspace = (
+                Path(settings.ENV_INSTANCES_DIR)
+                / str(environment.id)
+                / WORKSPACE_ROOT_REL
+                / "skills"
+            )
+            if not workspace.is_dir():
+                return
+            for row in missing:
+                skill_dir = workspace / row["name"]
+                # Both links, not just the file: an agent controls its own
+                # workspace, and a symlinked *directory* would let it surface
+                # another environment's `version:` on its own row. Both sibling
+                # readers of this tree check the directory
+                # (``SkillCatalogService._resolve_skill_dir``,
+                # ``parse_skill_dir``); this one was the odd read out.
+                if skill_dir.is_symlink() or not skill_dir.is_dir():
+                    continue
+                skill_md = skill_dir / "SKILL.md"
+                if skill_md.is_symlink() or not skill_md.is_file():
+                    continue
+                try:
+                    frontmatter, _ = parse_frontmatter(
+                        skill_md.read_text(encoding="utf-8-sig")
+                    )
+                except (OSError, UnicodeDecodeError, ValueError):
+                    continue
+                row["version"] = coerce_version(frontmatter.get("version"))
+        except Exception as exc:  # never break an index over a file read
+            logger.debug(
+                "skills_version_backfill_failed env_id=%s: %s", environment.id, exc
+            )
+
     @classmethod
     def _normalise_entries(cls, raw: Any) -> list[dict[str, Any]]:
         """Coerce a reported index into the cached row shape.
@@ -533,6 +625,11 @@ class AgentSkillsService:
                     "secret_paths": [
                         p for p in secret_paths if isinstance(p, str)
                     ] if isinstance(secret_paths, list) else [],
+                    # Absent from every container built before skills carried a
+                    # version, which is why it is normalised rather than read:
+                    # such an environment reports rows without the key and must
+                    # cache `None` rather than fail the whole index.
+                    "version": coerce_version(item.get("version")),
                 }
             )
         return entries

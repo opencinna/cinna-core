@@ -47,6 +47,10 @@ class SkillEntryPublic(SQLModel):
     user_invocable: bool = True    # may a person invoke it with /<name>
     model_invocable: bool = True   # may the model reach for it unprompted
     size_bytes: int = 0            # whole folder, not just SKILL.md
+    #: The frontmatter's optional ``version``. Absent for a skill nobody has
+    #: versioned and for one reported by a container built before skills
+    #: carried a version — a client must render its absence, not a ``v``.
+    version: str | None = None
     error: SkillIssuePublic | None = None
     warning: SkillIssuePublic | None = None
     #: Structured secret-scan result: paths inside the skill that look like key

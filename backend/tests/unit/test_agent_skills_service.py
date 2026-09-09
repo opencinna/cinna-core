@@ -117,6 +117,7 @@ def _reported(**overrides) -> dict:
         "error": None,
         "warning": None,
         "secret_paths": [],
+        "version": None,
     }
     entry.update(overrides)
     return entry
@@ -542,3 +543,133 @@ class TestPostActionEvents:
             {"meta": {"environment_id": "not-a-uuid"}}
         )
         await AgentSkillsService.handle_post_action_event({"meta": "not-a-dict"})
+
+
+class TestSkillVersionInTheCache:
+    """The frontmatter ``version`` travelling container → cache → row."""
+
+    def test_a_reported_version_is_normalised_and_read_back(self):
+        rows = AgentSkillsService._normalise_entries(
+            [_reported(version="1.0.0")]
+        )
+        assert rows[0]["version"] == "1.0.0"
+
+    def test_an_unquoted_numeric_version_survives_as_a_string(self):
+        # The container's parser has already coerced `version: 1.0` to a float;
+        # caching it as one would put a number where the wire says string.
+        rows = AgentSkillsService._normalise_entries([_reported(version=1.0)])
+        assert rows[0]["version"] == "1.0"
+
+    def test_a_container_built_before_versions_caches_none(self):
+        # A pre-feature env-core reports rows with no `version` key at all. The
+        # index must still normalise rather than raise, or one old container
+        # blanks the whole skills list.
+        entry = _reported()
+        del entry["version"]
+        rows = AgentSkillsService._normalise_entries([entry])
+        assert rows[0]["version"] is None
+
+
+class TestLocalVersionBackfill:
+    """The host filling in a version an old container cannot report.
+
+    ``app/core/`` is copied out of the template at environment *creation*, so
+    an environment made before skills carried a version reports rows with no
+    ``version`` key however many times its author edits ``SKILL.md``. The host
+    reads the same file the publish path reads.
+    """
+
+    @staticmethod
+    def _workspace(monkeypatch, tmp_path, env) -> "Path":
+        from pathlib import Path
+
+        from app.core.config import settings
+        from app.services.environments.workspace_classification import (
+            WORKSPACE_ROOT_REL,
+        )
+
+        monkeypatch.setattr(settings, "ENV_INSTANCES_DIR", str(tmp_path))
+        skills = Path(tmp_path) / str(env.id) / WORKSPACE_ROOT_REL / "skills"
+        skills.mkdir(parents=True)
+        return skills
+
+    def test_a_missing_version_is_read_off_the_workspace(
+        self, monkeypatch, tmp_path
+    ):
+        env = _environment()
+        skills = self._workspace(monkeypatch, tmp_path, env)
+        (skills / "pdf-report").mkdir()
+        (skills / "pdf-report" / "SKILL.md").write_text(
+            "---\nname: pdf-report\nversion: 2.1.0\ndescription: d\n---\nbody\n",
+            encoding="utf-8",
+        )
+
+        rows = AgentSkillsService._normalise_entries([_reported()])
+        AgentSkillsService._backfill_local_versions(env, rows)
+
+        assert rows[0]["version"] == "2.1.0"
+
+    def test_a_version_the_container_reported_is_not_overwritten(
+        self, monkeypatch, tmp_path
+    ):
+        # A rebuilt container is the thing that actually loaded the skill; the
+        # host must not second-guess it.
+        env = _environment()
+        skills = self._workspace(monkeypatch, tmp_path, env)
+        (skills / "pdf-report").mkdir()
+        (skills / "pdf-report" / "SKILL.md").write_text(
+            "---\nname: pdf-report\nversion: 9.9.9\ndescription: d\n---\nbody\n",
+            encoding="utf-8",
+        )
+
+        rows = AgentSkillsService._normalise_entries([_reported(version="1.0.0")])
+        AgentSkillsService._backfill_local_versions(env, rows)
+
+        assert rows[0]["version"] == "1.0.0"
+
+    def test_plugin_skills_are_left_alone(self, monkeypatch, tmp_path):
+        # A plugin's skill does not live under the workspace's `skills/`, and
+        # its version is its publisher's business.
+        env = _environment()
+        self._workspace(monkeypatch, tmp_path, env)
+        rows = AgentSkillsService._normalise_entries(
+            [_reported(source="plugin", plugin_ref="official/pdf")]
+        )
+        AgentSkillsService._backfill_local_versions(env, rows)
+        assert rows[0]["version"] is None
+
+    def test_a_workspace_that_is_not_on_disk_changes_nothing(
+        self, monkeypatch, tmp_path
+    ):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "ENV_INSTANCES_DIR", str(tmp_path))
+        rows = AgentSkillsService._normalise_entries([_reported()])
+        AgentSkillsService._backfill_local_versions(_environment(), rows)
+        assert rows[0]["version"] is None
+
+    def test_a_skill_with_no_version_in_its_header_stays_unversioned(
+        self, monkeypatch, tmp_path
+    ):
+        env = _environment()
+        skills = self._workspace(monkeypatch, tmp_path, env)
+        (skills / "pdf-report").mkdir()
+        (skills / "pdf-report" / "SKILL.md").write_text(
+            "---\nname: pdf-report\ndescription: d\n---\nbody\n", encoding="utf-8"
+        )
+        rows = AgentSkillsService._normalise_entries([_reported()])
+        AgentSkillsService._backfill_local_versions(env, rows)
+        assert rows[0]["version"] is None
+
+    def test_a_name_that_is_not_a_skill_name_is_never_joined_into_a_path(
+        self, monkeypatch, tmp_path
+    ):
+        # The index is written by a process inside the agent's own container,
+        # so the name is guarded as a path segment, not merely validated.
+        env = _environment()
+        self._workspace(monkeypatch, tmp_path, env)
+        rows = AgentSkillsService._normalise_entries(
+            [_reported(name="../../etc")]
+        )
+        AgentSkillsService._backfill_local_versions(env, rows)
+        assert rows[0]["version"] is None

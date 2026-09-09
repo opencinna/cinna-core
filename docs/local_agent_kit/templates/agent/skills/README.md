@@ -30,6 +30,7 @@ reads on demand, things it hands over or fills in.
 ---
 name: timeoff-check
 description: Check and verify an employee's time-off balance and history. Use when the user asks to check, verify or explain time off for a named person.
+version: 1.0.0
 ---
 
 # Time-off check
@@ -54,6 +55,20 @@ Two frontmatter fields are required and validated:
 |-------|------|
 | `name` | lowercase letters, digits and single hyphens (`^[a-z0-9]+(-[a-z0-9]+)*$`), 1–64 characters, and it **must equal the folder name**. |
 | `description` | 1–1024 characters. It is the only thing the engine sees before it decides to open the skill, so say *what it does* **and** *when to use it*. |
+
+One more field is **optional but worth writing**:
+
+| Field | Rule |
+|-------|------|
+| `version` | Free text, ≤ 64 characters. `1.0.0` by convention; `1.2`, `v3` and a date all work. Nothing validates it and nothing breaks without it. |
+
+Write it when you create the skill and leave it alone afterwards: publishing to
+the catalog reads this line, works out the next version, **writes it back
+here**, and publishes that. So a skill you have never published carries
+whatever you wrote, and a skill you publish repeatedly carries the version it
+was last published as. Bump it by hand only when you want a specific number —
+a `2.0.0` you set here is honoured on the next publish instead of the automatic
+`1.0.3`.
 
 Everything else you write in the frontmatter is passed through untouched
 (`allowed-tools`, `disable-model-invocation`, `user-invocable`, `argument-hint`,

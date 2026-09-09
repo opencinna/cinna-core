@@ -6492,6 +6492,7 @@ export type SkillEntryPublic = {
     user_invocable?: boolean;
     model_invocable?: boolean;
     size_bytes?: number;
+    version?: (string | null);
     error?: (SkillIssuePublic | null);
     warning?: (SkillIssuePublic | null);
     secret_paths?: Array<(string)>;
@@ -6657,6 +6658,25 @@ export type SkillPackageUpdate = {
     description?: (string | null);
     visibility?: (string | null);
     is_listed?: (boolean | null);
+};
+
+/**
+ * Response of ``GET /agents/{agent_id}/skills/{name}/publish-preview``.
+ *
+ * Everything the Share dialog needs to show the publisher what pressing the
+ * button will do, computed by the same code that will do it. Nothing here is
+ * a promise: the values are re-derived inside the publish lock, so a
+ * concurrent publish of the same skill can still move the revision number
+ * between this call and the next one.
+ */
+export type SkillPublishPreview = {
+    version: string;
+    header_version?: (string | null);
+    latest_published_version?: (string | null);
+    package_id: string;
+    package_id_disambiguated?: boolean;
+    is_republish?: boolean;
+    next_revision_number?: number;
 };
 
 /**
@@ -10931,6 +10951,13 @@ export type SkillsRevokeSkillPackageGrantData = {
 };
 
 export type SkillsRevokeSkillPackageGrantResponse = (void);
+
+export type SkillsPreviewAgentSkillPublishData = {
+    agentId: string;
+    name: string;
+};
+
+export type SkillsPreviewAgentSkillPublishResponse = (SkillPublishPreview);
 
 export type SkillsPublishAgentSkillData = {
     agentId: string;

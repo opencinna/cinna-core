@@ -36,6 +36,7 @@ from app.models import (
     SkillPackageRevisionPublic,
     SkillPackagesPublic,
     SkillPackageUpdate,
+    SkillPublishPreview,
     SkillPublishRequest,
     SkillRevisionContentPublic,
 )
@@ -362,6 +363,37 @@ def _get_agent(session, agent_id: uuid.UUID, user) -> Agent:
     :meth:`LLMPluginService.verify_agent_access`.
     """
     return LLMPluginService.verify_agent_access(session, agent_id, user)
+
+
+@agent_router.get(
+    "/{agent_id}/skills/{name}/publish-preview",
+    response_model=SkillPublishPreview,
+)
+def preview_agent_skill_publish(
+    agent_id: uuid.UUID,
+    name: str,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """What publishing this skill would produce — version and package id.
+
+    A read of the same derivations the publish performs, so the Share dialog
+    can prefill rather than ask the publisher to invent a version number and a
+    reverse-DNS id. Both answers need the server: the version is read out of
+    the skill's own ``SKILL.md`` on the publisher's workspace, and the id has
+    to be checked for collisions against packages this caller cannot list.
+
+    Same gate and same coded refusals as the publish itself, minus the content
+    checks — a skill flagged by the index still previews, and is still refused
+    at publish.
+    """
+    agent = _get_agent(session, agent_id, current_user)
+    try:
+        return SkillCatalogService.publish_preview(
+            session, agent=agent, user=current_user, skill_name=name
+        )
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
 
 
 @agent_router.post(

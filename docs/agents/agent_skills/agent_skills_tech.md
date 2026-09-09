@@ -147,6 +147,7 @@ class SkillEntry:
     error: SkillIssue | None = None
     warning: SkillIssue | None = None
     secret_paths: list[str] = []    # ALWAYS present; empty = clean
+    version: str | None = None      # frontmatter `version`, via coerce_version()
     frontmatter: dict = {}          # opt-in on to_dict()
 
     is_valid       = error is None
@@ -161,6 +162,7 @@ catalog publish path needs it; the UI index never does.
 | Function | Notes |
 |----------|-------|
 | `parse_skill_dir(path, *, source, plugin_ref, rel_path)` | Never raises; a malformed skill comes back carrying an `error`. `rel_path` **must** be passed for a plugin's skill folder, or `path` would point at the agent's own `skills/<name>` and read the wrong file |
+| `coerce_version(raw)` | Frontmatter `version` → `str \| None`. Public because the publish path reads the same key and must agree with the index on what counts as a version. `_coerce_scalar` has already turned `version: 2` into an `int` and `version: 1.0` into a `float`, so a bare number is stringified rather than dropped; a list or mapping is `None`. Capped at `MAX_VERSION_LENGTH` (64), the same bound as `SkillPublishRequest.version` |
 | `scan_skills_root(root, *, source, plugin_ref, rel_root, max_skills, max_total_bytes)` | Missing root → `[]`. Skips dotfiles **and non-directories silently** (see below). Sorts by name, then applies the caps |
 | `apply_budget(entries, *, max_skills, max_total_bytes)` | Mutates in place. Separate from the scan because the caps are per **agent** while a scan sees one root. Entries already carrying an error are skipped and charge nothing. Re-application is a fixed point — the merged pass sees the union of the per-root passes, so a second pass can only add exclusions |
 | `tree_hash(root)` | SHA-256 over `(relative path, size, mtime_ns)` — never file contents, because it runs before every message. A missing root hashes the empty string |
@@ -495,6 +497,14 @@ and the capability reply cannot disagree about who the agent belongs to.
 `SkillEntryPublic.can_publish` = that **and** `source == "local"` **and**
 `entry.is_publishable`.
 
+`SkillEntryPublic.version` (`str | None`) carries the frontmatter's optional
+`version`, so `GET /agents/{agent_id}/skills` reports it alongside the addons
+projection's `AddonPublic.version`. `None` for a skill nobody has versioned and
+for one reported by a container built before skills carried a version — a
+client renders its absence, never a bare `v`. Currently read only through the
+addons projection; nothing in `frontend/src` reads `skill.version` directly, so
+a plugin-shipped addon's per-skill versions are not surfaced anywhere yet.
+
 ---
 
 ## `/skills` command and popup entries
@@ -688,9 +698,12 @@ the stored value still equals what the previous revision declared** — §5.3's
 literal "updates description" would silently overwrite a publisher's edited
 catalog blurb on their next publish.
 
-`default_package_id(user_id, name)` = `<reversed host>.<8-hex owner slug>.<name>`,
-mirroring `BundleIdService.generate_bundle_id` so the two id families read as one
-namespace. Validated against `BUNDLE_ID_REGEX`.
+The derived id is `base_package_id(name)` = `<reversed host>.skill.<name>`,
+disambiguated by `derive_package_id` when it is already taken — the derivation
+table below is the single description of that rule. Validated against
+`BUNDLE_ID_REGEX`. (An earlier `default_package_id(user_id, name)` =
+`<reversed host>.<8-hex owner slug>.<name>` is gone: the slug became the
+collision fallback rather than an always-present segment.)
 
 **Read** — `list_catalog` returns public+listed packages plus the caller's own,
 excluding packages with no revision yet (a publish that failed between creating
@@ -769,6 +782,7 @@ Two routers, one `skills` tag → one `SkillsService` in the generated client.
 | `POST /skills/packages/{package_id}/delist` | superuser | hide, never delete |
 | `GET /skills/packages/{package_id}/revisions/{n}/content` | `CurrentUser` + visibility | `SKILL.md` preview |
 | `GET /skills/packages/{package_id}/revisions/{n}/archive` | `AgentEnvContextDep` | tarball; `X-Content-SHA256` header. 403 (not 404) when the env authenticated fine but holds no install of that revision |
+| `GET /agents/{agent_id}/skills/{name}/publish-preview` | owner + developer gate | `SkillPublishPreview` — the version and `package_id` a publish would take, from the same code that will take them. Runs the authorization gate and the workspace lookup but **not** the three content checks: a preview that refused would leave the Share dialog with nothing to show for a skill whose row already carries the warning |
 | `POST /agents/{agent_id}/skills/{name}/publish` | owner + developer gate | `SkillPackageRevisionPublic` |
 | `POST /agents/{agent_id}/skills/install` | owner | creates the link, then `LLMPluginService.sync_plugins_to_agent_environments(message_prefix="Skill added.")` → `PluginSyncResponse` |
 | `POST /agents/{agent_id}/plugins/{link_id}/upgrade` | existing route | now maps `SkillCatalogError` through `http_error_for` |
@@ -779,6 +793,66 @@ it now checks `is_superuser` **before** loading the package and then loads witho
 a visibility check. It previously loaded through the visibility-gated path, which
 was both an existence oracle and the reason a `users` package could not be
 delisted.
+
+#### Version and package-id derivation — `SkillCatalogService`
+
+| Member | Notes |
+|--------|-------|
+| `resolve_version(*, requested, frontmatter_version, published_versions, latest_version)` | Pure. An explicit request wins verbatim and is never de-duplicated — but it passes through `coerce_version` first, so a control character disqualifies it rather than reaching the file. Else the header's version if it is not already published; else the successor of the seed (`latest_version`, else the header), walking on while the candidate is taken; a seed with no successor gets `.1` appended so the series stays **above** its predecessor. `FIRST_VERSION` (`1.0.0`) only when there is no seed at all |
+| `_bump_version(v)` | Increments the **last run of digits** (`^(.*?)(\d+)$`) — `1.0.0`→`1.0.1`, `1.2`→`1.3`, `v3`→`v4`, `2026-09-09`→`2026-09-10`. `None` for a version with no digits, which starts a fresh series |
+| `_write_version_to_skill_md(skill_md, version)` | Surgical single-line edit of the frontmatter — replace a top-level `version:`, else insert after `name:`, else after the opening fence. Preserves the BOM, the dominant line ending and every other byte (mixed endings normalise to the dominant one, via `splitlines()`); atomic (dot-prefixed temp + `os.replace`). Writes into the publisher's **host-side workspace** — `<ENV_INSTANCES_DIR>/<env id>/app/workspace/skills/<name>/SKILL.md`, the same bind-mounted tree the publish already reads from, so it needs no mount the publish did not already need. Returns `True` when the file carries the version afterwards, **including when it already did**, so the caller only warns on a genuine failure. Runs in a thread, off the event loop |
+| `_version_history(session, package_uuid)` | One read → `(next revision number, every version used, newest version)`. Shared by the publish and the preview so the number shown is the number written |
+| `base_package_id(name)` | `<reversed host>.skill.<name>`. `PACKAGE_ID_SKILL_SEGMENT` is the fixed segment that tells a package id from a bundle id |
+| `derive_package_id(session, *, publisher_user_id, skill_name)` | `(id, disambiguated)`. Base → base + the publisher's 8-hex slug → `-2`, `-3`, and after 98 collisions a random `uuid4().hex[:8]` tail rather than raising. Read-then-write, so two simultaneous first publishes of one name can still pick the same free id; `uq_skill_package_package_id` is what actually decides, and `_resolve_package` catches that `IntegrityError`, rolls back and re-raises it as `package_id_taken`. Without the catch the loser got a raw **500** on an aborted session — this line documented the 409 before the code produced one |
+| `publish_preview(session, *, agent, user, skill_name)` | The read behind `GET .../publish-preview` |
+
+Order inside `publish_from_agent`, all within the per-`(publisher, skill)` lock:
+`_resolve_package` → `_version_history` → `resolve_version` →
+**`_write_version_to_skill_md`** → `_write_snapshot_to_disk`. The write-back is
+before the snapshot on purpose — a revision is immutable, so there is no second
+chance to put the version in the published bytes. The stored
+`SkillPackageRevision.frontmatter` is `{**entry.frontmatter, "version":
+resolved}` for the same reason: a revision whose stored frontmatter disagreed
+with its own snapshot would be a second answer to "what version is this" — and
+the merge is therefore **conditional on the write-back having succeeded**, since
+on the degraded path the snapshot carries no `version:` at all and merging one
+in would manufacture the very disagreement it prevents.
+
+After the commit, `AgentSkillsService.refresh_after_action(env, force=True)` —
+the write-back changed a file the index is a cache of — but **only when the
+environment is not in `SLEEPING_STATUSES`**. `refresh_after_action` does not
+wake a container (that is `force_refresh`), so on a suspended env `fetch_index`
+fails and `_persist_error` *commits* `skills_error="env_not_running"`: a
+successful publish would then paint "the environment is asleep" over the Addons
+card until a manual Refresh. Publishing from a suspended environment is
+supported and pinned, so the refresh is skipped there instead — the host-side
+backfill reads the same header on the next read either way.
+
+#### The host-side version backfill — `AgentSkillsService._backfill_local_versions`
+
+The index is built **inside** the container, and `app/core/` is copied out of
+the template at environment *creation* (`_copy_template`, one call site), not at
+start. So an environment created before skills carried a version reports rows
+with no `version` key however many times its author edits `SKILL.md` and presses
+Refresh — while the publish path, which reads the same file from the host, would
+happily publish one. `fetch_index` therefore backfills: for every `source=local`
+row missing a version whose name matches `SKILL_NAME_RE`, it reads
+`<ENV_INSTANCES_DIR>/<env id>/app/workspace/skills/<name>/SKILL.md` and parses
+its frontmatter. A **backfill, not an override** — a container that reports a
+version is believed. Best-effort throughout, off the event loop in a thread
+(it is filesystem I/O in an `async def` that runs after every stream
+completion, and a skill with no `version:` at all stays in the missing set
+permanently), and it guards a symlinked skill *directory* as well as a
+symlinked `SKILL.md`. It runs *before* `_entries_differ`, so the newly-filled
+version is what makes the cache change and the card re-render. A rebuilt
+container stops needing it.
+
+**It is reached only through `fetch_index`**, whose callers are
+`refresh_after_action` (rate-limited unless forced) and `force_refresh`. The
+Addons tab's ordinary read is cache-only, so on exactly the environments this
+exists for the version appears after a Refresh press, a start sweep, a watcher
+signal or a publish — **never on a first page load**. Users on a pre-feature
+container are told to press Refresh once.
 
 `SkillPublishRequest` gained `grant_emails: list[str]` (max 50) and
 `SkillPackageEntry` gained `is_granted`. A publish carrying grant targets is
@@ -797,7 +871,11 @@ and would otherwise have made the later 404 unreachable.
 Wire schemas: `backend/app/models/skills/schemas.py` — `SkillPackagePublic`,
 `SkillPackageEntry` (adds `install_count`, `installed_in_agent_ids`,
 `can_manage`), `SkillPackagesPublic`, `SkillPackageDetailPublic`,
-`SkillPackageRevisionPublic`, `SkillPackageUpdate`, `SkillPublishRequest`,
+`SkillPackageRevisionPublic`, `SkillPackageUpdate`, `SkillPublishRequest`
+(whose `version` a `field_validator` refuses when it carries a newline or any
+other control character — the value is written into a frontmatter block, where
+a newline injects top-level keys into the author's header),
+`SkillPublishPreview`,
 `SkillInstallRequest`, `SkillRevisionContentPublic`. All re-exported from
 `app.models`.
 
@@ -942,7 +1020,7 @@ grant row / dialog / sheet:
 | S7 | Package detail route — Package card, `SKILL.md` card, Revisions `PreviewList` | `routes/_layout/catalog/skills/$packageId.tsx`, `Catalog/SkillPackageCard.tsx`, `SkillRevisionRow.tsx`, `AllSkillRevisionsSheet.tsx`, `SkillSource.tsx` |
 | S8 | Edit package details dialog | (in the detail route) |
 | S9 | Publish skill dialog, opened from the S1 row `⋯` only | `Agents/PublishSkillDialog.tsx` |
-| S10 | Add-skill-to-agent dialog (`SearchableSelect`, never a nested picker dialog) | `Catalog/AddSkillToAgentDialog.tsx` |
+| S10 | Add-skill-to-agent dialog (`Common/AgentSelectorList` in `mode="single"`, never a nested picker dialog) | `Catalog/AddSkillToAgentDialog.tsx` |
 | S11 | Installed Plugins card rebuilt on `ListRow` / `PreviewList` / `RowActionsMenu` (A10 fix-on-touch) | `Agents/InstalledPluginRow.tsx`, `AllInstalledPluginsSheet.tsx` |
 
 Query keys: `["skills-catalog", filter]`, `["skill-package", packageId]`;
