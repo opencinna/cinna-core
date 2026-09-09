@@ -197,6 +197,35 @@ immutable storage and appends a `SkillPackageRevision`.
 - The dialog's success panel links to the catalog entry; it never opens another
   dialog.
 
+### 5b. Reading a package in the catalog
+
+The package route shows what the skill *is* before anybody installs it: the
+Package card (publisher, version, installs, visibility, package id) beside a
+`SKILL.md` panel rendered as markdown.
+
+`SKILL.md` is one file, and a skill is a folder. The card's **Content** fact is
+the rest of that answer:
+
+- it names how many files the shown revision ships (`4 files`), and opens a
+  Sheet listing every one of them — path, size, and a flag on anything the
+  archive keeps the executable bit for;
+- beside it, a **download** takes the whole revision as the same deterministic
+  `.tar.gz` an agent installs, so what a reader inspects is what an agent would
+  run. The reader may take it whenever they may see the package — visibility is
+  the only gate.
+
+The listing is paths and sizes, never contents: deciding whether to install a
+skill needs to know that it ships three scripts and two references, and a
+per-file viewer would turn the catalog into a general reader over other
+people's published trees. Both surfaces follow the revision the Version fact
+has pinned, so reading `v1` lists `v1`'s files.
+
+The Sheet caps at 500 listed files; past that the file count and total size
+still describe the whole revision, and the Sheet says so ("showing the first
+500") rather than silently dropping the rest. The download is unaffected —
+it always carries every file — so a reader who needs what the list could not
+show still gets it by taking the whole folder.
+
 ### 6. Installing a catalog skill
 
 From the skills catalog, a user picks one of their own agents. This creates an
@@ -249,6 +278,62 @@ A skill shows **one** warning. Precedence is `secrets > shadowed > oversized` �
 secrets outranks the rest because it is the only warning that blocks publishing;
 shadowed outranks oversized because a shadowed skill may not be the one that
 runs.
+
+### Reading the index can fail three ways, and each has exactly one remedy
+
+The issue vocabulary above describes a skill. This one describes the *read* — why
+the card has no index to show — and it is a separate list because the remedies
+are not interchangeable:
+
+| `skills_error` | What happened | What the user must do |
+|----------------|---------------|-----------------------|
+| `env_not_running` | The environment is asleep (`suspended` / `stopped` / `error`) | Refresh, or send a message — the wake re-reads |
+| `adapter_error` | The container is not asleep and did not answer: a timeout, a transport failure, or any non-404 status **from an endpoint that exists** | Restart it, then refresh |
+| `adapter_unsupported` | The container answered **404**: its `/app/core` predates the feature and has no `/config/skills` route at all | **Rebuild** it |
+| `parse_error` | The container answered with something the backend could not read | Refresh to try again |
+
+`adapter_error` and `adapter_unsupported` were one code until they were split,
+and the split is the point. Both mean "the call failed on a container that is not
+asleep", but **a restart re-runs the same image and can never add a route that
+was never built into it** — only a rebuild replaces `/app/core` from the
+template. While the two shared a code, every surface had to pick one remedy and
+was therefore wrong half the time: the card told an unreachable environment to
+rebuild, and the CLI told a pre-feature container to restart.
+
+Two consequences follow, both deliberate:
+
+- **The 404 is classified before the sleeping-status check.** A pre-feature
+  container that also happens to be suspended reports `adapter_unsupported`, not
+  `env_not_running` — otherwise the copy would say "refresh to wake it" and send
+  the user round a loop the wake never breaks.
+- **Only a 404 earns the unsupported code.** Any other status came from *inside*
+  an endpoint that exists, and must not borrow the rebuild copy.
+
+The rebuild has a verb of its own now: `cinna agent rebuild-env <agent>`, beside
+the `/rebuild-env` session command and the environment card's rebuild action (see
+[account_cli_workspace](../../application/cinna_cli_integration/account_cli_workspace.md)).
+
+### An installed skill that contributes no skill is not healthy
+
+An addon row of `kind="skill"` wraps exactly one `SKILL.md` by definition, so an
+empty skill list on such a row is a contradiction: the link is correct, the files
+are not there, and the model cannot load it. Such a row used to read **`ok`** —
+the row was reporting the *link*, and the link was genuinely fine.
+
+The row now reports the files as well, and how loudly depends on whether absence
+is evidence:
+
+| The index was… | Row status | `status_code` |
+|----------------|-----------|---------------|
+| read, and the skill is not in it | **error** | `not_materialized` |
+| not readable (the read failed) | **warning** | `unverified` |
+| never read — no environment, or no read yet | silent, as before | — |
+
+Claiming "missing" while the container could not be reached would be the same
+overreach in the other direction, which is why the middle case is its own code
+rather than folded into either neighbour. `kind="plugin"` rows are **exempt**: a
+plugin legitimately ships only commands or agents and contributes nothing here in
+perfect health. See [agent_addons](../agent_addons/agent_addons.md).
 
 ### Caps are per agent, applied once over the merged list
 
@@ -441,7 +526,9 @@ regex.
 | Projected directory that is not ours | Left alone. Only directories carrying the `.cinna_projected` marker are ever pruned |
 | A skill folder is a symlink, or contains one | Refused / not followed, at both the parse and the copy step |
 | OpenCode build without `POST /instance/dispose` | 404, logged once per server. Skills become visible at the next server start; `/rebuild-env` is the user-facing fix |
-| Pre-feature container (old `/app/core`) | No `/config/skills` route → cache error `adapter_error`; the card says "Rebuild the environment to enable skills." Refreshing will never fix it |
+| Pre-feature container (old `/app/core`) | No `/config/skills` route → **404** → cache error **`adapter_unsupported`**; the card says "Rebuild the environment to enable skills." Neither refreshing nor restarting will ever fix it. Classified **before** the sleeping-status branch, so a pre-feature container that is also suspended still reports `adapter_unsupported` rather than `env_not_running` |
+| Running container that does not answer (timeout, transport failure, non-404 status) | Cache error **`adapter_error`**; the card says "The environment isn't answering. Restart it, then refresh the skills." A rebuild is minutes of downtime that cannot help — the route is already there |
+| An installed `kind="skill"` row that contributes no skill | Never `ok`. Index read and the skill absent → **error** / `not_materialized`; index unreadable → **warning** / `unverified`; index never read → silent. `kind="plugin"` rows are exempt, since a plugin may legitimately ship no skills |
 | `WORKSPACE_FILES_CHANGED` for `skills/` while the env is suspended | The refresh exits early and records `env_not_running`; picked up by the next activation sweep |
 | Environment asleep when the card loads | The cached rows are still returned, with an `error` banner over them. Blanking the card on a sleeping agent would be a worse answer than showing what is known |
 | Deleting the whole `skills/` folder | Still fires a resync: the watcher always records a directory entry (an absent root hashes to the empty digest), unlike a missing *file*, which is omitted |
@@ -490,11 +577,14 @@ sweep skips denylisted names — it simply never travels again.
 
 ## Rollout Notes
 
-- **Existing environments need a rebuild.** env-core ships in the per-environment
-  `/app/core` copy, so an environment created before this feature has no
-  projection and no `/config/skills`. Until `/rebuild-env` (or the admin bulk
-  rebuild) runs, its Skills card shows `adapter_error` with "Rebuild the
-  environment to enable skills." Refreshing does not help.
+- **Existing environments need a rebuild — not a restart.** env-core ships in the
+  per-environment `/app/core` copy, so an environment created before this feature
+  has no projection and no `/config/skills`. Until a rebuild runs
+  (`/rebuild-env` in a session, `cinna agent rebuild-env <agent>` from the CLI,
+  or the admin bulk rebuild), its Addons tab shows `adapter_unsupported` with
+  "Rebuild the environment to enable skills." Refreshing does not help, and
+  neither does restarting: a restart re-runs the same image, and only a rebuild
+  replaces `/app/core` from the template.
 - **Operators upgrading need a new compose mount.** Phase 3 adds
   `SKILL_STORAGE_DIR` (`/app/data/skills`) and the compose volume
   `${HOST_SKILL_STORAGE_DIR:-./backend/data/skills}:/app/data/skills`.

@@ -56,6 +56,26 @@ Auto-generated from OpenAPI spec. Tag: `skills`
 
 ---
 
+## GET `/api/v1/skills/packages/{package_id}/revisions/{revision_number}/files`
+**List Skill Package Revision Files**
+
+**Path parameters:**
+- `package_id`: uuid
+- `revision_number`: integer
+
+**Response:** `SkillRevisionFilesPublic`
+
+---
+
+## GET `/api/v1/skills/packages/{package_id}/revisions/{revision_number}/download`
+**Download Skill Package Revision**
+
+**Path parameters:**
+- `package_id`: uuid
+- `revision_number`: integer
+
+---
+
 ## GET `/api/v1/skills/packages/{package_id}/revisions/{revision_number}/archive`
 **Download Skill Package Archive**
 

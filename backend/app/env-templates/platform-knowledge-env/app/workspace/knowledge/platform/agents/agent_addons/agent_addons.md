@@ -115,8 +115,37 @@ so no call site re-derives it:
    revision is gone, a marketplace link whose plugin row is gone, or a
    marketplace entry the last sync marked unsupported
 3. the first skill carrying an `error` → **error**, with that skill's issue code
-4. the first skill carrying a `warning` → **warning**, with that code
-5. otherwise **ok**
+4. a `kind="skill"` row that carries **no skill at all** → **error**
+   (`not_materialized`) or **warning** (`unverified`), per the next rule
+5. the first skill carrying a `warning` → **warning**, with that code
+6. otherwise **ok**
+
+### A skill row that contributes no skill is not `ok`
+
+A `kind="skill"` row wraps exactly one `SKILL.md` by definition, so an empty
+skill list on such a row is a contradiction. It used to read **`ok`** anyway —
+the link was genuinely correct, and the row was reporting the link. The user was
+told the skill was fine while the model could not load it.
+
+Whether an empty list is *evidence* depends on whether the index was read, so the
+projection carries a tri-state and the row says only what it knows:
+
+| The environment's skill index was… | Row | `status_code` |
+|------------------------------------|-----|---------------|
+| read, and this skill is not in it | **error** | `not_materialized` |
+| not readable (`skills_error` is set) | **warning** | `unverified` |
+| never read — no environment, or no read yet | silent, as before | — |
+
+Copy: `not_materialized` — "Installed here, but its files never reached the
+environment — the model can't load it." `unverified` — "Installed here. Whether
+its files reached the environment couldn't be checked." Calling an install broken
+because we could not reach its container would be the same overreach as calling
+it healthy, which is why the middle case is its own code.
+
+**`kind="plugin"` rows are exempt.** A plugin legitimately ships only commands or
+agents and contributes nothing to the skill index in perfect health. Local skill
+rows are built *from* an index entry and so always carry one; only a link row can
+be empty.
 
 `has_update` is deliberately **not** a status. It is a flag; colouring it would
 make routine maintenance look like a fault. Disabled is not a status either — it
@@ -468,7 +497,9 @@ for the admin surface and the sync mechanics.
 
 | Scenario | Behaviour |
 |----------|-----------|
-| Environment asleep / adapter error / pre-feature container | Plugin rows still return; `skills_error` carries the banner; local rows come from the cache if there is one |
+| Environment asleep / adapter error / pre-feature container | Plugin rows still return; `skills_error` carries the banner (`env_not_running` / `adapter_error` / **`adapter_unsupported`** / `parse_error` — see [agent_skills](../agent_skills/agent_skills.md), where the four codes and their one-per-code remedies are defined); local rows come from the cache if there is one |
+| An installed `kind="skill"` row with no skill in the index | Index read → `status=error`, `status_code=not_materialized`. Index unreadable → `status=warning`, `status_code=unverified`. No environment / no read yet → silent. `kind="plugin"` rows are exempt |
+| Plugin sync to a pre-feature environment | `EnvironmentSyncStatus.status="unsupported"`, counted in `unsupported_syncs`, **not** in `failed_syncs` — the link write succeeded, so `success` stays `True`. The only remedy is a rebuild; nothing here is retryable |
 | Catalog link whose package or revision was deleted | `status=error`, `status_code=source_unavailable`; uninstall offered, upgrade hidden |
 | Marketplace link whose plugin row is gone | Same `source_unavailable`; upgrading answers **409 `source_unavailable`** with a sentence telling the user to uninstall |
 | Plugin directory present, link gone | Orphan row, read-only, "the next environment sync removes it" |

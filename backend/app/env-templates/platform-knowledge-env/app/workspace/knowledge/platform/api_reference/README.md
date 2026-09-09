@@ -28,7 +28,7 @@ Each file below documents one API domain.
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
-| Cli | [cli.md](./cli.md) | 60 |
+| Cli | [cli.md](./cli.md) | 61 |
 | Credentials | [credentials.md](./credentials.md) | 20 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Desktop Download | [desktop_download.md](./desktop_download.md) | 1 |
@@ -56,7 +56,7 @@ Each file below documents one API domain.
 | Server Channels | [server_channels.md](./server_channels.md) | 16 |
 | Server Config | [server_config.md](./server_config.md) | 5 |
 | Sessions | [sessions.md](./sessions.md) | 9 |
-| Skills | [skills.md](./skills.md) | 12 |
+| Skills | [skills.md](./skills.md) | 14 |
 | Ssh Keys | [ssh_keys.md](./ssh_keys.md) | 6 |
 | Task Triggers | [task_triggers.md](./task_triggers.md) | 16 |
 | Tasks | [tasks.md](./tasks.md) | 25 |

@@ -253,6 +253,16 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## POST `/api/v1/cli/account/agents/{agent_id}/rebuild-env`
+**Account Rebuild Env**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AccountRebuildEnvResult`
+
+---
+
 ## GET `/api/v1/cli/account/agents/{agent_id}/inspect`
 **Account Inspect Agent**
 
