@@ -170,7 +170,7 @@ Not every feature needs the full 3-layer treatment. For simple features or stand
 The platform knowledge sync keeps the `platform-knowledge-env` environment template in sync with docs changes. That template's `knowledge/platform/` snapshot is the source the account-CLI context package serves to local orchestrator agents. It is run automatically as the final step of this command (see below).
 
 This script:
-1. Copies all non-`_tech` `.md` files from `docs/application/` and `docs/agents/` into the template's `knowledge/platform/` directory
+1. Copies all non-`_tech` `.md` files from `docs/application/`, `docs/agents/` and `docs/flows/` into the template's `knowledge/platform/` directory
 2. Auto-generates REST API reference files from `frontend/openapi.json` (grouped by tag) into `knowledge/platform/api_reference/`
 
 **Do NOT manually write `_api.md` files** — API reference is auto-generated from the OpenAPI spec. If API routes change, run `make gen-client` first (to update `openapi.json`), then `make sync-platform-knowledge`.

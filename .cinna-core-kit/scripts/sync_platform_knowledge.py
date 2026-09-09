@@ -44,6 +44,7 @@ from app.services.cli.platform_knowledge_assets import (  # noqa: E402
 DOC_SOURCES = {
     "application": PROJECT_ROOT / "docs" / "application",
     "agents": PROJECT_ROOT / "docs" / "agents",
+    "flows": PROJECT_ROOT / "docs" / "flows",
 }
 DOCS_README = PROJECT_ROOT / "docs" / "README.md"
 OPENAPI_PATH = PROJECT_ROOT / "frontend" / "openapi.json"
