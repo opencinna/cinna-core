@@ -50,7 +50,7 @@ A single bulk-rebuild request accepts at most `ADMIN_ENV_MAX_BULK_SIZE` environm
 
 1. Admin opens sidebar > Admin > Agent Environments.
 2. Page loads. If any environments are behind the current template image, an orange alert banner appears: "N of M environments are behind the current template image."
-3. Admin clicks "Select all stale". The filter switches to stale-only, allowing the table header checkbox to select all visible stale rows.
+3. Admin clicks "Select all stale". Every stale environment that is not mid-transition is selected, including those on other pages of the table; the filters stay as they are.
 4. Bulk action bar appears: "N envs selected — Rebuild Selected".
 5. Admin clicks "Rebuild Selected". A confirm dialog opens, showing the selected environments grouped by template and split by current status (running / stopped / suspended).
 6. Admin confirms. A toast shows "Rebuild queued for N environments." and the dialog closes.
