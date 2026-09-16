@@ -50,6 +50,23 @@ class ActiveStreamingManager:
         self._active_streams: Dict[UUID, ActiveStream] = {}
         self._lock = asyncio.Lock()
 
+    def is_streaming_nowait(self, session_id: UUID) -> bool:
+        """True when a stream is registered for ``session_id``.
+
+        Lock-free dict membership check. Call it only from the event-loop
+        thread (the one that registers and unregisters streams).
+        """
+        return session_id in self._active_streams
+
+    def is_interrupt_requested_nowait(self, session_id: UUID) -> bool:
+        """True when a stop was requested for the session's registered stream.
+
+        Lock-free, so it can run from a cancellation path without awaiting.
+        Event-loop thread only, like ``is_streaming_nowait``.
+        """
+        stream = self._active_streams.get(session_id)
+        return stream is not None and (stream.is_interrupted or stream.interrupt_pending)
+
     async def register_stream(
         self,
         session_id: UUID,

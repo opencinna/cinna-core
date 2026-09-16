@@ -732,7 +732,7 @@ Same mechanism as page refresh - derived state from session query handles everyt
 | `message_metadata.streaming_in_progress` | `bool` | Whether message is still being generated |
 | `message_metadata.streaming_events` | `list[dict]` | Array of events with `event_seq`, `type`, `content` |
 | `message_metadata.model` | `str` | Model used for generation |
-| `status` | `str` | `""`, `"user_interrupted"`, `"error"` |
+| `status` | `str` | `""`, `"user_interrupted"`, `"error"`, `"aborted"` (turn cancelled without a requested stop — a client disconnect that outlived the turn, a killed backend process, or process shutdown; sealed by the same cancel-path finalizer as `user_interrupted`, or later by the status-repair orphan pass — see [Status Repair](../../system/status_repair/status_repair.md)) |
 
 ## Implementation Details
 

@@ -45,7 +45,10 @@ from app.core.db import leader_session
 from app.services.system.status_repair_channels import repair_channel_deliveries
 from app.services.system.status_repair_context import RepairContext
 from app.services.system.status_repair_environments import repair_environments
-from app.services.system.status_repair_sessions import repair_sessions
+from app.services.system.status_repair_sessions import (
+    repair_orphaned_streams,
+    repair_sessions,
+)
 from app.services.system.status_repair_tasks import repair_input_tasks
 
 logger = logging.getLogger(__name__)
@@ -103,6 +106,7 @@ def repair_leader_session() -> Iterator[Session | None]:
 # Tenants (see docs/plans/system_status_repair_plan.md):
 #   A  environments        — transitional env status, probe container, repair
 #   B  sessions            — stale "running" / "pending_stream" interaction status
+#   B2 orphaned streams    — turns whose DB stream heartbeat went stale
 #   C  input tasks         — re-derive "in_progress" from repaired sessions
 #   D  channel deliveries  — unsealed "draft" turn-delivery rows
 #
@@ -127,6 +131,10 @@ REPAIR_PASSES: list[tuple[str, RepairPass]] = [
     # running it first would faithfully derive from the stale rows and conclude
     # nothing had changed.
     ("sessions", repair_sessions),
+    # After B and before C: seals turns whose stream owner is gone (boot
+    # stamp) well before B's age bound; C re-derives from the sessions it
+    # clears, and it records them in the context for D like B does.
+    ("orphaned_streams", repair_orphaned_streams),
     ("input_tasks", repair_input_tasks),
     # D after B, for evidence rather than for output — and the evidence runs
     # through the context, not the column. D reads

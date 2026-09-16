@@ -86,14 +86,21 @@ Enables external agents and A2A-compatible tools to discover and communicate wit
 
 ### Task State Mapping
 
-| A2A TaskState | Internal State |
-|---------------|----------------|
-| submitted | interaction_status='pending_stream' |
-| working | interaction_status='running' |
-| completed | status='completed' |
-| input-required | tool_questions_status='unanswered' |
-| canceled | status='error' + interrupted |
-| failed | status='error' |
+`GetTask`/`tasks/get` (and the `message/send` poll) derive `TaskState` from internal state in a fixed rule order — first match wins:
+
+| # | Condition | A2A TaskState |
+|---|-----------|---------------|
+| 1 | Last message has an unanswered tool question | `input-required` |
+| 2 | `interaction_status = 'running'` | `working` |
+| 3 | `interaction_status = 'pending_stream'` | `submitted` |
+| 4 | A turn is in flight in this process (session lock held, or a stream registered) — or undelivered user messages exist | `working` |
+| 5 | `status = 'error'` | `failed` |
+| 6 | Last agent message of the turn is `user_interrupted` | `canceled` |
+| 6 | Last agent message of the turn is `aborted` (turn crashed or was torn down before it finished) | `failed` |
+| 7 | `status` in `active`, `completed` | `completed` |
+| 8 | anything else | `working` (conservative default) |
+
+Rule 4 is what makes `GetTask` safe to poll immediately after a send returns: a message still queued behind another turn (or not yet picked up) reads as `working`, never as a stale terminal state left over from an earlier turn.
 
 ### Public vs Extended Agent Card
 
@@ -133,6 +140,8 @@ See [A2A v1.0 Support](./a2a_v1_support.md) for detailed specification.
 
 Events are delivered incrementally. `A2AStreamEventHandler` pushes each mapped event into an `asyncio.Queue` the moment `on_event` fires; the SSE generator drains the queue and yields to the client immediately. Clients receive `assistant`, `tool`, and `thinking` events in the same chunked cadence that the backend receives them from the agent-env — there is no end-of-stream burst.
 
+A client disconnect does not stop the turn: the agent keeps running to completion server-side, detached from the SSE connection; events queued after the client is gone are dropped rather than accumulated. Concurrent sends to the same task never stream in parallel — a second send queues behind the first (see Crash Recovery below). Every stream ends with exactly one final event (`final=true`), even when the turn produced no events of its own (e.g. it was already answered by an earlier batched turn).
+
 | Internal Event Type | A2A TaskState | final | Notes |
 |---------------------|---------------|-------|-------|
 | stream_started | working | false | Stream initialization |
@@ -168,6 +177,30 @@ A2A clients can inspect `TextPart.metadata` to distinguish the different kinds o
 #### History Replay (GetTask)
 
 When a client calls `GetTask`, agent messages in `history` are returned with **multiple TextParts** — one per persisted streaming event (assistant, thinking, tool, tool_result). Each part carries its own `cinna.content_kind` metadata so clients replaying the history can reconstruct the full content breakdown. `tool_result_delta` events are expanded into their own TextParts with `cinna.tool_id` and `cinna.tool_stream` metadata, exactly mirroring the live-stream shape. `cinna.command_invocation` is preserved through replay — replay TextParts include the key whenever the persisted streaming events stored it, so live SSE and `GetTask` history produce the same shape. Messages without a persisted streaming trace fall back to a single TextPart built from the stored message content.
+
+Each agent message in `history` also carries `cinna.message_state` on `Message.metadata`: `complete`, `streaming` (still generating — the currently open row), `aborted` (the turn crashed or the process was torn down before it finished — see Crash Recovery below), or `canceled` (the user requested cancellation). A user message carries `cinna.client_message_id` on `Message.metadata` when the caller supplied a `messageId` on send (see Idempotency below).
+
+For the in-progress row specifically, `GetTask` merges the persisted streaming events with the in-memory live buffer of this process's active stream, so a client that reconnects mid-turn sees the same content a live SSE consumer would — not just what has already been flushed to the database (flushes happen roughly every 2 seconds).
+
+#### Crash Recovery
+
+The agent turn is detached from the SSE connection carrying `SendStreamingMessage`/`message/stream`: if the client disconnects, the turn keeps running to completion server-side rather than being cancelled. Recovery is by polling, not by reconnecting to the same stream — call `GetTask`/`tasks/get` until the state is terminal (`completed`, `failed`, `canceled`) or `input-required`. `SubscribeToTask`/`tasks/resubscribe` is not implemented.
+
+Two sends to the same task never stream concurrently. The second `SendStreamingMessage` yields its own initial `working` acknowledgement immediately, then queues behind the session's turn lock (wait mode — it is never rejected outright) until the first turn's teardown completes. That lock is per backend worker: with several workers running, two sends to the same session that land on different workers can still stream concurrently instead of queuing behind each other — a documented multi-worker gap, not a fix.
+
+If the backend process itself is killed mid-turn (not just the client disconnecting), the in-progress agent message is left `streaming` until a process restart. The status-repair background sweep's orphan-stream pass (see [Status Repair](../../../system/status_repair/status_repair.md)) then seals it as `aborted` — a few minutes after the crash by default — so `GetTask` eventually reports `failed` rather than `working` forever. A cancel the user actually requested (the interrupt/stop button, or `CancelTask`) is sealed as `canceled` instead.
+
+The same seal-on-exit also covers a stream that ends in an **error** before it finished writing: the partial agent message is sealed `aborted` rather than left `streaming` forever, exactly like a disconnect or a crash. The error itself is still recorded separately (a `system` message with an error status), and `GetTask` still reports `failed` for the turn — only the partial agent row's own status changes.
+
+#### Idempotency (`messageId`)
+
+`SendMessage`/`SendStreamingMessage` may include the caller's own `message.messageId`. The platform stores it on the user message row and, for an existing task, dedupes a resend before any command runs or any row is written:
+
+- If the earlier message with that `messageId` was never delivered to the agent (its turn failed before collecting it — e.g. the environment never came up), the resend re-drives delivery. No new row is written.
+- Otherwise the resend returns the status of the turn the original message opened — `message/send` polls it like a fresh send; `message/stream` returns a single status event and closes without re-running the turn: the turn's final state if it has one, or a **non-final `working`** event if it's still open, including the edge case of a resend that races the original send before it has even been stored (an in-flight duplicate claim, no message row yet). Either way, a client that gets a non-final event back from `message/stream` must fall back to polling `GetTask`/`tasks/get` for the outcome — the same recovery contract as any other in-progress turn.
+- Dedupe is scoped to the task: a first message that creates a new session is never deduped (there is no `taskId` yet). Callers should key resend attempts on the `taskId` returned by the first response.
+- A blank or overlong (over 255 characters) `messageId` is treated as absent and never takes part in dedupe.
+- The in-flight duplicate claim (the edge case above, before the first row is stored) is also per backend worker: two resends racing each other in that narrow window can both run if they land on different workers. Every resend after the first row exists is deduped by the stored `messageId` regardless of which worker handles it, so this exposure is limited to that first race.
 
 ### Environment Activation
 
@@ -243,4 +276,4 @@ A2A Event Mapper ---------> Centralized A2A protocol mapping logic
 
 ---
 
-*Last updated: 2026-05-22*
+*Last updated: 2026-09-16 — A2A crash recovery (C1–C4): detached producer, tasks/get in-flight state, cancel finalize + orphan-stream seal, client messageId dedupe*

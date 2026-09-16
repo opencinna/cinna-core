@@ -70,11 +70,17 @@ from app.models.environments.environment import AgentEnvironment
 from app.services.bundles.install_gate_dispatcher import InstallGateDispatcher
 from app.services.sessions.session_service import SessionService
 from app.services.sessions.channel_ingestion_service import ChannelIngestionService
-from app.services.a2a.a2a_event_mapper import A2AEventMapper
+from app.services.a2a.a2a_event_mapper import (
+    A2AEventMapper,
+    is_final_task_state,
+)
 from app.services.a2a.a2a_task_store import DatabaseTaskStore
 from app.services.a2a.access_token_service import AccessTokenService
 
 logger = logging.getLogger(__name__)
+
+# Longest client ``messageId`` kept for dedupe; longer ids are ignored.
+CLIENT_MESSAGE_ID_MAX_LENGTH = 255
 
 
 class A2ARequestHandler:
@@ -261,6 +267,7 @@ class A2ARequestHandler:
 
         content = self._extract_text_from_parts(message_data.get("parts", []))
         file_ids = self._extract_file_ids_from_message(message_data)
+        client_message_id = self._extract_client_message_id(message_data)
 
         task_id = message_data.get("taskId") or message_data.get("task_id")
         thread_key = self._parse_session_scope(task_id)
@@ -367,6 +374,7 @@ class A2ARequestHandler:
                 get_fresh_db_session=self.get_db_session,
                 backend_base_url=self.backend_base_url,
                 extra_session_kwargs=extra_kwargs or None,
+                client_message_id=client_message_id,
             )
 
         if ingestion.action == "error":
@@ -399,6 +407,17 @@ class A2ARequestHandler:
         # ensure environment is ready and re-initiate streaming. Mirrors the
         # pre-migration handling for `pending` / `message_created` actions.
         action = ingestion.action
+        is_duplicate = action == "duplicate"
+        # The messages this send is responsible for, for the failure flag below.
+        own_max_sequence = self.task_store.get_max_user_sequence(session_id)
+        if is_duplicate:
+            # A resend of a stored message runs nothing new. A still-pending
+            # message with no turn in flight was never delivered: re-drive it
+            # (the drive below). Either way, wait on the turn like a fresh send.
+            redrive = ingestion.duplicate_pending and not self.task_store.is_turn_in_flight(session_id)
+            if redrive and ingestion.message_id is not None:
+                self.task_store.clear_delivery_failed(ingestion.message_id)
+            action = "pending" if redrive else "streaming"
         if action in ("pending", "message_created"):
             try:
                 await SessionService.ensure_environment_ready_for_streaming(
@@ -416,23 +435,27 @@ class A2ARequestHandler:
                     "%s environment not ready for message/send: %s",
                     self.log_prefix, e,
                 )
+                # Same as the stream path: the undelivered rows must not keep
+                # tasks/get at "working"; they stay pending for the next turn.
+                self.task_store.flag_pending_delivery_failed(session_id, own_max_sequence)
                 raise self._wrap_env_error(e)
 
         # Wait for completion if streaming started
-        if action == "streaming":
+        if action == "streaming" or is_duplicate:
             max_wait = 300  # 5 minutes
             poll_interval = 1
             elapsed = 0
 
             while elapsed < max_wait:
-                task = self.task_store.get(str(session_id))
-                if task and task.status.state in [
-                    TaskState.completed,
-                    TaskState.failed,
-                    TaskState.canceled,
-                    TaskState.input_required,
-                ]:
-                    return task
+                if is_duplicate:
+                    # Track the turn the duplicate opened, never a newer one.
+                    state = self.task_store.get_turn_state(session_id, ingestion.message_id)
+                else:
+                    state = self.task_store.get_state(str(session_id))
+                if state is not None and is_final_task_state(state):
+                    task = self.task_store.get(str(session_id))
+                    if task:
+                        return task
                 await asyncio.sleep(poll_interval)
                 elapsed += poll_interval
 
@@ -462,12 +485,16 @@ class A2ARequestHandler:
         SSE events.  Delegates the core streaming pipeline to
         ``SessionStreamProcessor`` with an ``A2AStreamEventHandler``.
         """
-        from app.services.sessions.stream_processor import SessionStreamProcessor
+        from app.services.sessions.stream_processor import (
+            LockedTurnRunner,
+            SessionStreamProcessor,
+        )
         from app.services.sessions.stream_event_handlers import A2AStreamEventHandler
 
         message_data = params.get("message", {})
         content = self._extract_text_from_parts(message_data.get("parts", []))
         file_ids = self._extract_file_ids_from_message(message_data)
+        client_message_id = self._extract_client_message_id(message_data)
 
         task_id = message_data.get("taskId") or message_data.get("task_id")
         try:
@@ -533,6 +560,7 @@ class A2ARequestHandler:
             access_token_id=token_id,
             integration_type=None,
             backend_base_url=self.backend_base_url,
+            client_message_id=client_message_id,
         )
 
         if result["action"] == "error":
@@ -577,6 +605,25 @@ class A2ARequestHandler:
 
         task_id_str = str(session_id)
         context_id_str = str(session_id)
+
+        # A resend of a stored message. Still pending → fall through: the
+        # locked runner below collects the stored row, no new row is written.
+        # Otherwise report the state of the turn it opened and stop. For a
+        # resend of a send that is still being stored (in-flight claim, no
+        # message id yet) this is a non-final "working"; the client polls
+        # tasks/get for the outcome (plan §9 R10).
+        if result["action"] == "duplicate" and not result.get("pending"):
+            turn_state = self.task_store.get_turn_state(
+                session_id, result.get("message_id")
+            ) or TaskState.completed
+            turn_event = A2AEventMapper.create_status_update(
+                task_id=task_id_str,
+                context_id=context_id_str,
+                state=turn_state,
+                final=is_final_task_state(turn_state),
+            )
+            yield self._format_sse_event(request_id, turn_event)
+            return
 
         # Yield initial working status
         initial_event = A2AEventMapper.create_status_update(
@@ -623,7 +670,47 @@ class A2ARequestHandler:
             log_prefix=self.log_prefix,
         )
 
-        async for sse_event in handler.stream(processor):
+        async def _final_if_silent() -> None:
+            # Runs inside the session lock after teardown. The lock (and any
+            # pending row a queued turn will collect) belongs to us or to the
+            # next turn, not to this one, so the in-flight signals are ignored:
+            # input_required / failed / canceled are reported as such, and any
+            # other non-final state means "done".
+            # Known gap (plan §9 R9): this reads the session's state, not the
+            # batch's. A message batched into an earlier turn that was
+            # aborted / canceled can be reported "completed" here when that
+            # turn's agent row is no longer the current turn's.
+            state = self.task_store.get_state(task_id_str, ignore_turn_in_flight=True)
+            if state is None or not is_final_task_state(state):
+                state = TaskState.completed
+            await handler.emit_final_state(state)
+
+        # Rows up to here belong to this turn; later ones to turns queued
+        # behind it, which must not be flagged if this one fails.
+        own_max_sequence = await asyncio.to_thread(
+            self.task_store.get_max_user_sequence, session_id,
+        )
+
+        async def _flag_undelivered() -> None:
+            # The turn failed (e.g. environment never ready) and the SSE got
+            # "failed"; rows it never collected must not keep tasks/get at
+            # "working". They stay pending for the next turn.
+            await asyncio.to_thread(
+                self.task_store.flag_pending_delivery_failed, session_id, own_max_sequence,
+            )
+
+        # The turn runs detached from this SSE connection and waits its turn
+        # on the per-session lock. The "working" event above is yielded before
+        # the lock is taken, so a queued message is acknowledged immediately.
+        runner = LockedTurnRunner(
+            processor=processor,
+            session_id=session_id,
+            teardown_reason="a2a stream teardown",
+            after_teardown=_final_if_silent,
+            after_failure=_flag_undelivered,
+        )
+
+        async for sse_event in handler.stream(runner):
             yield sse_event
 
     async def handle_tasks_get(self, params: dict[str, Any]) -> Task | None:
@@ -648,8 +735,13 @@ class A2ARequestHandler:
                 return None
             self._authorize_existing_session(session)
 
+        from app.services.sessions.active_streaming_manager import active_streaming_manager
+
+        live_stream = await active_streaming_manager.get_stream_events(session_uuid)
         history_length = params.get("historyLength", params.get("history_length", 10))
-        return self.task_store.get_task_with_limited_history(task_id, history_length)
+        return self.task_store.get_task_with_limited_history(
+            task_id, history_length, live_stream=live_stream,
+        )
 
     async def handle_tasks_list(self, params: dict[str, Any]) -> list[Task]:
         """
@@ -756,6 +848,24 @@ class A2ARequestHandler:
                 if "text" in root:
                     text_parts.append(root["text"])
         return "\n".join(text_parts)
+
+    def _extract_client_message_id(self, message_data: dict[str, Any]) -> str | None:
+        """The caller's ``messageId``, or None when absent, blank or too long.
+
+        Blank ids never take part in dedupe.
+        """
+        raw = message_data.get("messageId") or message_data.get("message_id")
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            candidate = raw.strip()
+            if candidate and len(candidate) <= CLIENT_MESSAGE_ID_MAX_LENGTH:
+                return candidate
+        logger.debug(
+            "%s ignoring unusable client messageId (type=%s)",
+            self.log_prefix, type(raw).__name__,
+        )
+        return None
 
     def _extract_file_ids_from_message(
         self, message_data: dict[str, Any]

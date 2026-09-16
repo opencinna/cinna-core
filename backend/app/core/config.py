@@ -1161,6 +1161,20 @@ class Settings(BaseSettings):
     # waiting on an ``ENVIRONMENT_ACTIVATED`` event that may never arrive, so
     # it can be reclaimed much sooner.
     STATUS_REPAIR_STREAM_MAX_AGE_MINUTES: int = Field(default=120, ge=1)
+    # Orphaned streams: an agent row / running session whose DB stream
+    # heartbeat (written every 30 s by the live turn on whichever worker runs
+    # it, services/sessions/stream_heartbeat.py) is older than this is sealed
+    # aborted / cleared. 2 min = 4 missed beats: long enough that a slow DB
+    # write or a busy event loop never reaps a live turn, short enough that a
+    # crashed turn reads as failed within about two repair ticks. Rows written
+    # before the heartbeat existed keep the STREAM_MAX_AGE bound.
+    STATUS_REPAIR_ORPHAN_STREAM_MIN_AGE_MINUTES: int = Field(default=2, ge=1)
+    # Pass B skips a running session whose stream heartbeat is fresh (a live
+    # turn may run for hours). Past this hard cap it reaps regardless: a
+    # stream hung on a still-connected environment keeps beating while no
+    # chunk ever arrives (httpx reads time out per chunk, not per turn). 12 h
+    # is far beyond any real agent turn.
+    STATUS_REPAIR_STREAM_HARD_MAX_AGE_HOURS: int = Field(default=12, ge=1)
     STATUS_REPAIR_PENDING_STREAM_MAX_AGE_MINUTES: int = Field(default=15, ge=1)
     # Pass C — input tasks. Purely derived from the session states Pass B has
     # just repaired, so it only needs to outlast one repair tick.

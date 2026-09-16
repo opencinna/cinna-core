@@ -43,3 +43,23 @@ def get_messages_by_role(
     """List messages filtered by role (e.g. 'user', 'agent')."""
     messages = list_messages(client, token_headers, session_id)
     return [m for m in messages if m["role"] == role]
+
+
+def get_raw_message_metadata(db, message_id: str) -> dict:
+    """Read a message row's ``message_metadata`` straight off the test DB.
+
+    Documented seam, same posture as ``force_session_interaction_claim`` in
+    ``tests/utils/session.py``: every read surface (``GET .../messages``,
+    A2A ``tasks/get``) merges the in-memory live-stream buffer into what it
+    returns (``MessageService.enrich_messages_with_streaming`` /
+    ``convert_session_messages_to_a2a``'s ``live_stream`` merge), so neither
+    can be used to observe the *persisted* row on its own — only a direct
+    read can prove a read path didn't also write to it.
+    """
+    import uuid as _uuid
+
+    from app.models.sessions.session import SessionMessage
+
+    row = db.get(SessionMessage, _uuid.UUID(message_id))
+    assert row is not None, f"Message {message_id} not found"
+    return dict(row.message_metadata or {})

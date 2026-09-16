@@ -147,6 +147,8 @@ idle ("") → running → idle ("")
 - User messages start with `sent_to_agent_status = "pending"`, set to `"sent"` after delivery
 - Agent messages accumulate content via incremental DB flushes every ~2 seconds during streaming
 - `message_metadata.streaming_events` stores all streaming events with `event_seq` for deduplication
+- An in-progress agent message whose turn ends before its own finalize write — a client disconnect that outlives the turn, a killed backend process, process shutdown, or an error raised inside the stream itself — is sealed `status="aborted"` (partial content and events kept, `streaming_in_progress` cleared) rather than left `streaming` forever. A turn cancelled because the user explicitly requested a stop is instead sealed `status="user_interrupted"`, as before. An error is still also recorded as its own separate `system` message with `status="error"` — only the partial agent row's status changes. A process crash that leaves no writer at all is later sealed the same way by the status-repair sweep's orphan pass — see [A2A Protocol](../a2a_integration/a2a_protocol/a2a_protocol.md#crash-recovery) and [Status Repair](../../system/status_repair/status_repair.md)
+- A user message sent with a caller-supplied id (A2A `messageId`) stores it in `message_metadata.client_message_id`; a resend of the same id within the same session is deduped — re-driven if never delivered, otherwise reported as the status of the turn it already opened — before any row is written or command runs
 
 ### Cascade Delete
 

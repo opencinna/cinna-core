@@ -40,6 +40,7 @@ from app.core.db import create_session, leader_session
 from app.models import Session, SessionCreate, SessionMessage
 from app.services.acp.connector_service import ACPConnectorService
 from app.services.bundles.install_gate_dispatcher import InstallGateDispatcher
+from app.services.sessions.active_streaming_manager import active_streaming_manager
 from app.services.sessions.message_service import MessageService
 from app.services.sessions.session_service import SessionService
 from app.services.sessions.stream_processor import (
@@ -622,6 +623,9 @@ class CinnaACPAgent:
         # finalizer. A stalled environment gets forced cleanup in _run_prompt.
         _, pending = await asyncio.wait({task}, timeout=1)
         if pending:
+            # Tell the stream the cancel is a requested stop, so the backend
+            # seals the partial reply as user_interrupted, not aborted.
+            await active_streaming_manager.mark_interrupted(UUID(session_id))
             task.cancel()
 
     async def close(self) -> None:

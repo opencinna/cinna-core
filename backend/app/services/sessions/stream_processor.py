@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 from uuid import UUID
 
 from sqlmodel import Session as DbSession
@@ -55,6 +55,16 @@ def get_session_lock(session_id: str) -> asyncio.Lock:
                 del _session_locks[sid]
         _session_locks[session_id] = asyncio.Lock()
     return _session_locks[session_id]
+
+
+def is_session_lock_held(session_id: str) -> bool:
+    """True when this process holds the per-session lock.
+
+    Read-only: never creates a lock entry, so probing unknown sessions does
+    not grow ``_session_locks``.
+    """
+    lock = _session_locks.get(session_id)
+    return lock is not None and lock.locked()
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +374,80 @@ class SessionStreamProcessor:
             self.log_prefix, self.session_id, len(batches), len(full_response),
         )
         return full_response
+
+
+# ---------------------------------------------------------------------------
+# Locked turn runner
+# ---------------------------------------------------------------------------
+
+class LockedTurnRunner:
+    """Run one processor turn under the per-session lock, teardown included.
+
+    Takes the shared per-session lock in WAIT mode (a queued turn waits, it
+    is not rejected) and holds it around ``processor.process()`` and the
+    teardown: a shielded ``clear_interaction_status`` followed by the
+    optional ``after_teardown`` callback, which runs only when the turn
+    returned normally. ``after_failure`` runs (also inside the lock, after
+    teardown) when the turn raised an ``Exception``; its own errors are
+    logged, and the turn's exception is re-raised. The reasoning, including the accepted shield
+    residual, is the comment block in
+    ``MessageService.process_pending_messages`` (web path), which keeps its
+    own hand-written copy of this sequence.
+
+    The wrapped processor must be built with ``use_session_lock=False`` so
+    the lock is not taken twice.
+    """
+
+    def __init__(
+        self,
+        *,
+        processor: Any,
+        session_id: UUID,
+        teardown_reason: str,
+        after_teardown: Callable[[], Awaitable[None]] | None = None,
+        after_failure: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        self.processor = processor
+        self.session_id = session_id
+        self.teardown_reason = teardown_reason
+        self.after_teardown = after_teardown
+        self.after_failure = after_failure
+
+    async def process(self) -> str:
+        async with get_session_lock(str(self.session_id)):
+            try:
+                result = await self.processor.process()
+            except Exception:
+                await self._teardown()
+                if self.after_failure is not None:
+                    try:
+                        await self.after_failure()
+                    except Exception as exc:  # noqa: BLE001 - never mask the turn error
+                        logger.warning(
+                            "after_failure hook failed | session=%s | error=%s",
+                            self.session_id, exc,
+                        )
+                raise
+            except BaseException:
+                await self._teardown()
+                raise
+            await self._teardown()
+            if self.after_teardown is not None:
+                await self.after_teardown()
+            return result
+
+    async def _teardown(self) -> None:
+        try:
+            await asyncio.shield(
+                SessionService.clear_interaction_status(
+                    self.session_id, reason=self.teardown_reason,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - teardown is best-effort
+            logger.warning(
+                "Teardown clear failed | session=%s | reason=%s | error=%s",
+                self.session_id, self.teardown_reason, exc,
+            )
 
 
 # ---------------------------------------------------------------------------

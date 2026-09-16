@@ -17,8 +17,9 @@
 ### Backend - Core Services (used by A2A)
 - `backend/app/services/sessions/session_service.py` - Session operations
 - `backend/app/services/sessions/message_service.py` - Message operations
-- `backend/app/services/sessions/stream_processor.py` - `SessionStreamProcessor` unified streaming pipeline
-- `backend/app/services/sessions/stream_event_handlers.py` - `A2AStreamEventHandler` for A2A SSE event mapping; owns producer/consumer lifecycle via `stream(processor)`, `_run_processor()`, and `_enqueue_error_once()`
+- `backend/app/services/sessions/stream_processor.py` - `SessionStreamProcessor` unified streaming pipeline; `LockedTurnRunner` (turn + teardown under the per-session lock); `is_session_lock_held()`
+- `backend/app/services/sessions/stream_event_handlers.py` - `A2AStreamEventHandler` for A2A SSE event mapping; owns producer/consumer lifecycle via `stream(runner)`, `_run_processor()`, and `_enqueue_error_once()`; module-level `_DETACHED_A2A_TURNS` registry and `wait_for_detached_a2a_turns()`
+- `backend/app/services/sessions/stream_heartbeat.py` - `StreamHeartbeat`, a per-turn DB heartbeat (`stream_heartbeat_at`) used to tell a live stream writer from an orphan left by a dead process, valid across backend workers
 - `backend/app/services/agents/agent_service.py` - Skills generation integration
 
 ### Backend - AI Functions
@@ -45,6 +46,11 @@
 - `backend/tests/api/a2a_integration/` - A2A integration tests
 - `backend/tests/api/a2a_integration/test_a2a_cancel.py` - Integration tests for `CancelTask`: happy-path cancel verifies `forward_interrupt_to_environment` is called with the correct `external_session_id`; idempotent cancel verifies zero forwards; unknown-task cancel returns `-32001`
 - `backend/tests/unit/test_a2a_stream_event_handler.py` - Unit tests for `A2AStreamEventHandler`: incremental delivery regression guard (measures inter-event gaps), sentinel on every exit path, cancel on disconnect, error deduplication, pre-stream errors
+- `backend/tests/api/a2a_integration/test_a2a_crash_recovery.py` - Integration tests for the detached producer: a client disconnect does not abort the turn; driven through the raw ASGI harness below since `TestClient` cannot produce a genuine mid-stream disconnect
+- `backend/tests/api/a2a_integration/test_a2a_task_state.py` - Integration tests for `tasks/get` state and the `message/send` poll end to end, including turn-genuinely-in-flight and cancel-mid-turn cases that need real concurrency
+- `backend/tests/unit/test_a2a_crash_recovery_internals.py` - Unit tests for `A2AStreamEventHandler` drop-not-block at scale, `_DETACHED_A2A_TURNS` cleanup, `emit_final_state`'s no-op guard, `LockedTurnRunner` teardown ordering, and `is_session_lock_held`
+- `backend/tests/unit/test_a2a_task_state_mapping.py` - Unit tests for `A2AEventMapper.map_session_status_to_task_state`'s rule order and precedence — pure logic, no DB or client
+- `backend/tests/utils/a2a_raw_asgi.py` - Raw ASGI driver + gated agent-env stub, used where `TestClient` cannot simulate a mid-stream disconnect or true same-loop concurrency
 
 ## Database Schema
 
@@ -104,9 +110,9 @@ Both `handle_message_send` and `handle_message_stream` route inbound calls throu
 
 Shared dispatch methods (used by both the `/a2a/` surface and, via `ExternalA2AContextHandler`, the `/external/a2a/` surface):
 
-- `A2ARequestHandler.handle_message_send()` - Non-streaming message handling (polls for completion)
-- `A2ARequestHandler.handle_message_stream()` - SSE streaming handler; creates `A2AStreamEventHandler` and iterates `handler.stream(processor)` to yield events incrementally to the client
-- `A2ARequestHandler.handle_tasks_get()` - Task query
+- `A2ARequestHandler.handle_message_send()` - Non-streaming message handling; polls `task_store.get_state()` (cheap, no history read) once a second until a final/`input_required` state, then returns `task_store.get()`. On a duplicate `messageId` (see Idempotency below) it either re-drives delivery (`task_store.clear_delivery_failed()`) or joins the same poll loop as a fresh send. On an environment-readiness failure it flags this turn's own still-pending rows via `task_store.flag_pending_delivery_failed(session_id, own_max_sequence)`, `own_max_sequence` snapshotted (`task_store.get_max_user_sequence`) before the readiness check — the same mechanism `handle_message_stream`'s `_flag_undelivered` uses
+- `A2ARequestHandler.handle_message_stream()` - SSE streaming handler; creates `A2AStreamEventHandler`, wraps the `SessionStreamProcessor` in a `LockedTurnRunner` (see Crash Recovery Implementation below), and iterates `handler.stream(runner)` to yield events incrementally to the client. A duplicate `messageId` whose original message is not still pending short-circuits before the lock is taken: it yields one status event from `task_store.get_turn_state()` and returns without running the turn again. When the resend races the original send before it has even been stored (an in-flight dedupe claim, `message_id` still `None`), `get_turn_state(session_id, None)` falls back to the session-level state — typically a non-final `working` — so the client is expected to fall back to polling `tasks/get` (plan §9 R10)
+- `A2ARequestHandler.handle_tasks_get()` - Task query; merges `active_streaming_manager.get_stream_events(session_id)` (the live in-memory buffer) into `task_store.get_task_with_limited_history()` so a reconnecting client sees content not yet flushed to the DB
 - `A2ARequestHandler.handle_tasks_cancel()` - Task cancellation; delegates to `MessageService.interrupt_stream()` so the interrupt is forwarded to the agent-env via HTTP, not merely flagged on the backend; treats "No active stream to interrupt" as idempotent success (terminal-task cancel per A2A spec); other errors (`ValueError`) propagate
 - `A2ARequestHandler.handle_tasks_list()` - List tasks (custom extension)
 
@@ -121,6 +127,7 @@ Hook methods — subclasses override to customize access control and session sta
 - `_task_list_filter(session)` - In-memory filter for tasks/list results
 - `_wrap_env_error(exc)` - Shape env-readiness errors for the caller
 - `_stream_scope_error(exc, request_id)` - Optionally surface scope violations as inline SSE errors (default: propagate)
+- `_extract_client_message_id(message_data)` - Reads `messageId`/`message_id`; keeps it only if it's a non-blank string of at most 255 characters, else `None` (logged at debug level)
 
 Uses `SessionService` for session operations (no direct DB queries); streaming delegated to unified `SessionStreamProcessor`.
 
@@ -128,12 +135,13 @@ Uses `SessionService` for session operations (no direct DB queries); streaming d
 **File:** `backend/app/services/a2a/a2a_event_mapper.py`
 
 - `A2AEventMapper.map_stream_event()` - Internal streaming event to A2A event; handles `assistant`, `tool`, `thinking`, and `tool_result_delta` event types (mapped via `_STREAM_EVENT_TO_CONTENT_KIND`); stamps `cinna.command_invocation` on `tool` and `tool_result_delta` parts when the event carries a slash-command invocation
-- `A2AEventMapper.map_session_status_to_task_state()` - Session status to TaskState
-- `A2AEventMapper.convert_session_messages_to_a2a()` - SessionMessage list to A2A Message list
+- `A2AEventMapper.map_session_status_to_task_state(status, interaction_status, tool_questions_status=None, *, turn_in_flight=False, has_pending=False, last_agent_status=None)` - Session status to TaskState; evaluates the rule table in [the business doc's Task State Mapping](./a2a_protocol.md#task-state-mapping) in order, first match wins. Callers not affected by the new keywords (e.g. `_final_if_silent`, see below) get identical behavior by omitting them
+- `A2AEventMapper.is_terminal_task_state(state)` / `is_final_task_state(state)` - `TERMINAL_TASK_STATES` (`completed`, `failed`, `canceled`, `rejected`) and terminal-or-`input_required`, respectively. Used wherever a poll loop or a stream needs to decide "is this the end"
+- `A2AEventMapper.convert_session_messages_to_a2a(messages, session_id, live_stream=None)` - SessionMessage list to A2A Message list. Stamps `MESSAGE_STATE_KEY` (`cinna.message_state`: `complete` / `streaming` / `aborted` / `canceled`) on agent messages and `CLIENT_MESSAGE_ID_KEY` (`cinna.client_message_id`) on user messages that carry one. When `live_stream` (the active-streaming-manager buffer) is given, the in-progress agent row's parts are built from `MessageService.merge_live_events(stored, live_stream["streaming_events"])` on **copies** — the ORM row itself is never mutated, since the caller's DB session would flush it
 - `A2AEventMapper.create_status_update(part_metadata=...)` - low-level TaskStatusUpdateEvent construction; the optional `part_metadata` kwarg is attached to the embedded `TextPart` (not the `Message`) so streaming events carry content-kind metadata at part level
 - `A2AEventMapper.create_notice_event(task_id, context_id, message)` - factory for a non-final `working` status update carrying `cinna.content_kind = "notice"` (env-activation hint and other ephemeral platform notices)
 - `A2AEventMapper.create_command_result_event(task_id, context_id, message)` - factory for the terminal `completed` status update carrying `cinna.content_kind = "command_result"` and `cinna.command_invocation = "<slash invocation>"` (synchronous slash-command output yielded on the `command_executed` branch in place of the agent stream)
-- `A2AEventMapper._build_parts_for_session_message()` - Expands a stored agent `SessionMessage` into one `TextPart` per persisted streaming event, each carrying `cinna.content_kind` metadata; tool parts additionally carry `cinna.tool_name`, `cinna.tool_input` (when a dict), and `cinna.tool_id` (when non-empty) from the persisted event's `metadata`; `tool_result_delta` events are expanded into their own TextParts carrying `cinna.tool_id` and `cinna.tool_stream` metadata; `cinna.command_invocation` is preserved on replay whenever the persisted event stored it (tool, tool_result, and command_result parts from slash-command invocations); falls back to a single TextPart from `msg.content` when no trace is stored
+- `A2AEventMapper._build_parts_for_session_message(msg, role, events_override=None)` - Expands a stored agent `SessionMessage` into one `TextPart` per persisted streaming event, each carrying `cinna.content_kind` metadata; tool parts additionally carry `cinna.tool_name`, `cinna.tool_input` (when a dict), and `cinna.tool_id` (when non-empty) from the persisted event's `metadata`; `tool_result_delta` events are expanded into their own TextParts carrying `cinna.tool_id` and `cinna.tool_stream` metadata; `cinna.command_invocation` is preserved on replay whenever the persisted event stored it (tool, tool_result, and command_result parts from slash-command invocations); falls back to a single TextPart from `msg.content` when no trace is stored. `events_override`, when given, replaces the stored `streaming_events` for this call only — how `convert_session_messages_to_a2a` splices in the merged live buffer
 
 #### Content-Kind Module-Level Constants
 
@@ -144,6 +152,8 @@ Defined at module level in `backend/app/services/a2a/a2a_event_mapper.py`; impor
 | Constant | Value | Use |
 |----------|-------|-----|
 | `CONTENT_KIND_KEY` | `"cinna.content_kind"` | Metadata key placed on each `TextPart` |
+| `MESSAGE_STATE_KEY` | `"cinna.message_state"` | `Message.metadata` key on agent rows in history: `complete` \| `streaming` \| `aborted` \| `canceled` |
+| `CLIENT_MESSAGE_ID_KEY` | `"cinna.client_message_id"` | `Message.metadata` key on user rows in history, echoing the caller-supplied `messageId` when one was stored |
 | `TOOL_NAME_KEY` | `"cinna.tool_name"` | Metadata key for tool name; present only on tool parts |
 | `TOOL_INPUT_KEY` | `"cinna.tool_input"` | Metadata key for structured tool arguments (JSON object); present only on tool parts when the underlying SDK emits a dict |
 | `TOOL_ID_KEY` | `"cinna.tool_id"` | Metadata key for opaque tool-call identifier string; present on tool parts when the underlying SDK emits a non-empty value, and on every tool_result part |
@@ -165,7 +175,12 @@ Metadata is always placed on `TextPart.metadata` (for text parts) or `FilePart.m
 **File:** `backend/app/services/a2a/a2a_task_store.py`
 
 - `DatabaseTaskStore.get()` - Get task by ID (via SessionService)
-- `DatabaseTaskStore.get_task_with_limited_history()` - Get task with message limit
+- `DatabaseTaskStore.get_task_with_limited_history(task_id, history_length=10, live_stream=None)` - Get task with message limit; `live_stream` is forwarded to `A2AEventMapper.convert_session_messages_to_a2a` for the in-progress-row merge
+- `DatabaseTaskStore.get_state(task_id, *, ignore_turn_in_flight=False)` - State only, no history read; cheap enough to poll every second. `ignore_turn_in_flight=True` skips the lock/stream/pending signals — used by `LockedTurnRunner`'s own teardown callback, where those signals describe the caller (the runner itself still holds the lock at that point), not the task
+- `DatabaseTaskStore.get_turn_state(session_id, user_message_id)` - State of the turn a specific user message opened, not the session as a whole: while no newer user message exists this is the session-level state; once one does, the turn is over and the state comes from the last agent message between the two user messages (`user_interrupted` → `canceled`, `aborted` → `failed`, anything else or no row → `completed`). Used to answer a `message/stream` duplicate resend without re-running the turn
+- `DatabaseTaskStore.is_turn_in_flight(session_id)` - `is_session_lock_held(str(session_id)) or active_streaming_manager.is_streaming_nowait(session_id)`
+- `DatabaseTaskStore.clear_delivery_failed(message_id)` / `flag_pending_delivery_failed(session_id, up_to_sequence)` / `get_max_user_sequence(session_id)` - Thin wrappers over the `MessageService` methods of the same name, used by the duplicate-resend and locked-runner-failure paths respectively
+- `_map_status_to_state()` queries no more than it must: the mapper's early-exit rules (tool question, `running`/`pending_stream`) are checked first, and the turn-in-flight / pending / last-agent-status queries only run if none of those already decided the state
 - Delegates all A2A conversions to `A2AEventMapper`
 
 ### A2A v1.0 Adapter
@@ -187,7 +202,7 @@ The adapter is only applied for v1.0 and latest endpoints. The v0.3 endpoint byp
 ### Integration with Existing Services
 
 **SessionService:** `backend/app/services/sessions/session_service.py`
-- `send_session_message()` - Creates session (if agent_id provided) + message, initiates streaming
+- `send_session_message(..., client_message_id=None)` - Creates session (if agent_id provided) + message, initiates streaming. When `client_message_id` and an existing `session_id` are both given, claims `(session_id, client_message_id)` in a process-local `_inflight_client_message_ids` set (closes the check/insert race), looks up `MessageService.find_user_message_by_client_id`, and returns `{"action": "duplicate", "message_id", "pending"}` before any command runs or row is written. On a miss it re-enters itself holding the claim, so the claim also covers the row insert
 - `get_session()` - Get session by ID
 - `list_environment_sessions()` - List sessions for environment with pagination and access token filter
 - `update_interaction_status()` - Update interaction_status and pending_messages_count
@@ -195,8 +210,15 @@ The adapter is only applied for v1.0 and latest endpoints. The v0.3 endpoint byp
 - `ensure_environment_ready_for_streaming()` - Activate suspended environments
 
 **MessageService:** `backend/app/services/sessions/message_service.py`
-- `stream_message_with_events()` - Streams responses as internal events
+- `stream_message_with_events()` - Streams responses as internal events. Its `finally` seals an in-progress row whenever the batch never reached its own finalize write — a cancel, a consumer going away (`CancelledError` / `GeneratorExit`), **or an error raised inside the stream itself**: `_seal_unfinished_turn` awaits (shielded) any flush already in flight, then calls `finalize_aborted_agent_message`, `user_interrupted=True` when `active_streaming_manager.is_interrupt_requested_nowait(session_id)` (the cancel followed a requested stop), else `False`. Before this, an error left the row `streaming_in_progress` forever; the error itself is still recorded as its own `system` message with `status="error"`, this only changes the partial agent row. Side effect: an ACP prompt error now shows its agent row as `aborted` too, since it runs through the same `finally`
 - `interrupt_stream()` - Full interrupt flow: flag → resolve env → HTTP POST to agent-env `/chat/interrupt/{external_session_id}`; called by the UI route, webapp-chat route, and `A2ARequestHandler.handle_tasks_cancel`. Caller must authorize session access before calling (trust-based contract).
+- `_apply_aborted(db, msg, events, content, *, user_interrupted=False)` / `finalize_aborted_agent_message()` - Locks the row (`with_for_update`), returns `False` without writing unless it is still `streaming_in_progress` (never overwrites a finalized row), then sets `status="aborted"` or `status="user_interrupted"`
+- `has_pending_user_messages(db, session_id)` - EXISTS check on pending user rows, excluding those flagged `delivery_failed_at` (a turn that failed before collecting them — nothing is driving them, but they stay `pending` for the next turn)
+- `get_last_agent_message_of_current_turn()` / `get_turn_closing_agent_message()` - Feed `A2ATaskStore._current_turn_agent_status` and `get_turn_state` respectively
+- `find_user_message_by_client_id(db, session_id, client_message_id)` - Oldest user message stored with that `client_message_id`, the dedupe lookup `SessionService.send_session_message` runs
+- `flag_pending_delivery_failed(db, session_id, up_to_sequence)` / `clear_delivery_failed(db, message_id)` - Stamp/clear `message_metadata["delivery_failed_at"]` on still-`pending` rows a failed turn never collected. `up_to_sequence` (`get_max_user_sequence(db, session_id)`, captured before the failing turn starts) scopes the flag to that turn's own rows, so rows of a turn already queued behind it are left alone
+- `get_max_user_sequence(db, session_id)` - Sequence number of the session's newest user message (0 if none); the `up_to_sequence` snapshot for the call above
+- `merge_live_events(db_events, live_events)` - Pure helper: appends live events whose `event_seq` exceeds the highest stored one. Shared by `_flush_streaming_to_db` and `A2AEventMapper.convert_session_messages_to_a2a`
 - `get_last_message()` - Get last message (for tool_questions_status check)
 - `get_last_n_messages()` - Get message history
 
@@ -210,11 +232,20 @@ The adapter is only applied for v1.0 and latest endpoints. The v0.3 endpoint byp
 
 `A2AStreamEventHandler` owns the producer/consumer lifecycle for A2A SSE streaming:
 
-- `on_event(event)` - Maps each agent-env event to A2A format via `A2AEventMapper` and puts it on an `asyncio.Queue`
+- `on_event(event)` - Maps each agent-env event to A2A format via `A2AEventMapper` and calls `_emit` to put it on an `asyncio.Queue`; sets `final_emitted=True` when the mapped event is itself final
 - `on_error(error)` - Calls `_enqueue_error_once` to enqueue a final `failed` status event
-- `stream(processor)` - Async iterator that runs `processor.process()` as a detached `asyncio.create_task`; drains the queue and yields each SSE string to the caller; a done-callback on the task posts a `None` sentinel to guarantee the consumer unblocks on every exit path (normal completion, error, client disconnect, abrupt task death)
-- `_run_processor(processor)` - Wraps `processor.process()`; re-raises `CancelledError` without enqueuing a spurious `failed` event; maps `ValueError`/`RuntimeError` to `_enqueue_error_once`
-- `_enqueue_error_once(message)` - Enqueues a final `failed` status event at most once (guarded by `error_enqueued` flag) to prevent duplicate error events when both `on_error` and `_run_processor`'s except branch fire
+- `emit_final_state(state)` - No-op if `final_emitted` is already set; otherwise emits one closing status update (`final=True` for a terminal state or `input_required`) and sets the flag. Used by `LockedTurnRunner`'s `after_teardown` callback when the turn produced no events of its own — e.g. its message was collected and answered as part of an earlier batched turn
+- `_emit(item)` - Puts `item` on the queue via `put_nowait` (the queue is unbounded on purpose — the producer can never stall on a slow or absent consumer) unless `_consumer_attached` is `False`, in which case the item is silently dropped
+- `stream(runner)` - Async iterator that runs `runner.process()` (a `LockedTurnRunner`, see Crash Recovery Implementation below) as a **detached** `asyncio.create_task`, held in the module-level `_DETACHED_A2A_TURNS` set so it survives past the consumer even though `asyncio` itself only keeps a weak reference to a task. Drains the queue and yields each SSE string to the caller; a done-callback discards the task from the registry and posts a `None` sentinel to guarantee the consumer unblocks on every exit path (normal completion, error, client disconnect, abrupt task death). On a client disconnect (`GeneratorExit`), the `finally` sets `_consumer_attached=False` and drains any events already queued — it does **not** cancel the producer; the turn runs to completion regardless of the SSE connection
+- `_run_processor(runner)` - Wraps `runner.process()`; re-raises `CancelledError` without enqueuing a spurious `failed` event (only process shutdown cancels a detached producer); maps `ValueError`/`RuntimeError` to `_enqueue_error_once`
+- `_enqueue_error_once(message)` - Emits a final `failed` status event at most once (guarded by `error_enqueued` flag, which also sets `final_emitted`) to prevent duplicate error events when both `on_error` and `_run_processor`'s except branch fire
+- `wait_for_detached_a2a_turns(timeout)` (module-level) - Awaits a snapshot of `_DETACHED_A2A_TURNS` up to `timeout` seconds; never raises on timeout. Used by tests (and available for a future shutdown drain)
+
+### Crash Recovery Implementation (C1–C4)
+
+- `LockedTurnRunner` (`stream_processor.py`) - Wraps a processor in the per-session lock, **wait mode** (a queued turn waits, never rejected), plus teardown: a shielded `SessionService.clear_interaction_status()` runs inside the lock in every case. `after_teardown` (only on a normal return) is `_final_if_silent` in `handle_message_stream` — it calls `task_store.get_state(..., ignore_turn_in_flight=True)` and `handler.emit_final_state(...)`. Known gap (plan §9 R9): this reads the *session's* state, not the batch's — a message batched into an earlier turn that was aborted/canceled can be reported `completed` here once that turn's agent row is no longer the current one. `after_failure` (only when the turn raised) is `_flag_undelivered` — it calls `task_store.flag_pending_delivery_failed(session_id, own_max_sequence)`, where `own_max_sequence` is snapshotted before the turn starts so only this turn's own rows are flagged, not ones queued behind it. Flagged rows don't count as in-flight for `tasks/get`, but stay `pending` for the next turn. The wrapped processor must be built `use_session_lock=False`. The lock (`_session_locks`) is a **process-local** dict: it serializes concurrent sends to one session only within the worker that holds it, so two sends to the same session landing on different backend workers can still stream concurrently instead of queuing behind each other (plan §9 R11, documented, not fixed)
+- `is_session_lock_held(session_id)` (`stream_processor.py`) - Read-only probe (`_session_locks.get(session_id)` + `.locked()`); never creates a lock entry, so probing an unknown session doesn't grow the registry
+- `stream_heartbeat.py` (new; plan D10) - `StreamHeartbeat(session_id, get_fresh_db_session)`: `start()` / `attach_message(message_id)` / `stop()`. A per-turn ticker that writes `stream_heartbeat_at` (`STREAM_HEARTBEAT_KEY`) into `session_metadata` from turn start, and into the in-progress agent row's `message_metadata` once it exists, roughly every `HEARTBEAT_INTERVAL_SECONDS` (30s); also stamped on message creation and every periodic flush. Because the heartbeat is DB state, the status-repair orphan pass's verdict holds across every backend worker, not just the one that started the turn — see [status repair tech](../../../system/status_repair/status_repair_tech.md) for the pass and the self-heal marker (`ORPHAN_CLEARED_KEY`). The client `messageId` in-flight dedupe claim, by contrast, is still process-local (`services/sessions/session_service.py`): two resends racing the same `messageId` before the first row is stored can both run if they land on different workers (plan §9 R12) — every resend after that first row exists is deduped by the stored `messageId` regardless of worker
 
 ## Frontend Components
 
@@ -381,4 +412,4 @@ The two feature surfaces keep their own routes, auth contexts, card builders, an
 
 ---
 
-*Last updated: 2026-05-22*
+*Last updated: 2026-09-16 — A2A crash recovery (C1–C4): detached producer, tasks/get in-flight state, cancel finalize + orphan-stream seal, client messageId dedupe*

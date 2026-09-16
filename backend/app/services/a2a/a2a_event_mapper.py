@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 # synchronous slash-command output) — all of which otherwise look like
 # generic "agent" text.
 CONTENT_KIND_KEY = "cinna.content_kind"
+# Per-message state of an agent row in history: complete | streaming |
+# aborted | canceled.
+MESSAGE_STATE_KEY = "cinna.message_state"
+# The caller-supplied A2A ``messageId`` echoed on the stored user row.
+CLIENT_MESSAGE_ID_KEY = "cinna.client_message_id"
 TOOL_NAME_KEY = "cinna.tool_name"
 # Structured tool arguments (object) — surfaced on each tool TextPart so
 # clients can render the call without parsing the narration text.
@@ -141,6 +146,35 @@ def _build_attachment_file_part(
         mime_type=mime_type,
     )
     return Part(root=FilePart(file=file_with_uri, metadata=part_metadata))
+
+
+TERMINAL_TASK_STATES: frozenset[TaskState] = frozenset({
+    TaskState.completed,
+    TaskState.failed,
+    TaskState.canceled,
+    TaskState.rejected,
+})
+
+
+def _message_state(status: str | None, streaming_in_progress: bool) -> str:
+    """The ``cinna.message_state`` value of an agent row."""
+    if status == "aborted":
+        return "aborted"
+    if status == "user_interrupted":
+        return "canceled"
+    if streaming_in_progress:
+        return "streaming"
+    return "complete"
+
+
+def is_terminal_task_state(state: TaskState) -> bool:
+    """True when the task can make no further progress."""
+    return state in TERMINAL_TASK_STATES
+
+
+def is_final_task_state(state: TaskState) -> bool:
+    """True when a stream ends on ``state``: terminal, or waiting on the caller."""
+    return is_terminal_task_state(state) or state == TaskState.input_required
 
 
 class A2AEventMapper:
@@ -470,41 +504,59 @@ class A2AEventMapper:
         status: str,
         interaction_status: str,
         tool_questions_status: str | None = None,
+        *,
+        turn_in_flight: bool = False,
+        has_pending: bool = False,
+        last_agent_status: str | None = None,
     ) -> TaskState:
         """
-        Map internal session status to A2A TaskState.
+        Map internal session state to A2A TaskState.
+
+        Rules are evaluated in order; the first match wins.
 
         Args:
             status: Session status (active, completed, error, paused)
             interaction_status: Session interaction status (running, pending_stream, "")
             tool_questions_status: Last message tool_questions_status (unanswered, answered, null)
+            turn_in_flight: A turn of this session is running in this process
+                (session lock held or a stream registered)
+            has_pending: Undelivered user messages exist
+            last_agent_status: ``status`` of the agent message of the current
+                turn (``None`` when the turn has no agent message yet)
 
         Returns:
             A2A TaskState enum value
         """
-        # Check for input required (tool questions)
         if tool_questions_status == "unanswered":
             return TaskState.input_required
 
-        # Map interaction_status
         if interaction_status == "running":
             return TaskState.working
-        elif interaction_status == "pending_stream":
+        if interaction_status == "pending_stream":
             return TaskState.submitted
 
-        # Map session status
-        if status == "completed":
-            return TaskState.completed
-        elif status == "error":
+        if turn_in_flight or has_pending:
+            return TaskState.working
+
+        if status == "error":
             return TaskState.failed
 
-        # Default to working for active sessions
+        if last_agent_status == "user_interrupted":
+            return TaskState.canceled
+        if last_agent_status == "aborted":
+            return TaskState.failed
+
+        if status in ("active", "completed"):
+            return TaskState.completed
+
+        # Unknown statuses keep the conservative answer.
         return TaskState.working
 
     @staticmethod
     def convert_session_messages_to_a2a(
         messages: list[SessionMessage],
         session_id: UUID,
+        live_stream: dict | None = None,
     ) -> list[Message]:
         """
         Convert a list of SessionMessage objects to A2A Message format.
@@ -516,19 +568,50 @@ class A2AEventMapper:
         tool-call narration. Messages without a trace fall back to a single
         TextPart built from ``msg.content``.
 
+        Agent rows carry ``cinna.message_state`` in their metadata; user rows
+        that were sent with a client ``messageId`` echo it as
+        ``cinna.client_message_id``.
+
         Args:
             messages: List of SessionMessage objects
             session_id: The session UUID (used as taskId and contextId)
+            live_stream: In-memory buffer of the session's active stream
+                (``active_streaming_manager.get_stream_events``). Its events
+                are merged into the in-progress agent row, on copies.
 
         Returns:
             List of A2A Message objects
         """
+        from app.services.sessions.message_service import merge_live_events
+
+        live_events = (live_stream or {}).get("streaming_events") or []
         history: list[Message] = []
         for msg in messages:
             # Map role: user -> user, agent/system -> agent
             role = "user" if msg.role == "user" else "agent"
+            stored_metadata = msg.message_metadata or {}
+            in_progress = bool(stored_metadata.get("streaming_in_progress"))
 
-            parts = A2AEventMapper._build_parts_for_session_message(msg, role)
+            events_override = None
+            if msg.role == "agent" and in_progress and live_events:
+                # Copies only: the ORM row must never be mutated here, the
+                # caller's DB session would flush it.
+                events_override = merge_live_events(
+                    list(stored_metadata.get("streaming_events") or []),
+                    list(live_events),
+                )
+
+            parts = A2AEventMapper._build_parts_for_session_message(
+                msg, role, events_override=events_override,
+            )
+
+            message_metadata: dict[str, Any] = {}
+            if msg.role == "agent":
+                message_metadata[MESSAGE_STATE_KEY] = _message_state(msg.status, in_progress)
+            elif msg.role == "user":
+                client_message_id = stored_metadata.get("client_message_id")
+                if client_message_id:
+                    message_metadata[CLIENT_MESSAGE_ID_KEY] = client_message_id
 
             a2a_message = Message(
                 messageId=str(msg.id),
@@ -536,6 +619,7 @@ class A2AEventMapper:
                 parts=parts,
                 taskId=str(session_id),
                 contextId=str(session_id),
+                metadata=message_metadata or None,
             )
             history.append(a2a_message)
 
@@ -545,6 +629,7 @@ class A2AEventMapper:
     def _build_parts_for_session_message(
         msg: SessionMessage,
         role: str,
+        events_override: list[dict] | None = None,
     ) -> list[Part]:
         """Build A2A Parts for a stored SessionMessage.
 
@@ -558,7 +643,10 @@ class A2AEventMapper:
             return fallback
 
         metadata = msg.message_metadata or {}
-        streaming_events = metadata.get("streaming_events") or []
+        if events_override is not None:
+            streaming_events = events_override
+        else:
+            streaming_events = metadata.get("streaming_events") or []
         if not streaming_events:
             return fallback
 

@@ -396,6 +396,7 @@ class IngestionResult:
         "setup_required",
         "no_pending_messages",
         "message_created",
+        "duplicate",
     ] | None = None
     # Pass-through of the `"message"` key returned by
     # `SessionService.send_session_message`. Populated unconditionally —
@@ -405,6 +406,9 @@ class IngestionResult:
     # row and as this field). `None` when the underlying primitive does not
     # return a message field for the action.
     message: str | None = None
+    # Only meaningful when `action == "duplicate"`: the stored message with
+    # the same client message id has not been sent to the agent yet.
+    duplicate_pending: bool = False
 
 
 def get_session_sender(session: "Session") -> SessionSender:

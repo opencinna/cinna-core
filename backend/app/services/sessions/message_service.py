@@ -16,6 +16,11 @@ from app.services.environments.agent_env_connector import agent_env_connector
 from app.services.agents.agent_service import AgentService
 from app.models.mcp.mcp_session_meta import MCPSessionMeta
 from app.services.sessions.session_context_signer import sign_session_context
+from app.services.sessions.stream_heartbeat import (
+    STREAM_HEARTBEAT_KEY,
+    StreamHeartbeat,
+    heartbeat_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +394,29 @@ class StreamContext(NamedTuple):
     base_url: str
     auth_headers: dict
     env_auth_token: str | None
+
+
+# Strong references to in-flight cancel-path seals (see
+# ``MessageService._seal_unfinished_turn``).
+_PENDING_SEALS: set[asyncio.Task] = set()
+
+# ``message_metadata`` key on a still-pending user message whose turn failed
+# before collecting it (e.g. the environment never became ready). Excludes the
+# row from "turn in flight" (A2A ``tasks/get`` rule 4) without changing its
+# delivery status.
+DELIVERY_FAILED_META_KEY = "delivery_failed_at"
+
+
+def merge_live_events(db_events: list[dict], live_events: list[dict]) -> list[dict]:
+    """Append the live events newer than the stored ones.
+
+    Pure: returns a new list and mutates neither input. "Newer" means an
+    ``event_seq`` greater than the highest ``event_seq`` already stored.
+    """
+    db_max_seq = max((e.get("event_seq", 0) for e in db_events), default=0)
+    return list(db_events) + [
+        e for e in live_events if e.get("event_seq", 0) > db_max_seq
+    ]
 
 
 async def _emit_activity_event(
@@ -934,6 +962,161 @@ class MessageService:
         statement = (
             select(SessionMessage)
             .where(SessionMessage.session_id == session_id)
+            .order_by(SessionMessage.sequence_number.desc())
+            .limit(1)
+        )
+        return session.exec(statement).first()
+
+    @staticmethod
+    def find_user_message_by_client_id(
+        session: Session, session_id: UUID, client_message_id: str
+    ) -> SessionMessage | None:
+        """Oldest user message of the session stored with ``client_message_id``."""
+        statement = (
+            select(SessionMessage)
+            .where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+                SessionMessage.message_metadata["client_message_id"].as_string()
+                == client_message_id,
+            )
+            .order_by(SessionMessage.sequence_number)
+            .limit(1)
+        )
+        return session.exec(statement).first()
+
+    @staticmethod
+    def get_turn_closing_agent_message(
+        session: Session, session_id: UUID, user_message: SessionMessage
+    ) -> tuple[bool, SessionMessage | None]:
+        """Describe the turn that ``user_message`` opened.
+
+        Returns ``(closed, agent_message)``. ``closed`` is True when a newer
+        user message exists (the turn is over); ``agent_message`` is then the
+        newest agent message between the two user messages, or None.
+        """
+        next_user_seq = session.exec(
+            select(func.min(SessionMessage.sequence_number)).where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+                SessionMessage.sequence_number > user_message.sequence_number,
+            )
+        ).one()
+        if next_user_seq is None:
+            return False, None
+        agent_message = session.exec(
+            select(SessionMessage)
+            .where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "agent",
+                SessionMessage.sequence_number > user_message.sequence_number,
+                SessionMessage.sequence_number < next_user_seq,
+            )
+            .order_by(SessionMessage.sequence_number.desc())
+            .limit(1)
+        ).first()
+        return True, agent_message
+
+    @staticmethod
+    def has_pending_user_messages(session: Session, session_id: UUID) -> bool:
+        """True when the session has user messages waiting for a turn.
+
+        Pending rows flagged ``DELIVERY_FAILED_META_KEY`` (their turn failed
+        before collecting them) do not count: nothing is driving them. They
+        stay ``pending`` and are still collected by the next turn.
+        """
+        statement = select(
+            select(SessionMessage.id)
+            .where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+                SessionMessage.sent_to_agent_status == "pending",
+                SessionMessage.message_metadata[DELIVERY_FAILED_META_KEY]
+                .as_string()
+                .is_(None),
+            )
+            .exists()
+        )
+        return bool(session.exec(statement).one())
+
+    @staticmethod
+    def get_max_user_sequence(session: Session, session_id: UUID) -> int:
+        """Sequence number of the session's newest user message (0 if none)."""
+        return session.exec(
+            select(func.coalesce(func.max(SessionMessage.sequence_number), 0)).where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+            )
+        ).one()
+
+    @staticmethod
+    def flag_pending_delivery_failed(
+        session: Session, session_id: UUID, up_to_sequence: int
+    ) -> int:
+        """Flag the session's still-pending user rows as orphaned by a failed turn.
+
+        Only rows up to ``up_to_sequence`` (the failing turn's own messages),
+        so rows of turns queued behind it are left alone. Only metadata
+        changes: ``sent_to_agent_status`` stays ``pending`` so any later turn
+        (web, A2A, channel) still collects and delivers them.
+        """
+        from sqlalchemy.orm.attributes import flag_modified
+
+        rows = session.exec(
+            select(SessionMessage).where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+                SessionMessage.sequence_number <= up_to_sequence,
+                SessionMessage.sent_to_agent_status == "pending",
+            )
+        ).all()
+        failed_at = datetime.now(UTC).isoformat()
+        for row in rows:
+            row.message_metadata = {
+                **(row.message_metadata or {}),
+                DELIVERY_FAILED_META_KEY: failed_at,
+            }
+            flag_modified(row, "message_metadata")
+            session.add(row)
+        session.commit()
+        return len(rows)
+
+    @staticmethod
+    def clear_delivery_failed(session: Session, message_id: UUID) -> None:
+        """Drop the failed-delivery flag before a message is driven again."""
+        from sqlalchemy.orm.attributes import flag_modified
+
+        row = session.get(SessionMessage, message_id)
+        if row is None or DELIVERY_FAILED_META_KEY not in (row.message_metadata or {}):
+            return
+        row.message_metadata = {
+            k: v for k, v in row.message_metadata.items()
+            if k != DELIVERY_FAILED_META_KEY
+        }
+        flag_modified(row, "message_metadata")
+        session.add(row)
+        session.commit()
+
+    @staticmethod
+    def get_last_agent_message_of_current_turn(
+        session: Session, session_id: UUID
+    ) -> SessionMessage | None:
+        """Newest agent message sequenced after the newest user message, or None."""
+        last_user_seq = (
+            select(func.coalesce(func.max(SessionMessage.sequence_number), 0))
+            .where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+            )
+            .scalar_subquery()
+        )
+        statement = (
+            select(SessionMessage)
+            .where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "agent",
+                SessionMessage.sequence_number > last_user_seq,
+            )
             .order_by(SessionMessage.sequence_number.desc())
             .limit(1)
         )
@@ -1804,13 +1987,9 @@ class MessageService:
 
         if in_progress_msg:
             db_events = in_progress_msg.message_metadata.get("streaming_events", [])
-            db_max_seq = max((e.get("event_seq", 0) for e in db_events), default=0)
-            new_events = [
-                e for e in stream_data["streaming_events"]
-                if e.get("event_seq", 0) > db_max_seq
-            ]
-            if new_events:
-                in_progress_msg.message_metadata["streaming_events"] = db_events + new_events
+            merged = merge_live_events(db_events, stream_data["streaming_events"])
+            if len(merged) > len(db_events):
+                in_progress_msg.message_metadata["streaming_events"] = merged
             if stream_data["accumulated_content"]:
                 in_progress_msg.content = stream_data["accumulated_content"]
 
@@ -2164,12 +2343,26 @@ class MessageService:
         ):
             from sqlalchemy.orm.attributes import flag_modified
             with get_fresh_db_session() as db:
-                agent_msg = db.get(SessionMessage, msg_id)
+                agent_msg = db.get(
+                    SessionMessage, msg_id, with_for_update=True, populate_existing=True,
+                )
+                if agent_msg and not (agent_msg.message_metadata or {}).get(
+                    "streaming_in_progress"
+                ) and agent_msg.status != "aborted":
+                    # Already finalized (completed, interrupted, sealed by our
+                    # own cancel path): never reopen it. An "aborted" row is
+                    # the one exception, see below.
+                    return
                 if agent_msg:
                     agent_msg.content = content
                     metadata["streaming_in_progress"] = True
                     metadata["streaming_events"] = events
+                    metadata[STREAM_HEARTBEAT_KEY] = heartbeat_now()
                     agent_msg.message_metadata = metadata
+                    if agent_msg.status == "aborted":
+                        # A live writer proves the orphan pass guessed wrong.
+                        agent_msg.status = ""
+                        agent_msg.status_message = None
                     flag_modified(agent_msg, "message_metadata")
                     db.add(agent_msg)
                     db.commit()
@@ -2629,6 +2822,122 @@ class MessageService:
         )
 
     @staticmethod
+    def _apply_aborted(
+        db: Session,
+        msg: SessionMessage,
+        events: list[dict] | None,
+        content: str | None,
+        *,
+        user_interrupted: bool = False,
+    ) -> bool:
+        """Mark an in-progress agent message as aborted and commit.
+
+        With ``user_interrupted`` the row is sealed as ``user_interrupted``
+        instead: the turn was cancelled because a user asked to stop it.
+
+        Locks the row first and returns ``False`` without writing unless it
+        is still ``streaming_in_progress``, so a finalized row is never
+        overwritten. ``events`` replaces the stored streaming events when
+        given; ``content`` (or, failing that, the assistant text of the
+        events) replaces the content when non-empty.
+        """
+        from sqlalchemy.orm.attributes import flag_modified
+
+        row = db.get(
+            SessionMessage, msg.id, with_for_update=True, populate_existing=True,
+        )
+        if row is None:
+            return False
+        metadata = dict(row.message_metadata or {})
+        if not metadata.get("streaming_in_progress"):
+            return False
+
+        final_events = list(events) if events is not None else list(
+            metadata.get("streaming_events") or []
+        )
+        final_content = content or "".join(
+            e["content"] for e in final_events
+            if e.get("type") == "assistant" and e.get("content")
+        )
+
+        metadata["streaming_in_progress"] = False
+        metadata["streaming_events"] = final_events
+        row.message_metadata = metadata
+        flag_modified(row, "message_metadata")
+        if final_content:
+            row.content = final_content
+        if user_interrupted:
+            row.status = "user_interrupted"
+            row.status_message = "Interrupted by user"
+        else:
+            row.status = "aborted"
+            row.status_message = "Turn aborted before completion"
+        db.add(row)
+        db.commit()
+        return True
+
+    @staticmethod
+    async def finalize_aborted_agent_message(
+        message_id: UUID,
+        events: list[dict] | None,
+        get_fresh_db_session: callable,
+        *,
+        user_interrupted: bool = False,
+    ) -> bool:
+        """Finalize an agent message whose turn was cancelled mid-stream."""
+        def _finalize() -> bool:
+            with get_fresh_db_session() as db:
+                msg = db.get(SessionMessage, message_id)
+                if msg is None:
+                    return False
+                return MessageService._apply_aborted(
+                    db, msg, events, None, user_interrupted=user_interrupted,
+                )
+
+        return await asyncio.to_thread(_finalize)
+
+    @staticmethod
+    async def _seal_unfinished_turn(
+        agent_message_id: UUID,
+        events: list[dict],
+        pending_flush: asyncio.Task | None,
+        get_fresh_db_session: callable,
+        *,
+        user_interrupted: bool,
+    ) -> None:
+        """Seal a cancelled turn's row: wait out any in-flight flush, then finalize.
+
+        Runs as a referenced, shielded task, so a second cancel only stops the
+        wait; the seal itself still completes. Never raises.
+        """
+        async def _seal() -> None:
+            if pending_flush is not None:
+                try:
+                    await pending_flush
+                except BaseException:  # noqa: BLE001 - flush outcome is irrelevant here
+                    pass
+            await MessageService.finalize_aborted_agent_message(
+                agent_message_id, events, get_fresh_db_session,
+                user_interrupted=user_interrupted,
+            )
+
+        task = asyncio.create_task(_seal(), name=f"seal-turn-{agent_message_id}")
+        _PENDING_SEALS.add(task)
+        task.add_done_callback(_PENDING_SEALS.discard)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # A cancel that arrived while sealing: let the (shielded) seal
+            # settle, then propagate the cancel instead of losing it.
+            await asyncio.wait({task})
+            raise
+        except Exception as exc:  # noqa: BLE001 - never mask the turn's outcome
+            logger.warning(
+                "Failed to seal unfinished agent message %s: %s",
+                agent_message_id, exc,
+            )
+
+    @staticmethod
     async def _finalize_agent_message(
         agent_message_id: UUID | None,
         session_id: UUID,
@@ -2738,7 +3047,7 @@ class MessageService:
 
         # Emit STREAM_STARTED event for activity tracking
         await _emit_activity_event(
-            EventType.STREAM_STARTED, session_id, environment_id, session_mode, ctx.user_id
+            EventType.STREAM_STARTED, session_id, environment_id, session_mode, ctx.user_id,
         )
 
         # Variables to collect agent response
@@ -2748,6 +3057,10 @@ class MessageService:
         agent_message_id = None
         tools_needing_approval = set()
         event_seq_counter = 0
+        # Set once this batch has written its final row state (or given up on
+        # it through the error path); until then ``finally`` seals the row.
+        finalized = False
+        pending_flush: asyncio.Task | None = None
         last_flush_time = time.time()
         FLUSH_INTERVAL = 2.0
         response_metadata = {
@@ -2774,6 +3087,11 @@ class MessageService:
                     session_state["session_context_signature"] = sign_session_context(
                         ctx.session_context, ctx.env_auth_token
                     )
+
+        # DB liveness proof for the orphan repair pass (plan D10). Stopped
+        # before the final write and before the seal in ``finally``.
+        heartbeat = StreamHeartbeat(session_id, get_fresh_db_session)
+        heartbeat.start()
 
         try:
             # Stream from environment
@@ -2936,10 +3254,16 @@ class MessageService:
 
                     # Periodic flush to DB (non-blocking)
                     if agent_message_id and (time.time() - last_flush_time >= FLUSH_INTERVAL):
-                        await MessageService._flush_streaming_to_db(
-                            agent_message_id, streaming_events, response_metadata,
-                            get_fresh_db_session, session_id,
+                        # A referenced task, awaited through a shield: a cancel
+                        # here must not orphan the flush thread, whose commit
+                        # would otherwise land after the cancel-path seal.
+                        pending_flush = asyncio.create_task(
+                            MessageService._flush_streaming_to_db(
+                                agent_message_id, streaming_events, response_metadata,
+                                get_fresh_db_session, session_id,
+                            )
                         )
+                        await asyncio.shield(pending_flush)
                         last_flush_time = time.time()
 
                 # Create agent message in DB as soon as we receive the first "assistant" event
@@ -2951,7 +3275,8 @@ class MessageService:
                             initial_metadata = {
                                 "external_session_id": new_external_session_id,
                                 "mode": session_mode,
-                                "streaming_in_progress": True
+                                "streaming_in_progress": True,
+                                STREAM_HEARTBEAT_KEY: heartbeat_now(),
                             }
                             message = MessageService.create_message(
                                 session=db,
@@ -2963,6 +3288,7 @@ class MessageService:
                             return message.id
 
                     agent_message_id = await asyncio.to_thread(_create_initial_agent_message)
+                    heartbeat.attach_message(agent_message_id)
                     logger.info(f"Created initial agent message {agent_message_id} on first assistant event")
 
                 # Collect metadata from events
@@ -3118,6 +3444,7 @@ class MessageService:
                 # turn identity, so emitting the stale local would tell a
                 # channel consumer "this turn produced no agent message" about
                 # a turn that produced one.
+                await heartbeat.stop()
                 agent_message_id = await MessageService._finalize_agent_message(
                     agent_message_id=agent_message_id,
                     session_id=session_id,
@@ -3127,6 +3454,7 @@ class MessageService:
                     was_interrupted=was_interrupted,
                     get_fresh_db_session=get_fresh_db_session,
                 )
+                finalized = True
                 logger.info(f"Agent response finalized ({len(streaming_events)} events, model={response_metadata.get('model')}, has_questions={has_questions}, interrupted={was_interrupted})")
 
             # Emit stream_completed event for event-driven post-processing
@@ -3171,6 +3499,8 @@ class MessageService:
             }
 
         except Exception as e:
+            # A mid-stream row (if any) is sealed as aborted by ``finally``;
+            # a row already finalized is left alone (``finalized`` is set).
             logger.error(f"Error in message stream: {e}", exc_info=True)
 
             await _emit_activity_event(
@@ -3194,9 +3524,35 @@ class MessageService:
                 "error_type": type(e).__name__
             }
         finally:
+            # Before the seal: no heartbeat may land after it (and reopen it).
+            # The stop flag is set synchronously, so even a cancelled await
+            # here leaves no beat able to write.
+            heartbeat_cancelled = False
+            try:
+                await heartbeat.stop()
+            except asyncio.CancelledError:
+                heartbeat_cancelled = True
+            if agent_message_id and not finalized:
+                # Cancelled (CancelledError) or closed by its consumer
+                # (GeneratorExit from aclose) before the final write: seal the
+                # partial row so it never stays "streaming" forever. No
+                # terminal event: locked callers' teardown clears
+                # interaction_status and status repair seals channel drafts.
+                # The interrupt flag is read synchronously, before unregister.
+                await MessageService._seal_unfinished_turn(
+                    agent_message_id,
+                    list(streaming_events),
+                    pending_flush,
+                    get_fresh_db_session,
+                    user_interrupted=active_streaming_manager.is_interrupt_requested_nowait(
+                        session_id
+                    ),
+                )
             # Always unregister stream when done (success, error, or interruption)
             await active_streaming_manager.unregister_stream(session_id)
             logger.info(f"Stream unregistered for session {session_id}")
+            if heartbeat_cancelled:
+                raise asyncio.CancelledError
 
     @staticmethod
     async def _process_attachments(

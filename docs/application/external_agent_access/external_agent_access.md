@@ -102,6 +102,7 @@ Native clients show "v1.0 → v1.2 update available" on installed agents and let
 - Identity binding and assignment validity are re-checked on every message resume — revocation mid-conversation surfaces as `–32004`
 - Default protocol is v1.0 (PascalCase method names, `supportedInterfaces` in card); `?protocol=v0.3` switches to slash-case
 - `.well-known/agent-card.json` is a mirror of the root card GET endpoint
+- Crash recovery and idempotency are unchanged on this surface: since `ExternalA2AContextHandler` reuses `A2ARequestHandler`'s `handle_message_send`/`handle_message_stream`/`handle_tasks_get` bodies verbatim, the detached-turn behavior, the `tasks/get` polling contract, and `messageId` dedupe described in [A2A Protocol / Crash Recovery](../a2a_integration/a2a_protocol/a2a_protocol.md#crash-recovery) apply here exactly as on `/api/v1/a2a/`
 
 ### Session Visibility
 - A session is visible to a user if `user_id == user.id` OR `caller_id == user.id` OR `identity_caller_id == user.id`

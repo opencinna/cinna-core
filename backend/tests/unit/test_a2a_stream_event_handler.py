@@ -4,8 +4,8 @@ Unit tests for ``A2AStreamEventHandler``.
 These tests lock in the **incremental streaming guarantee** that the
 handler is built around: events from the agent-env must reach the SSE
 client as they arrive, not in a burst at the end of the stream. They
-also cover the lifecycle contract (sentinel on every exit path,
-producer-task cancellation on client disconnect).
+also cover the lifecycle contract (sentinel on every exit path, the
+producer keeps running after a client disconnect).
 
 The end-to-end HTTP tests in ``tests/api/a2a_integration/`` collect the
 full SSE response before asserting, so they cannot distinguish
@@ -19,7 +19,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from app.services.sessions.stream_event_handlers import A2AStreamEventHandler
+from app.services.sessions.stream_event_handlers import (
+    A2AStreamEventHandler,
+    wait_for_detached_a2a_turns,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -231,39 +234,40 @@ def test_stream_surfaces_pre_stream_error_without_on_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lifecycle: client disconnect cancels the producer
+# Lifecycle: client disconnect does not cancel the producer
 # ---------------------------------------------------------------------------
 
-def test_stream_cancels_producer_on_client_disconnect() -> None:
+def test_stream_producer_survives_client_disconnect() -> None:
     """When the consumer closes the async generator early (SSE client
-    disconnected), the background producer task must be cancelled —
-    not left running to completion with its output thrown away.
+    disconnected), the detached producer keeps running to completion and
+    its later events are dropped instead of queued.
     """
 
-    async def run() -> tuple[str, str, bool, bool]:
+    async def run() -> tuple[str, str, bool, bool, int]:
         handler = _make_handler()
         processor = _ScriptedProcessor(
             handler,
-            events=[{"type": "assistant", "content": f"chunk-{i}"} for i in range(100)],
-            delay_s=0.02,
+            events=[{"type": "assistant", "content": f"chunk-{i}"} for i in range(10)],
+            delay_s=0.01,
         )
 
         agen = handler.stream(processor)
         first = await agen.__anext__()
         second = await agen.__anext__()
         await agen.aclose()
-        # Give the event loop a tick for cancellation to propagate.
-        await asyncio.sleep(0.05)
-        return first, second, processor.cancelled, processor.completed
+        await wait_for_detached_a2a_turns(timeout=2.0)
+        return (
+            first, second, processor.cancelled, processor.completed,
+            handler.queue.qsize(),
+        )
 
-    first, second, cancelled, completed = asyncio.run(run())
+    first, second, cancelled, completed, queued = asyncio.run(run())
 
     assert "chunk-0" in first
     assert "chunk-1" in second
-    assert cancelled is True, (
-        "producer task should have been cancelled when the consumer closed the stream"
-    )
-    assert completed is False
+    assert cancelled is False
+    assert completed is True, "producer should run to completion after disconnect"
+    assert queued == 0, "events after disconnect must not accumulate in the queue"
 
 
 def test_stream_unblocks_consumer_if_producer_dies_without_sentinel() -> None:

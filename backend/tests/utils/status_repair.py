@@ -57,6 +57,13 @@ class RepairTick:
 
         return asyncio.run(repair_sessions(self._ctx))
 
+    def run_orphaned_streams(self) -> int:
+        from app.services.system.status_repair_sessions import (
+            repair_orphaned_streams,
+        )
+
+        return asyncio.run(repair_orphaned_streams(self._ctx))
+
     def run_input_tasks(self) -> int:
         from app.services.system.status_repair_tasks import repair_input_tasks
 
@@ -80,6 +87,15 @@ class RepairTick:
         if isinstance(session_id, str):
             session_id = uuid.UUID(session_id)
         return self._ctx.is_session_in_motion(session_id)
+
+    def note_session_in_motion(self, session_id: str | uuid.UUID) -> None:
+        """Seed ``sessions_in_motion`` directly, for a test that wants to
+        assert a later pass's "already touched this tick" guard without
+        first running the earlier pass that would normally set it.
+        """
+        if isinstance(session_id, str):
+            session_id = uuid.UUID(session_id)
+        self._ctx.note_session_in_motion(session_id)
 
 
 def set_environment_probe(env_id: str | uuid.UUID, status: str):

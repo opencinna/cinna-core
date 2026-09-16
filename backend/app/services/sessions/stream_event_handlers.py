@@ -191,6 +191,24 @@ class MCPEventHandler:
 # A2A streaming handler
 # ---------------------------------------------------------------------------
 
+# Strong references to detached A2A producer tasks. The event loop only keeps
+# weak references to tasks, so a producer that outlives its SSE consumer must be
+# held here until it finishes (see ``A2AStreamEventHandler.stream``).
+_DETACHED_A2A_TURNS: set[asyncio.Task] = set()
+
+
+async def wait_for_detached_a2a_turns(timeout: float) -> None:
+    """Wait (up to ``timeout`` seconds) for the detached A2A producers running now.
+
+    Takes a snapshot of the set, so producers started while waiting are not
+    awaited. Never raises on timeout; unfinished producers keep running.
+    """
+    pending = list(_DETACHED_A2A_TURNS)
+    if not pending:
+        return
+    await asyncio.wait(pending, timeout=timeout)
+
+
 class A2AStreamEventHandler:
     """Maps streaming events to A2A SSE format and exposes them as an async iterator.
 
@@ -199,14 +217,16 @@ class A2AStreamEventHandler:
     1. **Protocol mapping** — each agent-env event is mapped to an A2A
        SSE payload via ``A2AEventMapper``.
     2. **Producer/consumer plumbing** — events are pushed into an
-       ``asyncio.Queue`` as they arrive from the processor; the SSE
-       generator drains the queue and yields them to the client. This
+       unbounded ``asyncio.Queue`` as they arrive from the processor; the
+       SSE generator drains the queue and yields them to the client. This
        gives the client true incremental streaming (chunked ``assistant``/
        ``tool``/``thinking`` events) rather than a single burst at the end.
     3. **Background-task lifecycle** — ``stream(processor)`` runs
-       ``processor.process()`` as a detached task, handles errors and
-       cancellation, and guarantees the consumer always unblocks via a
-       ``None`` sentinel (posted by a done-callback on the task).
+       ``processor.process()`` as a *detached* task. The agent turn is not
+       tied to the SSE connection: if the client disconnects, the producer
+       keeps running to completion (held in ``_DETACHED_A2A_TURNS``) and its
+       events are dropped instead of queued. The consumer always unblocks via
+       a ``None`` sentinel (posted by a done-callback on the task).
 
     Callers should consume events with::
 
@@ -230,8 +250,12 @@ class A2AStreamEventHandler:
         self.request_id = request_id
         self.format_sse_event = format_sse_event
         self._event_mapper = None
+        # Unbounded on purpose: ``put_nowait`` never raises and never blocks,
+        # so the producer can never stall on a slow or absent consumer.
         self.queue: asyncio.Queue[str | None] = asyncio.Queue()
         self.error_enqueued: bool = False
+        self.final_emitted: bool = False
+        self._consumer_attached: bool = True
 
     @property
     def event_mapper(self):
@@ -239,6 +263,12 @@ class A2AStreamEventHandler:
             from app.services.a2a.a2a_event_mapper import A2AEventMapper
             self._event_mapper = A2AEventMapper
         return self._event_mapper
+
+    def _emit(self, item: str | None) -> None:
+        """Queue ``item`` for the consumer; drop it once the consumer is gone."""
+        if not self._consumer_attached:
+            return
+        self.queue.put_nowait(item)
 
     # ------------------------------------------------------------------
     # StreamEventHandler protocol
@@ -252,7 +282,9 @@ class A2AStreamEventHandler:
             event, self.task_id, self.context_id
         )
         if a2a_event:
-            await self.queue.put(self.format_sse_event(self.request_id, a2a_event))
+            if a2a_event.get("kind") == "status-update" and a2a_event.get("final"):
+                self.final_emitted = True
+            self._emit(self.format_sse_event(self.request_id, a2a_event))
 
     async def on_error(self, error: Exception) -> None:
         await self._enqueue_error_once(f"Error: {error}")
@@ -260,12 +292,32 @@ class A2AStreamEventHandler:
     async def on_complete(self, response_text: str) -> None:
         pass  # Final status is handled by the A2A event mapper's "done" event handling
 
+    async def emit_final_state(self, state: Any) -> None:
+        """Emit a closing status event unless a final event was already emitted.
+
+        Used when a turn ends without streaming anything of its own (e.g. its
+        message was already answered by an earlier batched turn). Terminal
+        states and ``input_required`` are sent with ``final=True``.
+        """
+        if self.final_emitted:
+            return
+        from app.services.a2a.a2a_event_mapper import is_final_task_state
+
+        event = self.event_mapper.create_status_update(
+            task_id=self.task_id,
+            context_id=self.context_id,
+            state=state,
+            final=is_final_task_state(state),
+        )
+        self._emit(self.format_sse_event(self.request_id, event))
+        self.final_emitted = True
+
     # ------------------------------------------------------------------
     # Producer / consumer
     # ------------------------------------------------------------------
 
     async def stream(self, processor: Any) -> AsyncIterator[str]:
-        """Run ``processor.process()`` as a background task and yield SSE events as they arrive.
+        """Run ``processor.process()`` as a detached task and yield SSE events as they arrive.
 
         The consumer is unblocked on every exit path:
 
@@ -273,19 +325,27 @@ class A2AStreamEventHandler:
         - Error in processor (streaming or pre-streaming) → error event is
           enqueued once (either by ``on_error`` from inside the processor
           or by ``_run_processor``'s own except branch), then the sentinel.
-        - Client disconnect (``GeneratorExit`` inside this async generator)
-          → the ``finally`` block cancels the producer task; the
-          done-callback still posts the sentinel.
         - Producer task killed before its ``finally`` runs (theoretical) →
           the done-callback posts the sentinel anyway.
+
+        Client disconnect (``GeneratorExit`` inside this async generator) does
+        **not** cancel the producer: the turn runs to completion. The
+        ``finally`` block detaches the consumer and drains the queue, so later
+        events are dropped rather than accumulated.
         """
         producer = asyncio.create_task(
             self._run_processor(processor),
             name=f"a2a-stream-producer-{self.task_id}",
         )
-        # Defense-in-depth: guarantee the consumer unblocks even if the
-        # producer dies without running its own finally.
-        producer.add_done_callback(lambda _t: self.queue.put_nowait(None))
+        _DETACHED_A2A_TURNS.add(producer)
+
+        def _on_producer_done(task: asyncio.Task) -> None:
+            _DETACHED_A2A_TURNS.discard(task)
+            # Defense-in-depth: guarantee the consumer unblocks even if the
+            # producer dies without running its own finally.
+            self._emit(None)
+
+        producer.add_done_callback(_on_producer_done)
 
         try:
             while True:
@@ -294,24 +354,19 @@ class A2AStreamEventHandler:
                     break
                 yield item
         finally:
-            if not producer.done():
-                producer.cancel()
+            self._consumer_attached = False
+            while True:
                 try:
-                    await producer
-                except asyncio.CancelledError:
-                    pass
-                except Exception as exc:  # noqa: BLE001 - log only, don't mask original
-                    logger.warning(
-                        "A2A producer task raised during cancel: %s", exc,
-                        exc_info=True,
-                    )
+                    self.queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
     async def _run_processor(self, processor: Any) -> None:
         try:
             await processor.process()
         except asyncio.CancelledError:
-            # Client disconnected or caller cancelled us — don't enqueue a
-            # "failed" event for a cancel we initiated ourselves.
+            # Only process shutdown cancels a detached producer; don't
+            # enqueue a "failed" event for it.
             raise
         except (ValueError, RuntimeError) as exc:
             logger.error(
@@ -326,12 +381,7 @@ class A2AStreamEventHandler:
             await self._enqueue_error_once(f"Error: {exc}")
 
     async def _enqueue_error_once(self, message: str) -> None:
-        """Enqueue a final ``failed`` status event, at most once.
-
-        The invariant ``error_enqueued == True  ⇒  error event is on the
-        queue`` is upheld by enqueueing *before* flipping the flag, so a
-        caller that sees the flag can safely skip its own enqueue.
-        """
+        """Emit a final ``failed`` status event, at most once."""
         if self.error_enqueued:
             return
         from a2a.types import TaskState
@@ -343,15 +393,9 @@ class A2AStreamEventHandler:
             final=True,
             message=message,
         )
-        try:
-            await self.queue.put(self.format_sse_event(self.request_id, error_event))
-        except Exception as exc:  # noqa: BLE001 - logging-only; don't mask original
-            logger.warning(
-                "A2A streaming: failed to enqueue error event: %s", exc,
-                exc_info=True,
-            )
-            return
+        self._emit(self.format_sse_event(self.request_id, error_event))
         self.error_enqueued = True
+        self.final_emitted = True
 
 
 # ---------------------------------------------------------------------------

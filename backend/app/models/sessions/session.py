@@ -111,7 +111,7 @@ class SessionMessage(SQLModel, table=True):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     tool_questions_status: str | None = None  # null | "unanswered" | "answered"
     answers_to_message_id: uuid.UUID | None = Field(default=None, foreign_key="message.id")
-    status: str = ""  # "" | "user_interrupted" | "error"
+    status: str = ""  # "" | "user_interrupted" | "error" | "aborted"
     status_message: str | None = None  # Error details or interrupt reason
     sent_to_agent_status: str = "pending"  # "pending" | "sent" - tracks if user message was sent to agent-env
 

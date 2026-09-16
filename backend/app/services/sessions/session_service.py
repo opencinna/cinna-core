@@ -18,6 +18,11 @@ from app.utils import create_task_with_error_logging
 
 logger = logging.getLogger(__name__)
 
+# (session_id, client_message_id) pairs whose send is in progress in this
+# process. Closes the race between the dedupe lookup and the row insert in
+# ``send_session_message``. Process-local, like the session lock.
+_inflight_client_message_ids: set[tuple[UUID, str]] = set()
+
 
 class SessionService:
     @staticmethod
@@ -483,30 +488,38 @@ class SessionService:
                 session_id, f" ({reason})" if reason else "",
             )
 
-            try:
-                from app.services.events.event_service import event_service
-                status_meta = {"session_id": str(session_id), "interaction_status": ""}
-                await event_service.emit_event(
-                    event_type="session_interaction_status_changed",
-                    model_id=session_id,
-                    meta=status_meta,
-                    user_id=user_id,
-                )
-                await event_service.emit_event(
-                    event_type="session_interaction_status_changed",
-                    model_id=session_id,
-                    meta=status_meta,
-                    room=f"session_{session_id}_stream",
-                )
-            except Exception as ws_err:  # noqa: BLE001 — WS emit is best-effort
-                logger.error(
-                    "Failed to emit session_interaction_status_changed during "
-                    "defensive clear for session %s: %s", session_id, ws_err,
-                )
+            await SessionService.emit_interaction_status_cleared(session_id, user_id)
         except Exception as exc:  # noqa: BLE001 — safety net must never raise
             logger.error(
                 "Defensive interaction_status clear failed for session %s: %s",
                 session_id, exc, exc_info=True,
+            )
+
+    @staticmethod
+    async def emit_interaction_status_cleared(session_id: UUID, user_id: UUID) -> None:
+        """Tell open chat windows the session's interaction status is idle.
+
+        Best-effort: never raises.
+        """
+        try:
+            from app.services.events.event_service import event_service
+            status_meta = {"session_id": str(session_id), "interaction_status": ""}
+            await event_service.emit_event(
+                event_type="session_interaction_status_changed",
+                model_id=session_id,
+                meta=status_meta,
+                user_id=user_id,
+            )
+            await event_service.emit_event(
+                event_type="session_interaction_status_changed",
+                model_id=session_id,
+                meta=status_meta,
+                room=f"session_{session_id}_stream",
+            )
+        except Exception as ws_err:  # noqa: BLE001 — WS emit is best-effort
+            logger.error(
+                "Failed to emit session_interaction_status_changed for "
+                "cleared session %s: %s", session_id, ws_err,
             )
 
     @staticmethod
@@ -1398,6 +1411,7 @@ class SessionService:
         context_binding_id: UUID | None = None,
         external_message_id: str | None = None,
         channel_reply_target: dict[str, Any] | None = None,
+        client_message_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Send a message to a session and optionally initiate streaming.
@@ -1452,11 +1466,19 @@ class SessionService:
                 ``"temporary"``. Same single caller and the same bound: it
                 exempts the **named ids** and nothing else. See that method for
                 the full contract before adding a second caller.
+            client_message_id: Caller-supplied message id (A2A ``messageId``).
+                Stored in the user row's ``message_metadata`` and, for an
+                existing session, used to dedupe: a resend returns
+                ``{"action": "duplicate", "message_id", "pending"}`` before
+                any command runs or any row is written. **Callers passing it must
+                already have authorized the caller for ``session_id``**: a resend
+                that races an in-flight send returns ``duplicate`` before this
+                method's ownership check (it carries no message id).
 
         Returns:
             dict with status information:
             {
-                "action": "streaming" | "pending" | "no_pending_messages" | "error" | "message_created" | "command_executed" | "queued",
+                "action": "streaming" | "pending" | "no_pending_messages" | "error" | "message_created" | "command_executed" | "queued" | "duplicate",
                 "message": str,
                 "pending_count": int,
                 "files_attached": int (if files present),
@@ -1470,6 +1492,80 @@ class SessionService:
                     "starting up..." notice. Omitted when no wake-up was
                     needed.)
             }
+        """
+        if client_message_id is not None and not client_message_id.strip():
+            client_message_id = None
+
+        # Process-local claim on (session, client message id): closes the race
+        # between the dedupe lookup and the row insert in the impl. Only for
+        # existing sessions: a new session cannot hold a duplicate.
+        claim_key = (session_id, client_message_id) if session_id and client_message_id else None
+        if claim_key is not None:
+            if claim_key in _inflight_client_message_ids:
+                return {
+                    "action": "duplicate",
+                    "session_id": session_id,
+                    "message_id": None,
+                    "pending": False,
+                    "message": "Message already received",
+                }
+            _inflight_client_message_ids.add(claim_key)
+        try:
+            return await SessionService._send_session_message_impl(
+                session_id,
+                user_id,
+                content,
+                file_ids,
+                answers_to_message_id,
+                get_fresh_db_session,
+                initiate_streaming,
+                agent_id,
+                access_token_id,
+                backend_base_url,
+                page_context,
+                integration_type,
+                uploader_user_id=uploader_user_id,
+                redelivered_file_ids=redelivered_file_ids,
+                channel_context=channel_context,
+                context_binding_id=context_binding_id,
+                external_message_id=external_message_id,
+                channel_reply_target=channel_reply_target,
+                client_message_id=client_message_id,
+                dedupe=claim_key is not None,
+            )
+        finally:
+            if claim_key is not None:
+                _inflight_client_message_ids.discard(claim_key)
+
+    @staticmethod
+    async def _send_session_message_impl(
+        session_id: UUID | None,
+        user_id: UUID,
+        content: str,
+        file_ids: list[UUID] | None = None,
+        answers_to_message_id: UUID | None = None,
+        get_fresh_db_session: callable = None,
+        initiate_streaming: bool = True,
+        agent_id: UUID | None = None,
+        access_token_id: UUID | None = None,
+        backend_base_url: str | None = None,
+        page_context: str | None = None,
+        integration_type: str | None = None,
+        *,
+        uploader_user_id: UUID | None = None,
+        redelivered_file_ids: set[UUID] | None = None,
+        channel_context: "ChannelContextResult | None" = None,
+        context_binding_id: UUID | None = None,
+        external_message_id: str | None = None,
+        channel_reply_target: dict[str, Any] | None = None,
+        client_message_id: str | None = None,
+        dedupe: bool = False,
+    ) -> dict[str, Any]:
+        """Body of ``send_session_message``; see there.
+
+        ``dedupe``: look up ``client_message_id`` in the session (after the
+        ownership check, before any command runs or any row is written). The
+        caller holds the in-flight claim.
         """
         # Default get_fresh_db_session if not provided
         if get_fresh_db_session is None:
@@ -1524,6 +1620,28 @@ class SessionService:
             environment_id = environment.id
             environment_status = environment.status
             agent_id_for_command = chat_session.agent_id
+
+        # Phase 1.2: Client message id dedupe (existing sessions only), before
+        # any command runs or any row is written.
+        if dedupe:
+            from app.services.sessions.message_service import MessageService
+
+            with get_fresh_db_session() as db:
+                existing = MessageService.find_user_message_by_client_id(
+                    db, session_id, client_message_id,
+                )
+                if existing is not None:
+                    return {
+                        "action": "duplicate",
+                        "session_id": session_id,
+                        "message_id": existing.id,
+                        "pending": existing.sent_to_agent_status == "pending",
+                        "message": "Message already received",
+                    }
+
+        client_id_metadata: dict[str, str] = (
+            {"client_message_id": client_message_id} if client_message_id else {}
+        )
 
         # Phase 1.5: Check for slash commands (e.g., /files)
         # Commands are handled locally without an LLM call.
@@ -1602,6 +1720,7 @@ class SessionService:
                         sent_to_agent_status="pending",  # queued for async streaming
                         message_metadata={
                             **({"channel_reply_target": channel_reply_target} if channel_reply_target else {}),
+                            **client_id_metadata,
                             "command": True,
                             "command_name": command_label,
                             "routing": "command_stream",
@@ -1652,6 +1771,7 @@ class SessionService:
                     role="user",
                     content=content,
                     sent_to_agent_status="sent",
+                    message_metadata=client_id_metadata or None,
                 )
 
             # Create system message with response (commands are deterministic, not LLM)
@@ -1748,7 +1868,7 @@ class SessionService:
             # collect_pending_messages can inject it as an XML block into the
             # agent-bound content without it being stored in message.content
             # (and therefore never rendered in the chat UI).
-            base_message_metadata: dict = {}
+            base_message_metadata: dict = dict(client_id_metadata)
             if channel_reply_target:
                 base_message_metadata["channel_reply_target"] = channel_reply_target
             if page_context:

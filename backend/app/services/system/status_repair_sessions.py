@@ -77,7 +77,16 @@ from app.core.config import settings
 from app.core.db import create_session
 from app.models.environments.environment import AgentEnvironment
 from app.models.sessions.session import Session as ChatSession, SessionMessage
+from app.services.sessions.active_streaming_manager import active_streaming_manager
+from app.services.sessions.message_service import MessageService
 from app.services.sessions.session_service import SessionService
+from app.services.sessions.stream_heartbeat import (
+    ORPHAN_CLEARED_KEY,
+    STREAM_HEARTBEAT_KEY,
+    build_orphan_cleared_marker,
+    parse_heartbeat,
+)
+from app.services.sessions.stream_processor import is_session_lock_held
 from app.services.system.status_repair_context import RepairContext
 from app.utils import as_utc, create_task_with_error_logging
 
@@ -513,7 +522,16 @@ async def _repair_session(
         # whether its container is up, and the container being up is not
         # evidence that anything is still writing into this session. The
         # threshold itself is the safeguard — 120 minutes by default, wide
-        # enough that no legitimate turn is reaped mid-flight.
+        # enough that no legitimate turn is reaped mid-flight. A fresh stream
+        # heartbeat (plan D10) proves a turn is still live on some worker, so
+        # a turn longer than the threshold is left alone — up to the hard cap,
+        # the backstop for a stream hung on a still-connected environment
+        # (which keeps beating while no chunk ever arrives).
+        hard_cap = timedelta(hours=settings.STATUS_REPAIR_STREAM_HARD_MAX_AGE_HOURS)
+        if now - claim.stamped_at < hard_cap and _has_fresh_heartbeat(
+            session, claim.session_id, now
+        ):
+            return False
         if not await _clear_to_idle(session, claim):
             return False
         # Recorded for Pass D *after* the write, and only when it landed: this
@@ -645,4 +663,271 @@ async def repair_sessions(ctx: RepairContext) -> int:
                 exc,
                 exc_info=True,
             )
+    return repaired
+
+
+# ── Orphaned streams ───────────────────────────────────────────────────
+#
+# A turn whose process died (or whose task was torn down before it could
+# finalize) leaves its agent row at ``streaming_in_progress`` and its session
+# at ``running``. Every live turn beats ``stream_heartbeat_at`` into both rows
+# about every 30 s (``services/sessions/stream_heartbeat.py``), whichever
+# backend worker runs it. This pass acts on that DB evidence only (plan D10):
+#
+# * heartbeat older than ``STATUS_REPAIR_ORPHAN_STREAM_MIN_AGE_MINUTES``
+#   (4 missed beats) → orphaned, sealed / cleared;
+# * heartbeat fresher than that → alive (possibly on a sibling worker), kept;
+# * no heartbeat (legacy rows written before D10) → agent rows keep the old
+#   ``STATUS_REPAIR_STREAM_MAX_AGE_MINUTES`` rule; sessions are left to Pass B.
+#
+# In-process state (stream registry, session lock) is only an extra **skip**
+# guard: it proves a turn is alive on this worker, and proves nothing about
+# the others.
+
+
+def _local_turn_present(session_id: UUID) -> bool:
+    """True when this worker runs a turn for the session."""
+    return (
+        active_streaming_manager.is_streaming_nowait(session_id)
+        or is_session_lock_held(str(session_id))
+    )
+
+
+def _heartbeat_of(metadata: dict | None) -> tuple[object, datetime | None]:
+    raw = (metadata or {}).get(STREAM_HEARTBEAT_KEY)
+    return raw, parse_heartbeat(raw)
+
+
+def _orphan_message_is_repairable(
+    ctx: RepairContext,
+    heartbeat: datetime | None,
+    session_id: UUID,
+    age: timedelta,
+    session_interaction_status: str | None,
+    heartbeat_cutoff: datetime,
+) -> bool:
+    if _local_turn_present(session_id):
+        return False
+    if heartbeat is not None:
+        return heartbeat < heartbeat_cutoff
+    # Legacy row: no liveness evidence, so only the long bound applies.
+    return (
+        age >= timedelta(minutes=settings.STATUS_REPAIR_STREAM_MAX_AGE_MINUTES)
+        and session_interaction_status != _RUNNING
+        and not ctx.is_session_in_motion(session_id)
+    )
+
+
+# How far back (by ``Session.updated_at``) the orphan pass looks for sessions
+# that may hold an unfinished agent row. ``updated_at`` moves at stream start
+# and at every interaction-status clear, so a crashed turn's session stays in
+# the window for the long (legacy) bound plus a day of backend downtime.
+# Bounds the scan: ``message.message_metadata`` is JSON (not JSONB) and
+# ``message.timestamp`` is not indexed, so the rows are looked up per
+# candidate session through the ``(session_id, sequence_number)`` index.
+_ORPHAN_SCAN_MARGIN = timedelta(days=1)
+_ORPHAN_SCAN_CHUNK = 500
+
+
+def _orphan_candidate_session_ids(session: Session, now: datetime) -> list[UUID]:
+    window_start = now - (
+        timedelta(minutes=settings.STATUS_REPAIR_STREAM_MAX_AGE_MINUTES)
+        + _ORPHAN_SCAN_MARGIN
+    )
+    ids = session.exec(
+        select(ChatSession.id).where(
+            (ChatSession.interaction_status == _RUNNING)
+            | (col(ChatSession.updated_at) >= window_start)
+        )
+    ).all()
+    return list(ids)
+
+
+def _orphan_cutoff(now: datetime) -> datetime:
+    return now - timedelta(
+        minutes=settings.STATUS_REPAIR_ORPHAN_STREAM_MIN_AGE_MINUTES
+    )
+
+
+def _seal_if_heartbeat_unchanged(
+    session: Session, message_id: UUID, observed_heartbeat: object,
+) -> bool:
+    """Seal the row as aborted unless its heartbeat moved since the read."""
+    row = session.get(
+        SessionMessage, message_id, with_for_update=True, populate_existing=True,
+    )
+    if row is None or (row.message_metadata or {}).get(
+        STREAM_HEARTBEAT_KEY
+    ) != observed_heartbeat:
+        session.rollback()
+        return False
+    # ``_apply_aborted`` re-locks the same row (already ours) and re-checks
+    # ``streaming_in_progress``.
+    if MessageService._apply_aborted(session, row, None, None):
+        return True
+    session.rollback()
+    return False
+
+
+async def _repair_orphaned_messages(ctx: RepairContext, now: datetime) -> int:
+    session = ctx.session
+    cutoff = _orphan_cutoff(now)
+    candidate_ids = _orphan_candidate_session_ids(session, now)
+    rows = []
+    for start in range(0, len(candidate_ids), _ORPHAN_SCAN_CHUNK):
+        chunk = candidate_ids[start:start + _ORPHAN_SCAN_CHUNK]
+        rows.extend(session.exec(
+            select(
+                SessionMessage.id,
+                SessionMessage.session_id,
+                SessionMessage.timestamp,
+                SessionMessage.message_metadata,
+                ChatSession.interaction_status,
+            )
+            .join(ChatSession, ChatSession.id == SessionMessage.session_id)
+            .where(
+                col(SessionMessage.session_id).in_(chunk),
+                SessionMessage.role == "agent",
+                SessionMessage.message_metadata["streaming_in_progress"].as_string()
+                == "true",
+                # A row younger than the minimum age cannot carry a stale
+                # heartbeat: it was stamped at creation.
+                SessionMessage.timestamp < cutoff,
+            )
+        ).all())
+    session.rollback()
+
+    repaired = 0
+    for message_id, session_id, timestamp, metadata, interaction_status in rows:
+        raw_heartbeat, heartbeat = _heartbeat_of(metadata)
+        age = now - as_utc(timestamp)
+        try:
+            if not _orphan_message_is_repairable(
+                ctx, heartbeat, session_id, age, interaction_status, cutoff
+            ):
+                continue
+            if _seal_if_heartbeat_unchanged(session, message_id, raw_heartbeat):
+                repaired += 1
+                logger.info(
+                    "Status repair: agent message %s of session %s sealed as "
+                    "aborted (last heartbeat: %s, age: %s)",
+                    message_id, session_id, raw_heartbeat or "none (legacy)", age,
+                )
+        except Exception as exc:
+            session.rollback()
+            logger.error(
+                "Status repair: failed to seal orphaned message %s: %s",
+                message_id, exc, exc_info=True,
+            )
+    return repaired
+
+
+def _has_fresh_heartbeat(session: Session, session_id: UUID, now: datetime) -> bool:
+    row = session.get(ChatSession, session_id, populate_existing=True)
+    _, heartbeat = _heartbeat_of(row.session_metadata if row else None)
+    session.rollback()
+    return heartbeat is not None and heartbeat >= _orphan_cutoff(now)
+
+
+def _clear_orphaned_session(
+    session: Session, claim: _Claim, observed_heartbeat: object,
+) -> UUID | None:
+    """Clear a ``running`` claim whose heartbeat went stale, under the row lock.
+
+    The claim and the heartbeat are re-checked and the clear committed in one
+    locked transaction, so a beat that lands meanwhile either blocks us (and we
+    then see its new heartbeat) or finds the row already cleared. The same
+    write leaves ``ORPHAN_CLEARED_KEY`` (the heartbeat judged and the original
+    ``streaming_started_at``, so a restore keeps the hard-cap clock), which lets a
+    live turn restore ``running`` (``StreamHeartbeat``).
+
+    Does the clear itself rather than through
+    ``SessionService.clear_interaction_status``: that helper opens its own
+    connection, which would block on the lock held here. Returns the owner's
+    user id when the row was cleared, else ``None``.
+    """
+    row = session.get(
+        ChatSession, claim.session_id, with_for_update=True, populate_existing=True,
+    )
+    if (
+        row is None
+        or not _claim_still_held(row, claim)
+        or (row.session_metadata or {}).get(STREAM_HEARTBEAT_KEY) != observed_heartbeat
+    ):
+        session.rollback()
+        return None
+    row.interaction_status = ""
+    original_start = row.streaming_started_at
+    row.streaming_started_at = None
+    row.updated_at = datetime.now(UTC)
+    row.session_metadata = {
+        **(row.session_metadata or {}),
+        ORPHAN_CLEARED_KEY: build_orphan_cleared_marker(
+            observed_heartbeat, original_start
+        ),
+    }
+    user_id = row.user_id
+    session.add(row)
+    session.commit()
+    return user_id
+
+
+async def _repair_orphaned_sessions(ctx: RepairContext, now: datetime) -> int:
+    session = ctx.session
+    cutoff = _orphan_cutoff(now)
+    rows = session.exec(
+        select(
+            ChatSession.id,
+            ChatSession.streaming_started_at,
+            ChatSession.session_metadata,
+        ).where(
+            ChatSession.interaction_status == _RUNNING,
+            col(ChatSession.streaming_started_at).is_not(None),
+            col(ChatSession.streaming_started_at) < cutoff,
+        )
+    ).all()
+    session.rollback()
+
+    repaired = 0
+    for session_id, streaming_started_at, metadata in rows:
+        if ctx.is_session_in_motion(session_id) or _local_turn_present(session_id):
+            continue
+        raw_heartbeat, heartbeat = _heartbeat_of(metadata)
+        if heartbeat is None or heartbeat >= cutoff:
+            # Alive, or legacy (Pass B's long bound covers it).
+            continue
+        claim = _Claim(session_id, _RUNNING, as_utc(streaming_started_at))
+        try:
+            user_id = _clear_orphaned_session(session, claim, raw_heartbeat)
+            if user_id is None:
+                continue
+            ctx.note_session_in_motion(session_id)
+            _recount_pending(session, session_id)
+            await SessionService.emit_interaction_status_cleared(session_id, user_id)
+            repaired += 1
+            logger.info(
+                "Status repair: session %s cleared from 'running' — its stream "
+                "heartbeat is stale (last: %s)",
+                session_id, raw_heartbeat,
+            )
+        except Exception as exc:
+            session.rollback()
+            logger.error(
+                "Status repair: failed to clear orphaned session %s: %s",
+                session_id, exc, exc_info=True,
+            )
+    return repaired
+
+
+async def repair_orphaned_streams(ctx: RepairContext) -> int:
+    """Seal agent messages and sessions whose stream heartbeat went stale.
+
+    Registered after Pass B (``repair_sessions``) and before the input-task
+    pass, which re-derives task state from the sessions cleared here. Every
+    session cleared is recorded in ``ctx`` for Pass D. Returns the number of
+    messages plus sessions repaired.
+    """
+    now = datetime.now(UTC)
+    repaired = await _repair_orphaned_messages(ctx, now)
+    repaired += await _repair_orphaned_sessions(ctx, now)
     return repaired

@@ -121,6 +121,7 @@ class ChannelIngestionService:
         context_binding_id: UUID | None = None,
         external_message_id: str | None = None,
         channel_reply_target: dict[str, Any] | None = None,
+        client_message_id: str | None = None,
     ) -> IngestionResult:
         """Run the full inbound ingestion flow (plan §4.1).
 
@@ -155,6 +156,9 @@ class ChannelIngestionService:
                 ``uploader_user_id``: it names ids, it is not a mode, and every
                 id outside the set is checked exactly as before. See
                 ``MessageService.prepare_user_message_with_files``.
+            client_message_id: Caller-supplied message id (A2A ``messageId``),
+                stored on the user row and used to dedupe resends within the
+                session. A duplicate comes back as ``action="duplicate"``.
         """
         # Step 1: access gating.
         ChannelIngestionService.assert_access(
@@ -203,6 +207,7 @@ class ChannelIngestionService:
             context_binding_id=context_binding_id,
             external_message_id=external_message_id,
             channel_reply_target=channel_reply_target,
+            client_message_id=client_message_id,
         )
 
         # Step 4: map the dict return into `IngestionResult`. `message` is a
@@ -212,6 +217,7 @@ class ChannelIngestionService:
         action = result.get("action")
         message_id = result.get("message_id")
         message = result.get("message")
+        # "duplicate" stored nothing and kicked nothing: not initiating.
         streaming_initiated = action in ("streaming", "pending")
 
         return IngestionResult(
@@ -221,6 +227,7 @@ class ChannelIngestionService:
             streaming_initiated=streaming_initiated,
             action=action,
             message=message,
+            duplicate_pending=bool(result.get("pending")) if action == "duplicate" else False,
         )
 
     # ------------------------------------------------------------------

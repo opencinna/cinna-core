@@ -193,6 +193,13 @@ because `SessionStreamProcessor` owns the stream kick; App MCP does the same and
 `stream_and_collect_response`'s session lock; and `POST /api/v1/sessions/` calls only
 `resolve_or_create_session`, because there is no message body yet.
 
+`message/stream` on A2A also no longer runs its turn as a bare detached task: it wraps
+`SessionStreamProcessor` in `LockedTurnRunner` (`stream_processor.py`), which takes the same shared
+per-session lock UI and MCP use — in **wait** mode, so a second concurrent send to the same task
+queues rather than races or is rejected. The turn itself stays detached from the SSE connection: a
+client disconnect drains the consumer but does not cancel the producer. See
+[A2A Protocol / Crash Recovery](../application/a2a_integration/a2a_protocol/a2a_protocol.md#crash-recovery).
+
 ACP is another explicit exception: `backend/app/acp/agent.py` creates an owner-held session with a connector/token binding, persists text through `MessageService.create_message`, and invokes `SessionStreamProcessor` directly under the shared session lock and an ACP advisory lease. It checks the install gate before execution, reuses environment activation, and translates output to ACP updates. It does not invoke the web UI slash-command parser or expose client filesystem/MCP tools.
 
 ### 7. Message row, environment readiness, commands

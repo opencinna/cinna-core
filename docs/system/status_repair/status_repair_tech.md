@@ -9,7 +9,7 @@ See [status_repair.md](status_repair.md) for the business logic, per-pass thresh
 - `backend/app/services/system/status_repair_scheduler.py` — `BackgroundScheduler` setup, leader-lock context manager, main-loop bridge, pass registry, `start_scheduler()` / `shutdown_scheduler()`.
 - `backend/app/services/system/status_repair_context.py` — `RepairContext` dataclass, the per-tick cross-pass scratchpad.
 - `backend/app/services/system/status_repair_environments.py` — Pass A.
-- `backend/app/services/system/status_repair_sessions.py` — Pass B.
+- `backend/app/services/system/status_repair_sessions.py` — Pass B, and Pass B2 (`repair_orphaned_streams`).
 - `backend/app/services/system/status_repair_tasks.py` — Pass C.
 - `backend/app/services/system/status_repair_channels.py` — Pass D.
 - `backend/app/services/system/__init__.py` — empty package marker.
@@ -21,6 +21,10 @@ See [status_repair.md](status_repair.md) for the business logic, per-pass thresh
 - `backend/app/services/environments/admin_environment_service.py` — `_TRANSITIONAL_STATUSES`, the pre-existing frozenset of transitional status values, imported (not re-derived) by Pass A.
 - `backend/app/services/environments/template_image_service.py:is_build_in_flight()` — process-local, veto-only check Pass A uses to avoid reaping a cold `docker build` that has written no heartbeat.
 - `backend/app/services/sessions/session_service.py` — `SessionService.clear_interaction_status()` / `initiate_stream()` — reused, not reimplemented, by Pass B.
+- `backend/app/services/sessions/stream_heartbeat.py` — `StreamHeartbeat`, `STREAM_HEARTBEAT_KEY`, `parse_heartbeat()`; Pass B2's evidence source (see [A2A Protocol tech](../../application/a2a_integration/a2a_protocol/a2a_protocol_tech.md) for the writer side of the same heartbeat).
+- `backend/app/services/sessions/active_streaming_manager.py` — `is_streaming_nowait()`; Pass B2's `self`-verdict local-turn check.
+- `backend/app/services/sessions/stream_processor.py` — `is_session_lock_held()`; the other half of Pass B2's local-turn check.
+- `backend/app/services/sessions/message_service.py` — `MessageService._apply_aborted()`; reused, not reimplemented, by Pass B2 to seal a message row.
 - `backend/app/services/tasks/input_task_service.py` — `InputTaskService.compute_status_from_sessions()` / `update_task_status()` — reused by Pass C.
 - `backend/app/services/server_channels/channel_outbound_service.py:_binding_thread_key()` / `ChannelOutboundService.set_status()` — reused by Pass D to resolve and rewrite the external progress notice.
 - `backend/app/services/server_channels/channel_stream_relay.py` — `ChannelStreamRegistry`, reused by Pass D's process-local live-relay veto.
@@ -40,6 +44,10 @@ See [status_repair.md](status_repair.md) for the business logic, per-pass thresh
 ### Tests
 
 - `backend/tests/api/agents/sessions/agents_status_repair_test.py` — Pass A, B, and the B→C hand-off.
+- `backend/tests/api/agents/sessions/agents_orphaned_stream_repair_test.py` — Pass B2: stale/fresh/legacy heartbeat verdicts for both messages and sessions, the local-turn skip, and the session-in-motion / max-age fallback for legacy rows.
+- `backend/tests/api/agents/sessions/agents_stream_heartbeat_test.py` — real-SQL heartbeat integration: the ticker stamps the session and agent row and clears the session stamp at normal turn end (R14), a beat reopens a row/session the orphan pass sealed/cleared, a later turn's beat does not restore an earlier turn's clear, and Pass B reaps a still-beating turn past the hard cap (R13).
+- `backend/tests/unit/test_stream_heartbeat.py` — `StreamHeartbeat` ticker: session/message writes, the stop-flag race, the aborted-row and cleared-session self-heal, and the `TESTING` kill switch.
+- `backend/tests/unit/test_status_repair_orphaned_streams_pass_order.py` — `orphaned_streams` is registered between `sessions` and `input_tasks`.
 - `backend/tests/api/server_channels/server_channels_status_repair_test.py` — Pass D and the B→D hand-off.
 - `backend/tests/architecture/environment_status_writer_test.py` — AST-based drift test enforcing the single-writer invariant `_set_status`/`_touch_progress` depend on.
 
@@ -96,7 +104,7 @@ This is also the pass functions' entire test surface: because the `TESTING` gate
 
 **Candidates.** `Session` rows with `interaction_status` in `{"running", "pending_stream"}`. Claim stamp is `streaming_started_at` for `running` (nulled at every clear site, so a session missing it never recorded a start and is skipped — no honest age to measure) and `updated_at` for `pending_stream` (bumped by every `update_interaction_status` write).
 
-**`running` repair (B.1).** No environment probe — a stream older than `STATUS_REPAIR_STREAM_MAX_AGE_MINUTES` (default 120) is treated as over regardless of container state; the threshold itself is the safeguard against reaping a legitimate long turn. Repaired via `SessionService.clear_interaction_status(session_id, reason="reconciled by status repair")` (reused, not reimplemented — it is already idempotent, nulls `streaming_started_at`, and emits both websocket events an open chat window needs), followed by `_recount_pending()`.
+**`running` repair (B.1).** No environment probe — a stream older than `STATUS_REPAIR_STREAM_MAX_AGE_MINUTES` (default 120) is a candidate, but `_has_fresh_heartbeat()` (shared with Pass B2) keeps it alive past that as long as its DB stream heartbeat is still fresh. Only a stale heartbeat, or a claim older than `STATUS_REPAIR_STREAM_HARD_MAX_AGE_HOURS` (default 12h) regardless of heartbeat, licenses the repair — the hard cap is the backstop for a stream stuck on a still-connected-but-hung environment, which keeps beating forever because httpx read timeouts are per chunk, not per turn (plan R13). The clear only ever touches the session: the agent row stays `streaming_in_progress` until that turn actually ends, since sealing a row that still beats would only be reopened by the next one. Repaired via `SessionService.clear_interaction_status(session_id, reason="reconciled by status repair")` (reused, not reimplemented — it is already idempotent, nulls `streaming_started_at`, and emits both websocket events an open chat window needs), followed by `_recount_pending()`.
 
 **`pending_stream` repair (B.2).** Threshold `STATUS_REPAIR_PENDING_STREAM_MAX_AGE_MINUTES` (default 15). `_resend_is_due()` gates re-entry on three independent conditions: the bound environment's status is `"running"`; there is an oldest pending user message and it is younger than `_max_quiet_time(status) * _RESEND_MAX_AGE_FACTOR` (`_RESEND_MAX_AGE_FACTOR = 2`, a constant — at defaults this yields a `[15, 30)` minute resend window, deliberately expressed as a multiple of the threshold rather than a fixed number so raising the threshold cannot silently widen the window into hours); and this pass has not already resent for this exact episode. The window is measured against **the oldest pending message's own timestamp**, never the claim stamp — because `_stamp_resend_claim()` bumps the claim stamp (`updated_at`) as part of claiming the row, so a window measured against it could never expire.
 
@@ -107,6 +115,32 @@ If not due (env not running, nothing pending, past the window, or already resent
 **`_recount_pending()`** re-derives `pending_messages_count` from `count(message where role='user' and sent_to_agent_status='pending')` — the same predicate `MessageService.collect_pending_messages` uses — whenever B.1 or B.2 touches a row. Deliberately does **not** bump `updated_at` (that column is the `pending_stream` claim token; forging a heartbeat on a pure count-correction would hide the row from the next tick for no reason).
 
 **Pass A skip.** For `pending_stream` claims, `ctx.is_environment_draining(env_id)` short-circuits the repair entirely (see RepairContext section above), recording the session into `sessions_in_motion` even though nothing was written, since Pass D still needs to know this pass looked at it.
+
+## Pass B2 — Orphaned Streams (`status_repair_sessions.py`)
+
+Registered in `status_repair_scheduler.py` as `("orphaned_streams", repair_orphaned_streams)`, immediately after `"sessions"` (Pass B) and before `"input_tasks"` (Pass C) — see the comment block at `status_repair_scheduler.py:106-139`.
+
+**Why it exists.** Pass B's `running`-session bound is 120 minutes, chosen because *age alone* is weak evidence — a legitimately long turn looks identical to a dead one. Pass B2 exists because a much stronger, cheap signal is available for one specific case: every live turn writes `stream_heartbeat_at` into both the in-progress agent message's `message_metadata` and its session's `session_metadata` roughly every 30 s (`stream_heartbeat.py:StreamHeartbeat`, started in `MessageService.stream_message_with_events`, stamped again on message creation and on every periodic flush). Because the heartbeat is DB state rather than in-process memory, it proves liveness regardless of which backend worker is running the turn (plan D10).
+
+**Candidates — messages, in two steps (bounding the scan).** `message.message_metadata` is JSON (not JSONB) and `message.timestamp` is not indexed, so the message query is never run unfiltered against the whole table:
+1. `_orphan_candidate_session_ids()` first selects `Session.id` for sessions that are either `interaction_status = "running"` right now, or whose `updated_at` falls within `STATUS_REPAIR_STREAM_MAX_AGE_MINUTES` plus a one-day margin (`_ORPHAN_SCAN_MARGIN`) — `updated_at` moves at stream start and at every interaction-status clear, so a crashed turn's session stays in this window for the long (legacy) bound plus a day of backend downtime.
+2. Those session ids are queried in chunks of `_ORPHAN_SCAN_CHUNK = 500`, and for each chunk the agent-message query runs: `message_metadata->>'streaming_in_progress' = 'true'`, `timestamp` older than `STATUS_REPAIR_ORPHAN_STREAM_MIN_AGE_MINUTES` (default 2), `session_id IN (chunk)`, joined against the owning session's `interaction_status` (not used for the verdict, only passed through to the legacy fallback below).
+
+**Candidates — sessions.** `Session` rows with `interaction_status = "running"` and `streaming_started_at` older than the same minimum age. This covers a crash *before* the first assistant event, when no agent message row exists yet for Pass B2's message check to find.
+
+**Heartbeat verdict (`_orphan_message_is_repairable`, `_has_fresh_heartbeat`)**, read from `message_metadata["stream_heartbeat_at"]` / `session_metadata["stream_heartbeat_at"]` (`stream_heartbeat.parse_heartbeat`):
+- **Local turn present** (`_local_turn_present`: `active_streaming_manager.is_streaming_nowait(session_id)` or `is_session_lock_held(str(session_id))`) — never repairable regardless of heartbeat: this worker is still writing it.
+- **Heartbeat present and stale** (older than `STATUS_REPAIR_ORPHAN_STREAM_MIN_AGE_MINUTES`, default 2 min = 4 missed beats) — repairable.
+- **Heartbeat present and fresh** — not repairable; the writer (this worker or a sibling) is still alive.
+- **No heartbeat** (legacy row, written before D10) — for messages, repairable only past `STATUS_REPAIR_STREAM_MAX_AGE_MINUTES` (Pass B's 120-minute bound) **and** the session is not `interaction_status = "running"` **and** `ctx.is_session_in_motion(session_id)` is false; for sessions, left to Pass B entirely (`_repair_orphaned_sessions` skips a row with no heartbeat).
+
+**Repair — messages (`_repair_orphaned_messages` / `_seal_if_heartbeat_unchanged`).** Re-locks the row, re-checks the observed heartbeat value is unchanged since the candidate read (a live writer may have beaten again in between), then `MessageService._apply_aborted(ctx.session, msg, None, None)` — the same row-locking, streaming-in-progress-guarded seal the cancel path uses, so a message finalized by any other path in the meantime is never overwritten. Per-row isolation with a rollback on error, like Pass B.
+
+**Repair — sessions (`_repair_orphaned_sessions` / `_clear_orphaned_session`).** The claim (`_Claim(session_id, "running", streaming_started_at)`) and the observed heartbeat are both re-checked, and the clear committed, under **one row lock** in `_clear_orphaned_session()` — a beat that lands in between either blocks on the lock (and is then seen as the row's new heartbeat) or finds the row already cleared. It writes the clear directly (not through `SessionService.clear_interaction_status`, which opens its own connection and would block on the lock this function already holds) and, in the same write, leaves the judged heartbeat under `session_metadata["stream_orphan_cleared_heartbeat"]` — the self-heal marker `StreamHeartbeat._beat_session` looks for: if the turn was actually still alive (a stalled loop or a slow DB write, not a crash) and beats again after the clear, it finds this marker at or after its own first beat and restores `interaction_status = "running"` on the session, and separately reopens its own agent row from `aborted` if the message pass sealed it too. On success, `_repair_orphaned_sessions` runs `_recount_pending()` and calls `SessionService.emit_interaction_status_cleared(session_id, user_id)` directly (the same WS-event helper `clear_interaction_status` and B.1 use, extracted so this pass — which cannot call `clear_interaction_status` itself — still notifies an open chat window). Every session cleared is recorded with `ctx.note_session_in_motion()`, exactly like Pass B, so Pass D still knows to leave its channel delivery alone this tick.
+
+**Why 2 minutes is enough.** 4 missed beats at 30 s: a slow DB write or a busy event loop never reaps a live turn, and a crashed backend process is sealed within about two sweep ticks (4 minutes) rather than Pass B's 120. A row with no heartbeat (legacy) keeps the full 120-minute bound, so a stream actually owned by a live sibling worker is never reaped sooner than Pass B would have reaped it anyway.
+
+**Return value.** `repair_orphaned_streams` returns the combined count of messages plus sessions repaired — no `RepairContext` mutation beyond `note_session_in_motion`, since neither drained environments nor input-task state is relevant here.
 
 ## Pass C — Input Tasks (`status_repair_tasks.py`)
 
@@ -138,8 +172,10 @@ Marked external work keeps `executed_at` null and therefore does not enter this 
 | `STATUS_REPAIR_INTERVAL_MINUTES` | `2` | Sweep tick interval |
 | `STATUS_REPAIR_ENV_ACTIVATING_MAX_AGE_MINUTES` | `10` | Pass A — `activating`/`starting` |
 | `STATUS_REPAIR_ENV_BUILDING_MAX_AGE_MINUTES` | `60` | Pass A — `creating`/`building`/`rebuilding` |
-| `STATUS_REPAIR_STREAM_MAX_AGE_MINUTES` | `120` | Pass B — `interaction_status="running"` |
+| `STATUS_REPAIR_STREAM_MAX_AGE_MINUTES` | `120` | Pass B — `interaction_status="running"`; also Pass B2's fallback bound for a legacy row with no stream heartbeat |
+| `STATUS_REPAIR_STREAM_HARD_MAX_AGE_HOURS` | `12` | Pass B — hard cap that reaps a `running` session past this age regardless of a fresh heartbeat (R13); the agent row itself is left for the turn to finish |
 | `STATUS_REPAIR_PENDING_STREAM_MAX_AGE_MINUTES` | `15` | Pass B — `interaction_status="pending_stream"` |
+| `STATUS_REPAIR_ORPHAN_STREAM_MIN_AGE_MINUTES` | `2` | Pass B2 — minimum age of a stale stream heartbeat before a row is sealed |
 | `STATUS_REPAIR_TASK_MAX_AGE_MINUTES` | `30` | Pass C |
 | `STATUS_REPAIR_CHANNEL_DRAFT_MAX_AGE_MINUTES` | `60` | Pass D |
 
