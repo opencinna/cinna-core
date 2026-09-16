@@ -1,10 +1,9 @@
 import {
+  AlertTriangle,
   BookOpen,
   ChevronRight,
-  Clock,
   ExternalLink,
   Key,
-  Shield,
   Sparkles,
 } from "lucide-react"
 import { useState } from "react"
@@ -22,7 +21,7 @@ interface AnthropicCredentialsModalProps {
   onOpenChange: (open: boolean) => void
 }
 
-type ArticleId = "setup-via-api" | "setup-via-oauth"
+type ArticleId = "setup-via-api" | "oauth-tokens"
 
 interface Article {
   id: ArticleId
@@ -46,8 +45,9 @@ const articles: Article[] = [
             <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
               sk-ant-api
             </code>
-            . They provide programmatic access to Claude models and are ideal
-            for production applications, automation, and CI/CD pipelines.
+            . They provide programmatic access to Claude models and are the
+            recommended way to run agents in the cloud: unlike Claude Code OAuth
+            tokens, they are not signed out unexpectedly.
           </p>
         </div>
 
@@ -57,7 +57,7 @@ const articles: Article[] = [
             <li>
               Visit{" "}
               <a
-                href="https://console.anthropic.com"
+                href="https://console.anthropic.com/settings/keys"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-violet-600 dark:text-violet-400 hover:underline inline-flex items-center gap-1"
@@ -135,143 +135,62 @@ const articles: Article[] = [
     ),
   },
   {
-    id: "setup-via-oauth",
-    title: "Setup via Claude Code OAuth",
-    icon: <Shield className="h-5 w-5" />,
-    content: () => (
+    id: "oauth-tokens",
+    title: "Claude Code OAuth Tokens",
+    icon: <AlertTriangle className="h-5 w-5" />,
+    content: (onNavigate) => (
       <div className="space-y-4">
-        <div>
-          <h3 className="font-medium text-base mb-2">What are OAuth Tokens?</h3>
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            Claude Code OAuth tokens are specialized authentication tokens that
-            start with{" "}
-            <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
-              sk-ant-oat
-            </code>
-            . These tokens are designed for Claude Code CLI integration and
-            provide seamless authentication for development workflows.
-          </p>
-        </div>
-
-        <div>
-          <h3 className="font-medium text-base mb-2">
-            How to Get an OAuth Token
-          </h3>
-          <p className="text-sm text-muted-foreground leading-relaxed mb-3">
-            OAuth tokens are generated through the Claude Code CLI on your local
-            machine. Follow these steps to obtain your token:
-          </p>
-          <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-            <li>
-              <a
-                href="https://claude.com/product/claude-code"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-violet-600 dark:text-violet-400 hover:underline inline-flex items-center gap-1"
-              >
-                Install Claude Code CLI
-                <ExternalLink className="h-3 w-3" />
-              </a>{" "}
-              on your local machine
-            </li>
-            <li>
-              Run the setup command:{" "}
-              <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
-                claude setup-token
-              </code>
-            </li>
-            <li>
-              Authorize with your Anthropic subscription account in the browser
-            </li>
-            <li>
-              <strong>Copy the token from the console immediately</strong> -
-              once you close the window, you won't be able to see the token
-              again
-            </li>
-            <li>
-              Paste the token into this credential form to save it securely
-            </li>
-          </ol>
-        </div>
-
-        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+        <div className="bg-amber-50 dark:bg-amber-950/30 border-2 border-amber-200 dark:border-amber-800 rounded-lg p-4">
           <div className="flex items-start gap-2">
-            <Clock className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
             <div>
               <p className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-1">
-                Token Expiration
+                Not recommended for cloud agents
               </p>
               <p className="text-xs text-amber-600/80 dark:text-amber-400/80">
-                OAuth tokens typically expire after <strong>1 year</strong>. Set
-                an expiry notification date when adding the credential to
-                receive a reminder before it expires.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-violet-50 dark:bg-violet-950/30 border-2 border-violet-200 dark:border-violet-800 rounded-lg p-4">
-          <div className="flex items-start gap-2">
-            <Shield className="h-4 w-4 text-violet-600 dark:text-violet-400 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-xs font-medium text-violet-700 dark:text-violet-300 mb-1">
-                Token Security
-              </p>
-              <p className="text-xs text-violet-600/80 dark:text-violet-400/80">
-                OAuth tokens are scoped credentials that provide secure access
-                to Claude services. Like API keys, they should be kept
-                confidential and never shared publicly.
+                Tokens created with{" "}
+                <code className="px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-900 font-mono">
+                  claude setup-token
+                </code>{" "}
+                are tied to a Claude subscription login and can be signed out
+                unexpectedly. When that happens, every agent using the
+                credential stops working until you create a new token.
               </p>
             </div>
           </div>
         </div>
 
         <div>
-          <h3 className="font-medium text-base mb-2">
-            Adding Your OAuth Token
-          </h3>
-          <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
-            <li>
-              In the credential dialog, select <strong>Anthropic</strong> as the
-              type
-            </li>
-            <li>
-              Paste your OAuth token starting with{" "}
-              <code className="px-1 py-0.5 rounded bg-muted font-mono text-xs">
-                sk-ant-oat
-              </code>
-            </li>
-            <li>Give it a descriptive name (e.g., "Claude Code OAuth")</li>
-            <li>Save the credential</li>
-          </ol>
-        </div>
-
-        <div className="bg-muted/50 rounded-lg p-4 border">
-          <p className="text-xs font-medium text-muted-foreground mb-2">
-            Example OAuth Token Format:
-          </p>
-          <div className="flex items-center gap-2">
-            {/* A format example, not a value: the two ghost "copy" buttons that
-                used to sit here copied the placeholder itself and did nothing
-                (an empty onClick), which is worse than no control at all. */}
-            <code className="text-xs font-mono bg-background px-2 py-1 rounded border flex-1">
-              sk-ant-oat01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-            </code>
-          </div>
-        </div>
-
-        <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
-          <p className="text-xs text-blue-600 dark:text-blue-400">
-            <strong>Note:</strong> The system automatically detects the
-            credential type based on the prefix (
-            <code className="px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900 font-mono">
+          <h3 className="font-medium text-base mb-2">What to do instead</h3>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Create an Anthropic API key (it starts with{" "}
+            <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
               sk-ant-api
-            </code>{" "}
-            vs{" "}
-            <code className="px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900 font-mono">
-              sk-ant-oat
             </code>
-            ) and configures the appropriate environment variables.
+            ) and use that for your agents. See{" "}
+            <button
+              type="button"
+              onClick={() => onNavigate("setup-via-api")}
+              className="text-violet-600 dark:text-violet-400 hover:underline"
+            >
+              Setup via API Keys
+            </button>
+            .
+          </p>
+        </div>
+
+        <div>
+          <h3 className="font-medium text-base mb-2">
+            Already using an OAuth token?
+          </h3>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Credentials starting with{" "}
+            <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
+              sk-ant-oat
+            </code>{" "}
+            still work. To switch, edit the credential and paste an API key in
+            its place. Your agents keep the same credential, so you don&apos;t
+            need to change anything else.
           </p>
         </div>
       </div>

@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Support both Anthropic API Keys and Claude Code OAuth Tokens with automatic detection, appropriate environment variable handling, and expiry notification management.
+Accept Anthropic credentials with automatic detection, appropriate environment variable handling, and expiry notification management. **API keys are the recommended credential for agents.** Claude Code OAuth tokens are still accepted so existing credentials keep working, but the UI steers users away from them: they are tied to a Claude subscription login that can be signed out unexpectedly, which silently breaks every cloud agent using the credential.
 
 ## Core Concepts
 
-- **API Key** - Traditional key from console.anthropic.com, prefix `sk-ant-api*`, no typical expiry
-- **OAuth Token** - Generated via `claude setup-token` CLI, prefix `sk-ant-oat*`, 1-year expiry
+- **API Key** (recommended) - Key from console.anthropic.com, prefix `sk-ant-api*`, no typical expiry
+- **OAuth Token** (legacy, not recommended) - Generated via `claude setup-token` CLI, prefix `sk-ant-oat*`, 1-year expiry. Can be signed out before it expires
 - **Auto-Detection** - System detects credential type by prefix and sets the appropriate environment variable
 - **Expiry Notification** - Optional date field with auto-set for OAuth tokens (11 months / 335 days)
 
@@ -21,22 +21,26 @@ Support both Anthropic API Keys and Claude Code OAuth Tokens with automatic dete
 
 ## User Stories / Flows
 
-### Creating an OAuth Token Credential
-
-1. User opens AI Credentials dialog, selects "Anthropic" type
-2. Clicks "Instructions" button - modal opens with setup guides
-3. Follows OAuth setup: runs `claude setup-token` locally, copies token
-4. Pastes token (`sk-ant-oat01-...`) into API key field
-5. Frontend auto-fills expiry date to 11 months from now
-6. User saves credential
-7. Backend detects OAuth token, confirms expiry auto-set
-
 ### Creating an API Key Credential
 
-1. User opens AI Credentials dialog, selects "Anthropic"
-2. Enters API key (`sk-ant-api03-...`)
-3. Expiry field remains empty (optional, user can set manually)
-4. User saves, backend detects API key type, no auto-expiry
+1. User opens the Add wizard on the AI Credentials card and selects "Anthropic"
+2. The details step recommends an API key from console.anthropic.com and notes that OAuth tokens are also accepted (the full "Anthropic Setup Guide" is under the card's ⋯ menu)
+3. Enters API key (`sk-ant-api03-...`)
+4. Expiry field remains empty (optional, user can set manually)
+5. User saves, backend detects API key type, no auto-expiry
+
+### Pasting an OAuth Token (discouraged)
+
+1. User pastes a token (`sk-ant-oat01-...`) into the API key field
+2. An informational warning appears under the field: OAuth tokens can be signed out unexpectedly; an API key is recommended. Saving is not blocked
+3. The token is saved as before: frontend auto-fills expiry date to 11 months from now, backend detects the OAuth token and confirms expiry auto-set
+
+### Moving an Existing OAuth Token Credential to an API Key
+
+1. User edits an existing Anthropic credential whose stored key is an OAuth token (`is_oauth_token`)
+2. The edit dialog shows the same warning under the API key field while it is blank
+3. User pastes an API key; the warning disappears
+4. Agents keep referencing the same credential, so nothing else changes
 
 ### Environment Using OAuth Token
 
@@ -49,22 +53,22 @@ Support both Anthropic API Keys and Claude Code OAuth Tokens with automatic dete
 ### Viewing Expiring Credentials
 
 1. User opens Settings > AI Credentials
-2. Credentials with expiry dates show color-coded badges:
-   - Red: Expired (< 0 days)
-   - Orange: Expiring very soon (≤ 30 days)
-   - Amber: Expiring soon (31-60 days)
-   - Gray: Not expiring soon (> 60 days)
-3. Hover shows tooltip with exact date and days remaining
+2. Credentials with expiry dates show their state on the row:
+   - Expired (< 0 days): red "Expired" badge
+   - Expiring soon (≤ 60 days): "Expires in N days" badge
+   - Later (> 60 days): no badge, "Expires <date>" in the row's secondary text
+3. Hover shows tooltip with exact date and days remaining; expired or ≤ 30-day credentials sort right after the default one on the card
 
-### Updating API Key to OAuth Token
+### Updating API Key to OAuth Token (discouraged)
 
 1. User edits an existing Anthropic credential
-2. Replaces API key with OAuth token (`sk-ant-oat01-...`)
+2. Replaces API key with OAuth token (`sk-ant-oat01-...`); the warning appears
 3. Frontend auto-fills new expiry date
 4. Backend detects type change, confirms auto-set expiry
 
 ## Business Rules
 
+- **API keys are the recommended path, OAuth tokens remain supported** - Users can still save an OAuth token (create and edit); the UI only stops steering them to it. The setup guide and Add wizard give step-by-step instructions only for API keys; the guide's "Claude Code OAuth Tokens" article explains why `claude setup-token` tokens are not recommended and how to switch. The OAuth warning is informational and never blocks saving
 - **Auto-detection is server-side** - Backend detects credential type on create, update, and environment generation
 - **Expiry is informational** - Not enforced; serves as a reminder for token renewal
 - **Auto-expiry for OAuth only** - Only OAuth tokens (`sk-ant-oat*`) get auto-set expiry (335 days)
@@ -92,11 +96,11 @@ Container started → Agent SDK reads the populated env var
 
 - **AI Credentials Service** - Detection on create/update for expiry auto-set. See [AI Credentials](ai_credentials.md)
 - **Environment Lifecycle** - Detection during `.env` file generation for correct env var
-- **Frontend Dialog** - Auto-fill expiry on OAuth token input, instructions modal
+- **Frontend Dialog** - API-key hint in the Add wizard, OAuth-token warning (`AnthropicOAuthTokenWarning`) in the Add wizard and edit dialog, auto-fill expiry on OAuth token input, setup guide modal
 - **Credentials List** - Expiry badge display with color coding; `is_oauth_token` field drives UI disabling in AI Functions credential picker
 - **AI Functions SDK Routing** - OAuth tokens rejected for use with AI utility functions. See [AI Functions SDK Routing](ai_functions_sdk_routing.md)
 - **Model Discovery** - OAuth tokens are skipped by the discovery cron (`sk-ant-oat*` prefix detected, `"oauth_token_unsupported"` recorded). Model health for these environments uses static fallback only. See [Model Freshness Tech](../../agents/agent_environments/model_freshness_tech.md)
 
 ---
 
-*Last updated: 2026-06-05*
+*Last updated: 2026-09-16*

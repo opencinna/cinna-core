@@ -18,7 +18,7 @@ export const PROVIDER_TYPE_OPTIONS: {
   {
     value: "anthropic",
     label: "Anthropic",
-    description: "Claude AI models (API Key or OAuth Token)",
+    description: "Claude AI models (API Key recommended, OAuth Token accepted)",
   },
   {
     value: "openai",

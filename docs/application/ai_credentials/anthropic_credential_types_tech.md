@@ -27,9 +27,10 @@
 ### Frontend
 
 **Components:**
-- `frontend/src/components/UserSettings/AnthropicCredentialsModal.tsx` - Instructions modal (API Key setup article + OAuth setup article)
+- `frontend/src/components/UserSettings/AnthropicCredentialsModal.tsx` - Setup guide modal (API Key setup article + "Claude Code OAuth Tokens" article explaining why they are not recommended)
+- `frontend/src/components/UserSettings/AICredentials/AnthropicOAuthTokenWarning.tsx` - Inline warning shown under the API key field when the key is an OAuth token
 - `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` / `frontend/src/components/UserSettings/AICredentials/EditAICredentialDialog.tsx` - expiry date handling (`toDateInput`, `expiry_notification_date`) on create and edit
-- `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` - Anthropic guidance shown while adding an Anthropic credential
+- `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` - Anthropic guidance shown while adding an Anthropic credential (recommends an API key; notes OAuth tokens are also accepted)
 - `frontend/src/components/UserSettings/AICredentials/EditAICredentialDialog.tsx` - Expiry date input field
 - `frontend/src/components/UserSettings/AICredentials/AICredentialRow.tsx` - `describeExpiry()` drives the expiry badge (variant + fact text)
 - `frontend/src/components/UserSettings/AICredentials/AICredentialRow.tsx` - Expiry badge rendering in credential rows
@@ -74,34 +75,41 @@ Output patterns:
 
 ## Frontend Auto-Fill
 
-`AICredentialDialog.tsx:92-101`:
-- `useEffect` watches `apiKey` and `type` state
-- When user types OAuth token prefix (`sk-ant-oat`): calculates `today + 335 days`, fills expiry field
+`AddAICredentialWizard.tsx` / `EditAICredentialDialog.tsx`:
+- A derived flag (`isOAuthToken` / `isPastedOAuthToken`) is true when the Anthropic key field starts with `sk-ant-oat`
+- When it flips on: an effect calculates `today + 335 days` and fills the expiry field
 - User can adjust or clear
 
-## Expiry Badge Color Coding
+## OAuth Token Warning
 
-`AICredentials.tsx:49-89` - `getExpiryBadgeProps(expiryDate)`:
+OAuth tokens (`claude setup-token`) are accepted but discouraged — the subscription login behind them can be signed out unexpectedly, breaking every cloud agent on the credential. `AnthropicOAuthTokenWarning` renders under the API key field:
+- Add wizard: while the typed key starts with `sk-ant-oat`
+- Edit dialog: while the typed key starts with `sk-ant-oat`, or while the field is blank and the stored credential has `is_oauth_token` (nudges replacement in place)
 
-| Status | Days Until Expiry | Color |
-|--------|------------------|-------|
-| Expired | < 0 | Red (`bg-red-100 dark:bg-red-950`) |
-| Expiring Very Soon | ≤ 30 | Orange (`bg-orange-100 dark:bg-orange-950`) |
-| Expiring Soon | 31-60 | Amber (`bg-amber-100 dark:bg-amber-950`) |
-| Not Expiring Soon | > 60 | Gray (`bg-muted text-muted-foreground`) |
+The warning is informational — it never disables Save. The backend does not reject OAuth tokens; detection, env-var routing and expiry auto-set are unchanged.
 
-Display format: `[Credential Name] [star] [calendar icon + date badge] [Type] [Actions]`
+## Expiry Display
 
-## Instructions Modal
+`credentialTypes.ts` - `describeExpiry(expiryDate)` returns `{ badge, fact, tooltip }`, rendered by `AICredentialRow.tsx`:
+
+| Status | Days Until Expiry | Rendering |
+|--------|------------------|-----------|
+| Expired | < 0 | `destructive` badge "Expired" |
+| Expiring soon | 0-60 | `secondary` badge "Expires today" / "Expires in N days" |
+| Not expiring soon | > 60 | No badge; row fact "Expires <date>" |
+
+The tooltip always carries the exact date (and days remaining). `isExpiryUrgent()` (expired or ≤ 30 days) ranks urgent credentials right after the default one on the card.
+
+## Setup Guide Modal
 
 `AnthropicCredentialsModal.tsx`:
 - Encyclopedia-style layout (pattern from `GettingStartedModal.tsx`)
 - Violet accent colors, dark mode support, 800px max width
-- Article 1: "Setup via API Keys" - link to console.anthropic.com
-- Article 2: "Setup via Claude Code OAuth" - `claude setup-token` instructions, 1-year expiration notice
+- Article 1: "Setup via API Keys" - link to console.anthropic.com, the recommended path
+- Article 2: "Claude Code OAuth Tokens" - why `claude setup-token` tokens are not recommended, and how to switch an existing credential to an API key
 
-Triggered from `AICredentialDialog.tsx:226-241` when type is `anthropic`.
+Opened from the ⋯ menu of `AICredentialsCard.tsx` (never from inside the Add wizard).
 
 ---
 
-*Last updated: 2026-03-02*
+*Last updated: 2026-09-16*

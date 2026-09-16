@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
 import { cn } from "@/lib/utils"
+import { AnthropicOAuthTokenWarning } from "./AnthropicOAuthTokenWarning"
 import {
   defaultCredentialName,
   describeTestResult,
@@ -72,15 +73,18 @@ export function AddAICredentialWizard({
   // overwritten when they go Back and pick a different provider.
   const autoNameRef = useRef("")
 
-  // Pasting an OAuth token dates the reminder eleven months out (335 days),
-  // which is what the platform suggests for a one-year token.
+  // Claude Code OAuth tokens are no longer recommended (see the warning below
+  // the key field) but are still accepted. Pasting one dates the reminder
+  // eleven months out (335 days), which is what the platform suggests for a
+  // one-year token.
+  const isOAuthToken = type === "anthropic" && apiKey.startsWith("sk-ant-oat")
   useEffect(() => {
-    if (type === "anthropic" && apiKey.startsWith("sk-ant-oat")) {
+    if (isOAuthToken) {
       const target = new Date()
       target.setDate(target.getDate() + 335)
       setExpiryDate(target.toISOString().split("T")[0])
     }
-  }, [apiKey, type])
+  }, [isOAuthToken])
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -241,20 +245,19 @@ export function AddAICredentialWizard({
               <Alert>
                 <Info className="h-4 w-4" />
                 <AlertDescription className="text-xs">
-                  Anthropic accepts an API key (
+                  We recommend an API key (
                   <code className="font-mono">sk-ant-api…</code>) from{" "}
                   <a
-                    href="https://console.anthropic.com"
+                    href="https://console.anthropic.com/settings/keys"
                     target="_blank"
                     rel="noreferrer"
                     className="text-primary underline underline-offset-2"
                   >
                     console.anthropic.com
                   </a>
-                  , or an OAuth token (
-                  <code className="font-mono">sk-ant-oat…</code>) from{" "}
-                  <code className="font-mono">claude setup-token</code>. The
-                  full guide is under the card&apos;s ⋯ menu.
+                  . Claude Code OAuth tokens (
+                  <code className="font-mono">sk-ant-oat…</code>) are also
+                  accepted. The full guide is under the card&apos;s ⋯ menu.
                 </AlertDescription>
               </Alert>
             )}
@@ -277,6 +280,7 @@ export function AddAICredentialWizard({
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
               />
+              {isOAuthToken && <AnthropicOAuthTokenWarning />}
             </div>
 
             {needsEndpointAndModel && (

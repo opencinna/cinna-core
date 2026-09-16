@@ -36,7 +36,7 @@ Enable users to manage multiple named AI credentials (API keys) for different LL
 | `openai_compatible` | `api_key`, `base_url`, `model` | — | `opencode` |
 | `google` | `api_key` | `base_url` | `opencode` |
 
-Note: `anthropic` credentials also support OAuth tokens (prefix `sk-ant-oat*`) — see [Anthropic Credential Types](anthropic_credential_types.md).
+Note: `anthropic` credentials should use an API key. Claude Code OAuth tokens (prefix `sk-ant-oat*`, from `claude setup-token`) are still accepted but discouraged because they can be signed out unexpectedly — see [Anthropic Credential Types](anthropic_credential_types.md).
 
 > **MiniMax is temporarily disabled (not supported).** The platform UI focuses on four providers — Anthropic, Google, OpenAI, and OpenAI-compatible. The `minimax` type is no longer offered in any provider picker or SDK selector. The backend code paths remain in place, so MiniMax can be re-enabled later by restoring the UI options.
 
@@ -194,4 +194,4 @@ Clone created → Uses owner's shared or recipient's own credentials
 
 ---
 
-*Last updated: 2026-06-15 — added "List models" picker flow*
+*Last updated: 2026-09-16 — the Anthropic note now recommends API keys over Claude Code OAuth tokens*

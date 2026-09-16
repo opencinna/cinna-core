@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/ui/loading-button"
 import useCustomToast from "@/hooks/useCustomToast"
+import { AnthropicOAuthTokenWarning } from "./AnthropicOAuthTokenWarning"
 import { describeTestResult, getTypeDisplayName } from "./credentialTypes"
 
 interface EditAICredentialDialogProps {
@@ -82,13 +83,20 @@ export function EditAICredentialDialog({
 
   // Swapping an API key for an OAuth token re-dates the reminder: OAuth tokens
   // expire in a year and the platform suggests eleven months (335 days).
+  const isPastedOAuthToken =
+    credential.type === "anthropic" && apiKey.startsWith("sk-ant-oat")
+  // OAuth tokens are no longer recommended; warn on a stored one too, until a
+  // replacement key is typed in.
+  const showOAuthWarning = apiKey
+    ? isPastedOAuthToken
+    : !!credential.is_oauth_token
   useEffect(() => {
-    if (credential.type === "anthropic" && apiKey.startsWith("sk-ant-oat")) {
+    if (isPastedOAuthToken) {
       const target = new Date()
       target.setDate(target.getDate() + 335)
       setExpiryDate(target.toISOString().split("T")[0])
     }
-  }, [apiKey, credential.type])
+  }, [isPastedOAuthToken])
 
   const updateMutation = useMutation({
     mutationFn: async () => {
@@ -217,6 +225,7 @@ export function EditAICredentialDialog({
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
+            {showOAuthWarning && <AnthropicOAuthTokenWarning />}
           </div>
 
           {credential.type === "openai_compatible" && (

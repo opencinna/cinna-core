@@ -45,7 +45,7 @@
 **Components:**
 - `frontend/src/components/UserSettings/AICredentials/AICredentialsCard.tsx` (+ `AICredentialRow.tsx`) - Main credentials list with expiry badges, set-default, delete actions; houses `SDKModeEditDialog`
 - `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` / `EditAICredentialDialog.tsx` - Add wizard and edit dialog with type selector, auto-fill expiry
-- `frontend/src/components/UserSettings/AnthropicCredentialsModal.tsx` - Instructions modal for Anthropic API Key / OAuth setup
+- `frontend/src/components/UserSettings/AnthropicCredentialsModal.tsx` - Setup guide modal for Anthropic API keys (plus why OAuth tokens are not recommended)
 - `frontend/src/components/UserSettings/AffectedEnvironmentsDialog.tsx` - Post-update rebuild dialog
 - `frontend/src/components/Environments/AddEnvironment.tsx` - Environment creation dialog with compact summary rows + `EnvModeEditDialog` modal for SDK/credential/model selection per mode
 - `frontend/src/components/Environments/EnvironmentConfigForm.tsx` - Per-mode edit dialog (`EnvModeEditDialog`) for reconfiguring existing environments; also uses `ListModelsButton`
@@ -298,7 +298,7 @@ Configured via `MODEL_DISCOVERY_ENABLED` (default `True`) and
 - Google: optional base_url
 - "Set as default" checkbox
 - Expiry notification date field with auto-fill for Anthropic OAuth tokens
-- Anthropic info banner with "Instructions" button opening `AnthropicCredentialsModal`
+- Anthropic info banner recommending an API key (the full `AnthropicCredentialsModal` guide is opened from the card's ⋯ menu); `AnthropicOAuthTokenWarning` under the key field when an OAuth token is entered or stored
 - **Test Connection button** (footer, between Cancel and Create/Update): calls `POST /ai-credentials/test-connection`; shows an inline alert with the result above the footer. On success shows "Connection successful — N models available." On a benign skip (`oauth_token_unsupported`, `no_list_endpoint`, etc.) shows a type-specific informative note. On failure shows "Connection failed — the provider rejected this key." In the Edit case a successful test invalidates `["aiCredentialsList"]` so refreshed `discovered_models` appear in model-override datalists immediately.
 
 ### `ListModelsButton.tsx` - Shared Live Model Picker
@@ -421,4 +421,4 @@ Two consequences worth knowing when reading this table:
 
 ---
 
-*Last updated: 2026-09-06 — zero-touch onboarding phase 5: the provider adapter registry absorbed the per-provider probe/bag/SDK tables, `leader_session` fixed the discovery scheduler's leaked advisory lock, `share_credential` gained the admin-managed refusal (`is_shareable`, widened from minted-only to every managed child and now raising the typed `AICredentialNotShareableError`), and the `AICredential` invariant is stated here. Previously: 2026-06-15 — ListModelsButton; bare model override → provider prefix re-qualification in environment_lifecycle.py*
+*Last updated: 2026-09-16 — Anthropic info banner and setup guide now recommend API keys over Claude Code OAuth tokens. Previously: 2026-09-06 — zero-touch onboarding phase 5: the provider adapter registry absorbed the per-provider probe/bag/SDK tables, `leader_session` fixed the discovery scheduler's leaked advisory lock, `share_credential` gained the admin-managed refusal (`is_shareable`, widened from minted-only to every managed child and now raising the typed `AICredentialNotShareableError`), and the `AICredential` invariant is stated here. Earlier: 2026-06-15 — ListModelsButton; bare model override → provider prefix re-qualification in environment_lifecycle.py*
