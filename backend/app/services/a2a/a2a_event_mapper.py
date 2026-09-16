@@ -78,9 +78,11 @@ FILE_NAME_KEY = "cinna.file_name"
 FILE_MIME_KEY = "cinna.file_mime"
 FILE_SIZE_KEY = "cinna.file_size"
 
-# Content the stream finalize stores for an agent row with no assistant text
+# Contents the stream stores for an agent row with no assistant text: the
+# finalize placeholder, and the in-progress one a crashed or canceled row keeps
 # (``MessageService.stream_message_with_events``).
 AGENT_RESPONSE_PLACEHOLDER = "Agent response"
+_NO_TEXT_PLACEHOLDERS = frozenset({AGENT_RESPONSE_PLACEHOLDER, "Agent is responding..."})
 
 # Allowed values for cinna.tool_stream
 TOOL_STREAM_STDOUT = "stdout"
@@ -746,14 +748,14 @@ class A2AEventMapper:
         Agent messages with a recorded streaming-event trace become multiple
         TextParts (one per assistant/thinking/tool event) carrying content-kind
         metadata. All other cases produce a single TextPart from ``msg.content``,
-        except that a canceled / aborted agent row never shows the finalize
+        except that a canceled / aborted agent row never shows a no-text
         placeholder: its fallback part is then empty.
         """
         text = msg.content or ""
         if (
             role == "agent"
             and msg.status in ("user_interrupted", "aborted")
-            and text == AGENT_RESPONSE_PLACEHOLDER
+            and text in _NO_TEXT_PLACEHOLDERS
         ):
             text = ""
         fallback = [Part(root=TextPart(text=text))]

@@ -84,7 +84,9 @@ from app.services.sessions.stream_heartbeat import (
     ORPHAN_CLEARED_KEY,
     STREAM_HEARTBEAT_KEY,
     build_orphan_cleared_marker,
+    heartbeat_now,
     parse_heartbeat,
+    set_turn_aborted_marker,
 )
 from app.services.sessions.stream_processor import is_session_lock_held
 from app.services.system.status_repair_context import RepairContext
@@ -866,6 +868,9 @@ def _clear_orphaned_session(
             observed_heartbeat, original_start
         ),
     }
+    # A turn that crashed before writing any agent row leaves nothing for
+    # Pass A to seal; mark its user message so it reads as cut off.
+    set_turn_aborted_marker(session, claim.session_id, heartbeat_now())
     user_id = row.user_id
     session.add(row)
     session.commit()

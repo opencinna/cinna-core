@@ -82,6 +82,15 @@ class _FakeDB:
                 return None
             return model(id=row_id, **copy.deepcopy(state))
 
+    def exec(self, statement: Any) -> Any:
+        # Only the turn-aborted marker lookup queries; the fake has no user
+        # messages (covered against real rows in agents_stream_heartbeat_test).
+        class _NoRows:
+            def first(self) -> None:
+                return None
+
+        return _NoRows()
+
     def add(self, obj: Any) -> None:
         self._added.append(obj)
 

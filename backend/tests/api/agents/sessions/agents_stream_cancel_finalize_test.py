@@ -47,8 +47,11 @@ class _GatedConnector:
     blocks forever (the test cancels the task instead of releasing it).
     """
 
-    def __init__(self, *, yield_assistant_before_gate: bool) -> None:
+    def __init__(
+        self, *, yield_assistant_before_gate: bool, yield_tool_before_gate: bool = False,
+    ) -> None:
         self._yield_assistant_before_gate = yield_assistant_before_gate
+        self._yield_tool_before_gate = yield_tool_before_gate
         self.entered = asyncio.Event()
         self.reached_gate = asyncio.Event()
         self._never = asyncio.Event()
@@ -61,6 +64,12 @@ class _GatedConnector:
             "type": "session_created", "content": "",
             "session_id": str(uuid.uuid4()), "metadata": {},
         }
+        if self._yield_tool_before_gate:
+            yield {
+                "type": "tool", "tool_name": "bash",
+                "content": "Using tool: bash",
+                "metadata": {"tool_input": {"command": "sleep 90"}},
+            }
         if self._yield_assistant_before_gate:
             yield {"type": "assistant", "content": "Partial reply before cancel"}
         self.reached_gate.set()
@@ -137,6 +146,42 @@ def test_cancel_after_first_assistant_event_seals_aborted_with_events_kept(
         "the partial turn's events must be kept, not discarded"
     )
     assert "Partial reply before cancel" in row["content"]
+
+
+def test_cancel_after_first_tool_event_seals_aborted_with_tool_event_kept(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """A turn whose first content is a tool call (no text yet) opens its
+    agent row on that event, so a cancel mid tool call still leaves the
+    partial reply: an ``aborted`` row holding the tool event.
+    """
+    session_id = _setup_session(client, superuser_token_headers)
+
+    stub = _GatedConnector(yield_assistant_before_gate=False, yield_tool_before_gate=True)
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
+        send_message(client, superuser_token_headers, session_id, content="Run sleep 90")
+        coro = _take_collected_coro()
+
+        async def run():
+            with patch("app.services.sessions.message_service.agent_env_connector", stub):
+                task = asyncio.create_task(coro)
+                await _wait_until(lambda: stub.reached_gate.is_set())
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run())
+
+    messages = get_messages_by_role(client, superuser_token_headers, session_id, role="agent")
+    assert len(messages) == 1, f"expected exactly one agent row, got {messages}"
+    row = messages[0]
+    assert row["status"] == "aborted"
+    events = row["message_metadata"]["streaming_events"]
+    assert [e["type"] for e in events] == ["tool"]
+    assert events[0]["tool_name"] == "bash"
 
 
 def test_cancel_before_any_assistant_event_writes_no_row(

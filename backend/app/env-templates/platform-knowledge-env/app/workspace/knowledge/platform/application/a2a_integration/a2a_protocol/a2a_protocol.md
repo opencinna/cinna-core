@@ -97,7 +97,7 @@ Enables external agents and A2A-compatible tools to discover and communicate wit
 | 4 | A turn is in flight in this process (session lock held, or a stream registered) — or undelivered user messages exist | `working` |
 | 5 | `status = 'error'` | `failed` |
 | 6 | Last agent message of the turn is `user_interrupted`, or the turn was stopped before the agent produced anything (no agent message; the turn's user message is marked instead) | `canceled` |
-| 6 | Last agent message of the turn is `aborted` (turn crashed or was torn down before it finished) | `failed` |
+| 6 | Last agent message of the turn is `aborted` (turn crashed or was torn down before it finished), or the turn was cut off by a backend crash before it wrote any agent message (its user message is marked by the status repair) | `failed` |
 | 7 | `status` in `active`, `completed` | `completed` |
 | 8 | anything else | `working` (conservative default) |
 
@@ -191,7 +191,7 @@ The agent turn is detached from the SSE connection carrying `SendStreamingMessag
 
 Two sends to the same task never stream concurrently. The second `SendStreamingMessage` yields its own initial `working` acknowledgement immediately, then queues behind the session's turn lock (wait mode — it is never rejected outright) until the first turn's teardown completes. That lock is per backend worker: with several workers running, two sends to the same session that land on different workers can still stream concurrently instead of queuing behind each other — a documented multi-worker gap, not a fix.
 
-If the backend process itself is killed mid-turn (not just the client disconnecting), the in-progress agent message is left `streaming` until a process restart. The status-repair background sweep's orphan-stream pass (see [Status Repair](../../../system/status_repair/status_repair.md)) then seals it as `aborted` — a few minutes after the crash by default — so `GetTask` eventually reports `failed` rather than `working` forever. A cancel the user actually requested (the interrupt/stop button, or `CancelTask`) is sealed as `canceled` instead.
+If the backend process itself is killed mid-turn (not just the client disconnecting), the in-progress agent message is left `streaming` until a process restart. The status-repair background sweep's orphan-stream pass (see [Status Repair](../../../system/status_repair/status_repair.md)) then seals it as `aborted` — a few minutes after the crash by default — so `GetTask` eventually reports `failed` rather than `working` forever. The agent message is created on the turn's first text, thinking or tool event and saved with the events so far, so a crash during a long first tool call still leaves the partial reply. A turn that crashed before any such event has no agent message; the same sweep marks its user message instead, and `GetTask` reports `failed` too, with history ending at the user message. A cancel the user actually requested (the interrupt/stop button, or `CancelTask`) is sealed as `canceled` instead.
 
 The same seal-on-exit also covers a stream that ends in an **error** before it finished writing: the partial agent message is sealed `aborted` rather than left `streaming` forever, exactly like a disconnect or a crash. The error itself is still recorded separately (a `system` message with an error status), and `GetTask` still reports `failed` for the turn — only the partial agent row's own status changes.
 

@@ -38,6 +38,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm.attributes import flag_modified
+from sqlmodel import select
 
 from app.core.config import settings
 from app.models.sessions.session import Session as ChatSession, SessionMessage
@@ -49,6 +50,10 @@ STREAM_HEARTBEAT_KEY = "stream_heartbeat_at"
 # whose heartbeat was stale: ``{"heartbeat": <judged stamp>,
 # "streaming_started_at": <the cleared claim's start>}``.
 ORPHAN_CLEARED_KEY = "stream_orphan_cleared_heartbeat"
+# ``message_metadata`` key on the newest delivered user message of a turn the
+# orphan pass cleared while the turn had written no agent row: A2A
+# ``tasks/get`` reads that turn as aborted (``failed``), not ``completed``.
+TURN_ABORTED_META_KEY = "turn_aborted_at"
 
 # Beat period. The orphan pass waits
 # ``STATUS_REPAIR_ORPHAN_STREAM_MIN_AGE_MINUTES`` (2 min = 4 missed beats).
@@ -267,6 +272,7 @@ class StreamHeartbeat:
             # Restore the original start so the hard-cap clock keeps running.
             row.interaction_status = "running"
             row.streaming_started_at = original_start or self._started_at
+            set_turn_aborted_marker(db, self._session_id, None)
             logger.warning(
                 "Stream heartbeat restored 'running' on session %s "
                 "(orphan repair misjudged a live turn)", self._session_id,
@@ -309,3 +315,47 @@ def reopen_aborted(row: SessionMessage, metadata: dict) -> None:
     metadata["streaming_in_progress"] = True
     row.status = ""
     row.status_message = None
+
+
+def _newest_delivered_user_message(db: Any, session_id: UUID) -> SessionMessage | None:
+    return db.exec(
+        select(SessionMessage)
+        .where(
+            SessionMessage.session_id == session_id,
+            SessionMessage.role == "user",
+            SessionMessage.sent_to_agent_status == "sent",
+        )
+        .order_by(SessionMessage.sequence_number.desc())
+        .limit(1)
+    ).first()
+
+
+def set_turn_aborted_marker(db: Any, session_id: UUID, stamp: str | None) -> bool:
+    """Set (``stamp``) or drop (``None``) ``TURN_ABORTED_META_KEY``. No commit.
+
+    Targets the newest delivered user message, and is set only while no agent
+    message follows it: a turn that wrote a row is judged by that row. Returns
+    whether the row changed.
+    """
+    row = _newest_delivered_user_message(db, session_id)
+    if row is None:
+        return False
+    metadata = dict(row.message_metadata or {})
+    if stamp is None:
+        if metadata.pop(TURN_ABORTED_META_KEY, None) is None:
+            return False
+    else:
+        agent_after = db.exec(
+            select(SessionMessage.id).where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "agent",
+                SessionMessage.sequence_number > row.sequence_number,
+            ).limit(1)
+        ).first()
+        if agent_after is not None:
+            return False
+        metadata[TURN_ABORTED_META_KEY] = stamp
+    row.message_metadata = metadata
+    flag_modified(row, "message_metadata")
+    db.add(row)
+    return True

@@ -431,3 +431,27 @@ def force_pending_user_message(
         sent_to_agent_status="pending",
     )
     return {"id": str(message.id), "session_id": str(message.session_id)}
+
+
+def force_delivered_user_message(
+    db,
+    session_id: str | uuid.UUID,
+    *,
+    content: str,
+) -> dict:
+    """Create a ``user`` row already ``sent_to_agent_status="sent"`` with no
+    agent reply after it — what a turn leaves when the backend process dies
+    after delivering the message and before writing any agent row. Only a
+    killed process leaves this state (see ``force_session_interaction_claim``).
+    Returns ``{"id": ..., "session_id": ...}``.
+    """
+    from app.services.sessions.message_service import MessageService
+
+    message = MessageService.create_message(
+        session=db,
+        session_id=_as_uuid(session_id),
+        role="user",
+        content=content,
+        sent_to_agent_status="sent",
+    )
+    return {"id": str(message.id), "session_id": str(message.session_id)}

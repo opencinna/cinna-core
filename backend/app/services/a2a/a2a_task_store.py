@@ -29,15 +29,23 @@ from app.services.sessions.message_service import (
 )
 from app.services.a2a.a2a_event_mapper import A2AEventMapper
 from app.services.sessions.active_streaming_manager import active_streaming_manager
+from app.services.sessions.stream_heartbeat import TURN_ABORTED_META_KEY
 from app.services.sessions.stream_processor import is_session_lock_held
 
 logger = logging.getLogger(__name__)
 
 
-def _canceled_before_output_status(user_message: SessionMessage) -> str | None:
-    """``user_interrupted`` for a user row whose turn was stopped before any output."""
-    if TURN_CANCELED_META_KEY in (user_message.message_metadata or {}):
+def _no_output_turn_status(user_message: SessionMessage) -> str | None:
+    """Agent-row status for a turn that ended without writing one.
+
+    ``user_interrupted`` when it was stopped before any output, ``aborted``
+    when the orphan pass cleared it after a crash, else ``None``.
+    """
+    metadata = user_message.message_metadata or {}
+    if TURN_CANCELED_META_KEY in metadata:
         return "user_interrupted"
+    if TURN_ABORTED_META_KEY in metadata:
+        return "aborted"
     return None
 
 
@@ -181,13 +189,13 @@ class DatabaseTaskStore:
     ) -> str | None:
         """Status of the current turn's agent message, reusing the last message.
 
-        A turn stopped before any output has no agent message; its user row
-        carries ``TURN_CANCELED_META_KEY`` and reads as ``user_interrupted``.
+        A turn that wrote no agent message is judged by its user row's marker
+        (see ``_no_output_turn_status``).
         """
         if last_message is None:
             return None
         if last_message.role == "user":
-            return _canceled_before_output_status(last_message)
+            return _no_output_turn_status(last_message)
         if last_message.role == "agent":
             return last_message.status
         agent_message = MessageService.get_last_agent_message_of_current_turn(db, session_id)
@@ -244,7 +252,7 @@ class DatabaseTaskStore:
                 if agent_message is not None:
                     agent_status = agent_message.status
                 elif user_message is not None:
-                    agent_status = _canceled_before_output_status(user_message)
+                    agent_status = _no_output_turn_status(user_message)
                 else:
                     agent_status = None
         except Exception as e:

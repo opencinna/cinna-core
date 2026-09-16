@@ -406,6 +406,14 @@ _PENDING_SEALS: set[asyncio.Task] = set()
 # delivery status.
 DELIVERY_FAILED_META_KEY = "delivery_failed_at"
 
+# Content of an in-progress agent row that has no assistant text yet.
+STREAMING_PLACEHOLDER_CONTENT = "Agent is responding..."
+# Stream event types that open the turn's agent row (see
+# ``stream_message_with_events``).
+_ROW_OPENING_EVENT_TYPES = frozenset(
+    {"assistant", "thinking", "tool", "tool_result", "tool_result_delta"}
+)
+
 # ``message_metadata`` key on the newest delivered user message of a turn that
 # was interrupted before the agent produced anything (so no agent row exists).
 # Lets A2A ``tasks/get`` report that turn as canceled rather than completed.
@@ -2366,7 +2374,7 @@ class MessageService:
         flush_content = "".join(
             e["content"] for e in flush_events
             if e["type"] == "assistant" and e.get("content")
-        ) or "Agent is responding..."
+        ) or STREAMING_PLACEHOLDER_CONTENT
 
         flush_metadata = dict(response_metadata)
 
@@ -3301,16 +3309,24 @@ class MessageService:
                         await asyncio.shield(pending_flush)
                         last_flush_time = time.time()
 
-                # Create agent message in DB as soon as we receive the first "assistant" event
-                # This ensures the message exists BEFORE any tool calls execute (like handover)
-                if event.get("type") == "assistant" and agent_message_id is None:
+                # Create the agent message on the first content event (text,
+                # thinking or a tool call), with the events so far, so it
+                # exists BEFORE any tool call executes (like handover) and a
+                # crash mid tool call still leaves the partial reply behind.
+                if event.get("type") in _ROW_OPENING_EVENT_TYPES and agent_message_id is None:
+                    initial_events = list(streaming_events)
+
                     def _create_initial_agent_message():
                         with get_fresh_db_session() as db:
-                            initial_content = event.get("content", "Agent is responding...")
+                            if event.get("type") == "assistant" and event.get("content"):
+                                initial_content = event["content"]
+                            else:
+                                initial_content = STREAMING_PLACEHOLDER_CONTENT
                             initial_metadata = {
                                 "external_session_id": new_external_session_id,
                                 "mode": session_mode,
                                 "streaming_in_progress": True,
+                                "streaming_events": initial_events,
                                 STREAM_HEARTBEAT_KEY: heartbeat_now(),
                             }
                             message = MessageService.create_message(
@@ -3324,7 +3340,15 @@ class MessageService:
 
                     agent_message_id = await asyncio.to_thread(_create_initial_agent_message)
                     heartbeat.attach_message(agent_message_id)
-                    logger.info(f"Created initial agent message {agent_message_id} on first assistant event")
+                    last_flush_time = time.time()
+                    if initial_events:
+                        await active_streaming_manager.update_last_flushed_seq(
+                            session_id, initial_events[-1].get("event_seq", 0),
+                        )
+                    logger.info(
+                        f"Created initial agent message {agent_message_id} "
+                        f"on first {event.get('type')} event"
+                    )
 
                 # Collect metadata from events
                 event_metadata = event.get("metadata", {})

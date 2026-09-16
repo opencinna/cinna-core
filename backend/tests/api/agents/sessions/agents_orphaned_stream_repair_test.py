@@ -33,9 +33,10 @@ from fastapi.testclient import TestClient
 
 from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.message import get_messages_by_role
+from tests.utils.message import get_messages_by_role, get_raw_message_metadata
 from tests.utils.session import (
     create_session_via_api,
+    force_delivered_user_message,
     force_orphaned_agent_message,
     force_session_interaction_claim,
     get_session,
@@ -117,6 +118,54 @@ def test_stale_heartbeat_session_without_agent_row_is_cleared(
     session = get_session(client, superuser_token_headers, session_id)
     assert session["interaction_status"] == ""
     assert tick.is_session_in_motion(session_id), "Pass D must be told"
+
+
+def test_cleared_turn_without_agent_row_marks_its_user_message_aborted(
+    client: TestClient, superuser_token_headers: dict, db,
+) -> None:
+    """The process died after delivering the message and before any agent
+    row was written: the clear marks the delivered user message
+    ``turn_aborted_at`` so A2A ``tasks/get`` reads the turn as cut off.
+    """
+    from app.services.sessions.stream_heartbeat import TURN_ABORTED_META_KEY
+
+    session_id = _setup_session(client, superuser_token_headers)
+    user_message = force_delivered_user_message(db, session_id, content="Run sleep 90")
+    force_session_interaction_claim(
+        db, session_id,
+        interaction_status="running",
+        streaming_started_at=_age(4),
+        stream_heartbeat_at=_age(4),
+        set_stream_heartbeat=True,
+    )
+
+    assert RepairTick(db).run_orphaned_streams() == 1
+
+    assert TURN_ABORTED_META_KEY in get_raw_message_metadata(db, user_message["id"])
+
+
+def test_cleared_turn_with_agent_row_leaves_user_message_unmarked(
+    client: TestClient, superuser_token_headers: dict, db,
+) -> None:
+    """A turn that wrote an agent row is judged by that row (sealed
+    ``aborted``); its user message gets no marker.
+    """
+    from app.services.sessions.stream_heartbeat import TURN_ABORTED_META_KEY
+
+    session_id = _setup_session(client, superuser_token_headers)
+    user_message = force_delivered_user_message(db, session_id, content="Run sleep 90")
+    force_session_interaction_claim(
+        db, session_id,
+        interaction_status="running",
+        streaming_started_at=_age(5),
+        stream_heartbeat_at=_age(3),
+        set_stream_heartbeat=True,
+    )
+    force_orphaned_agent_message(db, session_id, timestamp=_age(5), heartbeat_at=_age(3))
+
+    assert RepairTick(db).run_orphaned_streams() == 2
+
+    assert TURN_ABORTED_META_KEY not in get_raw_message_metadata(db, user_message["id"])
 
 
 def test_stale_heartbeat_but_stream_registered_here_is_left_untouched(

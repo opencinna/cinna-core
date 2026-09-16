@@ -21,10 +21,11 @@ from fastapi.testclient import TestClient
 
 from tests.utils.agent import create_agent_via_api, get_agent
 from tests.utils.background_tasks import drain_tasks
-from tests.utils.message import get_messages_by_role
+from tests.utils.message import get_messages_by_role, get_raw_message_metadata
 from tests.utils.session import (
     beat_stream_heartbeat,
     create_session_via_api,
+    force_delivered_user_message,
     force_orphaned_agent_message,
     force_session_interaction_claim,
     get_session,
@@ -136,6 +137,33 @@ def test_beat_restores_running_on_a_session_the_orphan_pass_cleared(
     if restored.tzinfo is None:
         restored = restored.replace(tzinfo=UTC)
     assert restored < _age(9)
+
+
+def test_beat_restoring_running_drops_the_turn_aborted_marker(
+    client: TestClient, superuser_token_headers: dict, db,
+) -> None:
+    """The orphan pass misjudged a live turn that had no agent row yet: the
+    restoring beat also removes the marker that would read the turn as cut off.
+    """
+    from app.services.sessions.stream_heartbeat import TURN_ABORTED_META_KEY
+
+    session_id = _setup_session(client, superuser_token_headers)
+    user_message = force_delivered_user_message(db, session_id, content="Long tool call")
+    force_session_interaction_claim(
+        db, session_id,
+        interaction_status="running",
+        streaming_started_at=_age(10),
+        stream_heartbeat_at=_age(4),
+        set_stream_heartbeat=True,
+    )
+    assert RepairTick(db).run_orphaned_streams() == 1
+    assert TURN_ABORTED_META_KEY in get_raw_message_metadata(db, user_message["id"])
+
+    heartbeat = make_stream_heartbeat(db, session_id, started_at=_age(10))
+    beat_stream_heartbeat(heartbeat)
+
+    assert get_session(client, superuser_token_headers, session_id)["interaction_status"] == "running"
+    assert TURN_ABORTED_META_KEY not in get_raw_message_metadata(db, user_message["id"])
 
 
 def test_beat_of_a_later_turn_does_not_restore_an_earlier_clear(

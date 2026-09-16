@@ -564,3 +564,55 @@ def test_streamed_ask_user_question_final_event_is_input_required(
     assert body["result"]["status"]["state"] == "input-required", (
         "tasks/get must agree with the streamed final event"
     )
+
+
+# ── T2.11 — turn cut off by a crash before any agent row → failed ──────────
+
+
+def test_turn_orphaned_before_any_agent_row_reports_failed(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db,
+) -> None:
+    """The backend died after delivering the message and before writing an
+    agent row. Once the orphan pass clears the stale ``running`` claim,
+    ``tasks/get`` must read the turn as cut off (``failed``), not
+    ``completed``. The message row and stale claim are forged: only a killed
+    process leaves them (see ``force_session_interaction_claim``).
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from tests.utils.session import (
+        force_delivered_user_message,
+        force_session_interaction_claim,
+    )
+    from tests.utils.status_repair import RepairTick
+
+    agent, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A State Orphaned No Row",
+    )
+    agent_id = agent["id"]
+    a2a_token = token_data["token"]
+
+    events, _ = send_a2a_streaming_message(
+        client, agent_id, a2a_token, message_text="Hello", response_text="Hi",
+    )
+    task_id = extract_task_id(events)
+
+    stale = datetime.now(UTC) - timedelta(minutes=4)
+    force_delivered_user_message(db, task_id, content="Run sleep 90")
+    force_session_interaction_claim(
+        db, task_id,
+        interaction_status="running",
+        streaming_started_at=stale,
+        stream_heartbeat_at=stale,
+        set_stream_heartbeat=True,
+    )
+    assert RepairTick(db).run_orphaned_streams() == 1
+
+    body = post_a2a_jsonrpc(
+        client, agent_id, a2a_token,
+        {"jsonrpc": "2.0", "id": "get-1", "method": "tasks/get", "params": {"id": task_id}},
+    )
+    assert body["result"]["status"]["state"] == "failed", body["result"]
+    assert body["result"]["history"][-1]["role"] == "user"
