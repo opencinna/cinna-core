@@ -91,11 +91,12 @@ Enables external agents and A2A-compatible tools to discover and communicate wit
 | # | Condition | A2A TaskState |
 |---|-----------|---------------|
 | 1 | Last message has an unanswered tool question | `input-required` |
+| 1a | A stop was requested for the turn running in this process (the agent may still be winding down) | `canceled` |
 | 2 | `interaction_status = 'running'` | `working` |
 | 3 | `interaction_status = 'pending_stream'` | `submitted` |
 | 4 | A turn is in flight in this process (session lock held, or a stream registered) — or undelivered user messages exist | `working` |
 | 5 | `status = 'error'` | `failed` |
-| 6 | Last agent message of the turn is `user_interrupted` | `canceled` |
+| 6 | Last agent message of the turn is `user_interrupted`, or the turn was stopped before the agent produced anything (no agent message; the turn's user message is marked instead) | `canceled` |
 | 6 | Last agent message of the turn is `aborted` (turn crashed or was torn down before it finished) | `failed` |
 | 7 | `status` in `active`, `completed` | `completed` |
 | 8 | anything else | `working` (conservative default) |
@@ -152,7 +153,7 @@ A client disconnect does not stop the turn: the agent keeps running to completio
 | stream_completed | completed | true | Used by internal event service |
 | error | failed | true | Error occurred (with message) |
 | interrupted | canceled | true | User requested cancellation |
-| done | completed/canceled | true | Final stream event from MessageService |
+| done | completed / canceled / input-required | true | Final stream event from MessageService. `input-required` when the turn asked the user through the ask-user tool (`askuserquestion`); its message carries the question tool part(s), the same parts `GetTask` history shows |
 
 #### Content-Kind Metadata on TextParts
 
@@ -180,6 +181,8 @@ When a client calls `GetTask`, agent messages in `history` are returned with **m
 
 Each agent message in `history` also carries `cinna.message_state` on `Message.metadata`: `complete`, `streaming` (still generating — the currently open row), `aborted` (the turn crashed or the process was torn down before it finished — see Crash Recovery below), or `canceled` (the user requested cancellation). A user message carries `cinna.client_message_id` on `Message.metadata` when the caller supplied a `messageId` on send (see Idempotency below).
 
+A `canceled` or `aborted` message carries the parts the agent produced before it stopped (text, tool, tool_result — same shapes as a completed message). It never carries the internal "Agent response" placeholder: if nothing renderable was produced, its only part is an empty text part.
+
 For the in-progress row specifically, `GetTask` merges the persisted streaming events with the in-memory live buffer of this process's active stream, so a client that reconnects mid-turn sees the same content a live SSE consumer would — not just what has already been flushed to the database (flushes happen roughly every 2 seconds).
 
 #### Crash Recovery
@@ -191,6 +194,17 @@ Two sends to the same task never stream concurrently. The second `SendStreamingM
 If the backend process itself is killed mid-turn (not just the client disconnecting), the in-progress agent message is left `streaming` until a process restart. The status-repair background sweep's orphan-stream pass (see [Status Repair](../../../system/status_repair/status_repair.md)) then seals it as `aborted` — a few minutes after the crash by default — so `GetTask` eventually reports `failed` rather than `working` forever. A cancel the user actually requested (the interrupt/stop button, or `CancelTask`) is sealed as `canceled` instead.
 
 The same seal-on-exit also covers a stream that ends in an **error** before it finished writing: the partial agent message is sealed `aborted` rather than left `streaming` forever, exactly like a disconnect or a crash. The error itself is still recorded separately (a `system` message with an error status), and `GetTask` still reports `failed` for the turn — only the partial agent row's own status changes.
+
+#### Cancel (`CancelTask` / `tasks/cancel`)
+
+`CancelTask` forwards the stop to the agent environment and returns the **Task**, in the same shape `GetTask` returns (v1-transformed on a v1 request):
+
+- A turn that was running reads `canceled` at once, even though the agent may take a few seconds to wind down and write its partial message. `GetTask` reports `canceled` for that window too.
+- A task with nothing running is a no-op, not an error: the Task comes back in its current state (`completed`, `input-required`, `canceled`, ...).
+- A turn stopped before the agent produced anything leaves no agent message; both `CancelTask` and later `GetTask` calls report it `canceled`.
+- An unknown or foreign task is a JSON-RPC error.
+
+Limits: the stop signal is process-local, like the turn lock. A cancel that lands on a different backend worker than the running turn finds nothing to stop and returns the current state (`working`). The same happens for a cancel sent while the environment is still starting, before the turn's stream exists. There is also a sub-second window after the partial message is written, while the turn's teardown still holds the session lock, in which `GetTask` can read `working`.
 
 #### Idempotency (`messageId`)
 
@@ -276,4 +290,4 @@ A2A Event Mapper ---------> Centralized A2A protocol mapping logic
 
 ---
 
-*Last updated: 2026-09-16 — A2A crash recovery (C1–C4): detached producer, tasks/get in-flight state, cancel finalize + orphan-stream seal, client messageId dedupe*
+*Last updated: 2026-09-16 — A2A crash recovery (C1–C4): detached producer, tasks/get in-flight state, cancel finalize + orphan-stream seal, client messageId dedupe; cancel returns the Task, question turns end input-required*

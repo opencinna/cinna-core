@@ -334,10 +334,13 @@ async def _handle_jsonrpc(
 
         elif method == "tasks/cancel":
             try:
-                result = await handler.handle_tasks_cancel(params)
-                return JSONResponse(content=jsonrpc_success(request_id, result))
+                task = await handler.handle_tasks_cancel(params)
             except ValueError as e:
                 return _error_response(request_id, -32001, str(e))
+            result = task.model_dump(by_alias=True, exclude_none=True)
+            if use_v1:
+                result = A2AV1Adapter.transform_task_outbound(result)
+            return JSONResponse(content=jsonrpc_success(request_id, result))
 
         elif method == "tasks/list":
             # Custom extension to A2A protocol - list tasks for this agent

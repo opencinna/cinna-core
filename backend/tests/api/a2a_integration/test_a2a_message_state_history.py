@@ -28,6 +28,7 @@ from app.services.sessions.stream_event_handlers import wait_for_detached_a2a_tu
 from tests.utils.a2a import (
     build_streaming_request,
     extract_task_id,
+    part_text,
     post_a2a_jsonrpc,
     send_a2a_streaming_message,
     setup_a2a_agent,
@@ -145,6 +146,49 @@ def test_message_state_is_canceled_for_an_interrupted_turn(
     task = _get_task(client, agent_id, a2a_token, task_id)
     entry = _agent_history_entry(task, agent_messages[0]["id"])
     assert entry["metadata"]["cinna.message_state"] == "canceled"
+    # A canceled row with a recorded streaming trace carries the event's own
+    # parts, not an empty placeholder part — the placeholder-suppression
+    # rule only kicks in when the stored content IS the finalize placeholder
+    # (see test_message_state_aborted_placeholder_content_renders_empty_part).
+    all_text = "".join(
+        (p.get("text") or (p.get("root") or {}).get("text", "")) for p in entry["parts"]
+    )
+    assert "Partial before cancel" in all_text
+
+
+def test_message_state_aborted_placeholder_content_renders_empty_part(
+    client: TestClient, superuser_token_headers: dict[str, str], db,
+) -> None:
+    """
+    An aborted/canceled agent row whose stored content is the finalize
+    placeholder ("Agent response" — what ``MessageService`` writes when the
+    stream produced no assistant text) and whose events yield no parts must
+    render an empty text part, not the placeholder string. Showing the
+    literal placeholder to an A2A client would look like a real (empty but
+    present) response, when the turn actually produced nothing.
+    """
+    agent, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A History Placeholder Agent",
+    )
+    agent_id = agent["id"]
+    a2a_token = token_data["token"]
+
+    events, _ = send_a2a_streaming_message(
+        client, agent_id, a2a_token, message_text="Hi", response_text="First reply",
+    )
+    task_id = extract_task_id(events)
+
+    # content= the exact finalize placeholder; default streaming_events=[]
+    # (see create_aborted_agent_message) — no events to derive parts from.
+    created = create_aborted_agent_message(db, task_id, content="Agent response")
+
+    task = _get_task(client, agent_id, a2a_token, task_id)
+    entry = _agent_history_entry(task, created["id"])
+    assert entry["metadata"]["cinna.message_state"] == "aborted"
+    assert len(entry["parts"]) == 1
+    assert part_text(entry["parts"][0]) == "", (
+        f"Expected an empty text part, not the placeholder: {entry['parts']}"
+    )
 
 
 def test_message_state_is_aborted_for_a_sealed_partial_turn(

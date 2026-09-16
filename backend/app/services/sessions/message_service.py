@@ -406,6 +406,11 @@ _PENDING_SEALS: set[asyncio.Task] = set()
 # delivery status.
 DELIVERY_FAILED_META_KEY = "delivery_failed_at"
 
+# ``message_metadata`` key on the newest delivered user message of a turn that
+# was interrupted before the agent produced anything (so no agent row exists).
+# Lets A2A ``tasks/get`` report that turn as canceled rather than completed.
+TURN_CANCELED_META_KEY = "turn_canceled_at"
+
 
 def merge_live_events(db_events: list[dict], live_events: list[dict]) -> list[dict]:
     """Append the live events newer than the stored ones.
@@ -1092,6 +1097,36 @@ class MessageService:
         row.message_metadata = {
             k: v for k, v in row.message_metadata.items()
             if k != DELIVERY_FAILED_META_KEY
+        }
+        flag_modified(row, "message_metadata")
+        session.add(row)
+        session.commit()
+
+    @staticmethod
+    def mark_turn_canceled_before_output(session: Session, session_id: UUID) -> None:
+        """Stamp ``TURN_CANCELED_META_KEY`` on the turn's newest delivered user row.
+
+        For a turn interrupted before any agent output: it leaves no agent row
+        to carry the ``user_interrupted`` status. Rows of turns queued behind
+        it are still ``pending``, so the newest ``sent`` row is this turn's.
+        """
+        from sqlalchemy.orm.attributes import flag_modified
+
+        row = session.exec(
+            select(SessionMessage)
+            .where(
+                SessionMessage.session_id == session_id,
+                SessionMessage.role == "user",
+                SessionMessage.sent_to_agent_status == "sent",
+            )
+            .order_by(SessionMessage.sequence_number.desc())
+            .limit(1)
+        ).first()
+        if row is None:
+            return
+        row.message_metadata = {
+            **(row.message_metadata or {}),
+            TURN_CANCELED_META_KEY: datetime.now(UTC).isoformat(),
         }
         flag_modified(row, "message_metadata")
         session.add(row)
@@ -3548,6 +3583,20 @@ class MessageService:
                         session_id
                     ),
                 )
+            elif agent_message_id is None and (
+                was_interrupted
+                or active_streaming_manager.is_interrupt_requested_nowait(session_id)
+            ):
+                # Stopped before any output: no agent row carries the
+                # interrupt, so mark the turn's user row instead.
+                def _mark_canceled() -> None:
+                    with get_fresh_db_session() as db:
+                        MessageService.mark_turn_canceled_before_output(db, session_id)
+
+                try:
+                    await asyncio.to_thread(_mark_canceled)
+                except Exception as exc:  # noqa: BLE001 - best-effort marker
+                    logger.warning(f"Failed to mark canceled turn for {session_id}: {exc}")
             # Always unregister stream when done (success, error, or interruption)
             await active_streaming_manager.unregister_stream(session_id)
             logger.info(f"Stream unregistered for session {session_id}")

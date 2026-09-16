@@ -78,6 +78,10 @@ FILE_NAME_KEY = "cinna.file_name"
 FILE_MIME_KEY = "cinna.file_mime"
 FILE_SIZE_KEY = "cinna.file_size"
 
+# Content the stream finalize stores for an agent row with no assistant text
+# (``MessageService.stream_message_with_events``).
+AGENT_RESPONSE_PLACEHOLDER = "Agent response"
+
 # Allowed values for cinna.tool_stream
 TOOL_STREAM_STDOUT = "stdout"
 TOOL_STREAM_STDERR = "stderr"
@@ -154,6 +158,71 @@ TERMINAL_TASK_STATES: frozenset[TaskState] = frozenset({
     TaskState.canceled,
     TaskState.rejected,
 })
+
+
+def _parts_from_stream_events(streaming_events: list[dict], session_id: str) -> list[Part]:
+    """One Part per assistant/thinking/tool/tool-result/attachment event, with content-kind metadata."""
+    parts: list[Part] = []
+    for evt in streaming_events:
+        evt_type = evt.get("type")
+        content_kind = _STREAM_EVENT_TO_CONTENT_KIND.get(evt_type)
+        if content_kind is None:
+            continue
+
+        # Agent attachment → native FilePart (no text content required).
+        if content_kind == CONTENT_KIND_FILE:
+            file_part = _build_attachment_file_part(
+                evt.get("metadata") or {}, session_id
+            )
+            if file_part is not None:
+                parts.append(file_part)
+            continue
+
+        content = evt.get("content") or ""
+        if not content:
+            continue
+
+        part_metadata: dict[str, Any] = {CONTENT_KIND_KEY: content_kind}
+        if content_kind == CONTENT_KIND_TOOL:
+            tool_name = evt.get("tool_name")
+            if tool_name:
+                part_metadata[TOOL_NAME_KEY] = tool_name
+            evt_meta = evt.get("metadata") or {}
+            evt_tool_input = evt_meta.get("tool_input")
+            if isinstance(evt_tool_input, dict):
+                part_metadata[TOOL_INPUT_KEY] = evt_tool_input
+            evt_tool_id = evt_meta.get("tool_id")
+            if isinstance(evt_tool_id, str) and evt_tool_id:
+                part_metadata[TOOL_ID_KEY] = evt_tool_id
+            evt_command_invocation = evt_meta.get("command_invocation")
+            if isinstance(evt_command_invocation, str) and evt_command_invocation:
+                part_metadata[COMMAND_INVOCATION_KEY] = evt_command_invocation
+        elif content_kind == CONTENT_KIND_TOOL_RESULT:
+            evt_meta = evt.get("metadata") or {}
+            evt_tool_id = evt_meta.get("tool_id")
+            if isinstance(evt_tool_id, str) and evt_tool_id:
+                part_metadata[TOOL_ID_KEY] = evt_tool_id
+            evt_stream = evt_meta.get("stream")
+            if evt_stream not in (TOOL_STREAM_STDOUT, TOOL_STREAM_STDERR):
+                evt_stream = TOOL_STREAM_STDOUT
+            part_metadata[TOOL_STREAM_KEY] = evt_stream
+            evt_command_invocation = evt_meta.get("command_invocation")
+            if isinstance(evt_command_invocation, str) and evt_command_invocation:
+                part_metadata[COMMAND_INVOCATION_KEY] = evt_command_invocation
+
+        parts.append(Part(root=TextPart(text=content, metadata=part_metadata)))
+
+    return parts
+
+
+def _question_events(streaming_events: list[dict]) -> list[dict]:
+    """The ask-user tool calls of a turn (see ``MessageService.detect_ask_user_question_tool``)."""
+    from app.services.sessions.message_service import MessageService
+
+    return [
+        evt for evt in streaming_events
+        if MessageService.detect_ask_user_question_tool([evt])
+    ]
 
 
 def _message_state(status: str | None, streaming_in_progress: bool) -> str:
@@ -340,6 +409,17 @@ class A2AEventMapper:
                     state=TaskState.canceled,
                     final=True,
                 )
+            # A turn that asked through the ask-user tool waits on the caller,
+            # as ``tasks/get`` reports it; the final event carries the question.
+            question_events = _question_events(metadata.get("streaming_events") or [])
+            if question_events:
+                return A2AEventMapper.create_parts_status_update(
+                    task_id=task_id,
+                    context_id=context_id,
+                    state=TaskState.input_required,
+                    final=True,
+                    parts=_parts_from_stream_events(question_events, task_id),
+                )
             return A2AEventMapper.create_status_update(
                 task_id=task_id,
                 context_id=context_id,
@@ -432,6 +512,36 @@ class A2AEventMapper:
                 parts=[Part(root=text_part)],
             )
 
+        event = TaskStatusUpdateEvent(
+            taskId=task_id,
+            contextId=context_id,
+            status=status,
+            final=final,
+        )
+        return {
+            "kind": "status-update",
+            **event.model_dump(by_alias=True, exclude_none=True),
+        }
+
+    @staticmethod
+    def create_parts_status_update(
+        task_id: str,
+        context_id: str,
+        state: TaskState,
+        final: bool,
+        parts: list[Part],
+    ) -> dict:
+        """Create a TaskStatusUpdateEvent whose message carries ``parts`` (none → no message)."""
+        status = TaskStatus(
+            state=state,
+            timestamp=datetime.now(UTC).isoformat() + "Z",
+        )
+        if parts:
+            status.message = Message(
+                messageId=uuid4().hex,
+                role="agent",
+                parts=parts,
+            )
         event = TaskStatusUpdateEvent(
             taskId=task_id,
             contextId=context_id,
@@ -635,9 +745,18 @@ class A2AEventMapper:
 
         Agent messages with a recorded streaming-event trace become multiple
         TextParts (one per assistant/thinking/tool event) carrying content-kind
-        metadata. All other cases produce a single TextPart from ``msg.content``.
+        metadata. All other cases produce a single TextPart from ``msg.content``,
+        except that a canceled / aborted agent row never shows the finalize
+        placeholder: its fallback part is then empty.
         """
-        fallback = [Part(root=TextPart(text=msg.content or ""))]
+        text = msg.content or ""
+        if (
+            role == "agent"
+            and msg.status in ("user_interrupted", "aborted")
+            and text == AGENT_RESPONSE_PLACEHOLDER
+        ):
+            text = ""
+        fallback = [Part(root=TextPart(text=text))]
 
         if role != "agent":
             return fallback
@@ -650,55 +769,5 @@ class A2AEventMapper:
         if not streaming_events:
             return fallback
 
-        session_id = str(msg.session_id)
-        parts: list[Part] = []
-        for evt in streaming_events:
-            evt_type = evt.get("type")
-            content_kind = _STREAM_EVENT_TO_CONTENT_KIND.get(evt_type)
-            if content_kind is None:
-                continue
-
-            # Agent attachment → native FilePart (no text content required).
-            if content_kind == CONTENT_KIND_FILE:
-                file_part = _build_attachment_file_part(
-                    evt.get("metadata") or {}, session_id
-                )
-                if file_part is not None:
-                    parts.append(file_part)
-                continue
-
-            content = evt.get("content") or ""
-            if not content:
-                continue
-
-            part_metadata: dict[str, Any] = {CONTENT_KIND_KEY: content_kind}
-            if content_kind == CONTENT_KIND_TOOL:
-                tool_name = evt.get("tool_name")
-                if tool_name:
-                    part_metadata[TOOL_NAME_KEY] = tool_name
-                evt_meta = evt.get("metadata") or {}
-                evt_tool_input = evt_meta.get("tool_input")
-                if isinstance(evt_tool_input, dict):
-                    part_metadata[TOOL_INPUT_KEY] = evt_tool_input
-                evt_tool_id = evt_meta.get("tool_id")
-                if isinstance(evt_tool_id, str) and evt_tool_id:
-                    part_metadata[TOOL_ID_KEY] = evt_tool_id
-                evt_command_invocation = evt_meta.get("command_invocation")
-                if isinstance(evt_command_invocation, str) and evt_command_invocation:
-                    part_metadata[COMMAND_INVOCATION_KEY] = evt_command_invocation
-            elif content_kind == CONTENT_KIND_TOOL_RESULT:
-                evt_meta = evt.get("metadata") or {}
-                evt_tool_id = evt_meta.get("tool_id")
-                if isinstance(evt_tool_id, str) and evt_tool_id:
-                    part_metadata[TOOL_ID_KEY] = evt_tool_id
-                evt_stream = evt_meta.get("stream")
-                if evt_stream not in (TOOL_STREAM_STDOUT, TOOL_STREAM_STDERR):
-                    evt_stream = TOOL_STREAM_STDOUT
-                part_metadata[TOOL_STREAM_KEY] = evt_stream
-                evt_command_invocation = evt_meta.get("command_invocation")
-                if isinstance(evt_command_invocation, str) and evt_command_invocation:
-                    part_metadata[COMMAND_INVOCATION_KEY] = evt_command_invocation
-
-            parts.append(Part(root=TextPart(text=content, metadata=part_metadata)))
-
+        parts = _parts_from_stream_events(streaming_events, str(msg.session_id))
         return parts or fallback

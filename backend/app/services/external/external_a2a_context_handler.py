@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 from uuid import UUID
 
+from a2a.types import Task
 from sqlmodel import Session as DbSession
 
 from app.models import Session as ChatSession
@@ -256,7 +257,7 @@ class ExternalA2AContextHandler(A2ARequestHandler):
     # tasks/cancel override — external uses domain exceptions, not ValueError
     # ------------------------------------------------------------------
 
-    async def handle_tasks_cancel(self, params: dict[str, Any]) -> dict:
+    async def handle_tasks_cancel(self, params: dict[str, Any]) -> Task:
         """External-surface override: translate ``ValueError`` to domain exceptions.
 
         The shared body validates task_id, session existence, and

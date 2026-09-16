@@ -23,12 +23,22 @@ from a2a.types import (
 
 from app.models import Session as ChatSession, SessionMessage
 from app.services.sessions.session_service import SessionService
-from app.services.sessions.message_service import MessageService
+from app.services.sessions.message_service import (
+    TURN_CANCELED_META_KEY,
+    MessageService,
+)
 from app.services.a2a.a2a_event_mapper import A2AEventMapper
 from app.services.sessions.active_streaming_manager import active_streaming_manager
 from app.services.sessions.stream_processor import is_session_lock_held
 
 logger = logging.getLogger(__name__)
+
+
+def _canceled_before_output_status(user_message: SessionMessage) -> str | None:
+    """``user_interrupted`` for a user row whose turn was stopped before any output."""
+    if TURN_CANCELED_META_KEY in (user_message.message_metadata or {}):
+        return "user_interrupted"
+    return None
 
 
 class DatabaseTaskStore:
@@ -129,6 +139,16 @@ class DatabaseTaskStore:
         last_message = MessageService.get_last_message(db, session.id)
         tool_questions_status = last_message.tool_questions_status if last_message else None
 
+        # A stream whose stop was requested is reported canceled at once (it
+        # still reads "running"): the agent-env may take a while to wind it
+        # down and write the row. Process-local, like ``is_turn_in_flight``.
+        if (
+            tool_questions_status != "unanswered"
+            and not ignore_turn_in_flight
+            and active_streaming_manager.is_interrupt_requested_nowait(session.id)
+        ):
+            return TaskState.canceled
+
         decided_early = (
             tool_questions_status == "unanswered"
             or interaction_status in ("running", "pending_stream")
@@ -159,9 +179,15 @@ class DatabaseTaskStore:
     def _current_turn_agent_status(
         db: DbSession, session_id: UUID, last_message: SessionMessage | None
     ) -> str | None:
-        """Status of the current turn's agent message, reusing the last message."""
-        if last_message is None or last_message.role == "user":
+        """Status of the current turn's agent message, reusing the last message.
+
+        A turn stopped before any output has no agent message; its user row
+        carries ``TURN_CANCELED_META_KEY`` and reads as ``user_interrupted``.
+        """
+        if last_message is None:
             return None
+        if last_message.role == "user":
+            return _canceled_before_output_status(last_message)
         if last_message.role == "agent":
             return last_message.status
         agent_message = MessageService.get_last_agent_message_of_current_turn(db, session_id)
@@ -215,7 +241,12 @@ class DatabaseTaskStore:
                     closed, agent_message = MessageService.get_turn_closing_agent_message(
                         db, session_id, user_message
                     )
-                agent_status = agent_message.status if agent_message else None
+                if agent_message is not None:
+                    agent_status = agent_message.status
+                elif user_message is not None:
+                    agent_status = _canceled_before_output_status(user_message)
+                else:
+                    agent_status = None
         except Exception as e:
             logger.error(f"Error getting turn state {session_id}/{user_message_id}: {e}")
             return None

@@ -22,7 +22,10 @@ from app.services.sessions.stream_event_handlers import wait_for_detached_a2a_tu
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.a2a import (
     build_streaming_request,
+    extract_parts_from_sse_event,
     extract_task_id,
+    part_metadata,
+    part_text,
     parse_sse_events,
     post_a2a_jsonrpc,
     send_a2a_streaming_message,
@@ -431,3 +434,133 @@ def test_v1_get_task_returns_same_state_as_legacy_tasks_get(
 
     assert legacy_body["result"]["status"]["state"] == v1_body["result"]["status"]["state"]
     assert legacy_body["result"]["status"]["state"] == "completed"
+
+
+# ── T2.9 — turn stopped before any output → canceled, not completed ────────
+
+
+def test_turn_canceled_before_output_reports_canceled(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    A turn interrupted before the agent produced anything leaves no agent
+    row — only the finalize path (``MessageService._finalize_agent_message``)
+    creates one, and that only runs on the (non-interrupted) success path,
+    or ``_seal_unfinished_turn`` if a row was already opened by an assistant
+    event. Neither ran here, since the stream never emitted one.
+
+    Pre-fix, ``tasks/get`` fell through to "no agent row for this turn" and
+    reported ``completed``. The fix stamps ``TURN_CANCELED_META_KEY`` on the
+    turn's user row from the stream's ``finally`` block
+    (``MessageService.mark_turn_canceled_before_output``), and the task
+    store reads it back as ``user_interrupted`` -> ``canceled``.
+    """
+    agent, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A State Canceled Before Output",
+    )
+    agent_id = agent["id"]
+    a2a_token = token_data["token"]
+
+    class InterruptedBeforeOutputConnector:
+        async def stream_chat(self, base_url, auth_headers, payload):
+            yield {
+                "type": "session_created", "content": "",
+                "session_id": str(uuid.uuid4()), "metadata": {},
+            }
+            # No assistant/tool event at all — the agent said nothing before
+            # the stop landed, so no agent row is ever opened.
+            yield {"type": "interrupted"}
+
+    stub = InterruptedBeforeOutputConnector()
+    request = build_streaming_request("Please respond")
+
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
+        resp = client.post(
+            f"/api/v1/a2a/{agent_id}/",
+            headers={"Authorization": f"Bearer {a2a_token}", "Content-Type": "application/json"},
+            json=request,
+        )
+    drain_tasks()
+    assert resp.status_code == 200, resp.text
+
+    events = parse_sse_events(resp.text)
+    task_id = extract_task_id(events)
+    assert task_id is not None
+
+    body = post_a2a_jsonrpc(
+        client, agent_id, a2a_token,
+        {"jsonrpc": "2.0", "id": "get-1", "method": "tasks/get", "params": {"id": task_id}},
+    )
+    assert body["result"]["status"]["state"] == "canceled", (
+        f"A turn stopped before any output must report canceled, not "
+        f"completed: {body['result']}"
+    )
+
+
+# ── T2.10 — streamed AskUserQuestion → final input-required with parts ─────
+
+
+def test_streamed_ask_user_question_final_event_is_input_required(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    The final ``done`` event of a turn whose streaming_events include an
+    AskUserQuestion tool call must be mapped, live in the SSE stream, to a
+    ``status-update`` with ``final: true``, ``state: "input-required"``,
+    and the question tool call carried as a Part on ``status.message`` —
+    not the generic ``completed`` the "done" event mapped to before this
+    fix, and not a bare (message-less) status update either. A follow-up
+    ``tasks/get`` on the same session must agree.
+    """
+    agent, token_data = setup_a2a_agent(
+        client, superuser_token_headers, name="A2A State Streamed Question",
+    )
+    agent_id = agent["id"]
+    a2a_token = token_data["token"]
+
+    stub = StubAgentEnvConnector(events=[
+        {
+            "type": "tool", "tool_name": "AskUserQuestion",
+            "content": "Which option do you want?",
+            "metadata": {"tool_input": {"question": "Which option do you want?"}},
+        },
+        {"type": "done"},
+    ])
+    request = build_streaming_request("Please ask me something")
+
+    with patch("app.services.sessions.message_service.agent_env_connector", stub):
+        resp = client.post(
+            f"/api/v1/a2a/{agent_id}/",
+            headers={"Authorization": f"Bearer {a2a_token}", "Content-Type": "application/json"},
+            json=request,
+        )
+    drain_tasks()
+    assert resp.status_code == 200, resp.text
+
+    events = parse_sse_events(resp.text)
+    task_id = extract_task_id(events)
+    assert task_id is not None
+
+    final_events = [e for e in events if e.get("result", {}).get("final") is True]
+    assert len(final_events) == 1, f"Expected exactly one final event, got: {events}"
+    final_result = final_events[0]["result"]
+    assert final_result["kind"] == "status-update"
+    assert final_result["status"]["state"] == "input-required"
+
+    parts = extract_parts_from_sse_event(final_events[0])
+    assert len(parts) == 1, f"Expected one question part, got: {parts}"
+    assert part_text(parts[0]) == "Which option do you want?"
+    meta = part_metadata(parts[0])
+    assert meta.get("cinna.content_kind") == "tool"
+    assert meta.get("cinna.tool_name") == "AskUserQuestion"
+    assert meta.get("cinna.tool_input") == {"question": "Which option do you want?"}
+
+    body = post_a2a_jsonrpc(
+        client, agent_id, a2a_token,
+        {"jsonrpc": "2.0", "id": "get-1", "method": "tasks/get", "params": {"id": task_id}},
+    )
+    assert body["result"]["status"]["state"] == "input-required", (
+        "tasks/get must agree with the streamed final event"
+    )

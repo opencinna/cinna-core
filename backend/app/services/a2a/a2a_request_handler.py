@@ -735,12 +735,16 @@ class A2ARequestHandler:
                 return None
             self._authorize_existing_session(session)
 
+        return await self._load_task(session_uuid, params)
+
+    async def _load_task(self, session_id: UUID, params: dict[str, Any]) -> Task | None:
+        """The task as ``tasks/get`` reports it (history merged with the live stream)."""
         from app.services.sessions.active_streaming_manager import active_streaming_manager
 
-        live_stream = await active_streaming_manager.get_stream_events(session_uuid)
+        live_stream = await active_streaming_manager.get_stream_events(session_id)
         history_length = params.get("historyLength", params.get("history_length", 10))
         return self.task_store.get_task_with_limited_history(
-            task_id, history_length, live_stream=live_stream,
+            str(session_id), history_length, live_stream=live_stream,
         )
 
     async def handle_tasks_list(self, params: dict[str, Any]) -> list[Task]:
@@ -777,7 +781,7 @@ class A2ARequestHandler:
 
         return tasks
 
-    async def handle_tasks_cancel(self, params: dict[str, Any]) -> dict:
+    async def handle_tasks_cancel(self, params: dict[str, Any]) -> Task:
         """
         Handle tasks/cancel request.
 
@@ -787,10 +791,15 @@ class A2ARequestHandler:
         backend. Without this, cancels would be silently no-ops whenever
         the external_session_id was already known at cancel time.
 
+        Returns the Task as ``tasks/get`` reports it after the interrupt: a
+        stream that was just interrupted reads ``canceled`` even while the
+        agent-env is still winding it down.
+
         Idempotency: per the A2A spec, cancelling a task that is no longer
         running is a best-effort no-op, not an error. If there is no
-        active stream, this returns ``{}`` instead of raising — the
-        caller's intent (stop the task) is already satisfied.
+        active stream, this returns the task in its current state instead
+        of raising — the caller's intent (stop the task) is already
+        satisfied.
 
         Raises:
             ValueError: If task not found, doesn't belong to agent, or
@@ -826,7 +835,10 @@ class A2ARequestHandler:
                 if "No active stream to interrupt" not in str(exc):
                     raise
 
-        return {}
+        task = await self._load_task(session_id, params)
+        if task is None:
+            raise ValueError("Task not found")
+        return task
 
     # ------------------------------------------------------------------
     # Shared helpers (used by subclasses via inheritance)

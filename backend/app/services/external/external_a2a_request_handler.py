@@ -463,7 +463,10 @@ class ExternalA2ARequestHandler:
             )
 
         if method == "tasks/cancel":
-            result = await handler.handle_tasks_cancel(params)
+            task = await handler.handle_tasks_cancel(params)
+            result = task.model_dump(by_alias=True, exclude_none=True)
+            if use_v1:
+                result = A2AV1Adapter.transform_task_outbound(result)
             return JSONRPCOutcome(
                 result_envelope=jsonrpc_success(request_id, result)
             )
