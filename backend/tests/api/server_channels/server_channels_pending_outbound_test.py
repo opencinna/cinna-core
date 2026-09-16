@@ -128,7 +128,10 @@ def test_pending_flow_parks_then_flushes_once_env_is_running(
     client: TestClient, superuser_token_headers: dict[str, str], db: Session
 ) -> None:
     setup = _setup_pending_install(client, superuser_token_headers)
-    assert any("Setting up" in t for t in setup["install_reply_texts"])
+    # The nameplate names the bundle being installed; the setup narration
+    # below it no longer repeats the name.
+    assert any("assigned to this thread" in t for t in setup["install_reply_texts"])
+    assert any("First-time setup" in t for t in setup["install_reply_texts"])
 
     # Not yet delivered — the environment isn't running yet.
     assert list_sessions(client, setup["consumer_headers"]) == []

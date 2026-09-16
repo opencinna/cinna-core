@@ -52,6 +52,7 @@ from sqlmodel import Session
 from app.core.config import settings
 from app.services.server_channels.adapters.base import ChannelReplaceResult
 from app.services.server_channels.channel_inbound_service import (
+    REPLY_ASSIGNED,
     REPLY_WORKING,
     REPLY_WORKING_ON_IT,
 )
@@ -290,15 +291,20 @@ def test_the_draft_grows_in_place_while_the_agent_writes(
     assert resp.status_code == 200
     assert resp.json() == {}, resp.json()
 
-    # ── One message for the whole turn ────────────────────────────────────
-    assert chat.sent == [REPLY_WORKING], chat.sent
-    notice_id = "spaces/AAA/messages/m1"
+    # ── Two messages: the thread's nameplate, and the turn's own ──────────
+    assert chat.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], chat.sent
+    nameplate_id = "spaces/AAA/messages/m1"
+    notice_id = "spaces/AAA/messages/m2"
     assert chat.deleted == [], chat.deleted
 
-    # ── The pipeline's own state, then the draft, all patches of that one ──
-    assert [mid for mid, _ in chat.updated] == [notice_id] * 3, chat.updated
+    # ── One patch settling the nameplate, then every draft on the notice ──
+    assert [mid for mid, _ in chat.updated] == [
+        nameplate_id,
+        notice_id,
+        notice_id,
+    ], chat.updated
     texts = [text for _, text in chat.updated]
-    assert texts[0] == REPLY_WORKING_ON_IT, texts
+    assert texts[0] == REPLY_ASSIGNED.format(agent_name=agent["name"]), texts
 
     # The draft updates land BEFORE the completion — they are `update_message`
     # calls, and the reply is a `replace_message`. Their content is the answer
@@ -430,17 +436,26 @@ def test_a_long_answer_seals_the_draft_and_opens_a_fresh_one(
     )
 
     assert resp.status_code == 200
-    sealed_id = "spaces/AAA/messages/m1"
-    fresh_id = "spaces/AAA/messages/m2"
+    nameplate_id = "spaces/AAA/messages/m1"
+    sealed_id = "spaces/AAA/messages/m2"
+    fresh_id = "spaces/AAA/messages/m3"
 
-    # ── Two messages exist by the end: the sealed one and the draft ───────
-    assert chat.sent == [REPLY_WORKING, f"{para_2}\n\n"], chat.sent
+    # ── Three messages by the end: the nameplate, the sealed one, the draft ─
+    assert chat.sent == [
+        REPLY_WORKING,
+        REPLY_WORKING_ON_IT,
+        f"{para_2}\n\n",
+    ], chat.sent
     assert chat.deleted == [], chat.deleted
 
-    # ── Everything patched before the seal patched the FIRST message ──────
-    assert [mid for mid, _ in chat.updated] == [sealed_id] * 3, chat.updated
-    working, growing, settled = [t for _, t in chat.updated]
-    assert working == REPLY_WORKING_ON_IT
+    # ── Everything patched before the seal patched the TURN's message ─────
+    assert [mid for mid, _ in chat.updated] == [
+        nameplate_id,
+        sealed_id,
+        sealed_id,
+    ], chat.updated
+    nameplate, growing, settled = [t for _, t in chat.updated]
+    assert nameplate == REPLY_ASSIGNED.format(agent_name=agent["name"])
     assert growing == f"{para_1}\n\n"
     # The seal cuts at the paragraph break and consumes it: a finished message
     # does not end in a blank line, and paragraph two is NOT in it.
@@ -501,10 +516,13 @@ def test_the_kill_switch_restores_todays_behaviour_exactly(
     assert resp.status_code == 200
     assert resp.json() == {}, resp.json()
 
-    notice_id = "spaces/AAA/messages/m1"
-    assert chat.sent == [REPLY_WORKING], chat.sent
-    # The ONLY patch is the pipeline's own progress state. No draft.
-    assert chat.updated == [(notice_id, REPLY_WORKING_ON_IT)], chat.updated
+    nameplate_id = "spaces/AAA/messages/m1"
+    notice_id = "spaces/AAA/messages/m2"
+    assert chat.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], chat.sent
+    # The ONLY patch is the one that settles the nameplate. No draft.
+    assert chat.updated == [
+        (nameplate_id, REPLY_ASSIGNED.format(agent_name=agent["name"]))
+    ], chat.updated
     assert chat.replaced == [(notice_id, _FULL_ANSWER)], chat.replaced
     assert chat.deleted == [], chat.deleted
     assert get_binding_status_message_id(db, channel["id"], thread_key) is None
@@ -557,7 +575,7 @@ def test_a_stream_that_fails_keeps_the_half_answer_and_apologises_under_it(
     )
 
     assert resp.status_code == 200
-    notice_id = "spaces/AAA/messages/m1"
+    notice_id = "spaces/AAA/messages/m2"
 
     # The half-answer was on screen before the failure was known.
     assert (notice_id, partial) in chat.updated, chat.updated

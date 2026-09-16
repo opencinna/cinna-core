@@ -49,6 +49,11 @@ from sqlmodel import Session
 
 from app.core.config import settings
 from app.models.identity.identity_models import IdentityAgentBinding
+from app.services.server_channels.channel_inbound_service import (
+    REPLY_ASSIGNED,
+    REPLY_ASSIGNED_IDENTITY,
+)
+from app.services.server_channels.channel_routing_guidance import safe_display_name
 from tests.stubs.agent_env_stub import StubAgentEnvConnector
 from tests.utils.agent import create_agent_via_api
 from tests.utils.ai_credential import create_random_ai_credential
@@ -181,13 +186,31 @@ _STATUS_NOTICE_TEXTS = {
     "🔎 Finding the right assistant for you…",
     "💬 Working on your message…",
 }
+#: The thread's nameplate ("✅ **X** is assigned to this thread…") is narration
+#: too, and is filtered out for the same reason — but it carries the agent's
+#: name, so it is matched around the name rather than by equality.
+_NAMEPLATES = [
+    tuple(template.split(placeholder))
+    for template, placeholder in (
+        (REPLY_ASSIGNED, "{agent_name}"),
+        (REPLY_ASSIGNED_IDENTITY, "{owner_name}"),
+    )
+]
+
+
+def _is_narration(text: str) -> bool:
+    if text in _STATUS_NOTICE_TEXTS:
+        return True
+    return any(
+        text.startswith(head) and text.endswith(tail) for head, tail in _NAMEPLATES
+    )
 
 
 def _texts(send_mock) -> list[str]:
     return [
         text
         for text in (c.args[-1] or "" for c in send_mock.await_args_list)
-        if text not in _STATUS_NOTICE_TEXTS
+        if not _is_narration(text)
     ]
 
 
@@ -270,6 +293,41 @@ def test_revocation_between_the_decision_and_the_ingest_is_refused(
 # ---------------------------------------------------------------------------
 # 4b. Revocation mid-thread
 # ---------------------------------------------------------------------------
+
+
+def test_an_identity_thread_nameplate_names_the_person_never_their_agent(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The thread's nameplate on an identity-routed thread.
+
+    The agent answering belongs to the identity owner, and its name is the
+    owner's internal label — the identity contract is that a caller sees the
+    *person*. So the nameplate names the owner the way the routing ballot
+    offered them (``full_name or email``, through ``safe_display_name``), and
+    the agent's own name appears in nothing the sender is sent.
+
+    ``_texts`` filters nameplates out as narration, so this test reads the raw
+    sends: it is the one place in this file that asserts what they say.
+    """
+    channel = _channel(client, superuser_token_headers)
+    signer = GoogleChatJWTSigner()
+    cast = _hr_story(client, superuser_token_headers, channel=channel)
+    agent_name = cast["shared"][0]["agent"]["name"]
+    thread_key = f"spaces/AAA/threads/{random_lower_string()}"
+
+    _, send_mock = _send(
+        client, channel, signer, cast, "first question", thread_key=thread_key,
+        stream_stub=StubAgentEnvConnector(response_text="first answer"),
+    )
+    sent = [c.args[-1] or "" for c in send_mock.await_args_list]
+
+    owner = cast["owner"]
+    expected = REPLY_ASSIGNED_IDENTITY.format(
+        owner_name=safe_display_name(owner.get("full_name") or owner["email"])
+    )
+    assert expected in sent, sent
+    assert not any(agent_name in text for text in sent), sent
+    assert any("first answer" in text for text in sent), sent
 
 
 def test_the_owner_revoking_mid_thread_refuses_the_next_message(

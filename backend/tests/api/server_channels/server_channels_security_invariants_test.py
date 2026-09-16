@@ -376,7 +376,14 @@ def test_same_asker_race_parks_both_messages_on_one_pending_install(
         drain_tasks()
 
     installing_texts = [call.args[-1] for call in send_mock.await_args_list]
-    assert any("Setting up" in (t or "") for t in installing_texts), installing_texts
+    # The install announced itself: the thread's nameplate names the bundle
+    # being installed, and the setup narration follows it.
+    assert any(
+        "assigned to this thread" in (t or "") for t in installing_texts
+    ), installing_texts
+    assert any(
+        "First-time setup" in (t or "") for t in installing_texts
+    ), installing_texts
     # The second message joined this asker's existing pending install.
     assert any("Still setting up" in (t or "") for t in installing_texts), installing_texts
 
@@ -460,7 +467,10 @@ def test_two_askers_auto_install_independently_in_one_thread(
 
     texts = [call.args[-1] or "" for call in send_mock.await_args_list]
 
-    assert sum("Setting up" in text for text in texts) >= 2, texts
+    # One nameplate and one setup narration per asker: the two installs are
+    # announced independently, on the same thread.
+    assert sum("assigned to this thread" in text for text in texts) >= 2, texts
+    assert sum("First-time setup" in text for text in texts) >= 2, texts
     assert not any("setting up your assistant failed" in text for text in texts), texts
     assert list_sessions(client, headers_a) == []
     assert list_sessions(client, headers_b) == []
@@ -971,6 +981,13 @@ def test_queued_turns_keep_thread_and_reply_here_destinations_separate(
     assert [m["content"] for m in messages if m["role"] == "user"] == [
         "Open my session", "Answer inside the thread", "Answer in the space",
     ]
+    # Four messages stand on the thread: the nameplate the first turn settled,
+    # and one per turn. The nameplate is not a turn, so it is set aside here —
+    # its own behaviour is `server_channels_status_notice_test.py`'s subject.
+    nameplates = [m for m, (_, text) in visible.items() if "assigned to this thread" in text]
+    assert len(nameplates) == 1, visible
+    for message_id in nameplates:
+        visible.pop(message_id)
     assert len(visible) == 3, visible
     for turn, expected_mode in ((1, "thread_reply"), (2, "thread_reply"), (3, "conversation_post")):
         replies = [(target, text) for target, text in visible.values() if text == f"Final answer for turn {turn}."]

@@ -69,20 +69,21 @@ The webhook URL is built from the backend's public origin (`BACKEND_BASE_URL`, f
 2. The message arrives at the webhook, is verified, whitelist-checked, and the sender is resolved (auto-registered if new and allowed).
 3. A short **status notice** appears in the thread — "🔎 Finding the right assistant for you…" — and stays there, rewriting itself, for as long as the work takes. See [The status notice](#the-status-notice).
 4. Since this is a brand-new thread, the platform tries to route it: first against the sender's own installed agents, then — if none match — against the server's auto-install list.
-5. If a match is found on the auto-install list, the matching bundle is installed for that sender behind the scenes and the notice becomes "⚙️ Setting up **X** for you…" while the environment builds.
-6. Once ready, the notice becomes "💬 Your assistant is ready — working on your message…", and when the agent answers, that same message is rewritten one last time to hold the reply.
-7. If nothing matches, the notice is replaced one last time by a polite "couldn't find an agent for that — contact your admin" — which stays, because it is the answer.
+5. The moment an agent is picked, that notice is rewritten one last time into the thread's **nameplate** — "✅ **X** is assigned to this thread and will answer your messages here" — and left standing. Everything after it happens in a new message below. See [The nameplate](#the-nameplate).
+6. If the match came from the auto-install list, the matching bundle is installed for that sender behind the scenes and the new notice says "⚙️ First-time setup takes a few minutes…" while the environment builds.
+7. Once ready, that notice becomes "💬 Your assistant is ready — working on your message…", and when the agent answers, that same message is rewritten one last time to hold the reply.
+8. If nothing matches, there is no agent to name, so no nameplate is written: the original notice is replaced one last time by a polite "couldn't find an agent for that — contact your admin" — which stays, because it is the answer.
 
 ### 3. Continuing a conversation
 
 1. The employee replies in the same Google Chat thread.
 2. Because the thread already has an active binding, the platform skips routing entirely and feeds the message straight into the same session — the same principle App MCP uses for a caller's already-resolved context.
-3. A "💬 Working on your message…" notice appears while the agent thinks.
+3. A "💬 Working on your message…" notice appears while the agent thinks. It does not repeat the agent's name — the nameplate above already says who is on this thread.
 4. When the agent finishes, that notice becomes the reply — one bot message per turn.
 
 ### The status notice
 
-Everything the pipeline says on a turn is **one message**. It is posted into the thread when the work starts, rewritten in place as the work advances, and rewritten one final time to hold the agent's answer. A finished exchange reads as the question and the answer — the narration was the same message all along, arriving in stages.
+Everything the pipeline says on a turn is **one message**. It is posted into the thread when the work starts, rewritten in place as the work advances, and rewritten one final time to hold the agent's answer. A finished exchange reads as the question and the answer — the narration was the same message all along, arriving in stages. (A brand-new thread keeps one more message, written once: [the nameplate](#the-nameplate), which says which agent answers there.)
 
 Four things can happen to it:
 
@@ -92,6 +93,21 @@ Four things can happen to it:
 | **settled** | This *is* the answer — "nothing matched", "setup failed" | The message stays, permanently |
 | **sealed** | A streamed answer outgrew one message: this part of it is finished | The message stays; the answer continues in a fresh one below it |
 | **cleared** | Rare: the turn ended with nothing at all to say | The message disappears |
+
+### The nameplate
+
+One message on a bound thread is not a state of the turn: the **nameplate**, the message that says *which agent answers here*.
+
+It exists because everything else about a turn is temporary by design. The status notice is rewritten into the answer, so a name written into it is gone the moment the agent speaks — and in a space where several people's assistants are working at once, "💬 Working on your message…" from three different agents is three identical messages. The nameplate is the opposite: written once, when the thread binds, and never touched again.
+
+- **It costs no extra message when the thread is new.** What becomes the nameplate is the "🔎 Finding the right assistant for you…" notice — it is *settled* in place, so the message that said *finding* is the message that ends up saying *found*. The turn's own work then opens a fresh notice below it.
+- **In a group space, this costs the asker a second notification on a new thread.** Settling the nameplate is an *edit* of the opening notice, but the turn's own notice below it is a genuinely new post — and in any group space (threaded or not) every post the bot makes for an asker opens with an @mention of them, and in quote-reply placement also quotes their message (see [Conversation placement and prior context](#conversation-placement-and-prior-context)). So a brand-new thread pings the asker twice; every later turn, with no nameplate left to write, pings them exactly once, as before nameplates existed. An accepted trade-off, not a bug. Direct messages have no @mention at all.
+- **It is written once per binding, not once per turn.** A binding is scoped to (thread, sender), so two askers in the same group-space thread each get their own nameplate rather than sharing one. Every later turn on a binding behaves exactly as it did before nameplates existed: one notice, which becomes the answer, with no name repeated anywhere.
+- **A nameplate is superseded, never edited.** A binding that loses its agent — it was uninstalled — or fails to set up gets deleted (on the uninstall, or on the sender's next message after a [failed auto-install](#4-environment-build-fails-during-auto-install)), and re-routing from scratch creates a fresh binding with its own nameplate. The old one is not touched or removed: it stays exactly where it was, above whatever was posted after it — a setup-failed notice included — so a thread that failed once and recovered can show two nameplates. The newer one, naming whichever agent actually answers there now, is the one that reflects the thread's current state.
+- **Only where there is a notice to settle.** Email and App MCP have no editable progress surface at all, so neither the nameplate nor the setup narration ever reaches them — a sender there gets no word of which agent was picked until it actually answers.
+- **The name is neutralised, whoever it belongs to.** Ordinarily it is the agent's own owner-authored name; on an [identity-routed](../identity_routing/identity_routing.md#from-a-chat-app-server-channels) thread — where the answering agent belongs to someone else — the nameplate names that *person* instead ("Your messages in this thread go to **X**…"), never the internal agent name, exactly as the identity contract requires everywhere a caller is told who answers. Auto-install never runs on an identity-routed thread, so the two never compete for the same turn. Either way the name is collapsed to one line, clamped, and stripped of anything Chat would read as markup, exactly as the names in a [guidance reply](#channel-routing-guidance-help-no-match-and-clarifying-questions) are.
+
+If the nameplate write does not reach the thread, nothing is lost and nothing is stranded: the turn's notice simply carries on rewriting that same message, which is precisely what it did before the nameplate existed.
 
 The reply **takes the notice's slot** rather than being posted below it, and the reason is worth stating because the alternative was tried: deleting the notice once the reply was posted leaves Google Chat's "Message deleted by its author" tombstone, which appeared above every single answer. Deletion is now the exception — a stream that produced no message, or a routing race whose loser has no thread left to narrate.
 

@@ -51,6 +51,7 @@ from app.services.server_channels.adapters.base import (
     ChannelSendError,
 )
 from app.services.server_channels.channel_inbound_service import (
+    REPLY_ASSIGNED,
     REPLY_NOTHING_TO_STOP,
     REPLY_WORKING,
     REPLY_WORKING_ON_IT,
@@ -493,10 +494,13 @@ def test_stop_as_the_first_message_of_a_thread_is_an_ordinary_message(
     )
 
     assert resp.status_code == 200
-    # Routed, streamed, answered — the full first-contact story.
-    assert chat.sent == [REPLY_WORKING], chat.sent
-    assert [t for _, t in chat.updated] == [REPLY_WORKING_ON_IT], chat.updated
-    assert chat.replaced == [("spaces/AAA/messages/m1", reply)], chat.replaced
+    # Routed, streamed, answered — the full first-contact story, nameplate
+    # included.
+    assert chat.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], chat.sent
+    assert [t for _, t in chat.updated] == [
+        REPLY_ASSIGNED.format(agent_name=agent["name"])
+    ], chat.updated
+    assert chat.replaced == [("spaces/AAA/messages/m2", reply)], chat.replaced
     # The agent really was handed the literal text.
     assert len(stub.stream_calls) == 1
     assert stub.stream_calls[0]["payload"]["message"] == "/stop"
@@ -628,8 +632,9 @@ def test_stop_while_the_thread_is_still_installing_is_never_parked(
             bearer_token=token,
         )
         drain_tasks()
-    assert install.sent == [REPLY_WORKING], install.sent
-    assert "Setting up" in install.updated[0][1], install.updated
+    assert len(install.sent) == 2 and install.sent[0] == REPLY_WORKING, install.sent
+    assert "First-time setup" in install.sent[1], install.sent
+    assert "assigned to this thread" in install.updated[0][1], install.updated
 
     # ── Phase 2: /stop on the pending thread ──────────────────────────────
     stop = _Chat()
@@ -719,7 +724,7 @@ def test_a_stopped_answer_keeps_what_was_said_and_marks_the_stop(
     )
 
     assert resp.status_code == 200
-    notice_id = "spaces/AAA/messages/m1"
+    notice_id = "spaces/AAA/messages/m2"
     # The partial was on screen while the agent was still writing…
     assert (notice_id, partial) in chat.updated, chat.updated
     # …and the stop is written under it, into the same message.
@@ -772,12 +777,16 @@ def test_a_turn_stopped_before_the_agent_spoke_still_says_so(
     )
 
     assert resp.status_code == 200
-    notice_id = "spaces/AAA/messages/m1"
-    # One message on the thread, and its LAST state is the acknowledgement.
-    assert chat.sent == [REPLY_WORKING], chat.sent
-    assert [mid for mid, _ in chat.updated] == [notice_id, notice_id], chat.updated
+    nameplate_id = "spaces/AAA/messages/m1"
+    notice_id = "spaces/AAA/messages/m2"
+    # One message for the TURN, and its last state is the acknowledgement.
+    assert chat.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], chat.sent
+    assert [mid for mid, _ in chat.updated] == [
+        nameplate_id,
+        notice_id,
+    ], chat.updated
     assert [t for _, t in chat.updated] == [
-        REPLY_WORKING_ON_IT,
+        REPLY_ASSIGNED.format(agent_name=agent["name"]),
         STOPPED_NOTICE,
     ], chat.updated
     # Not deleted (no "message deleted by its author" tombstone) and not
@@ -841,14 +850,19 @@ def test_the_stop_marker_lands_below_text_the_relay_already_sealed(
     )
 
     assert resp.status_code == 200
-    notice_id = "spaces/AAA/messages/m1"
-    # The notice became the sealed paragraph…
+    nameplate_id = "spaces/AAA/messages/m1"
+    notice_id = "spaces/AAA/messages/m2"
+    # The turn's notice became the sealed paragraph…
     assert chat.updated == [
-        (notice_id, REPLY_WORKING_ON_IT),
+        (nameplate_id, REPLY_ASSIGNED.format(agent_name=agent["name"])),
         (notice_id, sealed),
     ], chat.updated
     # …and the stop is a NEW message under it, not a rewrite of it.
-    assert chat.sent == [REPLY_WORKING, STOPPED_NOTICE], chat.sent
+    assert chat.sent == [
+        REPLY_WORKING,
+        REPLY_WORKING_ON_IT,
+        STOPPED_NOTICE,
+    ], chat.sent
     assert chat.replaced == [] and chat.deleted == []
     assert get_binding_status_message_id(db, channel["id"], thread_key) is None
 

@@ -147,7 +147,21 @@ def _one_line(value: str | None, limit: int) -> str:
     return cut.rstrip(" ,;:.-—") + "…"
 
 
-def _display_name(value: str) -> str:
+def safe_display_name(value: str | None) -> str:
+    """An owner-authored assistant name, safe to put in a channel message.
+
+    Public because it is not guidance-specific: anything that names an agent
+    to a channel reader needs the same three things this does — one line,
+    markup neutralised, clamped at a word boundary — and needs them applied
+    identically, or the same name reads differently in a guidance list than it
+    does in the thread's nameplate. The escaping is the load-bearing part: the
+    name goes out as the bot, so an unbalanced ``**`` in it would otherwise
+    break the formatting of the message carrying it.
+
+    Total, like the rest of this module: ``None``, a blank name and a name
+    that clamps away to nothing all answer "Unnamed assistant" rather than
+    putting an empty ``****`` on the thread.
+    """
     name = _one_line(value, MAX_NAME_CHARS)
     if _EMAIL_RE.match(name):
         name = name.split("@", 1)[0]
@@ -155,7 +169,7 @@ def _display_name(value: str) -> str:
 
 
 def _entry_line(entry: GuidanceEntry, *, markdown: bool) -> str:
-    name = _display_name(entry.name)
+    name = safe_display_name(entry.name)
     if entry.kind == ENTRY_IDENTITY:
         description = IDENTITY_DESCRIPTION
     else:
@@ -383,7 +397,7 @@ def resolve_choice(
             return options[index - 1].ref_id
 
     names = [
-        (option.ref_id, _choice_tokens(_display_name(option.name)))
+        (option.ref_id, _choice_tokens(safe_display_name(option.name)))
         for option in options
     ]
     exact = [ref for ref, name in names if name and " ".join(name) == reply]
@@ -452,4 +466,5 @@ __all__ = [
     "compose_guidance_reply",
     "is_selector_like",
     "resolve_choice",
+    "safe_display_name",
 ]

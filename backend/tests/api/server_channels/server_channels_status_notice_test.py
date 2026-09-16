@@ -19,6 +19,15 @@ slot removes deletion from the common path entirely, which is also why
 ``supports_message_delete`` gates only the two edges that end a turn with
 nothing to say.
 
+One exception, and it is the thread's own: the **nameplate**. When a thread
+binds, the notice that was narrating the routing is *settled* into
+"✅ **X** is assigned to this thread…" and left standing, and the turn's work
+opens a fresh notice below it. So a new thread costs two bot messages — one
+that says who answers here, permanently, and one that becomes the answer —
+while every later turn still costs exactly one. It is what lets a reader of a
+busy space tell which agent is working without every single turn repeating the
+name.
+
 Three verbs:
 
 * **set** — post it, or rewrite it. The id is kept on the binding.
@@ -57,6 +66,9 @@ from app.services.server_channels.adapters.base import (
     ChannelSendError,
 )
 from app.services.server_channels.channel_inbound_service import (
+    REPLY_ASSIGNED,
+    REPLY_INSTALLING,
+    REPLY_INSTALLING_NAMEPLATED,
     REPLY_NO_MATCH,
     REPLY_READY,
     REPLY_SETUP_FAILED,
@@ -92,27 +104,43 @@ _DELETE_TARGET = f"{_ADAPTER}.delete_message"
 _STREAM_TARGET = "app.services.sessions.message_service.agent_env_connector"
 _CLASSIFY_TARGET = "app.services.routing.agent_classifier.AgentClassifier.classify_answer"
 
-# The id the mocked adapter hands back for every post. Real-shaped on purpose:
-# the pipeline stores it in a varchar column and hands it straight back to
-# `patch` and `delete` as a message resource name.
+# The ids the mocked adapter hands back, in post order. Real-shaped on purpose:
+# the pipeline stores them in a varchar column and hands them straight back to
+# `patch` and `delete` as message resource names.
+#
+# They are DISTINCT, and that is load-bearing now that a new thread posts two
+# messages. One id for every post would let an assertion about "the notice"
+# pass while the pipeline wrote the answer over the **nameplate** instead — the
+# one message on the thread that must never be touched again.
 _NOTICE_ID = "spaces/AAA/messages/notice-1"
+_TURN_ID = "spaces/AAA/messages/notice-2"
 
 
 class _Chat:
     """The four outbound verbs, mocked together and read back by text."""
 
     def __init__(self) -> None:
-        self.send = AsyncMock(return_value=_NOTICE_ID)
+        self._posted = 0
+        self.send = AsyncMock(side_effect=self._post)
         self.update = AsyncMock(return_value=None)
         # A `ChannelReplaceResult`, not a bare id: `_deliver` reads `.replaced`
         # to decide whether the notice was really taken over, and releases the
         # binding's id only when it was. Returning a string here makes the
         # attribute read raise inside `_deliver`'s try, which the delivery path
         # cannot tell apart from a failed send.
-        self.replace = AsyncMock(
-            return_value=ChannelReplaceResult(message_id=_NOTICE_ID, replaced=True)
-        )
+        #
+        # It echoes the id it was ASKED to replace rather than a fixed one, so
+        # a delivery into the wrong message shows up as the wrong id rather
+        # than as the id every message shares.
+        self.replace = AsyncMock(side_effect=self._replace)
         self.delete = AsyncMock(return_value=None)
+
+    def _post(self, _channel, _thread_key, _text) -> str:
+        self._posted += 1
+        return f"spaces/AAA/messages/notice-{self._posted}"
+
+    def _replace(self, _channel, _thread_key, message_id, _text) -> ChannelReplaceResult:
+        return ChannelReplaceResult(message_id=message_id, replaced=True)
 
     def apply(self, stack: ExitStack) -> "_Chat":
         stack.enter_context(patch(_SEND_TARGET, self.send))
@@ -209,10 +237,14 @@ def _post(client, channel, signer, event, chat: _Chat, stub) -> object:
 # ---------------------------------------------------------------------------
 
 
-def test_a_new_thread_posts_one_notice_and_the_reply_takes_its_slot(
+def test_a_new_thread_posts_a_nameplate_and_one_notice_that_becomes_the_reply(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """Post → patch → *become the reply*. One bot message on the thread.
+    """Post → settle into the nameplate → a fresh notice → *become the reply*.
+
+    Two bot messages on a brand-new thread, and the first of them costs
+    nothing: the message that said "finding an assistant…" is the one that ends
+    up saying who was found, so the nameplate is an EDIT, never an extra post.
 
     Also the regression guard for the sync response: an accepted message must
     ack with an EMPTY body. Answering `REPLY_WORKING` there is what put the
@@ -246,18 +278,223 @@ def test_a_new_thread_posts_one_notice_and_the_reply_takes_its_slot(
     assert resp.status_code == 200
     assert resp.json() == {}, resp.json()
 
-    # Exactly ONE post for the whole exchange: the notice. Anything else would
-    # mean a state posted a message instead of rewriting the one that exists.
-    assert chat.sent == [REPLY_WORKING], chat.sent
-    # The states in between are edits of that same message.
-    assert chat.updated == [REPLY_WORKING_ON_IT], chat.updated
+    # Exactly TWO posts for the whole exchange, and no more: the opening
+    # notice, and the turn's own notice once the nameplate released the first
+    # one. A third would mean some state posted a message instead of rewriting
+    # the one that exists.
+    assert chat.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], chat.sent
+    # The nameplate is an edit of the FIRST message — it names the agent that
+    # routing just picked, and it is the last thing ever written there.
+    assert chat.updated == [
+        REPLY_ASSIGNED.format(agent_name=agent["name"])
+    ], chat.updated
     assert [c.args[2] for c in chat.update.await_args_list] == [_NOTICE_ID]
-    # And the answer lands IN it, rather than under it.
-    assert chat.replaced == [(_NOTICE_ID, reply_text)], chat.replaced
+    # And the answer lands in the TURN notice, rather than under it — and
+    # emphatically not in the nameplate, which would erase it.
+    assert chat.replaced == [(_TURN_ID, reply_text)], chat.replaced
     # Nothing is deleted, so no "Message deleted by its author" above the reply.
     assert chat.deleted == [], chat.deleted
     # Every call addressed to the thread the message arrived on.
     assert chat.threads == {thread_key}
+
+
+def test_the_nameplate_names_the_agent_once_and_is_never_written_to_again(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """Why the nameplate exists, and the two rules that make it worth its
+    message.
+
+    **It names the agent**, which nothing else on a bound thread does: the
+    turn notice is deliberately nameless, because it is rewritten into the
+    answer and a name there would be gone the moment the agent speaks. In a
+    space where several people's agents are working at once, this message is
+    the only thing that says whose is whose.
+
+    **It is written once per thread.** The second turn does not repeat it, does
+    not patch it and does not delete it — the whole point of paying for a
+    standing message is that the name stops being repeated. A second turn that
+    touched notice-1 in any way would be that cost paid twice.
+
+    The name is put through `safe_display_name`, so an agent called
+    `**gotcha**` cannot break the bold around it — covered directly in
+    `tests/unit/test_channel_routing_guidance.py`; here it is enough that an
+    ordinary agent name comes back verbatim.
+    """
+    user, headers, agent = _sender_with_one_agent(client, superuser_token_headers)
+    channel = _channel(client, superuser_token_headers)
+    signer = GoogleChatJWTSigner()
+    thread_key = f"spaces/AAA/threads/{random_lower_string()}"
+
+    first = _Chat()
+    _post(
+        client,
+        channel,
+        signer,
+        build_message_event(
+            thread_key=thread_key, text="hello", sender_email=user["email"]
+        ),
+        first,
+        StubAgentEnvConnector(response_text="first answer"),
+    )
+
+    nameplate = REPLY_ASSIGNED.format(agent_name=agent["name"])
+    assert agent["name"] in nameplate
+    assert first.updated == [nameplate], first.updated
+    # Written INTO the opening notice, so the thread pays no extra message for
+    # it, and left alone from there: not replaced, not deleted.
+    assert [c.args[2] for c in first.update.await_args_list] == [_NOTICE_ID]
+    assert _NOTICE_ID not in [m for m, _ in first.replaced]
+    assert first.deleted == []
+
+    second = _Chat()
+    _post(
+        client,
+        channel,
+        signer,
+        build_message_event(
+            thread_key=thread_key, text="and again", sender_email=user["email"]
+        ),
+        second,
+        StubAgentEnvConnector(response_text="second answer"),
+    )
+
+    # The second turn is exactly as quiet as it was before nameplates existed:
+    # one notice, which becomes the answer. No name repeated anywhere.
+    assert second.sent == [REPLY_WORKING_ON_IT], second.sent
+    assert agent["name"] not in "".join(second.sent + second.updated)
+    assert second.updated == [], second.updated
+    assert second.deleted == [], second.deleted
+
+
+def _refusing_nameplates(chat: _Chat) -> _Chat:
+    """Make every write of a nameplate fail — the patch AND the fallback post.
+
+    Anything else goes through as usual. That is the one shape in which the
+    nameplate never reaches the thread, and so the one shape in which
+    ``set_binding_status`` must keep the notice id instead of releasing it.
+    """
+    post, update = chat.send.side_effect, chat.update
+
+    def _send(channel, thread_key, text):
+        if "assigned to this thread" in (text or ""):
+            raise ChannelSendError("nameplate refused")
+        return post(channel, thread_key, text)
+
+    async def _update(channel, thread_key, message_id, text):
+        if "assigned to this thread" in (text or ""):
+            raise ChannelSendError("nameplate refused")
+        return await update(channel, thread_key, message_id, text)
+
+    chat.send = AsyncMock(side_effect=_send)
+    chat.update = AsyncMock(side_effect=_update)
+    return chat
+
+
+def test_a_nameplate_that_never_landed_leaves_the_old_single_notice(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The degradation ``_announce_assignment`` promises, observed.
+
+    A failed nameplate keeps the notice id, so the turn's "working on it"
+    patches the opening notice instead of posting under it, and the answer
+    lands in that same message: one bot message, exactly as before nameplates
+    existed. Releasing the id here would have posted a fresh notice below a
+    "finding an assistant…" that nothing could ever rewrite again.
+    """
+    user, headers, agent = _sender_with_one_agent(client, superuser_token_headers)
+    channel = _channel(client, superuser_token_headers)
+    signer = GoogleChatJWTSigner()
+    thread_key = f"spaces/AAA/threads/{random_lower_string()}"
+
+    chat = _refusing_nameplates(_Chat())
+    _post(
+        client,
+        channel,
+        signer,
+        build_message_event(
+            thread_key=thread_key, text="hello", sender_email=user["email"]
+        ),
+        chat,
+        StubAgentEnvConnector(response_text="the answer"),
+    )
+
+    # Only the opening notice was ever posted successfully…
+    assert [t for t in chat.sent if "assigned" not in t] == [REPLY_WORKING], chat.sent
+    # …and "working on it" was a PATCH of it, not a second message.
+    working = [
+        c.args[2] for c in chat.update.await_args_list
+        if c.args[-1] == REPLY_WORKING_ON_IT
+    ]
+    assert working == [_NOTICE_ID], chat.update.await_args_list
+    assert chat.replaced == [(_NOTICE_ID, "the answer")], chat.replaced
+    assert chat.deleted == [], chat.deleted
+
+
+def test_an_install_without_a_nameplate_names_the_bundle_itself(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The other half of the fallback: the install narration keeps the name.
+
+    ``REPLY_INSTALLING_NAMEPLATED`` drops the bundle name only because the
+    nameplate directly above already said it. With no nameplate on screen the
+    named ``REPLY_INSTALLING`` goes out instead — into the opening notice, whose
+    id was never released — so the sender still learns what is being set up.
+    """
+    consumer, _ = make_user_and_headers(client)
+    publisher, publisher_headers = make_user_and_headers(client)
+    promote_to_developer(client, superuser_token_headers, publisher["id"])
+    agent = create_agent_via_api(
+        client, publisher_headers, name=f"NoPlate-{random_lower_string()[:6]}"
+    )
+    drain_tasks()
+    set_router_trigger_prompt(
+        client, publisher_headers, agent["id"], "Handle no-nameplate requests"
+    )
+    publish_bundle_and_make_public(client, publisher_headers, agent["id"])
+    bundle_uuid = client.get(
+        f"{API}/agents/{agent['id']}", headers=publisher_headers
+    ).json()["bundle_uuid"]
+
+    channel = _channel(client, superuser_token_headers)
+    signer = GoogleChatJWTSigner()
+    add_auto_install_bundle(client, superuser_token_headers, bundle_uuid)
+    thread_key = f"spaces/AAA/threads/{random_lower_string()}"
+
+    chat = _refusing_nameplates(_Chat())
+    token = signer.token(audience=channel["config"]["project_number"])
+    classify_result = types.SimpleNamespace(
+        agent_id=bundle_uuid, transformed_message=None
+    )
+    with ExitStack() as stack:
+        stack.enter_context(signer.patched())
+        stack.enter_context(
+            patch(_STREAM_TARGET, StubAgentEnvConnector(response_text="unused"))
+        )
+        stack.enter_context(
+            patch(_CLASSIFY_TARGET, return_value=as_classifier_answer(classify_result))
+        )
+        chat.apply(stack)
+        post_webhook(
+            client,
+            channel["webhook_token"],
+            build_message_event(
+                thread_key=thread_key,
+                text="install something for me",
+                sender_email=consumer["email"],
+            ),
+            bearer_token=token,
+        )
+        drain_tasks()
+
+    assert [t for t in chat.sent if "assigned" not in t] == [REPLY_WORKING], chat.sent
+    installing = [
+        (c.args[2], c.args[-1]) for c in chat.update.await_args_list
+        if "assigned" not in c.args[-1]
+    ]
+    assert installing == [
+        (_NOTICE_ID, REPLY_INSTALLING.format(agent_name=agent["name"]))
+    ], installing
+    assert REPLY_INSTALLING_NAMEPLATED not in chat.sent
 
 
 def test_an_already_bound_thread_gets_its_own_notice_and_reuses_it(
@@ -291,7 +528,9 @@ def test_an_already_bound_thread_gets_its_own_notice_and_reuses_it(
         first,
         StubAgentEnvConnector(response_text="first answer"),
     )
-    assert first.replaced == [(_NOTICE_ID, "first answer")]
+    # The turn notice, not the nameplate — notice-1 is the nameplate on a
+    # brand-new thread and is never written to again.
+    assert first.replaced == [(_TURN_ID, "first answer")]
     assert first.deleted == []
 
     second = _Chat()
@@ -406,9 +645,14 @@ def test_an_install_carries_the_notice_across_tasks_to_ready(
         drain_tasks()
 
     assert resp.status_code == 200
-    # One post (the opening notice), then the install rewrote it in place.
-    assert chat.sent == [REPLY_WORKING], chat.sent
-    assert len(chat.updated) == 1 and "Setting up" in chat.updated[0], chat.updated
+    # The opening notice became the nameplate — naming the BUNDLE, since the
+    # agent is being installed from it — and the setup narration opened a fresh
+    # notice below. That narration no longer repeats the name: the message
+    # directly above it just said it.
+    assert chat.sent == [REPLY_WORKING, REPLY_INSTALLING_NAMEPLATED], chat.sent
+    assert len(chat.updated) == 1 and "assigned to this thread" in chat.updated[0], (
+        chat.updated
+    )
 
     installed = next(
         a
@@ -431,7 +675,7 @@ def test_an_install_carries_the_notice_across_tasks_to_ready(
     # install story, minutes long and spanning two tasks, is ONE message in the
     # thread, and it ends up holding the answer.
     assert flush.updated == [REPLY_READY], flush.updated
-    assert flush.replaced == [(_NOTICE_ID, "installed and answering")], flush.replaced
+    assert flush.replaced == [(_TURN_ID, "installed and answering")], flush.replaced
     assert flush.sent == [], flush.sent
     assert flush.deleted == [], flush.deleted
 
@@ -478,12 +722,15 @@ def test_a_stream_that_produced_nothing_deletes_the_notice(
 
     assert resp.status_code == 200
     assert resp.json() == {}
-    assert chat.sent == [REPLY_WORKING], chat.sent
-    assert chat.updated == [REPLY_WORKING_ON_IT], chat.updated
+    assert chat.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], chat.sent
+    assert chat.updated == [
+        REPLY_ASSIGNED.format(agent_name=agent["name"])
+    ], chat.updated
     assert chat.replaced == [], chat.replaced
-    # The notice — and only the notice — is deleted. No tombstone is left
-    # standing over nothing, and nothing is posted in its place either.
-    assert chat.deleted == [_NOTICE_ID], chat.deleted
+    # The TURN notice — and only it — is deleted. No tombstone is left standing
+    # over nothing, nothing is posted in its place, and the nameplate survives:
+    # the thread still has an agent on it, which is what that message says.
+    assert chat.deleted == [_TURN_ID], chat.deleted
 
 
 def test_setup_failure_settles_and_releases_the_notice_id(
@@ -549,8 +796,10 @@ def test_setup_failure_settles_and_releases_the_notice_id(
         drain_tasks()
 
     assert resp.status_code == 200
-    assert chat.sent == [REPLY_WORKING], chat.sent
-    assert len(chat.updated) == 1 and "Setting up" in chat.updated[0], chat.updated
+    assert chat.sent == [REPLY_WORKING, REPLY_INSTALLING_NAMEPLATED], chat.sent
+    assert len(chat.updated) == 1 and "assigned to this thread" in chat.updated[0], (
+        chat.updated
+    )
 
     installed = next(
         a
@@ -601,8 +850,8 @@ def test_setup_failure_settles_and_releases_the_notice_id(
     # imagine it hadn't been) binding, or leaked anywhere else, this would
     # have patched "🔎 Finding the right assistant…" straight over "Sorry —
     # setting up your assistant failed…".
-    assert second.sent == [REPLY_WORKING], second.sent
-    assert second.replaced == [(_NOTICE_ID, "second attempt")], second.replaced
+    assert second.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], second.sent
+    assert second.replaced == [(_TURN_ID, "second attempt")], second.replaced
 
 
 def test_delivery_failure_keeps_the_notice_id_for_the_next_turn(
@@ -641,7 +890,7 @@ def test_delivery_failure_keeps_the_notice_id_for_the_next_turn(
     )
     # The reply went out addressed at the notice's slot (the pipeline always
     # tries), but the adapter reports it did NOT actually land there.
-    assert first.replaced == [(_NOTICE_ID, "first answer")], first.replaced
+    assert first.replaced == [(_TURN_ID, "first answer")], first.replaced
 
     second = _Chat()
     resp = _post(
@@ -662,8 +911,10 @@ def test_delivery_failure_keeps_the_notice_id_for_the_next_turn(
     # a REAL replacement makes this a `send` instead.
     assert second.sent == [], second.sent
     assert second.updated == [REPLY_WORKING_ON_IT], second.updated
-    assert second.update.await_args.args[2] == _NOTICE_ID
-    assert second.replaced == [(_NOTICE_ID, "second answer")], second.replaced
+    # The id kept from turn one, which is that turn's NOTICE (notice-2) — the
+    # nameplate above it was released the moment it was written.
+    assert second.update.await_args.args[2] == _TURN_ID
+    assert second.replaced == [(_TURN_ID, "second answer")], second.replaced
 
 
 def test_a_notice_that_could_not_be_posted_still_lets_the_answer_through(
@@ -749,8 +1000,8 @@ def test_outbound_credentials_gate_the_synchronous_ack(
     assert resp_a.status_code == 200
     assert resp_a.json() == {"text": REPLY_WORKING, "thread": {"name": thread_a}}
     # The gate only changes what the SYNCHRONOUS ack says — it does not
-    # suppress the background task's own attempt to post the notice.
-    assert chat_a.sent == [REPLY_WORKING], chat_a.sent
+    # suppress the background task's own narration.
+    assert chat_a.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], chat_a.sent
 
     credentialed = _channel(client, superuser_token_headers)  # _SECRETS default
     thread_b = f"spaces/AAA/threads/{random_lower_string()}"
@@ -792,6 +1043,6 @@ def test_the_notice_id_is_cleared_on_the_binding_between_turns(
         chat,
         StubAgentEnvConnector(response_text="the answer"),
     )
-    assert chat.replaced == [(_NOTICE_ID, "the answer")], chat.replaced
+    assert chat.replaced == [(_TURN_ID, "the answer")], chat.replaced
 
     assert get_binding_status_message_id(db, channel["id"], thread_key) is None

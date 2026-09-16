@@ -70,6 +70,7 @@ from app.services.server_channels.adapters.base import (
     ChannelSendError,
 )
 from app.services.server_channels.channel_inbound_service import (
+    REPLY_ASSIGNED,
     REPLY_WORKING,
     REPLY_WORKING_ON_IT,
 )
@@ -335,7 +336,8 @@ def test_a_command_turn_never_redelivers_the_previous_turns_answer(
         StubAgentEnvConnector(response_text=answer_a),
     )
     assert resp.status_code == 200
-    assert chat1.replaced == [("spaces/AAA/messages/m1", answer_a)], chat1.replaced
+    # m1 is the thread's nameplate; the answer takes the turn's notice.
+    assert chat1.replaced == [("spaces/AAA/messages/m2", answer_a)], chat1.replaced
 
     session_id = _channel_session_id(client, headers, agent["id"])
     agent_rows_after_turn_one = _agent_message_ids(client, headers, session_id)
@@ -572,10 +574,11 @@ def test_a_turn_stopped_before_the_agent_spoke_still_says_so(
     )
 
     assert resp.status_code == 200
-    notice_id = "spaces/AAA/messages/m1"
-    assert chat.sent == [REPLY_WORKING], chat.sent
+    nameplate_id = "spaces/AAA/messages/m1"
+    notice_id = "spaces/AAA/messages/m2"
+    assert chat.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], chat.sent
     assert chat.updated == [
-        (notice_id, REPLY_WORKING_ON_IT),
+        (nameplate_id, REPLY_ASSIGNED.format(agent_name=agent["name"])),
         (notice_id, STOPPED_NOTICE),
     ], chat.updated
     assert chat.replaced == [] and chat.deleted == []
@@ -853,11 +856,11 @@ def test_a_sealing_turn_records_one_row_per_message_it_left_standing(
     # What the reader saw, so the ledger is being compared against a real
     # thread: paragraph one settled into the first message, the rest into the
     # fresh one below it.
-    assert (["spaces/AAA/messages/m1", para_1]) == [
+    assert (["spaces/AAA/messages/m2", para_1]) == [
         chat.updated[-1][0], chat.updated[-1][1]
     ], chat.updated
     assert chat.replaced == [
-        ("spaces/AAA/messages/m2", f"{para_2}\n\n{para_3}")
+        ("spaces/AAA/messages/m3", f"{para_2}\n\n{para_3}")
     ], chat.replaced
 
     session_id = _channel_session_id(client, headers, agent["id"])
@@ -872,10 +875,10 @@ def test_a_sealing_turn_records_one_row_per_message_it_left_standing(
     sealed, final = rows
     # The sealed row names the message it is standing in, and records how far
     # into the answer it reached; the final row records the whole answer.
-    assert sealed.external_message_id == "spaces/AAA/messages/m1"
+    assert sealed.external_message_id == "spaces/AAA/messages/m2"
     assert sealed.visible_char_end == len(f"{para_1}\n\n")
     assert sealed.content_sha256
-    assert final.external_message_id == "spaces/AAA/messages/m2"
+    assert final.external_message_id == "spaces/AAA/messages/m3"
     assert final.visible_char_end == len(f"{para_1}\n\n{para_2}\n\n{para_3}".strip())
     assert final.content_sha256 and final.content_sha256 != sealed.content_sha256
 
@@ -1078,7 +1081,7 @@ def test_a_failed_final_delivery_is_retried_and_corrects_its_own_row(
     # delivered — ``replaced`` records the *call*, not a message the reader
     # ever saw, and no fallback post went out under it either.
     assert [t for _, t in broken.replaced] == [answer], broken.replaced
-    assert broken.sent == [REPLY_WORKING], broken.sent
+    assert broken.sent == [REPLY_WORKING, REPLY_WORKING_ON_IT], broken.sent
     assert _rows(db, channel, thread_key) == [("final", 0, "failed")]
 
     session_id = _channel_session_id(client, headers, agent["id"])

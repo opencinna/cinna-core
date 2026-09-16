@@ -103,6 +103,8 @@ HR's agent answers -> ChannelOutboundService resolves the binding by session id
                    -> reply lands back in the sender's Google Chat thread
 ```
 
+The thread's [nameplate](../server_channels/server_channels.md#the-nameplate) — the standing message naming who answers on a bound thread — follows the same rule as the App MCP response above: on an identity-routed thread it names HR, never HR's internal agent name.
+
 Stage 2 only considers agents where the caller has an active, enabled binding assignment. If User B has three agents in their identity but only two are shared with User A, Stage 2 sees only those two.
 
 **Message transformation across stages:** Each routing stage can strip one layer of routing prefixes. Stage 1's transformed output becomes Stage 2's input. For example, "ask cinna to ask john to generate report" → Stage 1 produces "ask john to generate report" → Stage 2 produces "generate report". See [App MCP Server — Message Transformation](../app_mcp_server/app_mcp_server.md#message-transformation) for full details.

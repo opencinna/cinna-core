@@ -170,6 +170,7 @@ from app.services.server_channels.channel_routing_guidance import (
     compose_guidance_reply,
     is_selector_like,
     resolve_choice,
+    safe_display_name,
 )
 from app.services.server_channels.channel_routing_service import (
     ChannelRoutingService,
@@ -413,11 +414,55 @@ REPLY_NO_MATCH = (
     "I couldn't find an assistant that can help with that. "
     "Please contact your administrator."
 )
+#: The auto-install narration, in two spellings of the same sentence. Which
+#: one a sender sees depends on whether the thread got a nameplate
+#: (``REPLY_ASSIGNED``) immediately above it: with one, the name is already on
+#: screen and repeating it in the very next message is noise. Without one — a
+#: Chat thread whose opening notice failed to post, or whose nameplate write
+#: did not land — this is the only place the sender learns which assistant was
+#: picked. (Email and App MCP see neither: they have no progress surface, and
+#: ``set_status`` sends nothing on them.)
 REPLY_INSTALLING = (
     "⚙️ Setting up **{agent_name}** for you — first-time setup takes a few "
     "minutes. I'll reply here when it's ready."
 )
+REPLY_INSTALLING_NAMEPLATED = (
+    "⚙️ First-time setup takes a few minutes. I'll reply here when it's ready."
+)
 REPLY_READY = "💬 Your assistant is ready — working on your message…"
+#: The thread's **nameplate**: the one message that says which agent answers
+#: here. Everything else in this family is a *state* of the turn's notice —
+#: written, rewritten, and finally replaced by the answer, so a name put in one
+#: of them is gone the moment the agent speaks. The nameplate is the opposite:
+#: it is *settled* (``set_binding_status(settle=True)``) at the moment the
+#: thread binds and then left standing, so a reader scrolling a busy space can
+#: always see who is on this thread without every turn repeating it.
+#:
+#: Exactly one per binding — that is, per (scope, sender): two people asking in
+#: one group thread each get their own — and no bookkeeping column is needed to
+#: keep it that way, because a binding is created once. A nameplate is never
+#: *edited*; it is **superseded**. A thread that loses its binding (the agent
+#: was uninstalled, or setup/ingest failed and the failed row was dropped)
+#: re-routes into a new binding, whose new nameplate below names the agent that
+#: actually answers now. The old one stays visible above it, as history.
+#:
+#: It costs no extra message on a new thread: what it settles into is the
+#: "🔎 Finding the right assistant…" notice, so the message that said *finding*
+#: becomes the message that says *found*, and the turn's own notice is opened
+#: fresh below it.
+REPLY_ASSIGNED = (
+    "✅ **{agent_name}** is assigned to this thread and will answer your "
+    "messages here."
+)
+#: The identity-routed nameplate. The answering agent belongs to someone else,
+#: and its name is that person's internal label — the identity contract is that
+#: a caller sees the *person*, never the agent (the App MCP path returns the
+#: owner's name as ``agent_name`` for the same reason). So this names the owner,
+#: exactly as the routing ballot and guidance replies already do.
+REPLY_ASSIGNED_IDENTITY = (
+    "✅ Your messages in this thread go to **{owner_name}** — their assistant "
+    "will answer here."
+)
 # The plain spinner: a thread that is already bound and simply working. Posted
 # only where it can be taken away again (``supports_status_notice``); a
 # transport that would leave it standing forever is better off silent.
@@ -2661,6 +2706,17 @@ class ChannelInboundService:
                     # not "guard the one that bit".
                     agent_name = agent.name
                     agent_ref = str(agent.id)
+                    # The person an identity-routed thread is answered by. The
+                    # nameplate names them rather than ``agent_name``, which is
+                    # the owner's internal label and never shown to a caller.
+                    # ``full_name or email`` is the name the routing ballot
+                    # already offered this sender for that person.
+                    identity_owner_name: str | None = None
+                    if decision.identity_grant is not None:
+                        owner = db.get(User, decision.identity_grant.owner_id)
+                        identity_owner_name = (
+                            (owner.full_name or owner.email or "") if owner else ""
+                        )
                     # Pass 1 was terminal, so this trace is the whole decision —
                     # ``persist_args`` says so rather than this call site
                     # deciding it a second time (simulate persists the same
@@ -2776,6 +2832,23 @@ class ChannelInboundService:
                         bound = binding
                         status_message_id = None
                         if had_notice:
+                            # Two messages from here on, in this order: the
+                            # nameplate settles the notice that was narrating
+                            # the routing ("finding an assistant…") into the
+                            # thread's permanent "X answers here", and the
+                            # turn's own "working on it" is opened fresh below
+                            # it. One is about the thread and stays; the other
+                            # is about this turn and becomes the answer. If the
+                            # nameplate write did not land, the second call
+                            # patches the same message and this reads exactly
+                            # as it did before the nameplate existed.
+                            await ChannelInboundService._announce_assignment(
+                                db,
+                                channel,
+                                binding,
+                                agent_name,
+                                identity_owner_name=identity_owner_name,
+                            )
                             await ChannelOutboundService.set_binding_status(
                                 db=db,
                                 channel=channel,
@@ -3114,6 +3187,61 @@ class ChannelInboundService:
                     await ChannelInboundService._settle_notice(
                         db, channel, reply_target, status_message_id, REPLY_SETUP_FAILED
                     )
+
+    @staticmethod
+    async def _announce_assignment(
+        db: DBSession,
+        channel: ServerChannel,
+        binding: ChannelThreadBinding,
+        agent_name: str | None,
+        *,
+        identity_owner_name: str | None = None,
+    ) -> bool:
+        """Settle a brand-new thread's open notice into its nameplate.
+
+        Called once per binding, immediately after the notice is adopted onto
+        it, and never again — see ``REPLY_ASSIGNED`` for why one per binding is
+        also one per thread, with no column to track it.
+
+        ``settle=True`` is the whole mechanism: it writes the nameplate and
+        then *releases* the notice id, so the very next
+        ``set_binding_status`` on this binding has no id to patch and posts a
+        **fresh** notice for the turn's work. That is what splits one message
+        into two — the nameplate, which stays, and the turn notice, which goes
+        on to become the answer.
+
+        **A failure degrades to exactly the behaviour that predates the
+        nameplate.** ``set_binding_status`` releases the id only when the write
+        really landed, so a nameplate that never reached the thread leaves the
+        id in place: the ``set`` that follows patches that same message with
+        "working on your message…", the sender sees one notice run its course
+        as it always did, and nothing is orphaned. The ``False`` this returns
+        says so, and the install branch uses it to put the agent's name back
+        into its own narration rather than leave the sender with no name at
+        all.
+
+        Only reached where there is a notice to settle — the caller's
+        ``had_notice`` gate, or an explicit id on the install path — which
+        means Chat today. Email and App MCP have no progress surface at all and
+        never get a nameplate.
+
+        ``identity_owner_name`` is set on an identity-routed thread, and when it
+        is the nameplate names that *person* (``REPLY_ASSIGNED_IDENTITY``) and
+        ``agent_name`` is ignored — see that constant for why the owner's
+        internal agent name must never reach the sender.
+
+        Never raises: ``set_binding_status`` is total by contract, and this
+        adds only ``safe_display_name``, which is total too.
+        """
+        if identity_owner_name is not None:
+            text = REPLY_ASSIGNED_IDENTITY.format(
+                owner_name=safe_display_name(identity_owner_name)
+            )
+        else:
+            text = REPLY_ASSIGNED.format(agent_name=safe_display_name(agent_name))
+        return await ChannelOutboundService.set_binding_status(
+            db=db, channel=channel, binding=binding, text=text, settle=True
+        )
 
     @staticmethod
     async def _settle_notice(
@@ -3609,11 +3737,33 @@ class ChannelInboundService:
             if target is not None:
                 ChannelReplyPolicy.remember_target(binding, target)
             ChannelOutboundService.adopt_status_notice(db, binding, status_message_id)
+            # Nameplate first, then the setup narration in a notice of its own
+            # below it — the same split as the already-installed branch, and
+            # for the same reason. The nameplate goes up *before* the
+            # environment is built rather than after: it names the thread, not
+            # the progress, and the sender waiting out a multi-minute install
+            # is exactly who most wants to know whose install it is.
+            #
+            # Only a nameplate that actually reached the thread lets this
+            # narration drop the name — see ``REPLY_INSTALLING``. On a
+            # transport that runs no notice, and on a thread whose opening
+            # notice failed to post, the name stays here where it has always
+            # been.
+            nameplated = (
+                status_message_id is not None
+                and await ChannelInboundService._announce_assignment(
+                    db, channel, binding, bundle.display_name
+                )
+            )
             await ChannelOutboundService.set_binding_status(
                 db=db,
                 channel=channel,
                 binding=binding,
-                text=REPLY_INSTALLING.format(agent_name=bundle.display_name),
+                text=REPLY_INSTALLING_NAMEPLATED
+                if nameplated
+                else REPLY_INSTALLING.format(
+                    agent_name=safe_display_name(bundle.display_name)
+                ),
             )
             return binding
 

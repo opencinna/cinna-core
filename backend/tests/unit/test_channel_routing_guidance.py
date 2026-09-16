@@ -33,6 +33,7 @@ from app.services.server_channels.channel_routing_guidance import (
     GuidanceEntry,
     RoutingGuidance,
     build_guidance,
+    safe_display_name,
     compose_guidance_reply,
 )
 
@@ -323,6 +324,20 @@ def test_owner_text_cannot_render_a_link_or_a_chat_mention() -> None:
         assert forbidden not in reply, (forbidden, reply)
     assert "‹users/all›" in reply, reply
     assert "¦" in reply, reply
+
+
+@pytest.mark.parametrize("value", [None, "", "   \n ", "****", 42])
+def test_safe_display_name_never_answers_an_empty_name(value) -> None:
+    """The thread nameplate formats this straight into ``**{name}**``, so an
+    empty answer would put a bare ``****`` on the thread."""
+    assert safe_display_name(value) == "Unnamed assistant"
+
+
+def test_safe_display_name_neutralises_what_the_nameplate_would_render() -> None:
+    assert safe_display_name("**Pay`roll**\nBot") == "Payroll Bot"
+    assert safe_display_name("anna@example.com") == "anna"
+    assert "<" not in safe_display_name("<users/all>")
+    assert len(safe_display_name("N" * 300)) <= MAX_NAME_CHARS
 
 
 def test_plain_mode_drops_the_bold_markers_and_keeps_the_words() -> None:
