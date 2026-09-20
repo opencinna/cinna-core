@@ -22,6 +22,7 @@ Routes:
   POST  /agent/tasks/current/status      — Agent updates status (session-resolved task)
   GET   /agent/tasks/current/details     — Agent gets details (session-resolved task)
   POST  /agent/tasks/current/subtask     — Agent creates subtask under its current task
+  POST  /agent/tasks/current/delegation-result — Agent reports a delegated task's structured result
   POST  /agent/tasks/{task_id}/comment   — Agent posts comment (explicit task_id)
   POST  /agent/tasks/{task_id}/status    — Agent updates task status (explicit task_id)
   POST  /agent/tasks/{task_id}/subtask   — Agent creates subtask (explicit task_id)
@@ -53,10 +54,26 @@ from app.services.tasks.input_task_service import (
     ValidationError,
 )
 from app.services.tasks.task_comment_service import TaskCommentService, AgentCommentResult
+from app.models.tasks.delegation import AgentDelegationReport, DelegationResultPublic
+from app.services.tasks.delegation_service import DelegationService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["agent-tasks"])
+
+
+@router.post('/agent/tasks/current/delegation-result', response_model=DelegationResultPublic)
+def agent_report_delegation(
+    data: AgentDelegationReport, db_session: SessionDep, ctx: AgentEnvContextDep,
+) -> Any:
+    """Report only for this authenticated environment's current task session."""
+    try:
+        task = _resolve_task_from_session(db_session, data.source_session_id, ctx)
+        return DelegationService.report(
+            db_session, task.id, data, data.source_session_id, changed_by_agent_id=ctx.agent.id,
+        )
+    except InputTaskError as error:
+        _handle_error(error)
 
 
 def _handle_error(e: InputTaskError) -> None:

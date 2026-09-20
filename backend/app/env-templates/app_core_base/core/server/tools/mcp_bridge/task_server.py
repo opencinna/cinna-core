@@ -114,6 +114,36 @@ mcp = FastMCP("agent_task")
 
 
 @mcp.tool()
+def handover_report(status: str, summary: str, question: str = '', audience: str = 'user',
+                    artifacts: list[dict] | None = None, body: str = '') -> str:
+    """Report this delegated task's result: in_progress, blocked, done or failed.
+
+    Blocked requires a question. Use audience=requester when the requesting agent
+    can answer, or audience=user (the default) when only a person can. Artifacts need portable HTTP(S) URLs;
+    upload workspace files with add_comment first. End the turn after reporting:
+    the requester receives a durable result and replies resume this session.
+    """
+    config_error = _check_backend_config()
+    if config_error:
+        return config_error
+    session_id = _read_backend_session_id()
+    if not session_id:
+        return 'Error: No active task session is available.'
+    payload = {'source_session_id': session_id, 'status': status, 'summary': summary,
+               'question': question or None, 'audience': audience,
+               'artifacts': artifacts or [], 'body': body}
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(f'{BACKEND_URL}/api/v1/agent/tasks/current/delegation-result',
+                                   headers=_auth_headers(), json=payload)
+        if response.status_code != 200:
+            return f'Error: Report was not accepted (HTTP {response.status_code}): {response.text}'
+        return json.dumps(response.json())
+    except httpx.HTTPError as error:
+        return f'Error: Report acknowledgement unavailable: {error}'
+
+
+@mcp.tool()
 def add_comment(
     content: str,
     files: list[str] | None = None,

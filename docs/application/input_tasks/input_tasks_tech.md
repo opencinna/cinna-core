@@ -6,6 +6,7 @@
 
 **Models:**
 - `backend/app/models/tasks/input_task.py` — InputTask table, all schema classes, `InputTaskStatus` constants
+- `backend/app/models/tasks/delegation.py` — the delegation wire contract: `DelegationMetadata`, `DelegationReport`/`AgentDelegationReport`, `DelegationArtifact`, `DelegationReply`, `DelegationResultPublic`, `DelegationReplyResult`, `DelegationCapabilities`
 - `backend/app/models/tasks/task_comment.py` — TaskComment table, `TaskCommentCreate`, `AgentTaskCommentCreate`, `TaskCommentPublic`
 - `backend/app/models/tasks/task_attachment.py` — TaskAttachment table, `TaskAttachmentPublic`
 - `backend/app/models/tasks/task_status_history.py` — TaskStatusHistory table, `TaskStatusHistoryPublic`
@@ -19,6 +20,7 @@
 
 **Services:**
 - `backend/app/services/tasks/input_task_service.py` — main service (extended with collaboration methods)
+- `backend/app/services/tasks/delegation_service.py` — `DelegationService.report()` / `.reply()`; the `HOW_TO_REPORT` message appended to a delegated task's first execution message
 - `backend/app/services/tasks/task_comment_service.py` — comment creation, listing, deletion
 - `backend/app/services/tasks/task_attachment_service.py` — file upload, workspace attach, download
 - `backend/app/services/sessions/session_service.py` — `create_session`, `list_task_sessions`, `delete_session`
@@ -37,7 +39,8 @@
 - `backend/app/env-templates/app_core_base/core/server/tools/agent_task_create_subtask.py` — SDK tool for Claude Code adapter
 - `backend/app/env-templates/app_core_base/core/server/tools/agent_task_get_details.py` — SDK tool for Claude Code adapter
 - `backend/app/env-templates/app_core_base/core/server/tools/agent_task_list_tasks.py` — SDK tool for Claude Code adapter
-- `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py` — MCP bridge server (OpenCode adapter)
+- `backend/app/env-templates/app_core_base/core/server/tools/agent_task_handover_report.py` — `handover_report` SDK tool for Claude Code adapter; posts to `POST /api/v1/agent/tasks/current/delegation-result`
+- `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py` — MCP bridge server (OpenCode adapter); `handover_report` mirrors the Claude Code tool
 
 **Migrations:**
 - `backend/app/alembic/versions/l2g3h4i5j6k7_add_input_task_table.py` — initial `input_task` table
@@ -46,6 +49,7 @@
 - `backend/app/alembic/versions/u1p2q3r4s5t6_add_session_state_and_task_feedback.py` — result_state, result_summary, auto_feedback, feedback_delivered
 - `backend/app/alembic/versions/i6d5e7f8g9h0_add_input_task_id_to_activity.py` — input_task_id FK on activity
 - `backend/app/alembic/versions/8f3a1d7c04e2_add_input_task_external_ref_and_sync_index.py` — `external_ref` column, its partial unique index, and the `(owner_id, updated_at)` sync index
+- `backend/app/alembic/versions/ba517c930def_add_delegation_task_contract.py` — adds `delegation_metadata` and `delegation_result` JSON columns to `input_task`
 
 **App Startup:**
 - `backend/app/main.py` — event handler registration
@@ -114,9 +118,13 @@ External-client fields:
 - `external_executor` (VARCHAR(100), nullable) — normalized external execution owner, exposed on create/PATCH and every public task shape. `ExternalExecutorFields` trims before length validation and normalizes blanks to null.
 - `external_ref` (VARCHAR(64), nullable) — caller-supplied idempotency key, unique per owner where present. Normalised on write: blank or whitespace-only becomes `NULL`, because `''` **IS NOT NULL** and would therefore be covered by the partial unique index, turning a second create with an empty field into a constraint violation
 
+Delegation fields:
+- `delegation_metadata` (JSON, nullable) — the validated `DelegationMetadata` dict, set once at create and never rewritten. Presence of this column, not a separate flag, is what makes a task "a delegation" throughout the service (`if task.delegation_metadata: ...`)
+- `delegation_result` (JSON, nullable) — the latest `DelegationReport` fields plus `id`, `session_id`, and (once a blocked question is answered) `reply_state` / `reply_message`. Both are **plain JSON columns**: in-place dict mutation is not change-tracked by SQLAlchemy, so every writer assigns a brand-new dict rather than mutating the existing one in place
+
 Indexes: `ix_input_task_owner_status`, `ix_input_task_parent_task_id`, `ix_input_task_team_id`, `ix_input_task_assigned_node_id`, `ix_input_task_owner_updated` (`(owner_id, updated_at)` — backs the `updated_since` cursor), `ix_input_task_owner_external_ref` (`(owner_id, external_ref)` UNIQUE `WHERE external_ref IS NOT NULL` — partial so the overwhelming majority of tasks, which carry no ref, do not collide with each other)
 
-**Migration `8f3a1d7c04e2`** (`add_input_task_external_ref_and_sync_index`) adds the column and both indexes. Migration `fc99da75645c` (`backend/app/alembic/versions/fc99da75645c_add_external_executor_to_input_tasks.py`) adds the nullable execution marker without changing existing rows.
+**Migration `8f3a1d7c04e2`** (`add_input_task_external_ref_and_sync_index`) adds the column and both indexes. Migration `fc99da75645c` (`backend/app/alembic/versions/fc99da75645c_add_external_executor_to_input_tasks.py`) adds the nullable execution marker without changing existing rows. Migration `ba517c930def` (`add_delegation_task_contract`) adds `delegation_metadata` and `delegation_result` as nullable `JSON` columns; no index, no backfill, no downgrade data loss beyond dropping the two columns.
 
 **`InputTaskStatus` values:**
 
@@ -194,9 +202,9 @@ Index: `ix_task_status_history_task_id`
 - `InputTaskBase` — `original_message`, `current_description`
 - `InputTask` — DB table (all columns above)
 - `ExternalExecutorFields` — shared create/update schema with `external_executor: str | None` (max 100, stripped; blank becomes null)
-- `InputTaskCreate` — inherits `ExternalExecutorFields`; includes: `title?`, `priority?`, `team_id?`, `assigned_node_id?`, `parent_task_id?`, `auto_execute?` (bool, default `False`; set to `True` by `CreateTaskDialog` when Execute switch is on), `external_ref?` (str ≤ 64 — idempotency key; cleared by `POST /{id}/subtasks/` before the service sees it)
+- `InputTaskCreate` — inherits `ExternalExecutorFields`; includes: `title?`, `priority?`, `team_id?`, `assigned_node_id?`, `parent_task_id?`, `auto_execute?` (bool, default `False`; set to `True` by `CreateTaskDialog` when Execute switch is on), `external_ref?` (str ≤ 64 — idempotency key; cleared by `POST /{id}/subtasks/` before the service sees it), `delegation_metadata?` (`DelegationMetadata`, `extra='forbid'` — an unknown key is a 422, not a silently dropped field)
 - `InputTaskUpdate` — inherits `ExternalExecutorFields`; omitted marker preserves it, explicit null releases it after validation; includes new: `title?`, `priority?`, `team_id?`, `assigned_node_id?` (team can be changed after creation)
-- `InputTaskPublic` — includes new: `short_code`, `title`, `priority`, `parent_task_id`, `team_id`, `assigned_node_id`, `created_by_node_id`, `external_ref`, `external_executor`, `subtask_count`, `subtask_completed_count`
+- `InputTaskPublic` — includes new: `short_code`, `title`, `priority`, `parent_task_id`, `team_id`, `assigned_node_id`, `created_by_node_id`, `external_ref`, `external_executor`, `subtask_count`, `subtask_completed_count`, `delegation_metadata` (`DelegationMetadata?`), `delegation_result` (`DelegationResultPublic?`)
 - `InputTaskPublicExtended` — extends Public with: `agent_name`, nullable `result_state` and `result_summary` (typed source-session compatibility fields), `refinement_history`, `todo_progress`, `sessions_count`, `latest_session_id`, `attached_files`, `assigned_node_name`, `team_name`, `parent_short_code` (resolved by service layer via DB lookup), `root_short_code` (walks up hierarchy to root; set only when task has a parent)
 - `InputTaskDetailPublic` — extends Extended with: `comments: list[TaskCommentPublic]`, `attachments: list[TaskAttachmentPublic]`, `subtasks: list[InputTaskPublic]`, `status_history: list[TaskStatusHistoryPublic]`
 - `InputTaskStatusUpdate` — user-side status write (`status`, `reason?`). Deliberately separate from `InputTaskUpdate` (a status change carries a reason, an audit row and a transition check, none of which the field-patch route does) and from `AgentTaskStatusUpdate` (whose allowed set and consumers belong to the container-side agent API). `reason` is uncapped, matching `AgentTaskStatusUpdate.reason` and the `TaskStatusHistory.reason` column — a length limit only one caller had would break the shared refusal vocabulary
@@ -205,12 +213,29 @@ Index: `ix_task_status_history_task_id`
 - `AgentTaskCreate` — agent standalone task creation (`title`, `description?`, `assigned_to?`, `priority?`, `source_session_id?`)
 - `AgentTaskOperationResponse` — generic agent op response (`success`, `task` short code, `parent_task?` short code, `assigned_to?` resolved name, `message?`, `error?`)
 
+**`backend/app/models/tasks/delegation.py`** (all `extra='forbid'` — an unknown key is a 422):
+- `DelegationMetadata` — `id`, `requester_key`, `origin_kind` (`local_chat` / `local_task` / `remote_task` / `external`), optional `origin_agent_id` / `origin_chat_id` / `origin_task_id`, `depth` (1–2), `root`, optional `group`
+- `DelegationArtifact` — `kind` (`file` / `link`), `name`, `ref`; a `model_validator` rejects any `ref` that is not `http://`/`https://` — local workspace paths must be uploaded (e.g. via `add_comment`) before they can be cited
+- `DelegationReport` — `status` (`in_progress` / `blocked` / `done` / `failed`), `summary` (≤ 1000 chars), optional `question` (≤ 10000 chars), `audience` (`requester` / `user`, default `user`), `artifacts` (≤ 100), `body` (≤ 100000 chars); a `model_validator` requires `question` when `status == 'blocked'`
+- `AgentDelegationReport` — `DelegationReport` + `source_session_id`; the body shape for `POST /agent/tasks/current/delegation-result`
+- `DelegationReply` — `result_id`, `message` (≤ 10000 chars, non-blank)
+- `DelegationResultPublic` — the stored result as the requester reads it: `id`, `session_id?`, plus every `DelegationReport` field verbatim, plus `reply_state` (`sending` / `delivered` / `None`)
+- `DelegationReplyResult` — `delivered` (bool), `uncertain` (bool, default `False` — an earlier attempt's acknowledgement may or may not have reached the session; it is not resent)
+- `DelegationCapabilities` — `version`, `metadata`, `structured_result`, `reply` (all bool)
+
 ## API Endpoints
 
 ### File: `backend/app/api/routes/input_tasks.py`
 
+**Cross-Agent Delegation (new; registered at the top of the file, before any other route):**
+- `GET /api/v1/tasks/delegation-capabilities` — versioned capability discovery (`DelegationCapabilities`); must stay registered before `GET /{id}` — FastAPI matches routes in registration order, and `/{id}` would otherwise capture `delegation-capabilities` as an id and 422 on the UUID parse
+- `PUT /api/v1/tasks/{id}/delegation-result` — owner-authenticated report for a delegation handed to an **external executor** (not a platform session); accepted only while the task is `in_progress` or `blocked` (409 otherwise); delegates to `DelegationService.report(require_external_executor=True, owner_id=current_user.id, ...)`
+- `POST /api/v1/tasks/{id}/delegation-reply` — owner-authenticated reply to the task's current blocked result; delegates to `DelegationService.reply()`; `async def` because `reply()` awaits `SessionService.send_session_message`
+
+Both delegation routes answer **404** for a non-owner or a task with no `delegation_metadata` — a deliberate departure from the 400 the rest of this file uses for "exists but not yours" (see [400 vs 404](#400-vs-404)), so these newer, less-guessable routes don't reveal task existence.
+
 **Task CRUD:**
-- `POST /api/v1/tasks/` — create task; auto-generates `short_code` and `title`; calls `create_task_idempotent` and receives `(task, created)`. If `created` **and** `auto_execute=True` **and** `selected_agent_id` is set, schedules `_auto_execute_task` as a background asyncio task (creates a session and sends the task description as the initial message). The `created` gate is what makes an `external_ref` retry harmless: a matched task is returned without a second execution being scheduled on it
+- `POST /api/v1/tasks/` — create task; auto-generates `short_code` and `title`; calls `create_task_idempotent` and receives `(task, created)`. If `created` **and** `auto_execute=True` **and** `selected_agent_id` is set, schedules `_auto_execute_task` as a background asyncio task (creates a session and sends the task description as the initial message). The `created` gate is what makes an `external_ref` retry harmless: a matched task is returned without a second execution being scheduled on it. Accepts optional `delegation_metadata` — see [Cross-Agent Delegation Contract](input_tasks.md#cross-agent-delegation-contract) in the business doc, and `DelegationService` below for the report/reply write paths
 - `GET /api/v1/tasks/` — list tasks; query params: `root_only` (exclude subtasks), `team_id`, `priority`, `updated_since` plus optional `updated_since_id` (incremental cursor — lexicographic `(updated_at, id) >` when both are supplied; timestamp alone retains `updated_at >`, and switches the ordering to `(updated_at asc, id asc)` *only when present*; the route docstring carries the deletion limit and the cursor-not-`skip` paging rule so they reach the generated OpenAPI client)
 - `GET /api/v1/tasks/{id}` — get task (`InputTaskPublicExtended`)
 - `PATCH /api/v1/tasks/{id}` — update task, including owner-validated `external_executor` claim/release; emits `TASK_UPDATED` when the marker changes
@@ -265,6 +290,7 @@ Called by MCP tools inside agent environments. Authentication via the scoped `Ag
 - `POST /agent/tasks/current/status` — agent updates status of its current task; requires `source_session_id` in body; calls `_resolve_task_from_session`
 - `GET /agent/tasks/current/details` — agent gets details of its current task; `source_session_id` passed as query param; calls `_resolve_task_from_session`; automatically uploads task files to agent environment; `async def`
 - `POST /agent/tasks/current/subtask` — agent creates subtask under its current task (resolved from `source_session_id`); delegates to `create_subtask` with team topology validation
+- `POST /agent/tasks/current/delegation-result` — agent reports a delegated task's structured result (`AgentDelegationReport`, carries its own `source_session_id`); resolves the task via `_resolve_task_from_session`, then calls `DelegationService.report(session_id=data.source_session_id, changed_by_agent_id=ctx.agent.id)` — no `require_external_executor`, since the caller already proved session ownership
 - `POST /agent/tasks/{task_id}/comment` — agent posts comment with optional workspace file paths (explicit task_id variant)
 - `POST /agent/tasks/{task_id}/status` — agent explicitly updates status (edge cases: blocked, cancelled, completed; explicit task_id variant)
 - `POST /agent/tasks/{task_id}/subtask` — agent creates subtask with explicit parent task ID (validates team membership and connection topology)
@@ -275,7 +301,7 @@ Called by MCP tools inside agent environments. Authentication via the scoped `Ag
 
 ### `InputTaskService` (`backend/app/services/tasks/input_task_service.py`)
 
-Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, `PermissionDeniedError`, `ValidationError`
+Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, `PermissionDeniedError`, `ValidationError`, `ConflictError` (409 — "well-formed but conflicts with the task's current state"; used by delegation create-replay mismatches and by `DelegationService`)
 
 **Helper methods:**
 - `verify_agent_access()` — verify agent exists and user owns it, optionally require active environment
@@ -285,10 +311,10 @@ Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, 
 - `list_tasks_extended()` — same enrichment with `parent_short_code` batch-resolved in a single query for all tasks in the result set
 
 **CRUD:**
-- `create_task_idempotent(db_session, user_id, data) -> tuple[InputTask, bool]` — the real create. Normalises `external_ref` once at the top (`(... or '').strip() or None`) so blank and whitespace-only refs never reach the column; if a ref is present, looks up `(owner_id, external_ref)` first and returns `(existing, False)` on a hit. On insert it catches `IntegrityError`, and **only** when the failing constraint is `ix_input_task_owner_external_ref` (matched by `exc.orig.diag.constraint_name`, falling back to the index name in the message) rolls back, re-reads by `(owner_id, external_ref)` and returns the row that won the race; any other constraint failure is re-raised with its own shape. Both the lookup guard and the fallback guard test `is not None`, so they cannot disagree about what counts as "has a ref". The rollback is safe for the caller: everything before this call on both reachable routes is read-only, so it unwinds only the INSERT and the short-code counter increment — and un-burning that short code is desirable
+- `create_task_idempotent(db_session, user_id, data) -> tuple[InputTask, bool]` — the real create. Normalises `external_ref` once at the top (`(... or '').strip() or None`) so blank and whitespace-only refs never reach the column; if a ref is present, looks up `(owner_id, external_ref)` first and returns `(existing, False)` on a hit — **unless** `data.delegation_metadata` (dumped to JSON) differs from the matched row's stored `delegation_metadata`, in which case it raises `ConflictError` (409): a replay must describe the same delegation, or the same lack of one. On insert it catches `IntegrityError`, and **only** when the failing constraint is `ix_input_task_owner_external_ref` (matched by `exc.orig.diag.constraint_name`, falling back to the index name in the message) rolls back, re-reads by `(owner_id, external_ref)` and returns the row that won the race; any other constraint failure is re-raised with its own shape. Both the lookup guard and the fallback guard test `is not None`, so they cannot disagree about what counts as "has a ref". The rollback is safe for the caller: everything before this call on both reachable routes is read-only, so it unwinds only the INSERT and the short-code counter increment — and un-burning that short code is desirable. A `delegation_metadata` with no `external_ref`, or with `parent_task_id` also set, raises `ValidationError` (400) before the insert is attempted
 - `create_task()` — thin wrapper returning only the task, for the seven callers that do not care whether a row was created or matched. **Any caller with a side effect on the new task — scheduling execution, notifying a parent — must use `create_task_idempotent` and gate that effect on `created`.** Generates `short_code` via `_generate_short_code()`, sets `title` from first line of `original_message`; if `team_id` is set but neither `selected_agent_id` nor `assigned_node_id` is provided, queries `AgenticTeamNode` for the lead node (`is_lead=True`) and auto-assigns both `selected_agent_id` and `assigned_node_id`; if `data.user_workspace_id` is `None` and a `selected_agent_id` is set (explicit or team-lead-resolved), loads the `Agent` and inherits its `user_workspace_id` onto the task
 - `_auto_execute_task(task_ref: InputTask) -> None` — static async method; opens its own DB session (independent of the request lifecycle); calls `execute_task()` to create a session and send the task description as the initial message; used for both user-created tasks with `auto_execute=True` and agent-created subtasks; no-ops silently if `selected_agent_id` is not set or the task record is missing; previously named `_auto_execute_subtask` (dropped the unused `db_session` parameter in the same rename)
-- `execute_task()` routes through `ChannelIngestionService.ingest_inbound_message` with `SessionSender.from_task_execution(...)` (`kind="task_executor"`) — see [channel ingestion](../agent_sessions/channel_ingestion.md) / [tech](../agent_sessions/channel_ingestion_tech.md). The executing human's `user_id` is carried as `sender.platform_user_id` and the service runs a real owner-match access check (NOT a system-trigger fast-path)
+- `execute_task()` routes through `ChannelIngestionService.ingest_inbound_message` with `SessionSender.from_task_execution(...)` (`kind="task_executor"`) — see [channel ingestion](../agent_sessions/channel_ingestion.md) / [tech](../agent_sessions/channel_ingestion_tech.md). The executing human's `user_id` is carried as `sender.platform_user_id` and the service runs a real owner-match access check (NOT a system-trigger fast-path). When `task.delegation_metadata` is set, `delegation_service.HOW_TO_REPORT` is appended to the outgoing message content after the session title is derived from it — an agent whose brief was written by another agent otherwise has no way to learn that `handover_report` (not a chat reply) is what the requester reads
 - `_generate_short_code(session, owner_id, team_id=None) -> tuple[str, int]` — atomic counter increment; prefix from team or default "TASK"
 - `get_task_by_short_code(session, short_code, user_id)` — lookup by `(short_code, owner_id)`
 - `get_task_detail(session, task_id, user_id) -> InputTaskDetailPublic` — full detail with comments (inline attachments), standalone attachments, subtasks, status history
@@ -296,14 +322,16 @@ Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, 
 - `list_tasks_extended()` — supports filters: `root_only`, `team_id`, `priority`, `updated_since`, `updated_since_id` (passed straight through to `list_tasks`)
 - `list_tasks(..., updated_since=None, updated_since_id=None)` — applies `InputTask.updated_at > updated_since`, plus `updated_at == updated_since AND id > updated_since_id` when the companion ID is provided (ID without timestamp raises `ValidationError`) and, when the param is present, replaces the ordering with `(updated_at asc, id asc)`. Clients carry both final-row values into the next request; ordering by ID alone cannot prevent timestamp-only cursors skipping ties at page boundaries. The `id` tiebreak makes the sort total — `updated_at` is not unique, and two rows written in the same transaction would otherwise page in an order that can change between requests. The switch is **conditional on purpose**: making it unconditional would silently reorder the task list for every user on the web. `count_statement` is taken before any `order_by`, so the count is unaffected
 - `update_task()`, `delete_task()`, `update_status()`, `append_to_refinement_history()`
-- `link_session()` — set session_id, status to in_progress
+- `link_session()` — set session_id, status to in_progress. For a delegated task, re-loads the row under `SELECT ... FOR UPDATE` and, in the same commit, transitions to `in_progress` (reason `"Session started"`), sets `session_id`, and clears `delegation_result` / `error_message` / `completed_at` — a fresh execution starts with no leftover report from the previous one
 - `reset_task_if_no_sessions()` — reset to NEW if all linked sessions deleted
 
 **Status and collaboration:**
-- `update_task_status(session, task_id, new_status, changed_by_agent_id=None, changed_by_user_id=None, changed_by_system=False, reason=None)` — validates transition, creates `TaskStatusHistory`, creates system comment, emits `TASK_STATUS_CHANGED`
+- `update_task_status(session, task_id, new_status, changed_by_agent_id=None, changed_by_user_id=None, changed_by_system=False, reason=None)` — validates transition, creates `TaskStatusHistory`, creates system comment, emits `TASK_STATUS_CHANGED`. Internally a thin wrapper: loads the task, then calls the two building blocks below with `commit=True`
+- `_apply_status_transition(session, task, new_status, changed_by_agent_id=None, changed_by_user_id=None, changed_by_system=False, reason=None, commit=False) -> str | None` — validates the transition against `VALID_TRANSITIONS`, adds the `TaskStatusHistory` row and the `status_change` system comment, and sets `task.status` and its timestamps; returns the previous status (or `None` for a no-op). With `commit=False` nothing is committed or emitted — this is what lets `DelegationService.report()` fold a status change into the *same* commit as its own `delegation_result` write, under one row lock, instead of racing a second transaction against it
+- `_emit_status_changed(task, from_status, changed_by_agent_id=None, changed_by_user_id=None, to_status=None)` — emits `TASK_STATUS_CHANGED` for an already-committed transition and notifies the parent task on subtask completion; called by `DelegationService` after its own commit, once per transition step (a blocked→completed report emits two events: `blocked→in_progress`, then `in_progress→completed`)
 - `update_task_status_from_agent(session, task_id, agent_id, data: AgentTaskStatusUpdate)` — verifies agent is assigned; delegates to `update_task_status()`
 - `update_task_status_from_user(session, task_id, user_id, data: InputTaskStatusUpdate)` — the mirror of `update_task_status_from_agent` for a user-authenticated client reporting work executed outside cinna. Ownership via `get_task_with_ownership_check`, then a narrower allowed set (`open`, `in_progress`, `blocked`, `completed`, `error`, `cancelled`; refusal message `"User can only set status to: ..."`), then delegates to the auditing `update_task_status()` with `changed_by_user_id` — **not** the bare `update_status()` the session handlers call, which skips the transition table, the history row and the comment. Never touches sessions
-- `create_task_from_agent(session, user_id, data: AgentTaskCreate) -> (InputTask, resolved_name)` — resolves session context, agent name (team node or agent fallback), team inheritance; creates and optionally auto-executes task; posts system message to source session
+- `create_task_from_agent(session, user_id, data: AgentTaskCreate) -> (InputTask, resolved_name)` — resolves session context, agent name (team node or agent fallback), team inheritance; creates and optionally auto-executes task; posts system message to source session. `AgentTaskCreate` carries no `delegation_metadata` field — a task created through this in-platform handover tool is never itself a cross-agent delegation; only `POST /api/v1/tasks/` (`InputTaskCreate`) can set it
 - `create_subtask(session, parent_task_id, creating_agent_id, data: AgentSubtaskCreate)` — validates team membership, connection topology, creates child task, auto-executes if assigned, posts system comment on parent
 - `list_agent_tasks(session, user_id, status=None, scope="assigned")` — scope: assigned / created / team
 - `get_agent_task_details(session, task_id, user_id)` — simplified view for agent consumption
@@ -324,6 +352,44 @@ Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, 
 - `respond_to_task()` — replaced by `add_comment` on parent task
 
 **Also removed (Phase 4 of the channels & identity unification):** `send_email_answer()` (AI-generated email reply for an email-originated task) and the `source_email_message_id` / `source_agent_id` columns it depended on. Email no longer creates `InputTask` rows at all — see [Email Integration](../email_integration/email_integration.md#capabilities-removed-in-this-refactor).
+
+### `DelegationService` (`backend/app/services/tasks/delegation_service.py`)
+
+Durable reports and exactly-addressed replies for delegated tasks, independent of the task-tree/comment model the rest of `InputTaskService` uses. Both methods lock the task row with `_lock_task()` (`SELECT ... FOR UPDATE`, `populate_existing=True` to discard a stale identity-map copy) before reading or writing it.
+
+- `report(db_session, task_id, data: DelegationReport, session_id=None, *, require_external_executor=False, owner_id=None, changed_by_agent_id=None, changed_by_user_id=None) -> DelegationResultPublic` — the single write path for both report routes.
+  - `owner_id`, when given, scopes the task to that owner (`TaskNotFoundError` — 404 — otherwise); `require_external_executor` (set only by the owner route) additionally requires `task.external_executor` and `task.status in {in_progress, blocked}` (`ConflictError` — 409 — otherwise), and requires `owner_id` to be given (a `ValueError` if not, since ownership scoping is its only access check)
+  - `session_id`, when given and the task already has one, must match (`ValidationError` if not) — an older execution's report cannot land after a newer one has started
+  - **Idempotency**: if the incoming report's fields (`status`, `summary`, `question`, `audience`, `artifacts`, `body`) and stored `session_id` exactly match the previous `delegation_result`, the stored result is returned unchanged — even if the task has since closed because of it, or a reply to its question was already delivered. Only report fields and session are compared; `reply_state` / `reply_message` are the owner's, not the report's, and are preserved
+  - Otherwise: a closed task (`COMPLETED`/`ERROR`/`CANCELLED`/`ARCHIVED`, i.e. `CLOSED_STATUSES`) raises `ConflictError`. A `blocked → {completed, error}` report is recorded as two transitions — `blocked → in_progress` (reason `"Delegation resumed"`) then `in_progress → target` — via two calls to `_apply_status_transition(..., commit=False)`, both folded into the one commit that also writes the new `delegation_result`, `error_message` (set for `failed`) and `completed_at` (set for `done`/`failed`). `TASK_STATUS_CHANGED` is then emitted once per transition step via `_emit_status_changed`
+  - Report status → task status: `STATUSES = {in_progress: IN_PROGRESS, blocked: BLOCKED, done: COMPLETED, failed: ERROR}`
+- `reply(db_session, user_id, task_id, data: DelegationReply) -> DelegationReplyResult` — `async`; delivers the owner's answer to the task's current blocked result
+  - 404 (`TaskNotFoundError`) if the task doesn't exist, isn't owned by `user_id`, or has no `delegation_metadata`
+  - 409 (`ConflictError`) if `data.result_id` isn't the stored result's `id` ("read the task for its latest result"), if a reply is already in flight or delivered for a *different* message ("that question already has a different reply"), or if the stored result's `status` isn't `blocked`
+  - An identical duplicate of an in-flight/delivered reply returns its outcome directly without resending: `delivered=True` if `reply_state == 'delivered'`, else `delivered=False, uncertain=True` — an unresolved acknowledgement is not retried automatically
+  - The linked `Session` (`task.delegation_result['session_id']`) must belong to `user_id` and have `source_task_id == task_id`, or `ValidationError`
+  - Marks `reply_state='sending'` and commits *before* calling `SessionService.send_session_message(...)`, with a deterministic `client_message_id = uuid5(NAMESPACE_URL, f'delegation-reply:{result_id}')` so a retried send cannot duplicate the message in the session
+  - On any exception, or a `response['action'] == 'error'`, calls `_clear_sending()` (rolls back, re-locks, and — only if the state is still exactly `'sending'` for this `result_id` — pops `reply_state`/`reply_message` so the owner can retry) and re-raises
+  - On success, re-locks the task and, only if `delegation_result['id']` still equals `data.result_id` (a newer report may have arrived while the session was resuming), sets `reply_state='delivered'` and — only if the task is still `BLOCKED` — transitions it to `IN_PROGRESS` (reason `"Delegation reply delivered"`), committing and emitting `TASK_STATUS_CHANGED`. The report's own `status` field is never rewritten — it stays `'blocked'` so a retried identical report still matches the idempotency check in `report()` and is not re-applied
+- `HOW_TO_REPORT` (module constant) — the text appended to a delegated task's first execution message by `InputTaskService.execute_task()`
+- `_lock_task(db_session, task_id) -> InputTask | None` — module-level helper shared by both methods
+- `_clear_sending(db_session, task_id, result_id)` — module-level helper used by `reply()`'s failure path
+- `_emit_transitions(task, from_statuses, final_status, changed_by_agent_id, changed_by_user_id)` — replays `_emit_status_changed` for each transition step recorded by `report()`, in order
+
+### Known external client: cinna-cli (`cinna delegation`)
+
+This is a separate repo — **cinna-cli**, `/Users/evgenyl/dev/ml-llm/cinna-cli` — so it is described here from its own docs/tests, not this repo's code: `docs/features/delegation/delegation.md`, `docs/features/delegation/delegation_tech.md`, `README.md`, `tests/test_delegation.py`, `tests/test_account.py`. <!-- nocheck -->
+It implements
+a full client over these routes as `cinna delegation create|status|report|reply`:
+
+- `create --id KEY --target AGENT_UUID --title T --brief B [--execute] [--depth 2 --root ROOT] [--group G]` — calls `POST tasks/` through the CLI's account-workspace API proxy. `external_ref` is the sha256 hex digest of the JSON array `[target, requester_key]`; `delegation_metadata.id` is `uuid5(NAMESPACE_URL, that same identity)`. The `(target, key)` pair — never title, brief, group, depth or `--execute` — is the whole retry identity, so this backend's own `external_ref` dedup (above) is what makes a retry return the original task unchanged
+- `status TASK_ID` — one `GET tasks/{id}/detail`; no polling loop
+- `report [TASK_ID] --status ... --summary ...` — with a task id: `PUT tasks/{id}/delegation-result` (owner side, through the proxy). Without one (**executor path**, run inside the cloud task's own shell): reads `AGENT_AUTH_TOKEN` / `BACKEND_URL` / `ENV_ID` and a `backend_session_id` from a local `session_context.json`, then POSTs directly — not through any proxy — to `POST /api/v1/agent/tasks/current/delegation-result` with `Authorization: Bearer <token>` and `X-Agent-Env-Id`, redirects disabled, 30s timeout. This is the same route and payload shape `agent_task_handover_report.py` posts to; the CLI is a second, shell-invoked client of it, not a different mechanism
+- `reply TASK_ID --result-id ID --message M` — `POST tasks/{id}/delegation-reply`
+- Every owner-side verb calls `GET tasks/delegation-capabilities` first and refuses locally (before any other request) on a 404/405 or a body that isn't `{version: 1, ...}`
+- **Divergent default, not a bug in either repo**: the CLI's own `--audience` option defaults to `"requester"` (`src/cinna/delegation.py`), while `DelegationReport.audience` on this backend defaults to `"user"` (above). The CLI always sends an explicit `audience` value, so this backend's own default is only ever reached by a caller that omits the field entirely
+
+**Confirmed, not inferred, from that repo's docs**: a requester agent should end its turn after delegating and let **Cinna Desktop** deliver the result, rather than polling `status` in a loop (`delegation.md`, `README.md`). **Not confirmed anywhere** (left unverified rather than asserted): how Desktop routes a `requester`-audience question versus a `user`-audience one, whether either lands in a Desktop "Inbox", or any "cloud-to-desktop execution routing" mechanism — cinna-cli's docs do not describe Desktop-side delivery beyond the one claim above, and nothing in this repo implements or documents it either.
 
 ### `MessageService` — task context enrichment (`backend/app/services/sessions/message_service.py`)
 
@@ -400,6 +466,18 @@ event — to `completed`, a transition `VALID_TRANSITIONS["blocked"]` would have
 refused the user. **The server overrides the client on a transition the client
 itself cannot make.** In practice nothing contends, because an externally-executed
 task has no session and `sync_task_status_from_sessions` returns `None` for it.
+
+**Delegation guard.** Before computing anything, `sync_task_status_from_sessions`
+reads `task.delegation_result` and returns `None` unconditionally when its
+`status` is `done` or `failed`, or `blocked` with `reply_state` not `delivered`
+— a session-lifecycle event cannot silently overwrite a filed terminal result or
+an unanswered question. It does **not** guard `in_progress`, and does not guard
+the absence of any report at all: a delegated task whose agent never calls
+`handover_report` (or reports only `in_progress`) is still recomputed normally
+from session state, and a session that completes cleanly moves it straight to
+`completed` with no structured result behind it. See [Cross-Agent Delegation
+Contract → Known limitation](input_tasks.md#cross-agent-delegation-contract) in
+the business doc for the accepted gap and its planned fix.
 
 ### External execution guard and release
 
@@ -494,6 +572,8 @@ identically on these routes.
 - `backend/tests/api/input_tasks/test_task_external_executor.py` — marker normalization, public response coverage, idempotent retry, guarded execution/refinement, session-backed claim refusal, active-marker release refusal, user attribution/timestamps, marker owner events
 - `backend/tests/api/input_tasks/test_task_sync_pagination.py` — paired-cursor paging across timestamp ties and rejection of an ID without a timestamp
 - `backend/tests/unit/test_session_external_executor_guard.py` — defensive session-insertion guard regression; this does not simulate a concurrent database race
+- `backend/tests/api/input_tasks/test_delegation_contract.py` — API-level: capabilities route is versioned and authenticated; report gated by `external_executor` + active status; reply conflict and ownership (404 for non-owner/non-delegation); contract model validation (422 on unknown fields, blocked-without-question)
+- `backend/tests/unit/test_delegation_contract.py` — unit-level: metadata rejects unknown fields and caps origin/group length; depth and blocked-question validation; report idempotency; report rejects a stale executor session and non-delegated tasks; report reloads the task under its row lock before accepting a stale route-supplied object
 
 ## Event Handler Registration
 
@@ -566,5 +646,10 @@ These events are matched by `meta.source_task_id` or by `meta.session_id` / `eve
 - `POST /tasks/{id}/status` is user-scoped and owner-gated; the status it can set is restricted to a six-value subset, so `refining` and `archived` cannot be reached sideways and `archived_at` stays owned by `POST /{id}/archive`. It has no session side effects — a client cannot start, resume or interrupt agent work through it
 - The user status route and the agent status route reject each other's tokens (`get_current_user` refuses an `aud="agent_env"` token; `AgentEnvContextDep` refuses a user token) — see [External Client Sync Surface](#the-two-route-split)
 - `external_ref` is scoped per owner by a partial unique index, so one user's key can never match or reveal another user's task
+- All `DelegationMetadata` / `DelegationReport` / `DelegationReply` / `DelegationArtifact` models set `extra='forbid'` — an unknown field in any delegation payload is a 422, not a silently dropped value
+- `DelegationArtifact.ref` must be an `http://`/`https://` URL — a server filesystem path or a bare workspace-relative path is rejected, so a delegation result can never leak or depend on a local path
+- The two new delegation routes (`PUT /{id}/delegation-result`, `POST /{id}/delegation-reply`) answer **404**, not this file's usual 400, to a non-owner or non-delegated task — a deliberate exception to keep newer, less-guessable routes from confirming task existence; see [400 vs 404](#400-vs-404)
+- `DelegationService.report()` and `.reply()` both lock the task row (`SELECT ... FOR UPDATE`) before reading or writing `delegation_result`, so a report and a reply — or two concurrent reports — cannot interleave into an inconsistent stored result
+- The environment-authenticated report route (`POST /agent/tasks/current/delegation-result`) resolves the task from the caller's own session via `_resolve_task_from_session`, and additionally checks `session_id` continuity in `DelegationService.report()` — an environment cannot report against a session other than the one it authenticated with, nor overwrite a newer execution's report with an older one's
 - "Exists but not yours" answers `400` (`PermissionDeniedError`), only "does not exist" answers `404`, across all of `input_tasks.py`. Task existence is therefore distinguishable by an authenticated non-owner — pre-existing and file-wide, not specific to the newer routes
 - `task_prefix` validated: 1–10 uppercase alphanumeric characters (team settings)

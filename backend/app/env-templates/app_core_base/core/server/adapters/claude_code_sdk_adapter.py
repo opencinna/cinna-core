@@ -314,6 +314,7 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                         from ..tools.agent_task_create_subtask import agent_task_create_subtask
                         from ..tools.agent_task_get_details import agent_task_get_details
                         from ..tools.agent_task_list_tasks import agent_task_list_tasks
+                        from ..tools.agent_task_handover_report import agent_task_handover_report
 
                         agent_task_tools = [
                             agent_task_add_comment,
@@ -322,6 +323,7 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                             agent_task_create_subtask,
                             agent_task_get_details,
                             agent_task_list_tasks,
+                            agent_task_handover_report,
                         ]
 
                         agent_task_server = create_sdk_mcp_server(
@@ -339,9 +341,10 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                         options.allowed_tools.append("mcp__agent_task__create_subtask")
                         options.allowed_tools.append("mcp__agent_task__get_details")
                         options.allowed_tools.append("mcp__agent_task__list_tasks")
+                        options.allowed_tools.append("mcp__agent_task__handover_report")
                         logger.info(
                             "Added agent task tools (add_comment, update_status, "
-                            "create_task, create_subtask, get_details, list_tasks) "
+                            "create_task, create_subtask, get_details, list_tasks, handover_report) "
                             "for conversation mode"
                         )
                     except ImportError as e:

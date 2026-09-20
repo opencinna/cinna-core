@@ -35,6 +35,13 @@ from app.models import (
     TaskAttachmentsPublic,
 )
 from app.models.files.file_upload import FileUploadPublic
+from app.models.tasks.delegation import (
+    DelegationCapabilities,
+    DelegationReply,
+    DelegationReplyResult,
+    DelegationReport,
+    DelegationResultPublic,
+)
 from app.services.tasks.input_task_service import (
     InputTaskService,
     InputTaskError,
@@ -47,8 +54,50 @@ from app.utils import create_task_with_error_logging
 from app.services.sessions.session_service import SessionService
 from app.services.tasks.task_comment_service import TaskCommentService
 from app.services.tasks.task_attachment_service import TaskAttachmentService
+from app.services.tasks.delegation_service import DelegationService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+# Must stay registered before any GET '/{id}' route: FastAPI matches in
+# registration order, and '/{id}' would otherwise capture this path (422).
+@router.get('/delegation-capabilities', response_model=DelegationCapabilities)
+def delegation_capabilities(current_user: CurrentUser) -> DelegationCapabilities:
+    """Versioned, authenticated extension discovery; older servers return 404/422."""
+    return DelegationCapabilities(version=1, metadata=True, structured_result=True, reply=True)
+
+
+# 404 for non-owners so new routes don't reveal task existence; the older task routes' 400 is deliberately not copied.
+@router.put('/{id}/delegation-result', response_model=DelegationResultPublic)
+def report_delegation(
+    id: uuid.UUID, data: DelegationReport, session: SessionDep, current_user: CurrentUser,
+) -> Any:
+    """Result of a delegated task run by an external executor (not a platform session).
+
+    Accepted only while such a task is in_progress or blocked (409 otherwise);
+    404 when the task is not a delegation or not the caller's (same as reply).
+    """
+    try:
+        return DelegationService.report(
+            session, id, data,
+            require_external_executor=True,
+            owner_id=current_user.id,
+            changed_by_user_id=current_user.id,
+        )
+    except InputTaskError as error:
+        _handle_service_error(error)
+
+
+# 404 for non-owners so new routes don't reveal task existence; the older task routes' 400 is deliberately not copied.
+@router.post('/{id}/delegation-reply', response_model=DelegationReplyResult)
+async def reply_delegation(
+    id: uuid.UUID, data: DelegationReply, session: SessionDep, current_user: CurrentUser,
+) -> Any:
+    """Answer the current blocked result of a delegated task; resumes its session."""
+    try:
+        return await DelegationService.reply(session, current_user.id, id, data)
+    except InputTaskError as error:
+        _handle_service_error(error)
 
 
 def _handle_service_error(e: InputTaskError) -> None:

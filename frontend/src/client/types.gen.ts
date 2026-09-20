@@ -1229,6 +1229,20 @@ export type AgentCredentialLinkRequest = {
     credential_id: string;
 };
 
+export type AgentDelegationReport = {
+    status: 'in_progress' | 'blocked' | 'done' | 'failed';
+    summary: string;
+    question?: (string | null);
+    audience?: 'requester' | 'user';
+    artifacts?: Array<DelegationArtifact>;
+    body?: string;
+    source_session_id: string;
+};
+
+export type status = 'in_progress' | 'blocked' | 'done' | 'failed';
+
+export type audience = 'requester' | 'user';
+
 /**
  * Public response model for AgentEnvActionLog.
  */
@@ -3529,6 +3543,72 @@ export type DCRRequest = {
     resource?: string;
 };
 
+export type DelegationArtifact = {
+    kind: 'file' | 'link';
+    name: string;
+    ref: string;
+};
+
+export type kind = 'file' | 'link';
+
+/**
+ * Which parts of the delegation contract this server supports.
+ */
+export type DelegationCapabilities = {
+    version: number;
+    metadata: boolean;
+    structured_result: boolean;
+    reply: boolean;
+};
+
+export type DelegationMetadata = {
+    id: string;
+    requester_key: string;
+    origin_kind: 'local_chat' | 'local_task' | 'remote_task' | 'external';
+    origin_agent_id?: (string | null);
+    origin_chat_id?: (string | null);
+    origin_task_id?: (string | null);
+    depth: number;
+    root: string;
+    group?: (string | null);
+};
+
+export type origin_kind = 'local_chat' | 'local_task' | 'remote_task' | 'external';
+
+export type DelegationReply = {
+    result_id: string;
+    message: string;
+};
+
+export type DelegationReplyResult = {
+    delivered: boolean;
+    uncertain?: boolean;
+};
+
+export type DelegationReport = {
+    status: 'in_progress' | 'blocked' | 'done' | 'failed';
+    summary: string;
+    question?: (string | null);
+    audience?: 'requester' | 'user';
+    artifacts?: Array<DelegationArtifact>;
+    body?: string;
+};
+
+/**
+ * The stored structured result of a delegated task, as the requester reads it.
+ */
+export type DelegationResultPublic = {
+    id: string;
+    session_id?: (string | null);
+    status: 'in_progress' | 'blocked' | 'done' | 'failed';
+    summary: string;
+    question?: (string | null);
+    audience?: 'requester' | 'user';
+    artifacts?: Array<DelegationArtifact>;
+    body?: string;
+    reply_state?: ('sending' | 'delivered' | null);
+};
+
 export type DesktopOAuthClientPublic = {
     client_id: string;
     device_name: string;
@@ -4232,6 +4312,7 @@ export type ImprovementRequestUpdate = {
 
 export type InputTaskCreate = {
     external_executor?: (string | null);
+    delegation_metadata?: (DelegationMetadata | null);
     original_message: string;
     selected_agent_id?: (string | null);
     user_workspace_id?: (string | null);
@@ -4251,6 +4332,8 @@ export type InputTaskCreate = {
  * Full task detail including comments, attachments, subtasks, and status history
  */
 export type InputTaskDetailPublic = {
+    delegation_metadata?: (DelegationMetadata | null);
+    delegation_result?: (DelegationResultPublic | null);
     id: string;
     owner_id: string;
     original_message: string;
@@ -4300,6 +4383,8 @@ export type InputTaskDetailPublic = {
 };
 
 export type InputTaskPublic = {
+    delegation_metadata?: (DelegationMetadata | null);
+    delegation_result?: (DelegationResultPublic | null);
     id: string;
     owner_id: string;
     original_message: string;
@@ -4336,6 +4421,8 @@ export type InputTaskPublic = {
  * Extended response with agent name, sessions count, and collaboration data
  */
 export type InputTaskPublicExtended = {
+    delegation_metadata?: (DelegationMetadata | null);
+    delegation_result?: (DelegationResultPublic | null);
     id: string;
     owner_id: string;
     original_message: string;
@@ -6643,7 +6730,7 @@ export type SetupStatusResponse = {
     setup_url?: (string | null);
 };
 
-export type status = 'ready' | 'needs_setup' | 'publisher_broken';
+export type status2 = 'ready' | 'needs_setup' | 'publisher_broken';
 
 /**
  * Response model for credentials shared with the current user.
@@ -7109,7 +7196,7 @@ export type SyncPushResult = {
     server_record?: (SyncRecordPublic | null);
 };
 
-export type status2 = 'applied' | 'conflict' | 'unchanged' | 'rejected';
+export type status3 = 'applied' | 'conflict' | 'unchanged' | 'rejected';
 
 export type SyncRecordPublic = {
     collection: string;
@@ -8884,6 +8971,13 @@ export type AgentsGenerateRouterTriggerPromptEndpointData = {
 };
 
 export type AgentsGenerateRouterTriggerPromptEndpointResponse = (GenerateRouterTriggerPromptResponse);
+
+export type AgentTasksAgentReportDelegationData = {
+    requestBody: AgentDelegationReport;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksAgentReportDelegationResponse = (DelegationResultPublic);
 
 export type AgentTasksAgentCreateTaskData = {
     requestBody: AgentTaskCreate;
@@ -11448,6 +11542,22 @@ export type SshKeysGenerateSshKeyData = {
 };
 
 export type SshKeysGenerateSshKeyResponse = (SSHKeyPublic);
+
+export type TasksDelegationCapabilitiesResponse = (DelegationCapabilities);
+
+export type TasksReportDelegationData = {
+    id: string;
+    requestBody: DelegationReport;
+};
+
+export type TasksReportDelegationResponse = (DelegationResultPublic);
+
+export type TasksReplyDelegationData = {
+    id: string;
+    requestBody: DelegationReply;
+};
+
+export type TasksReplyDelegationResponse = (DelegationReplyResult);
 
 export type TasksListTasksBySourceSessionData = {
     sessionId: string;

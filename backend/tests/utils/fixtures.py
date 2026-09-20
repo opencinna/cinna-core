@@ -85,6 +85,11 @@ CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
     "app.acp.server.create_session",
     "app.services.sessions.session_service.create_session",
     "app.services.tasks.input_task_service.create_session",
+    # DelegationService.reply() resumes the blocked task's session via
+    # SessionService.send_session_message(get_fresh_db_session=create_session);
+    # unpatched, that lands on the real engine and can't see the session the
+    # test just created inside the rolled-back test transaction.
+    "app.services.tasks.delegation_service.create_session",
     "app.services.agents.commands.files_command.create_session",
     "app.services.events.activity_service.create_session",
     "app.services.agent_api.agent_api_service.create_session",

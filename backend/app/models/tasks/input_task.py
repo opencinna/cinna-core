@@ -14,6 +14,7 @@ from sqlalchemy import JSON, Index, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.models.files.file_upload import FileUploadPublic
+from app.models.tasks.delegation import DelegationMetadata, DelegationResultPublic
 
 
 class InputTaskStatus:
@@ -150,6 +151,10 @@ class InputTask(InputTaskBase, table=True):
     # (the desktop app) sends its own local task id here so a retried create
     # returns the first task instead of making a second one.
     external_ref: str | None = Field(default=None, max_length=64)
+    # Plain JSON columns: in-place dict mutation is NOT change-tracked, so
+    # always assign a new dict (or call flag_modified) when updating these.
+    delegation_metadata: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    delegation_result: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     external_executor: str | None = Field(default=None, max_length=100)
 
 
@@ -165,6 +170,7 @@ class ExternalExecutorFields(SQLModel):
 
 # Create schema
 class InputTaskCreate(ExternalExecutorFields):
+    delegation_metadata: DelegationMetadata | None = None
     original_message: str = Field(min_length=1, max_length=10000)
     selected_agent_id: uuid.UUID | None = None
     user_workspace_id: uuid.UUID | None = None
@@ -198,6 +204,8 @@ class InputTaskUpdate(ExternalExecutorFields):
 
 # API response schemas
 class InputTaskPublic(SQLModel):
+    delegation_metadata: DelegationMetadata | None = None
+    delegation_result: DelegationResultPublic | None = None
     id: uuid.UUID
     owner_id: uuid.UUID
     original_message: str

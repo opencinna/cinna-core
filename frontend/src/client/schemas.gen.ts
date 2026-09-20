@@ -6617,6 +6617,63 @@ export const AgentCredentialLinkRequestSchema = {
     title: 'AgentCredentialLinkRequest'
 } as const;
 
+export const AgentDelegationReportSchema = {
+    properties: {
+        status: {
+            type: 'string',
+            enum: ['in_progress', 'blocked', 'done', 'failed'],
+            title: 'Status'
+        },
+        summary: {
+            type: 'string',
+            maxLength: 1000,
+            minLength: 1,
+            title: 'Summary'
+        },
+        question: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Question'
+        },
+        audience: {
+            type: 'string',
+            enum: ['requester', 'user'],
+            title: 'Audience',
+            default: 'user'
+        },
+        artifacts: {
+            items: {
+                '$ref': '#/components/schemas/DelegationArtifact'
+            },
+            type: 'array',
+            maxItems: 100,
+            title: 'Artifacts'
+        },
+        body: {
+            type: 'string',
+            maxLength: 100000,
+            title: 'Body',
+            default: ''
+        },
+        source_session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Source Session Id'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['status', 'summary', 'source_session_id'],
+    title: 'AgentDelegationReport'
+} as const;
+
 export const AgentEnvActionLogPublicSchema = {
     properties: {
         id: {
@@ -14837,6 +14894,308 @@ export const DatabaseQueryRequestSchema = {
     description: 'Request to execute SQL query on SQLite database'
 } as const;
 
+export const DelegationArtifactSchema = {
+    properties: {
+        kind: {
+            type: 'string',
+            enum: ['file', 'link'],
+            title: 'Kind'
+        },
+        name: {
+            type: 'string',
+            maxLength: 500,
+            minLength: 1,
+            title: 'Name'
+        },
+        ref: {
+            type: 'string',
+            maxLength: 4096,
+            minLength: 1,
+            title: 'Ref'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['kind', 'name', 'ref'],
+    title: 'DelegationArtifact'
+} as const;
+
+export const DelegationCapabilitiesSchema = {
+    properties: {
+        version: {
+            type: 'integer',
+            title: 'Version'
+        },
+        metadata: {
+            type: 'boolean',
+            title: 'Metadata'
+        },
+        structured_result: {
+            type: 'boolean',
+            title: 'Structured Result'
+        },
+        reply: {
+            type: 'boolean',
+            title: 'Reply'
+        }
+    },
+    type: 'object',
+    required: ['version', 'metadata', 'structured_result', 'reply'],
+    title: 'DelegationCapabilities',
+    description: 'Which parts of the delegation contract this server supports.'
+} as const;
+
+export const DelegationMetadataSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            maxLength: 128,
+            minLength: 1,
+            title: 'Id'
+        },
+        requester_key: {
+            type: 'string',
+            maxLength: 128,
+            minLength: 1,
+            title: 'Requester Key'
+        },
+        origin_kind: {
+            type: 'string',
+            enum: ['local_chat', 'local_task', 'remote_task', 'external'],
+            title: 'Origin Kind'
+        },
+        origin_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Origin Agent Id'
+        },
+        origin_chat_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Origin Chat Id'
+        },
+        origin_task_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Origin Task Id'
+        },
+        depth: {
+            type: 'integer',
+            maximum: 2,
+            minimum: 1,
+            title: 'Depth'
+        },
+        root: {
+            type: 'string',
+            maxLength: 128,
+            minLength: 1,
+            title: 'Root'
+        },
+        group: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Group'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['id', 'requester_key', 'origin_kind', 'depth', 'root'],
+    title: 'DelegationMetadata'
+} as const;
+
+export const DelegationReplySchema = {
+    properties: {
+        result_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Result Id'
+        },
+        message: {
+            type: 'string',
+            maxLength: 10000,
+            minLength: 1,
+            title: 'Message'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['result_id', 'message'],
+    title: 'DelegationReply'
+} as const;
+
+export const DelegationReplyResultSchema = {
+    properties: {
+        delivered: {
+            type: 'boolean',
+            title: 'Delivered'
+        },
+        uncertain: {
+            type: 'boolean',
+            title: 'Uncertain',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['delivered'],
+    title: 'DelegationReplyResult'
+} as const;
+
+export const DelegationReportSchema = {
+    properties: {
+        status: {
+            type: 'string',
+            enum: ['in_progress', 'blocked', 'done', 'failed'],
+            title: 'Status'
+        },
+        summary: {
+            type: 'string',
+            maxLength: 1000,
+            minLength: 1,
+            title: 'Summary'
+        },
+        question: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Question'
+        },
+        audience: {
+            type: 'string',
+            enum: ['requester', 'user'],
+            title: 'Audience',
+            default: 'user'
+        },
+        artifacts: {
+            items: {
+                '$ref': '#/components/schemas/DelegationArtifact'
+            },
+            type: 'array',
+            maxItems: 100,
+            title: 'Artifacts'
+        },
+        body: {
+            type: 'string',
+            maxLength: 100000,
+            title: 'Body',
+            default: ''
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['status', 'summary'],
+    title: 'DelegationReport'
+} as const;
+
+export const DelegationResultPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        },
+        status: {
+            type: 'string',
+            enum: ['in_progress', 'blocked', 'done', 'failed'],
+            title: 'Status'
+        },
+        summary: {
+            type: 'string',
+            title: 'Summary'
+        },
+        question: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Question'
+        },
+        audience: {
+            type: 'string',
+            enum: ['requester', 'user'],
+            title: 'Audience',
+            default: 'user'
+        },
+        artifacts: {
+            items: {
+                '$ref': '#/components/schemas/DelegationArtifact'
+            },
+            type: 'array',
+            title: 'Artifacts'
+        },
+        body: {
+            type: 'string',
+            title: 'Body',
+            default: ''
+        },
+        reply_state: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['sending', 'delivered']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reply State'
+        }
+    },
+    type: 'object',
+    required: ['id', 'status', 'summary'],
+    title: 'DelegationResultPublic',
+    description: 'The stored structured result of a delegated task, as the requester reads it.'
+} as const;
+
 export const DesktopOAuthClientPublicSchema = {
     properties: {
         client_id: {
@@ -17524,6 +17883,16 @@ export const InputTaskCreateSchema = {
             ],
             title: 'External Executor'
         },
+        delegation_metadata: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DelegationMetadata'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
         original_message: {
             type: 'string',
             maxLength: 10000,
@@ -17664,6 +18033,26 @@ export const InputTaskCreateSchema = {
 
 export const InputTaskDetailPublicSchema = {
     properties: {
+        delegation_metadata: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DelegationMetadata'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        delegation_result: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DelegationResultPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
         id: {
             type: 'string',
             format: 'uuid',
@@ -18068,6 +18457,26 @@ export const InputTaskDetailPublicSchema = {
 
 export const InputTaskPublicSchema = {
     properties: {
+        delegation_metadata: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DelegationMetadata'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        delegation_result: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DelegationResultPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
         id: {
             type: 'string',
             format: 'uuid',
@@ -18333,6 +18742,26 @@ export const InputTaskPublicSchema = {
 
 export const InputTaskPublicExtendedSchema = {
     properties: {
+        delegation_metadata: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DelegationMetadata'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        delegation_result: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DelegationResultPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
         id: {
             type: 'string',
             format: 'uuid',

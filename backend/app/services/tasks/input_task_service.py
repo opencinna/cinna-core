@@ -85,6 +85,13 @@ class ValidationError(InputTaskError):
         super().__init__(message, status_code=400)
 
 
+class ConflictError(InputTaskError):
+    """The request is well-formed but conflicts with the task's current state."""
+
+    def __init__(self, message: str):
+        super().__init__(message, status_code=409)
+
+
 class InputTaskService:
     # ==================== Helper Methods ====================
 
@@ -522,6 +529,9 @@ class InputTaskService:
         # a second create under '' would be a constraint violation rather than
         # an ordinary unconstrained create.
         external_ref = (getattr(data, 'external_ref', None) or '').strip() or None
+        delegation_metadata = (
+            data.delegation_metadata.model_dump(mode='json') if data.delegation_metadata else None
+        )
 
         # Idempotency: a caller that supplies an external_ref it already used
         # gets its first task back, not a second one.
@@ -533,7 +543,17 @@ class InputTaskService:
                 )
             ).first()
             if existing:
+                # A replay must describe the same delegation (or the same lack
+                # of one). Handing a plain task back to a delegation create, or
+                # the reverse, would silently drop the reporting contract.
+                if existing.delegation_metadata != delegation_metadata:
+                    raise ConflictError(
+                        'external_ref is already used by a task with different delegation metadata'
+                    )
                 return existing, False
+
+        if delegation_metadata and (not external_ref or data.parent_task_id):
+            raise ValidationError('A delegation requires external_ref and must not use parent_task_id')
 
         # Generate short code
         short_code, sequence_number = InputTaskService._generate_short_code(
@@ -589,6 +609,7 @@ class InputTaskService:
             assigned_node_id=assigned_node_id,
             parent_task_id=getattr(data, 'parent_task_id', None),
             external_ref=external_ref,
+            delegation_metadata=delegation_metadata,
             external_executor=data.external_executor,
         )
         db_session.add(task)
@@ -935,6 +956,11 @@ class InputTaskService:
             task_id=task.id,
             task_name=session_title,
         )
+
+        if task.delegation_metadata:
+            # After the title is derived, so the session is still named after the work.
+            from app.services.tasks.delegation_service import HOW_TO_REPORT
+            content = f"{content}{HOW_TO_REPORT}"
 
         try:
             ingestion = await ChannelIngestionService.ingest_inbound_message(
@@ -1299,7 +1325,34 @@ class InputTaskService:
         Sets session_id first, then delegates to update_task_status so the
         transition gets a TaskStatusHistory entry and system comment.
         """
+        task = db_session.exec(select(InputTask).where(InputTask.id == task.id)
+                               .with_for_update().execution_options(populate_existing=True)).first()
+        if not task:
+            raise TaskNotFoundError()
+        if task.delegation_metadata:
+            # Session identity, cleared report and execution state must become
+            # visible together, in one commit under the row lock, so a report
+            # from the new session cannot land between them and be overwritten.
+            from_status = InputTaskService._apply_status_transition(
+                db_session, task, InputTaskStatus.IN_PROGRESS,
+                changed_by_system=True, reason="Session started",
+            )
+            task.session_id = session_id
+            task.delegation_result = None
+            task.error_message = None
+            task.completed_at = None
+            task.updated_at = datetime.now(UTC)
+            if task.executed_at is None and not task.external_executor:
+                task.executed_at = datetime.now(UTC)
+            db_session.add(task)
+            db_session.commit()
+            db_session.refresh(task)
+            if from_status is not None:
+                InputTaskService._emit_status_changed(task, from_status)
+            return task
+
         task.session_id = session_id
+        task.delegation_result = None
         db_session.add(task)
         db_session.commit()
         db_session.refresh(task)
@@ -1590,6 +1643,17 @@ class InputTaskService:
 
         if task.status not in execution_statuses:
             # Task is in new, refining, or archived - don't override
+            return None
+
+        # A structured delegation result is authoritative until a reply or a
+        # new execution clears it; session completion must not erase its ask.
+        # A blocked result whose reply was delivered no longer holds the task:
+        # the report keeps status 'blocked' verbatim (so a retried report still
+        # matches), and reply progress lives in reply_state.
+        result = task.delegation_result or {}
+        if result.get('status') in ('done', 'failed') or (
+            result.get('status') == 'blocked' and result.get('reply_state') != 'delivered'
+        ):
             return None
 
         # Compute or use forced status
@@ -2187,9 +2251,50 @@ class InputTaskService:
         if not task:
             raise TaskNotFoundError()
 
+        from_status = InputTaskService._apply_status_transition(
+            db_session,
+            task,
+            new_status,
+            changed_by_agent_id=changed_by_agent_id,
+            changed_by_user_id=changed_by_user_id,
+            changed_by_system=changed_by_system,
+            reason=reason,
+            commit=True,
+        )
+        if from_status is not None:
+            logger.info(f"Task {task_id} status: {from_status} → {new_status}")
+        return task
+
+    @staticmethod
+    def _apply_status_transition(
+        db_session: DBSession,
+        task: InputTask,
+        new_status: str,
+        changed_by_agent_id: UUID | None = None,
+        changed_by_user_id: UUID | None = None,
+        changed_by_system: bool = False,
+        reason: str | None = None,
+        commit: bool = False,
+    ) -> str | None:
+        """Validate and apply one status transition with its audit trail.
+
+        Checks ``VALID_TRANSITIONS``, adds the TaskStatusHistory row and the
+        status_change system comment, and sets the status and its timestamps.
+
+        With ``commit=True`` it commits, refreshes and emits
+        TASK_STATUS_CHANGED. With ``commit=False`` nothing is committed, so a
+        caller can make other fields visible in the same commit (e.g. under a
+        row lock); it must then call ``_emit_status_changed`` after committing.
+
+        Returns:
+            The previous status when a transition was applied, None for a no-op
+            (``new_status`` equals the current status).
+
+        Raises:
+            ValidationError: If the transition is not allowed.
+        """
         from_status = task.status
 
-        # Validate the transition
         valid_nexts = InputTaskStatus.VALID_TRANSITIONS.get(from_status, set())
         if new_status not in valid_nexts and new_status != from_status:
             raise ValidationError(
@@ -2198,39 +2303,35 @@ class InputTaskService:
             )
 
         if new_status == from_status:
-            return task  # No-op
+            return None
 
-        # Create immutable status history record
-        history = TaskStatusHistory(
-            task_id=task_id,
+        # Immutable status history record
+        db_session.add(TaskStatusHistory(
+            task_id=task.id,
             from_status=from_status,
             to_status=new_status,
             changed_by_agent_id=changed_by_agent_id,
             changed_by_user_id=changed_by_user_id,
             reason=reason,
-        )
-        db_session.add(history)
+        ))
 
-        # Post system comment visible in activity feed
-        comment_content = InputTaskService._build_status_change_comment(
-            from_status=from_status,
-            to_status=new_status,
-            agent_id=changed_by_agent_id,
-            user_id=changed_by_user_id,
-            is_system=changed_by_system,
-            reason=reason,
-            db_session=db_session,
-        )
-        from app.services.tasks.task_comment_service import TaskCommentService
-        TaskCommentService.add_system_comment(
-            db_session=db_session,
-            task_id=task_id,
-            content=comment_content,
+        # System comment visible in the activity feed. Added directly rather
+        # than via TaskCommentService.add_system_comment, which commits.
+        db_session.add(TaskComment(
+            task_id=task.id,
+            content=InputTaskService._build_status_change_comment(
+                from_status=from_status,
+                to_status=new_status,
+                agent_id=changed_by_agent_id,
+                user_id=changed_by_user_id,
+                is_system=changed_by_system,
+                reason=reason,
+                db_session=db_session,
+            ),
             comment_type="status_change",
             comment_meta={"from_status": from_status, "to_status": new_status},
-        )
+        ))
 
-        # Update task
         task.status = new_status
         task.updated_at = datetime.now(UTC)
 
@@ -2246,17 +2347,36 @@ class InputTaskService:
             task.archived_at = datetime.now(UTC)
 
         db_session.add(task)
-        db_session.commit()
-        db_session.refresh(task)
 
-        # Emit real-time event
+        if commit:
+            db_session.commit()
+            db_session.refresh(task)
+            InputTaskService._emit_status_changed(
+                task, from_status,
+                changed_by_agent_id=changed_by_agent_id,
+                changed_by_user_id=changed_by_user_id,
+            )
+        return from_status
+
+    @staticmethod
+    def _emit_status_changed(
+        task: InputTask,
+        from_status: str,
+        changed_by_agent_id: UUID | None = None,
+        changed_by_user_id: UUID | None = None,
+        to_status: str | None = None,
+    ) -> None:
+        """Emit TASK_STATUS_CHANGED for a committed transition to ``to_status``
+        (default ``task.status``), and notify the parent task when a subtask
+        completed."""
+        new_status = to_status or task.status
         create_task_with_error_logging(
             event_service.emit_event(
                 event_type=EventType.TASK_STATUS_CHANGED,
-                model_id=task_id,
+                model_id=task.id,
                 user_id=task.owner_id,
                 meta={
-                    "task_id": str(task_id),
+                    "task_id": str(task.id),
                     "short_code": task.short_code,
                     "from_status": from_status,
                     "to_status": new_status,
@@ -2264,22 +2384,18 @@ class InputTaskService:
                     "changed_by_user_id": str(changed_by_user_id) if changed_by_user_id else None,
                 }
             ),
-            task_name=f"emit_task_status_changed_{task_id}"
+            task_name=f"emit_task_status_changed_{task.id}"
         )
 
-        # If completed and has parent, notify parent
         if new_status == InputTaskStatus.COMPLETED and task.parent_task_id:
             create_task_with_error_logging(
                 InputTaskService._notify_parent_task_async(
                     parent_task_id=task.parent_task_id,
-                    completed_subtask_short_code=task.short_code or str(task_id),
+                    completed_subtask_short_code=task.short_code or str(task.id),
                     completed_subtask_agent_id=task.selected_agent_id,
                 ),
                 task_name=f"notify_parent_task_{task.parent_task_id}"
             )
-
-        logger.info(f"Task {task_id} status: {from_status} → {new_status}")
-        return task
 
     @staticmethod
     def _build_status_change_comment(

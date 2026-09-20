@@ -4,6 +4,7 @@ domain: tasks
 one_liner: "Lets a user or agent submit, AI-refine, execute, and track a task through comments, attachments, status history, and team subtask delegation."
 docs:
   tech: input_tasks_tech.md
+affects: [agent_environment_core]
 ---
 # Input Tasks
 
@@ -35,6 +36,8 @@ The task system also serves as the primary **collaboration surface** for agent w
 - **External Ref**: Caller-supplied idempotency key on task creation (`external_ref`, max 64 chars), unique per owner. An external client sends its own local task id so a retried create returns the first task instead of making a second one.
 - **Sync Cursor**: The `updated_since` and `updated_since_id` query params on the task list — an incremental-pull cursor for clients that poll for what changed, instead of re-reading the whole list.
 - **Externally-Executed Task**: A task a user-authenticated client runs *outside* cinna (Cinna Desktop running it on a local agent). There is no cinna session; the client mirrors status back through the user status route so the web view reflects reality.
+- **Delegation Metadata**: Optional `delegation_metadata` set on create (`requester_key`, `origin_kind`, optional origin agent/chat/task references, `depth`, `root`, optional `group`) that marks a task as a durable, cross-agent delegation rather than an ordinary in-platform handover. Requires `external_ref`; excludes `parent_task_id`.
+- **Delegation Result**: The structured report an executing agent files with the `handover_report` tool (`status`, `summary`, `question`, `audience`, `artifacts`, `body`, `reply_state`), stored on the task and read by the requester instead of the chat transcript. See [Cross-Agent Delegation Contract](#cross-agent-delegation-contract).
 
 ## User Stories / Flows
 
@@ -108,6 +111,34 @@ priority, comments, attachments, short code) and the status the client reports.
 Nothing in the web UI writes through this path — the web executes tasks with
 sessions, and the session lifecycle drives status for those. See
 [User-Reported Status](#user-reported-status-work-executed-outside-cinna).
+
+### Flow 6: Cross-Agent Delegation
+
+A caller on the other end of a task is not always a live cinna session in the
+same conversation — it may be a separate agent instance, another automation, or
+a client relaying on an agent's behalf. The delegation contract exchanges a
+structured result through the task record itself, so the requester does not
+have to watch the executor's chat to know what happened.
+
+1. The caller confirms the server supports the contract with `GET /api/v1/tasks/delegation-capabilities`, then creates the task with `POST /api/v1/tasks/`, supplying `external_ref` and `delegation_metadata` (`requester_key`, `origin_kind`, optional origin references, `depth`, `root`, optional `group`)
+2. cinna executes the task on the assigned agent as usual; the agent's first message carries an appended note (absent from an ordinary task) explaining that a structured report — not a chat reply — is what the requester reads
+3. The agent calls `handover_report` with `status` (`in_progress` / `blocked` / `done` / `failed`), a `summary`, and — for `blocked` — a `question` and an `audience` (`requester` or `user`)
+4. The report is stored as the task's delegation result and drives its status; a `blocked` or terminal report is authoritative and survives the ordinary session-completion status recompute
+5. If `blocked`, the task owner answers with `POST /api/v1/tasks/{id}/delegation-reply`, which resumes the agent's session with the reply as a new message
+6. The requester reads the outcome from `GET /api/v1/tasks/{id}` (or `/detail`) — the delegation result's `status`, plus `reply_state` when a question was involved
+
+See [Cross-Agent Delegation Contract](#cross-agent-delegation-contract) for the full rule set.
+
+**A concrete external client.** The account CLI implements the caller side of
+this flow as `cinna delegation create|status|report|reply` — confirmed by that
+tool's own docs and tests, not inferred: **cinna-cli** repo, `/Users/evgenyl/dev/ml-llm/cinna-cli`, `docs/features/delegation/delegation.md`, `docs/features/delegation/delegation_tech.md`, `tests/test_delegation.py`. <!-- nocheck -->
+`create`'s retry identity is the target agent plus a caller-chosen key, hashed
+into `external_ref`; `status` is a single read, never a poll loop, and that
+repo's own docs say a requester agent should end its turn and let **Cinna
+Desktop** deliver the result rather than poll `status` in a loop. Beyond that
+one claim, neither repo states how Desktop routes a `requester`-audience
+question versus a `user`-audience one, or where either surfaces in its UI —
+those are left unverified here.
 
 ## Business Rules
 
@@ -191,6 +222,24 @@ independently use the same string.
 - Blank and whitespace-only refs normalise to "no ref" and are stored as null, so they never collide with each other
 - `external_ref` is **ignored on `POST /{id}/subtasks/`**. A ref there could match an unrelated root task, and the route would return that task while silently dropping the parent the caller asked for. The field is cleared rather than rejected, so a client that fills it uniformly still gets a real subtask
 - The ref is returned on every task, so a client that lost its local database can re-bind by ref instead of guessing from titles
+
+### Cross-Agent Delegation Contract
+
+- **Requires `external_ref`, excludes `parent_task_id`.** A create with `delegation_metadata` but no `external_ref`, or with `parent_task_id` also set, is refused (400). Repeating the same `(owner, external_ref)` with identical `delegation_metadata` returns the same task (the ordinary idempotent-create behavior); repeating it with different metadata is refused (409) — a plain task cannot silently become a delegation, or the reverse, on retry.
+- **Capability discovery.** `GET /api/v1/tasks/delegation-capabilities` — versioned (`version`, `metadata`, `structured_result`, `reply`) — lets a caller confirm the server understands `delegation_metadata` before sending it; an older server has no other way to say so. It is registered ahead of `GET /{id}` so it can never be captured by the id-matching route.
+- **The report is the channel, not the chat.** Executing a delegated task appends reporting instructions to the agent's first message; an agent whose brief was written by another agent otherwise has no way to know a structured report is expected. The agent reports with the `handover_report` tool — shipped in the environment template — using `in_progress` / `blocked` (requires a `question`, defaults `audience` to `user`) / `done` / `failed`, a `summary`, `body`, and optional portable (HTTP(S)-only) `artifacts`. Unknown fields anywhere in the contract are rejected (422).
+- **Two report routes, one gate.** An agent's own `handover_report` call reports through the environment-authenticated route, resolved from its session. A delegation handed to an executor outside any cinna session instead reports through the owner-authenticated `PUT /api/v1/tasks/{id}/delegation-result`, and only while that task is `in_progress` or `blocked` (409 otherwise). Both answer 404 — not the file's usual 400 — to a non-owner or non-delegated task, deliberately, so these newer routes do not reveal task existence the way the rest of the task API does.
+- **Reports are idempotent, and resumptions are recorded.** A closed task (`completed`/`error`/`cancelled`/`archived`) refuses new reports (409). An identical retry (same fields, same session) is not reapplied — it returns the already-stored result, so a lost acknowledgement is harmless. A `done`/`failed` report following an earlier `blocked` one is recorded as a `blocked → in_progress → <status>` step, matching "someone answered in chat and the agent resumed" rather than being rejected as an invalid jump.
+- **A blocked question is answered once.** `POST /api/v1/tasks/{id}/delegation-reply` addresses one exact result by ID and resumes the linked session. A reply to a stale, non-blocked, or already differently-answered result is refused (409); a failed send is rolled back so the owner can retry, and a reply whose acknowledgement is lost mid-flight is reported uncertain rather than resent automatically. Once delivered, the stored report itself keeps `status: "blocked"` exactly as the agent sent it — only `reply_state` becomes `delivered` — while the task moves to `in_progress`. A reader must check both fields: `status="blocked"` with `reply_state="delivered"` is an answered question, not an open one.
+- **A structured result outlasts the session.** The ordinary session-completion status sync leaves a delegated task alone whenever its result is `done`, `failed`, or an undelivered `blocked` question — a finished session cannot silently erase a pending ask or an already-reported outcome. Starting a fresh execution on a delegated task clears the previous result.
+
+**Known limitation.** The session-completion status sync only defers for a `done`/`failed` result or an undelivered `blocked` question — **not** for `in_progress`, and not for no report at all. An agent session that finishes normally without ever calling `handover_report` (a stale environment, or ignored instructions) can therefore still let the ordinary session-based status computation move the task straight to `completed` or `error`, with no structured result behind it. This is expected until every agent environment is rebuilt with `handover_report` available; a planned follow-up will stop the session-completion sync from resolving a delegated task at all once its environment advertises the tool.
+
+`handover_report` ships in the environment template
+(`backend/app/env-templates/app_core_base/core/server/tools/`), which is baked
+into the container image on environment build, not live-mounted. An
+environment created before this change does not gain the tool until it is
+rebuilt — see [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md).
 
 ### Incremental Sync (`updated_since`)
 
@@ -334,10 +383,10 @@ Parent Task ──create_subtask──> Subtask ──auto_execute──> Target
 
 ## Integration Points
 
-- **Agent Handover**: Source agent uses `mcp__agent_task__create_task` to create tasks for direct handover or inbox — see [Agent Handover](../../agents/agent_handover/agent_handover.md)
+- **Agent Handover**: Source agent uses `mcp__agent_task__create_task` to create tasks for direct handover or inbox — see [Agent Handover](../../agents/agent_handover/agent_handover.md). This is a live, in-platform handoff between two sessions; the [Cross-Agent Delegation Contract](#cross-agent-delegation-contract) is a separate, session-independent mechanism for handoffs that are not a single in-platform tool call
 - **Agentic Teams**: Team-scoped tasks use the team's `task_prefix`; subtask delegation follows team topology — see [Agentic Teams](../../agents/agentic_teams/agentic_teams.md)
 - **Sessions**: Task execution creates sessions with `source_task_id` backlink; session lifecycle events drive automatic status updates — see [Agent Sessions](../agent_sessions/agent_sessions.md)
-- **Agent Environment Core**: Six MCP tools (`mcp__agent_task__*`) let agents interact with tasks from inside environments. `get_details` automatically uploads task files to the agent workspace. `add_comment` validates attached file paths locally before sending — see [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md) and [Agent Task Tools](../../agents/agent_environment_core/create_agent_task_tool.md)
+- **Agent Environment Core**: Seven MCP tools (`mcp__agent_task__*`) let agents interact with tasks from inside environments — six for the live in-platform task flow (`create_task`, `create_subtask`, `add_comment`, `update_status`, `get_details`, `list_tasks`) plus `handover_report` for the cross-agent delegation contract. `get_details` automatically uploads task files to the agent workspace. `add_comment` validates attached file paths locally before sending — see [Agent Environment Core](../../agents/agent_environment_core/agent_environment_core.md), [Agent Task Tools](../../agents/agent_environment_core/create_agent_task_tool.md) and [Session State Tools](../../agents/agent_environment_core/session_state_tools.md)
 - **Task Triggers**: Automated rules (CRON, webhook, date) that fire task execution; gains short-codes automatically — see [Task Triggers](task_triggers.md)
 - **Activities**: Session state events generate activities for user notification — see [Agent Activities](../agent_activities/agent_activities.md)
 - ~~**Email Integration**~~: Incoming email can no longer create tasks — the email-originated task flow (and the "Send Answer" AI reply) was removed when email became a [Server Channel](../server_channels/server_channels.md) (Phase 4 of the channels & identity unification); see [Email Integration — Capabilities removed](../email_integration/email_integration.md#capabilities-removed-in-this-refactor)
@@ -348,3 +397,4 @@ Parent Task ──create_subtask──> Subtask ──auto_execute──> Target
 ## Changelog
 
 - 2026-09-11: External execution ownership prevents duplicate cinna runs; marker-aware web controls and owner events expose the execution source. Incremental paging now accepts a task ID alongside the timestamp, and completed tasks may restart through the validated status API.
+- 2026-09-19: Added the cross-agent delegation contract — `delegation_metadata` on create, the `handover_report` tool and its owner/environment report routes, the delegation reply route, and a status-sync guard that lets a structured `done`/`failed`/`blocked` result outlive session completion.

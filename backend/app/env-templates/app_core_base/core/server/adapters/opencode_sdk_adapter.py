@@ -995,6 +995,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
                 "mcp__agent_task__create_subtask",
                 "mcp__agent_task__get_details",
                 "mcp__agent_task__list_tasks",
+                "mcp__agent_task__handover_report",
             ]
             for key in self._active_plugin_mcp_keys():
                 mcp_tool_names.append(f"mcp__{key}")

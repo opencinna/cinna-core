@@ -130,6 +130,13 @@ def delete_task(client: TestClient, headers: dict, task_id: str) -> dict:
     return r.json()
 
 
+def archive_task(client: TestClient, headers: dict, task_id: str) -> dict:
+    """POST /tasks/{task_id}/archive — asserts 200 and returns body."""
+    r = client.post(f"{_BASE}/{task_id}/archive", headers=headers)
+    assert r.status_code == 200, f"Archive task failed: {r.text}"
+    return r.json()
+
+
 # ---------------------------------------------------------------------------
 # Comment helpers
 # ---------------------------------------------------------------------------

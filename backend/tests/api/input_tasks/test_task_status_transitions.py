@@ -653,3 +653,110 @@ def test_user_route_and_agent_route_do_not_accept_each_others_tokens(
 
     # Neither attempt moved the task
     assert get_task(client, headers, task_id)["status"] == "new"
+
+
+def test_status_change_helper_still_emits_activity_after_delegation_refactor(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """
+    Regression guard for the delegation contract's shared refactor.
+
+    DelegationService now drives its status changes through the same
+    ``InputTaskService._apply_status_transition`` / ``_emit_status_changed``
+    helpers as the plain status routes (see
+    tests/api/input_tasks/test_delegation_contract.py). This is a canary that
+    a change made for delegation's sake didn't alter the TASK_STATUS_CHANGED
+    payload shape the plain (non-delegation) routes rely on: the Activities
+    feed is built entirely from that event, so a broken payload key shows up
+    here as a missing activity rather than as an assertion on the event
+    itself.
+
+      1. Owner route (POST /{id}/status, attributed to the user):
+         new → in_progress → blocked. History + system comment + a
+         task_blocked Activity all appear; GET /tasks/ shows 'blocked'.
+      2. Agent route (POST /agent/tasks/{id}/status, attributed to the agent):
+         a second task, in_progress → blocked the same way, confirming the
+         event payload works for agent attribution too.
+    """
+    from tests.utils.background_tasks import drain_tasks
+
+    headers = superuser_token_headers
+    owner_id = _get_superuser_id(client, headers)
+
+    def _activities(activity_type: str) -> list[dict]:
+        r = client.get(f"{settings.API_V1_STR}/activities/", headers=headers)
+        assert r.status_code == 200, r.text
+        return [a for a in r.json()["data"] if a["activity_type"] == activity_type]
+
+    # ── Phase 1: owner-attributed status change ─────────────────────────
+    task = create_task(client, headers, original_message="Owner-route event canary")
+    task_id = task["id"]
+
+    r = client.post(f"{_BASE}/{task_id}/status", headers=headers, json={"status": "in_progress"})
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    r = client.post(f"{_BASE}/{task_id}/status", headers=headers,
+                     json={"status": "blocked", "reason": "Waiting on a dependency"})
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    assert get_task(client, headers, task_id)["status"] == "blocked"
+
+    detail = get_task_detail(client, headers, task_id)
+    blocked_history = [h for h in detail["status_history"] if h["to_status"] == "blocked"]
+    assert len(blocked_history) == 1
+    assert blocked_history[0]["changed_by_user_id"] == owner_id
+    assert blocked_history[0]["changed_by_agent_id"] is None
+
+    r = client.get(f"{_BASE}/{task_id}/comments/", headers=headers)
+    assert r.status_code == 200
+    assert any(c["comment_type"] == "status_change" and "blocked" in c["content"]
+               for c in r.json()["data"])
+
+    owner_blocked_activities = [
+        a for a in _activities("task_blocked") if a["input_task_id"] == task_id
+    ]
+    assert len(owner_blocked_activities) >= 1, (
+        "TASK_STATUS_CHANGED from the owner status route no longer produces a "
+        "task_blocked Activity — the shared helper's event payload likely drifted"
+    )
+
+    # ── Phase 2: agent-attributed status change ─────────────────────────
+    from tests.utils.agent import create_agent_via_api
+
+    agent = create_agent_via_api(client, headers, name="Status event canary agent")
+    drain_tasks()
+    agent_id = agent["id"]
+    _, env_headers = create_env_with_token(db, agent_id=agent_id, owner_id=owner_id)
+
+    agent_task = create_task(
+        client, headers, original_message="Agent-route event canary", selected_agent_id=agent_id,
+    )
+    agent_task_id = agent_task["id"]
+    r = client.post(f"{_BASE}/{agent_task_id}/status", headers=headers, json={"status": "in_progress"})
+    assert r.status_code == 200, r.text
+    drain_tasks()
+
+    r = client.post(
+        f"{settings.API_V1_STR}/agent/tasks/{agent_task_id}/status",
+        headers=env_headers,
+        json={"status": "blocked", "reason": "Needs external input"},
+    )
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    assert get_task(client, headers, agent_task_id)["status"] == "blocked"
+
+    detail = get_task_detail(client, headers, agent_task_id)
+    blocked_history = [h for h in detail["status_history"] if h["to_status"] == "blocked"]
+    assert len(blocked_history) == 1
+    assert blocked_history[0]["changed_by_agent_id"] == agent_id
+    assert blocked_history[0]["changed_by_user_id"] is None
+
+    agent_blocked_activities = [
+        a for a in _activities("task_blocked") if a["input_task_id"] == agent_task_id
+    ]
+    assert len(agent_blocked_activities) >= 1, (
+        "TASK_STATUS_CHANGED from the agent status route no longer produces a "
+        "task_blocked Activity — the shared helper's event payload likely drifted"
+    )
