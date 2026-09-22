@@ -39,6 +39,12 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>
 
+// Types whose secrets the platform manages: the edit dialog saves metadata only.
+const METADATA_ONLY_TYPES: ReadonlySet<CredentialPublic["type"]> = new Set([
+  "agent_api",
+  "mcp_provider",
+])
+
 interface EditCredentialProps {
   credential: CredentialPublic
   onSuccess: () => void
@@ -94,6 +100,13 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
   })
 
   const onSubmit = (data: FormData) => {
+    if (METADATA_ONLY_TYPES.has(credential.type)) {
+      // These values are minted or server-refreshed, never typed; echoing
+      // the fetched credential_data back could overwrite newer tokens.
+      const { credential_data: _omitted, ...metadata } = data
+      mutation.mutate(metadata)
+      return
+    }
     mutation.mutate(data)
   }
 
@@ -144,6 +157,10 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
+                {(credential.type === "agent_api" || credential.type === "mcp_provider") && (
+                  <GenericCredentialForm form={form} credentialType={credential.type} />
+                )}
+
                 {credential.type === "odoo" && (
                   <OdooCredentialForm form={form} />
                 )}

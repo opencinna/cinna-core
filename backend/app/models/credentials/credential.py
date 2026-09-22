@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 from sqlmodel import Field, Relationship, SQLModel, Column, Text
@@ -40,6 +41,7 @@ class CredentialBase(SQLModel):
     name: str = Field(min_length=1, max_length=255)
     type: CredentialType
     notes: str | None = Field(default=None)
+    allow_local_use: bool = Field(default=False)
     allow_sharing: bool = Field(default=False)  # Whether this credential can be shared with other users
     allow_template_sharing: bool = Field(default=False)  # Whether this credential can be shared as a template (non-private fields are copied as defaults; the installer must supply the private ones)
     # Non-secret audience/slot id (I4). When set, the bundle publisher stamps
@@ -199,6 +201,7 @@ class CredentialUpdate(SQLModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     notes: str | None = None
     credential_data: dict | None = None
+    allow_local_use: bool | None = None
     allow_sharing: bool | None = None  # Update sharing permission
     allow_template_sharing: bool | None = None  # Toggle template-sharing
     template_private_fields: list[str] | None = None  # Fields the installer must supply when installing a bundle that uses this credential as a template
@@ -253,6 +256,7 @@ class Credential(CredentialBase, table=True):
         ),
     )
 
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     # Store encrypted credential data as text
     encrypted_data: str = Field(sa_column=Column(Text, nullable=False))

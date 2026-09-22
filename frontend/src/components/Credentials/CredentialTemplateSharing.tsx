@@ -136,15 +136,13 @@ const FIELD_LABELS_BY_TYPE: Record<string, Record<string, string>> = {
 // ``service_uri`` is a top-level Credential column (a non-secret slot id),
 // NOT a ``credential_data`` field, so it is deliberately kept out of
 // FIELDS_BY_TYPE (which mirrors the credential_data source of truth). It is
-// appended as an extra toggleable row only for credential types where the
-// slot id is meaningful. The toggle persists through the same
+// appended as an extra toggleable row for every credential type. The toggle persists through the same
 // ``template_private_fields`` mechanism — when present, the backend leaves
 // service_uri blank on the installer's row (installer provides); when absent
 // it copies the publisher's value as a shared default.
-const SERVICE_URI_TYPES = new Set<string>(["api_token", "agent_api"])
 
 function labelForField(type: string, field: string): string {
-  // service_uri is appended as an extra row for SERVICE_URI_TYPES and may
+  // service_uri is appended as an extra row for every credential type and may
   // not have a per-type label entry (e.g. agent_api) — give it a stable,
   // human-readable label everywhere.
   if (field === "service_uri") return "Service URI"
@@ -192,12 +190,10 @@ export function CredentialTemplateSharing({
 
   // Field rows the publisher can toggle private/shared. This is the
   // credential_data fields plus the top-level ``service_uri`` slot id for
-  // types where it applies. service_uri defaults to shared (it is not in
+  // every credential type. service_uri defaults to shared (it is not in
   // DEFAULT_PRIVATE_FIELDS_BY_TYPE) and persists through the same
   // template_private_fields list as any other field name.
-  const displayFieldNames = SERVICE_URI_TYPES.has(credential.type)
-    ? [...fieldNames, "service_uri"]
-    : fieldNames
+  const displayFieldNames = [...new Set([...fieldNames, "service_uri"])]
 
   // Bundles whose publisher install has this credential linked AND
   // resolved as ``provided_by="template"``. Filtered client-side so the

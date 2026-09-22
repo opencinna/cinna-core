@@ -1,3 +1,4 @@
+import { ServiceUriField } from "@/components/Credentials/CredentialFields/ServiceUriField"
 import { UseFormReturn } from "react-hook-form"
 import {
   FormControl,
@@ -43,6 +44,8 @@ export function OAuthCredentialForm({
         credentialType={credentialType}
         credentialId={credentialId}
       />
+
+      <ServiceUriField control={form.control} />
 
       <FormField
         control={form.control}

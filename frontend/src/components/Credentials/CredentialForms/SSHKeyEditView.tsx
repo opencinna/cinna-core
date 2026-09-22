@@ -1,3 +1,4 @@
+import { ServiceUriField } from "@/components/Credentials/CredentialFields/ServiceUriField"
 import { useEffect, useState } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -58,6 +59,7 @@ interface SSHKeyEditViewProps {
 const metadataSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
   notes: z.string().optional(),
+  service_uri: z.string().optional(),
   host_aliases_text: z.string().optional(),
 })
 
@@ -91,7 +93,7 @@ export function SSHKeyEditView({
     mode: "onBlur",
     defaultValues: {
       name: credential.name,
-      notes: credential.notes ?? "",
+      notes: credential.notes ?? "", service_uri: credential.service_uri ?? "",
       host_aliases_text: aliasesToText(data.host_aliases),
     },
   })
@@ -99,7 +101,7 @@ export function SSHKeyEditView({
   useEffect(() => {
     form.reset({
       name: credential.name,
-      notes: credential.notes ?? "",
+      notes: credential.notes ?? "", service_uri: credential.service_uri ?? "",
       host_aliases_text: aliasesToText(data.host_aliases),
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,6 +121,7 @@ export function SSHKeyEditView({
         requestBody: {
           name: values.name,
           notes: values.notes || null,
+          service_uri: values.service_uri || null,
           credential_data: {
             host_aliases: aliases ?? null,
           },
@@ -224,6 +227,8 @@ export function SSHKeyEditView({
               )}
             />
 
+            <ServiceUriField control={form.control} />
+
             <FormField
               control={form.control}
               name="notes"
@@ -272,7 +277,7 @@ export function SSHKeyEditView({
                   onClick={() =>
                     form.reset({
                       name: credential.name,
-                      notes: credential.notes ?? "",
+                      notes: credential.notes ?? "", service_uri: credential.service_uri ?? "",
                       host_aliases_text: aliasesToText(data.host_aliases),
                     })
                   }

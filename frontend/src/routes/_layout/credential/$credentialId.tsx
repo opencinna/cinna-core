@@ -1,3 +1,4 @@
+import { ServiceUriField } from "@/components/Credentials/CredentialFields/ServiceUriField"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
@@ -367,6 +368,8 @@ function OwnedCredentialView({
                       </FormItem>
                     )}
                   />
+
+                  <ServiceUriField control={form.control} />
 
                   <FormField
                     control={form.control}

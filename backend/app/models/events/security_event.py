@@ -9,6 +9,10 @@ CREDENTIAL_READ_ATTEMPT = "CREDENTIAL_READ_ATTEMPT"
 CREDENTIAL_BASH_ACCESS = "CREDENTIAL_BASH_ACCESS"
 OUTPUT_REDACTED = "OUTPUT_REDACTED"
 CREDENTIAL_WRITE_ATTEMPT = "CREDENTIAL_WRITE_ATTEMPT"
+# Emitted by ``DesktopCredentialService`` for each credential delivered to a
+# Desktop device: once for the requester, and once for the owner when a
+# recipient copied a credential shared with them. Never carries secret values.
+CREDENTIAL_MATERIALIZED_LOCAL = "CREDENTIAL_MATERIALIZED_LOCAL"
 
 # ── Two-Factor Authentication (MFA) event-type constants ─────────────
 # Emitted by ``MfaService`` and the login routes during 2FA enrollment,

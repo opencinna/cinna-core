@@ -217,31 +217,40 @@ class CredentialsService:
         # Get credentials for agent
         credentials = CredentialsService.get_agent_credentials(session=session, agent_id=agent_id)
 
-        result = []
-        for cred in credentials:
-            # Decrypt credential data
-            credential_data = CredentialsService.decrypt_credential_data(session=session, credential=cred)
+        return [
+            CredentialsService.credential_to_env_dict(
+                cred,
+                CredentialsService.decrypt_credential_data(session=session, credential=cred),
+            )
+            for cred in credentials
+        ]
 
-            # Process API Token credentials to generate HTTP header fields
-            if cred.type.value == "api_token":
-                credential_data = CredentialsService._process_api_token_credential(credential_data)
-                # service_uri lives on the Credential row (a non-secret slot id), not
-                # in credential_data. Surface it alongside the header pair so it syncs
-                # to the agent env like any other whitelisted api_token field.
-                if cred.service_uri:
-                    credential_data["service_uri"] = cred.service_uri
+    @staticmethod
+    def credential_to_env_dict(credential: Credential, credential_data: dict) -> dict:
+        """Shape one credential + its decrypted data as an env-bound entry.
 
-            result.append({
-                "id": str(cred.id),
-                "name": cred.name,
-                "type": cred.type.value,
-                "notes": cred.notes,
-                "service_uri": cred.service_uri,
-                "is_placeholder": bool(cred.is_placeholder),
-                "credential_data": credential_data
-            })
+        The single source of the pre-whitelist entry shape consumed by
+        ``prepare_credentials_for_environment`` — used by cloud env sync
+        (``get_agent_credentials_with_data``) and by Desktop delivery alike.
+        """
+        # Process API Token credentials to generate HTTP header fields
+        if credential.type.value == "api_token":
+            credential_data = CredentialsService._process_api_token_credential(credential_data)
+            # service_uri lives on the Credential row (a non-secret slot id), not
+            # in credential_data. Surface it alongside the header pair so it syncs
+            # to the agent env like any other whitelisted api_token field.
+            if credential.service_uri:
+                credential_data["service_uri"] = credential.service_uri
 
-        return result
+        return {
+            "id": str(credential.id),
+            "name": credential.name,
+            "type": credential.type.value,
+            "notes": credential.notes,
+            "service_uri": credential.service_uri,
+            "is_placeholder": bool(credential.is_placeholder),
+            "credential_data": credential_data,
+        }
 
     @staticmethod
     def _drop_external_agent_api_keys(
@@ -1377,7 +1386,10 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
     @staticmethod
     def prepare_credentials_for_environment(
         session: Session,
-        agent_id: uuid.UUID
+        agent_id: uuid.UUID | None,
+        *,
+        selected_credentials: list[dict] | None = None,
+        desktop_owner: User | None = None,
     ) -> dict:
         """
         Prepare credentials data for syncing to agent environment.
@@ -1393,7 +1405,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                                     Based on FILTERED structure to match credentials.json
         """
         # Get credentials with decrypted data
-        credentials = CredentialsService.get_agent_credentials_with_data(session, agent_id)
+        credentials = copy.deepcopy(selected_credentials) if selected_credentials is not None else CredentialsService.get_agent_credentials_with_data(session, agent_id)
 
         # Drop agent_api EXTERNAL KEYS before anything else looks at the list.
         # A key is for code running OUTSIDE the platform; syncing an
@@ -1486,8 +1498,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         try:
             from app.services.users import user_details_service
 
-            agent = session.get(Agent, agent_id)
-            owner = session.get(User, agent.owner_id) if agent else None
+            agent = session.get(Agent, agent_id) if agent_id else None
+            owner = desktop_owner or (session.get(User, agent.owner_id) if agent else None)
             if owner is not None:
                 filtered_credentials.append(
                     user_details_service.build_current_user_block(owner)
@@ -1519,7 +1531,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     AgentApiIdentityService,
                 )
 
-                agent = session.get(Agent, agent_id)
+                # Desktop delivery never selects agent_api, so this is cloud-only.
+                agent = session.get(Agent, agent_id) if agent_id else None
                 owner = session.get(User, agent.owner_id) if agent else None
                 if owner is not None:
                     filtered_credentials.append(
@@ -1748,6 +1761,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             name=credential_in.name,
             type=credential_in.type,
             notes=credential_in.notes,
+            allow_local_use=credential_in.allow_local_use,
             allow_sharing=credential_in.allow_sharing,
             allow_template_sharing=credential_in.allow_template_sharing,
             service_uri=credential_in.service_uri,
@@ -1859,6 +1873,23 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     ).get("token")
                     if stored_token:
                         data_payload = {**data_payload, "token": stored_token}
+            # OAuth tokens are minted by the consent flow and refreshed
+            # server-side, never typed. The edit
+            # form omits them, so carry the stored ones forward instead of
+            # letting a save made from a stale dialog drop or roll them back.
+            if (
+                isinstance(data_payload, dict)
+                and credential.type.value in CredentialsService.OAUTH_CREDENTIAL_TYPES
+            ):
+                stored = CredentialsService.decrypt_credential_data(
+                    session=session, credential=credential
+                )
+                carried = {
+                    field: stored[field]
+                    for field in CredentialsService.OAUTH_TOKEN_FIELDS
+                    if field in stored
+                }
+                data_payload = {**data_payload, **carried}
             encrypted_data = encrypt_field(json.dumps(data_payload))
             update_dict.pop("credential_data")
             credential.encrypted_data = encrypted_data
@@ -2256,6 +2287,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             "type": credential.type,
             "notes": credential.notes,
             "allow_sharing": credential.allow_sharing,
+            "allow_local_use": credential.allow_local_use,
             "allow_template_sharing": credential.allow_template_sharing,
             "service_uri": credential.service_uri,
             "template_private_fields": list(credential.template_private_fields or []),
@@ -2876,6 +2908,9 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             session=session,
             agent_id=agent_id
         )
+
+    # Server-managed OAuth token fields: preserved across credential edits.
+    OAUTH_TOKEN_FIELDS = ("access_token", "refresh_token", "expires_at", "token_type", "scope")
 
     # OAuth credential types that have refresh tokens and expiration
     OAUTH_CREDENTIAL_TYPES = {

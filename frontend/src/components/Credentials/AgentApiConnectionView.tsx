@@ -1,3 +1,4 @@
+import { ServiceUriField } from "@/components/Credentials/CredentialFields/ServiceUriField"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { FileJson, Lock, Network } from "lucide-react"
@@ -35,6 +36,7 @@ import { openAgentApiSpec } from "@/utils/agentApiSpec"
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
   notes: z.string().optional(),
+  service_uri: z.string().optional(),
 })
 
 type FormData = z.infer<typeof formSchema>
@@ -70,11 +72,11 @@ export function AgentApiConnectionView({
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     mode: "onBlur",
-    defaultValues: { name: credential.name, notes: credential.notes ?? "" },
+    defaultValues: { name: credential.name, notes: credential.notes ?? "", service_uri: credential.service_uri ?? "" },
   })
 
   useEffect(() => {
-    form.reset({ name: credential.name, notes: credential.notes ?? "" })
+    form.reset({ name: credential.name, notes: credential.notes ?? "", service_uri: credential.service_uri ?? "" })
   }, [credential, form])
 
   const mutation = useMutation({
@@ -143,6 +145,7 @@ export function AgentApiConnectionView({
                   </FormItem>
                 )}
               />
+              <ServiceUriField control={form.control} />
               <FormField
                 control={form.control}
                 name="notes"

@@ -3322,6 +3322,7 @@ export type CredentialCreate = {
     name: string;
     type: CredentialType;
     notes?: (string | null);
+    allow_local_use?: boolean;
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
     service_uri?: (string | null);
@@ -3385,6 +3386,7 @@ export type CredentialPublic = {
     name: string;
     type: CredentialType;
     notes?: (string | null);
+    allow_local_use?: boolean;
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
     service_uri?: (string | null);
@@ -3487,6 +3489,7 @@ export type CredentialUpdate = {
     credential_data?: ({
     [key: string]: unknown;
 } | null);
+    allow_local_use?: (boolean | null);
     allow_sharing?: (boolean | null);
     allow_template_sharing?: (boolean | null);
     template_private_fields?: (Array<(string)> | null);
@@ -3499,6 +3502,7 @@ export type CredentialWithData = {
     name: string;
     type: CredentialType;
     notes?: (string | null);
+    allow_local_use?: boolean;
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
     service_uri?: (string | null);
@@ -3607,6 +3611,67 @@ export type DelegationResultPublic = {
     artifacts?: Array<DelegationArtifact>;
     body?: string;
     reply_state?: ('sending' | 'delivered' | null);
+};
+
+export type DesktopCredentialList = {
+    items: Array<DesktopCredentialListItem>;
+};
+
+/**
+ * Metadata of one credential the caller could attach locally. No secrets.
+ */
+export type DesktopCredentialListItem = {
+    id: string;
+    name: string;
+    type: CredentialType;
+    notes?: (string | null);
+    service_uri?: (string | null);
+    status: string;
+    is_placeholder: boolean;
+    relation: 'owned' | 'shared';
+    category: string;
+    owner_email?: (string | null);
+    local_use_allowed: boolean;
+    revision: string;
+    expires_at?: (number | string | null);
+    user_workspace_id?: (string | null);
+};
+
+export type relation = 'owned' | 'shared';
+
+export type DesktopCredentialMaterializeRequest = {
+    credential_ids: Array<(string)>;
+    include_current_user?: boolean;
+};
+
+export type DesktopCredentialMaterializeResponse = {
+    items: Array<DesktopMaterializedCredential>;
+    refused: Array<DesktopCredentialRefusal>;
+    current_user?: ({
+    [key: string]: unknown;
+} | null);
+    owner_identity?: ({
+    [key: string]: unknown;
+} | null);
+};
+
+export type DesktopCredentialRefusal = {
+    id: string;
+    reason: 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type';
+};
+
+export type reason2 = 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type';
+
+export type DesktopMaterializedCredential = {
+    id: string;
+    revision: string;
+    entry: {
+        [key: string]: unknown;
+    };
+    service_account_file?: ({
+    [key: string]: unknown;
+} | null);
+    ssh_key?: null;
 };
 
 export type DesktopOAuthClientPublic = {
@@ -6715,7 +6780,7 @@ export type SetupStatusMissingItem = {
     is_ai?: boolean;
 };
 
-export type reason2 = 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared';
+export type reason3 = 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared';
 
 /**
  * Response of ``GET /agents/{agent_id}/setup-status``.
@@ -10292,6 +10357,14 @@ export type ExternalListExternalSessionMessagesData = {
 export type ExternalListExternalSessionMessagesResponse = (Array<MessagePublic>);
 
 export type ExternalGetAccountConfigResponse = (AccountConfigResponse);
+
+export type ExternalListCredentialsResponse = (DesktopCredentialList);
+
+export type ExternalMaterializeCredentialsData = {
+    requestBody: DesktopCredentialMaterializeRequest;
+};
+
+export type ExternalMaterializeCredentialsResponse = (DesktopCredentialMaterializeResponse);
 
 export type ExternalA2aGetExternalAgentCardData = {
     agentId: string;

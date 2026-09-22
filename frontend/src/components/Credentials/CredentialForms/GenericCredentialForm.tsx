@@ -1,3 +1,4 @@
+import { ServiceUriField } from "@/components/Credentials/CredentialFields/ServiceUriField"
 import { UseFormReturn } from "react-hook-form"
 import {
   FormControl,
@@ -44,6 +45,8 @@ export function GenericCredentialForm({
       {credentialType === "email_smtp" && (
         <EmailSmtpFields control={form.control} />
       )}
+
+      <ServiceUriField control={form.control} />
 
       <FormField
         control={form.control}

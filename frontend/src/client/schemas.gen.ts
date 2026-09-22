@@ -13957,6 +13957,11 @@ export const CredentialCreateSchema = {
             ],
             title: 'Notes'
         },
+        allow_local_use: {
+            type: 'boolean',
+            title: 'Allow Local Use',
+            default: false
+        },
         allow_sharing: {
             type: 'boolean',
             title: 'Allow Sharing',
@@ -14167,6 +14172,11 @@ export const CredentialPublicSchema = {
                 }
             ],
             title: 'Notes'
+        },
+        allow_local_use: {
+            type: 'boolean',
+            title: 'Allow Local Use',
+            default: false
         },
         allow_sharing: {
             type: 'boolean',
@@ -14535,6 +14545,17 @@ export const CredentialUpdateSchema = {
             ],
             title: 'Credential Data'
         },
+        allow_local_use: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Local Use'
+        },
         allow_sharing: {
             anyOf: [
                 {
@@ -14630,6 +14651,11 @@ export const CredentialWithDataSchema = {
                 }
             ],
             title: 'Notes'
+        },
+        allow_local_use: {
+            type: 'boolean',
+            title: 'Allow Local Use',
+            default: false
         },
         allow_sharing: {
             type: 'boolean',
@@ -15194,6 +15220,253 @@ export const DelegationResultPublicSchema = {
     required: ['id', 'status', 'summary'],
     title: 'DelegationResultPublic',
     description: 'The stored structured result of a delegated task, as the requester reads it.'
+} as const;
+
+export const DesktopCredentialListSchema = {
+    properties: {
+        items: {
+            items: {
+                '$ref': '#/components/schemas/DesktopCredentialListItem'
+            },
+            type: 'array',
+            title: 'Items'
+        }
+    },
+    type: 'object',
+    required: ['items'],
+    title: 'DesktopCredentialList'
+} as const;
+
+export const DesktopCredentialListItemSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            '$ref': '#/components/schemas/CredentialType'
+        },
+        notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Notes'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        is_placeholder: {
+            type: 'boolean',
+            title: 'Is Placeholder'
+        },
+        relation: {
+            type: 'string',
+            enum: ['owned', 'shared'],
+            title: 'Relation'
+        },
+        category: {
+            type: 'string',
+            title: 'Category'
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
+        },
+        local_use_allowed: {
+            type: 'boolean',
+            title: 'Local Use Allowed'
+        },
+        revision: {
+            type: 'string',
+            title: 'Revision'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'type', 'status', 'is_placeholder', 'relation', 'category', 'local_use_allowed', 'revision'],
+    title: 'DesktopCredentialListItem',
+    description: 'Metadata of one credential the caller could attach locally. No secrets.'
+} as const;
+
+export const DesktopCredentialMaterializeRequestSchema = {
+    properties: {
+        credential_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            maxItems: 50,
+            title: 'Credential Ids'
+        },
+        include_current_user: {
+            type: 'boolean',
+            title: 'Include Current User',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['credential_ids'],
+    title: 'DesktopCredentialMaterializeRequest'
+} as const;
+
+export const DesktopCredentialMaterializeResponseSchema = {
+    properties: {
+        items: {
+            items: {
+                '$ref': '#/components/schemas/DesktopMaterializedCredential'
+            },
+            type: 'array',
+            title: 'Items'
+        },
+        refused: {
+            items: {
+                '$ref': '#/components/schemas/DesktopCredentialRefusal'
+            },
+            type: 'array',
+            title: 'Refused'
+        },
+        current_user: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current User'
+        },
+        owner_identity: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Identity'
+        }
+    },
+    type: 'object',
+    required: ['items', 'refused'],
+    title: 'DesktopCredentialMaterializeResponse'
+} as const;
+
+export const DesktopCredentialRefusalSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        reason: {
+            type: 'string',
+            enum: ['not_found', 'no_access', 'not_local_category', 'local_use_not_allowed', 'unsupported_type'],
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['id', 'reason'],
+    title: 'DesktopCredentialRefusal'
+} as const;
+
+export const DesktopMaterializedCredentialSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        revision: {
+            type: 'string',
+            title: 'Revision'
+        },
+        entry: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Entry'
+        },
+        service_account_file: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Account File'
+        },
+        ssh_key: {
+            type: 'null',
+            title: 'Ssh Key'
+        }
+    },
+    type: 'object',
+    required: ['id', 'revision', 'entry'],
+    title: 'DesktopMaterializedCredential'
 } as const;
 
 export const DesktopOAuthClientPublicSchema = {

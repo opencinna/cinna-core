@@ -33,6 +33,7 @@ import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
 import useRole from "@/hooks/useRole"
 import { handleError } from "@/utils"
+import { isLocallyDeliverableCredentialType } from "@/utils/credentialLocalUse"
 import {
   bundleImpactSentence,
   skillImpactSentence,
@@ -143,6 +144,14 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
     onError: handleError.bind(showErrorToast),
   })
 
+  const localUseMutation = useMutation({
+    mutationFn: (allow_local_use: boolean) => CredentialsService.updateCredential({
+      id: credential.id, requestBody: { allow_local_use },
+    }),
+    onSuccess: () => { invalidateShareCaches(); queryClient.invalidateQueries({ queryKey: ["credential", credential.id] }) },
+    onError: handleError.bind(showErrorToast),
+  })
+
   const toggleSharingMutation = useMutation({
     mutationFn: (newAllowSharing: boolean) =>
       CredentialsService.updateCredentialSharing({
@@ -248,6 +257,16 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {allowSharing && isLocallyDeliverableCredentialType(credential.type) && (
+          <div className="flex items-start justify-between gap-4">
+            <div><p className="text-sm font-medium">Allow use on recipients’ computers</p>
+              <p className="text-sm text-muted-foreground">People you share this with can use it in agents on their own computer. The value is stored on their machine.</p>
+              <p className="text-sm text-muted-foreground">Disabling this cannot recall values already delivered.</p>
+            </div>
+            <Switch aria-label="Allow use on recipients’ computers" checked={credential.allow_local_use ?? false}
+              disabled={localUseMutation.isPending} onCheckedChange={value => localUseMutation.mutate(value)} />
+          </div>
+        )}
         {allowSharing && (
           <div className="space-y-3">
             <h4 className="text-sm font-medium">

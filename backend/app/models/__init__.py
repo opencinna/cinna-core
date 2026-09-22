@@ -184,6 +184,14 @@ from .credentials.credential_share import (
     SharedCredentialPublic,
     SharedCredentialsPublic,
 )
+from .credentials.desktop_credential import (
+    DesktopCredentialList,
+    DesktopCredentialListItem,
+    DesktopCredentialMaterializeRequest,
+    DesktopCredentialMaterializeResponse,
+    DesktopCredentialRefusal,
+    DesktopMaterializedCredential,
+)
 from .bundles.agent_bundle import (
     AgentBundle,
     AgentBundleBase,
@@ -1108,6 +1116,12 @@ __all__ = [
     "CredentialShare",
     "CredentialShareBase",
     "CredentialSharePublic",
+    "DesktopCredentialList",
+    "DesktopCredentialListItem",
+    "DesktopCredentialMaterializeRequest",
+    "DesktopCredentialMaterializeResponse",
+    "DesktopCredentialRefusal",
+    "DesktopMaterializedCredential",
     "CredentialShareCreate",
     "CredentialSharesPublic",
     "SharedCredentialPublic",

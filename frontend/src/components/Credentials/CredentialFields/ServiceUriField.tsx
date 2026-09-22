@@ -1,3 +1,5 @@
+import { CircleHelp } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Control } from "react-hook-form"
 import {
   FormControl,
@@ -28,19 +30,28 @@ export function ServiceUriField({ control }: ServiceUriFieldProps) {
       name="service_uri"
       render={({ field }) => (
         <FormItem>
-          <FormLabel>Service URI</FormLabel>
+          <div className="flex items-center gap-1.5">
+            <FormLabel>Service URI</FormLabel>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" aria-label="About Service URI" className="text-muted-foreground hover:text-foreground">
+                  <CircleHelp className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                A non-secret identifier for the service, such as slack.com or work-mail.
+                Agents use it together with the credential type to match a required slot.
+                Use the same Service URI on the credential and the agent’s requirement.
+              </TooltipContent>
+            </Tooltip>
+          </div>
           <FormControl>
             <Input
-              placeholder="reddit.com"
+              placeholder="e.g. slack.com or work-mail"
               {...field}
               value={field.value ?? ""}
             />
           </FormControl>
-          <p className="text-xs text-muted-foreground mt-1">
-            A unique identifier for the service this token belongs to — for
-            example, <code>reddit.com</code>. Helps identify which service this
-            API credential is for. Not secret.
-          </p>
           <FormMessage />
         </FormItem>
       )}

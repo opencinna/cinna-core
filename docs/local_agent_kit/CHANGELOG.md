@@ -16,6 +16,16 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.4.0 — cloud and local credential delivery
+
+- One reader for injected and cloud credential arrays, legacy objects, and local env files; strict slot lookup and service-account side files.
+- Exclude the entire credentials directory from exports and content hashes.
+- Reconcile the core skills folder definitions with Desktop runtime, schedule, and coordinator handback fields. Publication history remains in publications.json.
+- Desktop attachments and generated secrets are host-owned; no credential values enter the manifest.
+- An injected entry the host could not deliver may carry `unavailable_reason` (a Core refusal reason such as `local_use_not_allowed` when the owner has not allowed use on recipients' computers). The reader treats it like a placeholder (no env fallback) and names the reason in its error and in `cinna_credentials.py` status output.
+- Desktop only receives credential types that work locally out of the box (email IMAP/SMTP, Odoo, API token, Google service account). OAuth, SSH key, Agent API and MCP provider credentials are never delivered to Desktop; attach them in the cloud instead.
+- A type or `service_uri` resolves a slot only when exactly one declared slot matches; otherwise the reader raises an ambiguity error instead of picking the first.
+
 ## 1.1.0 — skills are folders
 
 Additive. Every existing agent folder is still valid and needs no change; a tool

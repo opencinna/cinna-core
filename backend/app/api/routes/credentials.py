@@ -87,6 +87,7 @@ def _credential_to_public(
         name=credential.name,
         type=credential.type,
         notes=credential.notes,
+        allow_local_use=credential.allow_local_use,
         allow_sharing=credential.allow_sharing,
         allow_template_sharing=credential.allow_template_sharing,
         service_uri=credential.service_uri,

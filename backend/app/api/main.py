@@ -31,6 +31,7 @@ from app.api.routes import (
     environments,
     external_a2a,
     external_account_config,
+    external_credentials,
     external_agents,
     identity,
     identity_contacts,
@@ -184,6 +185,7 @@ api_router.include_router(app_auth.router)
 api_router.include_router(app_sync.router)
 api_router.include_router(external_agents.router)
 api_router.include_router(external_account_config.router)
+api_router.include_router(external_credentials.router)
 api_router.include_router(external_a2a.router)
 
 
