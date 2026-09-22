@@ -19,7 +19,7 @@ Cinna Mobile uses the **same flow** through a parallel route namespace mounted a
 
 ## Core Capabilities
 
-- **Instance discovery** — User provides a domain (e.g. `my-company.cinna.io`) or selects "Cloud" (`opencinna.io`); the client validates the instance via `/.well-known/cinna-desktop` (desktop) or `/.well-known/cinna-app` (mobile). The desktop document optionally also carries a `local_dev` block — see [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding.md)
+- **Instance discovery** — User provides a domain (e.g. `my-company.example.com`) or selects "Cloud" (`opencinna.io`); the client validates the instance via `/.well-known/cinna-desktop` (desktop) or `/.well-known/cinna-app` (mobile). The desktop document optionally also carries a `local_dev` block — see [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding.md)
 - **Browser-based consent flow** — Standard OAuth 2.0 authorization code flow with PKCE (RFC 7636 + RFC 8252), routed through a frontend consent page
 - **Parallel mobile surface** — Cinna Mobile authenticates through `/app-auth/*` (mirror of `/desktop-auth/*`) backed by the same service and storage; only the URL namespace and native redirect schemes differ
 - **Client-kind-aware consent** — The consent screen renders "Cinna Mobile" vs "Cinna Desktop" copy/icon based on the `client_kind` the backend derives from the redirect URI scheme

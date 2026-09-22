@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cinna.dev/schema/cinna-agent.schema.json",
+  "$id": "https://opencinna.io/schema/cinna-agent.schema.json",
   "title": "cinna-agent.json",
   "description": "Definitional metadata for a locally built agent. Lives at the agent folder root and travels unchanged into a cloud agent workspace and into bundle revisions. Unknown keys are preserved for forward compatibility.",
   "type": "object",

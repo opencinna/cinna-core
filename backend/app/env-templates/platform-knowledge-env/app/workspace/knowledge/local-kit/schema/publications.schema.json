@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cinna.dev/schema/publications.schema.json",
+  "$id": "https://opencinna.io/schema/publications.schema.json",
   "title": "publications.json",
   "description": "Where an agent folder has been published. Lives beside cinna-agent.json at the agent root, is excluded from cloud import, and is absent until the first publish. It is a sibling of the manifest and not a key inside it because it is a mutable per-instance sync ledger rather than identity, and because each entry records a content_hash OF the exported tree - a tree the manifest is a member of, so a hash written into the manifest could never match the tree it describes. The top level is an object, not a bare array, so a later contract can add a sibling key without a breaking change to readers that already read `publications`. Unknown keys are preserved for forward compatibility.",
   "type": "object",
