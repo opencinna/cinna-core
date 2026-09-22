@@ -2,6 +2,22 @@
 
 Auto-generated from OpenAPI spec. Tag: `agent-tasks`
 
+## POST `/api/v1/agent/tasks/current/delegation-result`
+**Agent Report Delegation**
+
+**Request body** (`AgentDelegationReport`):
+  - `status`: "in_progress" | "blocked" | "done" | "failed" (required)
+  - `summary`: string (required)
+  - `question`: string | null
+  - `audience`: "requester" | "user"
+  - `artifacts`: DelegationArtifact[]
+  - `body`: string
+  - `source_session_id`: uuid (required)
+
+**Response:** `DelegationResultPublic`
+
+---
+
 ## POST `/api/v1/agent/tasks/create`
 **Agent Create Task**
 

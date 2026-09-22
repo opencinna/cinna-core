@@ -96,6 +96,7 @@ Agent SDK (Claude Code / ADK)
 | `CREDENTIAL_BASH_ACCESS` | high | Bash command matched credential-access pattern |
 | `OUTPUT_REDACTED` | medium | Credential value found and redacted in agent output |
 | `CREDENTIAL_WRITE_ATTEMPT` | high | Attempt to Write/Edit credential files |
+| `CREDENTIAL_MATERIALIZED_LOCAL` | high | A credential value was delivered to a Cinna Desktop session; fired on the requester, and also on the owner when the credential was shared |
 
 ## Pattern Matching
 
@@ -118,6 +119,7 @@ Tool interception uses regex patterns to detect credential access:
 - [Agent Environments](../agent_environments/agent_environments.md) — `environment_lifecycle.py` extended to write Claude Code hook settings
 - [Agent Sessions](../../application/agent_sessions/agent_sessions.md) — `session_id` on SecurityEvent links events to sessions
 - **[Guest Sharing](../guest_sharing/guest_sharing.md)** — `guest_share_id` on SecurityEvent enables guest-specific security queries for token-based guest sessions
+- **[Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md)** — source of the `CREDENTIAL_MATERIALIZED_LOCAL` event type, the one event this feature logs outside a running agent environment
 
 ## Known Limitations
 

@@ -20,7 +20,7 @@ Each file below documents one API domain.
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
 | Agent Git | [agent_git.md](./agent_git.md) | 11 |
 | Agent Hooks | [agent_hooks.md](./agent_hooks.md) | 1 |
-| Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 11 |
+| Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 12 |
 | Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 9 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
 | Agents | [agents.md](./agents.md) | 42 |
@@ -35,7 +35,7 @@ Each file below documents one API domain.
 | Desktop Download | [desktop_download.md](./desktop_download.md) | 1 |
 | Environments | [environments.md](./environments.md) | 17 |
 | Events | [events.md](./events.md) | 3 |
-| External | [external.md](./external.md) | 8 |
+| External | [external.md](./external.md) | 10 |
 | External A2A | [external_a2a.md](./external_a2a.md) | 6 |
 | Files | [files.md](./files.md) | 3 |
 | Guest Share | [guest_share.md](./guest_share.md) | 3 |
@@ -60,7 +60,7 @@ Each file below documents one API domain.
 | Skills | [skills.md](./skills.md) | 15 |
 | Ssh Keys | [ssh_keys.md](./ssh_keys.md) | 6 |
 | Task Triggers | [task_triggers.md](./task_triggers.md) | 16 |
-| Tasks | [tasks.md](./tasks.md) | 26 |
+| Tasks | [tasks.md](./tasks.md) | 29 |
 | User Channels | [user_channels.md](./user_channels.md) | 3 |
 | User Workspaces | [user_workspaces.md](./user_workspaces.md) | 5 |
 | Users | [users.md](./users.md) | 27 |

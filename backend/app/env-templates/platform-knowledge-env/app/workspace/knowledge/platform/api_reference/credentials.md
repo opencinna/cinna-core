@@ -75,6 +75,7 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `name`: string (required)
   - `type`: CredentialType (required)
   - `notes`: string | null
+  - `allow_local_use`: boolean
   - `allow_sharing`: boolean
   - `allow_template_sharing`: boolean
   - `service_uri`: string | null
@@ -110,6 +111,7 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `name`: string | null
   - `notes`: string | null
   - `credential_data`: object | null
+  - `allow_local_use`: boolean | null
   - `allow_sharing`: boolean | null
   - `allow_template_sharing`: boolean | null
   - `template_private_fields`: array | null

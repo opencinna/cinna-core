@@ -215,6 +215,7 @@ workspace/
 - [SSH Key Credentials](ssh_key_credentials.md) - SSH key pair credentials: generate/import, ~/.ssh/ materialization, known_hosts seeding, security model
 - [Agent Prompts](../agent_prompts/agent_prompts.md) - Credentials README included in building mode prompt <!-- TODO: create agent_prompts docs -->
 - [Agent Bundles & Installs](../agent_bundles/agent_bundles.md) - Install-time placeholder credentials and the runtime gate; the Credentials tab is the primary surface for resolving gate blocks after install
+- [Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md) - Reuses `credential_to_env_dict` / `prepare_credentials_for_environment` so a Desktop-delivered credential is shaped identically to one synced into a cloud environment; only a small locally-compatible type subset is ever delivered
 
 ## Current User Context
 

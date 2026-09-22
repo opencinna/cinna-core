@@ -113,7 +113,10 @@ agent into it with one command.
   top-level folders a cloud agent workspace has: `docs/` (prompts,
   `CLI_COMMANDS.yaml`), `skills/` (one folder per skill, contract 1.1.0),
   `scripts/`, `knowledge/`, `files/`, `config/`,
-  `credentials/` (local `.env`, never copied to the cloud), and
+  `credentials/` (local `.env`, never copied to the cloud, but a signed-in Cinna Desktop session
+  may also write a `credentials/credentials.json` into it via
+  [Desktop Credential Delivery](../desktop_credentials/desktop_credentials.md), read by
+  `scripts/cinna_credentials.py` the same way a cloud agent reads its own `credentials.json`), and
   `app-data/{storage,cache,uploads}/`. Nothing about the layout is
   kit-specific — it is the same convention [agent_prompts](../../agents/agent_prompts/agent_prompts.md),
   [agent_bundles](../../agents/agent_bundles/agent_bundles.md) and

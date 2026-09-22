@@ -73,3 +73,21 @@ Auto-generated from OpenAPI spec. Tag: `external`
 **Response:** `AccountConfigResponse`
 
 ---
+
+## GET `/api/v1/external/credentials`
+**List Credentials**
+
+**Response:** `DesktopCredentialList`
+
+---
+
+## POST `/api/v1/external/credentials/materialize`
+**Materialize Credentials**
+
+**Request body** (`DesktopCredentialMaterializeRequest`):
+  - `credential_ids`: uuid[] (required)
+  - `include_current_user`: boolean
+
+**Response:** `DesktopCredentialMaterializeResponse`
+
+---

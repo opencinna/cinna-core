@@ -73,10 +73,11 @@ Files exceeding the platform file size limit are skipped with a warning log. If 
 
 ## Registration
 
-- All six tools registered in the `agent_task` MCP server: `add_comment`, `update_status`, `create_task`, `create_subtask`, `get_details`, `list_tasks`
+- All seven tools registered in the `agent_task` MCP server: `add_comment`, `update_status`, `create_task`, `create_subtask`, `get_details`, `list_tasks`, `handover_report`
 - Registered in the Claude Code adapter only when `mode == "conversation"` — not available in building mode
-- Full tool names: `mcp__agent_task__create_task`, `mcp__agent_task__create_subtask`, `mcp__agent_task__add_comment`, `mcp__agent_task__get_details`, `mcp__agent_task__update_status`, `mcp__agent_task__list_tasks`
+- Full tool names: `mcp__agent_task__create_task`, `mcp__agent_task__create_subtask`, `mcp__agent_task__add_comment`, `mcp__agent_task__get_details`, `mcp__agent_task__update_status`, `mcp__agent_task__list_tasks`, `mcp__agent_task__handover_report`
 - Listed in backend's pre-allowed tools — agents can invoke without per-call user approval
+- `handover_report` reports the structured result of a task created with `delegation_metadata` (the [Cross-Agent Delegation Contract](../../application/input_tasks/input_tasks.md#cross-agent-delegation-contract)) rather than the in-platform handover this doc describes — see [Session State Tools](session_state_tools.md#handover_report) for its parameters and flow
 
 ## Session ID Access
 
@@ -107,7 +108,7 @@ The tools use the same scoped env token as other agent-env → backend calls:
   - `backend/app/env-templates/app_core_base/core/server/tools/agent_task_create_subtask.py`
   - `backend/app/env-templates/app_core_base/core/server/tools/agent_task_add_comment.py` — includes local file existence validation
   - `backend/app/env-templates/app_core_base/core/server/tools/agent_task_get_details.py` — renders "Task Files" section from `uploaded_files`
-- **MCP bridge (OpenCode)**: `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py` — all six tools; `add_comment` and `get_details` implement the same validation/rendering as their Claude Code counterparts
+- **MCP bridge (OpenCode)**: `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py` — all seven tools; `add_comment` and `get_details` implement the same validation/rendering as their Claude Code counterparts; `handover_report` — see [Session State Tools](session_state_tools.md#handover_report)
 - **Adapter registration**: `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py`
 - **Global session state + helpers**: `backend/app/env-templates/app_core_base/core/server/sdk_manager.py` (`get_backend_session_id()`)
 - **Prompt injection**: `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `build_task_context_section()`, `_load_handover_prompt()`
@@ -130,6 +131,6 @@ The tools use the same scoped env token as other agent-env → backend calls:
 
 - [Agent Handover](../agent_handover/agent_handover.md) — feature documentation: configuration management, UI, business rules, clone behavior
 - [Agent Handover Tech](../agent_handover/agent_handover_tech.md) — backend services, database schema, API endpoints, sync flow
-- [Session State Tools](session_state_tools.md) — sibling tools: `update_status` and `add_comment` for reporting on tasks
+- [Session State Tools](session_state_tools.md) — sibling tools: `update_status` and `add_comment` for reporting on tasks, and `handover_report` for the cross-agent delegation contract
 - [Agent Environment Core](agent_environment_core.md) — parent feature: server running inside Docker containers
-- [Input Tasks](../../application/input_tasks/input_tasks.md) — task lifecycle, subtask delegation, comments
+- [Input Tasks](../../application/input_tasks/input_tasks.md) — task lifecycle, subtask delegation, comments, and the [Cross-Agent Delegation Contract](../../application/input_tasks/input_tasks.md#cross-agent-delegation-contract)

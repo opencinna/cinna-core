@@ -282,3 +282,4 @@ Publisher sets allow_template_sharing=true + marks private fields
 - [Agent Credentials](agent_credentials.md) - Shared and template-materialised credentials link to agents and sync to environments identically to owned credentials
 - [Agent Bundles & Installs](../agent_bundles/agent_bundles.md) - `required_credential_specs` in a bundle revision drives install-time credential handling for all three modes (`provided_by`: `"user"`, `"publisher"`, `"template"`); template specs carry `template_data` and `template_private_fields`
 - [User Workspaces](../../application/user_workspaces/user_workspaces.md) - Credentials exist within workspace context
+- [Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md) - A recipient's Desktop can only copy a shared credential once the owner has separately turned on local-use consent (`allow_local_use`); the switch is shown only for locally-compatible credential types

@@ -2,6 +2,45 @@
 
 Auto-generated from OpenAPI spec. Tag: `tasks`
 
+## GET `/api/v1/tasks/delegation-capabilities`
+**Delegation Capabilities**
+
+**Response:** `DelegationCapabilities`
+
+---
+
+## PUT `/api/v1/tasks/{id}/delegation-result`
+**Report Delegation**
+
+**Path parameters:**
+- `id`: uuid
+
+**Request body** (`DelegationReport`):
+  - `status`: "in_progress" | "blocked" | "done" | "failed" (required)
+  - `summary`: string (required)
+  - `question`: string | null
+  - `audience`: "requester" | "user"
+  - `artifacts`: DelegationArtifact[]
+  - `body`: string
+
+**Response:** `DelegationResultPublic`
+
+---
+
+## POST `/api/v1/tasks/{id}/delegation-reply`
+**Reply Delegation**
+
+**Path parameters:**
+- `id`: uuid
+
+**Request body** (`DelegationReply`):
+  - `result_id`: uuid (required)
+  - `message`: string (required)
+
+**Response:** `DelegationReplyResult`
+
+---
+
 ## GET `/api/v1/tasks/by-source-session/{session_id}`
 **List Tasks By Source Session**
 
@@ -17,6 +56,7 @@ Auto-generated from OpenAPI spec. Tag: `tasks`
 
 **Request body** (`InputTaskCreate`):
   - `external_executor`: string | null
+  - `delegation_metadata`: DelegationMetadata | null
   - `original_message`: string (required)
   - `selected_agent_id`: string | null
   - `user_workspace_id`: string | null
@@ -317,6 +357,7 @@ Auto-generated from OpenAPI spec. Tag: `tasks`
 
 **Request body** (`InputTaskCreate`):
   - `external_executor`: string | null
+  - `delegation_metadata`: DelegationMetadata | null
   - `original_message`: string (required)
   - `selected_agent_id`: string | null
   - `user_workspace_id`: string | null

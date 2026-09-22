@@ -132,6 +132,7 @@ Auto-generated from OpenAPI spec. Tag: `installs`
   - `name`: string | null
   - `notes`: string | null
   - `credential_data`: object | null
+  - `allow_local_use`: boolean | null
   - `allow_sharing`: boolean | null
   - `allow_template_sharing`: boolean | null
   - `template_private_fields`: array | null
