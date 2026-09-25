@@ -211,7 +211,7 @@
       }
     },
     "schedules": {
-      "description": "Unattended run declarations. Platform import creates them as cloud schedules. Cinna Desktop may also run static_prompt schedules locally, only after a separate per-profile opt-in on each device and only while the app is open.",
+      "description": "Unattended run declarations. Platform import creates them as cloud schedules. Cinna Desktop runs static_prompt and script_trigger schedules locally after separate per-profile opt-in on each device, while the app is open and that profile is active. Missed times collapse into one catch-up run; enabling starts a future-only baseline. Definitions sync; local consent and execution history do not.",
       "type": "array",
       "x-scope": "portable",
       "x-import": "each entry becomes a cloud schedule, matched by name; an existing one is updated only with --update",
@@ -253,7 +253,7 @@
             "x-import": "imported"
           },
           "command": {
-            "description": "Required for script_trigger: the shell command whose non-OK output starts a session.",
+            "description": "Required for script_trigger: the shell command to execute. Exit 0 with trimmed stdout exactly OK is quiet success (stderr does not affect it); other completed results start a session. Desktop also accepts an existing /run:<name> catalog reference after review.",
             "type": ["string", "null"],
             "x-scope": "portable",
             "x-import": "imported"

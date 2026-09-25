@@ -5,9 +5,18 @@
 The user says *daily*, *weekly*, *every*, *at 7am*, *overnight*, *when I am not
 watching* — or the agent should otherwise run unattended.
 
-Locally a schedule is a **declaration plus a way to dry-run it**. Nothing on this
-machine runs the agent while nobody is there; that is what the cloud step buys. Say
-that plainly to the user instead of implying a local cron exists.
+Cinna Desktop can execute reviewed schedules while the app is open and the owning
+profile is active. Create or edit one in a kit agent's Schedules tab, using workday
+presets, selected weekdays and whole hours, or five-field numeric cron. Saving an
+enabled schedule reviews its exact prompt/command, timing, timezone, and catch-up
+behavior. Importing a manifest alone does not enable execution on a device.
+
+If times pass while the app is closed, asleep, or using another profile, Desktop
+runs the overdue schedule once when available and resumes its normal cadence.
+Enabling or re-enabling starts strictly in the future; old disabled time is not
+replayed. Existing unfinished work causes a skip, without accumulating a queue.
+There is no OS service executing while Desktop is closed; use the cloud for 24/7
+execution. Local consent, due cursors, and history do not sync.
 
 ## Declare it in the manifest
 
@@ -27,7 +36,7 @@ that plainly to the user instead of implying a local cron exists.
 |-------|------|
 | `name` | Unique within the agent. Import is idempotent by name. |
 | `cron_string` | Standard five fields: minute hour day-of-month month day-of-week. |
-| `timezone` | IANA name. Local-only metadata; used to render the cron description at import. |
+| `timezone` | IANA name. Cloud import uses this zone, UTC when absent. Desktop freezes the reviewed zone, using the current system zone if omitted; its editor writes it explicitly. |
 | `schedule_type` | `static_prompt` or `script_trigger`. Immutable after creation on the platform. |
 | `prompt` | Required for `static_prompt`. |
 | `command` | Required for `script_trigger`. |
@@ -40,7 +49,7 @@ message, the agent works, the user gets a result. Use it when the agent should
 *report* something on a cadence.
 
 **`script_trigger`** — runs a shell command on the cadence and starts a session
-**only when the output is not `OK`**. Use it when the agent should *watch* something
+**unless exit code is 0 and trimmed stdout is exactly `OK`** (case-sensitive; stderr does not change quiet success). Use it when the agent should *watch* something
 and stay silent while everything is fine. This is the cheap pattern: a check that
 runs every 30 minutes and costs nothing when there is nothing to say.
 
@@ -56,19 +65,28 @@ runs every 30 minutes and costs nothing when there is nothing to say.
 }
 ```
 
-The command is **cloud-first**: relative path, `python` not `uv run`, cwd is the
-workspace root. Its script must print exactly `OK` when there is nothing to report,
+Portable raw commands use relative paths; cwd is the owning agent workspace.
+Desktop also accepts `/run:<name>` catalog references, localized using the agent's
+command environment and bound to the reviewed catalog entry. Its script must print exactly `OK` when there is nothing to report,
 and a short description of the problem otherwise. That output becomes the context
-the session starts with.
+the session starts with. Desktop retains separate bounded stdout/stderr, applies a
+five-minute command limit, and never treats truncated stdout as quiet success.
+Spawn failure, timeout, cancellation, or uncertain interruption consumes the
+occurrence without automatically rerunning the command. Non-OK completed results
+start one ordinary task with command, time, exit code, stdout, and stderr context.
 
 **Cadence floor:** on the platform, `static_prompt` schedules may not run more often
 than once every 10 minutes. `script_trigger` has no floor. Design accordingly — a
-frequent check is a `script_trigger`.
+frequent check is a `script_trigger`. Desktop retains minute-level numeric cron
+for both execution types and does not apply the cloud cadence floor.
 
-## `ENTRYPOINT_PROMPT.md` becomes mandatory
+## Keep unattended prompts self-contained
+
+Desktop prompt schedules require the explicit reviewed manifest prompt and never
+silently substitute an entrypoint or fallback prompt.
 
 A scheduled run has no human in the room. `docs/ENTRYPOINT_PROMPT.md` is the message
-that starts it, so it must be entirely self-contained: no placeholders, no brackets,
+that starts cloud entrypoint-based work, so it must be entirely self-contained: no placeholders, no brackets,
 nothing the agent is expected to ask about.
 
 - Right: *"Run today's invoice check and report anything missing a PO number."*
