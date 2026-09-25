@@ -1,0 +1,18 @@
+{
+  "description": "A pre-1.0.0 folder: `schema_version` and neither `contract_version` nor `id`. It parses, and is one warning asking for a re-stamp - never an error.",
+  "manifest": {
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "schema_version": 1
+  },
+  "expect": {
+    "errors": [],
+    "warnings": [
+      "schema_version"
+    ]
+  }
+}

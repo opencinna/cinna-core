@@ -6053,6 +6053,11 @@ export class CliService {
      * environment creation) exactly as ``POST /api/v1/agents/`` does. Returns the
      * full ``AgentPublic`` record. ``require_developer``-gated (mirrors the UI
      * create route). ``env_name`` is accepted-but-noop in v1 (O1).
+     *
+     * ``engine`` (optional) is a local agent manifest's ``runtime.engine``
+     * preference; the environment is created on the SDK it maps to (unsupported
+     * engines → OpenCode). If the user has no AI credential for that SDK the call
+     * fails with 400 before any agent row is written.
      * @param data The data for the request.
      * @param data.requestBody
      * @returns AgentPublic Successful Response

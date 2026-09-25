@@ -37,7 +37,8 @@ agent into it with one command.
 - **The contract, and the guides** — The kit has two halves with two audiences,
   and only one of them is a promise to anybody.
   - The **contract** is the machine-readable half: `kit.json`, `layout.json`,
-    `CONTRACT_VERSION`, `CHANGELOG.md`, `schema/**` and `templates/**`. It is
+    `CONTRACT_VERSION`, `CHANGELOG.md`, `schema/**`, `templates/**` and
+    `conformance/**` (the contract's own test set, below). It is
     what a *second host* — Cinna Desktop — needs in order to create, validate
     and export agent folders that `kit.py` accepts unchanged, and the other way
     round. It is published on its own as `GET /agent-start/contract.tar.gz`
@@ -60,7 +61,7 @@ agent into it with one command.
     guide, template or tool edit. Answers *"is my copy of the kit current?"*,
     and it is what `kit.py refresh` polls and what every ETag is keyed on. It
     gates nothing.
-  - `contract_version` — a hand-maintained semantic version (`1.1.0` today),
+  - `contract_version` — a hand-maintained semantic version (`1.5.0` today),
     carried in three places that must agree: the `CONTRACT_VERSION` file,
     `kit.json` and `layout.json`. Every manifest records the one it was
     scaffolded with. Answers *"may this tool operate this folder?"*
@@ -137,6 +138,31 @@ agent into it with one command.
   `credential` is always a *reference* and never a value, and a deprecated
   `cloud` block from before the ledger moved out. Validated against
   `docs/local_agent_kit/schema/cinna-agent.schema.json`.
+- **One contract, minted here (1.5.0).** Cinna Desktop used to keep its own copy
+  of the contract and minted versions in it — its 1.1.0 (`runtime.complexity`),
+  1.2.0 (`runtime.engine`) and 1.3.0 (`handovers[].target_kind`) existed only
+  there, and the cloud import silently dropped them on publish. 1.5.0 brings the
+  three fields into this schema; from here a contract version is minted only in
+  `docs/local_agent_kit/`, and the desktop re-bundles the rendered contract. The
+  `CHANGELOG.md` 1.5.0 entry records the desktop-minted history.
+  - `runtime.engine` is a **preference**: absent means the host's default engine;
+    a named engine the host does not support runs on OpenCode, never a refusal.
+    It is the one `runtime` field the cloud import carries (into the new agent's
+    environment SDK). `runtime.model`, `runtime.complexity`, `runtime.credential`
+    and `runtime.permissions` stay local.
+  - `handovers[].target_kind` is registered to Cinna Desktop (its coordinator
+    handback pair); other hosts preserve it and ignore it.
+- **Schema annotations `x-scope` / `x-import`.** Every property in both schemas
+  says whether every host gives it one meaning (`portable`), only the host that
+  wrote it (`host`), or one registered host (`host:<name>`), and what
+  `cinna agent import` actually does with it (`imported`, `ignored`, or the
+  mapping). A field a host ships before the contract registers it is preserved
+  by every host and ignored by the import.
+- **The conformance set** — `conformance/manifests/*.json`, each a manifest plus
+  the field paths a validator must report (errors exactly, warnings present,
+  warnings absent), with the format and matching rule in
+  `conformance/README.md`. `kit.py` and the desktop validator both run the set
+  in their tests, so the two hosts' validators cannot drift apart silently.
 - **`publications.json`** — Where the agent has been published, one entry per
   Cinna instance (`platform_url`, `agent_id`, `workspace`, `imported_at`,
   `updated_at`, `contract_version`, `content_hash`), in a **sibling file at the

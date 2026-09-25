@@ -517,13 +517,22 @@ def test_contract_membership_is_the_declared_subset(client: TestClient) -> None:
       for a human or a coding assistant. `assistants/` in particular is
       deliberately outside the contract even though it now carries a
       desktop-facing page — the contract is the machine-readable half.
+
+    `conformance/` is in, for the opposite reason: it is data every validator of
+    the contract runs, not prose about it.
     """
     members = _contract_tarball_members(client)
 
     for member in ("kit.json", "layout.json", "CONTRACT_VERSION", "CHANGELOG.md"):
         assert member in members, sorted(members)
-    for prefix in ("schema/", "templates/"):
+    for prefix in ("schema/", "templates/", "conformance/"):
         assert any(rel.startswith(prefix) for rel in members), (prefix, sorted(members))
+    # The conformance set (contract 1.5.0) ships whole: its format and matching
+    # rule travel with the cases, or a host cannot apply them.
+    assert "conformance/README.md" in members, sorted(members)
+    assert any(
+        rel.startswith("conformance/manifests/") and rel.endswith(".json") for rel in members
+    ), sorted(members)
 
     for member in ("VERSION", "START.md", "README.md"):
         assert member not in members, member

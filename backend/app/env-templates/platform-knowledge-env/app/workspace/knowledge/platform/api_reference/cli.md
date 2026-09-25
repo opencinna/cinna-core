@@ -126,6 +126,7 @@ Auto-generated from OpenAPI spec. Tag: `cli`
   - `description`: string | null
   - `env_name`: string | null
   - `user_workspace_id`: string | null
+  - `engine`: string | null
 
 **Response:** `AgentPublic`
 

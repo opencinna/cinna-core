@@ -98,9 +98,13 @@ CONTRACT_TARBALL_ROOT = "cinna-contract"
 CONTRACT_TARBALL_FILENAME = "cinna-contract.tar.gz"
 
 # Exact member names in the contract, plus the directory prefixes that carry
-# the rest of it. Everything else in the kit (the guides, ``tools/``,
-# ``START.md``, ``README.md``, ``assistants/``) is prose for a human or a
-# coding assistant and is deliberately not part of the contract.
+# the rest of it. ``conformance/`` (contract 1.5.0) is the contract's own test
+# set — manifests paired with the findings every validator must report — so a
+# host that bundles the contract can run it against its own validator. It is
+# data, not prose, which is why it ships and ``tools/`` does not. Everything
+# else in the kit (the guides, ``tools/``, ``START.md``, ``README.md``,
+# ``assistants/``) is prose for a human or a coding assistant and is
+# deliberately not part of the contract.
 #
 # ``VERSION`` is deliberately absent: it holds the *kit* content version, and
 # shipping it inside a contract tree would put two meanings on one filename.
@@ -109,7 +113,7 @@ CONTRACT_TARBALL_FILENAME = "cinna-contract.tar.gz"
 CONTRACT_MEMBERS = frozenset(
     {INDEX_MEMBER, LAYOUT_MEMBER, CONTRACT_VERSION_MEMBER, CHANGELOG_MEMBER}
 )
-CONTRACT_MEMBER_PREFIXES = ("schema/", "templates/")
+CONTRACT_MEMBER_PREFIXES = ("schema/", "templates/", "conformance/")
 
 KIT_VERSION_HEADER = "X-Kit-Version"
 

@@ -16,6 +16,119 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.5.0 — one contract for every host
+
+Additive. Every 1.x folder is still valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.5.0 folder, because the majors match.
+From this release the contract is minted in one place — this kit — and every
+host re-bundles it rather than keeping its own copy.
+
+### Added
+
+- **Three fields Cinna Desktop introduced are now part of the one schema**
+  (their history is in the note below):
+  - `runtime.engine` — which engine the author *prefers*: `opencode`, `claude`
+    (Claude Code) or `codex` (the Codex CLI). **A preference, never a
+    requirement.** Absent means the host's default engine; a named engine the
+    host does not support — including a value it does not recognise — runs the
+    agent **on OpenCode**, and the host never refuses the folder. It is
+    deliberately not an enum. `claude` or `codex` together with
+    `runtime.credential` is a warning: those engines run under their own CLI
+    login, so the credential is ignored. On cloud import the preference picks
+    the new agent's environment SDK — `claude` becomes Claude Code, anything
+    else OpenCode — and an existing agent's engine is left as it is.
+  - `runtime.complexity` — `simple` | `medium` | `complex`, a portable
+    alternative to a concrete model id that the host resolves against the
+    models its credential offers. Like `engine` it is deliberately not an enum,
+    so an older strict validator never rejects a tier a newer minor adds. An
+    unrecognised tier is a warning and reads as no tier; a manifest carrying it
+    together with `runtime.model` is a warning, and the model wins.
+  - `handovers[].target_kind` — an optional host role, without an enum. The
+    exact pair `target_kind: "coordinator"`, `target_slug: "coordinator"` is
+    Cinna Desktop's explicit return to the coordinator owning the current task;
+    `target_kind: "coordinator"` with any other slug is an error, a non-string
+    kind is an error, and any other kind is accepted and grants nothing.
+
+  `kit.py validate` checks all three with the desktop validator's severities.
+- **Every schema property is annotated with `x-scope` and `x-import`.** These
+  are JSON Schema annotations and change no validation outcome. `x-scope` is
+  `portable` (every host gives the field one meaning), `host` (interpreted by the
+  host that wrote it: `runtime.permissions`), or `host:<name>` (registered to one
+  host so nobody reuses the name: `handovers[].target_kind` is
+  `host:cinna-desktop`). `x-import` records what `cinna agent import` actually
+  does with the field — `imported`, `ignored`, or the mapping. Reading them
+  answers "does this reach the cloud?" without reading the importer:
+  `runtime.engine` is carried, while `runtime.model`, `runtime.complexity`,
+  `runtime.credential` and `runtime.permissions` stay local.
+  `publications.schema.json` is annotated too; its `x-import` describes how the
+  import reads and writes the ledger, since the file itself never travels.
+- **A host-registered or not-yet-registered field is preserved and ignored.** A
+  host may ship a field before this contract names it, or register one for
+  itself; every other host keeps the key untouched when it rewrites the
+  manifest, gives it no meaning, and the cloud import ignores it.
+- **`conformance/` — the contract's own test set.** `conformance/manifests/*.json`
+  pairs a manifest with the field paths a validator must report for it: errors
+  (the exact set), warnings that must appear, and warnings that must not.
+  `conformance/README.md` states the format and the matching rule. Every
+  validator of this contract — `kit.py` and the desktop's — runs the whole set
+  in its tests, so two hosts can no longer disagree about a manifest silently.
+  The directory ships in the contract bundle.
+
+### Changed
+
+- **`runtime.model` no longer claims to seed the cloud's model override.** The
+  cloud import has never read it; the description now says so. Likewise
+  `schedules[].timezone` is documented as what it is on import — the cloud
+  schedule's timezone, UTC when absent — rather than local-only metadata.
+- **`schedules` and `handovers` are described for both hosts.** Platform import
+  creates schedules; Cinna Desktop may also run `static_prompt` schedules
+  locally after a separate per-profile, per-device opt-in, only while the app is
+  open. Handovers name sibling agents unless a host-registered `target_kind`
+  says otherwise.
+- **The agent and root `gitignore` templates ignore every credential value the
+  contract names.** They covered only `credentials/.env` and
+  `credentials/credentials.json`, while `cloud_import_excludes` and
+  `secret_files` also treat a root `credentials.json`, every dotenv shape
+  (`.env`, `.env.<suffix>`, `<name>.env`) and `*.pem` / `*.key` / `*.p12` as
+  secret — so a scaffolded folder could commit a file the export would never
+  send. Files ending `.example`, `.sample` or `.template` stay tracked, matching
+  `secret_files`' `unless`. Existing folders keep their own `.gitignore`; copy
+  the Secrets block across by hand.
+
+### Note — contract versions minted outside this kit
+
+Before 1.5.0, Cinna Desktop kept its own copy of this contract and minted
+versions in it. The two histories diverged, and this note records them so this
+file is the complete one:
+
+- **1.1.0 was minted twice.** Here it is "skills are folders" (below). In Cinna
+  Desktop it was **work complexity**: optional `runtime.complexity`
+  (`simple` | `medium` | `complex`), mutually exclusive with `runtime.model`.
+  Writing both is refused by the desktop; reading both is a warning and the model
+  wins, and an unrecognised tier reads as no tier rather than a broken folder, so
+  a host keeps running what a newer tool wrote. It exists because a model id is
+  the least portable thing a manifest can carry — it is wrong on a machine with a
+  different credential and stale when the provider retires it — while `medium`
+  means the same everywhere; a host should resolve a tier against its live
+  catalogue by model family, not against a table of ids.
+- **1.2.0 — engine (Cinna Desktop).** Optional `runtime.engine`, first `opencode`
+  and `claude`, later `codex`. An unrecognised value read as "no engine
+  declared", and the schema deliberately left the value set open. `claude` with
+  `credential` was refused on write and a warning on read, with the credential
+  ignored, because that engine resolves its own login.
+- **1.3.0 — explicit coordinator handback (Cinna Desktop).** Optional
+  `handovers[].target_kind`, without an enum. Only the exact pair
+  `target_kind: "coordinator"`, `target_slug: "coordinator"` enables the
+  desktop's return to the coordinator already owning a handed-off task, and an
+  eligible agent may end a successful answer with `/handback <note>`, which the
+  desktop consumes only for an already handed-off owner after all questions are
+  settled. An absent kind keeps sibling-slug semantics, including for a sibling
+  literally named `coordinator`; an unknown kind grants no handback authority.
+- **1.4.0** is the first version both carried, and its entry below is shared.
+
+1.5.0 adopts all three fields as described above. Nothing in a folder written
+against any of these versions needs migrating: minors gate nothing.
+
 ## 1.4.0 — cloud and local credential delivery
 
 - One reader for injected and cloud credential arrays, legacy objects, and local env files; strict slot lookup and service-account side files.

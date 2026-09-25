@@ -170,17 +170,21 @@ def account_create_agent(
     name: str = "CLI Agent",
     description: str | None = None,
     user_workspace_id: str | None = None,
+    engine: str | None = None,
 ) -> dict:
     """POST /api/v1/cli/account/agents — thin-client agent create.
 
     Returns the full ``AgentPublic`` record. ``user_workspace_id`` targets the
-    account user's active workspace (``None`` = Default).
+    account user's active workspace (``None`` = Default). ``engine`` is a local
+    agent manifest's ``runtime.engine`` preference (omitted when ``None``).
     """
     body: dict = {"name": name}
     if description is not None:
         body["description"] = description
     if user_workspace_id is not None:
         body["user_workspace_id"] = user_workspace_id
+    if engine is not None:
+        body["engine"] = engine
     r = client.post(f"{_BASE}/account/agents", headers=account_headers, json=body)
     assert r.status_code == 200, f"Account create agent failed: {r.text}"
     return r.json()

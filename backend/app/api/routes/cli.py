@@ -892,7 +892,14 @@ async def account_create_agent(
     environment creation) exactly as ``POST /api/v1/agents/`` does. Returns the
     full ``AgentPublic`` record. ``require_developer``-gated (mirrors the UI
     create route). ``env_name`` is accepted-but-noop in v1 (O1).
+
+    ``engine`` (optional) is a local agent manifest's ``runtime.engine``
+    preference; the environment is created on the SDK it maps to (unsupported
+    engines → OpenCode). If the user has no AI credential for that SDK the call
+    fails with 400 before any agent row is written.
     """
+    from app.services.environments.environment_service import AgentEnvironmentError
+
     _require_developer_account(account_ctx)
     try:
         return await AccountCLIService.create_agent(
@@ -900,6 +907,9 @@ async def account_create_agent(
         )
     except WorkspaceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except AgentEnvironmentError as e:
+        # Missing/incompatible AI credential for the environment's SDK (400).
+        raise HTTPException(status_code=e.status_code, detail=e.message)
     except ValueError as e:
         # Agent-creation limit (and other domain rule failures) raised by
         # AgentService.create_agent through the account-CLI path.

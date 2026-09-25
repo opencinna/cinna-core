@@ -3,7 +3,7 @@
   "$id": "https://opencinna.io/schema/cinna-agent.schema.json",
   "title": "cinna-agent.json",
   "description": "Definitional metadata for a locally built agent. Lives at the agent folder root and travels unchanged into a cloud agent workspace and into bundle revisions. Unknown keys are preserved for forward compatibility.",
-  "type": "object",
+  "$comment": "Every property carries two annotation keywords (contract 1.5.0; unknown keywords are legal JSON Schema 2020-12 annotations and change no validation outcome). `x-scope` is `portable` when every host gives the field the same meaning, `host` when it is interpreted only by the host that wrote it, or `host:<name>` when it is registered to one named host so nobody reuses the name - other hosts preserve such a field and ignore it. `x-import` says what `cinna agent import` does with the field: `imported`, `ignored`, or a short phrase naming the mapping. `ignored` means the import maps the value onto nothing; the key itself still travels, because the whole manifest is copied into the cloud workspace. A host may ship a field before it is registered here; every host preserves it and the import ignores it.",
   "required": ["name", "slug", "description"],
   "allOf": [
     {
@@ -24,98 +24,146 @@
     "contract_version": {
       "description": "Version of the folder contract this agent was scaffolded against, and the compatibility gate: a tool whose contract major is older than this must refuse to operate the folder. Required of every folder except a legacy one (see the top-level allOf).",
       "type": "string",
-      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?$"
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?$",
+      "x-scope": "portable",
+      "x-import": "compatibility gate (a newer major is refused, an older or missing one warns); recorded in the publications.json entry"
     },
     "id": {
       "description": "Stable identity of this agent, written once at scaffold and never rewritten. Survives folder moves and slug renames; preserved through cloud import as the agent's local origin. Required of every folder except a legacy one (see the top-level allOf).",
       "type": "string",
-      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "x-scope": "portable",
+      "x-import": "ignored"
     },
     "schema_version": {
       "description": "Legacy manifest version. A manifest that carries it, and neither contract_version nor id, is a pre-1.0.0 folder: it still parses, and a tool should re-stamp it rather than reject it. It is no longer the compatibility gate and nothing should branch on its value.",
       "type": "integer",
-      "deprecated": true
+      "deprecated": true,
+      "x-scope": "portable",
+      "x-import": "legacy check: must be an integer, and a value above 1 is refused"
     },
     "kit_version": {
       "description": "Version of the kit that scaffolded this agent. Informational only - never a gate.",
-      "type": ["string", "null"]
+      "type": ["string", "null"],
+      "x-scope": "portable",
+      "x-import": "ignored"
     },
     "created_at": {
       "description": "ISO 8601 timestamp written by the scaffolder. Informational.",
-      "type": ["string", "null"]
+      "type": ["string", "null"],
+      "x-scope": "portable",
+      "x-import": "ignored"
     },
     "name": {
       "description": "Display name shown to humans.",
       "type": "string",
       "minLength": 1,
-      "maxLength": 255
+      "maxLength": 255,
+      "x-scope": "portable",
+      "x-import": "imported (the cloud agent's name; `--name` overrides it)"
     },
     "slug": {
       "description": "Folder name and cloud reference. Must equal the agent folder's name.",
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+      "x-scope": "portable",
+      "x-import": "checked against the folder name; not sent"
     },
     "description": {
       "description": "One sentence describing what the agent does. Feeds agent cards, the A2A card and router-trigger generation.",
       "type": "string",
       "minLength": 1,
-      "maxLength": 2000
+      "maxLength": 2000,
+      "x-scope": "portable",
+      "x-import": "imported"
     },
     "example_prompts": {
       "description": "Ready-to-send task suggestions AND a first-class routing input. At least one is required for a cloud-ready agent.",
       "type": "array",
       "items": {"type": "string", "minLength": 1, "maxLength": 500},
-      "maxItems": 20
+      "maxItems": 20,
+      "x-scope": "portable",
+      "x-import": "imported"
     },
     "router_trigger_prompt": {
       "description": "One capability-verb sentence used only by the routing classifier. Describes when to route here, never how to behave.",
       "type": ["string", "null"],
-      "maxLength": 2000
+      "maxLength": 2000,
+      "x-scope": "portable",
+      "x-import": "imported"
     },
     "prompts": {
       "description": "Paths, relative to the agent root, of the three document-backed prompts.",
       "type": "object",
       "additionalProperties": false,
+      "x-scope": "portable",
+      "x-import": "each named file's contents become the cloud agent's prompt of that kind",
       "properties": {
-        "workflow": {"type": "string"},
-        "entrypoint": {"type": "string"},
-        "refiner": {"type": "string"}
+        "workflow": {"type": "string", "x-scope": "portable", "x-import": "file contents -> workflow_prompt"},
+        "entrypoint": {"type": "string", "x-scope": "portable", "x-import": "file contents -> entrypoint_prompt"},
+        "refiner": {"type": "string", "x-scope": "portable", "x-import": "file contents -> refiner_prompt"}
       }
     },
     "runtime": {
-      "description": "How this agent should be run by a host that offers a choice. Absent means the host's default runtime. Never contains a secret: credential is a reference, not a key.",
+      "description": "How this agent should be run by a host that offers a choice. Absent means the host's default runtime. Never contains a secret: credential is a reference, not a key. Everything but `engine` stays local: the cloud runs an imported agent on the model and credential its own environment selects.",
       "type": ["object", "null"],
       "additionalProperties": true,
+      "x-scope": "portable",
+      "x-import": "only `engine` is carried; see each property",
       "properties": {
+        "engine": {
+          "description": "Which engine the author prefers to run the agent on - a preference, never a requirement. Known values: `opencode` (an OpenCode server), `claude` (Claude Code) and `codex` (the Codex CLI); `claude` and `codex` drive a CLI under its own login. Absent means the host's default engine. A host that does not support the named engine - including a value it does not recognise - runs the agent on OpenCode and never refuses the folder. Deliberately not an enum: a newer minor may name an engine this schema predates, and such a folder must still validate. `claude`/`codex` and `credential` are not meaningful together: those engines spend no host credential, so a host ignores the credential and a validator warns. Minted by Cinna Desktop as contract 1.2.0; part of the one contract since 1.5.0.",
+          "type": ["string", "null"],
+          "examples": ["opencode", "claude", "codex"],
+          "x-scope": "portable",
+          "x-import": "engine preference -> the cloud environment's SDK at agent creation (`claude` -> claude-code, anything else -> opencode); an existing agent's engine is not changed"
+        },
         "model": {
-          "description": "Model identifier as the host names it. Seeds the cloud's per-mode model override at import.",
-          "type": ["string", "null"]
+          "description": "Model identifier as the host names it. Local only: the cloud import does not carry it, and an imported agent runs on the model its cloud environment selects. Mutually exclusive with `complexity`.",
+          "type": ["string", "null"],
+          "x-scope": "portable",
+          "x-import": "ignored"
+        },
+        "complexity": {
+          "description": "How hard this agent's work is, as a portable alternative to a concrete model id: the host resolves it against the models the chosen credential actually offers. Known tiers: `simple`, `medium`, `complex`. Deliberately not an enum, for the same reason as `engine`: a newer minor may add a tier, and an older strict validator must not reject that folder. A host that does not recognise the value runs the agent on its default model, and a validator warns. Mutually exclusive with `model`; a manifest carrying both is a warning and the model wins. Minted by Cinna Desktop as contract 1.1.0; part of the one contract since 1.5.0. Local only: there is no cloud counterpart yet.",
+          "type": ["string", "null"],
+          "examples": ["simple", "medium", "complex"],
+          "x-scope": "portable",
+          "x-import": "ignored"
         },
         "credential": {
-          "description": "Reference to the AI credential to run on: a credential type, or the name of a credential configured in the host. NEVER a key, token or secret value.",
-          "type": ["string", "null"]
+          "description": "Reference to the AI credential to run on: a credential type, or the name of a credential configured in the host. NEVER a key, token or secret value. Local only: the cloud import does not carry it.",
+          "type": ["string", "null"],
+          "x-scope": "portable",
+          "x-import": "ignored"
         },
         "permissions": {
           "description": "Host-specific permission profile for the agent's own tools. Interpreted by the host that wrote it; unknown keys are preserved.",
           "type": "object",
-          "additionalProperties": true
+          "additionalProperties": true,
+          "x-scope": "host",
+          "x-import": "ignored"
         }
       }
     },
     "status_refresh_command": {
       "description": "Shell command, or a /run:<name> reference into docs/CLI_COMMANDS.yaml, executed before the platform reads STATUS.md.",
       "type": ["string", "null"],
-      "maxLength": 1024
+      "maxLength": 1024,
+      "x-scope": "portable",
+      "x-import": "imported"
     },
     "credentials": {
       "description": "Credential slots the agent needs. Never contains secret values.",
       "type": "array",
+      "x-scope": "portable",
+      "x-import": "each slot becomes an empty credential draft attached to the agent (reused by name when one exists)",
       "items": {
         "type": "object",
         "required": ["name", "type"],
         "additionalProperties": true,
         "properties": {
-          "name": {"type": "string", "minLength": 1, "maxLength": 255},
+          "name": {"type": "string", "minLength": 1, "maxLength": 255, "x-scope": "portable", "x-import": "imported (the draft's name, and the match key for an existing credential)"},
           "type": {
             "description": "A platform credential type. The values below are the types known at contract 1.0.0; they are advisory, not a closed set. The platform's list grows independently of any bundled contract, so a contract pinned in a shipped desktop build cannot track it - an unrecognised value is therefore tolerated here and reported as a warning, and is resolved against the authoritative list at import.",
             "type": "string",
@@ -132,59 +180,85 @@
               "google_service_account",
               "api_token",
               "ssh_key"
-            ]
+            ],
+            "x-scope": "portable",
+            "x-import": "imported"
           },
-          "description": {"type": "string", "maxLength": 2000},
+          "description": {"type": "string", "maxLength": 2000, "x-scope": "portable", "x-import": "imported (as the draft's notes)"},
           "service_uri": {
             "description": "Explicit service slot for matching attached credentials of this type. Without it, match the declared name to the credential name or service_uri.",
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "x-scope": "portable",
+            "x-import": "imported"
           },
           "env_prefix": {
             "description": "Prefix of the local .env variable names for this slot. Variable name is <env_prefix><FIELD in upper case>.",
             "type": "string",
-            "pattern": "^[A-Z][A-Z0-9_]*_$"
+            "pattern": "^[A-Z][A-Z0-9_]*_$",
+            "x-scope": "portable",
+            "x-import": "ignored"
           },
           "fields": {
             "description": "Field names of the credential payload, as the platform names them.",
             "type": "array",
-            "items": {"type": "string", "minLength": 1}
+            "items": {"type": "string", "minLength": 1},
+            "x-scope": "portable",
+            "x-import": "ignored"
           },
-          "optional": {"type": "boolean"}
+          "optional": {"type": "boolean", "x-scope": "portable", "x-import": "ignored"}
         }
       }
     },
     "schedules": {
-      "description": "Unattended runs. Declared locally, created on the platform at import time.",
+      "description": "Unattended run declarations. Platform import creates them as cloud schedules. Cinna Desktop may also run static_prompt schedules locally, only after a separate per-profile opt-in on each device and only while the app is open.",
       "type": "array",
+      "x-scope": "portable",
+      "x-import": "each entry becomes a cloud schedule, matched by name; an existing one is updated only with --update",
       "items": {
         "type": "object",
         "required": ["name", "cron_string", "schedule_type"],
         "additionalProperties": true,
         "properties": {
-          "name": {"type": "string", "minLength": 1, "maxLength": 255},
+          "name": {"type": "string", "minLength": 1, "maxLength": 255, "x-scope": "portable", "x-import": "imported (also the match key)"},
+          "description": {
+            "description": "What the schedule does, shown with the cloud schedule.",
+            "type": ["string", "null"],
+            "x-scope": "portable",
+            "x-import": "imported (the schedule's name when absent)"
+          },
           "cron_string": {
             "description": "Standard five-field cron expression.",
             "type": "string",
-            "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$"
+            "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$",
+            "x-scope": "portable",
+            "x-import": "imported"
           },
           "timezone": {
-            "description": "IANA timezone name. Local-only metadata used to render the cron description at import.",
-            "type": ["string", "null"]
+            "description": "IANA timezone name. The cloud import uses it as the schedule's timezone, UTC when absent. A desktop opt-in freezes this zone, or the current system zone when absent, for matching local schedule occurrences.",
+            "type": ["string", "null"],
+            "x-scope": "portable",
+            "x-import": "imported (UTC when absent)"
           },
           "schedule_type": {
             "type": "string",
-            "enum": ["static_prompt", "script_trigger"]
+            "enum": ["static_prompt", "script_trigger"],
+            "x-scope": "portable",
+            "x-import": "imported"
           },
           "prompt": {
             "description": "Required for static_prompt: the message sent to start the run.",
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "x-scope": "portable",
+            "x-import": "imported"
           },
           "command": {
             "description": "Required for script_trigger: the shell command whose non-OK output starts a session.",
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "x-scope": "portable",
+            "x-import": "imported"
           },
-          "enabled": {"type": "boolean"}
+          "enabled": {"type": "boolean", "x-scope": "portable", "x-import": "imported (true when absent)"}
         },
         "allOf": [
           {
@@ -199,15 +273,23 @@
       }
     },
     "handovers": {
-      "description": "Other agents this one may delegate to. Targets are slugs of sibling agents.",
+      "description": "Other agents this one may delegate to. A target is the slug of a sibling agent, unless a host-registered `target_kind` gives the entry another meaning: Cinna Desktop reads the exact pair target_kind=coordinator, target_slug=coordinator as an explicit return to the coordinator that owns the current task.",
       "type": "array",
+      "x-scope": "portable",
+      "x-import": "ignored",
       "items": {
         "type": "object",
         "required": ["target_slug"],
         "additionalProperties": true,
         "properties": {
-          "target_slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
-          "description": {"type": "string", "maxLength": 2000}
+          "target_slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$", "x-scope": "portable", "x-import": "ignored"},
+          "description": {"type": "string", "maxLength": 2000, "x-scope": "portable", "x-import": "ignored"},
+          "target_kind": {
+            "description": "Optional host role, deliberately without an enum. Absent keeps sibling-slug semantics, including for a sibling literally named coordinator. The exact pair target_kind=coordinator and target_slug=coordinator enables Cinna Desktop's coordinator handback; target_kind=coordinator with any other slug is an error. Any other value grants no execution authority on the desktop. Minted by Cinna Desktop as contract 1.3.0; registered here since 1.5.0.",
+            "type": "string",
+            "x-scope": "host:cinna-desktop",
+            "x-import": "ignored"
+          }
         }
       }
     },
@@ -215,9 +297,11 @@
       "description": "Cloud-only capabilities the agent expects once imported. Ignored locally.",
       "type": "object",
       "additionalProperties": true,
+      "x-scope": "portable",
+      "x-import": "ignored",
       "properties": {
-        "webapp": {"type": "boolean"},
-        "agent_api": {"type": "boolean"}
+        "webapp": {"type": "boolean", "x-scope": "portable", "x-import": "ignored"},
+        "agent_api": {"type": "boolean", "x-scope": "portable", "x-import": "ignored"}
       }
     },
     "cloud": {
@@ -225,10 +309,12 @@
       "type": "object",
       "deprecated": true,
       "additionalProperties": true,
+      "x-scope": "portable",
+      "x-import": "fallback: names the agent to update when publications.json has no entry for this instance",
       "properties": {
-        "platform_url": {"type": ["string", "null"]},
-        "agent_id": {"type": ["string", "null"]},
-        "imported_at": {"type": ["string", "null"]}
+        "platform_url": {"type": ["string", "null"], "x-scope": "portable", "x-import": "the fallback applies only when absent or equal to this instance"},
+        "agent_id": {"type": ["string", "null"], "x-scope": "portable", "x-import": "the agent the fallback updates"},
+        "imported_at": {"type": ["string", "null"], "x-scope": "portable", "x-import": "ignored"}
       }
     }
   }

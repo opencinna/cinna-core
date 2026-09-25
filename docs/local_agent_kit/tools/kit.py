@@ -216,6 +216,18 @@ CREDENTIAL_TYPES = (
 SCHEDULE_TYPES = ("static_prompt", "script_trigger")
 
 PROMPT_KEYS = ("workflow", "entrypoint", "refiner")
+
+# Contract 1.5.0 fields first minted by Cinna Desktop. Both value sets are the
+# desktop's (`isAgentEngine` in src/shared/engine.ts, `isWorkComplexity` in
+# src/shared/modelFamilies.ts); an unrecognised value is a warning, never an
+# error, on both hosts — see `_validate_runtime`.
+KNOWN_ENGINES = ("opencode", "claude", "codex")
+# Engines that drive a CLI under its own login and spend no host credential.
+CLI_LOGIN_ENGINES = ("claude", "codex")
+WORK_COMPLEXITIES = ("simple", "medium", "complex")
+# The one registered `handovers[].target_kind` (host:cinna-desktop). Only the
+# exact pair kind == slug == "coordinator" means "return to the coordinator".
+COORDINATOR = "coordinator"
 DEFAULT_PROMPTS = {
     "workflow": "docs/WORKFLOW_PROMPT.md",
     "entrypoint": "docs/ENTRYPOINT_PROMPT.md",
@@ -1590,10 +1602,52 @@ def _validate_runtime(runtime: object, report: Report) -> None:
     if not isinstance(runtime, dict):
         report.error(f"{MANIFEST_NAME}: `runtime` must be an object or null.")
         return
-    for key in ("model", "credential"):
+    for key in ("model", "credential", "engine"):
         value = runtime.get(key)
         if value is not None and not isinstance(value, str):
             report.error(f"{MANIFEST_NAME}: `runtime.{key}` must be a string or null.")
+
+    # Contract 1.5.0 (desktop 1.2.0 / 1.1.0). WARNINGS, never errors, and the
+    # severities are the desktop validator's `checkRuntime()`: an error makes a
+    # host refuse the folder, which is exactly what "minor bumps are additive"
+    # promises against. Each case has defined behaviour instead — an engine the
+    # host does not support runs on OpenCode, `claude`/`codex` ignore the
+    # credential, an unknown tier reads as no tier, and `model` beats
+    # `complexity`.
+    engine = runtime.get("engine")
+    if isinstance(engine, str) and engine.strip():
+        name = engine.strip()
+        credential_ref = runtime.get("credential")
+        if name not in KNOWN_ENGINES:
+            report.warn(
+                f"{MANIFEST_NAME}: `runtime.engine` {name!r} is not a known engine "
+                f"({', '.join(KNOWN_ENGINES)}), so a host runs the agent on OpenCode instead."
+            )
+        elif (
+            name in CLI_LOGIN_ENGINES
+            and isinstance(credential_ref, str)
+            and credential_ref.strip()
+        ):
+            report.warn(
+                f"{MANIFEST_NAME}: `runtime.engine` {name} uses its own CLI login, so "
+                "runtime.credential is ignored. Remove it."
+            )
+
+    complexity = runtime.get("complexity")
+    if complexity is not None:
+        model = runtime.get("model")
+        if complexity not in WORK_COMPLEXITIES:
+            report.warn(
+                f"{MANIFEST_NAME}: `runtime.complexity` should be one of "
+                f"{', '.join(WORK_COMPLEXITIES)}. This one is not recognised, so the agent "
+                "runs on the host default instead."
+            )
+        elif isinstance(model, str) and model.strip():
+            report.warn(
+                f"{MANIFEST_NAME}: `runtime.complexity` and runtime.model are both set — one "
+                "names a model, the other asks the host to choose one. The model wins; "
+                "remove whichever you did not mean."
+            )
 
     # An ERROR, and the one place in this file where a manifest field is judged by
     # its shape rather than its type: `runtime.credential` names a credential, and
@@ -1873,8 +1927,33 @@ def _validate_handovers(handovers: object, slug: object, report: Report) -> None
         if not isinstance(target, str) or not SLUG_RE.match(target):
             report.error(f"{MANIFEST_NAME}: `{label}.target_slug` must be a valid slug.")
             continue
-        if target == slug:
+        # Contract 1.5.0 (desktop 1.3.0): `target_kind` is registered to
+        # host:cinna-desktop. The rules are the desktop's `checkHandovers()`
+        # exactly — a non-string kind and a coordinator kind naming any other
+        # slug are errors; any other string is accepted and grants nothing.
+        kind = handover.get("target_kind")
+        if "target_kind" in handover and not isinstance(kind, str):
+            report.error(f"{MANIFEST_NAME}: `{label}.target_kind` must be a string.")
+        if kind == COORDINATOR and target != COORDINATOR:
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.target_kind` is coordinator, so target_slug must "
+                "be coordinator too."
+            )
+        if not is_coordinator_handover(handover) and target == slug:
             report.warn(f"{MANIFEST_NAME}: `{label}` hands over to this same agent.")
+
+
+def is_coordinator_handover(handover: object) -> bool:
+    """The exact pair the desktop reads as a return to the task's coordinator.
+
+    Both keys, not the kind alone: a sibling agent literally named `coordinator`
+    keeps its sibling meaning when no kind is given.
+    """
+    return (
+        isinstance(handover, dict)
+        and handover.get("target_slug") == COORDINATOR
+        and handover.get("target_kind") == COORDINATOR
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -2601,6 +2680,10 @@ def _validate_cloud_readiness(
             if not isinstance(handover, dict):
                 continue
             target = handover.get("target_slug")
+            # Only a sibling-slug handover names a folder. The desktop skips the
+            # same check for any entry that carries a `target_kind`.
+            if "target_kind" in handover:
+                continue
             if isinstance(target, str) and not (agent_dir.parent / target).is_dir():
                 # A warning, matching the desktop: the sibling may simply not have
                 # been built yet, or may live in another workshop, and neither

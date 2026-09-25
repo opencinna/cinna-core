@@ -142,6 +142,16 @@ What it does: creates the agent, writes the prompts and metadata, syncs the
 workspace, copies the tree, pushes it, creates credential drafts, creates schedules,
 sets the status refresh command, and stamps a `cloud` block into `cinna-agent.json`.
 
+**Of the manifest's `runtime` block, only `engine` travels.** It is a *preference*:
+when the import creates the agent, `claude` picks a Claude Code environment and any
+other value — or none — picks OpenCode, the same fallback every host applies to an
+engine it does not support. It never changes the engine of an agent that already
+exists, so `--update` leaves it alone. `runtime.model`, `runtime.complexity`,
+`runtime.credential` and `runtime.permissions` stay local: the cloud agent runs on
+the model and AI credential its environment selects, and you set those on the
+agent's page (guide 13, §10). The schema's `x-import` annotation on each field says
+which is which.
+
 Two facts about that last pair, because this is where the CLI and this kit have
 drifted apart:
 

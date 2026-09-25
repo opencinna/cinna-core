@@ -1,6 +1,19 @@
-# Secrets
+# Secrets — never committed. Everything layout.json treats as a credential value:
+# every dotenv shape (`secret_files`), the credentials.json the platform injects at
+# the agent root and under credentials/, and private key material
+# (`cloud_import_excludes`). Examples, samples and templates stay tracked.
 credentials/.env
 credentials/credentials.json
+credentials.json
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+!*.example
+!*.sample
+!*.template
 
 # Python
 .venv/

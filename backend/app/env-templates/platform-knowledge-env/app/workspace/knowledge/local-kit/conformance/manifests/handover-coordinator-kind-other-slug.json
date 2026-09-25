@@ -1,0 +1,24 @@
+{
+  "description": "target_kind=coordinator with any other slug is an error.",
+  "manifest": {
+    "contract_version": "1.5.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "handovers": [
+      {
+        "target_slug": "billing-agent",
+        "target_kind": "coordinator"
+      }
+    ]
+  },
+  "expect": {
+    "errors": [
+      "handovers.target_kind"
+    ]
+  }
+}

@@ -104,7 +104,7 @@ from tests.utils.cli import (
     revoke_account_token,
     revoke_cli_token,
 )
-from tests.utils.environment import delete_environment
+from tests.utils.environment import delete_environment, list_environments
 from tests.utils.workspace import create_random_workspace
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.user import (
@@ -1885,6 +1885,131 @@ def test_account_create_agent(
     )
     assert r_missing.status_code == 422, (
         f"Missing required 'name' must return 422, got {r_missing.status_code}: {r_missing.text}"
+    )
+
+
+# ── Scenario 17a: POST /account/agents — manifest engine preference ─────────
+# Unit tests for sdk_for_engine_preference live in
+# tests/unit/test_sdk_engine_preference.py.
+
+
+def _developer_account(client: TestClient, superuser_token_headers: dict[str, str]):
+    """Fresh developer user → (user JWT headers, account CLI headers)."""
+    user = create_random_user(client)
+    user_headers = user_authentication_headers(
+        client=client, email=user["email"], password=user["_password"]
+    )
+    promote_to_developer(client, superuser_token_headers, user["id"])
+    account_jwt, _ = bootstrap_account_token(
+        client, user_headers, machine_name="Engine Machine"
+    )
+    return user_headers, account_cli_headers(account_jwt)
+
+
+def _env_sdks(client: TestClient, user_headers: dict[str, str], agent_id: str):
+    envs = list_environments(client, user_headers, agent_id)["data"]
+    assert len(envs) == 1, f"Expected exactly the default environment, got {envs}"
+    return envs[0]["agent_sdk_conversation"], envs[0]["agent_sdk_building"]
+
+
+def test_account_create_agent_engine_preference(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    POST /account/agents with ``engine`` (a manifest's runtime.engine):
+      1. Absent / blank engine → today's defaulting (user default conversation
+         SDK, building left unset)
+      2. engine=claude → claude-code/anthropic for both modes
+      3. engine=codex (no cloud engine) → opencode/anthropic for both modes
+      4. engine longer than 64 chars → 422
+      5. OpenAI-only user with default opencode/openai: engine=codex →
+         opencode/openai (provider carried over)
+      6. Same user, engine=claude → claude-code/anthropic needs an Anthropic
+         key they lack → 400 naming the SDK, and no agent is created
+    """
+    # ── Phase 1: Anthropic user — absent / blank engine is unchanged ──────
+    user_headers, acc_headers = _developer_account(client, superuser_token_headers)
+    create_random_ai_credential(
+        client, user_headers, credential_type="anthropic", set_default=True
+    )
+
+    for engine in (None, "   "):
+        agent = account_create_agent(
+            client, acc_headers, name="No Engine Agent", engine=engine
+        )
+        assert _env_sdks(client, user_headers, agent["id"]) == (
+            "claude-code/anthropic",
+            None,
+        ), f"engine={engine!r} must keep the default SDK and leave building unset"
+
+    # ── Phase 2: engine=claude → claude-code for both modes ───────────────
+    agent = account_create_agent(client, acc_headers, name="Claude", engine="claude")
+    assert _env_sdks(client, user_headers, agent["id"]) == (
+        "claude-code/anthropic",
+        "claude-code/anthropic",
+    )
+
+    # ── Phase 3: engine=codex → OpenCode fallback ─────────────────────────
+    agent = account_create_agent(client, acc_headers, name="Codex", engine="codex")
+    assert _env_sdks(client, user_headers, agent["id"]) == (
+        "opencode/anthropic",
+        "opencode/anthropic",
+    )
+
+    # ── Phase 4: over-long engine → 422 ───────────────────────────────────
+    r = client.post(
+        f"{_BASE}/account/agents",
+        headers=acc_headers,
+        json={"name": "Long Engine", "engine": "x" * 65},
+    )
+    assert r.status_code == 422, r.text
+
+    # ── Phase 5: OpenAI-only user — provider follows their default SDK ────
+    oa_headers, oa_acc_headers = _developer_account(client, superuser_token_headers)
+    create_random_ai_credential(
+        client, oa_headers, credential_type="openai", set_default=True
+    )
+    r = client.patch(
+        f"{settings.API_V1_STR}/users/me",
+        headers=oa_headers,
+        json={"default_sdk_conversation": "opencode/openai"},
+    )
+    assert r.status_code == 200, r.text
+
+    agent = account_create_agent(client, oa_acc_headers, name="OA Codex", engine="codex")
+    assert _env_sdks(client, oa_headers, agent["id"]) == (
+        "opencode/openai",
+        "opencode/openai",
+    )
+
+    # ── Phase 6: engine=claude without an Anthropic key → 400, no agent ───
+    before = {a["id"] for a in list_account_agents(client, oa_acc_headers)}
+    r = client.post(
+        f"{_BASE}/account/agents",
+        headers=oa_acc_headers,
+        json={"name": "OA Claude", "engine": "claude"},
+    )
+    assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
+    assert "claude-code/anthropic" in r.json()["detail"], r.text
+    after = {a["id"] for a in list_account_agents(client, oa_acc_headers)}
+    assert after == before, "A rejected create must not leave an agent behind"
+
+    # ── Phase 7: no engine and no key for the default SDK → 400, no agent ─
+    # The up-front check runs on every create, not only when an engine is
+    # given: without it the agent row was committed before the environment
+    # failed, and a retry duplicated it.
+    _bare_headers, bare_acc_headers = _developer_account(
+        client, superuser_token_headers
+    )
+    r = client.post(
+        f"{_BASE}/account/agents",
+        headers=bare_acc_headers,
+        json={"name": "No Key"},
+    )
+    assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
+    assert list_account_agents(client, bare_acc_headers) == [], (
+        "A create rejected for a missing key must not leave an agent behind"
     )
 
 

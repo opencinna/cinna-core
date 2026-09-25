@@ -407,8 +407,20 @@ class AgentService:
             )
 
     @staticmethod
-    async def create_agent(session: Session, user_id: UUID, data: AgentCreate, user: User) -> Agent:
-        """Create new agent with default environment"""
+    async def create_agent(
+        session: Session,
+        user_id: UUID,
+        data: AgentCreate,
+        user: User,
+        agent_sdk_conversation: str | None = None,
+        agent_sdk_building: str | None = None,
+    ) -> Agent:
+        """Create new agent with default environment.
+
+        ``agent_sdk_conversation`` / ``agent_sdk_building`` pin the default
+        environment's SDK per mode (as ``create_agent_flow`` does); ``None``
+        keeps ``EnvironmentService.create_environment``'s defaulting.
+        """
         AgentService._enforce_agent_creation_limit(session=session, user=user)
         from app.services.bundles.bundle_id_service import BundleIdService
 
@@ -431,7 +443,9 @@ class AgentService:
             env_version=settings.DEFAULT_AGENT_ENV_VERSION,
             instance_name="Default",
             type="docker",
-            config={}
+            config={},
+            agent_sdk_conversation=agent_sdk_conversation,
+            agent_sdk_building=agent_sdk_building,
         )
         default_env = await EnvironmentService.create_environment(
             session=session,

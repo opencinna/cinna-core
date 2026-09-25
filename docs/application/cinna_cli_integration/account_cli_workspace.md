@@ -210,6 +210,16 @@ create a new platform agent without opening the UI:
    server always picks `DEFAULT_AGENT_ENV_NAME`. Template selection at create time
    is a documented follow-up item.
 6. Requires `agent-developer` role. An `agent-user` receives **403**.
+7. Optional `engine` — the engine *preference* from a local agent manifest's
+   `runtime.engine` (sent by `cinna agent import`). The new environment is
+   created on the SDK it maps to, for both conversation and building:
+   `claude` → Claude Code, `opencode` → OpenCode, any other value (including
+   `codex`) → OpenCode. The provider is the one in the user's default
+   conversation SDK when that engine supports it, otherwise Anthropic. Absent or
+   blank → the user's default SDK, exactly as without the field. If the user has
+   no AI credential for the mapped SDK the call returns **400** ("Missing required
+   API key for SDK '…'") and creates nothing. Creation only — nothing changes the
+   engine of an existing agent.
 
 After creation, the developer runs `cinna agent sync <name>` to mint a child
 token and set up the agent's local workspace.
@@ -1126,7 +1136,7 @@ The backend contract these commands consume:
 
 | Command | Backend endpoint | Behavior |
 |---------|-----------------|----------|
-| `cinna agent create <name> [--description D]` | `POST /api/v1/cli/account/agents` body `{name, description, env_name}` | Create agent with backend defaults; print created agent's id, name, env id. 403 if not developer |
+| `cinna agent create <name> [--description D]` | `POST /api/v1/cli/account/agents` body `{name, description, env_name, user_workspace_id, engine}` | Create agent with backend defaults; print created agent's id, name, env id. 403 if not developer |
 | `cinna connect agent-api --producer P --consumer C [--label L] [--read-only]` | `POST /api/v1/cli/account/connect/agent-api` | Resolve P/C names → IDs from cached agents list; body `{producer_agent_id, consumer_agent_id, credential_label, read_only_override}`; print credential_id, token_prefix, base_url, spec_url |
 | `cinna connect mcp --producer P --consumer C [--label L] [--conversation-only\|--building-only]` | `GET …/account/connect/mcp/discoverable?consumer_agent_id=C` then `POST …/account/connect/mcp` | Resolve P → connector_id from discoverable list; body `{connector_id, consumer_agent_id, mcp_mode_conversation, mcp_mode_building, label}`; print credential_id, endpoint_url |
 | `cinna agent-api enable <agent> [--disable]` | `POST /api/v1/cli/account/agent-api/enable` body `{agent_id, enabled}` | Resolve agent → id; toggle `agent_api_enabled`; print resulting status (state, spec_available). 403 if not developer |

@@ -1,0 +1,22 @@
+{
+  "description": "An engine the validator does not know is a warning (the host falls back to OpenCode), never an error: the value set is open.",
+  "manifest": {
+    "contract_version": "1.5.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "runtime": {
+      "engine": "some-future-engine"
+    }
+  },
+  "expect": {
+    "errors": [],
+    "warnings": [
+      "runtime.engine"
+    ]
+  }
+}

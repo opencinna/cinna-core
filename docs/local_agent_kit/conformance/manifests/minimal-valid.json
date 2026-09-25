@@ -1,0 +1,27 @@
+{
+  "description": "The smallest valid 1.5.0 manifest: identity, name, slug, description and one example prompt. Nothing to report.",
+  "manifest": {
+    "contract_version": "1.5.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ]
+  },
+  "expect": {
+    "errors": [],
+    "no_warnings": [
+      "contract_version",
+      "id",
+      "name",
+      "slug",
+      "description",
+      "example_prompts",
+      "runtime.engine",
+      "runtime.complexity",
+      "handovers.target_kind"
+    ]
+  }
+}

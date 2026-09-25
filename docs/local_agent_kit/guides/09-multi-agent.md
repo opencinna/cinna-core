@@ -58,6 +58,13 @@ When one agent should delegate to another, declare it in the delegating agent's
 
 `target_slug` must be a real sibling under `Local/`. `kit.py validate` checks that.
 
+An entry may also carry `target_kind`, a role registered by a host. The only one
+today is Cinna Desktop's: the exact pair `"target_kind": "coordinator"`,
+`"target_slug": "coordinator"` lets an agent hand a task back to the coordinator
+that gave it to it, and names no folder. Do not write it unless the user runs the
+agent in Cinna Desktop and asked for that. `target_kind: "coordinator"` with any
+other slug is an error; the cloud import ignores the key.
+
 Then say so in the delegating agent's `docs/WORKFLOW_PROMPT.md`, in the agent's own
 voice:
 

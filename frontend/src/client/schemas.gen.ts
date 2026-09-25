@@ -2359,6 +2359,18 @@ export const AccountAgentCreateBodySchema = {
                 }
             ],
             title: 'User Workspace Id'
+        },
+        engine: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Engine'
         }
     },
     type: 'object',

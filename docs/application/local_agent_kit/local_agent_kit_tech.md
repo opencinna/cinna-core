@@ -290,14 +290,16 @@ CONTRACT_TARBALL_ROOT     = "cinna-contract"
 CONTRACT_TARBALL_FILENAME = "cinna-contract.tar.gz"
 
 CONTRACT_MEMBERS = frozenset({INDEX_MEMBER, LAYOUT_MEMBER, CONTRACT_VERSION_MEMBER, CHANGELOG_MEMBER})
-CONTRACT_MEMBER_PREFIXES = ("schema/", "templates/")
+CONTRACT_MEMBER_PREFIXES = ("schema/", "templates/", "conformance/")
 ```
 
 `_is_contract_member(rel_path)` is `rel_path in CONTRACT_MEMBERS or
 rel_path.startswith(CONTRACT_MEMBER_PREFIXES)` — a **selector over the one
 rendered tree**, not a second tree. Everything else in the kit (`START.md`,
 `README.md`, `guides/`, `assistants/`, `tools/`) is prose for a human or a
-coding assistant and is deliberately outside it.
+coding assistant and is deliberately outside it. `conformance/` (contract 1.5.0)
+is inside it for the opposite reason: it is data every validator of the contract
+runs, so a host that bundles only the contract can test itself against it.
 
 `VERSION` is deliberately **absent** from the contract: it holds the *kit*
 content version, and shipping it inside a contract tree would put two meanings
@@ -668,6 +670,47 @@ block — same entries, same order. A fallback that diverges is a silent
 hash-parity break: the two hosts hash different file sets and the drift
 indicator never clears.
 
+### Contract 1.5.0 — one contract for every host
+
+Brings the three fields Cinna Desktop minted in its own copy of the contract
+into the one schema, annotates the schemas, and ships a conformance set. All
+additive: no folder needs migrating. The desktop-minted history (its 1.1.0,
+1.2.0, 1.3.0) is recorded in a labelled note in the `CHANGELOG.md` 1.5.0 entry;
+the Compatibility table is unchanged because the desktop keeps a byte-identical
+copy of it.
+
+- **`runtime.engine`** — string or null, deliberately not an enum (`examples`:
+  `opencode`, `claude`, `codex`). A preference: absent → host default; a named
+  engine the host does not support → OpenCode. `_validate_runtime`: non-string →
+  error; unrecognised value → warning; `claude`/`codex` with a non-empty
+  `runtime.credential` → warning (the credential is ignored).
+- **`runtime.complexity`** — string or null, deliberately not an enum
+  (`examples`: `simple`, `medium`, `complex`), so an older strict validator
+  never rejects a tier a newer minor adds. Unrecognised → warning; set together with a
+  non-empty `runtime.model` → warning (the model wins).
+- **`handovers[].target_kind`** — `x-scope: host:cinna-desktop`.
+  `_validate_handovers`: present and not a string (null included) → error;
+  `coordinator` with any `target_slug` but `coordinator` → error; any other
+  string → accepted silently. The exact pair (`is_coordinator_handover`) is
+  exempt from the hands-over-to-itself warning, and `_validate_cloud_readiness`
+  skips the sibling-folder check for any entry carrying a `target_kind`.
+- Severities are the desktop validator's `checkRuntime()` / `checkHandovers()`:
+  an error makes a host refuse the folder, which a minor bump must never cause,
+  so everything with defined fallback behaviour is a warning. Every finding
+  carries its backticked field path — the conformance matcher reads it.
+- **`x-scope` / `x-import`** on every property of `cinna-agent.schema.json` and
+  `publications.schema.json`. `x-import` was read off `cinna-cli`'s
+  `local_import.py`, not guessed; it also corrected two descriptions that
+  disagreed with the importer — `runtime.model` (never seeded the cloud's model
+  override) and `schedules[].timezone` (it *is* sent, UTC when absent). The
+  `runtime.engine` mapping (`claude` → claude-code, anything else → opencode,
+  new agents only) is decision-level and lands with the import change.
+- **`conformance/`** — `manifests/*.json` (`{description, manifest, expect:
+  {errors, warnings, no_warnings}}`) and `README.md` stating the format and the
+  matching rule: paths are dotted with array indices dropped, `errors` is the
+  exact error-path set, `warnings` must all appear, `no_warnings` must not.
+  Manifest-level only — no folder around the manifest.
+
 ### Contract 1.1.0 — the `skills` role
 
 The contract's `agent` member list gained
@@ -823,7 +866,8 @@ non-empty strings, `runtime` (`_validate_runtime` — `credential` is a
 error with a rotate-it message), `credentials[]`, `schedules[]` (`cron_string`
 shape, `schedule_type` ∈ `static_prompt` | `script_trigger`, `prompt` required
 for the former / `command` for the latter), `handovers[].target_slug` shape,
-the legacy ledger keys (`_validate_manifest_ledger_keys`), and — in its own
+`handovers[].target_kind` and the 1.5.0 `runtime.engine` / `runtime.complexity`
+rules (see "Contract 1.5.0" above), the legacy ledger keys (`_validate_manifest_ledger_keys`), and — in its own
 file — `publications.json` (`_validate_publications`).
 
 Three severity choices are worth naming because they are contract decisions,
@@ -875,6 +919,18 @@ hostile `PROJECT_NAME` containing a quote, per-representation ETag scoping
 `X-Forwarded-For` and proxied-last-hop cases described above), the instance
 disable/enable round-trip through the real `PUT /admin/server-config` path, and
 missing-snapshot → 503 with cache recovery afterward.
+
+### `backend/tests/unit/test_local_kit_conformance.py` (the conformance set)
+
+Runs `kit.py`'s `validate_manifest` over every `conformance/manifests/*.json`
+and applies the matching rule from `conformance/README.md`: a finding's paths
+are the backticked field-path tokens in its message with array indices dropped;
+error paths must equal `expect.errors` exactly, `expect.warnings` must all be
+present, `expect.no_warnings` must all be absent. It also asserts every error
+and warning names at least one field path (a finding without one is invisible to
+the matcher) and that the set is not empty. Kit lookup is the same as
+`test_local_kit_tool.py`'s; it skips when the kit copy it found predates the
+conformance set.
 
 ### `backend/tests/unit/test_local_kit_tool.py` (`kit.py` itself)
 

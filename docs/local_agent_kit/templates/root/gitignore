@@ -1,8 +1,18 @@
 # Secrets — never committed, never leave this machine.
+# Everything layout.json treats as a credential value, at any depth: every dotenv
+# shape (`secret_files`), injected credentials.json, and private key material.
 **/credentials/.env
 **/credentials/credentials.json
+**/credentials.json
+**/.env
+**/.env.*
 **/*.env
-!**/credentials/.env.example
+**/*.pem
+**/*.key
+**/*.p12
+!**/*.example
+!**/*.sample
+!**/*.template
 
 # Python environments and build artefacts
 **/.venv/

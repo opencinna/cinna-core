@@ -661,6 +661,40 @@ class AccountCLIService:
             db, user, body.user_workspace_id
         )
 
+        # Engine preference from a local agent manifest (``runtime.engine``) →
+        # the environment SDK for both modes, set at creation. Absent/blank →
+        # ``None`` → the environment's normal SDK defaulting, unchanged.
+        from app.services.environments.sdk_constants import (
+            DEFAULT_SDK,
+            sdk_for_engine_preference,
+        )
+
+        sdk = sdk_for_engine_preference(
+            body.engine, user.default_sdk_conversation or DEFAULT_SDK
+        )
+        # Resolve the default AI credentials for the SDKs the environment will
+        # be created with, before any row is written. ``create_environment``
+        # runs the same check, but only after ``AgentService.create_agent`` has
+        # committed the agent, so a missing key there leaves an agent with no
+        # environment — which a retry then duplicates and ``--update`` attaches
+        # to. With no engine the SDKs are exactly what ``create_environment``
+        # resolves on its own: the user's default conversation SDK, and no
+        # building SDK. Raises the platform's ``EnvironmentCredentialError``
+        # ("Missing required API key for SDK '…'") → the route's 400.
+        from app.services.environments.environment_service import (
+            EnvironmentService,
+        )
+
+        EnvironmentService._resolve_credentials(
+            session=db,
+            user=user,
+            sdk_conversation=sdk or user.default_sdk_conversation or DEFAULT_SDK,
+            sdk_building=sdk,
+            use_default_ai_credentials=True,
+            requested_conversation_credential_id=None,
+            requested_building_credential_id=None,
+        )
+
         agent = await AgentService.create_agent(
             session=db,
             user_id=user.id,
@@ -670,6 +704,8 @@ class AccountCLIService:
                 user_workspace_id=workspace_id,
             ),
             user=user,
+            agent_sdk_conversation=sdk,
+            agent_sdk_building=sdk,
         )
         return agent
 

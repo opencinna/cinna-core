@@ -41,6 +41,13 @@ class AccountAgentCreateBody(SQLModel):
     # connect verbs inherit the agent's workspace automatically, so this single
     # field covers the "create in my active workspace" intent for both.
     user_workspace_id: uuid.UUID | None = None
+    # Engine preference — the local agent manifest's raw ``runtime.engine``
+    # (``claude`` / ``opencode`` / ``codex`` / anything a host names). Not an
+    # enum: the backend maps it to the new environment's SDK for both modes
+    # (``sdk_for_engine_preference``; unsupported values run on OpenCode).
+    # ``None`` / blank = the user's default SDK, exactly as without the field.
+    # Applied at creation only; nothing changes the engine of an existing agent.
+    engine: str | None = Field(default=None, max_length=64)
 
 
 class AccountConnectAgentApiBody(SQLModel):

@@ -394,7 +394,12 @@ and a mini-class model conversing.
   `conversation_ai_credential_id` / `building_ai_credential_id` (with
   `use_default_ai_credentials: false`) pin the user's own provider keys the same
   way.
-- *Locally:* the model is whatever your assistant or Cinna Desktop runs. Record the
+- *Locally:* the model is whatever your assistant or Cinna Desktop runs. A host that
+  offers a choice reads `runtime` in `cinna-agent.json`: `engine` is a preference
+  (`opencode`, `claude` or `codex`; a host that does not support it runs OpenCode),
+  and `complexity` (`simple` | `medium` | `complex`) is the portable way to ask for
+  a tier — prefer it to a concrete `model`, never write both. Both `model` and
+  `complexity` stay local; the cloud import does not carry them. Record the
   intended conversation tier in `docs/AGENT_DEVELOPMENT.md` so it is set once the
   agent is in the cloud.
 

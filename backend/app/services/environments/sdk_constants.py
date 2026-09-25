@@ -142,3 +142,54 @@ def apply_credential_to_bag(
     if adapter is None:
         return
     adapter.apply_to_bag(bag, cred_data)
+
+
+# Local agent manifest ``runtime.engine`` preference → cloud SDK engine.
+#
+# A manifest's engine is a *preference*, not an enum: a value the platform does
+# not run falls back to OpenCode rather than refusing the agent (kit contract
+# 1.5.0, decision 4). Known manifest values today: ``opencode``, ``claude``,
+# ``codex`` — ``codex`` has no cloud engine and so lands on OpenCode.
+MANIFEST_ENGINE_TO_SDK_ENGINE: dict[str, str] = {
+    "claude": SDK_ENGINE_CLAUDE_CODE,
+    "opencode": SDK_ENGINE_OPENCODE,
+}
+MANIFEST_ENGINE_FALLBACK_SDK_ENGINE = SDK_ENGINE_OPENCODE
+MANIFEST_ENGINE_FALLBACK_PROVIDER = "anthropic"
+
+
+def sdk_for_engine_preference(
+    engine: str | None, default_sdk_conversation: str | None
+) -> str | None:
+    """Map a manifest engine preference to a full SDK id, or ``None``.
+
+    ``None`` means "no override": a missing or blank ``engine`` leaves the
+    caller's normal SDK defaulting untouched.
+
+    Engine: ``claude`` → ``claude-code``, ``opencode`` → ``opencode``, any other
+    non-empty value (including ``codex``) → ``opencode``. Matching ignores
+    surrounding whitespace and is case-sensitive, like ``kit.py`` and Cinna
+    Desktop: ``Claude`` is not a known engine anywhere, so it runs on OpenCode.
+
+    Provider: the provider of the user's default conversation SDK when the
+    chosen engine accepts it (:data:`SDK_CREDENTIAL_COMPATIBILITY`), else
+    ``anthropic``. A bare default (``opencode``) or no default counts as
+    ``anthropic``, the provider those resolve to elsewhere.
+    """
+    if engine is None or not engine.strip():
+        return None
+    sdk_engine = MANIFEST_ENGINE_TO_SDK_ENGINE.get(
+        engine.strip(), MANIFEST_ENGINE_FALLBACK_SDK_ENGINE
+    )
+
+    default_provider = None
+    if default_sdk_conversation and "/" in default_sdk_conversation:
+        default_provider = default_sdk_conversation.split("/", 1)[1]
+
+    compatible = SDK_CREDENTIAL_COMPATIBILITY.get(sdk_engine, [])
+    provider = (
+        default_provider
+        if default_provider in compatible
+        else MANIFEST_ENGINE_FALLBACK_PROVIDER
+    )
+    return f"{sdk_engine}/{provider}"
