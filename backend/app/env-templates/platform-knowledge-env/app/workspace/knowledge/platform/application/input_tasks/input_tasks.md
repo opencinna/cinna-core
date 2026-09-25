@@ -131,7 +131,7 @@ See [Cross-Agent Delegation Contract](#cross-agent-delegation-contract) for the 
 
 **A concrete external client.** The account CLI implements the caller side of
 this flow as `cinna delegation create|status|report|reply` — confirmed by that
-tool's own docs and tests, not inferred: **cinna-cli** repo, `/Users/evgenyl/dev/ml-llm/cinna-cli`, `docs/features/delegation/delegation.md`, `docs/features/delegation/delegation_tech.md`, `tests/test_delegation.py`. <!-- nocheck -->
+tool's own docs and tests, not inferred: **cinna-cli** repo, `../cinna-cli`, `docs/features/delegation/delegation.md`, `docs/features/delegation/delegation_tech.md`, `tests/test_delegation.py`. <!-- nocheck -->
 `create`'s retry identity is the target agent plus a caller-chosen key, hashed
 into `external_ref`; `status` is a single read, never a poll loop, and that
 repo's own docs say a requester agent should end its turn and let **Cinna

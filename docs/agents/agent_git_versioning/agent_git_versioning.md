@@ -311,7 +311,7 @@ Conflict resolution is fail-loud on both sides. The human reconciles via standar
 
 ## cinna-cli Sparse-Checkout Integration (Forward-Looking)
 
-The cinna-cli local development tool (separate repo, `/Users/evgenyl/dev/ml-llm/cinna-cli`) uses `GET /api/v1/cli/git-coordinates` to discover whether a given agent is VCS-enabled. When it is and the local agent folder is not yet a git working tree, the planned CLI-side behavior is:
+The cinna-cli local development tool (separate repo, `../cinna-cli`) uses `GET /api/v1/cli/git-coordinates` to discover whether a given agent is VCS-enabled. When it is and the local agent folder is not yet a git working tree, the planned CLI-side behavior is:
 
 1. Copy live files into the agent folder first (so the backend's uncommitted in-flight changes are present).
 2. `git init` + `git remote add origin <repo_url>`.

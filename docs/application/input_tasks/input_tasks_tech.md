@@ -378,7 +378,7 @@ Durable reports and exactly-addressed replies for delegated tasks, independent o
 
 ### Known external client: cinna-cli (`cinna delegation`)
 
-This is a separate repo — **cinna-cli**, `/Users/evgenyl/dev/ml-llm/cinna-cli` — so it is described here from its own docs/tests, not this repo's code: `docs/features/delegation/delegation.md`, `docs/features/delegation/delegation_tech.md`, `README.md`, `tests/test_delegation.py`, `tests/test_account.py`. <!-- nocheck -->
+This is a separate repo — **cinna-cli**, `../cinna-cli` — so it is described here from its own docs/tests, not this repo's code: `docs/features/delegation/delegation.md`, `docs/features/delegation/delegation_tech.md`, `README.md`, `tests/test_delegation.py`, `tests/test_account.py`. <!-- nocheck -->
 It implements
 a full client over these routes as `cinna delegation create|status|report|reply`:
 

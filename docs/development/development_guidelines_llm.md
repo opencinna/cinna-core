@@ -59,7 +59,7 @@ cinna-core/
         └── routes/
 ```
 
-**CRITICAL**: Current working directory is `/Users/evgenyl/dev/ml-llm/cinna-core/backend`
+**CRITICAL**: Current working directory is `<repo root>/backend`
 
 **Architecture Pattern**:
 - **Models** in `app/models/<domain>/` — Database entities and Pydantic schemas; re-exported via `models/__init__.py` for backward-compatible imports
@@ -86,7 +86,7 @@ alembic current  # check status
 ### Frontend Commands
 ```bash
 # From project root (NOT from backend/)
-cd /Users/evgenyl/dev/ml-llm/cinna-core
+cd "$(git rev-parse --show-toplevel)"
 source backend/.venv/bin/activate
 bash scripts/generate-client.sh  # Regenerate OpenAPI client
 
@@ -95,7 +95,7 @@ npm run build  # Check TypeScript errors
 ```
 
 ### Common Pitfall: Directory Context
-- `pwd` shows `/Users/evgenyl/dev/ml-llm/cinna-core/backend`
+- `pwd` shows `<repo root>/backend`
 - To run frontend commands, use absolute paths or `cd` to project root first
 - Don't use `cd backend` from backend/ (already there)
 
@@ -390,7 +390,7 @@ alembic upgrade head
 ### 5. Regenerate Frontend Client
 
 ```bash
-cd /Users/evgenyl/dev/ml-llm/cinna-core
+cd "$(git rev-parse --show-toplevel)"
 source backend/.venv/bin/activate
 bash scripts/generate-client.sh
 ```
@@ -610,7 +610,7 @@ def read_with_data(session: SessionDep, current_user: CurrentUser, id: uuid.UUID
 ### 4. Directory Navigation
 ❌ `cd backend` when already in backend/
 ✅ Use absolute paths or check `pwd` first
-✅ For frontend: `cd /Users/evgenyl/dev/ml-llm/cinna-core`
+✅ For frontend: `cd "$(git rev-parse --show-toplevel)"` (the repo root)
 
 ### 5. Foreign Key Constraints
 ✅ Always use `ondelete="CASCADE"` in Field definition
@@ -654,7 +654,7 @@ alembic upgrade head
 python -c "from app.main import app"  # Verify
 
 # Frontend: Regenerate client
-cd /Users/evgenyl/dev/ml-llm/cinna-core
+cd "$(git rev-parse --show-toplevel)"
 source backend/.venv/bin/activate
 bash scripts/generate-client.sh
 
@@ -684,7 +684,7 @@ Changes flow: Backend routes → OpenAPI spec → Frontend client
 
 After ANY backend API changes:
 ```bash
-cd /Users/evgenyl/dev/ml-llm/cinna-core
+cd "$(git rev-parse --show-toplevel)"
 source backend/.venv/bin/activate
 bash scripts/generate-client.sh
 ```

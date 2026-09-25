@@ -77,7 +77,7 @@ Native clients show "v1.0 → v1.2 update available" on installed agents and let
 
 ## Client Impact: Cinna Desktop and `cinna-cli`
 
-**In scope to report here; out of scope to fix from inside this refactor** (`cinna-cli` is a separate repository at `/Users/evgenyl/dev/ml-llm/cinna-cli`).
+**In scope to report here; out of scope to fix from inside this refactor** (`cinna-cli` is a separate repository at `../cinna-cli`).
 
 - **Removed entirely:** `GET|POST /api/v1/external/a2a/route/{route_id}/` and its `.well-known/agent-card.json` mirror. <!-- nocheck -->
 - **Removed:** the `"app_mcp_route"` value of `ExternalTargetPublic.target_type` — the type is now `Literal["agent", "identity"]`.
