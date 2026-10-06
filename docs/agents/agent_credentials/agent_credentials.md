@@ -40,9 +40,10 @@ Agents access user-provided credentials (email, APIs, databases, OAuth services)
 4. **gmail_oauth / gmail_oauth_readonly** - Gmail OAuth (access_token, token_type, expires_at, scope)
 5. **gdrive_oauth / gdrive_oauth_readonly** - Google Drive OAuth
 6. **gcalendar_oauth / gcalendar_oauth_readonly** - Google Calendar OAuth
-7. **google_service_account** - Google Service Account (private key JSON)
-8. **api_token** - Generic API Token (Bearer or Custom template)
-9. **ssh_key** - SSH key pair (generated or imported) materialized into `~/.ssh/` inside the agent container for `git clone git@…`, `ssh …`, etc. See [SSH Key Credentials](ssh_key_credentials.md).
+7. **gmeet_oauth / gmeet_oauth_readonly** - Google Meet OAuth (full: create/manage meeting spaces, read spaces, conference records and participants; read-only: conference records, participants, recordings, transcripts, smart notes)
+8. **google_service_account** - Google Service Account (private key JSON)
+9. **api_token** - Generic API Token (Bearer or Custom template)
+10. **ssh_key** - SSH key pair (generated or imported) materialized into `~/.ssh/` inside the agent container for `git clone git@…`, `ssh …`, etc. See [SSH Key Credentials](ssh_key_credentials.md).
 
 ## User Stories / Flows
 
@@ -171,7 +172,7 @@ Credentials automatically sync to running agent environments when:
 - Refresh threshold: tokens expiring within 1800 seconds (30 minutes, `OAUTH_REFRESH_THRESHOLD_SECONDS`)
 - Refresh runs on sync, per stream turn and in a background sweep; see [OAuth Credentials](oauth_credentials.md)
 - Refresh failures are recorded on the credential but don't block streaming (graceful degradation); a rejected refresh token stops automatic retries until re-authorization
-- Supported OAuth types: gmail_oauth, gmail_oauth_readonly, gdrive_oauth, gdrive_oauth_readonly, gcalendar_oauth, gcalendar_oauth_readonly
+- Supported OAuth types: gmail_oauth, gmail_oauth_readonly, gdrive_oauth, gdrive_oauth_readonly, gcalendar_oauth, gcalendar_oauth_readonly, gmeet_oauth, gmeet_oauth_readonly
 
 ## Architecture Overview
 

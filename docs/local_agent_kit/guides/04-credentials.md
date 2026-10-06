@@ -62,6 +62,7 @@ cloud. These are the values `type` may take:
 | `gmail_oauth`, `gmail_oauth_readonly` | OAuth tokens | **Cloud-only.** |
 | `gdrive_oauth`, `gdrive_oauth_readonly` | OAuth tokens | **Cloud-only.** |
 | `gcalendar_oauth`, `gcalendar_oauth_readonly` | OAuth tokens | **Cloud-only.** |
+| `gmeet_oauth`, `gmeet_oauth_readonly` | OAuth tokens | **Cloud-only.** |
 
 **OAuth types cannot be filled locally.** There is no local browser consent flow and
 no token refresh. If the agent needs one, either use `google_service_account`

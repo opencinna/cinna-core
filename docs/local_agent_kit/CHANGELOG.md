@@ -16,6 +16,15 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## Google Meet credential types
+
+No contract-version change. The credential `type` values gain `gmeet_oauth` and
+`gmeet_oauth_readonly` (`cinna-agent.schema.json`, `kit.py`, `guides/04-credentials.md`).
+Like every OAuth type they are cloud-only: the kit never fills them locally, so a
+slot of either type stays a placeholder until the agent runs in the cloud. Nothing
+in an existing folder moves, and a tool that does not know the two values still
+operates the folder, because the majors match.
+
 ## Desktop installs the full kit
 
 Documentation update, with no schema or contract-version change. Cinna Desktop now

@@ -27,6 +27,8 @@ const CREDENTIAL_TYPE_NAMES: Record<string, string> = {
   gdrive_oauth_readonly: "Google Drive (Read-Only)",
   gcalendar_oauth: "Google Calendar",
   gcalendar_oauth_readonly: "Google Calendar (Read-Only)",
+  gmeet_oauth: "Google Meet",
+  gmeet_oauth_readonly: "Google Meet (Read-Only)",
 }
 
 export function OAuthCredentialFields({

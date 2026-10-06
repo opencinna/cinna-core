@@ -72,6 +72,8 @@ class CredentialsService:
         "gdrive_oauth_readonly": ["access_token", "refresh_token"],
         "gcalendar_oauth": ["access_token", "refresh_token"],
         "gcalendar_oauth_readonly": ["access_token", "refresh_token"],
+        "gmeet_oauth": ["access_token", "refresh_token"],
+        "gmeet_oauth_readonly": ["access_token", "refresh_token"],
         "api_token": ["http_header_value"],
         "google_service_account": ["private_key", "private_key_id"],
         # ssh_key: belt-and-suspenders — these fields are already stripped by the
@@ -148,6 +150,22 @@ class CredentialsService:
             "granted_user_name"
         ],
         "gcalendar_oauth_readonly": [
+            "access_token",
+            "token_type",
+            "expires_at",
+            "scope",
+            "granted_user_email",
+            "granted_user_name"
+        ],
+        "gmeet_oauth": [
+            "access_token",
+            "token_type",
+            "expires_at",
+            "scope",
+            "granted_user_email",
+            "granted_user_name"
+        ],
+        "gmeet_oauth_readonly": [
             "access_token",
             "token_type",
             "expires_at",
@@ -1280,6 +1298,80 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     lines.append("    calendarId='primary', body=event")
                     lines.append(").execute()")
                     lines.append("")
+                lines.append("```")
+                lines.append("")
+            elif cred_type in ["gmeet_oauth", "gmeet_oauth_readonly"]:
+                readonly = "readonly" in cred_type
+                readonly_suffix = " (Read-Only)" if readonly else ""
+                lines.append(f"### Google Meet OAuth Credential{readonly_suffix}: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
+                lines.append("")
+                lines.extend(CredentialsService._google_oauth_token_note_lines())
+                lines.append("")
+                lines.append("```python")
+                lines.append("from core.cinna_api import credentials")
+                lines.append("from google.oauth2.credentials import Credentials")
+                lines.append("from googleapiclient.discovery import build")
+                lines.append("")
+                lines.append("# Use Google Meet REST API")
+                lines.append(f"token = credentials.access_token('{cred_id}', min_ttl=300)  # refreshes via the platform if needed")
+                lines.append("creds = Credentials(token=token)")
+                lines.append("meet = build('meet', 'v2', credentials=creds)")
+                lines.append("")
+                if readonly:
+                    lines.append("# Drive client for the files Meet stores in Drive (drive.meet.readonly)")
+                    lines.append("drive = build('drive', 'v3', credentials=creds)")
+                    lines.append("")
+                    lines.append("# Example: List past conferences, participants, recordings and transcripts")
+                    lines.append("records = meet.conferenceRecords().list(pageSize=10).execute()")
+                    lines.append("for record in records.get('conferenceRecords', []):")
+                    lines.append("    participants = meet.conferenceRecords().participants().list(")
+                    lines.append("        parent=record['name']")
+                    lines.append("    ).execute()")
+                    lines.append("    transcripts = meet.conferenceRecords().transcripts().list(")
+                    lines.append("        parent=record['name']")
+                    lines.append("    ).execute()")
+                    lines.append("    recordings = meet.conferenceRecords().recordings().list(")
+                    lines.append("        parent=record['name']")
+                    lines.append("    ).execute()")
+                    lines.append("")
+                    lines.append("    # Recordings are mp4 files in Drive; skip ones not yet FILE_GENERATED")
+                    lines.append("    for rec in recordings.get('recordings', []):")
+                    lines.append("        file_id = rec.get('driveDestination', {}).get('file')")
+                    lines.append("        if not file_id:")
+                    lines.append("            continue")
+                    lines.append("        video = drive.files().get_media(fileId=file_id).execute()")
+                    lines.append("")
+                    lines.append("    # Transcripts are Google Docs: export them (get_media fails on Docs),")
+                    lines.append("    # or read transcripts().entries().list(parent=tr['name']) instead")
+                    lines.append("    for tr in transcripts.get('transcripts', []):")
+                    lines.append("        doc_id = tr.get('docsDestination', {}).get('document')")
+                    lines.append("        if not doc_id:")
+                    lines.append("            continue")
+                    lines.append("        text = drive.files().export(")
+                    lines.append("            fileId=doc_id, mimeType='text/plain'")
+                    lines.append("        ).execute()")
+                else:
+                    lines.append("# Example: Create a meeting space (no Calendar event; use a")
+                    lines.append("# Google Calendar credential to invite attendees)")
+                    lines.append("space = meet.spaces().create(body={}).execute()")
+                    lines.append("meeting_uri = space['meetingUri']")
+                    lines.append("")
+                    lines.append("# Example: Update the space's access settings")
+                    lines.append("meet.spaces().patch(")
+                    lines.append("    name=space['name'],")
+                    lines.append("    updateMask='config.accessType',")
+                    lines.append("    body={'config': {'accessType': 'TRUSTED'}},")
+                    lines.append(").execute()")
+                    lines.append("")
+                    lines.append("# Example: List past conferences and participants (meetings.space.readonly).")
+                    lines.append("# Recording/transcript files need a Google Meet (Read-Only) credential.")
+                    lines.append("records = meet.conferenceRecords().list(pageSize=10).execute()")
+                    lines.append("for record in records.get('conferenceRecords', []):")
+                    lines.append("    participants = meet.conferenceRecords().participants().list(")
+                    lines.append("        parent=record['name']")
+                    lines.append("    ).execute()")
+                lines.append("")
                 lines.append("```")
                 lines.append("")
             elif cred_type == "api_token":
@@ -2979,6 +3071,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         "gdrive_oauth_readonly",
         "gcalendar_oauth",
         "gcalendar_oauth_readonly",
+        "gmeet_oauth",
+        "gmeet_oauth_readonly",
     }
 
     # Required fields for each credential type to be considered "complete"
@@ -2992,6 +3086,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         "gdrive_oauth_readonly": ["access_token"],
         "gcalendar_oauth": ["access_token"],
         "gcalendar_oauth_readonly": ["access_token"],
+        "gmeet_oauth": ["access_token"],
+        "gmeet_oauth_readonly": ["access_token"],
         "api_token": ["api_token"],  # Base requirement; api_token_template required only for custom type
         "google_service_account": ["type", "project_id", "private_key", "client_email"],
         "ssh_key": ["public_key", "private_key", "fingerprint", "key_type"],

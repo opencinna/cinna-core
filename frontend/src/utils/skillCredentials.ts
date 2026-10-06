@@ -59,6 +59,8 @@ const CREDENTIAL_TYPE_LABELS: Record<CredentialType, string> = {
   gdrive_oauth_readonly: "Google Drive OAuth (Read-Only)",
   gcalendar_oauth: "Google Calendar OAuth",
   gcalendar_oauth_readonly: "Google Calendar OAuth (Read-Only)",
+  gmeet_oauth: "Google Meet OAuth",
+  gmeet_oauth_readonly: "Google Meet OAuth (Read-Only)",
   google_service_account: "Google Service Account",
   api_token: "API Token",
   ssh_key: "SSH Key",

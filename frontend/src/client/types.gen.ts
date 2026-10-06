@@ -3508,7 +3508,7 @@ export type CredentialsPublic = {
     count: number;
 };
 
-export type CredentialType = 'email_imap' | 'email_smtp' | 'odoo' | 'gmail_oauth' | 'gmail_oauth_readonly' | 'gdrive_oauth' | 'gdrive_oauth_readonly' | 'gcalendar_oauth' | 'gcalendar_oauth_readonly' | 'google_service_account' | 'api_token' | 'ssh_key' | 'agent_api' | 'mcp_provider';
+export type CredentialType = 'email_imap' | 'email_smtp' | 'odoo' | 'gmail_oauth' | 'gmail_oauth_readonly' | 'gdrive_oauth' | 'gdrive_oauth_readonly' | 'gcalendar_oauth' | 'gcalendar_oauth_readonly' | 'gmeet_oauth' | 'gmeet_oauth_readonly' | 'google_service_account' | 'api_token' | 'ssh_key' | 'agent_api' | 'mcp_provider';
 
 export type CredentialUpdate = {
     name?: (string | null);

@@ -49,6 +49,8 @@ class CredentialGuard:
         "gdrive_oauth_readonly": ["access_token", "refresh_token"],
         "gcalendar_oauth": ["access_token", "refresh_token"],
         "gcalendar_oauth_readonly": ["access_token", "refresh_token"],
+        "gmeet_oauth": ["access_token", "refresh_token"],
+        "gmeet_oauth_readonly": ["access_token", "refresh_token"],
         "api_token": ["http_header_value"],
         "google_service_account": ["private_key", "private_key_id"],
     }

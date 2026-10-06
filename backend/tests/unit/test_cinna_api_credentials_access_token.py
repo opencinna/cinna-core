@@ -176,12 +176,17 @@ def test_readme_oauth_blocks_use_access_token_helper():
             "id": f"id-{t}", "name": t, "type": t, "notes": None,
             "credential_data": {"access_token": "x"},
         }
-        for t in ("gmail_oauth", "gdrive_oauth", "gcalendar_oauth_readonly")
+        for t in ("gmail_oauth", "gdrive_oauth", "gcalendar_oauth_readonly", "gmeet_oauth", "gmeet_oauth_readonly")
     ]
     readme = CredentialsService.generate_credentials_readme(entries)
-    for t in ("gmail_oauth", "gdrive_oauth", "gcalendar_oauth_readonly"):
+    for t in ("gmail_oauth", "gdrive_oauth", "gcalendar_oauth_readonly", "gmeet_oauth", "gmeet_oauth_readonly"):
         assert f"credentials.access_token('id-{t}'" in readme
     assert "from_authorized_user_info" not in readme
+    # Google Meet section (read-write and read-only variants)
+    assert "### Google Meet OAuth Credential: gmeet_oauth\n" in readme
+    assert "### Google Meet OAuth Credential (Read-Only): gmeet_oauth_readonly" in readme
+    assert "build('meet', 'v2', credentials=creds)" in readme
+    assert "drive.meet.readonly" in readme
     assert "from core.cinna_api import credentials\n" in readme.replace("```", "\n")
     assert "CredentialRefreshError" not in readme.split("## Available Credentials")[1].split(
         "access_token("

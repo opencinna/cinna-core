@@ -82,6 +82,8 @@ def test_create_credential_various_types(
         "gdrive_oauth_readonly",
         "gcalendar_oauth",
         "gcalendar_oauth_readonly",
+        "gmeet_oauth",
+        "gmeet_oauth_readonly",
     ]
     for cred_type in types_to_test:
         cred = create_random_credential(

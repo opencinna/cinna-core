@@ -203,6 +203,8 @@ SKILL_CREDENTIAL_TYPES: frozenset[str] = frozenset(
         "gdrive_oauth_readonly",
         "gcalendar_oauth",
         "gcalendar_oauth_readonly",
+        "gmeet_oauth",
+        "gmeet_oauth_readonly",
         "google_service_account",
         "api_token",
         "ssh_key",

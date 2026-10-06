@@ -17,6 +17,7 @@ import {
   Plug,
   Send,
   ShieldCheck,
+  Video,
   type LucideIcon,
 } from "lucide-react"
 
@@ -156,6 +157,22 @@ export const CREDENTIAL_TYPE_GROUPS: CredentialTypeGroup[] = [
         defaultName: "Google Calendar (Read-Only)",
         keywords: "google calendar events oauth readonly",
         icon: Calendar,
+      },
+      {
+        type: "gmeet_oauth",
+        label: "Google Meet",
+        defaultName: "Google Meet",
+        keywords:
+          "google meet meeting video conference records participants oauth",
+        icon: Video,
+      },
+      {
+        type: "gmeet_oauth_readonly",
+        label: "Google Meet (Read-Only)",
+        defaultName: "Google Meet (Read-Only)",
+        keywords:
+          "google meet meeting video conference recordings transcripts notes participants drive oauth readonly",
+        icon: Video,
       },
       {
         type: "google_service_account",

@@ -1,7 +1,7 @@
 """
 OAuth Credentials Service - Business logic for OAuth credential operations.
 
-This service handles the OAuth flow for Google service credentials (Gmail, Drive, Calendar).
+This service handles the OAuth flow for Google service credentials (Gmail, Drive, Calendar, Meet).
 """
 import secrets
 import uuid
@@ -82,6 +82,30 @@ OAUTH_SCOPES = {
     ],
     "gcalendar_oauth_readonly": [
         "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "openid"
+    ],
+    # Google Meet: create and manage meeting spaces, plus read every space,
+    # conference record and participant the user can access
+    # (meetings.space.readonly), so it covers the read-only type's Meet
+    # metadata. It does not carry drive.meet.readonly: downloading recordings
+    # and transcripts still needs gmeet_oauth_readonly. No Calendar coupling —
+    # meetings with invitees go through gcalendar_oauth (conferenceData).
+    "gmeet_oauth": [
+        "https://www.googleapis.com/auth/meetings.space.created",
+        "https://www.googleapis.com/auth/meetings.space.settings",
+        "https://www.googleapis.com/auth/meetings.space.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "openid"
+    ],
+    # Google Meet read-only: conference records, participants, recordings,
+    # transcripts and smart notes. drive.meet.readonly (a restricted scope) is
+    # needed to download the recording/transcript artifacts stored in Drive.
+    "gmeet_oauth_readonly": [
+        "https://www.googleapis.com/auth/meetings.space.readonly",
+        "https://www.googleapis.com/auth/drive.meet.readonly",
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
         "openid"

@@ -701,7 +701,7 @@ Rules — a block that breaks one makes the skill **invalid** (excluded, and ref
   characters. Each slot appears once
 - `type` is one of `api_token`, `agent_api`, `odoo`, `email_imap`, `email_smtp`, `gmail_oauth`,
   `gmail_oauth_readonly`, `gdrive_oauth`, `gdrive_oauth_readonly`, `gcalendar_oauth`,
-  `gcalendar_oauth_readonly`, `google_service_account`, `ssh_key`. **`mcp_provider` cannot be declared** — it
+  `gcalendar_oauth_readonly`, `gmeet_oauth`, `gmeet_oauth_readonly`, `google_service_account`, `ssh_key`. **`mcp_provider` cannot be declared** — it
   never reaches `credentials.json`, so no script could use it
 - At most 20 slots per skill
 

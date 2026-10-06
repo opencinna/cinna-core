@@ -31,7 +31,7 @@
 - `frontend/src/components/Credentials/` - Full credential management UI (create, edit, delete, share)
 - `frontend/src/components/Credentials/CredentialForms/ApiTokenCredentialForm.tsx` - API token template form
 - `frontend/src/components/Credentials/CredentialForms/OAuthCredentialForm.tsx` - OAuth flow handler
-- `frontend/src/components/Credentials/CredentialFields/OAuthCredentialFields.tsx` - Unified OAuth UI for all 6 OAuth types (grant button, metadata display)
+- `frontend/src/components/Credentials/CredentialFields/OAuthCredentialFields.tsx` - Unified OAuth UI for all 8 OAuth types (grant button, metadata display)
 - `frontend/src/routes/credentials/oauth/callback.tsx` - OAuth callback handler route
 
 ### Tests

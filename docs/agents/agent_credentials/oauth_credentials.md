@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Users grant Google service credentials (Gmail, Google Drive, Google Calendar) to agents through an OAuth flow. Instead of manually copying access tokens, users click "Grant from Google", complete authorization, and tokens are automatically stored, encrypted, refreshed, and synced to agent environments.
+Users grant Google service credentials (Gmail, Google Drive, Google Calendar, Google Meet) to agents through an OAuth flow. Instead of manually copying access tokens, users click "Grant from Google", complete authorization, and tokens are automatically stored, encrypted, refreshed, and synced to agent environments.
 
 ## Supported OAuth Types & Scopes
 
@@ -14,8 +14,21 @@ Users grant Google service credentials (Gmail, Google Drive, Google Calendar) to
 | `gdrive_oauth_readonly` | Google Drive | Read-only | `drive.readonly` |
 | `gcalendar_oauth` | Google Calendar | Full | `calendar` |
 | `gcalendar_oauth_readonly` | Google Calendar | Read-only | `calendar.readonly` |
+| `gmeet_oauth` | Google Meet | Full | `meetings.space.created`, `meetings.space.settings`, `meetings.space.readonly` |
+| `gmeet_oauth_readonly` | Google Meet | Read-only | `meetings.space.readonly`, `drive.meet.readonly` |
 
-All scopes are under the `https://www.googleapis.com/auth/` prefix. Read-only variants provide safer access for monitoring/analysis agents.
+All scopes are under the `https://www.googleapis.com/auth/` prefix. Every type also requests `userinfo.email`, `userinfo.profile` and `openid`. Read-only variants provide safer access for monitoring/analysis agents.
+
+Google Meet: `gmeet_oauth` creates and manages meeting spaces (Meet REST API v2) and, through `meetings.space.readonly`, reads every space, conference record and participant the user can access; `gmeet_oauth_readonly` reads conference records, participants, recordings, transcripts and smart notes, and needs `drive.meet.readonly` (a Google *restricted* scope) to reach the files Meet stores in Drive: recordings download via Drive, while transcripts are Google Docs, so they are exported (e.g. as plain text) or read through the Meet transcript entries API. `gmeet_oauth` therefore covers the read-only type's Meet metadata, including meetings created elsewhere, but it does not carry `drive.meet.readonly`, so it cannot download recordings or transcripts: use `gmeet_oauth_readonly` for those artifacts. Space management (`spaces.create`, `spaces.patch`, ending conferences) is unchanged and stays limited to spaces created by this app. The environment README's Meet section for the full type now also shows listing conference records and participants. Meet types have no Calendar coupling: to invite attendees, create the event with a `gcalendar_oauth` credential.
+
+### Google-side prerequisites for Meet
+
+- Enable the **Google Meet REST API** in the Google Cloud project that owns the OAuth client.
+- Add `meetings.space.created`, `meetings.space.settings`, `meetings.space.readonly` and `drive.meet.readonly` to the OAuth consent screen's scopes.
+- Scope sensitivity: `drive.meet.readonly` is **restricted** (production apps need Google restricted-scope verification, possibly a security assessment); `meetings.space.created` and `meetings.space.readonly` are **sensitive**; `meetings.space.settings` is non-sensitive.
+- Recordings, transcripts and smart notes are Workspace features, so they are likely unavailable for personal Gmail accounts (unconfirmed).
+- Transcript entries are deleted 30 days after the meeting ends.
+- Meetings with invitees go through `gcalendar_oauth`; the Meet types carry no Calendar coupling.
 
 ## User Flows
 
@@ -137,7 +150,7 @@ Technical details: [OAuth Credentials Tech](oauth_credentials_tech.md).
 - Uses same Google OAuth configuration as user authentication (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`)
 - No new environment variables needed - reuses existing Google Cloud Console OAuth app
 - Google Cloud Console requires additional redirect URI for credential OAuth callback
-- All 6 OAuth types use unified UI component and identical backend flow
+- All 8 OAuth types use unified UI component and identical backend flow
 
 ## Changelog
 

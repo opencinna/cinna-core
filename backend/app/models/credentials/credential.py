@@ -24,6 +24,8 @@ class CredentialType(str, Enum):
     GDRIVE_OAUTH_READONLY = "gdrive_oauth_readonly"
     GCALENDAR_OAUTH = "gcalendar_oauth"
     GCALENDAR_OAUTH_READONLY = "gcalendar_oauth_readonly"
+    GMEET_OAUTH = "gmeet_oauth"
+    GMEET_OAUTH_READONLY = "gmeet_oauth_readonly"
     GOOGLE_SERVICE_ACCOUNT = "google_service_account"
     API_TOKEN = "api_token"
     SSH_KEY = "ssh_key"

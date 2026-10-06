@@ -15,7 +15,7 @@ before(async()=>{
  browser=await chromium.launch({headless:true})
 })
 after(async()=>{await browser?.close();await server?.close()})
-for(const type of ['api_token','email_imap','email_smtp','odoo','google_service_account','gmail_oauth','gmail_oauth_readonly','gdrive_oauth','gdrive_oauth_readonly','gcalendar_oauth','gcalendar_oauth_readonly','ssh_key','agent_api','agent_api_key','mcp_provider']) {
+for(const type of ['api_token','email_imap','email_smtp','odoo','google_service_account','gmail_oauth','gmail_oauth_readonly','gdrive_oauth','gdrive_oauth_readonly','gcalendar_oauth','gcalendar_oauth_readonly','gmeet_oauth','gmeet_oauth_readonly','ssh_key','agent_api','agent_api_key','mcp_provider']) {
  test(`${type} edits and saves Service URI as shared credential metadata`,async t=>{
   const page=await browser.newPage({viewport:{width:1100,height:850}});t.after(()=>page.close());page.setDefaultTimeout(10000)
   const writes=[],errors=[];page.on('pageerror',e=>errors.push(e.message))

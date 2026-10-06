@@ -174,7 +174,9 @@ const EditCredential = ({ credential, onSuccess }: EditCredentialProps) => {
                   credential.type === "gdrive_oauth" ||
                   credential.type === "gdrive_oauth_readonly" ||
                   credential.type === "gcalendar_oauth" ||
-                  credential.type === "gcalendar_oauth_readonly") && (
+                  credential.type === "gcalendar_oauth_readonly" ||
+                  credential.type === "gmeet_oauth" ||
+                  credential.type === "gmeet_oauth_readonly") && (
                   <OAuthCredentialForm
                     form={form}
                     credentialType={credential.type}

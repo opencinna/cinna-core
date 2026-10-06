@@ -330,3 +330,23 @@ def test_busy_lock_with_expired_token_is_502_refresh_in_progress(client, ctx, ex
     assert r.json()["detail"]["code"] == "refresh_in_progress"
     assert r.headers["Retry-After"] == "1"
     exchange.assert_not_called()
+
+
+@pytest.mark.parametrize("type_", ["gmeet_oauth", "gmeet_oauth_readonly"])
+def test_gmeet_types_refresh_and_push_without_refresh_token(client, ctx, exchange, type_):
+    """Meet credentials are refreshable; the env copy carries no refresh_token."""
+    cred = _oauth_credential(client, ctx.user_headers, expires_in=60, type_=type_)
+    with patch.object(settings, "GOOGLE_CLIENT_ID", None):  # link without refreshing
+        _link(client, ctx, cred["id"])
+    pushed = _pushed(ctx, cred["id"])
+    assert pushed["access_token"] == OLD_ACCESS
+    assert "refresh_token" not in pushed
+
+    r = _call(client, ctx, cred["id"])
+    assert r.status_code == 200, r.text
+    assert r.json()["access_token"] == NEW_ACCESS
+    assert r.json()["refreshed"] is True
+    exchange.assert_awaited_once_with(REFRESH_TOKEN)
+    assert _pushed(ctx, cred["id"])["access_token"] == NEW_ACCESS
+    assert "refresh_token" not in _pushed(ctx, cred["id"])
+    assert REFRESH_TOKEN not in r.text

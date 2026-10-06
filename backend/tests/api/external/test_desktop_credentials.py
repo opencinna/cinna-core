@@ -380,12 +380,14 @@ OAUTH_TYPES = (
     "gdrive_oauth_readonly",
     "gcalendar_oauth",
     "gcalendar_oauth_readonly",
+    "gmeet_oauth",
+    "gmeet_oauth_readonly",
 )
 
 
 def test_incompatible_types_are_neither_listed_nor_delivered(client: TestClient) -> None:
     """
-    1. Owner has one credential of every locally incompatible type (all six
+    1. Owner has one credential of every locally incompatible type (all eight
        OAuth types, ssh_key, mcp_provider) plus one api_token
     2. The Desktop list contains only the api_token
     3. Materialize delivers the api_token and refuses every other item

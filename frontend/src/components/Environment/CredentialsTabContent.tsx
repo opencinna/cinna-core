@@ -32,6 +32,10 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Calendar OAuth"
     case "gcalendar_oauth_readonly":
       return "Google Calendar OAuth (Read-Only)"
+    case "gmeet_oauth":
+      return "Google Meet OAuth"
+    case "gmeet_oauth_readonly":
+      return "Google Meet OAuth (Read-Only)"
     case "api_token":
       return "API Token"
     case "ssh_key":

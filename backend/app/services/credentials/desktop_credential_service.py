@@ -52,7 +52,7 @@ MATERIALIZE_LIMIT_PER_MINUTE = 60
 # Credential types that work on a Desktop device out of the box: the delivered
 # entry (plus, for a service account, its full key JSON) is all a local agent
 # needs. Everything else is never listed nor delivered:
-# - OAuth (gmail/gdrive/gcalendar, incl. readonly): refreshing the access token
+# - OAuth (gmail/gdrive/gcalendar/gmeet, incl. readonly): refreshing the access token
 #   needs the OAuth client secret, which is private to the backend server.
 # - ssh_key: the private key never leaves Core, so the entry is useless locally.
 # - agent_api: bound to the platform's anonymous connection model.

@@ -55,6 +55,8 @@ const FORCE_PRIVATE_TYPES = new Set<string>([
   "gdrive_oauth_readonly",
   "gcalendar_oauth",
   "gcalendar_oauth_readonly",
+  "gmeet_oauth",
+  "gmeet_oauth_readonly",
   "google_service_account",
 ])
 

@@ -12,7 +12,7 @@ Replaces an earlier two-step wizard (enter name → pick type → submit → for
 2. Modal opens with a search box at the top (autofocused) and four category groups:
    - **API & Access** — `api_token`, `ssh_key` (slate palette)
    - **Email** — `email_imap`, `email_smtp` (amber palette)
-   - **Google** — `gmail_oauth`, `gmail_oauth_readonly`, `gdrive_oauth`, `gdrive_oauth_readonly`, `gcalendar_oauth`, `gcalendar_oauth_readonly`, `google_service_account` (blue palette)
+   - **Google** — `gmail_oauth`, `gmail_oauth_readonly`, `gdrive_oauth`, `gdrive_oauth_readonly`, `gcalendar_oauth`, `gcalendar_oauth_readonly`, `gmeet_oauth`, `gmeet_oauth_readonly`, `google_service_account` (blue palette)
    - **Applications** — `odoo` (violet palette)
 3. User optionally filters the list by typing in the search box — match runs against label, group name, and a per-type keyword blob (e.g. "inbox" matches IMAP, "deploy" matches SSH key).
 4. User clicks a badge. The widget immediately fires a `POST /api/v1/credentials/` with a sensible default name (e.g. "Gmail (Read-Only)", "SSH Key"). A spinner appears on the clicked badge; all other badges are disabled while the request is in flight.

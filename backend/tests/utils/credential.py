@@ -98,6 +98,8 @@ def _default_credential_data(credential_type: str) -> dict:
         "gdrive_oauth_readonly",
         "gcalendar_oauth",
         "gcalendar_oauth_readonly",
+        "gmeet_oauth",
+        "gmeet_oauth_readonly",
     ):
         return {
             "access_token": "ya29.test-access-token",

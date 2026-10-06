@@ -79,6 +79,10 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Calendar OAuth"
     case "gcalendar_oauth_readonly":
       return "Google Calendar OAuth (Read-Only)"
+    case "gmeet_oauth":
+      return "Google Meet OAuth"
+    case "gmeet_oauth_readonly":
+      return "Google Meet OAuth (Read-Only)"
     case "google_service_account":
       return "Google Service Account"
     case "api_token":
@@ -265,6 +269,8 @@ function OwnedCredentialView({
     "gdrive_oauth_readonly",
     "gcalendar_oauth",
     "gcalendar_oauth_readonly",
+    "gmeet_oauth",
+    "gmeet_oauth_readonly",
   ].includes(credential.type)
 
   // ssh_key has its own dedicated edit surface: public key + fingerprint are
@@ -443,7 +449,9 @@ function OwnedCredentialView({
                   credential.type === "gdrive_oauth" ||
                   credential.type === "gdrive_oauth_readonly" ||
                   credential.type === "gcalendar_oauth" ||
-                  credential.type === "gcalendar_oauth_readonly") && (
+                  credential.type === "gcalendar_oauth_readonly" ||
+                  credential.type === "gmeet_oauth" ||
+                  credential.type === "gmeet_oauth_readonly") && (
                   <OAuthCredentialForm
                     form={form}
                     credentialType={credential.type}

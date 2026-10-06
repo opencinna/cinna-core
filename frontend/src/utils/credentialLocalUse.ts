@@ -19,6 +19,8 @@ const LOCALLY_DELIVERABLE: Record<CredentialType, boolean> = {
   gdrive_oauth_readonly: false,
   gcalendar_oauth: false,
   gcalendar_oauth_readonly: false,
+  gmeet_oauth: false,
+  gmeet_oauth_readonly: false,
   google_service_account: true,
   api_token: true,
   ssh_key: false,

@@ -70,6 +70,8 @@ function getCredentialIcon(type: string) {
     case "gdrive_oauth_readonly":
     case "gcalendar_oauth":
     case "gcalendar_oauth_readonly":
+    case "gmeet_oauth":
+    case "gmeet_oauth_readonly":
       return <AtSign className="h-5 w-5" />
     case "google_service_account":
       return <FileJson className="h-5 w-5" />
@@ -102,6 +104,10 @@ function getCredentialTypeLabel(type: string): string {
       return "Google Calendar OAuth"
     case "gcalendar_oauth_readonly":
       return "Google Calendar OAuth (Read-Only)"
+    case "gmeet_oauth":
+      return "Google Meet OAuth"
+    case "gmeet_oauth_readonly":
+      return "Google Meet OAuth (Read-Only)"
     case "google_service_account":
       return "Google Service Account"
     case "api_token":
