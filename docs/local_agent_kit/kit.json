@@ -1,6 +1,6 @@
 {
   "kit_version": "{{KIT_VERSION}}",
-  "contract_version": "1.5.0",
+  "contract_version": "1.6.0",
   "platform_url": "{{PLATFORM_URL}}",
   "kit_base_url": "{{KIT_BASE_URL}}",
   "start_url": "{{START_URL}}",
@@ -15,6 +15,12 @@
   "index": "README.md",
   "manifest_schema": "schema/cinna-agent.schema.json",
   "publications_schema": "schema/publications.schema.json",
+  "protocols": {
+    "tasks": "protocols/tasks.schema.json"
+  },
+  "platform_skills": {
+    "cinna-tasks": "skills/cinna-tasks"
+  },
   "agent_template": "templates/agent",
   "root_template": "templates/root",
   "tool": "tools/kit.py",

@@ -1,7 +1,7 @@
 ---
 feature: agent_handover
 domain: agents
-one_liner: "Lets a conversational agent delegate work to another agent directly, or create an inbox task for the user to route manually, using AI-assisted prompt generation."
+one_liner: "Lets a conversational agent delegate work to another agent directly, or queue a task for itself that a person runs later, using AI-assisted prompt generation."
 docs:
   tech: agent_handover_tech.md
 ---
@@ -9,7 +9,7 @@ docs:
 
 ## Purpose
 
-Allows conversational agents to delegate work to other agents (direct handover) or create tasks for user review (inbox task creation). Users configure handover targets through a UI with AI-assisted prompt generation; at runtime the agent decides when and how to invoke the handover.
+Allows conversational agents to delegate work to other agents (direct handover) or queue tasks for itself that a person runs later (own queue). Users configure handover targets through a UI with AI-assisted prompt generation; at runtime the agent decides when and how to invoke the handover.
 
 ## Core Concepts
 
@@ -19,20 +19,21 @@ Database record linking a source agent to a target agent with a handover prompt.
 
 ### Handover Prompt
 
-Compact 2-3 sentence natural language instruction (stored in `handover_prompt`) that defines:
-- **Trigger condition** — when the handover should happen
-- **Context to pass** — what data to include in the task message
-- **Message format** — how the handover message should look
+Compact 2-3 sentence natural language **trigger** (stored in `handover_prompt`) that defines:
+- **Trigger condition** — when the handover should happen, in this conversation
+- **Content to pass** — what the handed-over task description must contain, with an example
 
-Kept compact because it is appended directly to the conversation mode system prompt; shorter instructions reduce token usage and improve comprehension. The consolidated `handover_prompt` field from `{workspace}/docs/agent_handover_config.json` is loaded by `PromptGenerator._load_handover_prompt()` and appended at the end of `generate_conversation_mode_prompt()`, after the task context section.
+It names no tool: how to delegate is the platform's business (the `cinna-tasks` skill and the `cinna` server's `tasks_targets` / `tasks_create`), and differs between environments. At runtime the agent's prompt gets a **Configured handovers** section built from the synced `handovers` list — one line per enabled pair with the target name and its `tasks_targets` target string (`agent:<uuid>`), the pair's trigger verbatim beneath, and one sentence saying to hand over with `tasks_create` and the target as `assignee`. `PromptGenerator._load_handover_prompt()` renders it from `{workspace}/docs/agent_handover_config.json` (so a config written by an older backend still yields current text) and appends it after the task context block.
+
+**Environments built before the task protocol** (`task_protocol_version` 0) have only the retired `agent_task` tools, so the backend syncs them the pre-protocol prompt instead (`AgentService.build_legacy_handover_prompt`, verbatim the old text naming `create_agent_task`), and their conversations still receive the `[Sub-task …]` feedback lines.
 
 ### Direct Handover Mode
 
-Agent specifies a `target_agent_id` → backend creates an `InputTask` with `auto_execute=true`, optionally auto-refines the message using the target agent's `refiner_prompt`, creates a new session for the target agent, and sends the (possibly refined) message automatically.
+Agent calls `tasks_create` with an `assignee` (a `tasks_targets` string, or a unique name) → backend creates an `InputTask` with `agent_initiated=true`, `auto_execute=true`, optionally auto-refines the message using the target agent's `refiner_prompt`, creates a new session for the target agent, and sends the (possibly refined) message automatically.
 
-### Inbox Task Mode
+### Own Queue Mode
 
-Agent creates a task without specifying a target → backend creates an `InputTask` with `auto_execute=false`. The task lands in the user's inbox. The user manually selects an agent, optionally refines the message, and executes when ready.
+Agent calls `tasks_create` without an `assignee` → backend creates an `InputTask` assigned to the calling agent (on a team subtask, its own node) with `auto_execute=false`, status `new` or `open`; no session starts. A person runs it from the UI, and the report rule applies to that run.
 
 ### Enabled / Disabled
 
@@ -53,22 +54,23 @@ Handovers can be toggled on/off. Disabled handovers are excluded from the agent'
 ### 2. Runtime — Direct Handover
 
 1. Source agent is in conversation mode; user sends a message
-2. System prompt includes all enabled handovers as tool descriptions
-3. Agent detects the trigger condition and calls `mcp__agent_task__create_task` with the title, description, and `assigned_to` (target agent name)
-4. Tool calls `POST /api/v1/agent/tasks/create` on the backend with `source_session_id`
-5. Backend creates `InputTask` (`agent_initiated=true`, `auto_execute=true`)
+2. System prompt includes the **Configured handovers** section (target string and trigger per enabled pair)
+3. Agent detects the trigger condition and calls `tasks_create` with `title`, `description`, `assignee` (the target string) and an `id` of its choosing; a repeated call with the same `id` returns the same task and starts nothing
+4. Tool calls `POST /api/v1/agent/tasks/protocol/create` on the backend with `source_session_id`
+5. Backend creates `InputTask` (`agent_initiated=true`, `auto_execute=true`, `source_session_id` set)
 6. If target agent has a `refiner_prompt`, task message is auto-refined via AI
-7. New session is created for the target agent linked to the task; refined message is sent
+7. New session is created for the target agent linked to the task; refined message is sent. The target learns that a report is required from its context block (`report required: yes`) and the `cinna-tasks` skill
 8. Backend logs a system message in the source session with `task_id` and `session_id`
 9. User sees the system message with a clickable **View session** link
+10. The source agent ends its turn. When the target's session settles, the result arrives in the source conversation as a message beginning `Task result from <agent> on <ref>:` (status, summary, body, artifacts, question) — or, for a source environment at protocol 0, as the legacy `[Sub-task completed] …` line. A `blocked` question addressed to the requester is answered with `tasks_reply`
 
-### 3. Runtime — Inbox Task
+### 3. Runtime — Own Queue
 
-1. Agent calls `mcp__agent_task__create_task` without an `assigned_to` name
-2. Tool calls `POST /api/v1/agent/tasks/create` on the backend
-3. Backend creates `InputTask` (`agent_initiated=true`, `auto_execute=false`); no session is created
-4. Backend logs a system message in the source session with `task_id` and `inbox_task=true`
-5. User sees the system message with a clickable **View task** link and processes it manually
+1. Agent calls `tasks_create` without an `assignee`
+2. Tool calls `POST /api/v1/agent/tasks/protocol/create` on the backend
+3. Backend creates `InputTask` assigned to the calling agent (`agent_initiated=true`, `auto_execute=false`); no session is created
+4. Backend logs a system message "Task <code> added to <agent>'s queue" in the source session with `task_id` and `inbox_task=true`
+5. User sees the system message with a clickable **View task** link and runs the task when ready
 
 ### 4. Cloned Agent Behavior
 
@@ -83,7 +85,9 @@ Handovers can be toggled on/off. Disabled handovers are excluded from the agent'
 - **Ownership required** — user must own both the source and target agents
 - **No duplicates** — cannot create multiple handovers to the same target
 - **Cascade delete** — deleting the source agent removes all its handover configs
-- **Enabled-only injection** — only enabled handover configs are included in the agent's tool and system prompt at runtime
+- **Enabled-only injection** — only enabled handover configs are included in the agent's Configured handovers prompt section at runtime
+- **Configured pairs are not a whitelist** — `tasks_create` accepts any target `tasks_targets` lists (the owner's other active agents, or the current task's team nodes); a configured pair only adds a trigger to the prompt
+- **Report rule** — on an environment at task protocol 1 or later, a handed-over task whose session ends without `tasks_report` is left blocked with "Ended without reporting" instead of auto-completing. See [Input Tasks — Report rule](../../application/input_tasks/input_tasks.md#report-rule-task-protocol-v1)
 - **Clone isolation** — handover configuration is never propagated between clones or from parent to clone on push updates
 
 ## Architecture Overview
@@ -100,23 +104,23 @@ User → Agent Configuration UI → Backend API (handover CRUD)
                                                      │
                              ┌───────────────────────┘
                              ↓
-Agent (conversation mode) uses create_agent_task tool
+Agent (conversation mode) calls tasks_create on the `cinna` server
      │
-     └──→ POST /api/v1/agents/tasks/create
+     └──→ POST /api/v1/agent/tasks/protocol/create
                │
                ├── Direct Handover → InputTaskService.create_task_with_auto_refine()
                │                   → InputTaskService.execute_task()
                │                   → SessionService (creates session, sends message)
                │
-               └── Inbox Task → InputTaskService.create_task()
+               └── Own queue → task assigned to the caller, not started
                                 (no session created, user processes manually)
 ```
 
 ## Integration Points
 
-- **Agent Environment Core** — `create_agent_task` MCP tool registered in conversation mode; handles prompt injection of available handovers. See [create_agent_task tool](../agent_environment_core/create_agent_task_tool.md)
-- **Input Tasks** — handover creates `InputTask` with `agent_initiated=true`; inbox tasks use `auto_execute=false`. See [Input Tasks](../../application/input_tasks/input_tasks.md)
-- **Cross-Agent Delegation Contract** — a separate, session-independent mechanism on Input Tasks for handoffs where the requester is not a live cinna session in this conversation (a different agent instance, another automation, or a client relaying on an agent's behalf): the task carries `delegation_metadata` from creation, and the executing agent reports back with the `handover_report` tool instead of a chat reply. Unlike this feature's `create_task`/inbox flow, it is not configured per agent pair and does not go through `AgentHandoverConfig`. See [Input Tasks — Cross-Agent Delegation Contract](../../application/input_tasks/input_tasks.md#cross-agent-delegation-contract) and [Session State Tools](../agent_environment_core/session_state_tools.md#handover_report)
+- **Agent Environment Core** — the `cinna` MCP server's `tasks_targets` / `tasks_create` / `tasks_reply` in conversation mode, and the Configured handovers prompt section. See [Cinna Task Tools](../agent_environment_core/cinna_tasks_tools.md)
+- **Input Tasks** — handover creates `InputTask` with `agent_initiated=true`; own-queue tasks use `auto_execute=false`. Both kinds count toward the `tasks_create` chain limits (depth 2, 20 per conversation). See [Input Tasks](../../application/input_tasks/input_tasks.md)
+- **Cross-Agent Delegation Contract** — a separate, session-independent mechanism on Input Tasks for handoffs where the requester is not a live cinna session in this conversation (a different agent instance, another automation, or a client relaying on an agent's behalf): the task carries `delegation_metadata` from creation, and the executing agent reports back with `tasks_report` instead of a chat reply. Unlike this feature's configured pairs, it does not go through `AgentHandoverConfig`. See [Input Tasks — Cross-Agent Delegation Contract](../../application/input_tasks/input_tasks.md#cross-agent-delegation-contract) and [Cinna Task Tools](../agent_environment_core/cinna_tasks_tools.md#tasks_report)
 - **Agent Sessions** — direct handover creates a new session for the target agent linked to the source task. See [Agent Environment Core](../agent_environment_core/agent_environment_core.md)
 - **Agent Bundles & Installs** — installed agents start with empty handover configs (not included in bundle revision snapshots); apply-update never overwrites handover configuration. See [Agent Bundles & Installs](../agent_bundles/agent_bundles.md)
 - **AI Functions** — prompt generation and task refinement use `AIFunctionsService`. See [AI Functions development guide](../../development/backend/ai_functions_development.md)

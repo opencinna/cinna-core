@@ -22,6 +22,18 @@ interface ToolCallBlockProps {
   conversationModeUi?: string
 }
 
+const CREATE_TASK_TOOLS = new Set([
+  "mcp__cinna__tasks_create",
+  "cinna_tasks_create",
+  "mcp__agent_task__create_task",
+])
+
+const REPORT_TASK_TOOLS = new Set([
+  "mcp__cinna__tasks_report",
+  "cinna_tasks_report",
+  "mcp__agent_task__update_status",
+])
+
 export function ToolCallBlock({
   toolName,
   toolInput,
@@ -160,9 +172,10 @@ export function ToolCallBlock({
     )
   }
 
-  // Special rendering for Create Agent Task tool (handles both direct handover and inbox task)
+  // Special rendering for task creation: the `cinna` server's tasks_create
+  // (Claude Code and OpenCode names) and the retired agent_task create_task.
   const taskTitle = getInput("title")
-  if (toolNameLower === "mcp__agent_task__create_task" && taskTitle) {
+  if (CREATE_TASK_TOOLS.has(toolNameLower) && taskTitle) {
     const description = getInput("description")
     const fullMessage = description
       ? `${taskTitle}\n\n${description}`
@@ -170,19 +183,25 @@ export function ToolCallBlock({
     return (
       <AgentHandoverToolBlock
         targetAgentId={undefined}
-        targetAgentName={getInput("assigned_to")}
+        targetAgentName={getInput("assignee") || getInput("assigned_to")}
         taskMessage={fullMessage}
       />
     )
   }
 
-  // Special rendering for Update Status tool
+  // Special rendering for the executor's statement: tasks_report, and the
+  // retired agent_task update_status.
   const sessionState = getInput("status")
-  if (toolNameLower === "mcp__agent_task__update_status" && sessionState) {
+  if (REPORT_TASK_TOOLS.has(toolNameLower) && sessionState) {
+    const blocked = sessionState === "blocked"
     return (
       <UpdateSessionStateToolBlock
-        state={sessionState}
-        summary={getInput("reason")}
+        state={blocked ? "needs_input" : sessionState}
+        summary={
+          (blocked && getInput("question")) ||
+          getInput("summary") ||
+          getInput("reason")
+        }
       />
     )
   }

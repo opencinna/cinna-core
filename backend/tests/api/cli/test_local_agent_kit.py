@@ -520,13 +520,20 @@ def test_contract_membership_is_the_declared_subset(client: TestClient) -> None:
 
     `conformance/` is in, for the opposite reason: it is data every validator of
     the contract runs, not prose about it.
+    `protocols/` and `skills/` (1.6.0) are in because every host registers the
+    task protocol's tools against `protocols/tasks.schema.json` and delivers
+    the `cinna-tasks` skill versioned with it.
     """
     members = _contract_tarball_members(client)
 
     for member in ("kit.json", "layout.json", "CONTRACT_VERSION", "CHANGELOG.md"):
         assert member in members, sorted(members)
-    for prefix in ("schema/", "templates/", "conformance/"):
+    for prefix in ("schema/", "templates/", "conformance/", "protocols/", "skills/"):
         assert any(rel.startswith(prefix) for rel in members), (prefix, sorted(members))
+    # The task protocol (contract 1.6.0): the schema hosts assert their tools
+    # against, and the platform skill delivered with it.
+    assert "protocols/tasks.schema.json" in members, sorted(members)
+    assert "skills/cinna-tasks/SKILL.md" in members, sorted(members)
     # The conformance set (contract 1.5.0) ships whole: its format and matching
     # rule travel with the cases, or a host cannot apply them.
     assert "conformance/README.md" in members, sorted(members)

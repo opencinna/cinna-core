@@ -9036,6 +9036,18 @@ export const AgentSubtaskCreateSchema = {
                 }
             ],
             title: 'Source Session Id'
+        },
+        external_ref: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'External Ref'
         }
     },
     type: 'object',
@@ -9137,6 +9149,42 @@ export const AgentTaskCreateSchema = {
                 }
             ],
             title: 'Source Session Id'
+        },
+        assigned_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Assigned Agent Id'
+        },
+        assigned_node_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Assigned Node Id'
+        },
+        external_ref: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'External Ref'
         }
     },
     type: 'object',
@@ -14992,15 +15040,22 @@ export const DelegationArtifactSchema = {
             title: 'Name'
         },
         ref: {
-            type: 'string',
-            maxLength: 4096,
-            minLength: 1,
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 4096,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Ref'
         }
     },
     additionalProperties: false,
     type: 'object',
-    required: ['kind', 'name', 'ref'],
+    required: ['kind', 'name'],
     title: 'DelegationArtifact'
 } as const;
 
@@ -15021,10 +15076,18 @@ export const DelegationCapabilitiesSchema = {
         reply: {
             type: 'boolean',
             title: 'Reply'
+        },
+        protocol_version: {
+            type: 'integer',
+            title: 'Protocol Version'
+        },
+        server: {
+            type: 'string',
+            title: 'Server'
         }
     },
     type: 'object',
-    required: ['version', 'metadata', 'structured_result', 'reply'],
+    required: ['version', 'metadata', 'structured_result', 'reply', 'protocol_version', 'server'],
     title: 'DelegationCapabilities',
     description: 'Which parts of the delegation contract this server supports.'
 } as const;
@@ -30602,6 +30665,111 @@ export const TaskCommentsPublicSchema = {
     title: 'TaskCommentsPublic'
 } as const;
 
+export const TaskTargetSchema = {
+    properties: {
+        target: {
+            type: 'string',
+            title: 'Target'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        kind: {
+            type: 'string',
+            enum: ['folder', 'kit', 'cinna', 'desktop', 'external'],
+            title: 'Kind',
+            default: 'cinna'
+        },
+        location: {
+            type: 'string',
+            enum: ['local', 'remote'],
+            title: 'Location',
+            default: 'remote'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        capabilities: {
+            '$ref': '#/components/schemas/TaskTargetCapabilities'
+        },
+        protocol_version: {
+            type: 'integer',
+            title: 'Protocol Version',
+            default: 1
+        },
+        requires_approval: {
+            type: 'boolean',
+            title: 'Requires Approval',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['target', 'name'],
+    title: 'TaskTarget'
+} as const;
+
+export const TaskTargetCapabilitiesSchema = {
+    properties: {
+        structured_report: {
+            type: 'boolean',
+            title: 'Structured Report',
+            default: true
+        },
+        reply: {
+            type: 'boolean',
+            title: 'Reply',
+            default: true
+        },
+        priority: {
+            type: 'boolean',
+            title: 'Priority',
+            default: true
+        },
+        custom_fields: {
+            type: 'boolean',
+            title: 'Custom Fields',
+            default: false
+        },
+        attachments: {
+            type: 'boolean',
+            title: 'Attachments',
+            default: true
+        }
+    },
+    type: 'object',
+    title: 'TaskTargetCapabilities'
+} as const;
+
+export const TaskTargetsPublicSchema = {
+    properties: {
+        protocol_version: {
+            type: 'integer',
+            const: 1,
+            title: 'Protocol Version',
+            default: 1
+        },
+        targets: {
+            items: {
+                '$ref': '#/components/schemas/TaskTarget'
+            },
+            type: 'array',
+            title: 'Targets'
+        }
+    },
+    type: 'object',
+    required: ['targets'],
+    title: 'TaskTargetsPublic'
+} as const;
+
 export const TaskTriggerCreateExactDateSchema = {
     properties: {
         name: {
@@ -31147,6 +31315,368 @@ export const TaskTriggersPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'TaskTriggersPublic'
+} as const;
+
+export const TasksCommentRequestSchema = {
+    properties: {
+        source_session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Source Session Id'
+        },
+        ref: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ref'
+        },
+        body: {
+            type: 'string',
+            maxLength: 8000,
+            minLength: 1,
+            title: 'Body'
+        },
+        files: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array',
+                    maxItems: 20
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Files'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['source_session_id', 'body'],
+    title: 'TasksCommentRequest'
+} as const;
+
+export const TasksCreateRequestSchema = {
+    properties: {
+        source_session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Source Session Id'
+        },
+        title: {
+            type: 'string',
+            maxLength: 500,
+            minLength: 1,
+            title: 'Title'
+        },
+        description: {
+            type: 'string',
+            maxLength: 100000,
+            minLength: 1,
+            title: 'Description'
+        },
+        priority: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['low', 'normal', 'high', 'urgent']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Priority'
+        },
+        category: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['backlog', 'ready', 'draft']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Category'
+        },
+        parent: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Parent'
+        },
+        assignee: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 256
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Assignee'
+        },
+        id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    pattern: '^[a-z0-9][a-z0-9._-]{2,63}$'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Id'
+        },
+        execution: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['ask', 'auto']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Execution'
+        },
+        group: {
+            anyOf: [
+                {
+                    type: 'string',
+                    pattern: '^[a-z0-9][a-z0-9._-]{2,63}$'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Group'
+        },
+        custom_fields: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Custom Fields'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['source_session_id', 'title', 'description'],
+    title: 'TasksCreateRequest'
+} as const;
+
+export const TasksReplyRequestSchema = {
+    properties: {
+        source_session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Source Session Id'
+        },
+        ref: {
+            type: 'string',
+            maxLength: 128,
+            minLength: 1,
+            title: 'Ref'
+        },
+        message: {
+            type: 'string',
+            maxLength: 64000,
+            minLength: 1,
+            title: 'Message'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['source_session_id', 'ref', 'message'],
+    title: 'TasksReplyRequest'
+} as const;
+
+export const TasksReportRequestSchema = {
+    properties: {
+        source_session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Source Session Id'
+        },
+        ref: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ref'
+        },
+        status: {
+            type: 'string',
+            enum: ['in_progress', 'blocked', 'done', 'failed'],
+            title: 'Status'
+        },
+        summary: {
+            type: 'string',
+            maxLength: 1000,
+            minLength: 1,
+            title: 'Summary'
+        },
+        question: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 4000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Question'
+        },
+        audience: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['requester', 'user']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Audience'
+        },
+        artifacts: {
+            items: {
+                anyOf: [
+                    {
+                        type: 'string'
+                    },
+                    {
+                        additionalProperties: true,
+                        type: 'object'
+                    }
+                ]
+            },
+            type: 'array',
+            maxItems: 100,
+            title: 'Artifacts'
+        },
+        body: {
+            type: 'string',
+            maxLength: 100000,
+            title: 'Body',
+            default: ''
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['source_session_id', 'status', 'summary'],
+    title: 'TasksReportRequest'
+} as const;
+
+export const TasksUpdateRequestSchema = {
+    properties: {
+        source_session_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Source Session Id'
+        },
+        ref: {
+            type: 'string',
+            maxLength: 128,
+            minLength: 1,
+            title: 'Ref'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 100000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        priority: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['low', 'normal', 'high', 'urgent']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Priority'
+        },
+        custom_fields: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Custom Fields'
+        },
+        category: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['backlog', 'ready', 'done', 'cancelled']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Category'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['source_session_id', 'ref'],
+    title: 'TasksUpdateRequest'
 } as const;
 
 export const ToggleIdentityContactRequestSchema = {

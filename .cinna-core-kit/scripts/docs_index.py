@@ -109,6 +109,10 @@ def indexed_docs(include_plans=False):
         if not include_plans and r.startswith("docs/plans"):
             dirnames[:] = []
             continue
+        # Vendored contract files (verbatim protocol/skill copies) with foreign frontmatter, not feature docs.
+        if r.startswith(("docs/local_agent_kit/skills", "docs/local_agent_kit/protocols")):
+            dirnames[:] = []
+            continue
         for f in files:
             if f.endswith(".md"):
                 out.append(rel(os.path.join(dirpath, f)))

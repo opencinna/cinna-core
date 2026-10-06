@@ -150,6 +150,8 @@ Marked external work keeps `executed_at` null and therefore does not enter this 
 
 **Repair.** Adds no new judgment: calls the platform's existing `InputTaskService.compute_status_from_sessions(session, task_id)` and, if the result differs from `IN_PROGRESS`, writes it via `InputTaskService.update_task_status(..., changed_by_system=True, reason="Re-derived from session state by status repair")` — deliberately **not** the lower-level `sync_task_status_from_sessions`/`update_status`, because `update_task_status` is what writes the immutable `TaskStatusHistory` row, posts the activity-feed system comment, validates the transition, and emits `TASK_STATUS_CHANGED` — the same audit trail every other status change gets. If `compute_status_from_sessions` returns `None` (no connected sessions at all), the row is left alone — inventing a terminal status with nothing to derive it from would violate "verify, then repair." This no-sessions path is not covered by a test.
 
+**Report rule.** When the derived status is `COMPLETED` and `InputTaskService.requires_report(session, task)` holds (agent- or automation-given work on an environment at task protocol ≥ 1 with no final `tasks_report`), the sweep writes `BLOCKED` with reason `ENDED_WITHOUT_REPORTING` ("Ended without reporting") instead — the same rule the session-end sync applies. See [Input Tasks — Report rule](../../application/input_tasks/input_tasks.md#report-rule-task-protocol-v1).
+
 **Idempotence** comes from the derivation itself, not a claim check: once repaired, a task is no longer `IN_PROGRESS` and drops out of the candidate query on the next tick.
 
 ## Pass D — Channel Turn Deliveries (`status_repair_channels.py`)

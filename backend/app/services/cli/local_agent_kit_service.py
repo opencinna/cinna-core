@@ -101,7 +101,10 @@ CONTRACT_TARBALL_FILENAME = "cinna-contract.tar.gz"
 # the rest of it. ``conformance/`` (contract 1.5.0) is the contract's own test
 # set — manifests paired with the findings every validator must report — so a
 # host that bundles the contract can run it against its own validator. It is
-# data, not prose, which is why it ships and ``tools/`` does not. Everything
+# data, not prose, which is why it ships and ``tools/`` does not.
+# ``protocols/`` and ``skills/`` (contract 1.6.0) are the Cinna Task Protocol:
+# the ``tasks.schema.json`` every host's ``cinna`` tools must equal, and the
+# platform-owned ``cinna-tasks`` skill hosts deliver to agents with it. Everything
 # else in the kit (the guides, ``tools/``, ``START.md``, ``README.md``,
 # ``assistants/``) is prose for a human or a coding assistant and is
 # deliberately not part of the contract.
@@ -113,7 +116,7 @@ CONTRACT_TARBALL_FILENAME = "cinna-contract.tar.gz"
 CONTRACT_MEMBERS = frozenset(
     {INDEX_MEMBER, LAYOUT_MEMBER, CONTRACT_VERSION_MEMBER, CHANGELOG_MEMBER}
 )
-CONTRACT_MEMBER_PREFIXES = ("schema/", "templates/", "conformance/")
+CONTRACT_MEMBER_PREFIXES = ("schema/", "templates/", "conformance/", "protocols/", "skills/")
 
 KIT_VERSION_HEADER = "X-Kit-Version"
 

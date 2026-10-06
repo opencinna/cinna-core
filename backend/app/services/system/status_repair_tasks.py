@@ -62,7 +62,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.models.tasks.input_task import InputTask, InputTaskStatus
 from app.services.system.status_repair_context import RepairContext
-from app.services.tasks.input_task_service import InputTaskService
+from app.services.tasks.input_task_service import ENDED_WITHOUT_REPORTING, InputTaskService
 from app.utils import as_utc
 
 logger = logging.getLogger(__name__)
@@ -144,6 +144,13 @@ def _repair_task(session: Session, claim: _Claim, now: datetime) -> bool:
         session.rollback()
         return False
 
+    reason = _REPAIR_REASON
+    if derived == InputTaskStatus.COMPLETED and InputTaskService.requires_report(session, task):
+        # The session-end report rule applies here too: delegated or automated
+        # work on a protocol environment never completes without tasks_report.
+        derived = InputTaskStatus.BLOCKED
+        reason = ENDED_WITHOUT_REPORTING
+
     if derived == claim.status:
         # The sessions still say this task is running. The threshold made it
         # worth asking; the answer is that nothing is wrong.
@@ -161,7 +168,7 @@ def _repair_task(session: Session, claim: _Claim, now: datetime) -> bool:
         task_id=claim.task_id,
         new_status=derived,
         changed_by_system=True,
-        reason=_REPAIR_REASON,
+        reason=reason,
     )
     logger.info(
         "Status repair: task %s %s -> %s after %s at %r (re-derived from its "

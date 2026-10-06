@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinna.dev/protocols/tasks/v1/tasks.schema.json",
+  "title": "Cinna Task Protocol — MCP binding",
+  "description": "The eight tools every Cinna host (Cinna Desktop, cinna-core agent environments) registers on the MCP server named `cinna`. Both hosts load this file and assert their registered tools match it. Engine-visible names are derived by the host: Claude Code `mcp__cinna__<tool>`, Codex `mcp.cinna.<tool>`, OpenCode `cinna_<tool>`. Status words: `category` is what agents read and write (backlog, ready, active, waiting, done); `tasks_report.status` is the executor's statement (in_progress, blocked, done, failed). A host maps `done → completed` and `failed → error` onto its own status column.",
+  "protocol_version": 1,
+  "server": "cinna",
+  "aliases": {
+    "description": "Older tool names, for the record. They are NOT registered as tools (that would double every agent's tool list); a host that must keep talking to environments built before this change keeps them in its pre-approval or name-mapping lists only. Never mentioned in the skill or any prompt. Dropped from those lists in the release after this one.",
+    "desktop": {
+      "handover_targets": "tasks_targets",
+      "handover_list": "tasks_list",
+      "handover_reply": "tasks_reply",
+      "handover_report": "tasks_report",
+      "task_create": "tasks_create",
+      "task_update": "tasks_update",
+      "task_comment": "tasks_comment"
+    },
+    "cinna_core": {
+      "create_task": "tasks_create",
+      "create_subtask": "tasks_create",
+      "add_comment": "tasks_comment",
+      "update_status": "tasks_update",
+      "get_details": "tasks_get",
+      "list_tasks": "tasks_list",
+      "handover_report": "tasks_report"
+    }
+  },
+  "$defs": {
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "A task reference as this host shows it (`t-3f9a2b1c`, `TASK-5`, a folder task's id). Opaque: never built or translated by the agent, always copied from a tool result or the turn context."
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "normal", "high", "urgent"]
+    },
+    "category": {
+      "type": "string",
+      "enum": ["backlog", "ready", "active", "waiting", "done"],
+      "description": "Where a task sits. `done` covers completed, failed and cancelled work."
+    },
+    "custom_fields": {
+      "type": "object",
+      "maxProperties": 32,
+      "description": "User-named values on the task: text, number, boolean or a flat list of strings. Keys the protocol owns (status, title, priority, id, execution, origin, depth, group, parent, blocked_by) are refused in any letter case. The whole set is replaced on update; `{}` clears it.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string", "maxLength": 2000 },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 200 } }
+        ]
+      }
+    },
+    "artifact": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "A path relative to the working folder, or an http(s) URL."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["file", "link"] },
+            "name": { "type": "string", "maxLength": 200 },
+            "ref": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          }
+        }
+      ]
+    }
+  },
+  "tools": {
+    "tasks_targets": {
+      "description": "Who you can hand work to. Returns one entry per target with the exact `target` string to pass as `tasks_create.assignee`, its name, kind, where it runs, what it supports and its protocol version. Call it before delegating; never guess a target.",
+      "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+      "result": {
+        "type": "object",
+        "required": ["protocol_version", "targets"],
+        "properties": {
+          "protocol_version": { "type": "integer", "const": 1 },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["target", "name", "kind", "location"],
+              "properties": {
+                "target": { "type": "string", "description": "Opaque; pass verbatim as `assignee`." },
+                "name": { "type": "string" },
+                "kind": { "type": "string", "enum": ["folder", "kit", "cinna", "desktop", "external"] },
+                "location": { "type": "string", "enum": ["local", "remote"] },
+                "description": { "type": "string" },
+                "capabilities": {
+                  "type": "object",
+                  "properties": {
+                    "structured_report": { "type": "boolean", "description": "The target files `tasks_report`; false means its result is read from comments and status." },
+                    "reply": { "type": "boolean" },
+                    "priority": { "type": "boolean" },
+                    "custom_fields": { "type": "boolean" },
+                    "attachments": { "type": "boolean" }
+                  }
+                },
+                "protocol_version": { "type": "integer" },
+                "requires_approval": { "type": "boolean", "description": "A person approves the run before it starts, whatever `execution` says." }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tasks_list": {
+      "description": "The tasks that concern you: assigned to you, created by you, or delegated by you. Newest first, at most 50, closed ones left out unless `include_closed`. Not a wait primitive: if nothing changed since your last call in this turn, end your turn.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "relation": { "type": "string", "enum": ["assigned", "created", "delegated", "all"], "default": "all" },
+          "category": { "$ref": "#/$defs/category" },
+          "include_closed": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "tasks_get": {
+      "description": "One task in full: goal, description, status and category, priority, assignee, parent, blocked_by, custom fields, the latest comments, the latest report, and where any attached files were placed for you to read.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref"],
+        "properties": { "ref": { "$ref": "#/$defs/ref" } }
+      }
+    },
+    "tasks_create": {
+      "description": "Create work. Without `assignee` it goes into your own queue (Backlog unless `category: ready`). With an `assignee` from `tasks_targets` it is a delegation: `description` is the brief, `id` makes the request idempotent (repeating it returns the same work), and you end your turn afterwards — the result arrives later as a message in this conversation. `parent` must be a task of yours; with an assignee it makes a delegated subtask. Depth is capped at 2 and at most 20 tool-created tasks per conversation.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "description"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "description": { "type": "string", "minLength": 1, "maxLength": 100000, "description": "Markdown. For a delegation, everything the executor needs; it may not see this conversation." },
+          "priority": { "$ref": "#/$defs/priority" },
+          "category": { "type": "string", "enum": ["backlog", "ready", "draft"], "description": "`backlog` (default) or `ready`. `draft` is only for a delegation to a folder target: the brief is written but not picked up until made ready." },
+          "parent": { "$ref": "#/$defs/ref" },
+          "assignee": { "type": "string", "maxLength": 256, "description": "A `target` from `tasks_targets`, verbatim. Omit for your own queue." },
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$", "description": "Delegations only. Your idempotency key for this request; `YYYYMMDD-HHMM-<slug>` is the recommended shape." },
+          "execution": { "type": "string", "enum": ["ask", "auto"], "description": "Delegations only. `ask` forces a person to approve the run; otherwise the receiving side's own setting decides." },
+          "group": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$", "description": "Delegations only. Give several requests the same group and you are woken once, when all of them are over." },
+          "custom_fields": { "$ref": "#/$defs/custom_fields" }
+        }
+      }
+    },
+    "tasks_update": {
+      "description": "Edit a task's fields, or move it by hand between Backlog, Ready, Done and Cancelled as a person would on the board. Not for saying how your work went — that is `tasks_report`. Refused on a task something else is working on: a running turn, an open question, a queue or a delegation.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref"],
+        "properties": {
+          "ref": { "$ref": "#/$defs/ref" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "description": { "type": "string", "maxLength": 100000 },
+          "priority": { "$ref": "#/$defs/priority" },
+          "custom_fields": { "$ref": "#/$defs/custom_fields" },
+          "category": { "type": "string", "enum": ["backlog", "ready", "done", "cancelled"], "description": "A manual move. A host with status words of its own (a folder's `_board.yaml`) also accepts one of those words here." }
+        }
+      }
+    },
+    "tasks_comment": {
+      "description": "Leave a Markdown note on a task — a finding, an intermediate result, a question for a person reading the task page. Shown on the task and copied to the task's home where it has one. Does not change status; use `tasks_report` for that.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["body"],
+        "properties": {
+          "ref": { "$ref": "#/$defs/ref", "description": "Defaults to the task this conversation is working on." },
+          "body": { "type": "string", "minLength": 1, "maxLength": 8000 },
+          "files": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 1024 }, "description": "Paths relative to the working folder to attach, where the host supports attachments. A missing file fails the call and posts nothing." }
+        }
+      }
+    },
+    "tasks_report": {
+      "description": "Say how your work on a task is going or how it ended. The only way to close work you were given: `done` or `failed` with a one-line summary before you end your turn; `blocked` with a `question` when you cannot continue (audience `requester` wakes the agent that asked, `user` waits for a person); `in_progress` for a progress note. A dispatched or delegated task that ends without a report is left Waiting with “Ended without reporting”. Idempotent: repeating the same report changes nothing.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "summary"],
+        "properties": {
+          "ref": { "$ref": "#/$defs/ref", "description": "Defaults to the task this conversation is working on." },
+          "status": { "type": "string", "enum": ["in_progress", "blocked", "done", "failed"] },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "One line. It is what every list shows." },
+          "question": { "type": "string", "maxLength": 4000, "description": "Required when `status` is `blocked`." },
+          "audience": { "type": "string", "enum": ["requester", "user"], "description": "Who a `blocked` question is for. Defaults to `requester` when an agent asked for this work, else `user`." },
+          "artifacts": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/artifact" } },
+          "body": { "type": "string", "maxLength": 100000, "description": "The full answer or report, Markdown." }
+        }
+      }
+    },
+    "tasks_reply": {
+      "description": "Answer a `blocked` question from work you delegated, or send a follow-up to work still under way. The executor receives it in its own conversation with everything it has already read.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "message"],
+        "properties": {
+          "ref": { "$ref": "#/$defs/ref", "description": "The delegated task." },
+          "message": { "type": "string", "minLength": 1, "maxLength": 64000 }
+        }
+      }
+    }
+  },
+  "result_packet": {
+    "description": "How a delegation's result reaches the requester: a host-authored message in the requesting conversation, never a tool return. One shape on every host.",
+    "text_prefix": "Task result from <agent> on <ref>:",
+    "fields": ["ref", "status", "summary", "body", "artifacts", "question"]
+  },
+  "context_block": {
+    "description": "Data the host prepends to a turn, never persisted, never instructions. The skill explains it; the block only states facts.",
+    "lines": [
+      "Cinna task context (not part of the conversation):",
+      "- here: <host and agent identity>",
+      "- current task: <ref> \"<title>\" (report required: yes|no)   | none",
+      "- chain depth: N · open delegations: T (W waiting on the user) · ready tasks: N   [each only while nonzero]",
+      "- tasks skill: cinna-tasks v1"
+    ]
+  }
+}

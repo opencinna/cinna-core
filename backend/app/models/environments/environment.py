@@ -134,6 +134,13 @@ class AgentEnvironment(SQLModel, table=True):
     workflow_prompt_synced_hash: str | None = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
     entrypoint_prompt_synced_hash: str | None = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
     refiner_prompt_synced_hash: str | None = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    # Cinna Task Protocol version of the env-core (``tasks_report`` available
+    # from 1). Set when the core files are laid down (create, rebuild) and
+    # confirmed by each stream's ``done`` event. 0 = an environment built
+    # before the protocol, which keeps session-end auto-completion.
+    task_protocol_version: int = Field(
+        default=0, sa_column=Column(sa.Integer, nullable=False, server_default="0")
+    )
     # CLI live sync tracking
     last_sync_activity_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     sync_active: bool = Field(default=False)

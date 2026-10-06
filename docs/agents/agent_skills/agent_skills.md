@@ -119,6 +119,19 @@ run the script, and verifying readiness end to end.
 The agent page, the `/skills` command and the popup all read one merged index
 covering all three.
 
+**Platform skills** are a fourth, platform-owned kind that is not part of that
+index. Today there is one, `cinna-tasks`: the skill that teaches the Cinna Task
+Protocol (the `cinna` server's `tasks_*` tools — see
+[Cinna Task Tools](../agent_environment_core/cinna_tasks_tools.md)). It is
+authored in the Local Agent Kit (`docs/local_agent_kit/skills/cinna-tasks/`) and
+copied into every environment's core at `/app/core/skills/cinna-tasks/` at
+creation and at every rebuild; it is never copied into the workspace or a
+bundle. Its name is **reserved**: a workspace, plugin or catalog skill named
+`cinna-tasks` fails validation with `reserved_name`, so the platform copy can
+never be replaced. Its frontmatter carries keys the parser does not interpret
+(`when_to_use`, `compatibility`, a `metadata` map, `user-invocable: false`);
+like every unknown key they are kept verbatim.
+
 ### How the engines see them
 
 Neither Claude Code nor OpenCode looks at `skills/` in the workspace. Before
@@ -133,6 +146,14 @@ serves both engines).
 - **OpenCode** memoizes its skill list per workspace instance, so env-core calls
   `POST /instance/dispose` when — and only when — the projection actually moved.
   Generated `opencode.json` carries `permission.skill = "allow"`.
+- **Platform** skills (`cinna-tasks`) are projected into the same root beside
+  the workspace's, with the same marker, on every refresh; the platform tree
+  also feeds the state hash, so an image upgrade that changes the skill
+  re-projects it. OpenCode reads that projected copy through its global
+  discovery path — deliberately no `skills.paths` entry, which would list the
+  skill twice. For an adapter without native skills, the prompt's
+  `## Agent Skills` fallback block lists it with its `/app/core/skills/...`
+  path.
 - **Plugin** skills are not projected. Claude Code discovers a plugin's `skills/`
   itself; OpenCode gets each active plugin's `skills/` directory registered as an
   entry in its `skills.paths` config.
@@ -696,7 +717,7 @@ regex.
 | Scenario | Behaviour |
 |----------|-----------|
 | `SKILL.md` missing, unreadable, no frontmatter fence, bad name, name ≠ folder | Excluded from projection; listed with the matching `error` code; the card shows the sentence; bundle publish blocks |
-| Skill name collides with a platform command | `error: reserved_name` — excluded from projection and from the popup |
+| Skill name collides with a platform command, or with a platform skill (`cinna-tasks`) | `error: reserved_name` — excluded from projection and from the popup; the platform copy is the one projected |
 | A malformed `credentials:` block (not a list, no slot, unknown type, duplicate slot, more than 20 entries) | `error: invalid_credentials` — excluded from projection; publish refuses with the sentence naming the first problem |
 | A slot whose only linked credential is an unfilled placeholder | Resolves to `user` at publish. An empty credential shared to installers would be a credential they cannot edit |
 | The publisher turns sharing off after publishing | The frozen spec still says `publisher`; the install falls through to a placeholder and reports `publisher_unavailable`. Existing installs lose it at once — the shares are deleted, the installers' agents are unlinked and their environments re-synced without it — and the row reads `not_linked`. Re-enabling sharing does not re-share or re-link; uninstalling then installing again, or upgrading to a revision that newly adds the slot, reruns provisioning |
@@ -798,3 +819,7 @@ sweep skips denylisted names — it simply never travels again.
 - OpenCode hot-reload of plugin skills without a server relaunch.
 - Skill usage analytics from `skill` tool events.
 - Skill-level `hooks` / `agents` parity for OpenCode.
+
+## Changelog
+
+- 2026-10-06: Platform skills — `cinna-tasks` (Cinna Task Protocol) is installed into every environment's core, projected beside the agent's skills, reserved against workspace skills, and listed by the fallback Agent Skills block.

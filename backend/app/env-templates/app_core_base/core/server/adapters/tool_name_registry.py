@@ -44,14 +44,35 @@ CLAUDE_CODE_TOOL_NAME_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # OpenCode MCP bridge tool name unification
 #
-# OpenCode runs all agent task tools on the "agent_task" MCP server,
-# producing names like mcp__agent_task__add_comment.
-# Claude Code bundles them on the same "agent_task" server.
+# The Cinna Task Protocol tools live on the "cinna" MCP server in both
+# adapters (Claude Code in-process server, OpenCode stdio bridge), producing
+# mcp__cinna__tasks_create (Claude Code) / cinna_tasks_create (OpenCode).
+# Names and schemas come from core/protocols/tasks.schema.json; the unit test
+# test_cinna_tasks_parity.py asserts CINNA_TASK_TOOLS equals that file.
 #
-# No remapping needed — both adapters use the "agent_task" server name.
+# No remapping needed — both adapters use the same server names.
 # ---------------------------------------------------------------------------
 
 OPENCODE_MCP_TOOL_NAME_MAP: dict[str, str] = {}
+
+CINNA_TASKS_SERVER = "cinna"
+CINNA_TASK_TOOLS: tuple[str, ...] = (
+    "tasks_targets",
+    "tasks_list",
+    "tasks_get",
+    "tasks_create",
+    "tasks_update",
+    "tasks_comment",
+    "tasks_report",
+    "tasks_reply",
+)
+# Claude Code form (mcp__{server}__{tool}) and OpenCode form ({server}_{tool}).
+CINNA_TASK_TOOL_NAMES_CLAUDE: tuple[str, ...] = tuple(
+    f"mcp__{CINNA_TASKS_SERVER}__{name}" for name in CINNA_TASK_TOOLS
+)
+CINNA_TASK_TOOL_NAMES_OPENCODE: tuple[str, ...] = tuple(
+    f"{CINNA_TASKS_SERVER}_{name}" for name in CINNA_TASK_TOOLS
+)
 
 # ---------------------------------------------------------------------------
 # Canonical pre-approved tools (lowercase)
@@ -72,6 +93,12 @@ PRE_APPROVED_TOOLS: frozenset[str] = frozenset([
     "mcp__knowledge__query_integration_knowledge",
     # MCP bridge tools (knowledge) — OpenCode form ({server}_{tool})
     "knowledge_query_integration_knowledge",
+    # Cinna Task Protocol tools (server "cinna") — both forms
+    *CINNA_TASK_TOOL_NAMES_CLAUDE,
+    *CINNA_TASK_TOOL_NAMES_OPENCODE,
+    # DEPRECATED: the former "agent_task" server, replaced by "cinna" above.
+    # Kept only so environments built before the change are still
+    # pre-approved; drop in the release after the Cinna Task Protocol.
     # MCP bridge tools (agent task) — Claude Code form
     "mcp__agent_task__add_comment",
     "mcp__agent_task__update_status",

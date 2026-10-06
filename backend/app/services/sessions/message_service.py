@@ -60,6 +60,27 @@ PRE_ALLOWED_TOOLS = frozenset([
     "mcp__knowledge__query_integration_knowledge",
     # MCP bridge tools (knowledge) — OpenCode form ({server}_{tool})
     "knowledge_query_integration_knowledge",
+    # Cinna Task Protocol tools (MCP server "cinna") — Claude Code form
+    "mcp__cinna__tasks_targets",
+    "mcp__cinna__tasks_list",
+    "mcp__cinna__tasks_get",
+    "mcp__cinna__tasks_create",
+    "mcp__cinna__tasks_update",
+    "mcp__cinna__tasks_comment",
+    "mcp__cinna__tasks_report",
+    "mcp__cinna__tasks_reply",
+    # Cinna Task Protocol tools — OpenCode form ({server}_{tool})
+    "cinna_tasks_targets",
+    "cinna_tasks_list",
+    "cinna_tasks_get",
+    "cinna_tasks_create",
+    "cinna_tasks_update",
+    "cinna_tasks_comment",
+    "cinna_tasks_report",
+    "cinna_tasks_reply",
+    # DEPRECATED: the former "agent_task" server, replaced by "cinna" above.
+    # Kept only so environments built before the change are still
+    # pre-approved; drop in the release after the Cinna Task Protocol.
     # MCP bridge tools (agent task) — Claude Code form
     "mcp__agent_task__add_comment",
     "mcp__agent_task__update_status",
@@ -608,7 +629,82 @@ def _build_session_context(
     except Exception as e:
         logger.warning(f"Task context enrichment failed (non-critical): {e}", exc_info=True)
 
+    try:
+        protocol_context = _task_protocol_context(db, session_db, agent)
+        if protocol_context:
+            context["task_protocol"] = protocol_context
+    except Exception as e:
+        logger.warning(f"Task protocol context failed (non-critical): {e}", exc_info=True)
+
     return context
+
+
+def _chain_depth(db: Session, task) -> int:
+    """How many agent hand-offs led to ``task`` (see InputTaskService.chain_depth)."""
+    from app.services.tasks.input_task_service import InputTaskService
+
+    return InputTaskService.chain_depth(db, task)
+
+
+def _task_protocol_context(
+    db: Session, session_db: ChatSession, agent: Agent | None,
+) -> dict | None:
+    """The data behind the env's task context block (tasks.schema.json ``context_block``).
+
+    Facts only — the cinna-tasks skill explains them. ``None`` when the
+    conversation has no current task and every count is zero, so an ordinary
+    chat gets no block at all.
+    """
+    from app.models.tasks.input_task import InputTask, InputTaskStatus
+    from app.services.tasks.input_task_service import InputTaskService
+
+    closed = (
+        InputTaskStatus.COMPLETED, InputTaskStatus.ERROR,
+        InputTaskStatus.CANCELLED, InputTaskStatus.ARCHIVED,
+    )
+    agent_id = agent.id if agent else session_db.agent_id
+    task = db.get(InputTask, session_db.source_task_id) if session_db.source_task_id else None
+
+    delegated_stmt = select(InputTask).where(
+        InputTask.source_session_id == session_db.id,
+        InputTask.selected_agent_id.is_not(None),
+        InputTask.status.not_in(closed),
+    )
+    if agent_id:
+        delegated_stmt = delegated_stmt.where(InputTask.selected_agent_id != agent_id)
+    delegated = db.exec(delegated_stmt).all()
+    waiting_on_user = sum(
+        1 for t in delegated
+        if t.status == InputTaskStatus.BLOCKED
+        and (t.delegation_result or {}).get("audience", "user") == "user"
+    )
+    ready_tasks = 0
+    if agent_id:
+        ready_stmt = select(func.count()).select_from(InputTask).where(
+            InputTask.owner_id == session_db.user_id,
+            InputTask.selected_agent_id == agent_id,
+            InputTask.status == InputTaskStatus.OPEN,
+        )
+        if task:
+            ready_stmt = ready_stmt.where(InputTask.id != task.id)
+        ready_tasks = db.exec(ready_stmt).one()
+
+    chain_depth = _chain_depth(db, task) if task else 0
+    if not task and not delegated and not ready_tasks:
+        return None
+
+    return {
+        "here": f"cinna-core agent {agent.name}" if agent else "cinna-core agent",
+        "current_task": {
+            "ref": task.short_code or str(task.id),
+            "title": task.title or "",
+            "report_required": InputTaskService.requires_report(db, task),
+        } if task else None,
+        "chain_depth": chain_depth,
+        "open_delegations": len(delegated),
+        "waiting_on_user": waiting_on_user,
+        "ready_tasks": ready_tasks,
+    }
 
 
 class MessageService:
@@ -2305,6 +2401,46 @@ class MessageService:
         await asyncio.to_thread(_update_sdk_tools)
 
     @staticmethod
+    async def _record_task_protocol_version(
+        event: dict,
+        environment_id: UUID,
+        get_fresh_db_session: callable,
+    ) -> None:
+        """Store the task protocol version the env-core put on its ``done`` event.
+
+        Only an explicit ``protocol_version`` updates the column. A ``done``
+        without it (an error path, a cancelled stream, an older image) is no
+        information and leaves the stored version alone: the version is owned
+        by install/rebuild plus these announcements, and an environment from
+        before the protocol reads 0 through the column default. Written only
+        on change, so a steady environment costs one primary-key read per
+        stream.
+        """
+        raw = event.get("protocol_version")
+        if raw is None or isinstance(raw, bool):
+            return
+        try:
+            version = max(int(raw), 0)
+        except (TypeError, ValueError):
+            return
+
+        def _store() -> None:
+            with get_fresh_db_session() as db:
+                env = db.get(AgentEnvironment, environment_id)
+                if env and env.task_protocol_version != version:
+                    env.task_protocol_version = version
+                    db.add(env)
+                    db.commit()
+                    logger.info(
+                        f"Environment {environment_id} task protocol version -> {version}"
+                    )
+
+        try:
+            await asyncio.to_thread(_store)
+        except Exception as e:
+            logger.error(f"Failed to record task protocol version: {e}")
+
+    @staticmethod
     async def _handle_tool_event(
         event: dict,
         agent_allowed_tools: set,
@@ -3359,6 +3495,11 @@ class MessageService:
                         k: v for k, v in event_metadata.items()
                         if k in _FORWARDED_METADATA_KEYS
                     })
+
+                if event.get("type") == "done":
+                    await MessageService._record_task_protocol_version(
+                        event, environment_id, get_fresh_db_session,
+                    )
 
                 # Forward event to frontend (except 'done' - we'll send our own after saving message)
                 if event.get("type") != "done":

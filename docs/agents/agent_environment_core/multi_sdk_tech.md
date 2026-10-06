@@ -38,7 +38,7 @@
 - `backend/app/env-templates/app_core_base/core/server/adapters/opencode_event_transformer.py` — `OpenCodeEventTransformer`
 - `backend/app/env-templates/app_core_base/core/server/adapters/tool_name_registry.py` — unified lowercase tool name convention: maps, pre-approved set, `normalize_tool_name()`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/knowledge_server.py`
-- `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py`
+- `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/cinna_server.py`
 - `backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/collaboration_server.py` <!-- nocheck -->
 
 **Dockerfiles (OpenCode PATH fix applied to all three):**
@@ -355,12 +355,12 @@ Stateful translator from raw OpenCode SSE events to `SDKEvent` objects. Instanti
 
 Located in `tools/mcp_bridge/`. Each is a standalone Python MCP stdio server registered in `opencode.json`. OpenCode spawns them as child processes when needed.
 
-Bridge servers read `session_context.json` to get `backend_session_id` at call time. They prefer the absolute path in the `CINNA_SESSION_CONTEXT_PATH` env var (set by the adapter on the serve subprocess and inherited by the spawned bridges), falling back to the cwd-relative `session_context.json` for older environments. This indirection is required because, once sessions bind to `/app/workspace`, opencode spawns the bridges with `cwd = /app/workspace` rather than the runtime dir (see **Workspace project binding**). `task_server.py` reads context; `knowledge_server.py` is env-var-configured and does not.
+Bridge servers read `session_context.json` to get `backend_session_id` at call time. They prefer the absolute path in the `CINNA_SESSION_CONTEXT_PATH` env var (set by the adapter on the serve subprocess and inherited by the spawned bridges), falling back to the cwd-relative `session_context.json` for older environments. This indirection is required because, once sessions bind to `/app/workspace`, opencode spawns the bridges with `cwd = /app/workspace` rather than the runtime dir (see **Workspace project binding**). `cinna_server.py` reads context; `knowledge_server.py` is env-var-configured and does not.
 
 - `knowledge_server.py` — exposes `query_integration_knowledge` tool; calls backend knowledge API
-- `task_server.py` — exposes `add_comment`, `update_status`, `create_task`, `create_subtask`, `get_details`, `list_tasks` tools
+- `cinna_server.py` — the Cinna Task Protocol's `cinna` server: the eight `tasks_*` tools, specs read from `/app/core/protocols/tasks.schema.json` (see [Cinna Task Tools](cinna_tasks_tools.md))
 
-MCP tool names visible to the agent follow the pattern `mcp__{server}__{tool}` (e.g., `mcp__agent_task__create_task`).
+MCP tool names visible to the agent follow `mcp__{server}__{tool}` under Claude Code (e.g., `mcp__cinna__tasks_create`) and `{server}_{tool}` under OpenCode (e.g., `cinna_tasks_create`); `tool_name_registry.py` lists both forms.
 
 ## Configuration
 

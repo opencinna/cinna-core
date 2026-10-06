@@ -130,7 +130,7 @@ Injected into the agent container's `.env` file by `backend/app/services/environ
 
 ## Pre-Allowed Tools
 
-`backend/app/services/sessions/message_service.py` - `mcp__knowledge__query_integration_knowledge` is in the pre-allowed tools list, meaning agents can invoke it without per-call user approval. Other pre-allowed tools: `mcp__agent_task__add_comment`, `mcp__agent_task__update_status`, `mcp__agent_task__create_task`, `mcp__agent_task__create_subtask`, `mcp__agent_task__get_details`, `mcp__agent_task__list_tasks`.
+`backend/app/services/sessions/message_service.py` - `mcp__knowledge__query_integration_knowledge` is in the pre-allowed tools list, meaning agents can invoke it without per-call user approval. Other pre-allowed tools: the Cinna Task Protocol's `mcp__cinna__tasks_*` / `cinna_tasks_*` (plus the deprecated `agent_task` names, kept for environments built before the protocol).
 
 ## API Endpoints
 

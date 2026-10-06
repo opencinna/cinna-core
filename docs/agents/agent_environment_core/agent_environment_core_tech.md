@@ -37,14 +37,10 @@
 | File | Tool Name | Purpose |
 |------|-----------|---------|
 | `knowledge_query.py` | `query_integration_knowledge` | RAG-based knowledge source query tool |
-| `agent_task_add_comment.py` | `add_comment` | Post comment on task — see [Session State Tools](session_state_tools.md) |
-| `agent_task_update_status.py` | `update_status` | Edge-case status update — see [Session State Tools](session_state_tools.md) |
-| `agent_task_create_task.py` | `create_task` | Standalone task creation — see [Create Agent Task Tool](create_agent_task_tool.md) |
-| `agent_task_create_subtask.py` | `create_subtask` | Team subtask delegation — see [Create Agent Task Tool](create_agent_task_tool.md) |
-| `agent_task_get_details.py` | `get_details` | Full task detail with comments (capped at 3000 chars each) and subtask progress |
-| `agent_task_list_tasks.py` | `list_tasks` | List tasks by scope (assigned/created/team) |
+| `cinna_tasks_protocol.py` | — | The Cinna Task Protocol's `cinna` tools, engine-agnostic: `load_tool_specs()` reads names, descriptions and input schemas from `/app/core/protocols/tasks.schema.json`; `CinnaTasksClient` forwards each call to `/api/v1/agent/tasks/protocol/*` — see [Cinna Task Tools](cinna_tasks_tools.md) |
+| `cinna_tasks_claude.py` | `tasks_targets` … `tasks_reply` | `build_cinna_server()` — the in-process SDK server `cinna`, one tool per schema entry |
 
-**Schema convention**: All SDK tools use explicit JSON Schema dicts (`{"type": "object", "properties": {...}, "required": [...]}`) rather than simple `{name: type}` dicts. This ensures the `claude_agent_sdk`'s `create_sdk_mcp_server()` correctly marks optional parameters as non-required in the generated MCP tool schema.
+**Schema convention**: Hand-written SDK tools use explicit JSON Schema dicts (`{"type": "object", "properties": {...}, "required": [...]}`) rather than simple `{name: type}` dicts. This ensures the `claude_agent_sdk`'s `create_sdk_mcp_server()` correctly marks optional parameters as non-required in the generated MCP tool schema.
 
 ### MCP Bridge Servers (OpenCode adapter)
 
@@ -55,7 +51,7 @@ Lightweight stdio MCP servers that expose the same tools for OpenCode agents. Re
 | File | Exposes |
 |------|---------|
 | `knowledge_server.py` | `query_integration_knowledge` tool |
-| `task_server.py` | `add_comment`, `update_status`, `create_task`, `create_subtask`, `get_details`, `list_tasks` tools |
+| `cinna_server.py` | The eight `tasks_*` tools of the `cinna` server (`opencode.json` key `cinna`), from the same schema specs as the Claude Code server |
 
 The MCP bridge tools use Python type annotations with defaults for optional params (e.g., `files: list[str] | None = None`). FastMCP generates correct JSON Schema from these signatures automatically.
 

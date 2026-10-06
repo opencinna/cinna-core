@@ -16,6 +16,37 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.6.0 — the Cinna Task Protocol
+
+Additive. Every 1.x folder is still valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.6.0 folder, because the majors match.
+Nothing in an agent folder moves.
+
+### Added
+
+- **`protocols/tasks.schema.json`** — the Cinna Task Protocol (CTP) v1, MCP
+  binding: the eight tools every Cinna host registers on the MCP server named
+  `cinna` (`tasks_targets`, `tasks_list`, `tasks_get`, `tasks_create`,
+  `tasks_update`, `tasks_comment`, `tasks_report`, `tasks_reply`), their input
+  schemas, the `category` and report-status words, the result packet and the
+  turn context block. Hosts load this file and assert their registered tools
+  equal it; it is data, so it is part of the contract bundle.
+- **`skills/cinna-tasks/`** — the platform-owned skill that teaches the
+  protocol (`SKILL.md`, `references/file-protocol.md`), versioned with it.
+  Hosts deliver it to agents; it is not copied into agent folders, and an agent
+  folder's own `skills/` is unaffected.
+- `kit.json` names both: `protocols.tasks` and `platform_skills.cinna-tasks`.
+
+### For hosts
+
+- The tool names replace the hosts' earlier dialects (Cinna Desktop's
+  `task_*` / `handover_*`, cinna-core's `agent_task` server). The schema's
+  `aliases` block records the old names; they are never registered as tools,
+  only kept in pre-approval lists for one release.
+- cinna-core agent environments now serve these tools on `cinna` and carry the
+  schema and the skill at `/app/core/protocols/tasks.schema.json` and
+  `/app/core/skills/cinna-tasks/`.
+
 ## Google Meet credential types
 
 No contract-version change. The credential `type` values gain `gmeet_oauth` and

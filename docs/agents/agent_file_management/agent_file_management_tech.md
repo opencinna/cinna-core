@@ -121,7 +121,7 @@
 
 `POST /files/upload` accepts an optional `subfolder` form field. When provided, the file is placed at `./uploads/{subfolder}/{filename}` instead of `./uploads/{filename}`. The subfolder name is sanitized with `sanitize_filename()` to prevent path traversal.
 
-This is used by the task file auto-upload feature: when an agent calls `mcp__agent_task__get_details`, the backend uploads all task-associated files with `subfolder=task_{SHORT_CODE}` (e.g., `task_HR-5`), placing them at `/app/workspace/uploads/task_HR-5/` in the agent's workspace.
+This is used by the task file auto-upload feature: when an agent calls `tasks_get` (the `cinna` MCP server), the backend uploads all task-associated files with `subfolder=task_{SHORT_CODE}` (e.g., `task_HR-5`), placing them at `/app/workspace/uploads/task_HR-5/` in the agent's workspace.
 
 ## Frontend Components
 

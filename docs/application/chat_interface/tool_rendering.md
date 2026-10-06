@@ -26,8 +26,8 @@ Tool call rendering provides specialized visual feedback for each type of tool t
 | `todowrite` | TodoWriteToolBlock | Todo items with completion status | Same |
 | `askuserquestion` | AskUserQuestionToolBlock | Count of questions received | Same |
 | `mcp__knowledge__query_integration_knowledge` | KnowledgeQueryToolBlock | Query + article IDs | Same |
-| `mcp__agent_task__create_task` | AgentHandoverToolBlock | Target agent + task title/description, or inbox task | Same |
-| `mcp__agent_task__update_status` | UpdateSessionStateToolBlock | Status + reason | Same |
+| `mcp__cinna__tasks_create` / `cinna_tasks_create` (and the retired `mcp__agent_task__create_task`) | AgentHandoverToolBlock | Target (`assignee`, or the old `assigned_to`) + task title/description, or inbox task | Same |
+| `mcp__cinna__tasks_report` / `cinna_tasks_report` (and the retired `mcp__agent_task__update_status`) | UpdateSessionStateToolBlock | Status (`blocked` shown as needs input) + the question, summary or old reason | Same |
 | `webapp_action` | WebappActionBlock | Action name + data payload | Simplified |
 | (unknown) | Default renderer | Generic "Using tool: name" + JSON params | Same |
 

@@ -47,6 +47,7 @@ from .sdk_manager import sdk_manager
 from .agent_env_service import AgentEnvService
 from .active_session_manager import active_session_manager
 from .prompt_generator import PromptGenerator
+from .tools.cinna_tasks_protocol import PROTOCOL_VERSION as TASK_PROTOCOL_VERSION
 
 router = APIRouter(tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -465,7 +466,11 @@ async def chat_stream(request: ChatRequest):
             # Send done event
             logger.info("Sending final done event")
             try:
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                # protocol_version advertises the `cinna` task tools to the
+                # backend: from 1, a delegated or automated task's session
+                # must end with tasks_report instead of auto-completing.
+                done_event = {'type': 'done', 'protocol_version': TASK_PROTOCOL_VERSION}
+                yield f"data: {json.dumps(done_event)}\n\n"
             except (ConnectionResetError, BrokenPipeError) as conn_error:
                 logger.warning(f"Client disconnected before done event: {conn_error}")
 
@@ -771,11 +776,11 @@ async def update_agent_handover_config(config: AgentHandoverUpdate):
 
     Updates ./docs/agent_handover_config.json with:
     - handovers: Array of configured handover targets (id, name, prompt)
-    - handover_prompt: Instructions for using create_agent_task tool in conversation mode
+    - handover_prompt: The configured handovers as prompt data (target and trigger per pair)
 
     This is called by the backend when user updates handover configurations in the UI.
-    The handover_prompt is appended to the conversation mode system prompt, and the
-    handovers list is used by the create_agent_task tool to validate direct handover targets.
+    The handover_prompt is appended to the conversation mode system prompt; delegating
+    itself goes through the `cinna` server's tasks_targets / tasks_create.
     """
     try:
         agent_env_service.update_agent_handover_config(

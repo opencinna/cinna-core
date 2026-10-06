@@ -110,6 +110,10 @@ invocation, so ten skills cost ten lines until one is used.
 Do not split for tidiness: two agents are two prompt sets to keep true. When
 requests keep landing between two agents, redraw the boundary; never copy a script.
 
+*Delegation at run time* goes through the task tools the platform skill
+`cinna-tasks` teaches (kit `skills/cinna-tasks/`); a prompt says when to hand
+over and what to pass, never which tool to call.
+
 *Locally:* a second agent is a sibling folder plus `handovers[]` (kit guide 09);
 agent APIs and connectors exist only in the cloud, so keep that boundary as a
 module (§3). *In the cloud:* `REST_API_BUILDING.md` builds the producer; consumers

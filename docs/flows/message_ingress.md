@@ -373,7 +373,7 @@ cannot resume — a `thread_key` reaching the service with it is a caller bug.
 `SessionSender.from_system_trigger` are both in `agent_schedule_scheduler.py` and both pass
 `trigger_kind="schedule"`; `trigger_kind="handover"` appears only in
 `backend/tests/unit/models/test_session_sender.py`. Runtime handover
-(`AgentService.create_agent_task`) creates an `InputTask` with `auto_execute=True` and goes through
+(`tasks_create` with an `assignee` → `InputTaskService.create_task_from_agent`; the older `AgentService.create_agent_task` path likewise) creates an `InputTask` with `auto_execute=True` and goes through
 `InputTaskService.execute_task`, i.e. **`task_executor`** with `integration_type="task"`.
 
 **`Session.email_thread_id` and `Session.sender_email` are dead write paths.** `create_session`

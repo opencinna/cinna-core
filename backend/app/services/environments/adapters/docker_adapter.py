@@ -237,6 +237,12 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             instance_core_dir,
             dirs_exist_ok=True
         )
+        # Platform protocol files (tasks schema, cinna-tasks skill) from the kit;
+        # template_core_dir is <templates>/app_core_base/core.
+        from app.services.environments.platform_protocol_files import install_platform_protocol
+        await asyncio.to_thread(
+            install_platform_protocol, instance_core_dir, template_core_dir.parents[1],
+        )
         logger.info(f"Core files updated from template")
 
         # Update knowledge files from template (add/update only, don't delete)

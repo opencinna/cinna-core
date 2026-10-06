@@ -305,52 +305,28 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                     except Exception as e:
                         logger.warning(f"Could not setup knowledge query tool: {e}")
 
-                # Add custom tools for conversation mode
+                # Add custom tools for conversation mode: the Cinna Task
+                # Protocol's `cinna` server (tools and schemas from
+                # core/protocols/tasks.schema.json). Replaces the former
+                # `agent_task` server; its names stay pre-approved only.
                 if mode == "conversation":
                     try:
-                        from ..tools.agent_task_add_comment import agent_task_add_comment
-                        from ..tools.agent_task_update_status import agent_task_update_status
-                        from ..tools.agent_task_create_task import agent_task_create_task
-                        from ..tools.agent_task_create_subtask import agent_task_create_subtask
-                        from ..tools.agent_task_get_details import agent_task_get_details
-                        from ..tools.agent_task_list_tasks import agent_task_list_tasks
-                        from ..tools.agent_task_handover_report import agent_task_handover_report
+                        from ..tools.cinna_tasks_claude import build_cinna_server
 
-                        agent_task_tools = [
-                            agent_task_add_comment,
-                            agent_task_update_status,
-                            agent_task_create_task,
-                            agent_task_create_subtask,
-                            agent_task_get_details,
-                            agent_task_list_tasks,
-                            agent_task_handover_report,
-                        ]
-
-                        agent_task_server = create_sdk_mcp_server(
-                            name="agent_task",
-                            version="1.0.0",
-                            tools=agent_task_tools
-                        )
+                        cinna_server, cinna_tool_names = build_cinna_server()
                         if options.mcp_servers:
-                            options.mcp_servers["agent_task"] = agent_task_server
+                            options.mcp_servers["cinna"] = cinna_server
                         else:
-                            options.mcp_servers = {"agent_task": agent_task_server}
-                        options.allowed_tools.append("mcp__agent_task__add_comment")
-                        options.allowed_tools.append("mcp__agent_task__update_status")
-                        options.allowed_tools.append("mcp__agent_task__create_task")
-                        options.allowed_tools.append("mcp__agent_task__create_subtask")
-                        options.allowed_tools.append("mcp__agent_task__get_details")
-                        options.allowed_tools.append("mcp__agent_task__list_tasks")
-                        options.allowed_tools.append("mcp__agent_task__handover_report")
+                            options.mcp_servers = {"cinna": cinna_server}
+                        options.allowed_tools.extend(cinna_tool_names)
                         logger.info(
-                            "Added agent task tools (add_comment, update_status, "
-                            "create_task, create_subtask, get_details, list_tasks, handover_report) "
-                            "for conversation mode"
+                            "Added cinna task tools (%s) for conversation mode",
+                            ", ".join(cinna_tool_names),
                         )
                     except ImportError as e:
-                        logger.warning(f"Could not import agent task tools: {e}")
+                        logger.warning(f"Could not import cinna task tools: {e}")
                     except Exception as e:
-                        logger.warning(f"Could not setup agent task tools: {e}")
+                        logger.warning(f"Could not setup cinna task tools: {e}")
 
                 # Load plugins for current mode
                 try:
@@ -367,7 +343,7 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
 
                 # Merge credential-derived MCP-provider servers (RD-5). Each is
                 # a remote http/sse MCP server keyed cinna_mcp_<credential_id>,
-                # so it never collides with the knowledge / agent_task SDK
+                # so it never collides with the knowledge / cinna SDK
                 # servers above. The bearer token (if any) rides in headers — the
                 # only place an mcp_provider token reaches the container.
                 try:

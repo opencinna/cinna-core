@@ -210,8 +210,8 @@ Position updates do not invalidate the chart query cache — they are treated as
 Teams participate directly in the task management system:
 
 - **Task prefix**: Each team has an optional `task_prefix` field (e.g., `"HR"`). When set, tasks created in the team's context use this string as the short-code prefix (`HR-1`, `HR-42`). When null, the default `"TASK"` prefix is used. The prefix is configurable in team settings (1–10 uppercase alphanumeric characters).
-- **Team-scoped tasks**: Tasks with `team_id` set are associated with a team. The task board can filter by `team_id` to show only a team's work. Team membership unlocks the `mcp__agent_task__create_subtask` tool.
-- **Subtask delegation topology**: When an agent calls `mcp__agent_task__create_subtask`, the backend enforces that a directed connection exists from the creating agent's node to the target node in the team graph. Disconnected or unknown target agents are rejected. This means the visual team chart is the authoritative delegation policy — draw a connection to permit handover.
+- **Team-scoped tasks**: Tasks with `team_id` set are associated with a team. The task board can filter by `team_id` to show only a team's work. Team membership makes the team's other nodes the targets `tasks_targets` lists (`node:<uuid>`), and lets `tasks_create` with a `parent` delegate a subtask to one of them.
+- **Subtask delegation topology**: When an agent creates a delegated subtask (`tasks_create` with `parent` and a team-node `assignee`), the backend enforces that a directed connection exists from the creating agent's node to the target node in the team graph. Disconnected or unknown target agents are rejected. This means the visual team chart is the authoritative delegation policy — draw a connection to permit handover.
 - **Connection prompts**: The `handover_prompt` on a connection is injected into the target agent's task context prompt explaining why they received the subtask and what context the parent agent provides.
 
 See [Input Tasks](../../application/input_tasks/input_tasks.md) for the full task collaboration model.

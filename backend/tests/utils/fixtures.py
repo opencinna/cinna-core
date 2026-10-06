@@ -90,6 +90,10 @@ CREATE_SESSION_TARGETS_AGENT = CREATE_SESSION_TARGETS_BASE + [
     # unpatched, that lands on the real engine and can't see the session the
     # test just created inside the rolled-back test transaction.
     "app.services.tasks.delegation_service.create_session",
+    # TaskProtocolService.reply() (tasks_reply follow-up into a child task's
+    # session) passes create_session to SessionService.send_session_message,
+    # for the same reason as DelegationService.reply() above.
+    "app.services.tasks.task_protocol_service.create_session",
     "app.services.agents.commands.files_command.create_session",
     "app.services.events.activity_service.create_session",
     "app.services.agent_api.agent_api_service.create_session",

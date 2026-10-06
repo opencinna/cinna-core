@@ -18,7 +18,7 @@ Controls which tools agent environments are permitted to use autonomously. Plugi
 **Pre-Allowed Tools** (no approval required)
 - Core SDK tools always permitted: `read`, `edit`, `glob`, `grep`, `bash`, `write`, `webfetch`, `websearch`, `todowrite`, `task`, `skill`, `askuserquestion`, and others
 - OpenCode-only built-ins also pre-allowed: `list`, `patch`
-- MCP bridge tools pre-allowed: knowledge query (`mcp__knowledge__*`) and agent task tools (`mcp__agent_task__*`). Both naming conventions are pre-allowed — Claude Code's `mcp__{server}__{tool}` and OpenCode's `{server}_{tool}` (e.g., `agent_task_add_comment`)
+- MCP bridge tools pre-allowed: knowledge query (`mcp__knowledge__*`) and the Cinna Task Protocol tools (`mcp__cinna__tasks_*`). Both naming conventions are pre-allowed — Claude Code's `mcp__{server}__{tool}` and OpenCode's `{server}_{tool}` (e.g., `cinna_tasks_report`); the former `agent_task` names stay pre-allowed, deprecated, for environments built before the protocol
 - Canonical set defined in `adapters/tool_name_registry.PRE_APPROVED_TOOLS` (inside agent-env); mirrored in `backend/app/services/sessions/message_service.py` (`PRE_ALLOWED_TOOLS`)
 - All tool names use the **unified lowercase convention**
 - **Not the same thing as Claude Code's own `checkPermissions()` behavior:** this list only gates whether the chat UI shows an "Approve Tools" button — it says nothing about whether the Claude Code CLI itself can run a tool unattended. `askuserquestion` and `exitplanmode` are both in this list (no approval button needed) yet the CLI hardcodes both as always requiring interactive permission approval regardless of this list or `allowed_tools`/`permission_mode` — see [Claude Code Interactive Tools](claude_code_interactive_tools.md).

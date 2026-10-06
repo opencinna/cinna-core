@@ -19,6 +19,13 @@ Design constraints this module exists to satisfy:
 * **Confined writes.** Only ``<home>/skills/`` is ever written, and only
   directories whose name already passed the skill-name regex. Symlinks are
   refused on both sides.
+* **Platform skills ride along.** The image's platform-owned skills
+  (``/app/core/skills/<name>/``, today only ``cinna-tasks``, the task protocol
+  skill) are projected into the same root beside the workspace's, with the
+  same marker, on every refresh. A workspace skill may not take a platform
+  name (``skill_manifest`` refuses it as ``reserved_name``), so the platform
+  copy is never replaced. Both trees feed the state hash, so an image upgrade
+  that changes the platform skill re-projects it.
 * **Never eat a user's own file.** A projected directory carries a
   ``.cinna_projected`` marker; pruning only removes directories that have it.
   Nothing places skills under ``~/.claude/skills`` today, but the guard costs
@@ -34,13 +41,23 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .skill_manifest import parse_skill_dir, scan_skills_root, tree_hash
+from .skill_manifest import (
+    PLATFORM_SKILL_NAMES,
+    PLATFORM_SKILL_SOURCE,
+    parse_skill_dir,
+    scan_skills_root,
+    tree_hash,
+)
 
 logger = logging.getLogger(__name__)
 
 #: Engine-visible skill root. ``/root/.claude`` is the writable
 #: ``claude_sessions/`` bind mount (every env template mounts it rw).
 DEFAULT_CLAUDE_HOME = "/root/.claude"
+
+#: Platform-owned skills shipped in the image (platform_protocol_files.py
+#: installs them). Read-only; only names in ``PLATFORM_SKILL_NAMES`` are taken.
+DEFAULT_PLATFORM_SKILLS_DIR = "/app/core/skills"
 
 #: Written into each projected directory so pruning can tell our copies from a
 #: skill a user placed under ``~/.claude/skills`` by hand.
@@ -223,6 +240,34 @@ def _prune_stale(projected_root: Path, keep: set[str]) -> list[str]:
     return removed
 
 
+def _platform_entries(platform_root: Path) -> list:
+    """The valid platform-owned skills under ``platform_root`` (empty if absent)."""
+    if not platform_root.is_dir():
+        return []
+    return [
+        entry
+        for entry in scan_skills_root(platform_root, source=PLATFORM_SKILL_SOURCE)
+        if entry.is_valid and entry.name in PLATFORM_SKILL_NAMES
+    ]
+
+
+def _combined_hash(skills_root: Path, platform_root: Path) -> str:
+    """The workspace tree hash, folded with the platform tree's when one exists.
+
+    Without a platform tree it is the workspace hash unchanged, so an image
+    without platform skills keeps the state it already latched.
+    """
+    workspace = tree_hash(skills_root)
+    if not platform_root.is_dir():
+        return workspace
+    payload = json.dumps([workspace, tree_hash(platform_root)], separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _source_root(name: str, skills_root: Path, platform_root: Path) -> Path:
+    return platform_root if name in PLATFORM_SKILL_NAMES else skills_root
+
+
 def _project_one(skills_root: Path, projected_root: Path, name: str) -> str | None:
     """Copy one skill into the projection. Returns an error message or None."""
     destination = projected_root / name
@@ -249,6 +294,7 @@ def _project_one(skills_root: Path, projected_root: Path, name: str) -> str | No
 def _retry_failed(
     result: ProjectionResult,
     skills_root: Path,
+    platform_root: Path,
     projected_root: Path,
     home_path: Path,
     tree: str,
@@ -275,11 +321,13 @@ def _retry_failed(
         # tree hash pins the tree it was applied to. If that pinning ever goes
         # away, this has to become cap-aware — a budget-excluded skill must not
         # get in through the retry door.
-        if not parse_skill_dir(skills_root / name).is_valid:
+        root = _source_root(name, skills_root, platform_root)
+        source = PLATFORM_SKILL_SOURCE if root is platform_root else "local"
+        if not parse_skill_dir(root / name, source=source).is_valid:
             # No longer a projectable skill — drop it from the retry list
             # rather than retrying something that can never land.
             continue
-        error = _project_one(skills_root, projected_root, name)
+        error = _project_one(root, projected_root, name)
         if error is None:
             landed.append(name)
         else:
@@ -318,8 +366,9 @@ def projection_failures(home: str | Path = DEFAULT_CLAUDE_HOME) -> set[str]:
 def refresh(
     workspace_dir: str | Path = "/app/workspace",
     home: str | Path = DEFAULT_CLAUDE_HOME,
+    platform_skills_dir: str | Path = DEFAULT_PLATFORM_SKILLS_DIR,
 ) -> ProjectionResult:
-    """Mirror the workspace's valid skills into the engine skill root.
+    """Mirror the workspace's valid skills, and the platform's, into the engine skill root.
 
     Returns a :class:`ProjectionResult` whose ``identity`` is the token callers
     latch per engine to decide whether that engine must rebuild its skill list.
@@ -331,8 +380,9 @@ def refresh(
     result = ProjectionResult()
     try:
         skills_root = Path(workspace_dir) / "skills"
+        platform_root = Path(platform_skills_dir)
         home_path = Path(home)
-        current_hash = tree_hash(skills_root)
+        current_hash = _combined_hash(skills_root, platform_root)
         result.hash = current_hash
 
         state = _read_state(home_path)
@@ -348,11 +398,15 @@ def refresh(
             # would otherwise latch "up to date" forever while the engine sees
             # nothing at all.
             return _retry_failed(
-                result, skills_root, projected_root, home_path, current_hash, state
+                result, skills_root, platform_root, projected_root, home_path,
+                current_hash, state,
             )
 
         entries = scan_skills_root(skills_root)
-        valid = [entry for entry in entries if entry.is_valid]
+        platform = _platform_entries(platform_root)
+        # A workspace skill with a platform name already failed validation
+        # (reserved_name); the platform copy is the one projected.
+        valid = [entry for entry in entries if entry.is_valid] + platform
         expected = {entry.name for entry in valid}
 
         if not valid and not projected_root.is_dir():
@@ -380,7 +434,8 @@ def refresh(
         landed: list[str] = []
         failed: list[str] = []
         for entry in valid:
-            error = _project_one(skills_root, projected_root, entry.name)
+            root = platform_root if entry.source == PLATFORM_SKILL_SOURCE else skills_root
+            error = _project_one(root, projected_root, entry.name)
             if error is None:
                 landed.append(entry.name)
             else:
@@ -419,6 +474,7 @@ def refresh(
 
 __all__ = [
     "DEFAULT_CLAUDE_HOME",
+    "DEFAULT_PLATFORM_SKILLS_DIR",
     "PROJECTION_MARKER",
     "STATE_FILENAME",
     "ProjectionResult",

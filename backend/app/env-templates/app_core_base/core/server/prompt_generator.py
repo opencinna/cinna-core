@@ -4,7 +4,12 @@ import os
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any, List, Tuple
 
-from .skill_manifest import scan_skills_root
+from .skill_manifest import PLATFORM_SKILL_NAMES, PLATFORM_SKILL_SOURCE, scan_skills_root
+from .skills_projection import DEFAULT_PLATFORM_SKILLS_DIR
+
+# The platform-owned task protocol skill (projected by skills_projection).
+PLATFORM_TASKS_SKILL = "cinna-tasks"
+PLATFORM_TASKS_SKILL_VERSION = "1"
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,31 @@ _PERSONAL_MEMORY_TRUNCATION_NOTE = (
 )
 
 
+def build_handover_prompt(handovers: list) -> str:
+    """The configured handovers as a prompt section: who, which target, when.
+
+    Kept identical to the backend's ``AgentService.build_handover_prompt``
+    (the backend cannot import env templates). Each pair's user-authored
+    ``prompt`` is its trigger, verbatim; how to delegate is the cinna-tasks
+    skill's business.
+    """
+    entries = [h for h in handovers if isinstance(h, dict) and h.get("id")]
+    if not entries:
+        return ""
+    lines = [
+        "## Configured handovers",
+        "",
+        "When a trigger below is met, hand the work over with `tasks_create`, "
+        "the target as `assignee` (`tasks_targets` lists it too).",
+    ]
+    for h in entries:
+        lines += ["", f"- {h.get('name', '')} (target `agent:{h['id']}`)"]
+        trigger = (h.get("prompt") or "").strip()
+        if trigger:
+            lines.append(f"  Trigger: {trigger}")
+    return "\n".join(lines)
+
+
 class PromptGenerator:
     """
     Handles prompt generation for different agent modes.
@@ -92,6 +122,8 @@ class PromptGenerator:
         self.workspace_dir = Path(workspace_dir)
         self.supports_skills = supports_skills
         self.active_plugins_for_mode = active_plugins_for_mode
+        # Platform-owned skills (cinna-tasks), listed by the fallback block.
+        self.platform_skills_dir = Path(DEFAULT_PLATFORM_SKILLS_DIR)
 
         # Load static prompts that don't change during runtime
         self.building_agent_prompt = self._load_building_agent_prompt()
@@ -280,7 +312,13 @@ class PromptGenerator:
             return None
 
     def _load_handover_prompt(self) -> Optional[str]:
-        """Load handover prompt from docs/agent_handover_config.json if exists."""
+        """The configured handovers from docs/agent_handover_config.json, as prompt data.
+
+        Rendered from the ``handovers`` list (target, name, the user-authored
+        trigger) rather than the stored ``handover_prompt`` prose, so a config
+        written by an older backend (which described the retired
+        ``create_agent_task`` tool) still yields the current text.
+        """
         config_path = self.workspace_dir / "docs" / "agent_handover_config.json"
         if not config_path.exists():
             logger.debug(f"agent_handover_config.json not found at {config_path}")
@@ -288,16 +326,15 @@ class PromptGenerator:
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            handover_prompt = config.get("handover_prompt", "")
-            if handover_prompt.strip():
-                logger.info(f"Loaded handover prompt ({len(handover_prompt)} chars)")
-                return handover_prompt.strip()
-            else:
-                logger.debug("handover_prompt is empty in agent_handover_config.json")
-                return None
         except Exception as e:
             logger.error(f"Failed to load agent_handover_config.json: {e}")
             return None
+        handover_prompt = build_handover_prompt(config.get("handovers") or [])
+        if handover_prompt:
+            logger.info(f"Loaded handover prompt ({len(handover_prompt)} chars)")
+            return handover_prompt
+        logger.debug("No handovers configured in agent_handover_config.json")
+        return None
 
     def _load_current_user_personalization(self) -> Dict[str, Any]:
         """Read the current_user.credential_data block from credentials.json.
@@ -437,151 +474,69 @@ class PromptGenerator:
     @staticmethod
     def build_task_context_section(session_context: dict | None) -> str | None:
         """
-        Build a system prompt section with the agent's current task context.
+        The task context block: data only, never instructions.
 
-        Reads task fields from session_context (injected by backend) and generates
-        a human-readable section covering:
-        - Task identity (short_code, title, description, status, priority)
-        - Task origin (who created it, parent task if subtask)
-        - Reporting instructions (use add_comment, status is auto-managed)
-        - Team context (team name, role, downstream delegation targets) — team agents only
-        - Delegation instructions — team agents with downstream connections only
-        - Completion protocol
+        The shape is tasks.schema.json ``context_block``; the platform skill
+        ``cinna-tasks`` explains every line, so nothing here tells the agent
+        which tool to call. The backend sends the facts as
+        ``session_context["task_protocol"]`` (here, current task with
+        ``report_required``, chain depth, open delegations, ready tasks); an
+        older backend that sends only ``task_short_code`` / ``task_title`` gets
+        the current-task line with ``report required: no``. Counts appear only
+        while nonzero.
 
-        Args:
-            session_context: Dict from session_state["session_context"], or None.
+        A subtask received over a team connection adds that connection's
+        user-authored prompt verbatim under "Why you received this:".
 
         Returns:
-            Markdown section string, or None if session has no linked task.
+            The block, or None when there is no current task and nothing to count.
         """
         if not session_context:
             return None
 
-        task_short_code = session_context.get("task_short_code")
-        if not task_short_code:
+        protocol = session_context.get("task_protocol") or {}
+        current = protocol.get("current_task")
+        if current is None and session_context.get("task_short_code"):
+            current = {
+                "ref": session_context["task_short_code"],
+                "title": session_context.get("task_title", ""),
+                "report_required": False,
+            }
+
+        chain_depth = int(protocol.get("chain_depth") or 0)
+        open_delegations = int(protocol.get("open_delegations") or 0)
+        waiting_on_user = int(protocol.get("waiting_on_user") or 0)
+        ready_tasks = int(protocol.get("ready_tasks") or 0)
+        if not current and not (chain_depth or open_delegations or ready_tasks):
             return None
 
-        task_title = session_context.get("task_title", "")
-        task_description = session_context.get("task_description", "")
-        task_priority = session_context.get("task_priority", "normal")
-        task_status = session_context.get("task_status", "in_progress")
-
-        # Creator info
-        created_by_name = session_context.get("task_created_by_name")
-        created_by_type = session_context.get("task_created_by_type")  # "user" | "agent"
-
-        # Parent task info (for subtasks)
-        parent_short_code = session_context.get("parent_task_short_code")
-        parent_title = session_context.get("parent_task_title", "")
-        parent_description = session_context.get("parent_task_description", "")
-        parent_agent_name = session_context.get("parent_assigned_agent_name")
-        parent_node_name = session_context.get("parent_node_name")
-        delegation_reason = session_context.get("delegation_connection_prompt")  # connection_prompt from parent → this node
-
-        # Team context
-        team_name = session_context.get("team_name")
-        node_name = session_context.get("node_name")
-        downstream_members: list[dict] = session_context.get("downstream_team_members") or []
-
-        lines = ["\n\n---\n"]
-
-        # --- Current task ---
-        lines.append(f"## Your Current Task: {task_short_code}")
-        if task_title:
-            lines.append(f"Title: {task_title}")
-        lines.append(f"Priority: {task_priority}")
-        lines.append(f"Status: {task_status}")
-
-        if task_description:
-            lines.append(f"\nDescription:\n{task_description}")
-
-        # --- Task origin (standalone tasks only — subtasks use the parent task block below) ---
-        if created_by_name and created_by_type and not parent_short_code:
-            lines.append(f"\n## Task Origin")
-            lines.append(f"This task was created by: {created_by_name} ({created_by_type})")
-            if created_by_type == "agent" and delegation_reason and not parent_short_code:
-                lines.append(f"Context: {delegation_reason}")
-
-        # --- Team context (at top, before reporting) ---
-        if team_name and node_name:
-            lines.append(f"\n## Team Context")
-            lines.append(f"Team: {team_name}")
-            lines.append(f"Your Role: {node_name} (in the {team_name} team)")
-
-        # --- Parent task context (subtasks only) ---
-        if parent_short_code:
-            lines.append(f"\n## Task Origin")
-            lines.append(f'Parent task: {parent_short_code} — "{parent_title}"')
-            if parent_agent_name:
-                node_info = f" ({parent_node_name})" if parent_node_name else ""
-                lines.append(f"Delegated by: {parent_agent_name}{node_info}")
-            if delegation_reason:
-                lines.append(f"Why you received this: {delegation_reason}")
-            if parent_description:
-                lines.append(f"Parent description: {parent_description}")
-            if parent_agent_name:
-                lines.append(
-                    f"\nYour job is to complete this subtask and report results. "
-                    f"The delegating agent ({parent_agent_name}) will aggregate your "
-                    f"findings with other subtask results."
-                )
-
-        # --- Reporting instructions (all agents) ---
-        lines.append(f"\n## Reporting Your Work")
-        lines.append(f"- Use `mcp__agent_task__add_comment` to post findings, results, and deliverables")
-        lines.append(f"- Attach files to your comments using the `files` parameter")
-        lines.append(f"- Your task status is managed automatically:")
-        lines.append(f"  - When you start working: status is already \"in_progress\"")
-        lines.append(f"  - When you finish: status auto-completes when your session ends")
-        lines.append(
-            f"  - Use `mcp__agent_task__update_status(status=\"blocked\", reason=\"...\")` "
-            f"only if you're stuck and need external help"
-        )
-
-        # --- Team delegation (team agents only) ---
-        if team_name:
-            if downstream_members:
-                lines.append(f"\n## Team Members You Can Delegate To")
-                for member in downstream_members:
-                    target_node = member.get("node_name", "")
-                    target_agent = member.get("agent_name", "")
-                    target_desc = member.get("agent_description", "")
-                    connection_prompt = member.get("connection_prompt", "")
-
-                    member_line = f"- **{target_node}** ({target_agent})"
-                    if target_desc:
-                        member_line += f": {target_desc}"
-                    lines.append(member_line)
-                    if connection_prompt:
-                        lines.append(f"  Connection context: \"{connection_prompt}\"")
-
-                lines.append(f"\n## Delegation")
-                lines.append(
-                    f"- If your task is complex or spans multiple responsibilities, "
-                    f"use `mcp__agent_task__create_subtask` to delegate parts to team members listed above"
-                )
-                lines.append(f"- Each subtask you create will be automatically assigned and executed by the target agent")
-                lines.append(f"- Monitor subtask progress with `mcp__agent_task__get_details`")
-                lines.append(f"- You'll receive notifications when subtasks complete")
-                lines.append(f"- Read subtask comments and attachments to gather results")
-                lines.append(f"- Aggregate all subtask results before completing your own task")
-            else:
-                lines.append(
-                    f"\nYou are a leaf node in the team — you execute work directly rather than delegating."
-                )
-
-        # --- Completion protocol ---
-        lines.append(f"\n## Completion Protocol")
-        lines.append(f"1. Post comments as you work — share findings, intermediate results")
-        if downstream_members:
-            lines.append(f"2. If you delegated subtasks: wait for all to complete, read their comments, aggregate")
-            lines.append(f"3. Post a final summary comment with your complete results")
-            lines.append(f"4. Attach any deliverable files")
-            lines.append(f"5. Your task will auto-complete when your session ends successfully")
+        lines = [
+            "\n\n---\n",
+            "Cinna task context (not part of the conversation):",
+            f"- here: {protocol.get('here') or 'cinna-core agent'}",
+        ]
+        if current:
+            title = (current.get("title") or "").replace('"', "'")
+            required = "yes" if current.get("report_required") else "no"
+            lines.append(f'- current task: {current.get("ref")} "{title}" (report required: {required})')
         else:
-            lines.append(f"2. Post a final summary comment with your complete results")
-            lines.append(f"3. Attach any deliverable files")
-            lines.append(f"4. Your task will auto-complete when your session ends successfully")
+            lines.append("- current task: none")
+
+        counts = []
+        if chain_depth:
+            counts.append(f"chain depth: {chain_depth}")
+        if open_delegations:
+            waiting = f" ({waiting_on_user} waiting on the user)" if waiting_on_user else ""
+            counts.append(f"open delegations: {open_delegations}{waiting}")
+        if ready_tasks:
+            counts.append(f"ready tasks: {ready_tasks}")
+        if counts:
+            lines.append("- " + " · ".join(counts))
+        lines.append(f"- tasks skill: {PLATFORM_TASKS_SKILL} v{PLATFORM_TASKS_SKILL_VERSION}")
+
+        why = (session_context.get("delegation_connection_prompt") or "").strip()
+        if current and why:
+            lines += ["", "Why you received this:", why]
 
         return "\n".join(lines)
 
@@ -685,22 +640,40 @@ class PromptGenerator:
             ]
         except Exception as e:  # noqa: BLE001 — never break prompt generation
             logger.warning(f"Could not scan agent skills for the prompt: {e}")
-            return None
+            entries = []
+        try:
+            platform_entries = [
+                entry
+                for entry in scan_skills_root(
+                    self.platform_skills_dir, source=PLATFORM_SKILL_SOURCE
+                )
+                if entry.is_valid and entry.name in PLATFORM_SKILL_NAMES
+            ] if self.platform_skills_dir.is_dir() else []
+        except Exception as e:  # noqa: BLE001 — never break prompt generation
+            logger.warning(f"Could not scan platform skills for the prompt: {e}")
+            platform_entries = []
 
-        if not entries:
+        if not entries and not platform_entries:
             return None
 
         lines = [
             "\n\n---\n\n## Agent Skills\n",
             "This agent carries the skills below. Each is a folder under "
             "`./skills/` with a `SKILL.md` describing how to perform the task.",
-            "**Read `skills/<name>/SKILL.md` before using a skill** — this list "
-            "is only the index; the instructions live in the file.\n",
+            "**Read `skills/<name>/SKILL.md` before using a skill** (a platform "
+            "skill's file is at the path shown) — this list is only the index; "
+            "the instructions live in the file.\n",
         ]
         for entry in entries:
             lines.append(f"- **{entry.name}** — {entry.description}")
+        for entry in platform_entries:
+            skill_md = self.platform_skills_dir / entry.name / "SKILL.md"
+            lines.append(f"- **{entry.name}** (`{skill_md}`) — {entry.description}")
 
-        logger.info(f"Included agent skills fallback block ({len(entries)} skill(s))")
+        logger.info(
+            f"Included agent skills fallback block "
+            f"({len(entries) + len(platform_entries)} skill(s))"
+        )
         return "\n".join(lines)
 
     def _get_skill_scripts_section(self) -> Optional[str]:

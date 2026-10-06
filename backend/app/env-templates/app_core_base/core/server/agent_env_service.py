@@ -2979,7 +2979,7 @@ class AgentEnvService:
             ``McpHttpServerConfig`` / ``McpSSEServerConfig``)
 
         Keyed by the credential-namespaced ``cinna_mcp_<id>`` so it never
-        collides with the knowledge / agent_task bridges or plugin servers.
+        collides with the knowledge / cinna bridges or plugin servers.
         """
         if mode not in ("conversation", "building"):
             return {}

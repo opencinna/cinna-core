@@ -27,12 +27,39 @@ from app.services.tasks.input_task_service import (
 # travels back to the requester.
 HOW_TO_REPORT = (
     "\n\n---\nThis task was delegated to you by another agent, which is waiting for a structured result. "
+    "When the work is finished, call `tasks_report` once with status `done` (or `failed`), "
+    "a one-line `summary`, and the full answer in `body`. If you cannot continue without an answer, "
+    "call `tasks_report` with status `blocked` and your `question` — use audience `requester` when "
+    "the requesting agent can answer, `user` when only a person can — then end your turn; the reply "
+    "arrives in this same conversation. Do not only answer in chat: the requester reads the report."
+)
+
+# Appended to the first message of any other task the report rule applies to
+# (own-queue, triggered, team or agent-created work) on an environment at task
+# protocol >= 1. Not for delegations: they get HOW_TO_REPORT.
+REPORT_REQUIRED_FOOTER = (
+    "\n\n---\nThis task needs a report. When the work is finished, call `tasks_report` once with "
+    "status `done` (or `failed`) and a one-line `summary`. If you cannot continue without an answer, "
+    "call `tasks_report` with status `blocked` and your `question`, then end your turn. Without a "
+    "report the task is left waiting as \"Ended without reporting\"."
+)
+
+# HOW_TO_REPORT for an executor environment at task protocol 0: it has only the
+# retired agent_task tools, whose report tool is `handover_report`.
+LEGACY_HOW_TO_REPORT = (
+    "\n\n---\nThis task was delegated to you by another agent, which is waiting for a structured result. "
     "When the work is finished, call the `handover_report` tool once with status `done` (or `failed`), "
     "a one-line `summary`, and the full answer in `body`. If you cannot continue without an answer, "
     "call `handover_report` with status `blocked` and your `question` — use audience `requester` when "
     "the requesting agent can answer, `user` when only a person can — then end your turn; the reply "
     "arrives in this same conversation. Do not only answer in chat: the requester reads the report."
 )
+
+
+def how_to_report(task_protocol_version: int) -> str:
+    """The delegated-task footer for an executor environment at this protocol version."""
+    return HOW_TO_REPORT if task_protocol_version >= 1 else LEGACY_HOW_TO_REPORT
+
 
 # Report status -> task status.
 STATUSES = {
@@ -78,6 +105,7 @@ class DelegationService:
         owner_id: UUID | None = None,
         changed_by_agent_id: UUID | None = None,
         changed_by_user_id: UUID | None = None,
+        require_delegation: bool = True,
     ) -> DelegationResultPublic:
         """Store a structured report and move the task to the matching status.
 
@@ -85,6 +113,9 @@ class DelegationService:
         handed to an external executor, and already picked up by it, accepts a
         result that does not come from a platform session. ``owner_id``, when
         given, scopes the task to that owner: anyone else gets 404.
+        ``require_delegation=False`` is the task protocol's ``tasks_report``:
+        any task an agent is working on takes a structured report, with the
+        same idempotency and status rules a delegation has.
         """
         if require_external_executor and owner_id is None:
             # The owner route's only ownership check is the owner_id scope below.
@@ -94,7 +125,7 @@ class DelegationService:
         task = _lock_task(db_session, task_id)
         if not task or (owner_id is not None and task.owner_id != owner_id):
             raise TaskNotFoundError()
-        if not task.delegation_metadata:
+        if require_delegation and not task.delegation_metadata:
             raise TaskNotFoundError('This task is not a delegation')
         if session_id and task.session_id and session_id != task.session_id:
             raise ValidationError('This report belongs to an earlier execution')
@@ -135,6 +166,17 @@ class DelegationService:
                 db_session, task, InputTaskStatus.IN_PROGRESS, reason='Delegation resumed', **audit,
             )
             transitions.append(from_status)
+        # A task not yet started (an own-queue task in new/open that the agent
+        # simply did) walks the legal path to the reported status; its
+        # intermediate steps are in_progress, which _emit_transitions assumes.
+        if task.status in (InputTaskStatus.NEW, InputTaskStatus.OPEN):
+            path = InputTaskService.status_path(task.status, target) or [target]
+            for step in path[:-1]:
+                from_status = InputTaskService._apply_status_transition(
+                    db_session, task, step, reason='Started by report', **audit,
+                )
+                if from_status is not None:
+                    transitions.append(from_status)
         from_status = InputTaskService._apply_status_transition(
             db_session, task, target, reason=f'Delegation report: {data.summary}', **audit,
         )
@@ -158,11 +200,17 @@ class DelegationService:
     @staticmethod
     async def reply(
         db_session: DBSession, user_id: UUID, task_id: UUID, data: DelegationReply,
+        *,
+        require_delegation: bool = True,
     ) -> DelegationReplyResult:
-        """Deliver the owner's answer to a blocked report into its task session."""
+        """Deliver the owner's answer to a blocked report into its task session.
+
+        ``require_delegation=False`` is the task protocol's ``tasks_reply``: a
+        blocked ``tasks_report`` on any task is answered the same way.
+        """
         # Serialize duplicate replies before any streaming side effect.
         task = _lock_task(db_session, task_id)
-        if not task or task.owner_id != user_id or not task.delegation_metadata:
+        if not task or task.owner_id != user_id or (require_delegation and not task.delegation_metadata):
             raise TaskNotFoundError()
         result = dict(task.delegation_result or {})
         if result.get('id') != str(data.result_id):

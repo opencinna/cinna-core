@@ -35,6 +35,8 @@ from app.models import (
 from app.models.events.event import EventType
 from app.models.files.file_upload import FileUpload, FileUploadPublic, InputTaskFile
 from app.models.agentic_teams.agentic_team import AgenticTeamNode
+from app.models.environments.environment import AgentEnvironment
+from app.models.tasks.task_trigger import TaskTrigger
 from app.core.db import create_session
 from app.utils import create_task_with_error_logging
 from app.services.sessions.session_service import SessionService
@@ -46,6 +48,24 @@ from app.services.events.event_service import event_service
 from app.services.ai_functions.ai_functions_service import AIFunctionsService
 
 logger = logging.getLogger(__name__)
+
+# System comment reason when a protocol environment's session ends on delegated
+# or automated work without a final tasks_report (see requires_report).
+ENDED_WITHOUT_REPORTING = "Ended without reporting"
+
+# How far chain_depth follows origins when nothing is recorded; the cap is 2.
+CHAIN_DEPTH_WALK_LIMIT = 5
+
+# Session outcome (SESSION_STATE_UPDATED / stream end) -> result packet status,
+# used when the executor stored no tasks_report.
+RESULT_STATUS_BY_SESSION_STATE = {
+    "completed": "done",
+    "needs_input": "blocked",
+    "error": "failed",
+}
+# A result packet's body is a turn in the requester's conversation; the rest
+# stays on the task (tasks_get).
+RESULT_PACKET_BODY_LIMIT = 8000
 
 
 class InputTaskError(Exception):
@@ -697,12 +717,21 @@ class InputTaskService:
             user_id=user_id,
             data=data,
         )
+        return task, InputTaskService._auto_refine(db_session, user_id, task, data)
 
+    @staticmethod
+    def _auto_refine(
+        db_session: DBSession,
+        user_id: UUID,
+        task: InputTask,
+        data: InputTaskCreate,
+    ) -> str:
+        """Refine a just-created task for its agent; returns the message to send."""
         message_to_send = data.original_message
 
         # External clients own their mirror's description and execution.
         if task.external_executor:
-            return task, task.current_description
+            return task.current_description
 
         # Auto-refine if agent has refiner_prompt
         if data.selected_agent_id:
@@ -747,16 +776,22 @@ class InputTaskService:
                     logger.warning(f"Auto-refine failed for task {task.id}: {e}")
                     # Continue with original message if refinement fails
 
-        return task, message_to_send
+        return message_to_send
 
     @staticmethod
     async def create_task_from_agent(
         db_session: DBSession,
         user_id: UUID,
         data,  # AgentTaskCreate
-    ) -> tuple[InputTask, str | None]:
+        *,
+        with_created: bool = False,
+    ) -> tuple[InputTask, str | None] | tuple[InputTask, str | None, bool]:
         """
         Create a task from an agent MCP tool call.
+
+        With ``with_created=True`` the result gains a third item: False when a
+        keyed create (``external_ref``) matched an existing row — a retry or
+        the loser of a concurrent insert — and nothing was started.
 
         Resolves session context, agent name, and team inheritance, then creates
         and optionally auto-executes the task.
@@ -800,7 +835,21 @@ class InputTaskService:
         assigned_node_id = None
         resolved_name = None
 
-        if data.assigned_to:
+        if getattr(data, "assigned_agent_id", None):
+            # Exact assignee from a task-protocol target: no name lookup.
+            agent = db_session.get(Agent, data.assigned_agent_id)
+            if not agent or agent.owner_id != user_id:
+                raise ValidationError("Assignee not found")
+            selected_agent_id = agent.id
+            resolved_name = agent.name
+            node_id = getattr(data, "assigned_node_id", None)
+            if node_id:
+                node = db_session.get(_AgenticTeamNode, node_id)
+                if not node or node.team_id != team_id or node.agent_id != agent.id:
+                    raise ValidationError("Assignee is not a member of this task's team")
+                assigned_node_id = node.id
+                resolved_name = node.name
+        elif data.assigned_to:
             if team_id:
                 # Team context: try node name first
                 target_node = db_session.exec(
@@ -831,25 +880,46 @@ class InputTaskService:
         if data.description:
             message = f"{data.title}\n\n{data.description}"
 
+        # Own queue (tasks_create without an assignee): assigned to the
+        # calling agent but never started here; a person runs it.
+        own_queue = bool(getattr(data, "own_queue", False))
+        start_now = bool(selected_agent_id) and not own_queue
+
         task_data = InputTaskCreate(
             original_message=message,
             selected_agent_id=selected_agent_id,
             user_workspace_id=user_workspace_id,
             agent_initiated=True,
-            auto_execute=bool(selected_agent_id),
+            auto_execute=start_now,
             source_session_id=source_session_id,
             title=data.title,
             priority=data.priority,
             team_id=team_id,
             assigned_node_id=assigned_node_id,
+            external_ref=getattr(data, "external_ref", None),
         )
 
-        if selected_agent_id:
-            task, message_to_send = InputTaskService.create_task_with_auto_refine(
-                db_session=db_session,
-                user_id=user_id,
-                data=task_data,
+        if task_data.external_ref:
+            # A keyed create (tasks_create with an id): the row is created or
+            # matched in one step, and a matched row — a retry, or a concurrent
+            # call that lost the insert race — fires none of the side effects.
+            task, created = InputTaskService.create_task_idempotent(
+                db_session=db_session, user_id=user_id, data=task_data,
             )
+            if not created:
+                return (task, resolved_name, False) if with_created else (task, resolved_name)
+
+        if start_now:
+            if task_data.external_ref:
+                message_to_send = InputTaskService._auto_refine(
+                    db_session, user_id, task, task_data,
+                )
+            else:
+                task, message_to_send = InputTaskService.create_task_with_auto_refine(
+                    db_session=db_session,
+                    user_id=user_id,
+                    data=task_data,
+                )
 
             # Auto-execute: create session and send message
             success, new_session, error = await InputTaskService.execute_task(
@@ -878,18 +948,22 @@ class InputTaskService:
                 )
         else:
             # Inbox task (no agent assigned)
-            task = InputTaskService.create_task(
-                db_session=db_session,
-                user_id=user_id,
-                data=task_data,
-            )
+            if not task_data.external_ref:
+                task = InputTaskService.create_task(
+                    db_session=db_session,
+                    user_id=user_id,
+                    data=task_data,
+                )
 
             if source_session_id:
                 MessageService.create_message(
                     session=db_session,
                     session_id=source_session_id,
                     role="system",
-                    content=f"Task {task.short_code} created in inbox",
+                    content=(
+                        f"Task {task.short_code} added to {resolved_name}'s queue"
+                        if own_queue else f"Task {task.short_code} created in inbox"
+                    ),
                     message_metadata={
                         "task_created": True,
                         "task_id": str(task.id),
@@ -897,7 +971,7 @@ class InputTaskService:
                     },
                 )
 
-        return task, resolved_name
+        return (task, resolved_name, True) if with_created else (task, resolved_name)
 
     @staticmethod
     async def execute_task(
@@ -957,10 +1031,26 @@ class InputTaskService:
             task_name=session_title,
         )
 
+        # Report footer, after the title is derived so the session is still
+        # named after the work. Chosen by the executor environment's protocol
+        # version: a delegation gets its contract footer at any version; any
+        # other task the report rule applies to (requires_report would say yes
+        # for a run on this environment) gets the tasks_report footer at >= 1.
+        executor_env = (
+            db_session.get(AgentEnvironment, agent.active_environment_id)
+            if agent.active_environment_id else None
+        )
+        executor_version = executor_env.task_protocol_version if executor_env else 0
         if task.delegation_metadata:
-            # After the title is derived, so the session is still named after the work.
-            from app.services.tasks.delegation_service import HOW_TO_REPORT
-            content = f"{content}{HOW_TO_REPORT}"
+            from app.services.tasks.delegation_service import how_to_report
+            content = f"{content}{how_to_report(executor_version)}"
+        elif (
+            executor_version >= 1
+            and not InputTaskService.has_final_report(task)
+            and InputTaskService.is_automated(db_session, task)
+        ):
+            from app.services.tasks.delegation_service import REPORT_REQUIRED_FOOTER
+            content = f"{content}{REPORT_REQUIRED_FOOTER}"
 
         try:
             ingestion = await ChannelIngestionService.ingest_inbound_message(
@@ -1610,6 +1700,85 @@ class InputTaskService:
         return InputTaskStatus.IN_PROGRESS
 
     @staticmethod
+    def has_final_report(task: InputTask) -> bool:
+        """Whether the stored structured result says how the work ended.
+
+        ``done``/``failed``, or a ``blocked`` question not yet answered. An
+        ``in_progress`` report, or a ``blocked`` one whose reply was delivered
+        (the agent resumed), says nothing about the end of the run.
+        """
+        result = task.delegation_result or {}
+        return result.get('status') in ('done', 'failed') or (
+            result.get('status') == 'blocked' and result.get('reply_state') != 'delivered'
+        )
+
+    @staticmethod
+    def chain_depth(db_session: DBSession, task: InputTask) -> int:
+        """How many agent hand-offs led to ``task`` (0 for work a person started).
+
+        The deeper of the delegation contract's ``depth`` and the recorded
+        ``chain_depth``. When neither is set (rows from the older routes, or
+        chains created before the column), one per hop to the originating task
+        (``parent_task_id``, or the task of the conversation that created it),
+        each hop using this same rule. One helper for the context block and the
+        tasks_create depth limit, so the two cannot diverge.
+        """
+        depth = 0
+        hops = 0
+        current = task
+        seen = {task.id}
+        while hops <= CHAIN_DEPTH_WALK_LIMIT:
+            contract = (current.delegation_metadata or {}).get("depth")
+            recorded = max(contract if isinstance(contract, int) else 0, current.chain_depth or 0)
+            if recorded:
+                return hops + recorded
+            if not (current.source_session_id or current.parent_task_id):
+                return hops
+            hops += 1
+            origin_id = current.parent_task_id
+            if not origin_id and current.source_session_id:
+                source = db_session.get(Session, current.source_session_id)
+                origin_id = source.source_task_id if source else None
+            origin = db_session.get(InputTask, origin_id) if origin_id else None
+            if not origin or origin.id in seen:
+                return hops
+            seen.add(origin.id)
+            current = origin
+        return hops
+
+    @staticmethod
+    def is_automated(db_session: DBSession, task: InputTask) -> bool:
+        """Whether another agent or an automation handed the task over (report rule)."""
+        return bool(
+            task.delegation_metadata
+            or task.agent_initiated
+            or task.source_session_id
+            or task.created_by_node_id
+        ) or db_session.exec(
+            select(TaskTrigger.id).where(TaskTrigger.task_id == task.id)
+        ).first() is not None
+
+    @staticmethod
+    def requires_report(db_session: DBSession, task: InputTask) -> bool:
+        """Whether a session ending without a final report must block the task.
+
+        True only when the task's environment advertises the task protocol
+        (``tasks_report`` available, version >= 1), the task was handed to the
+        agent by another agent or an automation, and no final report is stored.
+        An ordinary user-opened task, or one run on an older image, keeps
+        session-end auto-completion.
+        """
+        if InputTaskService.has_final_report(task):
+            return False
+        if not InputTaskService.is_automated(db_session, task):
+            return False
+        session = db_session.get(Session, task.session_id) if task.session_id else None
+        if not session or not session.environment_id:
+            return False
+        environment = db_session.get(AgentEnvironment, session.environment_id)
+        return bool(environment and environment.task_protocol_version >= 1)
+
+    @staticmethod
     def sync_task_status_from_sessions(
         db_session: DBSession,
         task_id: UUID,
@@ -1650,10 +1819,7 @@ class InputTaskService:
         # A blocked result whose reply was delivered no longer holds the task:
         # the report keeps status 'blocked' verbatim (so a retried report still
         # matches), and reply progress lives in reply_state.
-        result = task.delegation_result or {}
-        if result.get('status') in ('done', 'failed') or (
-            result.get('status') == 'blocked' and result.get('reply_state') != 'delivered'
-        ):
+        if InputTaskService.has_final_report(task):
             return None
 
         # Compute or use forced status
@@ -1664,6 +1830,23 @@ class InputTaskService:
         if not new_status or new_status == task.status:
             # No change needed
             return None
+
+        # Report rule: on a protocol environment, delegated or automated work
+        # is settled by the agent's tasks_report, never by the session ending.
+        if (
+            not force_status
+            and new_status == InputTaskStatus.COMPLETED
+            and InputTaskService.requires_report(db_session, task)
+        ):
+            if task.status != InputTaskStatus.IN_PROGRESS:
+                return None
+            return InputTaskService.update_task_status(
+                db_session=db_session,
+                task_id=task.id,
+                new_status=InputTaskStatus.BLOCKED,
+                changed_by_system=True,
+                reason=ENDED_WITHOUT_REPORTING,
+            )
 
         # Update task status
         return InputTaskService.update_status(
@@ -1761,17 +1944,24 @@ class InputTaskService:
                     and task.auto_feedback
                     and not task.feedback_delivered
                 ):
+                    # Used only when the executor left no report; a stored
+                    # report supplies its own summary. Worded for the tools
+                    # the requester's environment has.
                     short_code = task.short_code or str(task.id)[:8]
-                    agent_name = "Agent"
-                    if task.selected_agent_id:
-                        agent = db.get(Agent, task.selected_agent_id)
-                        if agent:
-                            agent_name = agent.name
-
-                    summary = (
-                        f"{short_code} completed by {agent_name}. "
-                        f"Read results with mcp__agent_task__get_details tool (task=\"{short_code}\")."
-                    )
+                    if InputTaskService.session_protocol_version(db, task.source_session_id) >= 1:
+                        summary = (
+                            f"Finished without a report; tasks_get {short_code} shows its comments and files."
+                        )
+                    else:
+                        agent_name = "Agent"
+                        if task.selected_agent_id:
+                            agent = db.get(Agent, task.selected_agent_id)
+                            if agent:
+                                agent_name = agent.name
+                        summary = (
+                            f"{short_code} completed by {agent_name}. "
+                            f"Read results with mcp__agent_task__get_details tool (task=\"{short_code}\")."
+                        )
                     await InputTaskService.deliver_feedback_to_source(
                         db, task, "completed", summary
                     )
@@ -1929,6 +2119,82 @@ class InputTaskService:
             logger.error(f"Error in InputTaskService.handle_session_state_updated: {e}", exc_info=True)
 
     @staticmethod
+    def session_protocol_version(db_session: DBSession, session_id: UUID | None) -> int:
+        """Task protocol version of the environment a session runs on (0 if unknown)."""
+        session = db_session.get(Session, session_id) if session_id else None
+        if not session or not session.environment_id:
+            return 0
+        environment = db_session.get(AgentEnvironment, session.environment_id)
+        return environment.task_protocol_version if environment else 0
+
+    @staticmethod
+    def result_packet_text(
+        db_session: DBSession,
+        task: InputTask,
+        state: str,
+        summary: str,
+    ) -> str:
+        """The task protocol's result packet as the message the requester receives.
+
+        One shape on every host (tasks.schema.json ``result_packet``): a first
+        line ``Task result from <agent> on <ref>:`` then status, summary, body,
+        artifacts and question. The executor's stored ``tasks_report`` supplies
+        the fields when there is one; otherwise ``state`` (the session outcome:
+        completed / needs_input / error) maps onto the report status and
+        ``summary`` is the session's own text. The body is cut at
+        ``RESULT_PACKET_BODY_LIMIT`` with a pointer to ``tasks_get``.
+        """
+        ref = task.short_code or str(task.id)[:8]
+        agent_name = "Agent"
+        if task.selected_agent_id:
+            agent = db_session.get(Agent, task.selected_agent_id)
+            if agent:
+                agent_name = agent.name
+
+        report = task.delegation_result or {}
+        if report.get("status") in ("done", "failed", "blocked"):
+            status = report["status"]
+            summary = report.get("summary") or summary
+            body = report.get("body") or ""
+            artifacts = report.get("artifacts") or []
+            question = report.get("question") if status == "blocked" else None
+            audience = report.get("audience") or "user"
+        else:
+            status = RESULT_STATUS_BY_SESSION_STATE.get(state, "in_progress")
+            # No stored report: the session's summary is all there is, and a
+            # question in it has no result to answer through tasks_reply.
+            body, artifacts, audience, question = "", [], "user", None
+
+        lines = [
+            f"Task result from {agent_name} on {ref}:",
+            f"Status: {status}",
+            f"Summary: {summary.strip()}",
+        ]
+        body = body.strip()
+        if body:
+            if len(body) > RESULT_PACKET_BODY_LIMIT:
+                body = (
+                    body[:RESULT_PACKET_BODY_LIMIT].rstrip()
+                    + f"\n… (cut at {RESULT_PACKET_BODY_LIMIT} characters; tasks_get {ref} has the full result)"
+                )
+            lines += ["", body]
+        if artifacts:
+            lines += ["", "Artifacts:"]
+            for artifact in artifacts:
+                if isinstance(artifact, dict):
+                    if artifact.get('ref'):
+                        lines.append(f"- {artifact.get('name', '')}: {artifact['ref']}")
+                    else:
+                        # Recorded by name only: a path in the executor's folder.
+                        lines.append(f"- {artifact.get('name', '')} (file, not attached)")
+                else:
+                    lines.append(f"- {artifact}")
+        if question:
+            asked = "you (answer with tasks_reply)" if audience == "requester" else "the user"
+            lines += ["", f"Question for {asked}: {question.strip()}"]
+        return "\n".join(lines)
+
+    @staticmethod
     async def deliver_feedback_to_source(
         db_session: DBSession,
         task: InputTask,
@@ -1954,13 +2220,17 @@ class InputTaskService:
         if not source_session:
             return False
 
-        # Compose feedback content
-        content_map = {
-            "completed": f"[Sub-task completed] {summary}",
-            "needs_input": f"[Sub-task needs input] {summary}",
-            "error": f"[Sub-task error] {summary}",
-        }
-        content = content_map.get(state, f"[Sub-task update] {summary}")
+        if InputTaskService.session_protocol_version(db_session, task.source_session_id) >= 1:
+            content = InputTaskService.result_packet_text(db_session, task, state, summary)
+        else:
+            # A requester environment built before the task protocol reads the
+            # pre-protocol feedback lines its handover prompt describes.
+            content_map = {
+                "completed": f"[Sub-task completed] {summary}",
+                "needs_input": f"[Sub-task needs input] {summary}",
+                "error": f"[Sub-task error] {summary}",
+            }
+            content = content_map.get(state, f"[Sub-task update] {summary}")
 
         # Create message in source session (role="user" triggers agent processing)
         from app.services.sessions.message_service import MessageService  # circular import
@@ -2264,6 +2534,34 @@ class InputTaskService:
         if from_status is not None:
             logger.info(f"Task {task_id} status: {from_status} → {new_status}")
         return task
+
+    @staticmethod
+    def status_path(from_status: str, to_status: str) -> list[str] | None:
+        """The shortest chain of legal transitions from ``from_status`` to ``to_status``.
+
+        ``[]`` when already there, ``None`` when ``VALID_TRANSITIONS`` has no
+        route. Breadth-first, so a move records only the steps it must: a task
+        cancelled from ``new`` goes there in one step, one completed from
+        ``new`` passes through ``in_progress`` once (the same steps Cinna
+        Desktop pushes for a local task finished before its remote copy moved).
+        """
+        if from_status == to_status:
+            return []
+        previous: dict[str, str] = {from_status: from_status}
+        queue = [from_status]
+        while queue:
+            current = queue.pop(0)
+            for nxt in sorted(InputTaskStatus.VALID_TRANSITIONS.get(current, set())):
+                if nxt in previous:
+                    continue
+                previous[nxt] = current
+                if nxt == to_status:
+                    path = [nxt]
+                    while previous[path[0]] != from_status:
+                        path.insert(0, previous[path[0]])
+                    return path
+                queue.append(nxt)
+        return None
 
     @staticmethod
     def _apply_status_transition(
@@ -2678,9 +2976,14 @@ class InputTaskService:
         parent_task_id: UUID,
         creating_agent_id: UUID,
         data,  # AgentSubtaskCreate
-    ) -> InputTask:
+        *,
+        with_created: bool = False,
+    ) -> InputTask | tuple[InputTask, bool]:
         """
         Create a subtask (team agents only).
+
+        With ``with_created=True`` returns ``(subtask, created)``; ``created``
+        is False when ``external_ref`` matched an existing row.
 
         Validates that:
         - Parent task has team_id
@@ -2723,7 +3026,13 @@ class InputTaskService:
         # Resolve assignment if provided
         assigned_agent_id = None
         assigned_node_id = None
-        if data.assigned_to:
+        own_queue = bool(getattr(data, "own_queue", False))
+        if own_queue:
+            # The creator's own queue: its node, so the team-lead fallback in
+            # create_task_idempotent never runs; not started (auto_execute off).
+            assigned_agent_id = creator_node.agent_id
+            assigned_node_id = creator_node.id
+        elif data.assigned_to:
             # Find target node by name within the team
             target_node = db_session.exec(
                 select(AgenticTeamNode).where(
@@ -2757,19 +3066,24 @@ class InputTaskService:
             selected_agent_id=assigned_agent_id,
             user_workspace_id=parent.user_workspace_id,
             agent_initiated=True,
-            auto_execute=bool(assigned_agent_id),
+            auto_execute=bool(assigned_agent_id) and not own_queue,
             source_session_id=data.source_session_id,
             title=data.title,
             priority=data.priority,
             team_id=parent.team_id,
             assigned_node_id=assigned_node_id,
             parent_task_id=parent_task_id,
+            external_ref=getattr(data, "external_ref", None),
         )
-        subtask = InputTaskService.create_task(
+        subtask, created = InputTaskService.create_task_idempotent(
             db_session=db_session,
             user_id=parent.owner_id,
             data=subtask_create,
         )
+        if not created:
+            # Matched by external_ref (a retried or concurrent tasks_create):
+            # the first call already commented, emitted and started the run.
+            return (subtask, False) if with_created else subtask
 
         # Set created_by_node_id (not in InputTaskCreate, set directly)
         subtask.created_by_node_id = creator_node.id
@@ -2811,7 +3125,7 @@ class InputTaskService:
             )
 
         logger.info(f"Subtask {subtask.short_code} created under {parent.short_code}")
-        return subtask
+        return (subtask, True) if with_created else subtask
 
     @staticmethod
     async def _auto_execute_task(
@@ -3079,7 +3393,8 @@ class InputTaskService:
         Get task details formatted for agent MCP tool consumption.
 
         Returns a simplified dict view with recent comments, subtask list, and
-        progress counts — optimised for the mcp__agent_task__get_details tool.
+        progress counts — served to pre-protocol environments (the retired
+        ``agent_task`` get_details tool; current ones use the `cinna` server's tasks_get).
 
         Args:
             db_session: Database session

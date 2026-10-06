@@ -86,7 +86,7 @@
 All tool names throughout the system use **unified lowercase**:
 - Claude Code natively emits PascalCase names (`Read`, `Bash`, `WebFetch`). The `ClaudeCodeAdapter` normalizes these to lowercase (`read`, `bash`, `webfetch`) before emitting `SDKEvent` objects.
 - OpenCode natively emits lowercase names — no normalization needed for built-ins.
-- Both Claude Code and OpenCode register agent task tools on the `agent_task` MCP server, producing unified `mcp__agent_task__*` names.
+- Both Claude Code and OpenCode register the task tools on the `cinna` MCP server (`mcp__cinna__tasks_*` / `cinna_tasks_*`, listed in `CINNA_TASK_TOOL_NAMES_CLAUDE` / `CINNA_TASK_TOOL_NAMES_OPENCODE`); the deprecated `agent_task` names remain in the pre-approved set for one release.
 - Google ADK tools are defined as lowercase Python functions (`bash`, `read`).
 
 The backend `message_service.py` maintains a `PRE_ALLOWED_TOOLS` set that mirrors `tool_name_registry.PRE_APPROVED_TOOLS`. Tool comparison uses `.lower()` on both sides for backward compatibility with legacy PascalCase data that may exist in the database from before this convention was established.

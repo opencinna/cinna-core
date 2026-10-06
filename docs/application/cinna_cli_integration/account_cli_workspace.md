@@ -556,7 +556,7 @@ agent-api`, `cinna connect mcp`), the orchestrator can register a **team graph**
 that encodes the delegation topology — which agent may hand a subtask to which
 other agent. This graph is static (Blueprint phase): it does not run anything, but
 it is load-bearing because the task system enforces that
-`mcp__agent_task__create_subtask` is only permitted along a drawn connection.
+a delegated subtask (`tasks_create` with a `parent`, on the agent's `cinna` MCP server) is only permitted along a drawn connection.
 
 **No new CLI verbs were added in Phase 4.** The agentic-teams API is not on the
 escape-hatch denylist (see §5 for the denylist), so every team endpoint is fully
@@ -1300,7 +1300,7 @@ This document covers **Phases 1 through 5** — all phases are now shipped:
 - **agentic_teams** (Phase 4) — the agentic-teams API is not on the escape-hatch
   denylist, so the orchestrator reaches it entirely via `cinna api`. The team
   graph (nodes + directed connections) is the delegation-policy artifact that
-  permits `mcp__agent_task__create_subtask` along drawn edges. See
+  permits delegated subtasks (`tasks_create` with a `parent`) along drawn edges. See
   [agentic_teams.md](../../agents/agentic_teams/agentic_teams.md)
 - **agent_schedulers** (Phase 5 / flow 7c) — the schedule verbs wrap
   `AgentSchedulerService` (generate / create / get / update / delete / execute_now

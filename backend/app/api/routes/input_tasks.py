@@ -35,6 +35,7 @@ from app.models import (
     TaskAttachmentsPublic,
 )
 from app.models.files.file_upload import FileUploadPublic
+from app.models.tasks.task_protocol import PROTOCOL_VERSION, SERVER_NAME
 from app.models.tasks.delegation import (
     DelegationCapabilities,
     DelegationReply,
@@ -64,7 +65,10 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 @router.get('/delegation-capabilities', response_model=DelegationCapabilities)
 def delegation_capabilities(current_user: CurrentUser) -> DelegationCapabilities:
     """Versioned, authenticated extension discovery; older servers return 404/422."""
-    return DelegationCapabilities(version=1, metadata=True, structured_result=True, reply=True)
+    return DelegationCapabilities(
+        version=1, metadata=True, structured_result=True, reply=True,
+        protocol_version=PROTOCOL_VERSION, server=SERVER_NAME,
+    )
 
 
 # 404 for non-owners so new routes don't reveal task existence; the older task routes' 400 is deliberately not copied.

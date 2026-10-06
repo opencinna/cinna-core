@@ -146,6 +146,12 @@ def _tool_line(tool_name: str, tool_input: dict[str, Any]) -> str:
         return "Ask a question"
     if lowered == "mcp__knowledge__query_integration_knowledge":
         return _labelled("Search knowledge", _clean(_input_value(tool_input, "query")))
+    if lowered in ("mcp__cinna__tasks_create", "cinna_tasks_create"):
+        return _labelled("Create task", _clean(_input_value(tool_input, "title")))
+    if lowered in ("mcp__cinna__tasks_report", "cinna_tasks_report"):
+        return _labelled("Report", _clean(_input_value(tool_input, "status")))
+    # DEPRECATED "agent_task" names, from environments built before the
+    # Cinna Task Protocol; drop with the pre-approval aliases.
     if lowered == "mcp__agent_task__create_task":
         return _labelled("Create task", _clean(_input_value(tool_input, "title")))
     if lowered == "mcp__agent_task__update_status":

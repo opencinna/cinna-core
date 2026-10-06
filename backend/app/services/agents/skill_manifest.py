@@ -144,6 +144,17 @@ RESERVED_SKILL_NAMES: frozenset[str] = frozenset(
     }
 )
 
+#: Platform-owned skills, projected from the image (``/app/core/skills``)
+#: beside the agent's own. A workspace skill may not take one of these names:
+#: it would replace the platform's copy in the engine's index. Only a skill
+#: parsed with ``source="platform"`` may carry one. Their frontmatter may hold
+#: keys this module does not interpret (``when_to_use``, ``compatibility``, a
+#: ``metadata`` map); like every unknown key they are kept verbatim.
+PLATFORM_SKILL_NAMES: frozenset[str] = frozenset({"cinna-tasks"})
+
+#: ``SkillEntry.source`` of a platform-owned skill.
+PLATFORM_SKILL_SOURCE = "platform"
+
 #: Directories never walked when scanning a skill tree (regenerated junk).
 SKIP_DIR_NAMES: frozenset[str] = frozenset(
     {".git", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache", "node_modules"}
@@ -897,6 +908,8 @@ def parse_skill_dir(
         return _fail("name_mismatch")
     if is_reserved_name(name):
         return _fail("reserved_name")
+    if name in PLATFORM_SKILL_NAMES and source != PLATFORM_SKILL_SOURCE:
+        return _fail("reserved_name", "This name is reserved by a platform skill.")
 
     description = frontmatter.get("description")
     if not isinstance(description, str) or not description.strip():

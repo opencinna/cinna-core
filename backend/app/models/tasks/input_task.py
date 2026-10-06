@@ -155,6 +155,10 @@ class InputTask(InputTaskBase, table=True):
     # always assign a new dict (or call flag_modified) when updating these.
     delegation_metadata: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     delegation_result: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    # Cinna Task Protocol chain depth of a task created by an agent's tasks_create
+    # (delegation_metadata.depth holds it for contract delegations). NULL for
+    # tasks a person created.
+    chain_depth: int | None = Field(default=None)
     external_executor: str | None = Field(default=None, max_length=100)
 
 
@@ -340,6 +344,10 @@ class AgentSubtaskCreate(SQLModel):
     priority: str = "normal"
     task: str | None = None  # parent short_code; defaults to agent's current task
     source_session_id: uuid.UUID | None = None  # Calling session UUID (set by MCP tool)
+    # Per-session idempotency key from the task protocol (``tasks_create`` id).
+    external_ref: str | None = Field(default=None, max_length=64)
+    # Own queue: the subtask goes to the creating agent's own node, not started.
+    own_queue: bool = False
 
 
 class AgentTaskCreate(SQLModel):
@@ -349,6 +357,15 @@ class AgentTaskCreate(SQLModel):
     assigned_to: str | None = None  # Agent name to assign to
     priority: str = "normal"
     source_session_id: uuid.UUID | None = None  # Calling session UUID (set by MCP tool)
+    # Set by the task protocol (``tasks_create``) once its ``target`` string is
+    # resolved: an exact assignee instead of a name, and a per-session
+    # idempotency key. Both are validated against the owner by the service.
+    assigned_agent_id: uuid.UUID | None = None
+    assigned_node_id: uuid.UUID | None = None
+    external_ref: str | None = Field(default=None, max_length=64)
+    # Own queue: assign the task to `assigned_agent_id` (the calling agent)
+    # without starting it; a person runs it later.
+    own_queue: bool = False
 
 
 class AgentTaskOperationResponse(SQLModel):

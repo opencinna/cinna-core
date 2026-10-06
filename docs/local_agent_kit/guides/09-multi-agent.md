@@ -80,6 +80,14 @@ why, then read that agent's `AGENTS.md` and `docs/WORKFLOW_PROMPT.md` before
 answering. In the cloud the same declaration becomes a real handover between running
 agents.
 
+**How a running agent hands over is the platform's business, not the folder's.**
+Every Cinna host (Cinna Desktop, a cloud agent environment) gives its agents the
+platform skill `cinna-tasks` (`skills/cinna-tasks/SKILL.md` in this kit), which
+teaches how to find a target, hand work over, report how a task went and receive
+a result. The host delivers it; never copy it into an agent folder, and do not
+name task tools in `docs/WORKFLOW_PROMPT.md` or a handover `description`. Write
+*when* to hand over and *what* the receiving agent needs; the skill covers *how*.
+
 ## The orchestrator role
 
 At the root you are not any single agent. From there:

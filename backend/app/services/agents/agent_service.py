@@ -927,43 +927,12 @@ class AgentService:
             }
 
     @staticmethod
-    async def sync_agent_handover_config(session: Session, agent_id: UUID) -> None:
+    def build_legacy_handover_prompt(handovers_list: list[dict]) -> str:
+        """The pre-protocol handover prompt, verbatim, for an environment at task protocol 0.
+
+        Such an environment has only the retired ``agent_task`` tools, so it
+        must keep reading the instructions those tools were written for.
         """
-        Sync handover configuration to agent-env.
-
-        Called after creating, updating, or deleting handover configs.
-        Queries all enabled handovers for the agent, formats them, and pushes
-        the configuration to the agent's active environment.
-
-        Args:
-            session: Database session
-            agent_id: UUID of the agent
-        """
-        # Get agent with active environment
-        agent = AgentService.get_agent_with_environment(session=session, agent_id=agent_id)
-        if not agent or not agent.active_environment_id:
-            logger.warning(f"Agent {agent_id} has no active environment, skipping handover sync")
-            return
-
-        environment_id = agent.active_environment_id
-
-        # Get all enabled handovers for this agent
-        handover_configs = session.exec(
-            select(AgentHandoverConfig)
-            .where(AgentHandoverConfig.source_agent_id == agent_id)
-            .where(AgentHandoverConfig.enabled == True)
-        ).all()
-
-        # Format handovers for agent-env
-        handovers_list = []
-        for config in handover_configs:
-            handovers_list.append({
-                "id": str(config.target_agent_id),
-                "name": config.target_agent.name,
-                "prompt": config.handover_prompt
-            })
-
-        # Generate overall task creation prompt (includes both handover and inbox task modes)
         handover_prompt = (
             "## TASK CREATION INSTRUCTIONS\n\n"
             "You have the `create_agent_task` tool available in this conversation. "
@@ -1019,6 +988,81 @@ class AgentService:
             "- `[Sub-task error]` - Decide whether to retry or inform the user\n\n"
             "The message metadata contains `task_id` for use with the `respond_to_task` tool.\n"
         )
+
+        return handover_prompt
+
+    @staticmethod
+    def build_handover_prompt(handovers: list[dict]) -> str:
+        """The configured handovers as a prompt section: who, which target, when.
+
+        Kept identical to the env's ``prompt_generator.build_handover_prompt``,
+        which renders it from the synced ``handovers`` list. Each entry names the ``tasks_targets`` target string (``agent:<uuid>``)
+        and keeps the user-authored ``prompt`` verbatim as its trigger. Empty
+        when nothing is configured: delegating without a configured pair needs
+        no prompt text, the cinna-tasks skill covers it.
+        """
+        if not handovers:
+            return ""
+        lines = [
+            "## Configured handovers",
+            "",
+            "When a trigger below is met, hand the work over with `tasks_create`, "
+            "the target as `assignee` (`tasks_targets` lists it too).",
+        ]
+        for h in handovers:
+            lines += ["", f"- {h['name']} (target `agent:{h['id']}`)"]
+            trigger = (h.get("prompt") or "").strip()
+            if trigger:
+                lines.append(f"  Trigger: {trigger}")
+        return "\n".join(lines)
+
+    @staticmethod
+    async def sync_agent_handover_config(session: Session, agent_id: UUID) -> None:
+        """
+        Sync handover configuration to agent-env.
+
+        Called after creating, updating, or deleting handover configs.
+        Queries all enabled handovers for the agent, formats them, and pushes
+        the configuration to the agent's active environment.
+
+        Args:
+            session: Database session
+            agent_id: UUID of the agent
+        """
+        # Get agent with active environment
+        agent = AgentService.get_agent_with_environment(session=session, agent_id=agent_id)
+        if not agent or not agent.active_environment_id:
+            logger.warning(f"Agent {agent_id} has no active environment, skipping handover sync")
+            return
+
+        environment_id = agent.active_environment_id
+
+        # Get all enabled handovers for this agent
+        handover_configs = session.exec(
+            select(AgentHandoverConfig)
+            .where(AgentHandoverConfig.source_agent_id == agent_id)
+            .where(AgentHandoverConfig.enabled == True)
+        ).all()
+
+        # Format handovers for agent-env
+        handovers_list = []
+        for config in handover_configs:
+            handovers_list.append({
+                "id": str(config.target_agent_id),
+                "name": config.target_agent.name,
+                "prompt": config.handover_prompt
+            })
+
+        # Data, not tool instructions: how to delegate lives in the platform
+        # cinna-tasks skill. Each pair's user-authored prompt is its trigger.
+        # The text is consumed by this agent's environment, so it follows that
+        # environment's task protocol: one built before it only has the
+        # retired agent_task tools and keeps the old instructions.
+        environment = session.get(AgentEnvironment, environment_id)
+        if environment and environment.task_protocol_version >= 1:
+            handover_prompt = AgentService.build_handover_prompt(handovers_list)
+        else:
+            handover_prompt = AgentService.build_legacy_handover_prompt(handovers_list)
 
         # Get environment adapter and sync config
         try:

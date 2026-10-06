@@ -40,7 +40,7 @@
 ### Environment Instances (per-environment)
 
 - `backend/data/environments/{env_id}/` - Instance root
-  - `app/core/` - Copied from `app_core_base`; mounted read-only into container (not baked into image)
+  - `app/core/` - Copied from `app_core_base`; mounted read-only into container (not baked into image). The Cinna Task Protocol files (`protocols/tasks.schema.json`, `skills/cinna-tasks/`) are added from the Local Agent Kit snapshot by `backend/app/services/environments/platform_protocol_files.py` (`install_platform_protocol`) — see [Cinna Task Tools](../agent_environment_core/cinna_tasks_tools.md)
   - `app/workspace/` - User data, Docker volume mounted
   - `app/BUILDING_AGENT.md` - Instance-specific building prompt
   - `app/.env` - Application environment variables
@@ -148,12 +148,12 @@ An optional mixin interface for adapters that can provide direct local filesyste
 
 ### EnvironmentLifecycleManager (`backend/app/services/environments/environment_lifecycle.py`)
 
-- `create_environment_instance()` - Copy template (excluding `TEMPLATE_ONLY_FILES`) + shared core, call `TemplateImageService.ensure_template_image()`, generate configs with image tag, validate compose
+- `create_environment_instance()` - Copy template (excluding `TEMPLATE_ONLY_FILES`) + shared core + platform protocol files (sets `task_protocol_version` to 1 when the schema landed), call `TemplateImageService.ensure_template_image()`, generate configs with image tag, validate compose
 - `start_environment()` - UP operation with smart container detection (new vs existing); calls `ensure_template_image()` before compose regeneration
 - `stop_environment(update_status=True)` - STOP operation, keep container. Persists `status="stopped"` by default; callers that own their own in-progress status (the rebuild path) pass `update_status=False` so the stop does not clobber it. The error path still stamps `status="error"` regardless of the flag
 - `suspend_environment()` - STOP operation with `suspended` status
 - `activate_suspended_environment()` - UP operation optimized for existing containers; calls `ensure_template_image()` before compose regeneration
-- `rebuild_environment()` - DOWN → UP with full setup; calls `ensure_template_image()` before compose regeneration; core replaced from shared `app_core_base`; no `docker-compose build` step. Holds `status="rebuilding"` for the whole operation: emits `ENVIRONMENT_STATUS_CHANGED{rebuilding}` up front, stops the old container via `stop_environment(update_status=False)` then re-asserts `rebuilding`, and only writes the terminal status (`running` + `ENVIRONMENT_ACTIVATED`, or `stopped`) at the end — preventing a mid-rebuild status poll from surfacing a transient `stopped`
+- `rebuild_environment()` - DOWN → UP with full setup; calls `ensure_template_image()` before compose regeneration; core replaced from shared `app_core_base` plus the platform protocol files (and `task_protocol_version` raised to 1 when the schema landed); no `docker-compose build` step. Holds `status="rebuilding"` for the whole operation: emits `ENVIRONMENT_STATUS_CHANGED{rebuilding}` up front, stops the old container via `stop_environment(update_status=False)` then re-asserts `rebuilding`, and only writes the terminal status (`running` + `ENVIRONMENT_ACTIVATED`, or `stopped`) at the end — preventing a mid-rebuild status poll from surfacing a transient `stopped`
 - `delete_environment_instance()` - DOWN operation with volume cleanup
 - `_container_exists()` - Check if Docker container exists (stopped or running)
 - `_sync_dynamic_data()` - Sync prompts and credentials to running environment

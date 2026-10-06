@@ -80,7 +80,7 @@ from .opencode_event_transformer import (
     OpenCodeEventTransformer,
     OPENCODE_QUESTION_REQUEST_ID_KEY,
 )
-from .tool_name_registry import normalize_tool_name
+from .tool_name_registry import CINNA_TASK_TOOL_NAMES_CLAUDE, normalize_tool_name
 from ..prompt_generator import PromptGenerator
 from ..active_session_manager import active_session_manager
 from ..agent_env_service import AgentEnvService
@@ -274,7 +274,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
         #   * opencode loads project config by walking up from the project dir
         #     (/app/workspace), NOT from cwd — so it would no longer find our
         #     per-mode opencode.json. OPENCODE_CONFIG pins it explicitly.
-        #   * opencode spawns local MCP servers (the knowledge / agent_task
+        #   * opencode spawns local MCP servers (the knowledge / cinna
         #     bridges) with cwd = the project dir (/app/workspace), so they can
         #     no longer read session_context.json from cwd. We pass its absolute
         #     path so the bridges resolve it regardless of their cwd.
@@ -579,7 +579,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
         """
         Write session context for MCP bridge servers.
 
-        The MCP bridge servers (knowledge_server.py, task_server.py)
+        The MCP bridge servers (knowledge_server.py, cinna_server.py)
         read this file at tool-call time to obtain the
         current backend_session_id without needing to be passed it at startup.
         """
@@ -600,7 +600,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
         """Write a runtime opencode.json with active plugins' MCP servers merged in.
 
         The base config is the read-only per-mode ``opencode.json`` (model,
-        provider, permissions, the knowledge/agent_task MCP bridges). We fold in
+        provider, permissions, the knowledge/cinna MCP bridges). We fold in
         each active plugin's *declared* MCP servers (from its ``.mcp.json`` /
         ``plugin.json`` — NOT a python3 wrapper of the plugin dir), register each
         plugin's ``skills/`` dir as an OpenCode skills path, and copy the
@@ -610,7 +610,9 @@ class OpenCodeAdapter(BaseSDKAdapter):
         The agent's OWN skills are NOT listed here: they are projected into
         ``/root/.claude/skills`` before every message (see skills_projection),
         which OpenCode already reads, and listing them a second time would make
-        every skill appear twice in the index.
+        every skill appear twice in the index. The same holds for the platform
+        skill ``cinna-tasks`` (``/app/core/skills``): the projection places it
+        beside the agent's own, so it is not a skills path either.
 
         Returns the list of unsupported-capability reports (skills/agents/hooks)
         for non-blocking surfacing at session start.
@@ -643,7 +645,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
 
         # 1) Merge plugin MCP servers into the config's mcp section. Plugin keys
         #    are namespaced (plugin_<mkt>_<plugin>_<server>) so they never clobber
-        #    the knowledge / agent_task bridges.
+        #    the knowledge / cinna bridges.
         plugin_mcp = artifacts.get("mcp_servers") or {}
         if plugin_mcp:
             mcp_section = config.get("mcp")
@@ -654,7 +656,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
 
         # 1b) Merge credential-derived MCP-provider servers (RD-5). These are
         #     namespaced cinna_mcp_<credential_id> so they never collide with the
-        #     knowledge / agent_task bridges or plugin_* servers.
+        #     knowledge / cinna bridges or plugin_* servers.
         try:
             user_mcp = self.agent_env_service.get_user_mcp_servers_for_mode(
                 self._mode, engine="opencode"
@@ -734,7 +736,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
 
         Reads the materialized config so the advertised tool names exactly match
         what OpenCode actually loaded. Plugin servers are keyed ``plugin_*`` to
-        distinguish them from the knowledge / agent_task bridges.
+        distinguish them from the knowledge / cinna bridges.
         """
         if not self._runtime_dir:
             return []
@@ -982,20 +984,15 @@ class OpenCodeAdapter(BaseSDKAdapter):
             # 6. Build tools list including plugin MCP servers.
             # All tool names are normalized to unified lowercase convention.
             # OpenCode built-ins are already lowercase; MCP bridge tools use
-            # the mcp__agent_task__* prefix matching Claude Code naming.
+            # the mcp__{server}__* prefix matching Claude Code naming (the
+            # task protocol's tools are on the "cinna" server).
             # Plugin MCP servers were merged into the runtime opencode.json by
             # _materialize_opencode_config at server start; advertise each as a
             # wildcard mcp__<server> entry so the UI shows them as available.
             all_tools = list(OPENCODE_BUILTIN_TOOLS)
             mcp_tool_names = [
                 "mcp__knowledge__query_integration_knowledge",
-                "mcp__agent_task__add_comment",
-                "mcp__agent_task__update_status",
-                "mcp__agent_task__create_task",
-                "mcp__agent_task__create_subtask",
-                "mcp__agent_task__get_details",
-                "mcp__agent_task__list_tasks",
-                "mcp__agent_task__handover_report",
+                *CINNA_TASK_TOOL_NAMES_CLAUDE,
             ]
             for key in self._active_plugin_mcp_keys():
                 mcp_tool_names.append(f"mcp__{key}")

@@ -24,10 +24,16 @@ class DelegationArtifact(BaseModel):
 
     kind: Literal['file', 'link']
     name: str = Field(min_length=1, max_length=500)
-    ref: str = Field(min_length=1, max_length=4096)
+    # Absent only for a file recorded by name (a working-folder path the
+    # requester cannot reach); any ref present must be portable.
+    ref: str | None = Field(default=None, min_length=1, max_length=4096)
 
     @model_validator(mode='after')
     def portable_reference(self):
+        if self.ref is None:
+            if self.kind != 'file':
+                raise ValueError('A link artifact needs a portable HTTP(S) reference')
+            return self
         if not self.ref.startswith(('https://', 'http://')):
             raise ValueError('Artifacts require portable HTTP(S) references; upload local files first')
         return self
@@ -92,6 +98,10 @@ class DelegationCapabilities(BaseModel):
     metadata: bool
     structured_result: bool
     reply: bool
+    # Cinna Task Protocol: the version of the `cinna` tasks_* vocabulary this
+    # server speaks, and the MCP server name its agent environments expose.
+    protocol_version: int
+    server: str
 
 
 class DelegationReplyResult(BaseModel):

@@ -8,8 +8,9 @@ its local MCP server config.
 
 Servers:
 - knowledge_server.py  — query_integration_knowledge (building mode)
-- task_server.py       — add_comment, update_status, create_task, create_subtask,
-                         get_details, list_tasks (agent_task server, conversation mode)
+- cinna_server.py      — the Cinna Task Protocol tools tasks_targets … tasks_reply
+                         (cinna server, conversation mode); names and schemas
+                         from core/protocols/tasks.schema.json
 
 Session context (backend_session_id, opencode_session_id) is shared via a JSON
 file written by the OpenCodeAdapter before each message into the per-mode

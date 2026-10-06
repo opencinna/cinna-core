@@ -66,6 +66,7 @@ from app.api.routes import (
     skills,
     ssh_keys,
     task_agent_api,
+    task_protocol_api,
     task_triggers,
     user_channels,
     users,
@@ -159,6 +160,8 @@ api_router.include_router(user_channels.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
 api_router.include_router(input_tasks.router)
+# Before task_agent_api: its /agent/tasks/{task_id}/... patterns would capture /protocol/*.
+api_router.include_router(task_protocol_api.router)
 api_router.include_router(task_agent_api.router)
 api_router.include_router(agent_env_credentials.router)
 api_router.include_router(task_triggers.router, prefix="/tasks", tags=["task-triggers"])

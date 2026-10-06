@@ -28,6 +28,8 @@ from .sdk_constants import (
     sdk_expected_credential_type,
 )
 from .model_catalog import resolve_model
+from .platform_protocol_files import install_platform_protocol, protocol_installed
+from app.models.tasks.task_protocol import PROTOCOL_VERSION as TASK_PROTOCOL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +294,13 @@ class EnvironmentLifecycleManager:
             db_session.commit()
 
             await self._copy_template(template_dir, instance_dir)
+            # The core just laid down carries the `cinna` task tools; record it
+            # now so the first turn's task context already says whether a
+            # report is required (the done event keeps it current afterwards).
+            # Only when the schema actually landed (a missing kit snapshot is
+            # only logged by install_platform_protocol).
+            if protocol_installed(instance_dir / "app" / "core"):
+                environment.task_protocol_version = TASK_PROTOCOL_VERSION
 
             # 3. Allocate port (only on first create)
             _touch_progress(environment, "Configuring environment...")
@@ -1505,6 +1514,12 @@ class EnvironmentLifecycleManager:
                 rebuild_overwrite_files=[],
                 was_running=was_running
             )
+            # The replaced core carries the `cinna` task tools (see create),
+            # provided the schema was installed; otherwise leave it as it is.
+            if protocol_installed(instance_dir / "app" / "core"):
+                environment.task_protocol_version = TASK_PROTOCOL_VERSION
+                db_session.add(environment)
+                db_session.commit()
 
             # Regenerate SDK settings files after core replacement (MiniMax settings)
             # These files are in /app/core/.claude/ which get replaced during rebuild
@@ -1817,6 +1832,9 @@ class EnvironmentLifecycleManager:
                 logger.debug(f"Overlaid shared app/core from {app_core_base_dir}")
             else:
                 logger.warning(f"Shared app_core_base not found at {app_core_base_dir}")
+
+            # 2b. Platform protocol files (tasks schema, cinna-tasks skill) from the kit
+            install_platform_protocol(instance_dir / "app" / "core", self.templates_dir)
 
             # 3. Create claude_sessions directory for persistent SDK session storage
             # Mounted as /root/.claude inside the container to survive rebuilds
@@ -2698,11 +2716,13 @@ MODEL_CONVERSATION={model_conversation}
                     ],
                     "enabled": True,
                 },
-                "agent_task": {
+                # Cinna Task Protocol tools (tasks_*), same server name as
+                # the Claude Code in-process server.
+                "cinna": {
                     "type": "local",
                     "command": [
                         "python3",
-                        "/app/core/server/tools/mcp_bridge/task_server.py",
+                        "/app/core/server/tools/mcp_bridge/cinna_server.py",
                     ],
                     "enabled": True,
                 },

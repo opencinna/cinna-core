@@ -57,7 +57,7 @@
 - `frontend/src/components/Chat/ToolCallBlock.tsx` — Tool execution display block
 - `frontend/src/components/Chat/AnswerQuestionsModal.tsx` — Tool approval UI
 - `frontend/src/components/Chat/UpdateSessionStateToolBlock.tsx` — Displays agent `update_session_state` call
-- `frontend/src/components/Chat/AgentHandoverToolBlock.tsx` — Displays `create_agent_task` tool call
+- `frontend/src/components/Chat/AgentHandoverToolBlock.tsx` — Displays a `tasks_create` tool call (also the retired `create_task`)
 
 ### Frontend — Services
 - `frontend/src/services/eventService.ts` — Socket.IO client, room management (`subscribe`, `unsubscribeFromRoom`), `sendAgentUsageIntent()`

@@ -15,7 +15,9 @@
 **Services:**
 - `backend/app/services/agents/agent_handover_service.py` — `AgentHandoverService` with handover config CRUD, access verification, prompt generation; exception hierarchy (`HandoverError`, `HandoverNotFoundError`, `AgentNotFoundError`, `PermissionDeniedError`)
 - `backend/app/services/agents/handover_connection_sync_service.py` — `HandoverConnectionSyncService`, the single place that keeps `AgentHandoverConfig` and `AgenticTeamConnection` bidirectionally in sync: creating/deleting a handover creates/deletes the matching connection on every team where both agents are nodes, creating/updating/deleting a team connection does the reverse on the handover config, and adding a node to a team backfills connections from any pre-existing handover configs between it and the team's other nodes
-- `backend/app/services/agents/agent_service.py` — `sync_agent_handover_config()`, `create_agent_task()`
+- `backend/app/services/agents/agent_service.py` — `sync_agent_handover_config()`, `build_handover_prompt()`, `build_legacy_handover_prompt()`, `create_agent_task()`
+- `backend/app/services/tasks/task_protocol_service.py` — `TaskProtocolService` behind the `cinna` server's `tasks_targets` / `tasks_create` / `tasks_reply` (see [Cinna Task Tools](../agent_environment_core/cinna_tasks_tools.md))
+- `backend/app/services/tasks/input_task_service.py` — `create_task_from_agent()` (also `result_packet_text()` / `deliver_feedback_to_source()` for the result message)
 - `backend/app/services/tasks/input_task_service.py` — `create_task()`, `create_task_with_auto_refine()`, `execute_task()`, `link_session()`
 - `backend/app/services/sessions/session_service.py` — `create_session()`, `send_session_message()`
 - `backend/app/services/sessions/message_service.py` — system message creation with task metadata
@@ -39,12 +41,12 @@
 - `backend/app/env-templates/app_core_base/core/server/agent_env_service.py` — `get_agent_handover_config()`, `update_agent_handover_config()`
 
 **Runtime:**
-- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py` — tool registration (conversation mode only), global session state with async lock, helper functions
-- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `_load_handover_prompt()` reads the `handover_prompt` field from `{workspace}/docs/agent_handover_config.json`; appended to the conversation mode system prompt by `generate_conversation_mode_prompt()` after the task context section
-- `backend/app/env-templates/app_core_base/core/server/tools/agent_task_create_task.py` — create_agent_task tool implementation (split from the former single-file tool)
+- `backend/app/env-templates/app_core_base/core/server/adapters/claude_code_sdk_adapter.py` — registers the `cinna` task server (conversation mode only), global session state with async lock, helper functions
+- `backend/app/env-templates/app_core_base/core/server/prompt_generator.py` — `build_handover_prompt()` and `_load_handover_prompt()`: render the **Configured handovers** section from the `handovers` list in `{workspace}/docs/agent_handover_config.json` (not from the stored `handover_prompt` prose, so a config synced by an older backend still yields current text); appended to the conversation mode system prompt by `generate_conversation_mode_prompt()` after the task context block
+- `backend/app/env-templates/app_core_base/core/server/tools/cinna_tasks_protocol.py`, `cinna_tasks_claude.py`, `mcp_bridge/cinna_server.py` — the `tasks_*` tools (see [Cinna Task Tools](../agent_environment_core/cinna_tasks_tools.md))
 
 **Workspace Storage:**
-- `{workspace}/docs/agent_handover_config.json` — runtime config: array of handovers (id, name, prompt) + consolidated `handover_prompt`
+- `{workspace}/docs/agent_handover_config.json` — runtime config: array of handovers (id, name, prompt) + consolidated `handover_prompt` (the env renders its prompt from the array; the stored prose is what the backend built for that environment's protocol version)
 
 ### Frontend
 
@@ -106,8 +108,10 @@ All routes are in `backend/app/api/routes/agents.py`:
 
 ### AgentService (`backend/app/services/agents/agent_service.py`)
 
-- `sync_agent_handover_config(agent_id)` — queries all enabled handover configs, formats JSON with targets and consolidated prompt, pushes to agent-env via adapter
-- `create_agent_task(task_message, source_session_id, target_agent_id?, target_agent_name?)` — orchestrates direct handover or inbox task creation; delegates to `InputTaskService`
+- `sync_agent_handover_config(agent_id)` — queries all enabled handover configs, formats JSON with targets and consolidated prompt, pushes to agent-env via adapter. The consolidated prompt follows the agent's active environment: `task_protocol_version >= 1` → `build_handover_prompt()`, else `build_legacy_handover_prompt()`
+- `build_handover_prompt(handovers)` — the **Configured handovers** section: one line per pair with the name and target string `agent:<uuid>`, the user-authored trigger verbatim beneath, and one sentence pointing at `tasks_create` (`assignee`) and `tasks_targets`. Empty when nothing is configured. Kept identical to the env's `prompt_generator.build_handover_prompt()` (the backend cannot import env templates)
+- `build_legacy_handover_prompt(handovers)` — the pre-protocol text, verbatim (it names `create_agent_task` / `task_message` and describes the `[Sub-task …]` feedback), for environments at protocol 0
+- `create_agent_task(task_message, source_session_id, target_agent_id?, target_agent_name?)` — orchestrates direct handover or inbox task creation for the older agent routes; delegates to `InputTaskService`
 - `delete_agent(agent_id)` — handles clone relationship cleanup (detaches clones from parent, updates share records for deleted clones) before deleting environments and agent
 
 ### InputTaskService (`backend/app/services/tasks/input_task_service.py`)
@@ -119,7 +123,7 @@ All routes are in `backend/app/api/routes/agents.py`:
 
 ### AIFunctionsService (`backend/app/services/ai_functions/ai_functions_service.py`)
 
-- `generate_handover_prompt(source_agent, target_agent)` — invokes handover generator agent to produce draft prompt
+- `generate_handover_prompt(source_agent, target_agent)` — invokes handover generator agent to produce a draft **trigger**: 2-3 plain sentences on WHEN to hand over and WHAT to pass, never naming a tool or parameter (`handover_generator_prompt.md`)
 - `refine_task(task_message, refiner_prompt)` — refines handover message for direct handover mode
 
 ### Environment Lifecycle (`backend/app/services/environments/environment_lifecycle.py`)
@@ -196,7 +200,6 @@ Logged to source session after task creation:
 task_created: true
 task_id: <uuid>
 session_id: <uuid>
-target_agent_id: <uuid>
 target_agent_name: <string>
 ```
 
@@ -206,6 +209,10 @@ task_created: true
 task_id: <uuid>
 inbox_task: true
 ```
+
+## Result Delivery
+
+When the target's session settles, `InputTaskService.deliver_feedback_to_source()` posts a `role="user"` message into the source session (`message_metadata.task_feedback = true`) and starts a stream if it is idle. For a source environment at protocol 1 or later the content is the task protocol's result packet (`result_packet_text()`): `Task result from <agent> on <ref>:`, then `Status:` and `Summary:`, the report body cut at 8,000 characters with a pointer to `tasks_get`, artifacts (a by-name file shows as "(file, not attached)") and, for `blocked`, the question with who should answer it. Fields come from the stored `tasks_report`; without one the session outcome maps to `done` / `blocked` / `failed`. A source environment at protocol 0 gets the legacy `[Sub-task completed|needs input|error] <summary>` line.
 
 ## Security
 

@@ -1825,6 +1825,7 @@ export type AgentSubtaskCreate = {
     priority?: string;
     task?: (string | null);
     source_session_id?: (string | null);
+    external_ref?: (string | null);
 };
 
 export type AgentTaskCommentCreate = {
@@ -1843,6 +1844,9 @@ export type AgentTaskCreate = {
     assigned_to?: (string | null);
     priority?: string;
     source_session_id?: (string | null);
+    assigned_agent_id?: (string | null);
+    assigned_node_id?: (string | null);
+    external_ref?: (string | null);
 };
 
 /**
@@ -3577,7 +3581,7 @@ export type DCRRequest = {
 export type DelegationArtifact = {
     kind: 'file' | 'link';
     name: string;
-    ref: string;
+    ref?: (string | null);
 };
 
 export type kind = 'file' | 'link';
@@ -3590,6 +3594,8 @@ export type DelegationCapabilities = {
     metadata: boolean;
     structured_result: boolean;
     reply: boolean;
+    protocol_version: number;
+    server: string;
 };
 
 export type DelegationMetadata = {
@@ -7404,6 +7410,88 @@ export type TaskCommentsPublic = {
     count: number;
 };
 
+export type TasksCommentRequest = {
+    source_session_id: string;
+    ref?: (string | null);
+    body: string;
+    files?: (Array<(string)> | null);
+};
+
+export type TasksCreateRequest = {
+    source_session_id: string;
+    title: string;
+    description: string;
+    priority?: ('low' | 'normal' | 'high' | 'urgent' | null);
+    category?: ('backlog' | 'ready' | 'draft' | null);
+    parent?: (string | null);
+    assignee?: (string | null);
+    id?: (string | null);
+    execution?: ('ask' | 'auto' | null);
+    group?: (string | null);
+    custom_fields?: ({
+    [key: string]: unknown;
+} | null);
+};
+
+export type TasksReplyRequest = {
+    source_session_id: string;
+    ref: string;
+    message: string;
+};
+
+export type TasksReportRequest = {
+    source_session_id: string;
+    ref?: (string | null);
+    status: 'in_progress' | 'blocked' | 'done' | 'failed';
+    summary: string;
+    question?: (string | null);
+    audience?: ('requester' | 'user' | null);
+    artifacts?: Array<(string | {
+    [key: string]: unknown;
+})>;
+    body?: string;
+};
+
+export type TasksUpdateRequest = {
+    source_session_id: string;
+    ref: string;
+    title?: (string | null);
+    description?: (string | null);
+    priority?: ('low' | 'normal' | 'high' | 'urgent' | null);
+    custom_fields?: ({
+    [key: string]: unknown;
+} | null);
+    category?: ('backlog' | 'ready' | 'done' | 'cancelled' | null);
+};
+
+export type TaskTarget = {
+    target: string;
+    name: string;
+    kind?: 'folder' | 'kit' | 'cinna' | 'desktop' | 'external';
+    location?: 'local' | 'remote';
+    description?: (string | null);
+    capabilities?: TaskTargetCapabilities;
+    protocol_version?: number;
+    requires_approval?: boolean;
+};
+
+export type kind2 = 'folder' | 'kit' | 'cinna' | 'desktop' | 'external';
+
+export type location = 'local' | 'remote';
+
+export type TaskTargetCapabilities = {
+    structured_report?: boolean;
+    reply?: boolean;
+    priority?: boolean;
+    custom_fields?: boolean;
+    attachments?: boolean;
+};
+
+export type TaskTargetsPublic = {
+    protocol_version?: 1;
+    targets: Array<TaskTarget>;
+};
+
 export type TaskTriggerCreateExactDate = {
     name: string;
     type?: "exact_date";
@@ -9082,6 +9170,66 @@ export type AgentsGenerateRouterTriggerPromptEndpointData = {
 };
 
 export type AgentsGenerateRouterTriggerPromptEndpointResponse = (GenerateRouterTriggerPromptResponse);
+
+export type AgentTasksTasksTargetsData = {
+    sourceSessionId: string;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksTasksTargetsResponse = (TaskTargetsPublic);
+
+export type AgentTasksTasksListData = {
+    category?: ('backlog' | 'ready' | 'active' | 'waiting' | 'done' | null);
+    includeClosed?: boolean;
+    relation?: 'assigned' | 'created' | 'delegated' | 'all';
+    sourceSessionId: string;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksTasksListResponse = (unknown);
+
+export type AgentTasksTasksGetData = {
+    ref: string;
+    sourceSessionId: string;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksTasksGetResponse = (unknown);
+
+export type AgentTasksTasksCreateData = {
+    requestBody: TasksCreateRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksTasksCreateResponse = (unknown);
+
+export type AgentTasksTasksUpdateData = {
+    requestBody: TasksUpdateRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksTasksUpdateResponse = (unknown);
+
+export type AgentTasksTasksCommentData = {
+    requestBody: TasksCommentRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksTasksCommentResponse = (unknown);
+
+export type AgentTasksTasksReportData = {
+    requestBody: TasksReportRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksTasksReportResponse = (unknown);
+
+export type AgentTasksTasksReplyData = {
+    requestBody: TasksReplyRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentTasksTasksReplyResponse = (unknown);
 
 export type AgentTasksAgentReportDelegationData = {
     requestBody: AgentDelegationReport;

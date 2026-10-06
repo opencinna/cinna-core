@@ -115,6 +115,13 @@ SKIP_DIR_NAMES         = {".git", ".venv", "__pycache__", ".mypy_cache",
 registry). `test_skill_manifest.py::test_every_registered_platform_command_is_reserved`
 guards the drift.
 
+`PLATFORM_SKILL_NAMES = frozenset({"cinna-tasks"})` and `PLATFORM_SKILL_SOURCE =
+"platform"` (both copies) reserve the platform skills' names: a skill parsed
+with any other `source` that takes one fails with `reserved_name` ("This name is
+reserved by a platform skill."). Only a skill scanned with
+`source="platform"` may carry it. Extra frontmatter keys such as `when_to_use`,
+`compatibility` and a `metadata` map are kept verbatim, like every unknown key.
+
 `SKILL_CREDENTIAL_TYPES` mirrors `app.models.credentials.credential.CredentialType`
 for the same reason, minus `mcp_provider` — an MCP connector never reaches
 `credentials.json`, so no script could consume that slot. A unit test guards
@@ -206,6 +213,17 @@ All three env templates
 `~/.claude/skills/*/SKILL.md` is a documented OpenCode global discovery path as
 well as Claude Code's user-scope source, which is why **one** projection serves
 both engines.
+
+**Platform skills.** `refresh(..., platform_skills_dir=DEFAULT_PLATFORM_SKILLS_DIR)`
+(`/app/core/skills`, installed per environment by
+`backend/app/services/environments/platform_protocol_files.py`) adds the valid
+entries whose name is in `PLATFORM_SKILL_NAMES` (`_platform_entries`) to the
+projected set and copies them from that root (`_source_root`). The state hash is
+`_combined_hash`: the workspace `tree_hash` folded with the platform tree's when
+the platform root exists, and the workspace hash unchanged otherwise, so an image
+without platform skills keeps the state it already latched. OpenCode gets no
+`skills.paths` entry for `/app/core/skills` — it reads the projected copy, and a
+second path would index the skill twice.
 
 ### `ProjectionResult` — `identity`, not `changed`
 
@@ -359,7 +377,10 @@ whether to restart a server.
 `PromptGenerator(workspace_dir, supports_skills=True)`. When an adapter sets
 `SUPPORTS_SKILLS = False`, `_get_agent_skills_section()` appends a
 `## Agent Skills` block listing `name — description` plus "read
-`skills/<name>/SKILL.md` before using a skill". For both shipped engines it
+`skills/<name>/SKILL.md` before using a skill". The block also lists the
+platform skills found under `/app/core/skills` (`- **cinna-tasks**
+(`/app/core/skills/cinna-tasks/SKILL.md`) — <description>`); a scan failure there
+is logged and never breaks prompt generation. For both shipped engines it
 returns `None` and costs exactly zero tokens.
 
 ---

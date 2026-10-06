@@ -106,7 +106,10 @@ def test_delegation_capabilities_are_versioned_and_authenticated(
     capabilities = client.get(f'{BASE}/delegation-capabilities', headers=normal_user_token_headers)
     assert capabilities.status_code == 200
     body = capabilities.json()
-    assert body == {'version': 1, 'metadata': True, 'structured_result': True, 'reply': True}
+    assert body == {
+        'version': 1, 'metadata': True, 'structured_result': True, 'reply': True,
+        'protocol_version': 1, 'server': 'cinna',
+    }
 
 
 def test_delegation_report_gated_by_external_executor_and_active_status(

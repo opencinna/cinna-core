@@ -148,7 +148,7 @@ async def agent_create_task(
     If assigned_to is provided, resolves agent by name and auto-executes.
     For team agents, the task inherits team context from the calling session's task.
 
-    Called by the mcp__agent_task__create_task MCP tool.
+    For environments built before the Cinna Task Protocol (their ``create_task`` tool). Current environments call the `cinna` server's tasks_create, served by ``/agent/tasks/protocol/*``.
     """
     try:
         task, resolved_name = await InputTaskService.create_task_from_agent(
@@ -200,7 +200,7 @@ async def agent_add_comment_current(
     """
     Agent posts a comment on its current task (resolved from session).
 
-    Called by the mcp__agent_task__add_comment MCP tool when no task short code is specified.
+    For environments built before the Cinna Task Protocol (their ``add_comment`` tool). Current environments call the `cinna` server's tasks_comment, served by ``/agent/tasks/protocol/*``.
     """
     try:
         if not data.source_session_id:
@@ -227,7 +227,7 @@ async def agent_update_status_current(
     """
     Agent updates status of its current task (resolved from session).
 
-    Called by the mcp__agent_task__update_status MCP tool when no task short code is specified.
+    For environments built before the Cinna Task Protocol (their ``update_status`` tool). Current environments call the `cinna` server's tasks_report / tasks_update, served by ``/agent/tasks/protocol/*``.
     """
     try:
         if not data.source_session_id:
@@ -259,7 +259,7 @@ async def agent_get_task_details_current(
     """
     Agent gets details of its current task (resolved from session).
 
-    Called by the mcp__agent_task__get_details MCP tool when no task short code is specified.
+    For environments built before the Cinna Task Protocol (their ``get_details`` tool). Current environments call the `cinna` server's tasks_get, served by ``/agent/tasks/protocol/*``.
     Automatically uploads task files to the calling agent's workspace.
     """
     try:
@@ -286,7 +286,7 @@ async def agent_create_subtask_current(
     """
     Agent creates a subtask under its current task (resolved from session).
 
-    Called by the mcp__agent_task__create_subtask MCP tool.
+    For environments built before the Cinna Task Protocol (their ``create_subtask`` tool). Current environments call the `cinna` server's tasks_create with `parent`, served by ``/agent/tasks/protocol/*``.
     """
     try:
         if not data.source_session_id:
@@ -323,7 +323,7 @@ async def agent_add_comment(
     """
     Agent posts a comment on a task (with optional workspace file attachments).
 
-    Called by the mcp__agent_task__add_comment MCP tool.
+    For environments built before the Cinna Task Protocol (their ``add_comment`` tool). Current environments call the `cinna` server's tasks_comment, served by ``/agent/tasks/protocol/*``.
     """
     try:
         task = InputTaskService.get_task_with_ownership_check(
@@ -357,7 +357,7 @@ async def agent_update_status(
     Standard transitions (in_progress, completed) are handled automatically
     by the backend session lifecycle events.
 
-    Called by the mcp__agent_task__update_status MCP tool.
+    For environments built before the Cinna Task Protocol (their ``update_status`` tool). Current environments call the `cinna` server's tasks_report / tasks_update, served by ``/agent/tasks/protocol/*``.
     """
     try:
         task = InputTaskService.get_task_with_ownership_check(
@@ -396,7 +396,7 @@ async def agent_create_subtask(
 
     Validates team membership and connection topology before creating the subtask.
 
-    Called by the mcp__agent_task__create_subtask MCP tool.
+    For environments built before the Cinna Task Protocol (their ``create_subtask`` tool). Current environments call the `cinna` server's tasks_create with `parent`, served by ``/agent/tasks/protocol/*``.
     """
     try:
         task = InputTaskService.get_task_with_ownership_check(
@@ -439,7 +439,7 @@ def agent_list_tasks(
     - "created": tasks created by this agent (agent_initiated=True from this agent)
     - "team": all tasks in the agent's team
 
-    Called by the mcp__agent_task__list_tasks MCP tool.
+    For environments built before the Cinna Task Protocol (their ``list_tasks`` tool). Current environments call the `cinna` server's tasks_list, served by ``/agent/tasks/protocol/*``.
     """
     try:
         data, count = InputTaskService.list_agent_tasks(
@@ -463,7 +463,7 @@ async def agent_get_task_details(
     """
     Agent gets full task details including recent comments and subtask progress.
 
-    Called by the mcp__agent_task__get_details MCP tool.
+    For environments built before the Cinna Task Protocol (their ``get_details`` tool). Current environments call the `cinna` server's tasks_get, served by ``/agent/tasks/protocol/*``.
     Returns a simplified view optimized for agent consumption.
     Automatically uploads task files to the calling agent's workspace when
     source_session_id is provided.
