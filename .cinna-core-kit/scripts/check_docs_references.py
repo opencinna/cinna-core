@@ -88,6 +88,7 @@ def is_skippable_path(path):
     Skips:
     - Paths with '...' ellipsis (abbreviated paths like backend/app/env-templates/.../routes.py)
     - Paths with '[' brackets (placeholder syntax like backend/app/api/routes/[domain].py)
+    - Paths with '<' angle brackets (placeholder syntax like docs/plans/<plan>.progress.md)
     - Paths where any segment is a template/direction placeholder:
         - Starts with 'your_'  (e.g. your_entity.py)
         - Starts with '$'      (e.g. $entityId.tsx — TanStack Router dynamic params)
@@ -98,6 +99,8 @@ def is_skippable_path(path):
     if "..." in path or "\u2026" in path:
         return True
     if "[" in path or "]" in path:
+        return True
+    if "<" in path or ">" in path:
         return True
     for segment in path.replace("\\", "/").split("/"):
         stem = segment.rsplit(".", 1)[0] if "." in segment else segment
