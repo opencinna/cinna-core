@@ -261,3 +261,57 @@ def test_entries_without_declarations_raise_no_credential_issues(
     assert row["skills"][0]["credentials"] == []
     assert row["status"] == "ok"
     assert row["credential_issues"] == []
+
+
+# ---------------------------------------------------------------------------
+# Scenario 5 (C14): an issued agent_api key is ready only while it is active
+# ---------------------------------------------------------------------------
+
+
+def test_issued_agent_api_key_slot_is_not_ready_once_revoked(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+) -> None:
+    """
+    1. A local skill declares an ``agent_api`` slot; an issued key's credential
+       (slot = the producer's default ``<slug>-api``) is linked → ``ok``.
+    2. The issuer revokes the key → the slot reads ``access_revoked``.
+       (An expired key is not reachable through the API: ``expires_in_days >= 1``.)
+    """
+    from tests.utils.agent_api_keys import setup_producer
+
+    _, headers = make_developer(client, superuser_token_headers)
+    producer = setup_producer(client, headers, name="Ready Producer")
+    agent_id, _ = make_agent_with_env(client, headers, "KeySlot-Consumer")
+
+    r = client.post(
+        f"{API}/agents/{producer['id']}/agent-api/keys",
+        headers=headers,
+        json={"read_only_override": False},
+    )
+    assert r.status_code == 200, r.text
+    key = r.json()
+    slot = get_credential(client, headers, key["credential_id"])["service_uri"]
+    assert slot == "ready-producer-api"
+
+    _install_adapter(
+        patch_environment_adapter,
+        [_entry("keyed", credentials=_declares(slot, "agent_api"))],
+    )
+    link_credential_to_agent(client, headers, agent_id, key["credential_id"])
+
+    row = addons_by_name(refresh_agent_addons(client, headers, agent_id))["keyed"]
+    assert row["status"] == "ok"
+    assert row["credential_issues"] == []
+
+    r = client.post(
+        f"{API}/agents/{producer['id']}/agent-api/keys/{key['id']}/revoke", headers=headers
+    )
+    assert r.status_code == 200, r.text
+
+    row = addons_by_name(refresh_agent_addons(client, headers, agent_id))["keyed"]
+    assert row["status"] == "warning"
+    assert row["credential_issues"] == [
+        {"slot": slot, "type": "agent_api", "reason": "access_revoked"}
+    ]

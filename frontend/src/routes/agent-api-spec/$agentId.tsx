@@ -1,11 +1,12 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AgentApiService } from "@/client"
+import { AgentApiService, CredentialsService } from "@/client"
 import { OpenApiSpecViewer } from "@/components/Agents/OpenApiSpecViewer"
 import { Button } from "@/components/ui/button"
 import type { AgentApiStatus } from "@/hooks/useAgentApi"
 import { isLoggedIn } from "@/hooks/useAuth"
+import { getErrorMessage } from "@/utils"
 
 /**
  * Standalone, full-page viewer for a producer agent's harvested OpenAPI spec,
@@ -28,6 +29,14 @@ import { isLoggedIn } from "@/hooks/useAuth"
  */
 export const Route = createFileRoute("/agent-api-spec/$agentId")({
   component: AgentApiSpecPage,
+  // ``credential``: open the spec as the HOLDER of that issued key (through
+  // ``GET /credentials/{id}/agent-api-key/spec``) instead of as the producer's
+  // owner. The holder cannot wake or refresh someone else's agent, so that
+  // path is one fetch, no wake loop.
+  validateSearch: (search: Record<string, unknown>): { credential?: string } =>
+    typeof search.credential === "string"
+      ? { credential: search.credential }
+      : {},
   beforeLoad: async () => {
     if (!isLoggedIn()) {
       throw redirect({ to: "/login" })
@@ -50,6 +59,7 @@ const MAX_WAKE_POLLS = 12
 
 function AgentApiSpecPage() {
   const { agentId } = Route.useParams()
+  const { credential: holderCredentialId } = Route.useSearch()
 
   const [phase, setPhase] = useState<ViewerPhase>("waking")
   const [spec, setSpec] = useState<Record<string, unknown> | null>(null)
@@ -75,6 +85,29 @@ function AgentApiSpecPage() {
       new Promise((resolve) => setTimeout(resolve, ms))
 
     const isCurrent = () => pollActiveRef.current && activeRunRef.current === runId
+
+    // Holder path: one read through the key-holder endpoint (it applies the
+    // producer's ``expose_spec`` and refuses ended keys with a 409).
+    const loadAsHolder = async (credentialId: string) => {
+      setPhase("loading")
+      try {
+        const data = (await CredentialsService.readAgentApiKeySpec({
+          id: credentialId,
+        })) as Record<string, unknown>
+        if (!isCurrent()) return
+        setSpec(data)
+        setPhase("ready")
+      } catch (e) {
+        if (!isCurrent()) return
+        setErrorMessage(
+          getErrorMessage(
+            e,
+            "The spec is not available for this key. The key may no longer work, the producer may not publish its spec, or its API may be stopped.",
+          ),
+        )
+        setPhase("error")
+      }
+    }
 
     const loop = async () => {
       let attempt = 0
@@ -169,8 +202,12 @@ function AgentApiSpecPage() {
       }
     }
 
-    void loop()
-  }, [agentId])
+    if (holderCredentialId) {
+      void loadAsHolder(holderCredentialId)
+    } else {
+      void loop()
+    }
+  }, [agentId, holderCredentialId])
 
   useEffect(() => {
     startPolling()

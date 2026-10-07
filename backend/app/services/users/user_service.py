@@ -348,6 +348,22 @@ class UserService:
         return session.exec(statement).first()
 
     @staticmethod
+    def find_active_users_by_email_ci(*, session: Session, email: str) -> list[User]:
+        """Active users whose email equals ``email`` case-insensitively.
+
+        Normally zero or one row; legacy case-only duplicates can yield more,
+        which callers treat as ambiguous rather than picking one.
+        """
+        normalized = email.strip().lower()
+        if not normalized:
+            return []
+        statement = select(User).where(
+            func.lower(User.email) == normalized,
+            User.is_active == True,  # noqa: E712
+        )
+        return list(session.exec(statement).all())
+
+    @staticmethod
     def search_users(
         *,
         session: Session,

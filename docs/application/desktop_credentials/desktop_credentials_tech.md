@@ -94,14 +94,16 @@
 ## API Endpoints
 
 - `GET /api/v1/external/credentials` (`external_credentials.py:list_credentials`, tag `external`) —
-  `CurrentUser` auth. Reads `If-None-Match`; on a match returns `304` with the same `ETag` /
+  `CurrentUser` auth. Optional `?include=agent_api_keys` (comma-separated `include`, unknown values
+  ignored; `_includes_agent_api_keys`) opts in to the caller's own issued `agent_api` keys. Reads `If-None-Match`; on a match returns `304` with the same `ETag` /
   `Cache-Control: private, no-cache` headers and no body. Otherwise decrypts only the visible rows
   and returns `DesktopCredentialList`.
 - `POST /api/v1/external/credentials/materialize` (`external_credentials.py:materialize_credentials`)
   — `CurrentUser` + `CurrentClientClaims` (must resolve to `kind == "desktop"` with a `client_id`,
   else `403`). Calls `ensure_not_cli_exchanged_session` before touching the service. Body:
   `DesktopCredentialMaterializeRequest {credential_ids: UUID[0..50], include_current_user: bool}`.
-  Response: `Cache-Control: no-store`; `DesktopCredentialMaterializeResponse`.
+  Same optional `?include=agent_api_keys`. Response: `Cache-Control: no-store`;
+  `DesktopCredentialMaterializeResponse`.
 
 ## Services & Key Methods
 
@@ -112,8 +114,19 @@
   (not owned and (no share or `allow_sharing` now false)) → `not_local_category` (category ≠
   "mine") → `local_use_not_allowed` (not owned and `allow_local_use` false). Used identically by
   list visibility and by materialize.
-- `revision(credential) -> str` — `sha256(str(credential.updated_at))[:32]`, the opaque per-item
-  revision surfaced in both list items and materialized items.
+- `revision(credential, key_state=None) -> str` — non-keys: `sha256(str(credential.updated_at))[:32]`
+  (byte-for-byte unchanged). Issued keys: `sha256(f"{updated_at}|{key_status}|{expires_at}|{base_url}")[:32]`
+  with `key_status` computed at read time (D25), so expiry/revoke/pause/removal change it without a
+  write. Surfaced in list items and materialized items.
+- `key_facts(key_state) -> DesktopAgentApiKeyFacts` — non-secret facts `{producer_agent_id,
+  producer_name, issuer_email, base_url, spec_url, expires_at}`; URLs from
+  `AgentApiTokenService.build_base_url/build_spec_url(token.agent_id)` (public origin,
+  `settings.backend_base_url`); producer fields null once the producer is removed, `issuer_email`
+  null once the issuer is removed.
+- `_key_states(...)` — one `key_states_by_credential` query for the `agent_api` rows of a request
+  (empty without the opt-in). Eligibility in `local_access_refusal`: `agent_api` is local-compatible
+  only with the opt-in, owned by the caller, an issued key, `subject_user_id == caller`; otherwise
+  `unsupported_type`.
 - `_shared_sources` / `_categories` — batch helpers: one query for every `CredentialShare.source`
   the caller holds, one call to `CredentialsService.classify_owned_credentials` for owned rows plus
   `classify_credential_category` per shared row.
@@ -126,7 +139,7 @@
 - `materialize(session, user, client_id, request) -> DesktopCredentialMaterializeResponse` —
   `_require_live_client` (401 on missing/revoked/CLI-exchanged), `_check_rate_limit` (429 + `Retry-
   After`), then per requested id: `local_access_refusal`, and if `None`, an additional
-  `credential.type not in LOCALLY_COMPATIBLE_TYPES` check yielding `unsupported_type`. Selected
+  `credential.type not in LOCALLY_COMPATIBLE_TYPES` check yielding `unsupported_type` (`agent_api` is allowed only for an eligible issued key under the opt-in). For a key, a status gate follows: `unavailable_reason_for(status)` → refusal `key_revoked` | `key_expired` | `key_paused` carrying `key_status`; a key whose status changed between the gate and the builder is refused, never delivered. Selected
   entries are shaped with `CredentialsService.credential_to_env_dict` and passed as
   `selected_credentials` to `prepare_credentials_for_environment(session, None,
   selected_credentials=selected, desktop_owner=user)` — the `agent_id=None` / `desktop_owner=user`
@@ -139,7 +152,7 @@
   differs from the requester (a shared credential), logs a second event on the owner naming the
   recipient's id and email. Neither event carries a value.
 - `LOCALLY_COMPATIBLE_TYPES: frozenset[CredentialType]` — `EMAIL_IMAP`, `EMAIL_SMTP`, `ODOO`,
-  `API_TOKEN`, `GOOGLE_SERVICE_ACCOUNT`.
+  `API_TOKEN`, `GOOGLE_SERVICE_ACCOUNT` (`AGENT_API` is conditional, see above).
 - `MATERIALIZE_LIMIT_PER_MINUTE = 60`.
 
 `CredentialsService` additions this feature relies on (`credentials_service.py`):
@@ -154,6 +167,22 @@
   no `Agent` row). Same drop/whitelist/redact/`current_user`-block pipeline either way; see
   [Credential Materialization](../../flows/credential_materialization.md) for the full internal
   ordering.
+
+## Issued-key schema additions (`models/credentials/desktop_credential.py`)
+
+- `DesktopCredentialRefusalReason` gains `key_revoked`, `key_expired`, `key_paused`.
+- `DesktopCredentialListItem`: `key_status: str | None` (an `AgentApiKeyStatus` value; unknown
+  future values mean unavailable), `agent_api: DesktopAgentApiKeyFacts | None`, and the existing
+  `expires_at` filled with the key's expiry (ISO-8601 UTC) or null. Keys list as `relation="owned"`,
+  `local_use_allowed=true`, `status="complete"`, `service_uri` = the slot.
+- Refusal items carry `key_status`. `DesktopCredentialMaterializeResponse.owner_identity` stays
+  `None`: issued keys bind identity to the key.
+- Delivered entry (active keys only), same shape as a cloud `credentials.json` entry:
+  `credential_data = {base_url, spec_url, token, label, producer_agent_id}`; a cloud entry for a
+  non-active key is the token-less form with `unavailable_reason` + `key_status` (see
+  [Credential Materialization](../../flows/credential_materialization.md)). The pipeline marks key
+  entries so `prepare_credentials_for_environment` never builds an `owner_identity` block for them
+  (`CredentialsService._shape_agent_api_keys_for_env(..., for_desktop=True)` recomputes URLs).
 
 ## Frontend Components
 
@@ -183,8 +212,8 @@ config-driven.
   `Cache-Control: private, no-cache`.
 - `DesktopMaterializedCredential.ssh_key` and `DesktopCredentialMaterializeResponse.owner_identity`
   are typed fields that are always `None` — kept in the schema only so an older Desktop client that
-  still parses them does not break; neither `ssh_key` nor `agent_api`/`mcp_provider` credentials are
-  ever delivered.
+  still parses them does not break; neither `ssh_key` nor `mcp_provider` credentials, nor `agent_api` connections, are
+  ever delivered (issued `agent_api` keys are, under the opt-in).
 - Rate limiting is per-process (`RateLimiter`), keyed on `f"{user_id}:{client_id}"`, not a
   distributed quota.
 - Auditing never records a credential value, only ids/emails, via `SecurityEventService.create_event`.

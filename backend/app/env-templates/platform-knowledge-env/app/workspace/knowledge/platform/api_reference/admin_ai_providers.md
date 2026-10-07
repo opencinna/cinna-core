@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-providers`
 ## GET `/api/v1/admin/ai-providers/adapters`
 **List Provider Adapters**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `ProviderAdaptersPublic`
 
 ---
@@ -12,10 +14,14 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-providers`
 ## GET `/api/v1/admin/ai-providers/`
 **List Ai Providers**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## POST `/api/v1/admin/ai-providers/`
 **Create Ai Provider**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`AIProviderCreate`):
   - `name`: string (required)
@@ -43,6 +49,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-providers`
 ## GET `/api/v1/admin/ai-providers/{provider_id}`
 **Get Ai Provider**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `provider_id`: uuid
 
@@ -52,6 +60,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-providers`
 
 ## PATCH `/api/v1/admin/ai-providers/{provider_id}`
 **Update Ai Provider**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `provider_id`: uuid
@@ -78,6 +88,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-providers`
 ## DELETE `/api/v1/admin/ai-providers/{provider_id}`
 **Delete Ai Provider**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `provider_id`: uuid
 
@@ -91,6 +103,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-providers`
 ## POST `/api/v1/admin/ai-providers/{provider_id}/verify`
 **Verify Ai Provider**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `provider_id`: uuid
 
@@ -100,6 +114,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-providers`
 
 ## POST `/api/v1/admin/ai-providers/{provider_id}/rotate-key`
 **Rotate Ai Provider Key**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `provider_id`: uuid
@@ -113,6 +129,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-providers`
 
 ## POST `/api/v1/admin/ai-providers/{provider_id}/apply-to-existing`
 **Apply Ai Provider To Existing**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `provider_id`: uuid

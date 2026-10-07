@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { agentApiAccessQueryKey } from "@/hooks/useAgentApiKeys"
 import useCustomToast from "@/hooks/useCustomToast"
 
 /** The fixed user when the modal opens in edit mode (user cannot change). */
@@ -220,7 +221,10 @@ export function BundlePermissionsAddUserModal({
       })
     }
     for (const producerId of touchedProducerIds) {
-      queryClient.invalidateQueries({ queryKey: ["agentApiGrants", producerId] })
+      // The producer's API access card reads grants through its own list.
+      queryClient.invalidateQueries({
+        queryKey: agentApiAccessQueryKey(producerId),
+      })
     }
 
     setSubmitting(false)
@@ -345,7 +349,7 @@ interface ProducerScopeBlockProps {
 /**
  * Scope multiselect for one manageable producer: removable assigned chips,
  * catalog quick-add chips, and a free-text add — lifted from the GrantDialog
- * body in ``AgentApiAccessScopesCard.tsx`` so the two surfaces feel identical.
+ * body in ``ApiAccessScopesDialog.tsx`` so the two surfaces feel identical.
  */
 function ProducerScopeBlock({
   producer,

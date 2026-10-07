@@ -57,8 +57,10 @@ which encrypts `credential_data` with `encrypt_field`. Four provenances feed it:
   `create_credential` with `type=AGENT_API`, `allow_sharing=False`, and
   `credential_data={base_url, spec_url, token, label, producer_agent_id}`
   (`agent_api_token_service.py`). The `AgentApiToken` row is then pointed at the credential so
-  deleting the credential cascade-revokes the token. An **external key**
-  (`agent_api_key_service.py`, `kind="external"`) uses the same type but is *not* a connection.
+  deleting the credential cascade-revokes the token. An **issued key**
+  (`agent_api_key_service.py`, `kind="external"`) uses the same type but is *not* a connection:
+  its credential is created **owned by the recipient** (the person the producer's owner issued
+  it to), with a default `service_uri` of `<producer-slug>-api`.
 - **Automatic `mcp_provider`.** Connecting to a producer agent mints a connector-scoped direct token
   and calls `create_credential` with `type=MCP_PROVIDER`, `mcp_auth_mode="agent2agent"`,
   `mcp_consumer_agent_id`, per-mode flags `mcp_mode_conversation` / `mcp_mode_building`, and
@@ -139,11 +141,16 @@ load-bearing:
    credential by **slot** whatever its type, and tell a filled one from an empty one. `api_token`
    rows are additionally rewritten by `_process_api_token_credential` into a ready-to-use
    `http_header_name` / `http_header_value` pair, and keep the older in-data `service_uri` copy.
-2. **Drop external `agent_api` keys.** `_drop_external_agent_api_keys` batch-resolves
-   `AgentApiToken.kind` and keeps only rows positively identified as `kind="connection"`. It fails
-   closed twice: an orphan with no bound token is dropped, and if the lookup itself raises, **every**
-   `agent_api` credential is dropped. This runs first so keys are absent from the README render and
-   from the `has_agent_api_cred` test in step 6.
+2. **Shape `agent_api` credentials.** `_shape_agent_api_keys_for_env` resolves `AgentApiToken.kind`,
+   the credential owner and the issued-key status in batch. Connections are kept when their producer
+   still exists. An **issued key** is kept only when credential owner == key recipient == the
+   environment owner (the Desktop caller on the device path); otherwise dropped. An active key ships
+   with its token; a non-active key ships **token-less** with top-level `unavailable_reason`
+   (`key_revoked` | `key_expired` | `key_paused`) and `key_status`, and `credential_data` cut to
+   `{base_url, spec_url, label, producer_agent_id}`. On the Desktop path key URLs are recomputed from
+   the public origin. It fails closed twice: an orphan with no bound token is dropped, and if the
+   lookup raises **every** `agent_api` credential is dropped. This runs first so keys are marked
+   before the README render and the `has_agent_api_cred` test in step 6, which counts connections only.
 3. **Split out-of-band payloads.** `google_service_account` rows have their full JSON moved to a
    sibling `service_account_files` list and their in-file data replaced by
    `_process_service_account_credential` (a `{file_path, project_id, client_email}` reference).
@@ -273,10 +280,10 @@ create / start / resume / rebuild:
 | `credentials_service.py` `link_credential_to_agent` | share/ownership + agent2agent pair binding | link inserted / `ValueError` / `mcp_consumer_agent_id` bound on first link |
 | `credentials_service.py` `unlink_credential_from_agent` | is the unlinked agent the recorded agent2agent consumer? | plain unlink + sync, or credential auto-deleted with its bound token |
 | `credentials_service.py` `sync_credentials_to_agent_environments` | `AgentEnvironment.status == "running"` | push now, or defer to the next `_sync_dynamic_data` |
-| `credentials_service.py` `_drop_external_agent_api_keys` | `AgentApiToken.kind` per row (lookup may raise) | keep connections / drop keys / drop **all** `agent_api` on lookup failure |
+| `credentials_service.py` `_shape_agent_api_keys_for_env` | `AgentApiToken.kind`, credential owner vs recipient vs env owner, key status (lookup may raise) | keep connections / keep a recipient's key (token-less when not active) / drop other keys / drop **all** `agent_api` on lookup failure |
 | `credentials_service.py` `prepare_credentials_for_environment` | `type == "mcp_provider"` | row excluded from `credentials.json` and README entirely |
 | `credentials_service.py` `filter_credential_data_for_agent_env` | field ∈ `AGENT_ENV_ALLOWED_FIELDS[type]` | field synced, or silently excluded (`{}` for unknown types) |
-| `credentials_service.py` `prepare_credentials_for_environment` | any `agent_api` credential present? | `owner_identity` block appended, or omitted |
+| `credentials_service.py` `prepare_credentials_for_environment` | any `agent_api` **connection** present (never for an issued key or on Desktop)? | `owner_identity` block appended, or omitted |
 | `credentials_service.py` `_rewrite_agent_api_urls_for_env` | `AGENT_ENV_BACKEND_URL` has a netloc | rewrite to container origin, or warn and keep the public URL |
 | `credentials_service.py` `_rewrite_mcp_endpoint_for_env` | `auth_mode == "agent2agent"` and `MCP_SERVER_CONTAINER_URL` set | netloc swapped, or endpoint used verbatim |
 | `credentials_service.py` `collect_mcp_provider_manifest` | `mcp_mode_<mode>` flag, `endpoint_url` present | entry emitted / skipped for this mode |
@@ -323,10 +330,12 @@ create / start / resume / rebuild:
   `ssh_keys` payload straight into `~/.ssh/`. A consequence noted in the code: `CredentialGuard` is
   fed only the whitelisted values, so private-key bodies are not output-redacted — they are simply
   never in an agent-readable file.
-- **External `agent_api` keys are never written into a container.** `_drop_external_agent_api_keys`
-  fails closed on a lookup error by dropping *all* `agent_api` rows, because `token` is a whitelisted
-  field and would otherwise pass the filter. Removing them before the README render is also what keeps
-  a key from triggering the `owner_identity` block.
+- **Issued `agent_api` keys reach only their recipient's own environments or Desktop.** A key never
+  lands where someone else's agent runs, and a key that is no longer active is delivered **without
+  its token** (`unavailable_reason` + `key_status`) rather than silently dropped, so the slot can
+  explain itself. `_shape_agent_api_keys_for_env` fails closed on a lookup error by dropping *all*
+  `agent_api` rows, because `token` is a whitelisted field; a key never triggers the
+  `owner_identity` block.
 - **Stored URL ≠ container URL.** `agent_api` `base_url`/`spec_url` and agent2agent MCP `endpoint_url`
   are stored with the public host for UI display and rewritten to the internal Docker origin during
   preparation. Both rewrites swap only the netloc; both no-op with a warning if the internal setting

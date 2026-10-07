@@ -732,8 +732,8 @@ and the `docs` role text dropped "one doc per local skill". A skill is
   all-in on skills that they had not climbed a rung they had, and the ladder
   check would then send them back to the guide they followed.
 - **The `design` rung** (guide 13, after `scripts` in `kit.json`'s ladder) is
-  reported by `_rungs_present` when `docs/AGENT_DEVELOPMENT.md` or
-  `docs/test_scenarios/` exists — the scaffold ships neither, so a fresh agent
+  reported by `_rungs_present` when `docs/AGENT_DEVELOPMENT.md` or <!-- nocheck -->
+  `docs/test_scenarios/` exists — the scaffold ships neither, so a fresh agent <!-- nocheck -->
   never shows it (`test_the_design_rung_is_adopted_by_its_record_or_its_scenarios`).
   Guidance only: both are domain docs under the existing `docs/` role, so the
   contract stays at 1.1.0.

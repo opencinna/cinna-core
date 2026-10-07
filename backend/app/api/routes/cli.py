@@ -11,7 +11,7 @@ Live sync model (replaces tarball push/pull and local container):
 - GET  /agents/{id}/sync-runtime — pinned Mutagen version info for CLI setup
 """
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from fastapi import (
     APIRouter,
@@ -38,7 +38,10 @@ from app.api.deps import (
     SessionDep,
 )
 from app.models import Message
-from app.models.agent_api.agent_api_token import ConnectAgentApiResponse
+from app.models.agent_api.agent_api_token import (
+    AgentApiKeyPublic,
+    ConnectAgentApiResponse,
+)
 from app.models.agents.agent import AgentPublic
 from app.models.agents.agent_schedule import (
     AgentSchedulePublic,
@@ -51,10 +54,16 @@ from app.models.agents.agent_schedule import (
 from app.models.agents.agent_schedule_log import AgentScheduleLogsPublic
 from app.models.cli.account_agent import AccountAgentsPublic
 from app.models.cli.account_convenience import (
+    AccountAgentApiAccess,
     AccountAgentApiCallBody,
     AccountAgentApiCallResult,
     AccountAgentApiEnableBody,
+    AccountAgentApiKeyIssueBody,
+    AccountAgentApiKeyIssued,
+    AccountAgentApiKeyRevokeBody,
     AccountAgentApiRefreshBody,
+    AccountAgentApiScopesBody,
+    AccountAgentApiScopesResult,
     AccountAgentCreateBody,
     AccountAgentInspectResult,
     AccountAgentStatusResult,
@@ -108,6 +117,7 @@ from app.services.cli.account_api_proxy_policy import ApiProxyDenied
 from app.services.cli.account_api_proxy_service import AccountApiProxyService
 from app.services.cli.account_cli_service import (
     AccountCLIService,
+    CredentialDraftRefusedError,
     WorkspaceNotFoundError,
 )
 from app.services.cli.cli_service import CLIService
@@ -126,6 +136,7 @@ from app.services.improvement.improvement_request_service import (
 )
 
 if TYPE_CHECKING:
+    from app.services.agent_api.agent_api_service import AgentApiError
     from app.services.agents.agent_service import CanBuildError
 
 
@@ -1062,6 +1073,114 @@ async def account_agent_api_call(
         raise HTTPException(status_code=e.status_code, detail=e.message)
 
 
+# ── Issued API keys (``cinna agent-api access``) ───────────────────────────
+# Coded refusals: ``{"detail": {"code", "message"}}`` (the CLI's CodedRefusal
+# shape). No response here ever carries a key value; rotate and reveal stay
+# web-only.
+
+_AGENT_API_FALLBACK_CODES: dict[int, str] = {
+    400: "invalid_request",
+    404: "not_found",
+    409: "conflict",
+}
+
+
+def _raise_agent_api_coded(e: "AgentApiError") -> NoReturn:
+    """Re-raise a service ``AgentApiError`` as a coded HTTP refusal."""
+    code = e.code or _AGENT_API_FALLBACK_CODES.get(e.status_code, "invalid_request")
+    raise HTTPException(
+        status_code=e.status_code, detail={"code": code, "message": e.message}
+    )
+
+
+@router.get("/account/agent-api/access", response_model=AccountAgentApiAccess)
+def account_agent_api_access(
+    agent_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Everyone with access to a producer the caller owns: grants and issued keys
+    per person (terminal keys included), the scope catalog and the web page
+    that manages access. Never a key value. 404 ``agent_not_found`` (no leak).
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return AccountCLIService.list_agent_api_access(
+            db=db, user=account_ctx.user, agent_id=agent_id
+        )
+    except AgentApiError as e:
+        _raise_agent_api_coded(e)
+
+
+@router.post("/account/agent-api/keys", response_model=AccountAgentApiKeyIssued)
+async def account_agent_api_issue_key(
+    body: AccountAgentApiKeyIssueBody,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Issue a key on a producer to a person named by email (null = the caller).
+    The response never carries the value: a self-issue answers
+    ``credential_url``, the page where the caller reveals it. Developer-gated.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.issue_agent_api_key(
+            db=db, user=account_ctx.user, body=body
+        )
+    except AgentApiError as e:
+        _raise_agent_api_coded(e)
+
+
+@router.post("/account/agent-api/keys/revoke", response_model=AgentApiKeyPublic)
+async def account_agent_api_revoke_key(
+    body: AccountAgentApiKeyRevokeBody,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Revoke an issued key now. Idempotent (an already revoked key answers 200);
+    the person's grant is left alone. Developer-gated.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.revoke_agent_api_key(
+            db=db, user=account_ctx.user, agent_id=body.agent_id, key_id=body.key_id
+        )
+    except AgentApiError as e:
+        _raise_agent_api_coded(e)
+
+
+@router.put(
+    "/account/agent-api/access/scopes", response_model=AccountAgentApiScopesResult
+)
+async def account_agent_api_set_scopes(
+    body: AccountAgentApiScopesBody,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    Set a person's scopes on a producer to exactly the given list, or remove
+    their grant (``scopes: null``, idempotent). Keys are untouched.
+    Developer-gated.
+    """
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    _require_developer_account(account_ctx)
+    try:
+        return await AccountCLIService.set_agent_api_scopes(
+            db=db, user=account_ctx.user, body=body
+        )
+    except AgentApiError as e:
+        _raise_agent_api_coded(e)
+
+
 @router.post(
     "/account/agents/{agent_id}/restart-env",
     response_model=AccountRestartEnvResult,
@@ -1566,6 +1685,8 @@ async def account_create_credential(
         return await AccountCLIService.create_credential_draft(
             db=db, user=account_ctx.user, body=body, request=request
         )
+    except CredentialDraftRefusedError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except WorkspaceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 

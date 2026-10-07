@@ -15,11 +15,16 @@ exercised with those.
 import json
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
+from app.models import AgentApiToken
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api, get_agent, update_agent
 from tests.utils.background_tasks import drain_tasks
@@ -697,7 +702,15 @@ def test_openapi_names_desktop_credential_response_models(client: TestClient) ->
         "not_local_category",
         "local_use_not_allowed",
         "unsupported_type",
+        "key_revoked",
+        "key_expired",
+        "key_paused",
     }
+    refusal = spec["components"]["schemas"]["DesktopCredentialRefusal"]["properties"]
+    assert "key_status" in refusal
+    item = spec["components"]["schemas"]["DesktopCredentialListItem"]["properties"]
+    assert "key_status" in item and "agent_api" in item
+    assert "DesktopAgentApiKeyFacts" in spec["components"]["schemas"]
 
 
 # ── Scenario 11: only "mine" credentials reach a Desktop ─────────────────────
@@ -714,12 +727,12 @@ def test_owned_automatic_agent_api_connection_is_neither_listed_nor_delivered(
 ) -> None:
     """
     1. "Connect Agent API" creates an owned agent_api connection → "automatic":
-       absent from the list, refused not_local_category on materialize.
-    2. An external agent_api key the same owner issued is "mine" but not a
-       locally compatible type: not listed, refused unsupported_type, and its
-       token never appears in the response.
+       absent from the list, refused unsupported_type on materialize.
+    2. An issued key is "mine" and locally compatible, but only for a client
+       that opts in with ``?include=agent_api_keys``: without the flag it is
+       not listed, refused unsupported_type, and its token never appears.
+       (The opt-in half is covered in the issued-keys scenarios below.)
     """
-    su = client.get(f"{API}/users/me", headers=superuser_token_headers).json()
     dh, _ = desktop_session(client, superuser_token_headers)
     agent = create_agent_via_api(client, superuser_token_headers, name="Desktop Category Producer")
     drain_tasks()
@@ -741,14 +754,23 @@ def test_owned_automatic_agent_api_connection_is_neither_listed_nor_delivered(
     conn_id = str(r.json()["credential_id"])
     assert conn_id not in _listed(client, dh)
     result = materialize_desktop_credentials(client, dh, [conn_id])
-    assert _refused(result) == {conn_id: "not_local_category"}
+    assert _refused(result) == {conn_id: "unsupported_type"}
+    assert result["items"] == []
+    # ... and still refused when the client opts in (connections never leave
+    # the platform).
+    assert conn_id not in {
+        i["id"]
+        for i in list_desktop_credentials(client, dh, include="agent_api_keys").json()["items"]
+    }
+    result = materialize_desktop_credentials(client, dh, [conn_id], include="agent_api_keys")
+    assert _refused(result) == {conn_id: "unsupported_type"}
     assert result["items"] == []
 
-    # ── Phase 2: external key is "mine" but never delivered ───────────────
+    # ── Phase 2: issued key, flag absent ──────────────────────────────────
     r = client.post(
         f"{API}/agents/{agent['id']}/agent-api/keys",
         headers=superuser_token_headers,
-        json={"subject_user_id": su["id"], "read_only_override": False},
+        json={"read_only_override": False},
     )
     assert r.status_code == 200, r.text
     key = r.json()
@@ -860,3 +882,338 @@ def test_skill_install_share_is_not_listed(
     assert _refused(materialize_desktop_credentials(client, cdh, [cred["id"]])) == {
         cred["id"]: "not_local_category"
     }
+
+
+# ── Scenario 12: issued agent_api keys (opt-in, plan §7) ─────────────────────
+
+INCLUDE = "agent_api_keys"
+KEY_EVENT = EVENT
+
+
+def _issued_key_fixture(
+    client: TestClient,
+    su: dict[str, str],
+    name: str,
+    expires_in_days: int | None = None,
+) -> dict:
+    """Producer owned by the superuser, a key issued to recipient B, B's Desktop
+    session, and the revealed token."""
+    producer = create_agent_via_api(client, su, name=name)
+    drain_tasks()
+    update_agent(
+        client, su, producer["id"],
+        agent_api_enabled=True, agent_api_external_access_enabled=True,
+    )
+    b, bh = create_random_user_with_headers(client)
+    body: dict = {"issued_to_user_id": b["id"], "label": "desk-key"}
+    if expires_in_days is not None:
+        body["expires_in_days"] = expires_in_days
+    r = client.post(f"{API}/agents/{producer['id']}/agent-api/keys", headers=su, json=body)
+    assert r.status_code == 200, r.text
+    key = r.json()
+    r = client.post(
+        f"{API}/credentials/{key['credential_id']}/agent-api-key/reveal", headers=bh
+    )
+    assert r.status_code == 200, r.text
+    dh, _ = desktop_session(client, bh)
+    return {
+        "producer": producer, "b": b, "bh": bh, "dh": dh, "key": key,
+        "cid": str(key["credential_id"]), "token": r.json()["token"],
+    }
+
+
+def _list_item(client: TestClient, dh: dict[str, str], cid: str) -> dict:
+    r = list_desktop_credentials(client, dh, include=INCLUDE)
+    assert r.status_code == 200, r.text
+    return {i["id"]: i for i in r.json()["items"]}[cid]
+
+
+def _list_etag(client: TestClient, dh: dict[str, str]) -> str:
+    return list_desktop_credentials(client, dh, include=INCLUDE).headers["etag"]
+
+
+def _expire(db: Session, key_id: str) -> None:
+    row = db.get(AgentApiToken, uuid.UUID(key_id))
+    row.expires_at = datetime.now(UTC) - timedelta(days=1)
+    db.add(row)
+    db.commit()
+
+
+def test_issued_key_is_listed_and_delivered_only_with_the_include_flag(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    1. Without ``include``: not listed; materialize refuses it unsupported_type.
+    2. With ``include=agent_api_keys``: listed as owned / complete / local-allowed
+       with key_status, expiry and the ``agent_api`` facts block (no secrets).
+    3. Materialize delivers the cloud-shaped entry with the public URLs, token
+       and the default slot; one audit event; ``owner_identity`` stays null.
+    4. Unknown ``include`` values are ignored.
+    """
+    su = superuser_token_headers
+    fx = _issued_key_fixture(client, su, "CRM Agent", expires_in_days=30)
+    dh, cid, token, producer = fx["dh"], fx["cid"], fx["token"], fx["producer"]
+
+    # ── Phase 1: flag absent ───────────────────────────────────────────────
+    assert cid not in _listed(client, dh)
+    result = materialize_desktop_credentials(client, dh, [cid])
+    assert _refused(result) == {cid: "unsupported_type"}
+    assert token not in json.dumps(result)
+    r = list_desktop_credentials(client, dh, include="something_else")
+    assert cid not in {i["id"] for i in r.json()["items"]}
+
+    # ── Phase 2: flag present ──────────────────────────────────────────────
+    r = list_desktop_credentials(client, dh, include=INCLUDE)
+    assert r.status_code == 200, r.text
+    assert token not in r.text
+    item = {i["id"]: i for i in r.json()["items"]}[cid]
+    assert item["type"] == "agent_api"
+    assert item["relation"] == "owned"
+    assert item["local_use_allowed"] is True
+    assert item["status"] == "complete"
+    assert item["service_uri"] == "crm-agent-api"
+    assert item["key_status"] == "active"
+    assert item["expires_at"] is not None
+    facts = item["agent_api"]
+    base = f"{settings.backend_base_url}{API}/agent-api/{producer['id']}"
+    assert facts["producer_agent_id"] == producer["id"]
+    assert facts["producer_name"] == "CRM Agent"
+    assert facts["issuer_email"] == client.get(f"{API}/users/me", headers=su).json()["email"]
+    assert facts["base_url"] == base
+    assert facts["spec_url"] == f"{base}/openapi.json"
+    assert facts["expires_at"] == item["expires_at"]
+
+    # ── Phase 3: materialize ───────────────────────────────────────────────
+    result = materialize_desktop_credentials(client, dh, [cid], include=INCLUDE)
+    assert result["refused"] == []
+    assert result["owner_identity"] is None
+    entry = result["items"][0]["entry"]
+    assert entry["id"] == cid
+    assert entry["type"] == "agent_api"
+    assert entry["service_uri"] == "crm-agent-api"
+    assert entry["is_placeholder"] is False
+    data = entry["credential_data"]
+    assert data["token"] == token
+    assert data["base_url"] == base
+    assert data["spec_url"] == f"{base}/openapi.json"
+    assert data["producer_agent_id"] == producer["id"]
+    assert data["label"] == "desk-key"
+    assert result["items"][0]["revision"] == item["revision"]
+    assert len(events_of_type(client, fx["bh"], KEY_EVENT)) == 1
+
+
+def test_issued_key_is_invisible_to_its_issuer_and_connections_never_delivered(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """The issuer (A) never sees B's key, even opted in; a connection (owned)
+    is refused unsupported_type even opted in; a self-issued key is A's own."""
+    su = superuser_token_headers
+    fx = _issued_key_fixture(client, su, "Issuer Blind Producer")
+    ah, _ = desktop_session(client, su)
+    cid = fx["cid"]
+
+    r = list_desktop_credentials(client, ah, include=INCLUDE)
+    assert cid not in {i["id"] for i in r.json()["items"]}
+    result = materialize_desktop_credentials(client, ah, [cid], include=INCLUDE)
+    assert result["items"] == []
+    assert _refused(result)[cid] in ("not_found", "no_access")
+    assert fx["token"] not in json.dumps(result)
+
+    # A self-issued key is delivered to its own owner.
+    r = client.post(
+        f"{API}/agents/{fx['producer']['id']}/agent-api/keys", headers=su, json={}
+    )
+    own = r.json()
+    own_item = {
+        i["id"]: i
+        for i in list_desktop_credentials(client, ah, include=INCLUDE).json()["items"]
+    }[str(own["credential_id"])]
+    assert own_item["key_status"] == "active"
+    result = materialize_desktop_credentials(
+        client, ah, [str(own["credential_id"])], include=INCLUDE
+    )
+    assert result["items"][0]["entry"]["credential_data"]["token"] == own["token"]
+
+
+def test_issued_key_urls_use_the_public_origin_never_the_docker_internal_host(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """D18: recomputed from ``settings.backend_base_url`` on every call."""
+    fx = _issued_key_fixture(client, superuser_token_headers, "Origin Producer")
+    dh, cid, pid = fx["dh"], fx["cid"], fx["producer"]["id"]
+    internal = urlsplit(settings.AGENT_ENV_BACKEND_URL).netloc
+
+    with (
+        patch.object(settings, "BACKEND_BASE_URL", ""),
+        patch.object(settings, "WEBHOOK_BASE_URL", ""),
+        patch.object(settings, "FRONTEND_HOST", "https://cinna.example.test"),
+    ):
+        expected = f"https://cinna.example.test/api/v1/agent-api/{pid}"
+        item = _list_item(client, dh, cid)
+        assert item["agent_api"]["base_url"] == expected
+        entry = materialize_desktop_credentials(client, dh, [cid], include=INCLUDE)["items"][0]
+        assert entry["entry"]["credential_data"]["base_url"] == expected
+        assert entry["entry"]["credential_data"]["spec_url"] == f"{expected}/openapi.json"
+        everything = json.dumps([item, entry])
+        assert internal not in everything
+        first_revision, first_etag = item["revision"], _list_etag(client, dh)
+
+        with patch.object(settings, "BACKEND_BASE_URL", "https://api.example.test"):
+            wins = f"https://api.example.test/api/v1/agent-api/{pid}"
+            item2 = _list_item(client, dh, cid)
+            assert item2["agent_api"]["base_url"] == wins
+            assert item2["revision"] != first_revision
+            assert _list_etag(client, dh) != first_etag
+            entry2 = materialize_desktop_credentials(client, dh, [cid], include=INCLUDE)
+            assert entry2["items"][0]["entry"]["credential_data"]["base_url"] == wins
+            assert internal not in json.dumps([item2, entry2])
+
+
+def test_key_status_changes_move_revision_and_etag_and_refuse_with_key_status(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """
+    revoke / pause / expiry change ``revision`` and the list ETag and materialize
+    refuses with the typed reason + ``key_status`` (never a token-less entry);
+    pause recovers; rotate changes the revision and delivers the new token;
+    a producer rename moves only the ETag.
+    """
+    su = superuser_token_headers
+    fx = _issued_key_fixture(client, su, "Status Producer")
+    dh, bh, cid, pid = fx["dh"], fx["bh"], fx["cid"], fx["producer"]["id"]
+
+    def refusal(ids: list[str]) -> dict:
+        result = materialize_desktop_credentials(client, dh, ids, include=INCLUDE)
+        assert result["items"] == []
+        return result["refused"][0]
+
+    base_item = _list_item(client, dh, cid)
+    base_etag = _list_etag(client, dh)
+
+    # ── producer rename: ETag moves, revision does not ─────────────────────
+    update_agent(client, su, pid, name="Status Producer Renamed")
+    renamed = _list_item(client, dh, cid)
+    assert renamed["agent_api"]["producer_name"] == "Status Producer Renamed"
+    assert renamed["revision"] == base_item["revision"]
+    assert _list_etag(client, dh) != base_etag
+
+    # ── rotate: new revision, new token delivered ──────────────────────────
+    r = client.post(f"{API}/credentials/{cid}/agent-api-key/rotate", headers=bh)
+    assert r.status_code == 200, r.text
+    rotated = _list_item(client, dh, cid)
+    assert rotated["revision"] != renamed["revision"]
+    delivered = materialize_desktop_credentials(client, dh, [cid], include=INCLUDE)
+    assert delivered["items"][0]["entry"]["credential_data"]["token"] == r.json()["token"]
+
+    # ── paused: refused key_paused, recovers ───────────────────────────────
+    update_agent(client, su, pid, agent_api_external_access_enabled=False)
+    paused = _list_item(client, dh, cid)
+    assert paused["key_status"] == "external_access_paused"
+    assert paused["revision"] != rotated["revision"]
+    refused = refusal([cid])
+    assert (refused["id"], refused["reason"], refused["key_status"]) == (
+        cid, "key_paused", "external_access_paused",
+    )
+    update_agent(client, su, pid, agent_api_enabled=False)
+    assert refusal([cid])["key_status"] == "api_disabled"
+    update_agent(client, su, pid, agent_api_enabled=True, agent_api_external_access_enabled=True)
+    assert _list_item(client, dh, cid)["key_status"] == "active"
+    assert materialize_desktop_credentials(client, dh, [cid], include=INCLUDE)["items"]
+
+    # ── expired (no write): revision + refusal ─────────────────────────────
+    before_expiry = _list_item(client, dh, cid)
+    _expire(db, fx["key"]["id"])
+    expired = _list_item(client, dh, cid)
+    assert expired["key_status"] == "expired"
+    assert expired["revision"] != before_expiry["revision"]
+    refused = refusal([cid])
+    assert (refused["reason"], refused["key_status"]) == ("key_expired", "expired")
+
+    # ── revoked: precedes expiry; terminal refusal ─────────────────────────
+    etag_before = _list_etag(client, dh)
+    r = client.post(f"{API}/agents/{pid}/agent-api/keys/{fx['key']['id']}/revoke", headers=su)
+    assert r.status_code == 200, r.text
+    revoked = _list_item(client, dh, cid)
+    assert revoked["key_status"] == "revoked_by_issuer"
+    assert revoked["revision"] != expired["revision"]
+    assert _list_etag(client, dh) != etag_before
+    refused = refusal([cid])
+    assert (refused["reason"], refused["key_status"]) == ("key_revoked", "revoked_by_issuer")
+    assert fx["token"] not in json.dumps(materialize_desktop_credentials(client, dh, [cid], include=INCLUDE))
+
+    # ── recipient deletes the credential: gone, not_found ──────────────────
+    assert client.delete(f"{API}/credentials/{cid}", headers=bh).status_code == 200
+    assert cid not in {
+        i["id"] for i in list_desktop_credentials(client, dh, include=INCLUDE).json()["items"]
+    }
+    assert refusal([cid])["reason"] == "not_found"
+
+
+def test_producer_removed_key_is_listed_with_null_facts_and_refused(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    su = superuser_token_headers
+    fx = _issued_key_fixture(client, su, "Vanishing Producer")
+    dh, cid = fx["dh"], fx["cid"]
+    assert client.delete(f"{API}/agents/{fx['producer']['id']}", headers=su).status_code == 200
+
+    item = _list_item(client, dh, cid)
+    assert item["key_status"] == "producer_removed"
+    assert item["agent_api"]["producer_agent_id"] is None
+    result = materialize_desktop_credentials(client, dh, [cid], include=INCLUDE)
+    assert result["items"] == []
+    assert (result["refused"][0]["reason"], result["refused"][0]["key_status"]) == (
+        "key_revoked", "producer_removed",
+    )
+
+
+def test_non_key_revision_is_unchanged_by_the_include_flag(client: TestClient) -> None:
+    """A non-key credential's revision and null key fields do not depend on the
+    opt-in, and move only when the credential is written."""
+    owner, oh = create_random_user_with_headers(client)
+    od, _ = desktop_session(client, oh)
+    cred = create_credential_via_api(client, oh, "api_token", _api_token_data("plain-secret-1"))
+    cid = cred["id"]
+
+    without = {i["id"]: i for i in list_desktop_credentials(client, od).json()["items"]}[cid]
+    with_flag = _list_item(client, od, cid)
+    assert with_flag["revision"] == without["revision"]
+    assert with_flag["key_status"] is None and with_flag["agent_api"] is None
+
+    update_credential(client, oh, cid, credential_data=_api_token_data("plain-secret-2"))
+    assert _list_item(client, od, cid)["revision"] != without["revision"]
+
+
+def test_shared_agent_api_connection_is_refused_and_never_listed_even_opted_in(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """A connection directly shared with B: not listed for B, refused
+    unsupported_type on materialize with the flag, and its token never leaks."""
+    su = superuser_token_headers
+    producer = create_agent_via_api(client, su, name="Shared Conn Producer")
+    drain_tasks()
+    update_agent(client, su, producer["id"], agent_api_enabled=True)
+    r = client.post(
+        f"{API}/agents/{producer['id']}/agent-api/connect",
+        headers=su,
+        json={"read_only_override": False},
+    )
+    assert r.status_code == 200, r.text
+    conn_id = str(r.json()["credential_id"])
+    token = get_credential_with_data(client, su, conn_id)["credential_data"]["token"]
+
+    b, bh = create_random_user_with_headers(client)
+    r = client.patch(
+        f"{API}/credentials/{conn_id}/sharing", headers=su, json={"allow_sharing": True}
+    )
+    assert r.status_code == 200, r.text
+    share_credential_via_api(client, su, conn_id, b["email"])
+    bd, _ = desktop_session(client, bh)
+
+    for include in (None, INCLUDE):
+        r = list_desktop_credentials(client, bd, include=include)
+        assert conn_id not in {i["id"] for i in r.json()["items"]}
+        result = materialize_desktop_credentials(client, bd, [conn_id], include=include)
+        assert result["items"] == []
+        assert _refused(result) == {conn_id: "unsupported_type"}
+        assert token not in json.dumps(result)

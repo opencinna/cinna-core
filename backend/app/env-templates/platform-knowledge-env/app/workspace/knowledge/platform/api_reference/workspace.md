@@ -13,6 +13,8 @@ Auto-generated from OpenAPI spec. Tag: `workspace`
 ## GET `/api/v1/environments/{env_id}/workspace/download/{path}`
 **Download Workspace Item**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `env_id`: uuid
 - `path`: string
@@ -21,6 +23,8 @@ Auto-generated from OpenAPI spec. Tag: `workspace`
 
 ## GET `/api/v1/environments/{env_id}/workspace/view-file/{path}`
 **View Workspace File**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `env_id`: uuid

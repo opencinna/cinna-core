@@ -28,6 +28,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy import and_, or_
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -374,11 +375,13 @@ class AgentApiTokenService:
 
         producer_agent_name: str | None = None
         producer_ui_color_preset: str | None = None
+        producer_owned_by_viewer = False
         if producer_agent_id is not None:
             producer = session.get(Agent, producer_agent_id)
             if producer is not None:
                 producer_agent_name = producer.name
                 producer_ui_color_preset = producer.ui_color_preset
+                producer_owned_by_viewer = producer.owner_id == user_id
 
         # read_only is taken from the token bound to this credential.
         read_only = False
@@ -405,6 +408,7 @@ class AgentApiTokenService:
             producer_agent_id=producer_agent_id,
             producer_agent_name=producer_agent_name,
             producer_ui_color_preset=producer_ui_color_preset,
+            producer_owned_by_viewer=producer_owned_by_viewer,
             base_url=data.get("base_url", ""),
             spec_url=data.get("spec_url", ""),
             read_only=read_only,
@@ -425,7 +429,7 @@ class AgentApiTokenService:
         to. Surfaced on the producer's "Agent REST API" card. Owner-only.
 
         External keys are a separate product with their own list (see
-        ``AgentApiKeyService.list_keys``) and are excluded here — the two
+        ``AgentApiKeyService.list_access``) and are excluded here — the two
         surfaces stay disjoint.
         """
         from app.services.credentials.credentials_service import CredentialsService
@@ -663,24 +667,33 @@ class AgentApiTokenService:
         if not token_value:
             return None
         token_hash = AgentApiTokenService.hash_token(token_value)
+        now = datetime.now(UTC)
+        # The current value, or the previous value of a rotated issued key while
+        # its grace window is open. ``agent_id == agent_id`` never matches a
+        # NULL (producer removed), so a key whose producer is gone is dead here.
         token = session.exec(
             select(AgentApiToken).where(
-                AgentApiToken.token_hash == token_hash,
+                or_(
+                    AgentApiToken.token_hash == token_hash,
+                    and_(
+                        AgentApiToken.previous_token_hash == token_hash,
+                        AgentApiToken.previous_token_expires_at > now,
+                    ),
+                ),
                 AgentApiToken.agent_id == agent_id,
                 AgentApiToken.is_active == True,  # noqa: E712
             )
         ).first()
         if not token:
             return None
-        if AgentApiTokenService.is_expired(token):
+        if AgentApiTokenService.is_expired(token, now):
             return None
-        if (
-            token.kind == AgentApiTokenKind.EXTERNAL.value
-            and not external_access_enabled
-        ):
-            return None
+        if token.kind == AgentApiTokenKind.EXTERNAL.value:
+            # Issuer deleted ("issuer_removed") or kill switch off: same 401.
+            if token.owner_id is None or not external_access_enabled:
+                return None
 
-        token.last_used_at = datetime.now(UTC)
+        token.last_used_at = now
         session.add(token)
         session.commit()
         session.refresh(token)

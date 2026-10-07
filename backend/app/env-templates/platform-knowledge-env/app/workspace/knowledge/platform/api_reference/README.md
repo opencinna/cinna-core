@@ -3,6 +3,8 @@
 Auto-generated from the backend OpenAPI specification.
 Each file below documents one API domain.
 
+Routes marked *Not available via `cinna api`* are refused by the account CLI escape hatch (exit code 2); the note names the dedicated `cinna` verb where one exists.
+
 | Domain | File | Endpoints |
 |--------|------|-----------|
 | App Sync | [App Sync.md](./App Sync.md) | 21 |
@@ -21,7 +23,7 @@ Each file below documents one API domain.
 | Agent Credentials | [agent_credentials.md](./agent_credentials.md) | 1 |
 | Agent Git | [agent_git.md](./agent_git.md) | 11 |
 | Agent Hooks | [agent_hooks.md](./agent_hooks.md) | 1 |
-| Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 12 |
+| Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 20 |
 | Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 9 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
 | Agents | [agents.md](./agents.md) | 42 |
@@ -30,8 +32,8 @@ Each file below documents one API domain.
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 5 |
-| Cli | [cli.md](./cli.md) | 61 |
-| Credentials | [credentials.md](./credentials.md) | 20 |
+| Cli | [cli.md](./cli.md) | 65 |
+| Credentials | [credentials.md](./credentials.md) | 23 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Desktop Download | [desktop_download.md](./desktop_download.md) | 1 |
 | Environments | [environments.md](./environments.md) | 17 |

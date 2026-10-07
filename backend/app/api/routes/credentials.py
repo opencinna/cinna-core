@@ -3,6 +3,7 @@ import xmlrpc.client
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import func, select
 
@@ -10,7 +11,9 @@ from app.api.deps import CurrentUser, SessionDep
 from app.models.credentials.credential import CredentialType
 from app.models import (
     AgentApiConnectionInfo,
+    AgentApiKeyHolderInfo,
     AgentApiKeyRevealResponse,
+    AgentApiKeyRotateResponse,
     Credential,
     CredentialBundleUsages,
     CredentialDeletionImpact,
@@ -30,6 +33,12 @@ from app.services.credentials.credential_share_service import CredentialShareSer
 from app.services.agent_api.agent_api_key_service import (
     AgentApiKeyError,
     AgentApiKeyService,
+)
+from app.services.agent_api.agent_api_service import AgentApiError
+from app.services.agent_api.agent_api_key_status import (
+    KeyState,
+    key_states_by_credential,
+    key_status_value,
 )
 from app.services.agent_api.agent_api_token_service import (
     AgentApiTokenError,
@@ -61,12 +70,15 @@ def _credential_to_public(
     agent_usage_count: int = 0,
     used_in_bundle: bool = False,
     category: str = "mine",
+    key_states: dict[uuid.UUID, KeyState] | None = None,
 ) -> CredentialPublic:
     """Convert a Credential model to CredentialPublic with share_count and status.
 
     ``agent_usage_count``, ``used_in_bundle``, and ``category`` are computed by
     the caller (batched once per page for ``read_credentials``) and threaded in
-    so this helper never issues a per-row usage query.
+    so this helper never issues a per-row usage query. ``key_states`` is the
+    batched issued-key lookup; when omitted, an ``agent_api`` row is resolved
+    on its own.
     """
     share_count = 0
     if not is_shared:
@@ -104,7 +116,17 @@ def _credential_to_public(
         agent_usage_count=agent_usage_count,
         used_in_bundle=used_in_bundle,
         mcp_consumer_agent_id=credential.mcp_consumer_agent_id,
+        agent_api_key_status=_agent_api_key_status(session, credential, key_states),
     )
+
+
+def _agent_api_key_status(
+    session,
+    credential: Credential,
+    key_states: dict[uuid.UUID, KeyState] | None,
+) -> str | None:
+    """The issued-key status of an ``agent_api`` credential, else None."""
+    return key_status_value(session, credential, key_states)
 
 
 @router.get("/", response_model=CredentialsPublic)
@@ -175,6 +197,10 @@ def read_credentials(
     # their bound token's kind — connections are "Automatic", external keys are
     # "My Credentials").
     categories = CredentialsService.classify_owned_credentials(session, credentials)
+    key_states = key_states_by_credential(
+        session,
+        [c.id for c in credentials if c.type == CredentialType.AGENT_API],
+    )
 
     # Convert to public models with share_count, category, and the batched badges.
     credentials_public = [
@@ -184,6 +210,7 @@ def read_credentials(
             agent_usage_count=usage_counts.get(c.id, 0),
             used_in_bundle=c.id in bundle_flags,
             category=categories.get(c.id, "mine"),
+            key_states=key_states,
         )
         for c in credentials
     ]
@@ -272,11 +299,11 @@ async def reveal_agent_api_key(
     The only path that returns a key's value after mint, and the only one that
     is audited (`AGENT_API_EXTERNAL_KEY_REVEALED`, one event per call).
 
-    **Owner-gated with no superuser bypass** — reveal is disclosure, not
-    containment; see `AgentApiKeyService.reveal_external_key` for why the
-    asymmetry with `revoke_key` is deliberate. 404 when the credential does not
+    **Credential owner (the key's recipient) only, no superuser bypass** —
+    reveal is disclosure, not containment. 404 when the credential does not
     exist, is not the caller's, or the caller is an admin who is not the owner;
-    400 when it exists but is not an external key.
+    400 when it exists but is not an issued key; 409 when the key is revoked,
+    expired, or its producer / issuer is gone.
     """
     try:
         token = await AgentApiKeyService.reveal_external_key(
@@ -287,6 +314,65 @@ async def reveal_agent_api_key(
     except AgentApiKeyError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     return AgentApiKeyRevealResponse(token=token)
+
+
+@router.get("/{id}/agent-api-key", response_model=AgentApiKeyHolderInfo)
+def read_agent_api_key(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """
+    The recipient's view of an issued ``agent_api`` key: status, producer,
+    issuer, scopes, expiry, rotation grace, and the agents it is linked to.
+
+    Credential owner only (no superuser bypass): 404 otherwise; 400 when the
+    credential is not an issued key.
+    """
+    try:
+        return AgentApiKeyService.get_holder_info(
+            session=session, credential_id=id, user_id=current_user.id
+        )
+    except AgentApiKeyError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post(
+    "/{id}/agent-api-key/rotate", response_model=AgentApiKeyRotateResponse
+)
+async def rotate_agent_api_key(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """
+    Swap an issued key's value in place (same credential, same links).
+
+    The previous value keeps working for a short grace window
+    (``previous_valid_until``). Credential owner only (404 otherwise, no
+    superuser bypass); 400 when not an issued key; 409 when the key is revoked,
+    expired, or its producer / issuer is gone. Audited
+    (``AGENT_API_EXTERNAL_KEY_ROTATED``).
+    """
+    try:
+        return await AgentApiKeyService.rotate_key(
+            session=session, credential_id=id, user_id=current_user.id
+        )
+    except AgentApiKeyError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.get("/{id}/agent-api-key/spec")
+async def read_agent_api_key_spec(
+    session: SessionDep, current_user: CurrentUser, id: uuid.UUID
+) -> Any:
+    """
+    The producer's OpenAPI spec for the key's recipient (subject to the
+    producer's ``expose_spec``). Credential owner only; 409 on a terminal key.
+    """
+    try:
+        spec = await AgentApiKeyService.get_holder_spec(
+            session=session, credential_id=id, user_id=current_user.id
+        )
+    except AgentApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    return JSONResponse(content=spec)
 
 
 @router.get("/{id}/agent-api-connection", response_model=AgentApiConnectionInfo)

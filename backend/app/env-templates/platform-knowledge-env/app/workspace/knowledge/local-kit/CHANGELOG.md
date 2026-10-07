@@ -16,6 +16,42 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.7.0 — issued agent API keys
+
+Additive. Every 1.x folder is still valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.7.0 folder, because the majors match.
+
+### Added
+
+- **Issued `agent_api` keys reach local agents.** A producer's owner can issue
+  an API key to a person; that person's key credential may now be delivered by
+  Cinna Desktop (it opts in) and, as before, synced to their cloud agents.
+  Connections (agent-to-agent `agent_api` credentials) are still never
+  delivered locally. A key's slot is its `service_uri`, `<producer-slug>-api` by
+  default. The entry is Bearer-only: identity is bound to the key, so no
+  identity header is sent.
+- **`unavailable_reason` gains `key_revoked`, `key_expired`, `key_paused`**, each
+  with a `key_status` detail (`revoked_by_issuer`, `producer_removed`,
+  `issuer_removed`, `expired`, `api_disabled`, `external_access_paused`). The
+  same token-less entry shape is written in the cloud and on Desktop.
+  `key_paused` recovers by itself; the other two do not.
+- **`cinna_credentials.agent_api_session(slot, *, requests=False)`** in
+  `templates/agent/scripts/cinna_credentials.py`: a stdlib client
+  (`get`/`post`/`put`/`patch`/`delete`/`request`, `get_json`/`post_json`,
+  `.base_url`, `.spec_url`) that joins relative paths onto `base_url`, re-reads
+  the token on every request, and sends `Authorization` only to `base_url`'s
+  exact origin, on every redirect hop too. `requests=True` returns an
+  origin-pinned `requests.Session` when `requests` is installed.
+- `HELPER_VERSION` is `1.7.0`; the unavailable hints name the new reasons and
+  append `key_status`.
+
+### For hosts
+
+- Desktop lists and delivers `agent_api` only with
+  `?include=agent_api_keys`, only for the caller's own key issued to them, and
+  delivers only an active key; other statuses are refused with the reasons
+  above. Public URLs are recomputed on every delivery.
+
 ## 1.6.0 — the Cinna Task Protocol
 
 Additive. Every 1.x folder is still valid and needs no change, and a tool built

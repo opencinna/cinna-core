@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `guest-shares`
 ## POST `/api/v1/agents/{agent_id}/guest-shares/`
 **Create Guest Share**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 
@@ -20,6 +22,8 @@ Auto-generated from OpenAPI spec. Tag: `guest-shares`
 ## GET `/api/v1/agents/{agent_id}/guest-shares/`
 **List Guest Shares**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 
@@ -29,6 +33,8 @@ Auto-generated from OpenAPI spec. Tag: `guest-shares`
 
 ## GET `/api/v1/agents/{agent_id}/guest-shares/{guest_share_id}`
 **Get Guest Share**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `agent_id`: uuid
@@ -41,6 +47,8 @@ Auto-generated from OpenAPI spec. Tag: `guest-shares`
 ## DELETE `/api/v1/agents/{agent_id}/guest-shares/{guest_share_id}`
 **Delete Guest Share**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 - `guest_share_id`: uuid
@@ -51,6 +59,8 @@ Auto-generated from OpenAPI spec. Tag: `guest-shares`
 
 ## PUT `/api/v1/agents/{agent_id}/guest-shares/{guest_share_id}`
 **Update Guest Share**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `agent_id`: uuid

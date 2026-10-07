@@ -313,6 +313,9 @@ class CredentialPublic(CredentialBase):
     agent_usage_count: int = 0
     # True if the credential is used in ≥1 of the owner's bundles.
     used_in_bundle: bool = False
+    # Issued agent_api key rows only: the key's AgentApiKeyStatus value
+    # ("active", "revoked_by_issuer", ...). None for every other credential.
+    agent_api_key_status: str | None = None
 
 
 # Properties to return via API with decrypted data

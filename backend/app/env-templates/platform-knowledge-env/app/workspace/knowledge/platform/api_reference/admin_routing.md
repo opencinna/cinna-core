@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-routing`
 ## GET `/api/v1/admin/routing/traces`
 **List Routing Traces**
 
+> Not available via `cinna api` (excluded_path).
+
 **Query parameters:**
 - `channel_id`: string | null
 - `origin`: string | null
@@ -20,6 +22,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-routing`
 ## DELETE `/api/v1/admin/routing/traces`
 **Clear Routing Traces**
 
+> Not available via `cinna api` (excluded_path).
+
 **Query parameters:**
 - `channel_id`: string | null
 - `all`: boolean, default: `False`
@@ -30,6 +34,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-routing`
 
 ## GET `/api/v1/admin/routing/traces/{trace_id}`
 **Get Routing Trace**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `trace_id`: uuid
@@ -43,6 +49,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-routing`
 
 ## POST `/api/v1/admin/routing/simulate`
 **Simulate Routing**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`RoutingSimulateRequest`):
   - `message`: string (required)
@@ -60,6 +68,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-routing`
 ## POST `/api/v1/admin/routing/traces/{trace_id}/replay`
 **Replay Routing Trace**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `trace_id`: uuid
 
@@ -70,6 +80,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-routing`
 
 ## POST `/api/v1/admin/routing/traces/{trace_id}/recommendation`
 **Draft Routing Recommendation**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `trace_id`: uuid

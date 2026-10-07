@@ -118,9 +118,14 @@ FAIL_CLOSED_POLICY: dict = {
 class AgentApiError(Exception):
     """Base exception for agent REST API service errors."""
 
-    def __init__(self, message: str, status_code: int = 400):
+    def __init__(
+        self, message: str, status_code: int = 400, code: str | None = None
+    ):
         self.message = message
         self.status_code = status_code
+        # Machine-readable reason for coded callers (account CLI); web routes
+        # keep answering the plain message.
+        self.code = code
         super().__init__(message)
 
 
@@ -128,7 +133,7 @@ class AgentApiNotFoundError(AgentApiError):
     """Agent (or its environment) does not exist / is not accessible."""
 
     def __init__(self, message: str = "Agent not found"):
-        super().__init__(message, status_code=404)
+        super().__init__(message, status_code=404, code="agent_not_found")
 
 
 class AgentApiDisabledError(AgentApiError):

@@ -73,6 +73,8 @@ Auto-generated from OpenAPI spec. Tag: `task-triggers`
 ## POST `/api/v1/tasks/{task_id}/triggers/webhook`
 **Create Webhook Trigger**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `task_id`: uuid
 
@@ -88,6 +90,8 @@ Auto-generated from OpenAPI spec. Tag: `task-triggers`
 ## POST `/api/v1/tasks/{task_id}/triggers/webhook`
 **Create Webhook Trigger**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `task_id`: uuid
 
@@ -205,6 +209,8 @@ Auto-generated from OpenAPI spec. Tag: `task-triggers`
 ## POST `/api/v1/tasks/{task_id}/triggers/{trigger_id}/regenerate-token`
 **Regenerate Token**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `task_id`: uuid
 - `trigger_id`: uuid
@@ -215,6 +221,8 @@ Auto-generated from OpenAPI spec. Tag: `task-triggers`
 
 ## POST `/api/v1/tasks/{task_id}/triggers/{trigger_id}/regenerate-token`
 **Regenerate Token**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `task_id`: uuid

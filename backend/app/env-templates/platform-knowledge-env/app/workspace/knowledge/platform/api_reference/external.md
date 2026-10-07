@@ -77,12 +77,18 @@ Auto-generated from OpenAPI spec. Tag: `external`
 ## GET `/api/v1/external/credentials`
 **List Credentials**
 
+**Query parameters:**
+- `include`: string | null
+
 **Response:** `DesktopCredentialList`
 
 ---
 
 ## POST `/api/v1/external/credentials/materialize`
 **Materialize Credentials**
+
+**Query parameters:**
+- `include`: string | null
 
 **Request body** (`DesktopCredentialMaterializeRequest`):
   - `credential_ids`: uuid[] (required)

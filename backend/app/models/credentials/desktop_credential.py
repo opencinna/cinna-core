@@ -23,7 +23,29 @@ DesktopCredentialRefusalReason = Literal[
     "not_local_category",
     "local_use_not_allowed",
     "unsupported_type",
+    # Issued agent_api keys (only with ``include=agent_api_keys``). Each carries
+    # the detailed ``key_status``.
+    "key_revoked",  # revoked_by_issuer | producer_removed | issuer_removed
+    "key_expired",  # expired
+    "key_paused",  # api_disabled | external_access_paused (recovers by itself)
 ]
+
+
+class DesktopAgentApiKeyFacts(SQLModel):
+    """Non-secret facts of an issued agent_api key (D16). Null for non-keys.
+
+    URLs are the PUBLIC origin (``settings.backend_base_url``), recomputed on
+    every read. ``producer_agent_id`` / ``base_url`` / ``spec_url`` are null once
+    the producer is removed; ``issuer_email`` once the issuer is removed.
+    """
+
+    producer_agent_id: uuid.UUID | None = None
+    producer_name: str | None = None
+    issuer_email: str | None = None
+    base_url: str | None = None
+    spec_url: str | None = None
+    # ISO-8601 UTC, or null (never expires).
+    expires_at: str | None = None
 
 
 class DesktopCredentialListItem(SQLModel):
@@ -43,8 +65,13 @@ class DesktopCredentialListItem(SQLModel):
     owner_email: str | None = None
     local_use_allowed: bool
     revision: str
+    # For an issued key: the key's expiry (ISO-8601 UTC) or null.
     expires_at: int | float | str | None = None
     user_workspace_id: uuid.UUID | None = None
+    # Issued agent_api keys only (AgentApiKeyStatus value); null otherwise.
+    # Unknown future values: treat as unavailable.
+    key_status: str | None = None
+    agent_api: DesktopAgentApiKeyFacts | None = None
 
 
 class DesktopCredentialList(SQLModel):
@@ -59,6 +86,8 @@ class DesktopCredentialMaterializeRequest(SQLModel):
 class DesktopCredentialRefusal(SQLModel):
     id: uuid.UUID
     reason: DesktopCredentialRefusalReason
+    # Set on every refusal of an issued key that was otherwise deliverable.
+    key_status: str | None = None
 
 
 class DesktopMaterializedCredential(SQLModel):
@@ -75,7 +104,6 @@ class DesktopCredentialMaterializeResponse(SQLModel):
     items: list[DesktopMaterializedCredential]
     refused: list[DesktopCredentialRefusal]
     current_user: dict[str, Any] | None = None
-    # Always null: the owner identity token only accompanies agent_api
-    # credentials, which are never delivered to a device. Kept so existing
-    # Desktop clients parse.
+    # Always null: issued keys bind identity to the key, connections are never
+    # delivered to a device. Kept so existing Desktop clients parse.
     owner_identity: dict[str, Any] | None = None

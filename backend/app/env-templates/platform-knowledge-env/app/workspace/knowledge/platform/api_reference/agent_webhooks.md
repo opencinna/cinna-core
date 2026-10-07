@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `agent-webhooks`
 ## POST `/api/v1/agents/{agent_id}/webhooks/session`
 **Create Session Webhook**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 
@@ -22,6 +24,8 @@ Auto-generated from OpenAPI spec. Tag: `agent-webhooks`
 ## POST `/api/v1/agents/{agent_id}/webhooks/script`
 **Create Script Webhook**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 
@@ -38,6 +42,8 @@ Auto-generated from OpenAPI spec. Tag: `agent-webhooks`
 
 ## POST `/api/v1/agents/{agent_id}/webhooks/git-source`
 **Create Git Source Webhook**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `agent_id`: uuid
@@ -105,6 +111,8 @@ Auto-generated from OpenAPI spec. Tag: `agent-webhooks`
 
 ## POST `/api/v1/agents/{agent_id}/webhooks/{webhook_pk}/regenerate-token`
 **Regenerate Token**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `agent_id`: uuid

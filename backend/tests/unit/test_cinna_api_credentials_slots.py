@@ -438,3 +438,119 @@ class TestNoRequestsAtImportTime:
         )
         assert result.returncode == 0, result.stderr
         assert json.loads(result.stdout.strip()) is False
+
+
+# ---------------------------------------------------------------------------
+# Issued agent_api keys synced without their token (plan §5, D21)
+# ---------------------------------------------------------------------------
+
+
+def _unavailable_entry(reason: str, key_status: str, slot: str = "crm-api") -> dict:
+    return {
+        "id": f"key-{reason}",
+        "type": "agent_api",
+        "service_uri": slot,
+        "is_placeholder": False,
+        "unavailable_reason": reason,
+        "key_status": key_status,
+        "credential_data": {
+            "base_url": "http://backend:8000/api/v1/agent-api/p",
+            "spec_url": "http://backend:8000/api/v1/agent-api/p/openapi.json",
+            "label": "CRM",
+            "producer_agent_id": "p",
+        },
+    }
+
+
+def _active_entry(slot: str = "crm-api") -> dict:
+    return {
+        "id": "key-active",
+        "type": "agent_api",
+        "service_uri": slot,
+        "is_placeholder": False,
+        "credential_data": {
+            "base_url": "http://backend:8000/api/v1/agent-api/p",
+            "spec_url": "http://backend:8000/api/v1/agent-api/p/openapi.json",
+            "token": "secret-value",
+            "label": "CRM",
+            "producer_agent_id": "p",
+        },
+    }
+
+
+class TestUnavailableIssuedKeys:
+
+    @pytest.mark.parametrize(
+        "reason,key_status",
+        [
+            ("key_revoked", "revoked_by_issuer"),
+            ("key_revoked", "producer_removed"),
+            ("key_expired", "expired"),
+            ("key_paused", "external_access_paused"),
+            ("key_paused", "api_disabled"),
+        ],
+    )
+    def test_require_slot_raises_with_reason_and_key_status(
+        self, tmp_path, monkeypatch, reason, key_status
+    ):
+        _write_credentials(
+            tmp_path, monkeypatch, [_unavailable_entry(reason, key_status)]
+        )
+        with pytest.raises(credentials_module.CredentialMissing) as exc:
+            credentials_module.credentials.require_slot("crm-api")
+        assert exc.value.reason == reason
+        assert exc.value.key_status == key_status
+        assert exc.value.slot == "crm-api"
+        message = str(exc.value)
+        assert "crm-api" in message and reason in message and key_status in message
+
+    def test_agent_api_session_raises_on_unavailable_entry(self, tmp_path, monkeypatch):
+        _write_credentials(
+            tmp_path, monkeypatch, [_unavailable_entry("key_expired", "expired")]
+        )
+        with pytest.raises(credentials_module.CredentialMissing) as exc:
+            credentials_module.credentials.agent_api_session("crm-api")
+        assert exc.value.reason == "key_expired"
+        assert exc.value.key_status == "expired"
+
+    def test_unavailable_entry_is_still_returned_by_by_slot_when_alone(
+        self, tmp_path, monkeypatch
+    ):
+        _write_credentials(
+            tmp_path, monkeypatch, [_unavailable_entry("key_paused", "api_disabled")]
+        )
+        found = credentials_module.credentials.by_slot("crm-api")
+        assert found is not None and found["unavailable_reason"] == "key_paused"
+
+    def test_available_entry_is_preferred_whatever_the_order(self, tmp_path, monkeypatch):
+        unavailable = _unavailable_entry("key_revoked", "revoked_by_issuer")
+        for entries in ([unavailable, _active_entry()], [_active_entry(), unavailable]):
+            _write_credentials(tmp_path, monkeypatch, entries)
+            assert credentials_module.credentials.by_slot("crm-api")["id"] == "key-active"
+            assert credentials_module.credentials.require_slot("crm-api")["id"] == "key-active"
+
+    def test_unavailable_beats_placeholder_and_exception_pickles(self, tmp_path, monkeypatch):
+        placeholder = {
+            "id": "ph", "type": "agent_api", "service_uri": "crm-api",
+            "is_placeholder": True,
+        }
+        _write_credentials(
+            tmp_path, monkeypatch,
+            [placeholder, _unavailable_entry("key_revoked", "revoked_by_issuer")],
+        )
+        with pytest.raises(credentials_module.CredentialMissing) as exc:
+            credentials_module.credentials.require_slot("crm-api")
+        assert exc.value.reason == "key_revoked"
+        clone = pickle.loads(pickle.dumps(exc.value))
+        assert (clone.slot, clone.reason, clone.key_status) == (
+            "crm-api", "key_revoked", "revoked_by_issuer",
+        )
+
+
+def test_unknown_unavailable_reason_message_names_the_reason(tmp_path, monkeypatch):
+    entry = _unavailable_entry("key_from_the_future", "mystery_status")
+    _write_credentials(tmp_path, monkeypatch, [entry])
+    with pytest.raises(credentials_module.CredentialMissing) as exc:
+        credentials_module.credentials.require_slot("crm-api")
+    assert exc.value.reason == "key_from_the_future"
+    assert "unavailable (key_from_the_future" in str(exc.value)

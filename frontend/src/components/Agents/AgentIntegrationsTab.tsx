@@ -18,6 +18,7 @@ import { Separator } from "@/components/ui/separator"
 import useAuth from "@/hooks/useAuth"
 import useRole from "@/hooks/useRole"
 import { A2aAccessTokensManager } from "./A2aAccessTokensManager"
+import { AgentApiAccessCard } from "./AgentApiAccessCard"
 import { AgentRestApiCard } from "./AgentRestApiCard"
 import { GuestShareCard } from "./GuestShareCard"
 import { McpConnectorsCard } from "./McpConnectorsCard"
@@ -186,11 +187,21 @@ export function AgentIntegrationsTab({ agent }: AgentIntegrationsTabProps) {
         <AgentRestApiCard
           agentId={agent.id}
           agentApiEnabled={agent.agent_api_enabled ?? false}
-          agentApiIdentityEnabled={agent.agent_api_identity_enabled ?? false}
-          agentApiExternalAccessEnabled={
-            agent.agent_api_external_access_enabled ?? false
-          }
         />
+
+        {/* API access — who may call the REST API from outside with a key.
+            Owner-only (the access list is owner-gated) and only while the
+            REST API is on; the REST API card says to enable it first. */}
+        {isOwner && agent.agent_api_enabled && (
+          <AgentApiAccessCard
+            agentId={agent.id}
+            agentName={agent.name}
+            externalAccessEnabled={
+              agent.agent_api_external_access_enabled ?? false
+            }
+            identityEnabled={agent.agent_api_identity_enabled ?? false}
+          />
+        )}
 
         {/* Git Versioning Card - owner-only (connect/push/pull are developer-gated) */}
         {isOwner && (

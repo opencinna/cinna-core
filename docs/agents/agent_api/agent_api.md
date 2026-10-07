@@ -25,25 +25,25 @@ This is a **code-to-code** channel: deterministic, typed, and high-frequency. Co
 
 An agent that holds a powerful credential authors an `agent_api/` directory in its workspace. The platform supervises a real FastAPI app built from those files and exposes it through a backend proxy. A second agent holds only an `agent_api` credential (`{base_url, token, spec_url}`) and calls the proxy — it never touches the upstream credential.
 
-### Two products behind one proxy: Connection vs. Key
+### Two products behind one proxy: Connection vs. Issued key
 
 Every call to `/api/v1/agent-api/{agent_id}/*` is authenticated by one opaque `agent_api_token`, but that token row is one of **two modes**, discriminated by `AgentApiToken.kind` — the single source of truth for everything below:
 
-| | **Connection** (`kind="connection"`) | **External Key** (`kind="external"`) |
+| | **Connection** (`kind="connection"`) | **Issued key** (`kind="external"`) |
 |---|---|---|
-| Direction | agent → agent, inside the platform | agent → outside world (a laptop script, server, cron job) |
-| Created from | producer "Agent REST API" card / consumer agent's Credentials tab | global `/credentials` → New credential (**"Agent API Key"**); also from the producer card's **External Keys** section |
-| Created by | "Connect Agent API" — one click, no inputs | a form: producer agent + subject user + optional scopes/expiry/read-only |
-| Token | never shown, machine-only | **revealable** on the credential detail page — it is the deliverable |
-| Identity | anonymous by default; the separate `owner_identity_token` is injected into the consumer container | **bound to the key** (`AgentApiToken.subject_user_id`), fixed at mint |
-| Consumer | a container reading `credentials.json` | a human-operated caller outside the platform |
-| Revoke | delete credential → token cascade | delete credential → token cascade (same mechanism) |
+| Direction | agent → agent, inside the platform | a person (or their script, server, cron job, local agent) → a producer agent |
+| Created from | producer "Agent REST API" card / consumer agent's Credentials tab ("Connect Agent API") | the producer's **API access** surface ("Give API access"); also the global `/credentials` → New credential picker (self-issue) |
+| Created by | one click, no inputs | the producer's owner: producer + **issued to** (default: themself) + optional scopes / expiry / slot |
+| Credential owner | the consumer's owner | the **recipient** (`subject_user_id`), never the issuer |
+| Token | never shown, machine-only | revealed **to the recipient only**, from their credential; the issuer never sees a key issued to someone else |
+| Identity | anonymous by default; the separate `owner_identity_token` is injected into the consumer container | **bound to the key** (the recipient); the proxy ignores any caller-identity header |
+| Revoke | delete credential → token cascade | issuer: **soft revoke** (credential survives, shows why); recipient: delete credential → cascade |
 | Credentials-page tab | Automatic Credentials | **My Credentials** |
 | `CredentialShare` | allowed (safe — anonymous, narrowed proxy) | **forced off** — identity-bound |
-| Synced into envs (`credentials.json`) | yes | **no** |
-| Identity + scopes card on credential detail page | no (connections are anonymous by construction) | yes |
+| Synced into envs (`credentials.json`) | yes | only into the **recipient's own** agents' envs (token-less when not active) |
+| Delivered to Cinna Desktop | never | opt-in, owned keys only (see [Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md)) |
 
-Both modes are the same `CredentialType.AGENT_API` credential type — there is no separate `CredentialType` for a key. See [External Keys](#external-keys-calling-from-outside-the-platform) below for the key half of this table.
+Both modes are the same `CredentialType.AGENT_API` credential type — there is no separate `CredentialType` for a key. See [Issued Keys](#issued-keys) below for the key half of this table. The older "Acts as" wording is gone: a key is *issued to* a person who *owns* it, rather than minted by the issuer to impersonate someone.
 
 ### Connection = Credential (no manual tokens)
 
@@ -151,17 +151,22 @@ Typed function parameters, `Query(le=, ge=, regex=)` constraints, and Pydantic `
 
 ## Token Model
 
-`agent_api` tokens are **opaque tokens**, not JWTs (unlike A2A access tokens). This section describes the **connection** token (`kind="connection"`), minted only by the connect helper and never created or managed by hand. Security model mirrors `AgentAccessToken`:
+`agent_api` tokens are **opaque tokens**, not JWTs (unlike A2A access tokens). Security model mirrors `AgentAccessToken`; shared by both kinds:
 
-- Token value generated at connect time and written **once** into the connection credential's encrypted data; only a SHA256 hash is stored, plus an 8-char `token_prefix` for display.
+- Token value generated at creation and written **once** into the credential's encrypted data; only a SHA256 hash is stored, plus an 8-char `token_prefix` for display.
 - Scoped to a single producer agent.
-- **Bound to its credential** via `credential_id` (`ON DELETE CASCADE`): deleting the credential — disconnecting — deletes the token. This is the only revocation path (there is no manual revoke/restore).
-- Tokens never expire — internal machine credentials.
+- **Bound to its credential** via `credential_id` (`ON DELETE CASCADE`): deleting the credential deletes the token. For a **connection** this is the only revocation path (no manual revoke/restore); connection tokens never expire and are minted only by the connect helper.
 - `last_used_at` updated on each validated use.
-- `read_only_override`: a token may only narrow the producer's policy (force read-only), never widen it. (Not exposed in the simplified connect UI; the producer's `policy.yaml` is the primary read-only control, and it defaults to read-only.)
+- `read_only_override`: a token may only narrow the producer's policy (force read-only), never widen it.
 - 2FA does not apply — machine credential, consistent with A2A tokens.
 
-The **same table** (`agent_api_token`) also backs the `kind="external"` mode — a human-held, revealable, identity-bound, optionally-expiring **key** described in full under [External Keys](#external-keys-calling-from-outside-the-platform). Everything above (opaque value, SHA256 hash at rest, prefix, credential-cascade revocation, `read_only_override` narrowing) is shared by both kinds; expiry and identity-binding are the two properties that differ.
+The `kind="external"` **issued key** adds, on the same table:
+
+- **Recipient identity** — `subject_user_id` (who the key is issued to; immutable) and `owner_id` (the issuer). Both foreign keys the producer side holds are nullable: `agent_id` and `owner_id` are `ON DELETE SET NULL`, so deleting the producer or the issuer leaves the row (and the recipient's credential) behind as a terminal status instead of destroying the explanation.
+- **Optional expiry** — `expires_at`; an expired key returns the same `401` as an invalid one.
+- **Soft revoke** — `is_active=false`, `revoked_at`, `revoked_reason` (only `revoked_by_issuer` is ever stored).
+- **Rotation grace** — the recipient can rotate the value in place; the previous hash keeps authenticating for 5 minutes (`previous_token_hash` / `previous_token_expires_at`), so a running script picks up the new value without a hard cut. A second rotate inside the window replaces the previous hash.
+- **One status vocabulary** computed at read time (see [Issued Keys](#issued-keys)); the proxy re-derives validity on every call.
 
 ---
 
@@ -268,6 +273,9 @@ Revocation is unchanged and has two granularities: revoke one installer's `Crede
 - Recipient links it to their agent; it syncs into their container.
 - Revoking access: revoke the `CredentialShare` (cuts that recipient) **or** delete the connection credential (deletes the token → cuts everyone using it).
 
+
+**Steering for producer owners (connections only).** `agent_api` connections stay shareable because they are anonymous and narrowed. But sharing a connection is *not* how an owner gives a person access to their producer with an identity and scopes. When the viewer of an `agent_api` connection's Sharing card **owns the producer**, the card points to the producer's API access surface ("Give API access") instead, where an issued key (owned by the recipient, never shareable) plus a scope grant is the right mechanism. Issued keys themselves are never shareable.
+
 ---
 
 ## "Connect Agent API" — how two platform agents wire together
@@ -278,63 +286,92 @@ Connecting is a single action, surfaced from the **consumer** agent's Credential
 2. Creates an `agent_api` credential pre-filled with `{base_url, token, spec_url, label, producer_agent_id}` and binds the token to it (`credential_id`).
 3. Links the credential to the consumer agent (immediate credential sync into the consumer's running containers).
 
-The caller must own the producer agent (or be a superuser). The resulting credential is created with `allow_sharing=False` by default; the owner enables sharing afterwards. `consumer_agent_id` is optional on the connect request (a credential minted with none is created unlinked and shows as "Not linked to an agent" on the producer card until linked) — but every current UI/CLI entry point (the agent's Credentials tab, `cinna connect agent-api --producer --consumer`) always supplies a consumer, since the global "Add Credential" picker no longer offers "Connect Agent API" at all (see [External Keys](#external-keys-calling-from-outside-the-platform) — it offers the key form instead, which has no consumer agent to link to).
+The caller must own the producer agent (or be a superuser). The resulting credential is created with `allow_sharing=False` by default; the owner enables sharing afterwards. `consumer_agent_id` is optional on the connect request (a credential minted with none is created unlinked and shows as "Not linked to an agent" on the producer card until linked) — but every current UI/CLI entry point (the agent's Credentials tab, `cinna connect agent-api --producer --consumer`) always supplies a consumer, since the global "Add Credential" picker no longer offers "Connect Agent API" at all (see [Issued Keys](#issued-keys) — it offers the key form instead, which has no consumer agent to link to).
 
 **Workspace home.** The connection credential is stamped with a `user_workspace_id` at connect time so it groups under the same workspace as the agent it belongs to (instead of always landing in the default workspace). Consumer-first: when a consumer agent is given, the credential inherits *that* agent's workspace (it is configured on and synced into the consumer's containers); with no consumer, it inherits the producer's workspace. If neither agent has a workspace it stays in the default workspace. The workspace does not follow a later re-link to an agent in a different workspace (grouping convenience, not an auth boundary). Legacy connections created before this change have no workspace stamp; an optional one-off backfill stamps those that are linked to exactly one workspaced agent.
 
-**Global Credentials view.** `agent_api` connections appear under the **Automatic Credentials** tab in `/credentials`. Tab membership is a server-computed `category` field — an owned `agent_api` credential lands in `"automatic"` unless its bound token's `kind == "external"` (an **external key**, which is hand-issued and lands in `"mine"` instead — same split as **agent2agent** vs. external/manual `mcp_provider` credentials; see [Credential Sharing — Categorization rules](../agent_credentials/credential_sharing.md#credentials-page-filter-tabs-and-category-assignment)). A connection's detail page lets you edit **name and notes** (the proxy token is still never shown), keeps the **Sharing** card, and **omits the Template-sharing** card — a connection has no user-fillable private fields, so it can never be template-provided. An external key's detail page is different in kind — see [External Keys](#external-keys-calling-from-outside-the-platform).
+**Global Credentials view.** `agent_api` connections appear under the **Automatic Credentials** tab in `/credentials`. Tab membership is a server-computed `category` field — an owned `agent_api` credential lands in `"automatic"` unless its bound token's `kind == "external"` (an **external key**, which is hand-issued and lands in `"mine"` instead — same split as **agent2agent** vs. external/manual `mcp_provider` credentials; see [Credential Sharing — Categorization rules](../agent_credentials/credential_sharing.md#credentials-page-filter-tabs-and-category-assignment)). A connection's detail page lets you edit **name and notes** (the proxy token is still never shown), keeps the **Sharing** card, and **omits the Template-sharing** card — a connection has no user-fillable private fields, so it can never be template-provided. An external key's detail page is different in kind — see [Issued Keys](#issued-keys).
 
 ---
 
-## External Keys — calling from outside the platform
+## Issued Keys
 
-A **key** is the second product behind the same proxy: instead of wiring one platform agent to another, it hands a human a copy-pasteable bearer token for a laptop script, a server, or a cron job. The platform treats that external caller exactly like a peer agent — same proxy, same `policy.yaml`, same live scope grant, same `caller` accessor in the producer's code (see [`REST_API_BUILDING.md`](../../../backend/app/env-templates/app_core_base/core/prompts/REST_API_BUILDING.md)). **The producer writes one authorization path, not two.**
+An **issued key** is the second product behind the same proxy. The producer's owner (the **issuer**) gives API access to a person (the **recipient**: a platform user, or the issuer themself). The recipient owns the key's credential and uses it from outside the platform (a laptop script, a server, a cron job), from a local agent on Cinna Desktop, or links it to one of their own cloud agents. The platform treats that caller exactly like a peer agent — same proxy, same `policy.yaml`, same live scope grant, same `caller` accessor in the producer's code (see [`REST_API_BUILDING.md`](../../../backend/app/env-templates/app_core_base/core/prompts/REST_API_BUILDING.md)). **The producer writes one authorization path, not two.**
 
-> The user-visible picker label **"Agent API Key"** is a working name pending final owner sign-off (not yet a fixed product name) — everywhere the frontend needs to name it, it reads from one shared copy source (`agentApiKeyCopy.ts`) so a rename stays a one-line change.
+> The user-visible label **"Agent API Key"** is a working name; the frontend reads it from one shared copy source so a rename stays a one-line change. The issue dialog is titled **"Give API access"**.
 
 ### Producer opt-in: `agent_api_external_access_enabled`
 
-A key can only be minted while the producer's `agent_api_external_access_enabled` flag (default `false`, toggled from the "Agent REST API" card's **External Keys** section) is on — alongside the pre-existing `agent_api_enabled` requirement. Both are checked independently and both fail with `400`.
+A key can only be issued while the producer's `agent_api_external_access_enabled` flag (default `false`, toggled from the producer's API access surface) is on — alongside the pre-existing `agent_api_enabled` requirement. Both are checked independently and both fail with `400`.
 
-This flag is not just a mint-time gate — the proxy re-checks it on **every call** (`agent_api_public.py` → `_validate_token_or_401` → `AgentApiTokenService.validate_token(..., external_access_enabled=...)`). Turning it off is a **live kill switch**: every already-issued key stops authenticating immediately, without deleting any of them and without touching agent-to-agent connections, which read the same agent row but ignore this flag entirely. A call rejected by the switch never bumps the key's `last_used_at` — a disabled key must never look like it "still works" — and the key list's `is_usable` field folds the switch in, so a technically-active, non-expired key still shows as unusable while the switch is off.
+The flag is also a **live kill switch**: the proxy re-checks it on **every call** (`agent_api_public.py` → `_validate_token_or_401` → `AgentApiTokenService.validate_token(..., external_access_enabled=...)`). Turning it off stops every issued key at once, without deleting any, and without touching connections (which ignore the flag). A call rejected by the switch never bumps `last_used_at`. Keys read as **paused** while it is off and recover on their own when it comes back on.
 
-### Minting: who it acts as, what it can do
+### Issuing: issued to, what it can do
 
-A key is minted by the producer owner (or a superuser) from either the producer's **Agent REST API** card ("Issue key") or the global `/credentials` → New credential picker's **"Agent API Key"** entry (`POST /agents/{producer_id}/agent-api/keys`, owner-gated). The mint form (identical wherever it's opened from) asks for:
+The producer's owner (or a superuser) issues a key from the producer's API access surface, or — for themself — from the global `/credentials` → New credential picker (`POST /agents/{producer_id}/agent-api/keys`, owner-gated). The form asks for:
 
-1. **Producer agent** — one of the caller's own API-enabled agents (fixed when opened from that agent's own card).
-2. **Acts as** (`subject_user_id`) — the platform user this key impersonates on every call. Defaults to the issuer (the common case is a key for one's own script). **Immutable once issued**, and there is no edit or reassign affordance at all: a token already handed to someone must never quietly start acting as a different user. To point at a different user you revoke the key and issue a new one, which is honest about the fact that the previous holder loses access. One key = one identity, forever.
-3. **Scopes (optional)** — a convenience that **upserts** the `(producer, subject)` `agent_api_access_grant` row, the exact same row the producer's **Access & Scopes** card edits. Scopes are never stored on the key itself: the key answers *who*, the grant answers *what*. Leaving scopes blank at mint time leaves an existing grant untouched (an explicit empty list clears it). Because multiple keys can be issued to the same `(producer, subject)` pair, they all share that one scope set — the credential detail card carries a note saying so explicitly, so an owner does not mistake per-key scoping for something it isn't.
-4. **Expiry (optional, `expires_in_days`)** — `1`–`3650` days, or never. Checked by `AgentApiTokenService.validate_token`; an expired key returns the same `401` as an invalid one (no distinction leaked).
+1. **Producer agent** — one of the caller's own API-enabled agents (fixed when opened from that agent).
+2. **Issued to** (`issued_to_user_id`, default: the issuer). The recipient **owns the credential**, so only they can reveal, rotate, link or delete it. Immutable: to hand the key to someone else, revoke and issue a new one.
+3. **Scopes (optional)** — **upserts** the `(producer, recipient)` `agent_api_access_grant` row. Scopes are never stored on the key: the key answers *who*, the grant answers *what*. Blank leaves an existing grant untouched; an explicit empty list clears it. Several keys per (producer, recipient) are allowed and share one scope set.
+4. **Expiry (optional, `expires_in_days`)** — `1`–`3650` days, or never.
+5. **Slot (optional, `service_uri`)** — the name scripts and local agents use to find the credential. Default `<slug(producer name)>-api` (lowercase, runs of other characters become `-`, "CRM Agent" → `crm-agent-api`). The recipient can edit it later like any credential field.
 
-The mint form has no per-key read-only control. `read_only_override` is still accepted on `POST /keys` and still may only narrow (never widen) the producer's policy, but the form doesn't expose it — the producer's `policy.yaml` is the primary read-only lever and already defaults to read-only, so a per-key narrowing knob would be redundant. Keys minted from the UI carry the model default (`false`).
+There is no per-key read-only control in the form (`read_only_override` is still accepted by the API and may only narrow); the producer's `policy.yaml` is the primary lever.
 
-The mint response includes the raw token value **once**, plus the **public** `base_url`/`spec_url` (never the container-rewritten `AGENT_ENV_BACKEND_URL` form — an external caller is not on the Docker network and needs an address it can actually reach). After that, the value is not lost: it stays revealable from the credential detail page, because — unlike a connection's machine token — the key **is** the deliverable.
+**No secret for the issuer.** The response carries the token **only on a self-issue**. A key issued to someone else comes back with `token = null`; the recipient reveals it from their own credential. There is no superuser bypass on reveal. The response carries the **public** `base_url`/`spec_url` (never the container-rewritten form).
 
-### Independent lifecycles
+### One status vocabulary
 
-Revoking a key (producer card **or** deleting the credential directly) never deletes the `(producer, subject)` grant — that user may still reach the producer through their own agents or another key. Deleting the grant never revokes a key — it keeps authenticating, just with zero scopes from that point on. You can rotate the secret without touching capability, and revoke capability without rotating the secret.
+`AgentApiKeyStatus` is computed in one function (`key_status`) and means the same thing on the issuer's list, the recipient's page, the cloud env sync and Desktop. Precedence, top-down:
 
-Revocation itself bypasses the credential [deletion blast-radius gate](../agent_credentials/credential_sharing.md#deletion-impact-gate) (`force=True`): a leaked bearer key must always be instantly killable and must never come back with a `409` because some bundle happens to link its credential.
+| Status | Meaning | Terminal? |
+|---|---|---|
+| `revoked_by_issuer` | the issuer revoked it | yes |
+| `producer_removed` | the producer agent was deleted | yes |
+| `issuer_removed` | the issuer's account was deleted | yes |
+| `expired` | past `expires_at` | yes |
+| `api_disabled` | the producer's API is switched off | recovers |
+| `external_access_paused` | the kill switch is off | recovers |
+| `active` | works | — |
+
+Terminal keys refuse reveal, rotate and spec (`409`) and never authenticate. Everything else about availability is derived at read time, so a status can change without any write.
+
+### Lifecycles
+
+- **Soft revoke.** The issuer revoking a key never deletes the recipient's credential; the row stays with `revoked_at` so the recipient sees *why* it stopped. Revoked keys stay until the recipient deletes the credential (no auto-purge) and stay in the issuer's list behind a disclosure. Revocation touches the credential so the recipient's linked agents lose the value on the next sync, and it bypasses the credential deletion blast-radius gate by construction.
+- **Recipient deletes the credential.** The token cascades; only an audit event remains on the issuer's account.
+- **Rotation (recipient only).** `POST /credentials/{id}/agent-api-key/rotate` swaps the value in place (same credential, same token row). The previous value keeps working for **5 minutes**; there is no "rotate and end now". Terminal statuses refuse rotate.
+- **Grant independence.** Revoking a key never deletes the `(producer, recipient)` grant, and deleting the grant never revokes a key (it keeps authenticating with zero scopes).
+- **User deletion has no hook.** Environments see `issuer_removed` on their next sync; the proxy answers `401` immediately.
+
+### Where an issued key reaches
+
+- **Cloud agents (env sync).** A key syncs into `credentials.json` only when the credential owner, the key's recipient and the environment's agent owner are the **same person**. An active key ships with its token; a non-active one ships **token-less** with `unavailable_reason` (`key_revoked` | `key_expired` | `key_paused`) and `key_status`, so the agent can tell the user what is wrong instead of silently losing the slot. A key never makes the platform inject an `owner_identity_token` (identity is bound to the key). Connections are unchanged.
+- **Cinna Desktop.** Opt-in (`include=agent_api_keys`), owned-and-issued-to-caller keys only, active keys only; public URLs. See [Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md) and, for scripts, the kit's `agent_api_session` in [Local Agent Kit](../../application/local_agent_kit/local_agent_kit.md).
+- **Outside callers.** Call the public `base_url` with `Authorization: Bearer <token>`.
 
 ### What makes a key a key (vs. a connection), end to end
 
-- **Identity source at the proxy.** A connection's caller identity comes from the separate `owner_identity_token` header the platform injects into a consumer container (see [Caller Identity & Producer Scopes](#caller-identity--producer-scopes)) — anonymous if absent. An external key carries its identity **in the token itself** (`subject_user_id`, resolved via `AgentApiIdentityService.resolve_caller_headers_for_user`). The branch is on `token.kind` alone, so a request presenting a valid key **can never** override its bound identity by also supplying an `X-Cinna-Caller-Identity` header — the header is simply never consulted for a key call, not merely lower-priority.
-- **Scopes are injected even with the producer's opt-in off.** `agent_api_identity_enabled` exists to mean "attribute and score my anonymous *connection* callers" — an opt-in, because a connection's identity is inferred. A key's identity was deliberately assigned by the owner at mint time, so it is self-evidently intentional: `identity_enabled = agent.agent_api_identity_enabled OR token.kind == "external"` gates both scope injection and the optional edge enforcement, and a key always satisfies the second half.
-- **Never shareable.** `allow_sharing` is forced `False` at creation and `CredentialsService.assert_sharing_allowed` rejects any later attempt to turn it (or `allow_template_sharing`) on for a bound external-key credential. Sharing an identity-bound key would mean "here, act as user X" — cross-user access to a producer belongs to the scope grant, not credential sharing. An `agent_api` credential whose bound token row is missing entirely (orphaned) is treated the same way — restricted, fail-closed — because the platform can no longer tell which mode it was in.
-- **Never synced into `credentials.json`.** `CredentialsService._drop_external_agent_api_keys` strips every non-connection `agent_api` credential from the env-sync payload before it reaches a container (mirroring the `mcp_provider` external-server exclusion). A key is for a human outside the platform, not for a container — syncing it in would quietly let a container impersonate its bound subject and bypass the anonymous connection model.
-- **Excluded from bundle revisions.** `agent_api_external_access_enabled` is deliberately **not** part of the fields `AgentBundleRevision` snapshots at publish time (unlike `agent_api_enabled` and `agent_api_identity_enabled`, which are). A published bundle cannot ship "external keys already turned on" — every install starts with the switch off and the owner opts in explicitly.
-- **Reveal is a dedicated, audited endpoint — not `with-data`.** `POST /credentials/{id}/agent-api-key/reveal` is the only path that returns a key's value after mint; it writes a `severity="high"` `SecurityEvent` (`AGENT_API_EXTERNAL_KEY_REVEALED`) on every call. The generic `GET /credentials/{id}/with-data` — which every credential detail page calls on open — **strips `token`** from its response for a bound external key instead, and writes no audit event there; that route fires on every page load, so auditing it would record "page opened," not "secret revealed." Both are unchanged for `agent_api` connections, whose token is never shown at all. The credential detail card keeps the value masked until the owner explicitly clicks "Reveal" (or lands there straight from minting, where the deliverable is shown once inline) — the UI never auto-reveals on page load. See [agent_api_tech.md](agent_api_tech.md#reveal-endpoint-post-credentialsidagent-api-keyreveal-and-the-with-data-strip).
-- **Categorized as "mine", not "automatic".** See [Global Credentials view](#connect-agent-api--how-two-platform-agents-wire-together) above and [Credential Sharing — Categorization rules](../agent_credentials/credential_sharing.md#credentials-page-filter-tabs-and-category-assignment).
+- **Identity source at the proxy.** A connection's caller identity comes from the separate `owner_identity_token` (see [Caller Identity & Producer Scopes](#caller-identity--producer-scopes)) — anonymous if absent. An issued key carries its identity **in the token itself** (`subject_user_id`, resolved via `AgentApiIdentityService.resolve_caller_headers_for_user`). The branch is on `token.kind` alone: a key request can **never** override its identity with an `X-Cinna-Caller-Identity` header.
+- **Scopes are injected even with the producer's identity opt-in off.** `identity_enabled = agent.agent_api_identity_enabled OR token.kind == "external"`: a key's identity was deliberately assigned, so it is self-evidently intentional.
+- **Never shareable.** `allow_sharing` is forced `False` and `CredentialsService.assert_sharing_allowed` rejects turning it (or template sharing) on. An `agent_api` credential whose bound token row is missing is treated the same way (fail-closed).
+- **Excluded from bundle revisions.** `agent_api_external_access_enabled` is not part of what `AgentBundleRevision` snapshots; every install starts with the switch off.
+- **Reveal is a dedicated, audited endpoint — not `with-data`.** `POST /credentials/{id}/agent-api-key/reveal` writes a `severity="high"` `SecurityEvent` (`AGENT_API_EXTERNAL_KEY_REVEALED`) per call; `GET /credentials/{id}/with-data` strips `token` for an issued key and writes no event. The UI keeps the value masked until the recipient clicks "Reveal". See [agent_api_tech.md](agent_api_tech.md#reveal-endpoint-post-credentialsidagent-api-keyreveal-and-the-with-data-strip).
+- **Audit trail.** CREATED (issuer), REVOKED (issuer and recipient), REVEALED, ROTATED, DELETED_BY_HOLDER (issuer's account). No notification is sent to the recipient on issue.
+- **Categorized as "mine", not "automatic".** See [Credential Sharing — Categorization rules](../agent_credentials/credential_sharing.md#credentials-page-filter-tabs-and-category-assignment).
+
+### Accepted risk: linking a key to a shared agent
+
+A recipient who links their key to an agent that other people can reach lets those people's requests hit the producer **as the recipient**. This is documented, not mitigated. The recipient sees which of their agents the key is linked to; the issuer sees only a **count** of linked agents, never names.
 
 ### Where each surface lives
 
-- **Global `/credentials` → New credential** offers only **"Agent API Key"**, not "Connect Agent API" — the global picker has no consumer agent to link a connection to, so offering Connect there only ever produced a dangling "Not linked to an agent" credential. That entry point now issues a key on success and routes straight to the credential detail page with the value revealed once and a ready-to-copy `curl` snippet.
-- **Agent Credentials tab → Add credential** keeps "Connect Agent API" — a consumer agent is already in context there.
-- **Producer "Agent REST API" card** has the pre-existing **Connections** list (agents calling in) plus a new **External Keys** section beneath it (everything outside the platform that can call in) — prefix, subject user, last used, expiry, revoke, an "Issue key" button, and the `agent_api_external_access_enabled` switch.
-- **Key credential detail page** is a different layout from a connection's: one full-width **Agent API Key** card holding only the deliverable — the masked value (Reveal / Hide + Copy), the base URL + View Spec, and a copyable `curl` — over two half-width cards, **Details** (name / notes) and **Access** (the producer agent as a clickable badge, the read-only "acts as" identity, and the scopes editor writing through the same grant routes the Access & Scopes card uses).
+- **Producer's API access surface** (one per-person view, replacing the former External Keys list and the separate Access & Scopes sub-card): each person with access appears once with their scopes and their keys (status, expiry, last used, revoke), a **Give API access** action (its success panel names "{producer}'s API access card" as where to manage the key), the kill switch and the identity switch. **Edit scopes** is hidden while per-user scopes are switched off. Revoked and other terminal keys sit behind a disclosure.
+- **Recipient's key credential page**: the masked value (Reveal / Hide / Copy, **Rotate**), the base URL and View Spec, a ready-to-copy `curl`, the key's status with a plain-language explanation, the issuer, the scopes, and the agents the key is linked to. Terminal states explain themselves and offer delete.
+- **Global `/credentials` → New credential** offers **"Agent API Key"** (self-issue) and routes to the credential page with the value shown once. **Agent Credentials tab → Add credential** keeps "Connect Agent API".
 
 ---
+
 
 ## UI States
 
@@ -356,11 +393,27 @@ If the producer environment is **suspended or stopped** when Refresh is clicked,
 
 **Connections section:** one row per connection (token + its credential), showing the linked consumer agent(s) as their normal Bot badge (icon + agent colour preset), the agent **owner's email** next to each badge, a read-only badge when applicable, and a **Disconnect** (trash) button. The owner email disambiguates identical agent names — e.g. several users who each installed the same bundle and connected their copy produce same-named consumer agents that would otherwise be indistinguishable. Disconnect deletes the connection credential (or an orphaned token directly) — cascade-deleting the token. A connection created without a consumer link shows "Not linked to an agent" and can still be disconnected.
 
-**Access & Scopes card.** Inside the same producer "Agent REST API" card sits an **Access & Scopes** sub-card for caller identity and per-user scopes. It has an opt-in switch ("identify calling users and grant each one capability scopes") that toggles `agent_api_identity_enabled`; while off, calls are still attributed to a user but carry no scopes. With it on, a `UserAllowlistPicker` (the same server-search picker credential sharing and the MCP connector ACL use) adds platform users, and each granted user gets a row of **scope chips**: catalog scopes the producer declared in `policy.yaml` are offered as quick-add suggestions, and free-text scope names can be added too. Changes are written through the grant routes and take effect on the next call. Unlike the share/assignment pickers, this picker **includes the owner themselves** (`includeSelf`) — the producer's owner is frequently the calling user (when one of their own agents calls the producer API) and must be able to assign scopes to their own identity.
+**Access & Scopes (now the per-person API access surface — see [Issued Keys](#issued-keys)).** Caller identity and per-user scopes live in the producer's API access surface, where each person's scopes sit next to their issued keys. It has an opt-in switch ("identify calling users and grant each one capability scopes") that toggles `agent_api_identity_enabled`; while off, calls are still attributed to a user but carry no scopes. With it on, a `UserAllowlistPicker` (the same server-search picker credential sharing and the MCP connector ACL use) adds platform users, and each granted user gets a row of **scope chips**: catalog scopes the producer declared in `policy.yaml` are offered as quick-add suggestions, and free-text scope names can be added too. Changes are written through the grant routes and take effect on the next call. Unlike the share/assignment pickers, this picker **includes the owner themselves** (`includeSelf`) — the producer's owner is frequently the calling user (when one of their own agents calls the producer API) and must be able to assign scopes to their own identity.
 
 ### Consumer View
 
 The `agent_api` connection credential appears in the Credentials page and Agent Credentials tab like any other credential. Its **detail page** is a connection panel: the producer agent, the connected consumer agent(s) as Bot badges, a **View Spec** button (opens the producer's spec as rendered docs in a new tab — see [Spec Viewer](spec_viewer.md)), the proxy `base_url`, and the standard Sharing / Share-as-Template cards. The token itself is never shown.
+
+
+### Issued key states (API access surface and key page)
+
+| State | Issuer sees (per key) | Recipient sees (key page) |
+|---|---|---|
+| **Active** | prefix, last used, expiry, Revoke | masked value with Reveal / Copy / Rotate, `curl`, scopes, linked agents |
+| **Paused** (`api_disabled`, `external_access_paused`) | "paused" with the reason (switch off / API off) | explanation that it recovers on its own; value still revealable |
+| **Expired** | behind the terminal disclosure | explanation, no reveal/rotate, Delete |
+| **Revoked by issuer** | behind the terminal disclosure, with the revoke time | "the issuer revoked this key", no reveal/rotate, Delete |
+| **Producer / issuer removed** | (producer removed: key no longer listed on a producer) | explanation that the other side is gone, Delete |
+| **Just rotated** | `rotated_at` shown | a line saying the previous value "stops working in N minutes" |
+| **Issued to someone else, not yet revealed** | no value, ever; "issued to <person>" | the recipient reveals it once they open the credential |
+| **Legacy key the issuer had seen** (`issuer_saw_value`) | n/a | a warning to rotate; rotating clears it |
+
+A producer's owner viewing an `agent_api` connection sees a pointer to "Give API access" on its Sharing card.
 
 ---
 
@@ -380,7 +433,7 @@ The `agent_api` connection credential appears in the Credentials page and Agent 
 
 - **[Realtime Events](../../application/realtime_events/event_bus_system.md)** — `AGENT_API_STATUS_CHANGED` event is emitted after a spec reload or boot error so the owner's Integrations tab updates live without polling.
 
-- **[Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md)** — two layers. **Connect:** `cinna connect agent-api --producer P --consumer C` wraps `AgentApiTokenService.connect_agent_api` via `POST /api/v1/cli/account/connect/agent-api`; producer ownership gate and 403/404 mapping are reused unchanged. **Build + verify:** `cinna agent-api enable|refresh|spec <agent>` (the producer-side half that precedes connect) wrap the same `agent_api_enabled` toggle (`AgentService.update_agent`), `_refresh` re-harvest, and `openapi.json` spec read the Integrations card uses, via `POST /account/agent-api/enable`, `POST /account/agent-api/refresh`, and `GET /account/agent-api/spec`. So a local coding agent can stand up a producer API and verify the harvested spec, then wire a consumer, entirely from the CLI.
+- **[Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md)** — two layers. **Connect:** `cinna connect agent-api --producer P --consumer C` wraps `AgentApiTokenService.connect_agent_api` via `POST /api/v1/cli/account/connect/agent-api`; producer ownership gate and 403/404 mapping are reused unchanged. **Build + verify:** `cinna agent-api enable|refresh|spec <agent>` (the producer-side half that precedes connect) wrap the same `agent_api_enabled` toggle (`AgentService.update_agent`), `_refresh` re-harvest, and `openapi.json` spec read the Integrations card uses, via `POST /account/agent-api/enable`, `POST /account/agent-api/refresh`, and `GET /account/agent-api/spec`. So a local coding agent can stand up a producer API and verify the harvested spec, then wire a consumer, entirely from the CLI. **Access:** `cinna agent-api access list|issue|revoke|scopes` manage issued keys and grants through `/cli/account/agent-api/*`, reusing `AgentApiKeyService` and `AgentApiGrantService`. No key value ever crosses the account CLI (a self-issue returns a `credential_url` where the user reveals it); rotate, reveal and the external-access opt-in stay web-only; the generic `cinna api` escape hatch denies `agents/*/agent-api/keys`.
 
 ---
 
@@ -414,4 +467,10 @@ Plan item 10 proposed an optional producer-facing `/introspect` endpoint (an OAu
 
 ---
 
-*Last updated: 2026-08-07*
+## Changelog
+
+- **2026-10-07 — Issued keys.** "External Keys / Acts as" replaced by **Issued keys**: recipient-owned credential, soft revoke, seven-value status vocabulary, recipient rotation with a 5-minute grace, env sync only to the recipient's own agents (token-less with `unavailable_reason` when not active), opt-in Desktop delivery, default slot `<producer-slug>-api`, per-person API access surface, steering on connection sharing.
+
+---
+
+*Last updated: 2026-10-07*

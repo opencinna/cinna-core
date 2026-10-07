@@ -326,6 +326,9 @@ skills/
 ```
 
 - Shared utilities stay in `scripts/` at the top level, so every skill imports one copy.
+- A skill that calls another agent's REST API imports `agent_api_session` from the
+  top-level `scripts/cinna_credentials.py` and names its slot; it never reads the
+  key itself.
 - A script used by exactly one skill lives in that skill's `scripts/`.
 - A script that belongs to no skill stays in `scripts/`.
 - Commands and Makefile targets use the full path from the agent root:

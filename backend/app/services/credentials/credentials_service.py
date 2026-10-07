@@ -270,26 +270,37 @@ class CredentialsService:
             "credential_data": credential_data,
         }
 
+    # Internal marker set on issued-key entries by _shape_agent_api_keys_for_env
+    # so the README can describe them; stripped before anything is emitted.
+    _ISSUED_KEY_MARKER = "_agent_api_issued_key"
+
+    # Non-secret fields a token-less (unavailable) issued-key entry keeps.
+    UNAVAILABLE_AGENT_API_KEY_FIELDS = ("base_url", "spec_url", "label", "producer_agent_id")
+
     @staticmethod
-    def _drop_external_agent_api_keys(
-        session: Session, credentials: list[dict]
+    def _shape_agent_api_keys_for_env(
+        session: Session,
+        credentials: list[dict],
+        env_owner_id: uuid.UUID | None,
+        for_desktop: bool,
     ) -> list[dict]:
-        """Remove non-connection ``agent_api`` credentials from an env-bound list.
+        """Decide which ``agent_api`` credentials reach an env / device, and how.
 
-        Keys are never written into a container (plan D4) — see the call site in
-        ``prepare_credentials_for_environment`` for why. One batched lookup.
+        - **Connections** are kept only when bound to a ``kind="connection"``
+          token whose producer still exists (``agent_id`` not NULL).
+        - **Issued keys** are kept only when the credential's owner, the key's
+          recipient and ``env_owner_id`` are the same person (a key is never
+          written where someone else's agent runs). An active key ships as is; a
+          non-active one ships **token-less** with ``unavailable_reason`` and
+          ``key_status`` (plan D21) and only the non-secret
+          ``UNAVAILABLE_AGENT_API_KEY_FIELDS``.
+        - ``for_desktop``: key URLs are recomputed from the public origin
+          (``AgentApiTokenService.build_base_url``, D18); with no producer left
+          the stored URLs are kept.
+        - Orphans (no bound token) are dropped.
 
-        FAILS CLOSED twice over. ``token`` is a whitelisted ``agent_api`` field
-        (connections genuinely need it in the container), so the downstream
-        whitelist is NOT a second line of defence here:
-
-        - Only rows positively identified as ``kind="connection"`` are kept. An
-          orphan (no bound token) is dropped too — its stored token
-          authenticates nothing, so there is no upside to shipping it.
-        - If the lookup itself fails we cannot tell a key from a connection, so
-          every ``agent_api`` credential is dropped. A consumer temporarily
-          losing a connection is recoverable; an external key reaching a
-          container is not.
+        FAILS CLOSED: ``token`` is a whitelisted ``agent_api`` field, so if the
+        lookup fails every ``agent_api`` credential is dropped.
         """
         agent_api_ids = [
             uuid.UUID(cred["id"])
@@ -299,39 +310,96 @@ class CredentialsService:
         if not agent_api_ids:
             return credentials
 
+        from app.models import AgentApiToken
+        from app.services.agent_api.agent_api_key_status import (
+            AgentApiKeyStatus,
+            key_states_by_credential,
+            unavailable_reason_for,
+        )
         from app.services.agent_api.agent_api_token_service import (
             AgentApiTokenService,
         )
 
         try:
-            kinds = AgentApiTokenService.get_kinds_by_credential(
-                session, agent_api_ids
+            token_rows = session.exec(
+                select(
+                    AgentApiToken.credential_id,
+                    AgentApiToken.kind,
+                    AgentApiToken.agent_id,
+                ).where(AgentApiToken.credential_id.in_(agent_api_ids))
+            ).all()
+            owners = dict(
+                session.exec(
+                    select(Credential.id, Credential.owner_id).where(
+                        Credential.id.in_(agent_api_ids)
+                    )
+                ).all()
             )
+            key_states = key_states_by_credential(session, agent_api_ids)
         except Exception:
             logger.exception(
-                "Failed to resolve agent_api token kinds; dropping ALL agent_api "
-                "credentials from this sync (fail closed — `token` is whitelisted, "
-                "so keeping them risks writing an external key into the container)"
+                "Failed to resolve agent_api tokens; dropping ALL agent_api "
+                "credentials from this sync (fail closed — `token` is whitelisted)"
             )
             return [cred for cred in credentials if cred.get("type") != "agent_api"]
 
-        connection_ids = {
+        live_connection_ids = {
             str(cred_id)
-            for cred_id, kind in kinds.items()
-            if kind == AgentApiTokenKind.CONNECTION.value
+            for cred_id, kind, agent_id in token_rows
+            if cred_id is not None
+            and kind == AgentApiTokenKind.CONNECTION.value
+            and agent_id is not None
         }
-        kept = [
-            cred
-            for cred in credentials
-            if cred.get("type") != "agent_api" or cred.get("id") in connection_ids
-        ]
-        if len(kept) != len(credentials):
+
+        shaped: list[dict] = []
+        dropped = 0
+        for cred in credentials:
+            if cred.get("type") != "agent_api":
+                shaped.append(cred)
+                continue
+            if cred.get("id") in live_connection_ids:
+                shaped.append(cred)
+                continue
+            cred_uuid = uuid.UUID(cred["id"])
+            state = key_states.get(cred_uuid)
+            if (
+                state is None
+                or env_owner_id is None
+                or owners.get(cred_uuid) != env_owner_id
+                or state.token.subject_user_id != env_owner_id
+            ):
+                dropped += 1
+                continue
+
+            data = dict(cred.get("credential_data") or {})
+            if for_desktop and state.token.agent_id is not None:
+                data["base_url"] = AgentApiTokenService.build_base_url(
+                    state.token.agent_id
+                )
+                data["spec_url"] = AgentApiTokenService.build_spec_url(
+                    state.token.agent_id
+                )
+            entry = {**cred, CredentialsService._ISSUED_KEY_MARKER: True}
+            if state.status != AgentApiKeyStatus.ACTIVE:
+                data = {
+                    field: data[field]
+                    for field in CredentialsService.UNAVAILABLE_AGENT_API_KEY_FIELDS
+                    if field in data
+                }
+                entry["unavailable_reason"] = unavailable_reason_for(state.status)
+                entry["key_status"] = state.status.value
+            entry["credential_data"] = data
+            shaped.append(entry)
+
+        if dropped:
             logger.info(
-                "Excluding %d non-connection agent_api credential(s) from env "
-                "credential sync",
-                len(credentials) - len(kept),
+                "Excluding %d agent_api credential(s) from %s credential sync "
+                "(orphaned, dead connection, or an issued key not owned by the "
+                "env owner)",
+                dropped,
+                "desktop" if for_desktop else "env",
             )
-        return kept
+        return shaped
 
     @staticmethod
     def _process_api_token_credential(credential_data: dict) -> dict:
@@ -867,9 +935,32 @@ class CredentialsService:
         ]
 
     @staticmethod
-    def generate_credentials_readme(credentials: list[dict]) -> str:
+    def _agent_api_unavailable_hint(reason: str) -> str:
+        """What the user can do about an unavailable issued key (README)."""
+        return {
+            "key_revoked": (
+                "The key was revoked or its producer / issuer is gone; ask the "
+                "user to get a new key from the producer's owner."
+            ),
+            "key_expired": (
+                "The key expired; ask the user to get a new key from the "
+                "producer's owner."
+            ),
+            "key_paused": (
+                "The producer's API is paused; it recovers by itself when the "
+                "producer's owner turns it back on."
+            ),
+        }.get(reason, "")
+
+    @staticmethod
+    def generate_credentials_readme(
+        credentials: list[dict], issued_key_ids: set[str] | None = None
+    ) -> str:
         """
         Generate a README.md content for credentials with redacted sensitive data.
+
+        ``issued_key_ids`` names the ``agent_api`` entries that are issued keys
+        (Bearer only, identity bound to the key) rather than connections.
 
         This README will be included in the building agent prompt so the agent
         knows what credentials are available and how to use them, but doesn't
@@ -957,6 +1048,9 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 display_entry["service_uri"] = cred["service_uri"]
             if "is_placeholder" in cred:
                 display_entry["is_placeholder"] = cred["is_placeholder"]
+            if cred.get("unavailable_reason"):
+                display_entry["unavailable_reason"] = cred["unavailable_reason"]
+                display_entry["key_status"] = cred.get("key_status")
             display_entry["credential_data"] = redacted_credential_data
             credentials_for_display.append(display_entry)
 
@@ -1402,6 +1496,47 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("        break")
                 lines.append("```")
                 lines.append("")
+            elif cred_type == "agent_api" and cred.get("unavailable_reason"):
+                lines.append(f"### Agent API Key: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
+                lines.append("")
+                lines.append(
+                    f"Unavailable: {cred['unavailable_reason']} "
+                    f"(`key_status`: {cred.get('key_status')}). This entry carries "
+                    "no token; calls with it will fail. "
+                    + CredentialsService._agent_api_unavailable_hint(
+                        cred["unavailable_reason"]
+                    )
+                )
+                lines.append("")
+            elif cred_type == "agent_api" and cred_id in (issued_key_ids or ()):
+                lines.append(f"### Agent API Key: {cred_name}")
+                lines.append(f"**ID**: `{cred_id}`")
+                lines.append("")
+                slot = cred.get("service_uri") or "<slot>"
+                lines.append(
+                    "An API key issued to this agent's owner for another agent's "
+                    "REST API. Only the `Authorization: Bearer` token is sent; the "
+                    "caller's identity is bound to the key, so no identity header "
+                    "is needed. Use the SDK session, which sends the key only to "
+                    "the producer and raises `CredentialMissing` with the reason "
+                    "when the key is unavailable:"
+                )
+                lines.append("")
+                lines.append("```python")
+                lines.append("from core.cinna_api import credentials, CredentialMissing")
+                lines.append("")
+                lines.append(f"api = credentials.agent_api_session('{slot}')")
+                lines.append("spec = api.get(api.spec_url).json()")
+                lines.append("response = api.get('/some/endpoint')")
+                lines.append("```")
+                lines.append("")
+                lines.append(
+                    "In an environment built before the slot helpers, read "
+                    f"`credentials/credentials.json` entry `{cred_id}` and send "
+                    "`Authorization: Bearer <token>` to its `base_url`."
+                )
+                lines.append("")
             elif cred_type == "agent_api":
                 lines.append(f"### Agent API Connection: {cred_name}")
                 lines.append(f"**ID**: `{cred_id}`")
@@ -1529,16 +1664,21 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Get credentials with decrypted data
         credentials = copy.deepcopy(selected_credentials) if selected_credentials is not None else CredentialsService.get_agent_credentials_with_data(session, agent_id)
 
-        # Drop agent_api EXTERNAL KEYS before anything else looks at the list.
-        # A key is for code running OUTSIDE the platform; syncing an
-        # identity-bound key into a container would quietly bypass the anonymous
-        # connection model (the container would call the producer AS the key's
-        # subject user, not as its own install owner). Removing them here — not
-        # just from the whitelist — also keeps them out of the README render and
-        # out of the `has_agent_api_cred` test that decides whether to inject the
-        # owner_identity_token block (plan D4).
-        credentials = CredentialsService._drop_external_agent_api_keys(
-            session, credentials
+        # Shape agent_api credentials before anything else looks at the list:
+        # dead connections and keys not issued to this env's owner are dropped,
+        # non-active keys become token-less entries with unavailable_reason.
+        # Doing it here — not just in the whitelist — also keeps dropped rows
+        # out of the README render and the owner_identity_token test below.
+        if desktop_owner is not None:
+            env_owner_id: uuid.UUID | None = desktop_owner.id
+        else:
+            env_agent = session.get(Agent, agent_id) if agent_id else None
+            env_owner_id = env_agent.owner_id if env_agent is not None else None
+        credentials = CredentialsService._shape_agent_api_keys_for_env(
+            session,
+            credentials,
+            env_owner_id=env_owner_id,
+            for_desktop=desktop_owner is not None,
         )
 
         # Collect service account files before filtering
@@ -1585,8 +1725,13 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # container the consumer must call the backend over the internal Docker
         # network, not the public FRONTEND_HOST. Done before filtering so the
         # whitelist (base_url/spec_url) and the README both carry the rewritten URL.
+        # Cloud only: a Desktop calls the public origin (D18).
         for cred in credentials:
-            if cred["type"] == "agent_api" and cred.get("credential_data"):
+            if (
+                desktop_owner is None
+                and cred["type"] == "agent_api"
+                and cred.get("credential_data")
+            ):
                 cred["credential_data"] = CredentialsService._rewrite_agent_api_urls_for_env(
                     cred["credential_data"]
                 )
@@ -1594,6 +1739,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Filter out sensitive fields that should never be exposed to agent environment
         # (e.g., refresh tokens, client secrets for OAuth credentials)
         filtered_credentials = []
+        issued_key_ids: set[str] = set()
         for cred in credentials:
             # mcp_provider credentials are NEVER written to credentials.json or its
             # README. They are materialised into the per-mode SDK MCP config via
@@ -1605,6 +1751,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             if cred["type"] == "mcp_provider":
                 continue
             filtered_cred = copy.deepcopy(cred)
+            if filtered_cred.pop(CredentialsService._ISSUED_KEY_MARKER, False):
+                issued_key_ids.add(cred["id"])
             filtered_cred["credential_data"] = CredentialsService.filter_credential_data_for_agent_env(
                 cred["type"],
                 cred["credential_data"]
@@ -1647,13 +1795,19 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Re-minted for free on every sync, keeping running envs fresh (D7).
         # Guarded: a missing owner must never break credential sync.
         try:
-            has_agent_api_cred = any(c["type"] == "agent_api" for c in credentials)
+            # Never for a Desktop: issued keys bind identity to the key and
+            # connections are never delivered to a device.
+            # Connections only: an issued key's identity is the key itself.
+            has_agent_api_cred = desktop_owner is None and any(
+                c["type"] == "agent_api"
+                and not c.get(CredentialsService._ISSUED_KEY_MARKER)
+                for c in credentials
+            )
             if has_agent_api_cred:
                 from app.services.agent_api.agent_api_identity_service import (
                     AgentApiIdentityService,
                 )
 
-                # Desktop delivery never selects agent_api, so this is cloud-only.
                 agent = session.get(Agent, agent_id) if agent_id else None
                 owner = session.get(User, agent.owner_id) if agent else None
                 if owner is not None:
@@ -1675,7 +1829,9 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Generate README with redacted data (for agent prompt context)
         # IMPORTANT: Use filtered_credentials so README matches credentials.json structure
         # This ensures agent sees the same fields in README as in the actual JSON file
-        readme_content = CredentialsService.generate_credentials_readme(filtered_credentials)
+        readme_content = CredentialsService.generate_credentials_readme(
+            filtered_credentials, issued_key_ids=issued_key_ids
+        )
 
         return {
             "credentials_json": filtered_credentials,
@@ -1931,6 +2087,15 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         return db_credential
 
     @staticmethod
+    def write_credential_data(credential: Credential, credential_data: dict) -> None:
+        """Replace a credential's encrypted payload (caller commits).
+
+        For callers that own a field the generic update refuses to change
+        (the value of an issued agent_api key, written by ``rotate_key``).
+        """
+        credential.encrypted_data = encrypt_field(json.dumps(credential_data))
+
+    @staticmethod
     async def update_credential(
         session: Session,
         credential_id: uuid.UUID,
@@ -2007,9 +2172,10 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             # write replaces the encrypted blob wholesale, which would silently
             # destroy the only stored copy of a key that keeps authenticating at
             # the proxy — renaming a key would quietly make it unrevealable
-            # forever. Carry the stored value forward: a key is rotated by
-            # revoke + re-issue, never by editing its data.
-            if isinstance(data_payload, dict) and "token" not in data_payload:
+            # forever. Always keep the stored value: an incoming `token` is
+            # ignored, a key's value changes only through
+            # AgentApiKeyService.rotate_key (which writes it directly).
+            if isinstance(data_payload, dict):
                 from app.services.agent_api.agent_api_key_service import (
                     AgentApiKeyService,
                 )
@@ -2022,8 +2188,13 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     stored_token = CredentialsService.decrypt_credential_data(
                         session=session, credential=credential
                     ).get("token")
+                    data_payload = {
+                        key: value
+                        for key, value in data_payload.items()
+                        if key != "token"
+                    }
                     if stored_token:
-                        data_payload = {**data_payload, "token": stored_token}
+                        data_payload["token"] = stored_token
             # OAuth tokens are minted by the consent flow and refreshed
             # server-side, never typed. The edit
             # form omits them, so carry the stored ones forward instead of
@@ -2315,6 +2486,16 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
 
         # Get affected agents BEFORE deletion (links will be cascade deleted)
         affected_agent_ids = CredentialsService.get_affected_agents(session, credential_id)
+
+        # An issued agent_api key: the recipient deleting their copy is how a
+        # key ends for good (the token row cascades). Audit it on the issuer's
+        # account while the token row still exists.
+        if credential.type == CredentialType.AGENT_API:
+            from app.services.agent_api.agent_api_key_service import (
+                AgentApiKeyService,
+            )
+
+            await AgentApiKeyService.on_holder_delete(session, credential)
 
         # Delete credential
         session.delete(credential)

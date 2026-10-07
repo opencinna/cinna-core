@@ -525,7 +525,7 @@ stale or manually-corrupted state. Both sharing-disable paths (`PUT
 /credentials/{id}` and `PATCH …/sharing`) delete shares **and** recipient links,
 so their normal result is `not_linked`. Otherwise `CredentialIssueReason` is
 `not_linked` (no candidate), `not_configured` (a placeholder) or
-`access_revoked`.
+`access_revoked`. `SkillSlotIndex._usable` also treats a linked issued `agent_api` key whose key status is anything but `active` as not usable (so its slot reads `access_revoked`); key states load in one batched `key_states_by_credential` call in `build_for_agent`, and connections (no external key) are unaffected.
 
 **Why the readiness gate subtracts bundle-claimed ids.** An unfilled *skill*
 slot is a warning, not a block — a bundle's specs are the agent's contract, a

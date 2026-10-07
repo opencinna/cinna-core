@@ -2,6 +2,104 @@
 
 Auto-generated from OpenAPI spec. Tag: `agent-tasks`
 
+## GET `/api/v1/agent/tasks/protocol/targets`
+**Tasks Targets**
+
+**Query parameters:**
+- `source_session_id`: uuid (required)
+
+**Response:** `TaskTargetsPublic`
+
+---
+
+## GET `/api/v1/agent/tasks/protocol/list`
+**Tasks List**
+
+**Query parameters:**
+- `source_session_id`: uuid (required)
+- `relation`: "assigned" | "created" | "delegated" | "all", default: `all`
+- `category`: string | null
+- `include_closed`: boolean, default: `False`
+
+---
+
+## GET `/api/v1/agent/tasks/protocol/get`
+**Tasks Get**
+
+**Query parameters:**
+- `source_session_id`: uuid (required)
+- `ref`: string (required)
+
+---
+
+## POST `/api/v1/agent/tasks/protocol/create`
+**Tasks Create**
+
+**Request body** (`TasksCreateRequest`):
+  - `source_session_id`: uuid (required)
+  - `title`: string (required)
+  - `description`: string (required)
+  - `priority`: string | null
+  - `category`: string | null
+  - `parent`: string | null
+  - `assignee`: string | null
+  - `id`: string | null
+  - `execution`: string | null
+  - `group`: string | null
+  - `custom_fields`: object | null
+
+---
+
+## POST `/api/v1/agent/tasks/protocol/update`
+**Tasks Update**
+
+**Request body** (`TasksUpdateRequest`):
+  - `source_session_id`: uuid (required)
+  - `ref`: string (required)
+  - `title`: string | null
+  - `description`: string | null
+  - `priority`: string | null
+  - `custom_fields`: object | null
+  - `category`: string | null
+
+---
+
+## POST `/api/v1/agent/tasks/protocol/comment`
+**Tasks Comment**
+
+**Request body** (`TasksCommentRequest`):
+  - `source_session_id`: uuid (required)
+  - `ref`: string | null
+  - `body`: string (required)
+  - `files`: array | null
+
+---
+
+## POST `/api/v1/agent/tasks/protocol/report`
+**Tasks Report**
+
+**Request body** (`TasksReportRequest`):
+  - `source_session_id`: uuid (required)
+  - `ref`: string | null
+  - `status`: "in_progress" | "blocked" | "done" | "failed" (required)
+  - `summary`: string (required)
+  - `question`: string | null
+  - `audience`: string | null
+  - `artifacts`: string | object[]
+  - `body`: string
+
+---
+
+## POST `/api/v1/agent/tasks/protocol/reply`
+**Tasks Reply**
+
+**Request body** (`TasksReplyRequest`):
+  - `source_session_id`: uuid (required)
+  - `ref`: string (required)
+  - `message`: string (required)
+
+---
+
 ## POST `/api/v1/agent/tasks/current/delegation-result`
 **Agent Report Delegation**
 
@@ -27,6 +125,10 @@ Auto-generated from OpenAPI spec. Tag: `agent-tasks`
   - `assigned_to`: string | null
   - `priority`: string
   - `source_session_id`: string | null
+  - `assigned_agent_id`: string | null
+  - `assigned_node_id`: string | null
+  - `external_ref`: string | null
+  - `own_queue`: boolean
 
 **Response:** `AgentTaskOperationResponse`
 
@@ -84,6 +186,8 @@ Auto-generated from OpenAPI spec. Tag: `agent-tasks`
   - `priority`: string
   - `task`: string | null
   - `source_session_id`: string | null
+  - `external_ref`: string | null
+  - `own_queue`: boolean
 
 **Response:** `AgentTaskOperationResponse`
 
@@ -134,6 +238,8 @@ Auto-generated from OpenAPI spec. Tag: `agent-tasks`
   - `priority`: string
   - `task`: string | null
   - `source_session_id`: string | null
+  - `external_ref`: string | null
+  - `own_queue`: boolean
 
 **Response:** `AgentTaskOperationResponse`
 

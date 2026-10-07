@@ -206,6 +206,8 @@ Auto-generated from OpenAPI spec. Tag: `Dashboards`
 ## GET `/api/v1/dashboards/{dashboard_id}/blocks/{block_id}/env-file`
 **Get Block Env File**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `dashboard_id`: uuid
 - `block_id`: uuid

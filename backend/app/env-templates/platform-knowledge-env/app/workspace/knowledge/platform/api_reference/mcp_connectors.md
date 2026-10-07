@@ -88,6 +88,8 @@ Auto-generated from OpenAPI spec. Tag: `mcp-connectors`
 ## POST `/api/v1/agents/{agent_id}/mcp-connectors/{connector_id}/tokens`
 **Create Connector Token**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 - `connector_id`: uuid

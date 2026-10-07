@@ -569,6 +569,13 @@ class AgentService:
                 user_id=user_id,
             )
 
+        # API / external-access toggles change the status of every key issued
+        # on this producer without writing their rows: re-sync them after commit.
+        api_access_changed = any(
+            field in update_dict and update_dict[field] != getattr(agent, field)
+            for field in ("agent_api_enabled", "agent_api_external_access_enabled")
+        )
+
         agent.sqlmodel_update(update_dict)
 
         # Bump the per-prompt logical clock for each prompt field that actually
@@ -600,6 +607,16 @@ class AgentService:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to sync prompts to environment after agent update: {e}")
+
+        if api_access_changed:
+            from app.services.agent_api.agent_api_key_service import (
+                AgentApiKeyService,
+            )
+
+            await AgentApiKeyService.resync_issued_key_credentials(
+                session,
+                AgentApiKeyService.issued_key_credential_ids(session, agent.id),
+            )
 
         return agent
 
@@ -634,9 +651,18 @@ class AgentService:
         """
         from app.services.bundles.app_data_service import AppDataService
 
+        from app.services.agent_api.agent_api_key_service import AgentApiKeyService
+
         agent = session.get(Agent, agent_id)
         if not agent:
             return False
+
+        # Keys issued on this producer survive it (agent_id SET NULL →
+        # "producer_removed"); collect them now to re-sync their holders' envs
+        # after the delete.
+        issued_key_credential_ids = AgentApiKeyService.issued_key_credential_ids(
+            session, agent_id
+        )
 
         # Mark the per-user app-data volume orphaned BEFORE deleting the row.
         # ``AppDataService.wipe_volume`` requires ``is_orphaned=true``, and
@@ -701,6 +727,10 @@ class AgentService:
         # Delete agent (DB cascades will handle any remaining records)
         session.delete(agent)
         session.commit()
+
+        await AgentApiKeyService.resync_issued_key_credentials(
+            session, issued_key_credential_ids
+        )
         return True
 
     @staticmethod

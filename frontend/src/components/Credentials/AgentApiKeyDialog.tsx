@@ -1,19 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
-import { Bot } from "lucide-react"
+import { Link, useNavigate } from "@tanstack/react-router"
+import { AlertTriangle, CheckCircle2 } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import type { AgentPublic } from "@/client"
 import { AgentApiService, AgentsService } from "@/client"
 import { AgentApiScopeEditor } from "@/components/Common/AgentApiScopeEditor"
 import {
-  AgentSelectorDialog,
   type AgentOption,
+  AgentSelectorList,
 } from "@/components/Common/AgentSelectorDialog"
+import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import {
-  UserAllowlistPicker,
-  type UserAllowlistSelectedItem,
-} from "@/components/Common/UserAllowlistPicker"
+  UserSelectField,
+  type UserSelectValue,
+} from "@/components/Common/UserSelectField"
+import {
+  AgentApiKeyAdvancedFields,
+  expiryDays,
+} from "@/components/Credentials/AgentApiKeyAdvancedFields"
+import { AGENT_API_KEY_LABEL } from "@/components/Credentials/agentApiKeyCopy"
+import { stashMintedAgentApiKey } from "@/components/Credentials/agentApiKeyMintHandoff"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -23,160 +30,146 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/ui/loading-button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import useAuth from "@/hooks/useAuth"
-import { agentApiKeysQueryKey } from "@/hooks/useAgentApiKeys"
+import { agentApiAccessQueryKey } from "@/hooks/useAgentApiKeys"
 import useCustomToast from "@/hooks/useCustomToast"
-import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
-import { getColorPreset } from "@/utils/colorPresets"
-import { AGENT_API_KEY_LABEL } from "@/components/Credentials/agentApiKeyCopy"
-import { stashMintedAgentApiKey } from "@/components/Credentials/agentApiKeyMintHandoff"
 
 interface AgentApiKeyDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /**
-   * Pre-selected producer. Passed from the producer's own "Agent REST API"
-   * card, where the agent is already the subject of the page; omitted in the
-   * global credentials picker, which shows the agent selector instead.
+   * Fixed producer, from the producer's own API access card. Omitted on
+   * `/credentials` › New, which shows the producer picker instead.
    */
   producerAgentId?: string
+  /** Prefilled recipient ("Give another key" on a person). Defaults to me. */
+  initialRecipient?: UserSelectValue | null
 }
 
-/** Expiry choices, in days. ``null`` = never. */
-const EXPIRY_OPTIONS: { value: string; label: string; days: number | null }[] = [
-  { value: "never", label: "Never expires", days: null },
-  { value: "7", label: "7 days", days: 7 },
-  { value: "30", label: "30 days", days: 30 },
-  { value: "90", label: "90 days", days: 90 },
-  { value: "365", label: "1 year", days: 365 },
-]
+/** A key issued to someone else: the body swaps to this, no navigation. */
+interface IssuedToOther {
+  recipientName: string
+  keyLabel: string
+  producerName: string
+}
 
 /**
- * Mint an agent-api **external key** — the form behind the global
- * "{AGENT_API_KEY_LABEL}" picker entry and the producer card's "Issue key"
- * button. Identical in both places by design (plan D10.1): the credentials
- * page's tabs must not change the form, only where the resulting credential
- * lands.
+ * "Give API access" — issue a key on a producer to myself or to a colleague.
+ * Behind the producer's API access card ("Give access", "Give another key")
+ * and `/credentials` › New › {AGENT_API_KEY_LABEL}; the same form in both, the
+ * second only adds the producer picker.
  *
- * Fields: producer agent → subject user → optional scopes → optional expiry.
- * The producer and subject use the same shared pickers as the rest of the app
- * (`AgentSelectorDialog`, `UserAllowlistPicker`), and the subject defaults to
- * the issuer. There is deliberately no per-key read-only switch: the producer's
- * `policy.yaml` is the primary read-only lever and already defaults to
- * read-only, so `read_only_override` is left at its backend default of false.
+ * The key lands in the **recipient's** credentials. Issued to me, the flow
+ * ends where the value is (the detail page, value shown once from the issue
+ * response). Issued to someone else, the issuer never sees the value
+ * (``token`` is ``null``), so the dialog ends on a success panel instead.
  *
- * Scopes are a convenience that upserts the ``(producer, subject)`` grant
- * server-side; they live there, never on the key (plan D5).
- *
- * On success we route to the new credential's detail page, which is where the
- * value is revealed and the curl snippet lives.
+ * Scopes are a convenience that upserts the ``(producer, recipient)`` grant;
+ * they live there, never on the key. Expiry, name and slot have defaults and
+ * wait behind one Advanced disclosure. The slot is sent ``null`` when left
+ * empty so the server's default (plan D23) stays the one source of the slug;
+ * the placeholder only shows it.
  */
 export function AgentApiKeyDialog({
   open,
   onOpenChange,
   producerAgentId,
+  initialRecipient,
 }: AgentApiKeyDialogProps) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { user: currentUser } = useAuth()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
-  // The key's identity defaults to the person issuing it — the common case is
-  // "a key for my own script". Any other user is one pick away.
-  const selfAsSubject = useMemo<UserAllowlistSelectedItem | null>(
+  const me = useMemo<UserSelectValue | null>(
     () =>
       currentUser
         ? {
-            id: currentUser.id,
             userId: currentUser.id,
-            fallbackLabel: currentUser.full_name || currentUser.email,
+            label: currentUser.full_name || currentUser.email,
           }
         : null,
     [currentUser],
   )
 
   const [selectedProducerId, setSelectedProducerId] = useState("")
-  const [agentSelectorOpen, setAgentSelectorOpen] = useState(false)
-  const [subject, setSubject] = useState<UserAllowlistSelectedItem | null>(
-    selfAsSubject,
-  )
+  const [recipient, setRecipient] = useState<UserSelectValue | null>(null)
   const [label, setLabel] = useState("")
+  const [slot, setSlot] = useState("")
   const [scopes, setScopes] = useState<string[]>([])
   const [expiry, setExpiry] = useState("never")
+  const [issued, setIssued] = useState<IssuedToOther | null>(null)
 
   // Reset on every open so a second visit never inherits the first one's
-  // subject or scopes. Keyed on `open` so a close→open transition re-fires
-  // (the same guard the Access & Scopes dialog uses). The subject resets to
-  // self, not to empty — that is the default, not a blank slate.
+  // recipient or scopes. Keyed on `open` so a close→open transition re-fires.
   const [lastOpen, setLastOpen] = useState(false)
   if (open !== lastOpen) {
     setLastOpen(open)
     if (open) {
       setSelectedProducerId("")
-      setSubject(selfAsSubject)
+      setRecipient(initialRecipient ?? me)
       setLabel("")
+      setSlot("")
       setScopes([])
       setExpiry("never")
+      setIssued(null)
     }
   }
 
   const isProducerFixed = !!producerAgentId
   const producerId = producerAgentId ?? selectedProducerId
 
-  // Scope names are per-producer (they come from that agent's policy.yaml), so
-  // switching producers must not carry a scope over to an API where it means
-  // nothing — it would be written straight onto the grant.
+  // Scope names are per-producer (that agent's policy.yaml), so switching
+  // producers must not carry a scope over to an API where it means nothing.
   const [lastProducerId, setLastProducerId] = useState(producerId)
   if (producerId !== lastProducerId) {
     setLastProducerId(producerId)
     setScopes([])
   }
 
-  const { data: agentsData } = useQuery({
+  const agentsQuery = useQuery({
     queryKey: ["agents", "agent-api-key-producers"],
     queryFn: () => AgentsService.readAgents({ limit: 200 }),
     enabled: open && !isProducerFixed,
   })
+  const { data: fixedProducer } = useQuery({
+    queryKey: ["agent", producerAgentId],
+    queryFn: () => AgentsService.readAgent({ id: producerAgentId as string }),
+    enabled: open && isProducerFixed,
+  })
 
   // Only agents that expose a REST API AND are owned by the caller can be
-  // producers — minting is owner-gated, so offering someone else's agent would
-  // only ever produce a 404.
+  // producers — issuing is owner-gated, so anything else would only 404.
   const producers = useMemo<AgentPublic[]>(
     () =>
-      (agentsData?.data ?? []).filter(
+      (agentsQuery.data?.data ?? []).filter(
         (a) => a.agent_api_enabled && a.owner_id === currentUser?.id,
       ),
-    [agentsData, currentUser?.id],
+    [agentsQuery.data, currentUser?.id],
   )
-
-  const selectedProducer = producers.find((a) => a.id === producerId)
-  const selectedPreset = selectedProducer
-    ? getColorPreset(selectedProducer.ui_color_preset)
-    : null
   const producerOptions: AgentOption[] = producers.map((a) => ({
     id: a.id,
     name: a.name,
     colorPreset: a.ui_color_preset,
   }))
+  const producer: AgentPublic | undefined = isProducerFixed
+    ? fixedProducer
+    : producers.find((a) => a.id === producerId)
+  const producerName = producer?.name || ""
 
-  // Scope catalog comes from the chosen producer's policy.yaml. It is owner-
-  // gated, so it can only be fetched once a producer is picked.
   const { data: catalogData } = useQuery({
     queryKey: ["agentApiScopeCatalog", producerId],
-    queryFn: () => AgentApiService.getAgentApiScopeCatalog({ agentId: producerId }),
+    queryFn: () =>
+      AgentApiService.getAgentApiScopeCatalog({ agentId: producerId }),
     enabled: open && !!producerId,
   })
+
+  const recipientIsMe = !!recipient && recipient.userId === currentUser?.id
+  const recipientName = recipient?.label || "They"
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -184,32 +177,38 @@ export function AgentApiKeyDialog({
         agentId: producerId,
         requestBody: {
           label: label.trim() || null,
-          subject_user_id: subject?.userId as string,
-          // `null` leaves an existing grant untouched (plan D5) — only send a
-          // scope set when the user actually chose one, so minting a second key
-          // for someone never silently clears the scopes they already have.
+          issued_to_user_id: recipient?.userId ?? null,
+          service_uri: slot.trim() || null,
+          // `null` leaves an existing grant untouched — only send a scope set
+          // when one was chosen, so a second key never clears their scopes.
           scopes: scopes.length > 0 ? scopes : null,
-          expires_in_days:
-            EXPIRY_OPTIONS.find((o) => o.value === expiry)?.days ?? null,
+          expires_in_days: expiryDays(expiry),
         },
       }),
     onSuccess: (created) => {
-      showSuccessToast(`${AGENT_API_KEY_LABEL} created`)
       queryClient.invalidateQueries({ queryKey: ["credentials"] })
       queryClient.invalidateQueries({
-        queryKey: agentApiKeysQueryKey(producerId),
+        queryKey: agentApiAccessQueryKey(producerId),
       })
-      queryClient.invalidateQueries({ queryKey: ["agentApiGrants", producerId] })
+
+      if (!recipientIsMe) {
+        setIssued({
+          recipientName,
+          keyLabel: created.label || `${producerName || "Agent"} API key`,
+          producerName: producerName || "the agent",
+        })
+        return
+      }
+
+      showSuccessToast(`${AGENT_API_KEY_LABEL} created`)
       onOpenChange(false)
       if (created.credential_id) {
-        // The mint response is the ONLY place this value comes from for free
-        // (plan D4) — `with-data` no longer carries it, and going through the
-        // reveal endpoint would audit a disclosure the user did not ask for.
-        // Hand it to the detail page directly.
-        stashMintedAgentApiKey(created.credential_id, created.token)
-        // `new: 1` marks "just created" — the detail page latches it, reveals
-        // the handed-off value once, and strips it from the URL so a refresh
-        // does not re-reveal.
+        // The issue response is the only place this value comes from for
+        // free; going through reveal would audit a disclosure nobody asked
+        // for. Hand it to the detail page directly.
+        if (created.token) {
+          stashMintedAgentApiKey(created.credential_id, created.token)
+        }
         navigate({
           to: "/credential/$credentialId",
           params: { credentialId: created.credential_id },
@@ -220,179 +219,174 @@ export function AgentApiKeyDialog({
     onError: handleError.bind(showErrorToast),
   })
 
-  // Only knowable when we loaded the agent list (the fixed-producer path is
-  // reached from the producer card, which only offers the button when the
-  // switch is on).
+  // Only knowable on the picker path: the producer card disables its button
+  // while external access is off.
   const externalAccessOff =
-    !!selectedProducer && !selectedProducer.agent_api_external_access_enabled
+    !isProducerFixed &&
+    !!producer &&
+    !producer.agent_api_external_access_enabled
   const canSubmit =
-    !!producerId && !!subject && !externalAccessOff && !createMutation.isPending
+    !!producerId &&
+    !!recipient &&
+    !externalAccessOff &&
+    !createMutation.isPending
 
   return (
-    <>
-    {/* Rendered as a sibling, not a child: nesting a Dialog inside an open
-        Dialog's content fights over focus trapping and the overlay. `agents`
-        is passed explicitly so the picker offers the same owner-and-API-enabled
-        set the form validates against, rather than re-fetching every agent. */}
-    <AgentSelectorDialog
-      open={agentSelectorOpen}
-      onOpenChange={setAgentSelectorOpen}
-      onSelect={setSelectedProducerId}
-      selectedAgentId={selectedProducerId || null}
-      agents={producerOptions}
-      title="Select a producer agent"
-    />
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{AGENT_API_KEY_LABEL}</DialogTitle>
-          <DialogDescription>
-            Issue a key so code outside the platform — a script, a server, a cron
-            job — can call an agent's REST API. The key acts as one platform
-            user, and you can revoke it at any time.
-          </DialogDescription>
-        </DialogHeader>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Escape / outside-click do nothing while the key is being issued.
+        if (createMutation.isPending) return
+        onOpenChange(next)
+      }}
+    >
+      <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden sm:max-w-lg [&>*]:min-w-0">
+        {issued ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Give API access</DialogTitle>
+            </DialogHeader>
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+              <div className="min-w-0 space-y-1">
+                <p className="text-sm font-medium break-words">
+                  {issued.recipientName} has a new key
+                </p>
+                <p className="text-sm text-muted-foreground break-words">
+                  It is in their credentials as {issued.keyLabel}. You won't see
+                  its value. Revoke it from {issued.producerName}'s API access
+                  card.
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => onOpenChange(false)}>Done</Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Give API access</DialogTitle>
+              <DialogDescription>
+                Issue a key so code outside the platform can call{" "}
+                {producerName ? `${producerName}'s` : "an agent's"} REST API.
+              </DialogDescription>
+            </DialogHeader>
 
-        <div className="space-y-4 py-1">
-          {/* 1 — Producer agent */}
-          <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">
-              Producer agent <span className="text-destructive">*</span>
-            </Label>
-            {isProducerFixed ? (
-              <p className="text-xs text-muted-foreground">
-                This agent's REST API.
-              </p>
-            ) : producers.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                None of your agents expose a REST API yet. Enable "Agent REST
-                API" on an agent first.
-              </p>
-            ) : (
-              // Same trigger-button + AgentSelectorDialog pattern the agentic-
-              // teams AddNodeDialog uses, so an agent is picked the same way
-              // everywhere — colour preset included, rather than a bare Select.
-              <button
-                type="button"
-                onClick={() => setAgentSelectorOpen(true)}
-                className={cn(
-                  "flex w-full items-center gap-1.5 rounded-md px-3 py-2 text-left text-sm transition-all",
-                  selectedPreset
-                    ? `${selectedPreset.badgeBg} ${selectedPreset.badgeText} ${selectedPreset.badgeHover}`
-                    : "bg-muted text-muted-foreground hover:bg-muted/80",
+            <div className="space-y-4">
+              {!isProducerFixed && (
+                <fieldset className="space-y-1.5">
+                  <Label asChild>
+                    <legend>Producer</legend>
+                  </Label>
+                  {agentsQuery.isError ? (
+                    <QueryErrorAlert
+                      error={agentsQuery.error}
+                      fallback="Couldn't load your agents"
+                      onRetry={() => agentsQuery.refetch()}
+                      compact
+                    />
+                  ) : agentsQuery.isLoading ? (
+                    <Skeleton className="h-9 w-full rounded-md" />
+                  ) : producers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      None of your agents expose a REST API yet.
+                    </p>
+                  ) : (
+                    <AgentSelectorList
+                      mode="single"
+                      agents={producerOptions}
+                      selectedAgentId={selectedProducerId || null}
+                      onSelect={setSelectedProducerId}
+                      placeholder="Pick an agent that exposes a REST API"
+                      active={open}
+                      disabled={createMutation.isPending}
+                    />
+                  )}
+                  {externalAccessOff && producer && (
+                    <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                      <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" />
+                      <span>
+                        External access is off for {producer.name}. Turn it on
+                        in its{" "}
+                        <Link
+                          to="/agent/$agentId"
+                          params={{ agentId: producer.id }}
+                          hash="integrations"
+                          className="text-primary hover:underline"
+                        >
+                          API access card
+                        </Link>{" "}
+                        first.
+                      </span>
+                    </p>
+                  )}
+                </fieldset>
+              )}
+
+              <div className="space-y-1.5">
+                <Label htmlFor="agent-api-key-recipient">Issued to</Label>
+                <UserSelectField
+                  id="agent-api-key-recipient"
+                  value={recipient}
+                  onChange={setRecipient}
+                  includeSelf
+                  disabled={createMutation.isPending}
+                />
+                {recipient && !recipientIsMe && (
+                  <p className="text-xs text-muted-foreground break-words">
+                    The key goes to {recipientName}'s credentials. You won't see
+                    its value, and you can revoke it anytime.
+                  </p>
                 )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Scopes (optional)</Label>
+                <AgentApiScopeEditor
+                  scopes={scopes}
+                  onChange={setScopes}
+                  catalogScopes={catalogData?.scopes ?? []}
+                  emptyHint="No scopes — the caller is identified but carries no capabilities."
+                  disabled={!producerId || createMutation.isPending}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {recipientIsMe || !recipient
+                    ? "Shared by every key you hold on this agent. Leave empty to keep what you have."
+                    : `Shared by every key ${recipientName} holds on this agent. Leave empty to keep what they have.`}
+                </p>
+              </div>
+
+              <AgentApiKeyAdvancedFields
+                expiry={expiry}
+                onExpiryChange={setExpiry}
+                label={label}
+                onLabelChange={setLabel}
+                slot={slot}
+                onSlotChange={setSlot}
+                producerName={producerName}
+              />
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={createMutation.isPending}
               >
-                <Bot className="h-4 w-4 shrink-0" />
-                <span className="truncate">
-                  {selectedProducer?.name ??
-                    "Pick an agent that exposes a REST API"}
-                </span>
-              </button>
-            )}
-            {externalAccessOff && (
-              <p className="text-xs text-amber-600 dark:text-amber-500">
-                External access is off for{" "}
-                <span className="font-medium">{selectedProducer?.name}</span>.
-                Turn on "External keys" on that agent's Agent REST API card
-                first.
-              </p>
-            )}
-          </div>
-
-          {/* 2 — Subject user (the identity the key acts as) */}
-          <div className="space-y-1.5">
-            <UserAllowlistPicker
-              enabled={open}
-              includeSelf
-              selected={subject ? [subject] : []}
-              label={
-                <Label className="text-xs text-muted-foreground">
-                  Acts as <span className="text-destructive">*</span>
-                </Label>
-              }
-              searchPlaceholder="Search users this key represents..."
-              onAdd={(u) =>
-                setSubject({
-                  id: u.id,
-                  userId: u.id,
-                  fallbackLabel: u.full_name || u.email,
-                })
-              }
-              onRemove={() => setSubject(null)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Every call made with this key is attributed to this user. Fixed
-              once issued — changing it means revoking and re-issuing.
-            </p>
-          </div>
-
-          {/* 3 — Scopes (optional) */}
-          <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">
-              Scopes (optional)
-            </Label>
-            <AgentApiScopeEditor
-              scopes={scopes}
-              onChange={setScopes}
-              catalogScopes={catalogData?.scopes ?? []}
-              emptyHint="No scopes — the caller is identified but carries no capabilities."
-              disabled={!producerId}
-            />
-            <p className="text-xs text-muted-foreground">
-              Applied to this user on this producer, not to the key itself. Leave
-              empty to keep whatever they already have.
-            </p>
-          </div>
-
-          {/* 4 — Expiry. No read-only control: the producer's own policy.yaml
-              is the primary read-only lever and already defaults to read-only,
-              so a per-key narrowing knob is redundant here. The backend keeps
-              defaulting `read_only_override` to false. */}
-          <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">Expires</Label>
-            <Select value={expiry} onValueChange={setExpiry}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {EXPIRY_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Label — free text, defaults server-side to "<agent> API key". */}
-          <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">
-              Name (optional)
-            </Label>
-            <Input
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder={
-                selectedProducer ? `${selectedProducer.name} API key` : "API key"
-              }
-            />
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <LoadingButton
-            loading={createMutation.isPending}
-            disabled={!canSubmit}
-            onClick={() => createMutation.mutate()}
-          >
-            Create key
-          </LoadingButton>
-        </DialogFooter>
+                Cancel
+              </Button>
+              <LoadingButton
+                loading={createMutation.isPending}
+                disabled={!canSubmit}
+                onClick={() => createMutation.mutate()}
+              >
+                Give access
+              </LoadingButton>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
-    </>
   )
 }

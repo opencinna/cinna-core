@@ -5,10 +5,14 @@ Auto-generated from OpenAPI spec. Tag: `app-auth`
 ## GET `/api/v1/app-auth/clients`
 **List App Clients**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## DELETE `/api/v1/app-auth/clients/{client_id}`
 **Revoke App Client**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `client_id`: string
@@ -17,6 +21,8 @@ Auto-generated from OpenAPI spec. Tag: `app-auth`
 
 ## GET `/api/v1/app-auth/authorize`
 **Authorize**
+
+> Not available via `cinna api` (excluded_path).
 
 **Query parameters:**
 - `redirect_uri`: string (required)
@@ -33,6 +39,8 @@ Auto-generated from OpenAPI spec. Tag: `app-auth`
 ## GET `/api/v1/app-auth/requests/{nonce}`
 **Get App Auth Request**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `nonce`: string
 
@@ -42,6 +50,8 @@ Auto-generated from OpenAPI spec. Tag: `app-auth`
 
 ## POST `/api/v1/app-auth/consent`
 **App Consent**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`ConsentRequest`):
   - `request_nonce`: string (required)
@@ -54,6 +64,8 @@ Auto-generated from OpenAPI spec. Tag: `app-auth`
 ## POST `/api/v1/app-auth/token`
 **Token Endpoint**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `TokenResponse`
 
 ---
@@ -61,12 +73,16 @@ Auto-generated from OpenAPI spec. Tag: `app-auth`
 ## GET `/api/v1/app-auth/userinfo`
 **Userinfo**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `UserInfoResponse`
 
 ---
 
 ## POST `/api/v1/app-auth/revoke`
 **Revoke**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`RevokeRequest`):
   - `client_id`: string | null

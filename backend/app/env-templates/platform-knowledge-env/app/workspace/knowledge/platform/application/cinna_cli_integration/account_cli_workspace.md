@@ -317,6 +317,10 @@ to the same services the UI uses:
 | `cinna agent-api refresh <agent>` | `POST /account/agent-api/refresh` | `AgentApiService.get_spec(force_refresh) + load_policy` | producer ownership (404 no-leak) |
 | `cinna agent-api spec <agent> [-o file]` | `GET /account/agent-api/spec?agent_id=` | `AgentApiService.get_spec` | producer ownership (404 no-leak) |
 | `cinna agent-api call <agent> <path> [-X method] [--query k=v] [--json …]` | `POST /account/agent-api/call` | owner-preview proxy (`adapter.proxy_agent_api`, buffered) | producer ownership (404), `agent_api_enabled` (400), running env (503) |
+| `cinna agent-api access list <agent> [--all]` | `GET /account/agent-api/access?agent_id=` | `AgentApiKeyService.list_access` + `AgentApiGrantService.get_scope_catalog` | producer owner or superuser (404 `agent_not_found` no-leak); open to any account token |
+| `cinna agent-api access issue <agent> --to <email\|me> [--scope S ...] [--expires-in-days N] [--service-uri U] [--label L] [--read-only]` | `POST /account/agent-api/keys` | `AgentApiKeyService.create_key` (value dropped in-process) | `require_developer` + producer owner; 404 `recipient_not_found`, 409 `ambiguous_recipient`, 400 `external_access_disabled` / `api_disabled` |
+| `cinna agent-api access revoke <agent> <key>` | `POST /account/agent-api/keys/revoke` | `AgentApiKeyService.revoke_key` | `require_developer` + producer owner; idempotent; 404 `key_not_found` |
+| `cinna agent-api access scopes <agent> --user <email\|me> [--scope S ...]` | `PUT /account/agent-api/access/scopes` | `AgentApiGrantService.upsert_grant` / `delete_grant` | `require_developer` + producer owner |
 | `cinna agent restart-env <agent>` | `POST /account/agents/{id}/restart-env` | `EnvironmentService.restart_environment` | `can_build` (404 no-leak / 403); 400 if no active env. **Audited** (`CLI_ACCOUNT_ENV_RESTARTED`) |
 | `cinna agent rebuild-env <agent> [--yes]` | `POST /account/agents/{id}/rebuild-env` | `EnvironmentService.rebuild_environment` | `can_build` (404 no-leak / 403); 400 if no active env. **Audited** (`CLI_ACCOUNT_ENV_REBUILT`) |
 | `cinna agent show <agent> [--prompts]` | `GET /account/agents/{id}/inspect` | `Agent` fields + `CredentialsService.get_agent_credentials` (metadata only) | producer ownership (404 no-leak) |
@@ -417,6 +421,36 @@ account-token holder, but all three enforce producer **ownership** via
 `AgentApiService.resolve_agent_only` (404 no-leak, never 403, so an inaccessible
 agent id is never confirmed to exist).
 
+#### Giving API access (`cinna agent-api access`)
+
+A producer's REST API is reachable from outside the platform only through keys
+issued to a person. The four `access` verbs let the orchestrator agent see who
+has access and grant or withdraw it without the web page:
+
+- `access list <agent>` shows each person with their scopes and keys, plus the
+  producer's scope catalog and a `manage_url` (the web page that manages access).
+  Terminal keys (revoked, producer/issuer removed, expired) are hidden in the table
+  unless `--all`; `--json` is always the full payload.
+- `access issue <agent> --to <email|me>` mints a key. The recipient is resolved on
+  the server from an email (exact, case-insensitive, active users only; `me` sends
+  null = the caller). Two users matching the same email case-insensitively answer
+  409 `ambiguous_recipient`; no auto-pick. Optional scopes upsert the person's grant
+  first; scopes not in a non-empty catalog come back as `unknown_scopes` (never a refusal).
+- `access revoke <agent> <key>` revokes a key now. Idempotent; the person's grant is untouched.
+- `access scopes <agent> --user <email|me>` sets the person's scopes to exactly the
+  given list, or removes the grant when no scope is given. Keys are untouched.
+  On the wire `scopes` is required but nullable: omitting it is a 422, an explicit
+  `null` removes the grant.
+
+**No key value ever crosses the account CLI**, self-issue included. The service
+drops the created token in-process and the response models have no `token` field.
+A self-issue returns a `credential_url` (the web page where the user reveals the
+value); a key issued to someone else is delivered through that person's own
+credential. **Rotate and reveal stay web-only**, as do the external-access opt-in
+and the identity switch (the refusal `external_access_disabled` carries the
+agent's Integrations URL; the issue refusal ends with "Manage access: <manage_url>"). The owner gate runs before the recipient lookup, so a non-owner always gets `agent_not_found`. Audit is unchanged: the reused services already write
+the key CREATED / REVOKED and grant events; there is no CLI-tagged duplicate.
+
 ### 5. Drafting and Attaching Credentials (`cinna account credentials`)
 
 The motivating problem: an agent often needs a credential (a Stripe key, an Odoo
@@ -434,13 +468,19 @@ verbs touch only *metadata and structure*:
   credential type and the fields the user will need to fill (so the agent can pick
   a type and explain the setup).
 - `cinna account credentials create --name N --type T [--workspace ...]` →
-  `POST /account/credentials` creates an **empty draft** (no secret value). The
+  `POST /account/credentials` creates an **empty draft** (no secret value). Type
+  `agent_api` is refused with 400 (an empty `agent_api` row has no token binding and
+  is never usable): the message points to `cinna agent-api access issue ... --to me`
+  and `cinna connect agent-api`; `cinna agent import` skips `agent_api` manifest
+  credentials and prints that hint. The
   response includes the created credential (with `status="incomplete"`), the
   `required_fields` the user must fill, and a `setup_url` deep-link to the
   Credentials page. The draft lands in the account's active workspace (flow 3).
 - `cinna account credentials list` → `GET /account/credentials` lists the user's
   credentials with their `status` (`complete` / `incomplete`) — **metadata only,
   no values** — so the agent can see which drafts are still waiting on the user.
+  Each `agent_api` row also carries `agent_api_key_status` (`active`, `revoked_by_issuer`,
+  `expired`, `api_disabled`, ...) for issued keys; it is null for connections and other types.
 - `cinna account credentials update <id> [--name ...] [--notes ...]` →
   `PUT /account/credentials/{id}` edits **metadata only**; there is no field for
   the secret value, so the CLI structurally cannot set one.
@@ -511,6 +551,26 @@ generic authenticated escape hatch into (most of) the platform API:
 | Auth / session issuance | `login`, `oauth`, `auth`, `token` |
 | Streaming / SSE | `agents/create-flow-stream`, `agents/create-flow` |
 
+**Single-route denies (403 `excluded_path`, full match on the path).** Prefixes
+cannot express routes whose response carries a secret, so the policy also holds two
+pattern tuples. Prefix-only listings stay reachable, and their rows carry token
+prefixes only.
+
+| Tuple | Method | Paths denied | Why |
+|-------|--------|--------------|-----|
+| `EXCLUDED_PATTERNS` | any | `agents/*/agent-api/keys` and below | issue returns a self-issued key value; rotate starts a countdown on a value the CLI cannot deliver. Use `cinna agent-api access` |
+| `EXCLUDED_PATTERNS` | any | `environments/*/workspace/download/...`, `environments/*/workspace/view-file/...` | raw workspace files; `credentials/credentials.json` holds every linked credential's decrypted value |
+| `EXCLUDED_PATTERNS` | any | `dashboards/*/blocks/*/env-file` | same files through a dashboard block (path rides the query); `env-files` (names only) stays allowed |
+| `EXCLUDED_WRITE_PATTERNS` | POST | `agents/*/access-tokens` | A2A access token value |
+| `EXCLUDED_WRITE_PATTERNS` | POST | `agents/*/mcp-connectors/*/tokens` | MCP direct token value |
+| `EXCLUDED_WRITE_PATTERNS` | POST | `agents/*/acp-connectors/*/tokens` | ACP token value |
+| `EXCLUDED_WRITE_PATTERNS` | POST | `agents/*/webhooks/{git-source,script,session}`, `agents/*/webhooks/*/regenerate-token` | `webhook_token` |
+| `EXCLUDED_WRITE_PATTERNS` | POST | `tasks/*/triggers/webhook`, `tasks/*/triggers/*/regenerate-token` | `webhook_token` |
+
+Matching runs on the **percent-decoded** path, because that is what the router sees
+(an encoded `%63redentials` once reached the router past the prefix denylist).
+Share links are denied too (any method, `excluded_path`, `SHARE_PATTERNS`): `agents/*/guest-shares` and below, `agents/*/webapp-shares` and below (every response carries the `share_url` with the share token and the `security_code`), plus `guest-share/*/auth` and `webapp-share/*/auth` (they answer a guest session JWT). Share links are managed in the web app. `guest-share/*/activate|info` and `webapp-share/*/info` stay allowed (no token or code returned).
+
 Carve-outs explicitly allowed from the user-management exclusion:
 `GET /users/me` (own profile) and `GET /users/search` (minimal user-picker
 projection, needed to wire shares).
@@ -521,7 +581,7 @@ projection, needed to wire shares).
 - Streaming responses (`text/event-stream`): blocked → **502**
 - Rate limit: `ACCOUNT_API_PROXY_RATE_LIMIT_PER_MIN` (default 120/min per account
   token, sliding window) → **429 + Retry-After**
-- Malformed or path-traversal paths: **400 `malformed_path`**
+- Malformed paths: **400 `malformed_path`** when the percent-decoded path contains a control character (`\x00-\x1f`, `\x7f`), a `.` or `..` segment, `//`, or a `%` left after one decode (double encoding). A plain space is allowed (checked against the route table: it cannot reach a denied route). This closes a bypass where a trailing `%0A` was routed by Starlette but missed by the full-match patterns. `?` and `#` are allowed.
 
 **Audit policy:** `CLI_ACCOUNT_API_PROXY_CALL` security event is written **only on
 exclusion hits** (`excluded_path` or `excluded_method` reason). Allowed calls write
@@ -556,7 +616,7 @@ agent-api`, `cinna connect mcp`), the orchestrator can register a **team graph**
 that encodes the delegation topology — which agent may hand a subtask to which
 other agent. This graph is static (Blueprint phase): it does not run anything, but
 it is load-bearing because the task system enforces that
-`mcp__agent_task__create_subtask` is only permitted along a drawn connection.
+a delegated subtask (`tasks_create` with a `parent`, on the agent's `cinna` MCP server) is only permitted along a drawn connection.
 
 **No new CLI verbs were added in Phase 4.** The agentic-teams API is not on the
 escape-hatch denylist (see §5 for the denylist), so every team endpoint is fully
@@ -1139,6 +1199,7 @@ The backend contract these commands consume:
 | `cinna agent create <name> [--description D]` | `POST /api/v1/cli/account/agents` body `{name, description, env_name, user_workspace_id, engine}` | Create agent with backend defaults; print created agent's id, name, env id. 403 if not developer |
 | `cinna connect agent-api --producer P --consumer C [--label L] [--read-only]` | `POST /api/v1/cli/account/connect/agent-api` | Resolve P/C names → IDs from cached agents list; body `{producer_agent_id, consumer_agent_id, credential_label, read_only_override}`; print credential_id, token_prefix, base_url, spec_url |
 | `cinna connect mcp --producer P --consumer C [--label L] [--conversation-only\|--building-only]` | `GET …/account/connect/mcp/discoverable?consumer_agent_id=C` then `POST …/account/connect/mcp` | Resolve P → connector_id from discoverable list; body `{connector_id, consumer_agent_id, mcp_mode_conversation, mcp_mode_building, label}`; print credential_id, endpoint_url |
+| `cinna agent-api access list\|issue\|revoke\|scopes` | `GET /api/v1/cli/account/agent-api/access`, `POST .../agent-api/keys`, `POST .../agent-api/keys/revoke`, `PUT .../agent-api/access/scopes` | Resolve agent and key refs; recipient by email (`me` = null); never prints or `--json`-emits a `token` (dropped defensively); self-issue prints `credential_url`. See flow 4c |
 | `cinna agent-api enable <agent> [--disable]` | `POST /api/v1/cli/account/agent-api/enable` body `{agent_id, enabled}` | Resolve agent → id; toggle `agent_api_enabled`; print resulting status (state, spec_available). 403 if not developer |
 | `cinna agent-api refresh <agent>` | `POST /api/v1/cli/account/agent-api/refresh` body `{agent_id}` | Force a spec + policy re-harvest; print status (warns on `last_error`). Never raises on a harvest failure |
 | `cinna agent-api spec <agent> [-o file]` | `GET /api/v1/cli/account/agent-api/spec?agent_id=` | Print the harvested OpenAPI JSON to stdout (or write to `-o file`). 400 if disabled, 503 if env not running + cache cold |
@@ -1212,7 +1273,7 @@ child workspace's `.cinna/config.json` and in `~/.cinna/agents.json`.
 | `cinna api` targets `credentials/*`, `admin/*`, `cli/*`, etc. | 403 `excluded_path` + `CLI_ACCOUNT_API_PROXY_CALL` SecurityEvent |
 | `cinna api GET users/me` | Allowed (carve-out from user exclusion) |
 | `cinna api GET users/search` | Allowed (carve-out from user exclusion) |
-| `cinna api` path contains `..` or is not under `/api/v1` | 400 `malformed_path` (not audited) |
+| `cinna api` path has a `.`/`..` segment, `//`, a control character, a leftover `%` after decoding, or is not under `/api/v1` | 400 `malformed_path` (not audited) |
 | `cinna api` to a streaming/SSE route | 403 (denylist) or 502 if inner response is `text/event-stream` |
 | `cinna api` request body > 1 MiB | 413 |
 | `cinna api` inner response > 8 MiB | 502 |
@@ -1300,7 +1361,7 @@ This document covers **Phases 1 through 5** — all phases are now shipped:
 - **agentic_teams** (Phase 4) — the agentic-teams API is not on the escape-hatch
   denylist, so the orchestrator reaches it entirely via `cinna api`. The team
   graph (nodes + directed connections) is the delegation-policy artifact that
-  permits `mcp__agent_task__create_subtask` along drawn edges. See
+  permits delegated subtasks (`tasks_create` with a `parent`) along drawn edges. See
   [agentic_teams.md](../../agents/agentic_teams/agentic_teams.md)
 - **agent_schedulers** (Phase 5 / flow 7c) — the schedule verbs wrap
   `AgentSchedulerService` (generate / create / get / update / delete / execute_now

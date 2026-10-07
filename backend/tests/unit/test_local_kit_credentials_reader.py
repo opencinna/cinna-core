@@ -179,3 +179,230 @@ def test_unknown_unavailable_reason_uses_generic_hint(reader) -> None:
     with pytest.raises(reader.CredentialError) as exc:
         reader.require_slot("erp")
     assert "it could not be delivered (something_new)" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Kit contract 1.7.0: issued agent_api keys + agent_api_session
+# ---------------------------------------------------------------------------
+
+import http.server
+import threading
+from contextlib import contextmanager
+
+
+def test_helper_version_matches_contract_version_1_7_0(reader) -> None:
+    assert reader.HELPER_VERSION == "1.7.0"
+    if KIT_SOURCE == "docs":
+        contract = (SCRIPT.parents[3] / "CONTRACT_VERSION").read_text().strip()
+        assert contract == "1.7.0" == reader.HELPER_VERSION
+
+
+@pytest.mark.parametrize(
+    "reason,key_status,hint",
+    [
+        ("key_revoked", "revoked_by_issuer", "revoked"),
+        ("key_revoked", "producer_removed", "revoked"),
+        ("key_expired", "expired", "expired"),
+        ("key_paused", "external_access_paused", "paused"),
+        ("key_paused", "api_disabled", "paused"),
+    ],
+)
+def test_unavailable_issued_key_raises_with_reason_and_key_status(
+    reader, reason: str, key_status: str, hint: str
+) -> None:
+    _write(
+        reader,
+        [{"name": "CRM API", "type": "agent_api", "service_uri": "crm-api"}],
+        [{"name": "CRM API", "type": "agent_api", "service_uri": "crm-api",
+          "unavailable_reason": reason, "key_status": key_status,
+          "credential_data": {"base_url": "https://x/api", "spec_url": "https://x/s",
+                              "label": "k", "producer_agent_id": "p"}}],
+    )
+    expected_hints = {"revoked": "revoked", "expired": "expired", "paused": "paused"}
+    for call in (
+        lambda: reader.agent_api_session("crm-api"),
+        lambda: reader.agent_api_session("CRM API"),
+        lambda: reader.require_slot("crm-api"),
+    ):
+        with pytest.raises(reader.CredentialError) as exc:
+            call()
+        message = str(exc.value)
+        assert "unavailable" in message
+        assert reason in message and key_status in message
+        assert expected_hints[hint] in message
+    assert reader.has_credential("CRM API") is False
+
+
+def test_agent_api_session_rejects_other_types_and_unconfigured_slots(reader) -> None:
+    _write(
+        reader,
+        [{"name": "ERP", "type": "api_token", "service_uri": "erp"},
+         {"name": "CRM API", "type": "agent_api", "service_uri": "crm-api"}],
+        [{"name": "ERP", "type": "api_token", "service_uri": "erp",
+          "credential_data": {"http_header_value": "Bearer x", "token": "t", "base_url": "u"}}],
+    )
+    with pytest.raises(reader.CredentialError) as exc:
+        reader.agent_api_session("erp")
+    assert "not 'agent_api'" in str(exc.value)
+    with pytest.raises(reader.CredentialError) as exc:
+        reader.agent_api_session("crm-api")
+    assert "not configured" in str(exc.value)
+
+
+class _Recorder(http.server.BaseHTTPRequestHandler):
+    """Records (path, Authorization) and serves a few redirect shapes."""
+
+    seen: list[tuple[str, str | None]]
+    cross_target: str = ""
+    same_target: str = ""
+
+    def log_message(self, *args) -> None:  # silence
+        pass
+
+    def _handle(self) -> None:
+        type(self).seen.append((self.path, self.headers.get("Authorization")))
+        if self.path.endswith("/redir-same"):
+            self.send_response(302)
+            self.send_header("Location", type(self).same_target)
+            self.end_headers()
+            return
+        if self.path.endswith("/redir-cross"):
+            self.send_response(302)
+            self.send_header("Location", type(self).cross_target)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        echoed = self.rfile.read(length).decode() if length else ""
+        body = json.dumps({"path": self.path, "method": self.command, "body": echoed}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_GET = do_POST = _handle
+
+
+@contextmanager
+def _server():
+    handler = type("H", (_Recorder,), {"seen": []})
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield httpd, handler
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def _key_entry(base_url: str, token: str) -> dict:
+    return {"name": "CRM API", "type": "agent_api", "service_uri": "crm-api",
+            "credential_data": {"base_url": base_url, "token": token,
+                                "spec_url": f"{base_url}/openapi.json",
+                                "label": "k", "producer_agent_id": "p"}}
+
+
+def test_agent_api_session_joins_paths_attaches_bearer_and_rereads_token(reader) -> None:
+    with _server() as (httpd, handler):
+        base = f"http://127.0.0.1:{httpd.server_port}/api/v1/agent-api/p"
+        slots = [{"name": "CRM API", "type": "agent_api", "service_uri": "crm-api"}]
+        _write(reader, slots, [_key_entry(base, "tok-1")])
+
+        session = reader.agent_api_session("crm-api")
+        assert session.base_url == base
+        assert session.spec_url == f"{base}/openapi.json"
+
+        assert session.get_json("orders", params={"q": "a b"}) == {
+            "path": "/api/v1/agent-api/p/orders?q=a+b", "method": "GET", "body": "",
+        }
+        assert session.get("/leading/slash").ok
+        out = session.post_json("orders", {"n": 1})
+        assert out["method"] == "POST" and json.loads(out["body"]) == {"n": 1}
+        assert [p for p, _ in handler.seen][:2] == [
+            "/api/v1/agent-api/p/orders?q=a+b", "/api/v1/agent-api/p/leading/slash",
+        ]
+        assert {a for _, a in handler.seen} == {"Bearer tok-1"}
+
+        # Rotation: a new token in the file is used by the SAME session object.
+        reader.CLOUD_CREDENTIALS.write_text(json.dumps([_key_entry(base, "tok-2")]))
+        session.get("ping")
+        assert handler.seen[-1][1] == "Bearer tok-2"
+
+        # A caller-supplied Authorization header never overrides the key.
+        session.get("ping", headers={"Authorization": "Bearer evil"})
+        assert handler.seen[-1][1] == "Bearer tok-2"
+
+
+def test_agent_api_session_strips_authorization_on_cross_origin_redirect_keeps_same_origin(
+    reader,
+) -> None:
+    with _server() as (a, a_h), _server() as (b, b_h):
+        base = f"http://127.0.0.1:{a.server_port}/api/v1/agent-api/p"
+        a_h.same_target = f"{base}/landed"
+        a_h.cross_target = f"http://127.0.0.1:{b.server_port}/landing"
+        _write(
+            reader,
+            [{"name": "CRM API", "type": "agent_api", "service_uri": "crm-api"}],
+            [_key_entry(base, "tok-1")],
+        )
+        session = reader.agent_api_session("crm-api")
+
+        same = session.get("redir-same")
+        assert same.ok and same.json()["path"].endswith("/landed")
+        assert [auth for path, auth in a_h.seen if path.endswith("/landed")] == ["Bearer tok-1"]
+
+        cross = session.get("redir-cross")
+        assert cross.ok
+        assert b_h.seen == [("/landing", None)], "Authorization must not cross origins"
+        # The first hop (same origin as base_url) did carry it.
+        assert [auth for path, auth in a_h.seen if path.endswith("/redir-cross")] == ["Bearer tok-1"]
+
+        # An absolute URL on another origin never receives the key either.
+        session.get(f"http://127.0.0.1:{b.server_port}/direct")
+        assert b_h.seen[-1] == ("/direct", None)
+
+
+def test_agent_api_session_requests_mode(reader) -> None:
+    requests = pytest.importorskip("requests")
+    with _server() as (a, a_h), _server() as (b, b_h):
+        base = f"http://127.0.0.1:{a.server_port}/api/v1/agent-api/p"
+        a_h.cross_target = f"http://127.0.0.1:{b.server_port}/landing"
+        _write(
+            reader,
+            [{"name": "CRM API", "type": "agent_api", "service_uri": "crm-api"}],
+            [_key_entry(base, "tok-1")],
+        )
+        session = reader.agent_api_session("crm-api", requests=True)
+        assert isinstance(session, requests.Session)
+        assert session.base_url == base
+        assert session.get("orders").status_code == 200
+        assert a_h.seen[-1] == ("/api/v1/agent-api/p/orders", "Bearer tok-1")
+        assert session.get("redir-cross").status_code == 200
+        assert b_h.seen[-1] == ("/landing", None)
+
+
+def test_agent_api_session_refuses_when_base_url_origin_changes_after_construction(
+    reader,
+) -> None:
+    """The entry's base_url is re-read per request; a different origin than the
+    one fixed at construction raises CredentialError and sends nothing."""
+    with _server() as (a, a_h), _server() as (b, b_h):
+        base = f"http://127.0.0.1:{a.server_port}/api/v1/agent-api/p"
+        slots = [{"name": "CRM API", "type": "agent_api", "service_uri": "crm-api"}]
+        _write(reader, slots, [_key_entry(base, "tok-1")])
+        session = reader.agent_api_session("crm-api")
+        assert session.get("ping").ok
+        sent_before = len(a_h.seen)
+
+        moved = f"http://127.0.0.1:{b.server_port}/api/v1/agent-api/p"
+        reader.CLOUD_CREDENTIALS.write_text(json.dumps([_key_entry(moved, "tok-1")]))
+        with pytest.raises(reader.CredentialError):
+            session.get("ping")
+        assert len(a_h.seen) == sent_before
+        assert b_h.seen == []
+
+        # A same-origin path change (e.g. a different producer id) is allowed.
+        same_origin = f"http://127.0.0.1:{a.server_port}/api/v1/agent-api/other"
+        reader.CLOUD_CREDENTIALS.write_text(json.dumps([_key_entry(same_origin, "tok-1")]))
+        assert session.get("ping").ok

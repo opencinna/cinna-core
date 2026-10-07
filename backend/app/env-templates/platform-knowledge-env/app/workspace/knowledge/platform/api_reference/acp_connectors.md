@@ -70,6 +70,8 @@ Auto-generated from OpenAPI spec. Tag: `acp-connectors`
 ## POST `/api/v1/agents/{agent_id}/acp-connectors/{connector_id}/tokens`
 **Create Acp Token**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 - `connector_id`: uuid

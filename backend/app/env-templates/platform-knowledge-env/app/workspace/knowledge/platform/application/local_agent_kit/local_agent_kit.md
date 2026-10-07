@@ -61,7 +61,7 @@ agent into it with one command.
     guide, template or tool edit. Answers *"is my copy of the kit current?"*,
     and it is what `kit.py refresh` polls and what every ETag is keyed on. It
     gates nothing.
-  - `contract_version` — a hand-maintained semantic version (`1.5.0` today),
+  - `contract_version` — a hand-maintained semantic version (`1.7.0` today),
     carried in three places that must agree: the `CONTRACT_VERSION` file,
     `kit.json` and `layout.json`. Every manifest records the one it was
     scaffolded with. Answers *"may this tool operate this folder?"*
@@ -152,6 +152,22 @@ agent into it with one command.
     and `runtime.permissions` stay local.
   - `handovers[].target_kind` is registered to Cinna Desktop (its coordinator
     handback pair); other hosts preserve it and ignore it.
+- **Issued API keys and `agent_api_session` (contract 1.7.0).** A person a producer's owner has
+  issued an API key to can now use it from a local agent: Cinna Desktop delivers the key (it opts
+  in; connections are still never delivered) and the helper `scripts/cinna_credentials.py`
+  (`HELPER_VERSION` 1.7.0) gains `agent_api_session(slot, *, requests=False)`. The slot is the key's
+  `service_uri`, `<producer-slug>-api` by default. The session is a small stdlib client (relative
+  paths join the key's `base_url`; `get`/`post`/`put`/`patch`/`delete`/`request`,
+  `get_json`/`post_json`) that re-reads the token on every request, so a rotation (the previous
+  value works for 5 minutes) is picked up mid-turn, and that sends the bearer only to the exact
+  origin of `base_url`, including on every redirect hop. `requests=True` returns an origin-pinned
+  `requests.Session` when `requests` is installed. Identity is bound to the key, so no identity
+  header is sent. A key that is not active arrives token-less with `unavailable_reason`
+  (`key_revoked` | `key_expired` | `key_paused`) plus `key_status`, and the helper raises an error
+  naming the human reason; `key_paused` recovers by itself. See
+  [Agent REST API — Issued Keys](../../agents/agent_api/agent_api.md#issued-keys). Guide 13
+  (design patterns) was rewritten in the same release: the old "no agent API locally" statement
+  is gone.
 - **Schema annotations `x-scope` / `x-import`.** Every property in both schemas
   says whether every host gives it one meaning (`portable`), only the host that
   wrote it (`host`), or one registered host (`host:<name>`), and what
@@ -504,4 +520,4 @@ publishing the kit — see **Business Rules** below.
 
 ---
 
-*Last updated: 2026-09-03*
+*Last updated: 2026-10-07*

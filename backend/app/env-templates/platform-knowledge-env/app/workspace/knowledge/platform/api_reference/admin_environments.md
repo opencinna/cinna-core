@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-environments`
 ## GET `/api/v1/admin/agent-environments/`
 **List Admin Environments**
 
+> Not available via `cinna api` (excluded_path).
+
 **Query parameters:**
 - `template`: string | null
 - `status`: string | null
@@ -23,6 +25,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-environments`
 ## POST `/api/v1/admin/agent-environments/bulk-rebuild`
 **Bulk Rebuild Environments**
 
+> Not available via `cinna api` (excluded_path).
+
 **Request body** (`AdminBulkRebuildRequest`):
   - `environment_ids`: uuid[] (required)
 
@@ -32,6 +36,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-environments`
 
 ## POST `/api/v1/admin/agent-environments/{env_id}/rebuild`
 **Rebuild Single Environment**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `env_id`: uuid

@@ -5,12 +5,16 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 ## GET `/api/v1/users/me/mfa/status`
 **Mfa Status**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `MfaStatus`
 
 ---
 
 ## GET `/api/v1/users/me/mfa/passkeys`
 **List Passkeys**
+
+> Not available via `cinna api` (excluded_path).
 
 **Response:** `UserPasskeysPublic`
 
@@ -19,6 +23,8 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 ## POST `/api/v1/users/me/mfa/passkeys/begin`
 **Begin Passkey Registration**
 
+> Not available via `cinna api` (excluded_path).
+
 
 **Response:** `BeginPasskeyRegistrationResponse`
 
@@ -26,6 +32,8 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 
 ## POST `/api/v1/users/me/mfa/passkeys/finish`
 **Finish Passkey Registration**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`PasskeyFinishRequest`):
   - `challenge_token`: string (required)
@@ -38,6 +46,8 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 
 ## PATCH `/api/v1/users/me/mfa/passkeys/{passkey_id}`
 **Rename Passkey**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `passkey_id`: uuid
@@ -52,6 +62,8 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 ## DELETE `/api/v1/users/me/mfa/passkeys/{passkey_id}`
 **Delete Passkey**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `passkey_id`: uuid
 
@@ -62,12 +74,16 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 ## POST `/api/v1/users/me/mfa/totp/begin`
 **Begin Totp Enrollment**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `TotpEnrollResponse`
 
 ---
 
 ## POST `/api/v1/users/me/mfa/totp/finish`
 **Finish Totp Enrollment**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`TotpFinishRequest`):
   - `secret_token`: string (required)
@@ -79,6 +95,8 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 
 ## DELETE `/api/v1/users/me/mfa/totp`
 **Disable Totp**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`StepUpProof`):
   - `password`: string | null
@@ -93,12 +111,16 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 ## GET `/api/v1/users/me/mfa/recovery-codes`
 **Recovery Codes Status**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `RecoveryCodeStatus`
 
 ---
 
 ## POST `/api/v1/users/me/mfa/recovery-codes/regenerate`
 **Regenerate Recovery Codes**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`StepUpProof`):
   - `password`: string | null
@@ -113,12 +135,16 @@ Auto-generated from OpenAPI spec. Tag: `mfa`
 ## POST `/api/v1/users/me/mfa/step-up/passkey/options`
 **Begin Step Up Passkey**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `StepUpPasskeyOptions`
 
 ---
 
 ## POST `/api/v1/users/me/mfa/disable`
 **Disable Two Factor**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`StepUpProof`):
   - `password`: string | null

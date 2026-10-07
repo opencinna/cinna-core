@@ -479,3 +479,225 @@ class TestConstants:
 
     def test_mfa_in_excluded(self) -> None:
         assert "mfa" in EXCLUDED_PREFIXES
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# H. Secret-bearing single routes (EXCLUDED_PATTERNS / EXCLUDED_WRITE_PATTERNS)
+# ────────────────────────────────────────────────────────────────────────────
+
+_A = "11111111-1111-1111-1111-111111111111"
+
+_ANY_METHOD_DENIED = [
+    f"agents/{_A}/agent-api/keys",
+    f"agents/{_A}/agent-api/keys/{_A}",
+    f"agents/{_A}/agent-api/keys/{_A}/revoke",
+    f"agents/{_A}/agent-api/keys/{_A}/rotate",
+    f"environments/{_A}/workspace/download/credentials/credentials.json",
+    f"environments/{_A}/workspace/download",
+    f"environments/{_A}/workspace/view-file/files/a.txt",
+    f"dashboards/{_A}/blocks/{_A}/env-file",
+    # Share links carry the share token + security code (C18).
+    f"agents/{_A}/guest-shares",
+    f"agents/{_A}/guest-shares/{_A}",
+    f"agents/{_A}/webapp-shares",
+    f"agents/{_A}/webapp-shares/{_A}",
+]
+
+_POST_DENIED = [
+    f"agents/{_A}/access-tokens",
+    f"agents/{_A}/mcp-connectors/{_A}/tokens",
+    f"agents/{_A}/acp-connectors/{_A}/tokens",
+    f"agents/{_A}/webhooks/git-source",
+    f"agents/{_A}/webhooks/script",
+    f"agents/{_A}/webhooks/session",
+    f"agents/{_A}/webhooks/{_A}/regenerate-token",
+    f"tasks/{_A}/triggers/webhook",
+    f"tasks/{_A}/triggers/{_A}/regenerate-token",
+]
+
+_ALLOWED = [
+    ("GET", f"agents/{_A}"),
+    ("GET", f"agents/{_A}/agent-api/access"),
+    ("GET", f"agents/{_A}/agent-api/grants"),
+    ("GET", f"agents/{_A}/agent-api/connections"),
+    ("GET", f"environments/{_A}/workspace/tree"),
+    ("GET", f"dashboards/{_A}/blocks/{_A}/env-files"),
+    ("GET", f"agents/{_A}/access-tokens"),
+    ("PUT", f"agents/{_A}/access-tokens/{_A}"),
+    ("DELETE", f"agents/{_A}/access-tokens/{_A}"),
+    ("GET", f"agents/{_A}/mcp-connectors/{_A}/tokens"),
+    ("GET", f"agents/{_A}/acp-connectors/{_A}/tokens"),
+    ("GET", f"agents/{_A}/webhooks"),
+    ("GET", f"tasks/{_A}/triggers"),
+    ("POST", f"tasks/{_A}/triggers/schedule"),
+]
+
+
+class TestSecretBearingRoutes:
+    @pytest.mark.parametrize("method", ["GET", "POST", "PUT", "PATCH", "DELETE"])
+    @pytest.mark.parametrize("rel", _ANY_METHOD_DENIED)
+    def test_any_method_patterns_denied(self, method: str, rel: str) -> None:
+        _denied(method, f"{_BASE}/{rel}", reason="excluded_path")
+
+    @pytest.mark.parametrize("rel", _POST_DENIED)
+    def test_write_patterns_denied_for_post(self, rel: str) -> None:
+        _denied("POST", f"{_BASE}/{rel}", reason="excluded_path")
+
+    @pytest.mark.parametrize("rel", _POST_DENIED)
+    def test_write_patterns_only_deny_post(self, rel: str) -> None:
+        _allowed("GET", f"{_BASE}/{rel}")
+
+    @pytest.mark.parametrize(("method", "rel"), _ALLOWED)
+    def test_prefix_listings_and_counterparts_allowed(self, method: str, rel: str) -> None:
+        _allowed(method, f"{_BASE}/{rel}")
+
+    def test_keys_denial_message_names_the_dedicated_verb(self) -> None:
+        exc = _denied("POST", f"{_BASE}/agents/{_A}/agent-api/keys", reason="excluded_path")
+        assert "cinna agent-api access" in exc.message
+
+    @pytest.mark.parametrize(
+        "rel",
+        [
+            f"agents/{_A}/agent-api/keys/",
+            f"environments/{_A}/workspace/download/",
+            f"agents/{_A}/guest-shares/",
+        ],
+    )
+    def test_trailing_slash_variants_denied(self, rel: str) -> None:
+        _denied("POST", f"{_BASE}/{rel}", reason="excluded_path")
+
+    def test_trailing_slash_post_pattern_denied(self) -> None:
+        _denied("POST", f"{_BASE}/agents/{_A}/access-tokens/", reason="excluded_path")
+
+
+class TestPercentEncodedBypass:
+    def test_encoded_prefix_char_denied(self) -> None:
+        _denied("GET", f"{_BASE}/%63redentials", reason="excluded_path")
+
+    def test_encoded_prefix_child_denied(self) -> None:
+        _denied("GET", f"{_BASE}/%63redentials/abc/reveal", reason="excluded_path")
+
+    def test_encoded_pattern_segment_denied(self) -> None:
+        _denied("POST", f"{_BASE}/agents/{_A}/agent-api/%6beys", reason="excluded_path")
+
+    def test_encoded_write_pattern_denied(self) -> None:
+        _denied("POST", f"{_BASE}/agents/{_A}/access-%74okens", reason="excluded_path")
+
+    def test_encoded_slash_cannot_hide_a_denied_route(self) -> None:
+        # %2F decodes to a real slash: agents/<id>/agent-api/keys
+        r = None
+        try:
+            assert_api_proxy_allowed("POST", f"{_BASE}/agents/{_A}/agent-api%2Fkeys")
+        except ApiProxyDenied as exc:
+            r = exc
+        assert r is not None and r.reason in ("excluded_path", "malformed_path")
+
+    def test_encoded_dotdot_is_malformed(self) -> None:
+        _denied("GET", f"{_BASE}/agents/%2e%2e/credentials", reason="malformed_path")
+
+    def test_literal_dotdot_is_malformed(self) -> None:
+        _denied("GET", f"{_BASE}/agents/../credentials", reason="malformed_path")
+
+
+class TestHardenedDecoding:
+    """Decoded control chars / whitespace, double encoding and ``//`` are refused;
+    a decoded ``?`` or ``#`` is plain path data (allowed); decoded ``..`` is refused."""
+
+    @pytest.mark.parametrize(
+        "suffix", ["%0A", "%0D", "%0D%0A", "%00", "%09", "%7F"]
+    )
+    def test_control_or_whitespace_refused(self, suffix: str) -> None:
+        _denied("POST", f"{_BASE}/agents/{_A}/agent-api/keys{suffix}", reason="malformed_path")
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            f"{_BASE}/%2563redentials",
+            f"{_BASE}/%2561gents/{_A}",
+            f"{_BASE}/agents/{_A}/agent-api/keys%250A",
+        ],
+    )
+    def test_double_encoding_refused(self, path: str) -> None:
+        _denied("GET", path, reason="malformed_path")
+
+    def test_encoded_space_is_allowed(self) -> None:
+        _allowed("GET", f"{_BASE}/environments/{_A}/workspace/tree/my%20notes.md")
+
+    def test_encoded_space_does_not_hide_a_denied_route(self) -> None:
+        _denied("GET", f"{_BASE}/environments/{_A}/workspace/download/my%20notes.md",
+                reason="excluded_path")
+
+    @pytest.mark.parametrize("seg", [".", "%2e", "%2E"])
+    def test_dot_segment_refused(self, seg: str) -> None:
+        _denied("GET", f"{_BASE}/agents/{seg}/{_A}", reason="malformed_path")
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            f"{_BASE}/agents//{_A}",
+            f"{_BASE}/agents%2F%2F{_A}",
+            f"{_BASE}/agents/{_A}/agent-api/keys//",
+        ],
+    )
+    def test_double_slash_refused(self, path: str) -> None:
+        _denied("GET", path, reason="malformed_path")
+
+    @pytest.mark.parametrize("enc", ["%3F", "%23"])
+    def test_decoded_query_or_fragment_chars_are_allowed(self, enc: str) -> None:
+        _allowed("GET", f"{_BASE}/environments/{_A}/workspace/tree/notes{enc}1.md")
+
+    def test_decoded_dotdot_still_refused(self) -> None:
+        _denied("GET", f"{_BASE}/agents/%2e%2e/{_A}")
+
+
+class TestShareRoutes:
+    """C18: share links carry the share token + security code; web-only."""
+
+    @pytest.mark.parametrize("method", ["GET", "POST", "PUT", "PATCH", "DELETE"])
+    @pytest.mark.parametrize(
+        "rel",
+        [
+            f"agents/{_A}/guest-shares",
+            f"agents/{_A}/guest-shares/{_A}",
+            f"agents/{_A}/webapp-shares",
+            f"agents/{_A}/webapp-shares/{_A}/anything",
+            "guest-share/tok123/auth",
+            "webapp-share/tok123/auth",
+        ],
+    )
+    def test_share_routes_denied(self, method: str, rel: str) -> None:
+        _denied(method, f"{_BASE}/{rel}", reason="excluded_path")
+
+    @pytest.mark.parametrize(
+        ("method", "rel"),
+        [
+            ("GET", "guest-share/tok123/info"),
+            ("POST", "guest-share/tok123/activate"),
+            ("GET", "webapp-share/tok123/info"),
+        ],
+    )
+    def test_info_and_activate_still_allowed(self, method: str, rel: str) -> None:
+        _allowed(method, f"{_BASE}/{rel}")
+
+
+class TestCinnaApiNote:
+    """C19: the generated api_reference marks routes the hatch refuses."""
+
+    def test_keys_route_is_marked_with_the_dedicated_verb(self) -> None:
+        from app.services.cli.platform_knowledge_assets import cinna_api_note
+
+        note = cinna_api_note("POST", f"{_BASE}/agents/{{agent_id}}/agent-api/keys")
+        assert note is not None
+        assert "Not available via `cinna api`" in note
+        assert "cinna agent-api access" in note
+
+    def test_allowed_route_is_not_marked(self) -> None:
+        from app.services.cli.platform_knowledge_assets import cinna_api_note
+
+        assert cinna_api_note("GET", f"{_BASE}/agents/{{agent_id}}") is None
+        assert cinna_api_note("GET", f"{_BASE}/agents/{{agent_id}}/agent-api/access") is None
+
+    def test_non_api_path_has_no_note(self) -> None:
+        from app.services.cli.platform_knowledge_assets import cinna_api_note
+
+        assert cinna_api_note("GET", "/health") is None

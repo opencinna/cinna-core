@@ -14,18 +14,25 @@ pass. Only the caller's "mine" credentials qualify: "automatic" and "bundle"
 ones (per ``CredentialsService.classify_credential_category``) are never
 listed or delivered. Only ``LOCALLY_COMPATIBLE_TYPES`` — types that work on a
 device out of the box — are listed or delivered at all.
+
+Issued ``agent_api`` keys (plan §6/§7) are opt-in: only with
+``include=agent_api_keys``, only the caller's own key issued to the caller, and
+only delivered while active (other statuses are listed, and refused on
+materialize with ``key_revoked`` / ``key_expired`` / ``key_paused``).
 """
 
 import hashlib
 import json
 import logging
 import uuid
+from datetime import UTC
 
 from sqlmodel import Session, select
 
 from app.models.credentials.credential import Credential, CredentialType
 from app.models.credentials.credential_share import CredentialShare
 from app.models.credentials.desktop_credential import (
+    DesktopAgentApiKeyFacts,
     DesktopCredentialList,
     DesktopCredentialListItem,
     DesktopCredentialMaterializeRequest,
@@ -40,6 +47,12 @@ from app.models.events.security_event import (
     SecurityEventCreate,
 )
 from app.models.users.user import User
+from app.services.agent_api.agent_api_key_status import (
+    KeyState,
+    key_states_by_credential,
+    unavailable_reason_for,
+)
+from app.services.agent_api.agent_api_token_service import AgentApiTokenService
 from app.services.common.rate_limiter import RateLimiter
 from app.services.credentials.credentials_service import CredentialsService
 from app.services.desktop_auth.desktop_auth_service import DesktopAuthService
@@ -55,7 +68,8 @@ MATERIALIZE_LIMIT_PER_MINUTE = 60
 # - OAuth (gmail/gdrive/gcalendar/gmeet, incl. readonly): refreshing the access token
 #   needs the OAuth client secret, which is private to the backend server.
 # - ssh_key: the private key never leaves Core, so the entry is useless locally.
-# - agent_api: bound to the platform's anonymous connection model.
+# - agent_api: only an issued key owned by and issued to the caller, and only
+#   when the client opts in (include=agent_api_keys); connections never.
 # - mcp_provider: an SDK MCP-server manifest entry, not a credential file.
 LOCALLY_COMPATIBLE_TYPES: frozenset[CredentialType] = frozenset(
     {
@@ -64,6 +78,7 @@ LOCALLY_COMPATIBLE_TYPES: frozenset[CredentialType] = frozenset(
         CredentialType.ODOO,
         CredentialType.API_TOKEN,
         CredentialType.GOOGLE_SERVICE_ACCOUNT,
+        CredentialType.AGENT_API,
     }
 )
 
@@ -84,10 +99,46 @@ class DesktopCredentialError(Exception):
 
 class DesktopCredentialService:
     @staticmethod
-    def revision(credential: Credential) -> str:
-        """Opaque per-credential revision; ``updated_at`` is bumped by DB triggers
-        on every credential write and every share insert/update/delete."""
-        return hashlib.sha256(str(credential.updated_at).encode()).hexdigest()[:32]
+    def revision(credential: Credential, key_state: KeyState | None = None) -> str:
+        """Opaque per-credential revision.
+
+        Non-keys: ``updated_at`` (bumped by DB triggers on every credential
+        write and every share insert/update/delete). Issued keys (D25): also the
+        read-time ``key_status``, the expiry and the public ``base_url``, so
+        revoke, pause, producer/issuer removal, expiry and an origin change all
+        move it without a write.
+        """
+        if key_state is None:
+            return hashlib.sha256(str(credential.updated_at).encode()).hexdigest()[:32]
+        facts = DesktopCredentialService.key_facts(key_state)
+        raw = (
+            f"{credential.updated_at}|{key_state.status.value}|"
+            f"{facts.expires_at}|{facts.base_url}"
+        )
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+    @staticmethod
+    def key_facts(key_state: KeyState) -> DesktopAgentApiKeyFacts:
+        """The non-secret facts of an issued key, URLs on the public origin."""
+        token = key_state.token
+        agent = key_state.agent if token.agent_id is not None else None
+        expires_at = token.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return DesktopAgentApiKeyFacts(
+            producer_agent_id=agent.id if agent is not None else None,
+            producer_name=agent.name if agent is not None else None,
+            issuer_email=key_state.issuer_email if token.owner_id else None,
+            base_url=(
+                AgentApiTokenService.build_base_url(agent.id) if agent else None
+            ),
+            spec_url=(
+                AgentApiTokenService.build_spec_url(agent.id) if agent else None
+            ),
+            expires_at=(
+                expires_at.astimezone(UTC).isoformat() if expires_at else None
+            ),
+        )
 
     @staticmethod
     def local_access_refusal(
@@ -95,6 +146,8 @@ class DesktopCredentialService:
         user_id: uuid.UUID,
         shared_sources: dict[uuid.UUID, str | None],
         categories: dict[uuid.UUID, str],
+        include_agent_api_keys: bool = False,
+        key_states: dict[uuid.UUID, KeyState] | None = None,
     ) -> DesktopCredentialRefusalReason | None:
         """Why ``user_id`` may not copy ``credential`` to a device, or None.
 
@@ -102,6 +155,13 @@ class DesktopCredentialService:
         *and* the owner's ``allow_sharing``, a share that makes it "mine" (not a
         bundle or skill install), plus the owner's local-use consent. Superuser
         status grants nothing here. ``categories`` comes from ``_categories``.
+
+        ``agent_api``: only when ``include_agent_api_keys`` and the credential is
+        the caller's own issued key, issued to the caller (``key_states`` from
+        ``key_states_by_credential``); every other ``agent_api`` credential,
+        connections included, is ``unsupported_type``. Checked after access so
+        a caller without access learns nothing. Status is NOT checked here
+        (keys are listed whatever their status; materialize gates it).
         """
         if credential is None:
             return "not_found"
@@ -110,11 +170,32 @@ class DesktopCredentialService:
             credential.id not in shared_sources or not credential.allow_sharing
         ):
             return "no_access"
+        if credential.type == CredentialType.AGENT_API:
+            state = (key_states or {}).get(credential.id)
+            if (
+                not include_agent_api_keys
+                or not is_owned
+                or state is None
+                or state.token.subject_user_id != user_id
+            ):
+                return "unsupported_type"
         if categories.get(credential.id) != "mine":
             return "not_local_category"
         if not is_owned and not credential.allow_local_use:
             return "local_use_not_allowed"
         return None
+
+    @staticmethod
+    def _key_states(
+        session: Session, credentials: list[Credential], include_agent_api_keys: bool
+    ) -> dict[uuid.UUID, KeyState]:
+        """Issued-key states for the ``agent_api`` rows (one query), or {}."""
+        if not include_agent_api_keys:
+            return {}
+        return key_states_by_credential(
+            session,
+            [c.id for c in credentials if c.type == CredentialType.AGENT_API],
+        )
 
     @staticmethod
     def _shared_sources(
@@ -170,13 +251,19 @@ class DesktopCredentialService:
 
     @staticmethod
     def list_credentials(
-        session: Session, user: User, if_none_match: str | None
+        session: Session,
+        user: User,
+        if_none_match: str | None,
+        include_agent_api_keys: bool = False,
     ) -> tuple[str, DesktopCredentialList | None]:
         """Return ``(etag, list)``; ``list`` is None when ``if_none_match`` matches.
 
         The ETag covers every metadata field plus the revision. ``status`` and
         ``expires_at`` derive from the encrypted payload, whose every change
         bumps the revision, so the common unchanged poll costs no decryption.
+        Issued keys (opt-in) put ``key_status``, ``expires_at`` and their
+        ``agent_api`` facts in the metadata, so status flips, producer renames
+        and issuer email changes move the ETag too.
         """
         shared = DesktopCredentialService._shared_sources(session, user.id)
         rows = session.exec(
@@ -190,6 +277,9 @@ class DesktopCredentialService:
         categories = DesktopCredentialService._categories(
             session, user.id, list(rows), shared
         )
+        key_states = DesktopCredentialService._key_states(
+            session, list(rows), include_agent_api_keys
+        )
         # A shared entry without local-use consent is still listed
         # (local_use_allowed=false) so Desktop can explain it; every other
         # refusal (including automatic/bundle credentials) omits the entry.
@@ -197,7 +287,12 @@ class DesktopCredentialService:
             c
             for c in rows
             if DesktopCredentialService.local_access_refusal(
-                c, user.id, shared, categories
+                c,
+                user.id,
+                shared,
+                categories,
+                include_agent_api_keys=include_agent_api_keys,
+                key_states=key_states,
             )
             in (None, "local_use_not_allowed")
         ]
@@ -213,22 +308,9 @@ class DesktopCredentialService:
         )
 
         metadata = [
-            {
-                "id": str(c.id),
-                "name": c.name,
-                "type": c.type.value,
-                "notes": c.notes,
-                "service_uri": c.service_uri,
-                "is_placeholder": bool(c.is_placeholder),
-                "relation": "owned" if c.owner_id == user.id else "shared",
-                "category": categories[c.id],
-                "owner_email": owner_emails.get(c.owner_id),
-                "local_use_allowed": c.owner_id == user.id or c.allow_local_use,
-                "revision": DesktopCredentialService.revision(c),
-                "user_workspace_id": str(c.user_workspace_id)
-                if c.user_workspace_id
-                else None,
-            }
+            DesktopCredentialService._list_metadata(
+                c, user.id, categories, owner_emails, key_states.get(c.id)
+            )
             for c in visible
         ]
         etag = (
@@ -242,6 +324,11 @@ class DesktopCredentialService:
         items = []
         for c, meta in zip(visible, metadata, strict=True):
             data = CredentialsService.decrypt_credential_data(session, c)
+            if c.id in key_states:
+                # Keys: expiry is the token's (already in meta); status is
+                # "complete" — availability is key_status, not the payload.
+                items.append(DesktopCredentialListItem(**meta, status="complete"))
+                continue
             items.append(
                 DesktopCredentialListItem(
                     **meta,
@@ -252,6 +339,39 @@ class DesktopCredentialService:
                 )
             )
         return etag, DesktopCredentialList(items=items)
+
+    @staticmethod
+    def _list_metadata(
+        credential: Credential,
+        user_id: uuid.UUID,
+        categories: dict[uuid.UUID, str],
+        owner_emails: dict[uuid.UUID, str],
+        key_state: KeyState | None,
+    ) -> dict:
+        """The ETag-covered metadata of one listed credential."""
+        meta = {
+            "id": str(credential.id),
+            "name": credential.name,
+            "type": credential.type.value,
+            "notes": credential.notes,
+            "service_uri": credential.service_uri,
+            "is_placeholder": bool(credential.is_placeholder),
+            "relation": "owned" if credential.owner_id == user_id else "shared",
+            "category": categories[credential.id],
+            "owner_email": owner_emails.get(credential.owner_id),
+            "local_use_allowed": credential.owner_id == user_id
+            or credential.allow_local_use,
+            "revision": DesktopCredentialService.revision(credential, key_state),
+            "user_workspace_id": str(credential.user_workspace_id)
+            if credential.user_workspace_id
+            else None,
+        }
+        if key_state is not None:
+            facts = DesktopCredentialService.key_facts(key_state)
+            meta["key_status"] = key_state.status.value
+            meta["expires_at"] = facts.expires_at
+            meta["agent_api"] = facts.model_dump(mode="json")
+        return meta
 
     # ------------------------------------------------------------------ #
     # Materialize                                                        #
@@ -291,6 +411,7 @@ class DesktopCredentialService:
         user: User,
         client_id: str,
         request: DesktopCredentialMaterializeRequest,
+        include_agent_api_keys: bool = False,
     ) -> DesktopCredentialMaterializeResponse:
         """Deliver the selected credentials to the caller's Desktop client.
 
@@ -308,6 +429,9 @@ class DesktopCredentialService:
         categories = DesktopCredentialService._categories(
             session, user.id, list(loaded.values()), shared
         )
+        key_states = DesktopCredentialService._key_states(
+            session, list(loaded.values()), include_agent_api_keys
+        )
         selected: list[dict] = []
         revisions: dict[str, str] = {}
         owners: dict[str, uuid.UUID] = {}
@@ -316,12 +440,29 @@ class DesktopCredentialService:
             # Access is checked before type, so a caller without access learns
             # nothing about the credential.
             reason = DesktopCredentialService.local_access_refusal(
-                credential, user.id, shared, categories
+                credential,
+                user.id,
+                shared,
+                categories,
+                include_agent_api_keys=include_agent_api_keys,
+                key_states=key_states,
             )
             if reason is None and credential.type not in LOCALLY_COMPATIBLE_TYPES:
                 reason = "unsupported_type"
+            key_state = key_states.get(cid) if reason is None else None
+            if key_state is not None:
+                # Status gate: only an active key is delivered.
+                reason = unavailable_reason_for(key_state.status)
             if reason:
-                refused.append(DesktopCredentialRefusal(id=cid, reason=reason))
+                refused.append(
+                    DesktopCredentialRefusal(
+                        id=cid,
+                        reason=reason,
+                        key_status=(
+                            key_state.status.value if key_state is not None else None
+                        ),
+                    )
+                )
                 continue
             selected.append(
                 CredentialsService.credential_to_env_dict(
@@ -329,7 +470,9 @@ class DesktopCredentialService:
                     CredentialsService.decrypt_credential_data(session, credential),
                 )
             )
-            revisions[str(cid)] = DesktopCredentialService.revision(credential)
+            revisions[str(cid)] = DesktopCredentialService.revision(
+                credential, key_state
+            )
             owners[str(cid)] = credential.owner_id
 
         bundle = CredentialsService.prepare_credentials_for_environment(
@@ -348,6 +491,17 @@ class DesktopCredentialService:
                 refused.append(
                     DesktopCredentialRefusal(id=entry["id"], reason="unsupported_type")
                 )
+        # Delivered entries are active keys only: a key whose status changed
+        # between the gate above and the builder is refused, not delivered.
+        for cid in [c for c, e in entries.items() if e.get("unavailable_reason")]:
+            entry = entries.pop(cid)
+            refused.append(
+                DesktopCredentialRefusal(
+                    id=cid,
+                    reason=entry["unavailable_reason"],
+                    key_status=entry.get("key_status"),
+                )
+            )
 
         items = []
         for cid, entry in entries.items():

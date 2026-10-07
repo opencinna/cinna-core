@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## POST `/api/v1/app-sync/`
 **Sync**
 
+> Not available via `cinna api` (excluded_path).
+
 **Request body** (`SyncRequest`):
   - `cursor`: integer
   - `changes`: SyncRecordUpsert[]
@@ -18,6 +20,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## DELETE `/api/v1/app-sync/`
 **Wipe**
 
+> Not available via `cinna api` (excluded_path).
+
 
 **Response:** `Message`
 
@@ -25,6 +29,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 
 ## POST `/api/v1/app-sync/pull`
 **Pull**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`PullRequest`):
   - `cursor`: integer
@@ -38,6 +44,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## POST `/api/v1/app-sync/push`
 **Push**
 
+> Not available via `cinna api` (excluded_path).
+
 **Request body** (`PushRequest`):
   - `changes`: SyncRecordUpsert[]
 
@@ -48,12 +56,16 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## GET `/api/v1/app-sync/state`
 **Get State**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `SyncStatePublic`
 
 ---
 
 ## GET `/api/v1/app-sync/encryption`
 **Get Encryption**
+
+> Not available via `cinna api` (excluded_path).
 
 **Response:** `EncryptionStatePublic`
 
@@ -62,12 +74,16 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## DELETE `/api/v1/app-sync/encryption`
 **Reset Encryption**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `EncryptionStatePublic`
 
 ---
 
 ## POST `/api/v1/app-sync/encryption/init`
 **Init Encryption**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`EncryptionInitRequest`):
   - `device`: DeviceInput (required)
@@ -80,6 +96,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## GET `/api/v1/app-sync/keys`
 **List Keys**
 
+> Not available via `cinna api` (excluded_path).
+
 **Query parameters:**
 - `umk_version`: integer | null
 
@@ -87,6 +105,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 
 ## POST `/api/v1/app-sync/keys`
 **Add Key**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`KeyEnvelopeInput`):
   - `wrap_method`: "device" | "recovery" | "passphrase" (required)
@@ -103,6 +123,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## DELETE `/api/v1/app-sync/keys/{envelope_id}`
 **Delete Key**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `envelope_id`: uuid
 
@@ -113,10 +135,14 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## GET `/api/v1/app-sync/devices`
 **List Devices**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## POST `/api/v1/app-sync/devices`
 **Register Device**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`DeviceInput`):
   - `device_label`: string (required)
@@ -130,6 +156,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## DELETE `/api/v1/app-sync/devices/{device_id}`
 **Revoke Device**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `device_id`: uuid
 
@@ -139,6 +167,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 
 ## POST `/api/v1/app-sync/pairing/start`
 **Pairing Start**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`PairingStartRequest`):
   - `new_device_pubkey`: string (required)
@@ -152,10 +182,14 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## GET `/api/v1/app-sync/pairing/inbox`
 **Pairing Inbox**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## GET `/api/v1/app-sync/pairing/inbox/{pairing_id}`
 **Pairing Inbox Get**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `pairing_id`: uuid
@@ -166,6 +200,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 
 ## POST `/api/v1/app-sync/pairing/inbox/{pairing_id}/sealer-nonce`
 **Pairing Set Sealer Nonce**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `pairing_id`: uuid
@@ -180,6 +216,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## POST `/api/v1/app-sync/pairing/inbox/{pairing_id}/complete`
 **Pairing Complete By Id**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `pairing_id`: uuid
 
@@ -193,6 +231,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 ## GET `/api/v1/app-sync/pairing/{code}`
 **Pairing Get**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `code`: string
 
@@ -202,6 +242,8 @@ Auto-generated from OpenAPI spec. Tag: `App Sync`
 
 ## POST `/api/v1/app-sync/pairing/{code}/reveal`
 **Pairing Reveal**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `code`: string

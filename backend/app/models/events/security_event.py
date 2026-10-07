@@ -137,11 +137,16 @@ AGENT_API_GRANT_DELETED = "AGENT_API_GRANT_DELETED"
 # Emitted by ``AgentApiKeyService``. An external key is a copy-pasteable,
 # identity-bound bearer credential for code running OUTSIDE the platform, so its
 # whole lifecycle is audited: minting (who issued it, for whom), revoking, and
-# every reveal of the value on the credential detail page. The token value and
+# every reveal of the value, rotation, and the recipient deleting it. The token value and
 # its hash are NEVER logged — only the 8-char display prefix.
 AGENT_API_EXTERNAL_KEY_CREATED = "AGENT_API_EXTERNAL_KEY_CREATED"
 AGENT_API_EXTERNAL_KEY_REVOKED = "AGENT_API_EXTERNAL_KEY_REVOKED"
 AGENT_API_EXTERNAL_KEY_REVEALED = "AGENT_API_EXTERNAL_KEY_REVEALED"
+# Recipient swapped the key's value (old value valid for the rotation grace).
+AGENT_API_EXTERNAL_KEY_ROTATED = "AGENT_API_EXTERNAL_KEY_ROTATED"
+# Recipient deleted their key credential; recorded on the ISSUER's account
+# (the token row cascades away, so this event is all that remains).
+AGENT_API_EXTERNAL_KEY_DELETED_BY_HOLDER = "AGENT_API_EXTERNAL_KEY_DELETED_BY_HOLDER"
 
 # ── Agent improvement requests ────────────────────────────────────────
 # Written by the web and CLI archive-download routes when, and only when,

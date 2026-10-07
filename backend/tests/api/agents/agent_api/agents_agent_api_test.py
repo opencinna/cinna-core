@@ -2323,3 +2323,58 @@ def test_refresh_running_env_stopped_child_with_harvested_spec_reports_terminal_
 
     finally:
         lm.get_adapter = original_get_adapter
+
+
+def test_connection_unaffected_by_issued_key_changes_and_reports_producer_ownership(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    P2 regression: an ``agent_api`` CONNECTION is not an issued key.
+      1. Its credential row carries no ``agent_api_key_status``.
+      2. The connection info reports ``producer_owned_by_viewer`` (D10) for the
+         producer's owner.
+      3. The key-only holder routes (read / rotate) refuse it with 400.
+      4. Issuing and revoking an issued key on the same producer leaves the
+         connection authenticating.
+    """
+    producer = _setup_api_agent(client, superuser_token_headers, name="Conn Unaffected Producer")
+    conn = _mint_token(client, superuser_token_headers, producer["id"], label="plain-conn")
+    cred_id = conn["credential_id"]
+    api = settings.API_V1_STR
+
+    r = client.get(f"{api}/credentials/", headers=superuser_token_headers)
+    assert r.status_code == 200, r.text
+    row = next(c for c in r.json()["data"] if c["id"] == cred_id)
+    assert row["agent_api_key_status"] is None
+
+    r = client.get(_connection_info_url(cred_id), headers=superuser_token_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["producer_owned_by_viewer"] is True
+
+    holder = f"{api}/credentials/{cred_id}/agent-api-key"
+    assert client.get(holder, headers=superuser_token_headers).status_code == 400
+    assert client.post(f"{holder}/rotate", headers=superuser_token_headers).status_code == 400
+
+    update_agent(
+        client, superuser_token_headers, producer["id"],
+        agent_api_external_access_enabled=True,
+    )
+    r = client.post(
+        f"{api}/agents/{producer['id']}/agent-api/keys",
+        headers=superuser_token_headers,
+        json={},
+    )
+    assert r.status_code == 200, r.text
+    key_id = r.json()["id"]
+    r = client.post(
+        f"{api}/agents/{producer['id']}/agent-api/keys/{key_id}/revoke",
+        headers=superuser_token_headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.get(
+        _consumer_proxy_url(producer["id"], "ping"),
+        headers=_bearer_headers(conn["token"]),
+    )
+    assert r.status_code == 200, "connection must survive issued-key issue + revoke"

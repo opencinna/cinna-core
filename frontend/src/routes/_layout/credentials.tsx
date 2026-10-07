@@ -151,6 +151,7 @@ function CredentialTabs() {
         allow_sharing: c.allow_sharing,
         share_count: c.share_count ?? 0,
         status: c.status,
+        agent_api_key_status: c.agent_api_key_status,
       }),
     )
     const sharedModels: CredentialCardModel[] = (shared.data?.data ?? []).map(

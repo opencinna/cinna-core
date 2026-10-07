@@ -70,6 +70,22 @@ export type AccessTokenMode = 'conversation' | 'building';
 export type AccessTokenScope = 'limited' | 'general';
 
 /**
+ * Producer API access for ``cinna agent-api access list``.
+ *
+ * The web access list (grants + issued keys per person, terminal keys
+ * included) plus the scope catalog and the web page that manages it. Never a
+ * key value.
+ */
+export type AccountAgentApiAccess = {
+    data: Array<AgentApiAccessEntry>;
+    count: number;
+    external_access_enabled: boolean;
+    identity_enabled: boolean;
+    scope_catalog?: Array<AgentApiScope>;
+    manage_url: string;
+};
+
+/**
  * Owner-side smoke test for a producer API — ``cinna agent-api call``.
  *
  * Invokes one endpoint on the producer's *own* REST API through the
@@ -121,6 +137,62 @@ export type AccountAgentApiEnableBody = {
 };
 
 /**
+ * Issue a key on a producer — ``cinna agent-api access issue``.
+ *
+ * The recipient is resolved server-side from ``issued_to_email`` (exact,
+ * case-insensitive, active users; None = the caller). ``scopes`` None leaves
+ * the grant as is; ``[]`` writes an explicit empty grant.
+ */
+export type AccountAgentApiKeyIssueBody = {
+    agent_id: string;
+    issued_to_email?: (string | null);
+    scopes?: (Array<(string)> | null);
+    expires_in_days?: (number | null);
+    service_uri?: (string | null);
+    label?: (string | null);
+    read_only?: boolean;
+};
+
+/**
+ * The issued key as the account CLI sees it. Never the value.
+ *
+ * Inherits ``AgentApiKeyPublic`` (which has no ``token`` field); a self-issue
+ * carries ``credential_url``, the web page where the user reveals the value.
+ */
+export type AccountAgentApiKeyIssued = {
+    id: string;
+    credential_id: (string | null);
+    agent_id: (string | null);
+    label: (string | null);
+    token_prefix: string;
+    issued_to: (AgentApiKeyUser | null);
+    read_only: boolean;
+    is_active: boolean;
+    status: AgentApiKeyStatus;
+    is_usable: boolean;
+    expires_at: (string | null);
+    last_used_at: (string | null);
+    revoked_at?: (string | null);
+    rotated_at?: (string | null);
+    linked_agent_count?: number;
+    created_at: string;
+    base_url: string;
+    spec_url: string;
+    service_uri?: (string | null);
+    issued_to_self: boolean;
+    credential_url?: (string | null);
+    unknown_scopes?: Array<(string)>;
+};
+
+/**
+ * Revoke an issued key — ``cinna agent-api access revoke`` (idempotent).
+ */
+export type AccountAgentApiKeyRevokeBody = {
+    agent_id: string;
+    key_id: string;
+};
+
+/**
  * Force an on-demand spec + policy re-harvest — ``cinna agent-api refresh``.
  *
  * Maps to the producer ``POST /_refresh`` action: re-imports the agent's
@@ -130,6 +202,27 @@ export type AccountAgentApiEnableBody = {
  */
 export type AccountAgentApiRefreshBody = {
     agent_id: string;
+};
+
+/**
+ * Set or remove a person's scopes — ``cinna agent-api access scopes``.
+ *
+ * ``scopes`` is required but nullable: a list sets the ``(producer, user)``
+ * grant to exactly that list, an explicit ``null`` removes the grant. It has
+ * no default so an omitted field can never silently delete a grant.
+ */
+export type AccountAgentApiScopesBody = {
+    agent_id: string;
+    user_email?: (string | null);
+    scopes: (Array<(string)> | null);
+};
+
+/**
+ * The person's access after a scopes change (None when nothing is left).
+ */
+export type AccountAgentApiScopesResult = {
+    entry?: (AgentApiAccessEntry | null);
+    unknown_scopes?: Array<(string)>;
 };
 
 /**
@@ -914,6 +1007,16 @@ export type AgentAddonsPublic = {
     can_add?: boolean;
 };
 
+/**
+ * One person with access to a producer: their grant and their keys.
+ */
+export type AgentApiAccessEntry = {
+    user: AgentApiKeyUser;
+    grant_id?: (string | null);
+    scopes?: Array<(string)>;
+    keys?: Array<AgentApiKeyPublic>;
+};
+
 export type AgentApiAccessGrantCreate = {
     scopes?: Array<(string)>;
     user_id: string;
@@ -940,6 +1043,16 @@ export type AgentApiAccessGrantUpdate = {
 };
 
 /**
+ * The producer's API access surface: grants and issued keys per person.
+ */
+export type AgentApiAccessList = {
+    data: Array<AgentApiAccessEntry>;
+    count: number;
+    external_access_enabled: boolean;
+    identity_enabled: boolean;
+};
+
+/**
  * A consumer agent that has the agent_api credential linked to it.
  */
 export type AgentApiConnectedAgent = {
@@ -960,6 +1073,7 @@ export type AgentApiConnectionInfo = {
     producer_agent_id: (string | null);
     producer_agent_name: (string | null);
     producer_ui_color_preset?: (string | null);
+    producer_owned_by_viewer?: boolean;
     base_url: string;
     spec_url: string;
     read_only: boolean;
@@ -973,78 +1087,130 @@ export type AgentApiGrantUser = {
 };
 
 /**
- * Request to mint an external API key on a producer agent (plan D9).
+ * Request to issue an API key on a producer agent.
  *
  * ``scopes`` is a convenience: it **upserts** the ``agent_api_access_grant``
- * for ``(producer, subject_user_id)``. Scopes live on the grant, never on the
- * key (plan D5) — the same row the producer's Access & Scopes card edits.
+ * for ``(producer, recipient)``. Scopes live on the grant, never on the key —
+ * the same row the producer's API access surface edits.
  */
 export type AgentApiKeyCreate = {
     label?: (string | null);
-    subject_user_id: string;
+    issued_to_user_id?: (string | null);
+    service_uri?: (string | null);
     scopes?: (Array<(string)> | null);
     read_only_override?: boolean;
     expires_in_days?: (number | null);
 };
 
 /**
- * Returned on mint — carries the token value plus where to call it.
+ * Returned on issue. ``token`` only when issued to the caller themself.
  */
 export type AgentApiKeyCreated = {
     id: string;
     credential_id: (string | null);
-    agent_id: string;
+    agent_id: (string | null);
     label: (string | null);
     token_prefix: string;
-    subject: (AgentApiKeySubject | null);
+    issued_to: (AgentApiKeyUser | null);
     read_only: boolean;
     is_active: boolean;
+    status: AgentApiKeyStatus;
     is_usable: boolean;
     expires_at: (string | null);
     last_used_at: (string | null);
+    revoked_at?: (string | null);
+    rotated_at?: (string | null);
+    linked_agent_count?: number;
     created_at: string;
-    token: string;
+    token?: (string | null);
     base_url: string;
     spec_url: string;
 };
 
 /**
- * One external key as listed on the producer card. Never the value.
+ * An issued key as its RECIPIENT (the credential owner) sees it.
+ */
+export type AgentApiKeyHolderInfo = {
+    credential_id: string;
+    token_prefix: string;
+    status: AgentApiKeyStatus;
+    service_uri: (string | null);
+    producer: (AgentApiKeyProducer | null);
+    issuer: (AgentApiKeyUser | null);
+    scopes: Array<(string)>;
+    read_only: boolean;
+    expires_at: (string | null);
+    last_used_at: (string | null);
+    rotated_at: (string | null);
+    previous_valid_until: (string | null);
+    issuer_saw_value: boolean;
+    base_url: (string | null);
+    spec_url: (string | null);
+    linked_agents: Array<AgentApiConnectedAgent>;
+};
+
+/**
+ * The producer an issued key calls, as the recipient sees it.
+ */
+export type AgentApiKeyProducer = {
+    id: string;
+    name: string;
+    ui_color_preset?: (string | null);
+};
+
+/**
+ * One issued key as the ISSUER sees it. Never the value.
  */
 export type AgentApiKeyPublic = {
     id: string;
     credential_id: (string | null);
-    agent_id: string;
+    agent_id: (string | null);
     label: (string | null);
     token_prefix: string;
-    subject: (AgentApiKeySubject | null);
+    issued_to: (AgentApiKeyUser | null);
     read_only: boolean;
     is_active: boolean;
+    status: AgentApiKeyStatus;
     is_usable: boolean;
     expires_at: (string | null);
     last_used_at: (string | null);
+    revoked_at?: (string | null);
+    rotated_at?: (string | null);
+    linked_agent_count?: number;
     created_at: string;
 };
 
 /**
- * The value of an external key, returned by the dedicated reveal endpoint.
+ * The value of an issued key, returned by the dedicated reveal endpoint.
  *
- * The **only** way to read a key back after mint (plan D4): ``with-data``
- * deliberately strips it, so every reveal goes through one audited call.
+ * The way to read a key back after issue: ``with-data`` deliberately strips
+ * it, so every reveal goes through one audited call.
  */
 export type AgentApiKeyRevealResponse = {
     token: string;
 };
 
-export type AgentApiKeysPublic = {
-    data: Array<AgentApiKeyPublic>;
-    count: number;
+/**
+ * The new value of a rotated key (returned once; reveal still works).
+ */
+export type AgentApiKeyRotateResponse = {
+    token: string;
+    token_prefix: string;
+    previous_valid_until: string;
 };
 
 /**
- * The platform user an external key is bound to.
+ * The one status vocabulary of an issued key (plan D4).
+ *
+ * Precedence top-down; computed only by ``agent_api_key_status.key_status``.
+ * The first four are terminal; the last two recover by themselves.
  */
-export type AgentApiKeySubject = {
+export type AgentApiKeyStatus = 'active' | 'revoked_by_issuer' | 'producer_removed' | 'issuer_removed' | 'expired' | 'api_disabled' | 'external_access_paused';
+
+/**
+ * A platform user shown next to a key (recipient or issuer).
+ */
+export type AgentApiKeyUser = {
     id: string;
     email?: (string | null);
     full_name?: (string | null);
@@ -1826,6 +1992,7 @@ export type AgentSubtaskCreate = {
     task?: (string | null);
     source_session_id?: (string | null);
     external_ref?: (string | null);
+    own_queue?: boolean;
 };
 
 export type AgentTaskCommentCreate = {
@@ -1847,6 +2014,7 @@ export type AgentTaskCreate = {
     assigned_agent_id?: (string | null);
     assigned_node_id?: (string | null);
     external_ref?: (string | null);
+    own_queue?: boolean;
 };
 
 /**
@@ -3438,6 +3606,7 @@ export type CredentialPublic = {
     category?: string;
     agent_usage_count?: number;
     used_in_bundle?: boolean;
+    agent_api_key_status?: (string | null);
 };
 
 /**
@@ -3554,6 +3723,7 @@ export type CredentialWithData = {
     category?: string;
     agent_usage_count?: number;
     used_in_bundle?: boolean;
+    agent_api_key_status?: (string | null);
     credential_data: {
         [key: string]: unknown;
     };
@@ -3646,6 +3816,22 @@ export type DelegationResultPublic = {
     reply_state?: ('sending' | 'delivered' | null);
 };
 
+/**
+ * Non-secret facts of an issued agent_api key (D16). Null for non-keys.
+ *
+ * URLs are the PUBLIC origin (``settings.backend_base_url``), recomputed on
+ * every read. ``producer_agent_id`` / ``base_url`` / ``spec_url`` are null once
+ * the producer is removed; ``issuer_email`` once the issuer is removed.
+ */
+export type DesktopAgentApiKeyFacts = {
+    producer_agent_id?: (string | null);
+    producer_name?: (string | null);
+    issuer_email?: (string | null);
+    base_url?: (string | null);
+    spec_url?: (string | null);
+    expires_at?: (string | null);
+};
+
 export type DesktopCredentialList = {
     items: Array<DesktopCredentialListItem>;
 };
@@ -3668,6 +3854,8 @@ export type DesktopCredentialListItem = {
     revision: string;
     expires_at?: (number | string | null);
     user_workspace_id?: (string | null);
+    key_status?: (string | null);
+    agent_api?: (DesktopAgentApiKeyFacts | null);
 };
 
 export type relation = 'owned' | 'shared';
@@ -3690,10 +3878,11 @@ export type DesktopCredentialMaterializeResponse = {
 
 export type DesktopCredentialRefusal = {
     id: string;
-    reason: 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type';
+    reason: 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type' | 'key_revoked' | 'key_expired' | 'key_paused';
+    key_status?: (string | null);
 };
 
-export type reason2 = 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type';
+export type reason2 = 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type' | 'key_revoked' | 'key_expired' | 'key_paused';
 
 export type DesktopMaterializedCredential = {
     id: string;
@@ -8664,18 +8853,18 @@ export type AgentApiCreateAgentApiKeyData = {
 
 export type AgentApiCreateAgentApiKeyResponse = (AgentApiKeyCreated);
 
-export type AgentApiListAgentApiKeysData = {
+export type AgentApiListAgentApiAccessData = {
     agentId: string;
 };
 
-export type AgentApiListAgentApiKeysResponse = (AgentApiKeysPublic);
+export type AgentApiListAgentApiAccessResponse = (AgentApiAccessList);
 
-export type AgentApiDeleteAgentApiKeyData = {
+export type AgentApiRevokeAgentApiKeyData = {
     agentId: string;
     keyId: string;
 };
 
-export type AgentApiDeleteAgentApiKeyResponse = (Message);
+export type AgentApiRevokeAgentApiKeyResponse = (AgentApiKeyPublic);
 
 export type AgentApiPublicConsumerSpecData = {
     agentId: string;
@@ -9837,6 +10026,30 @@ export type CliAccountAgentApiCallData = {
 
 export type CliAccountAgentApiCallResponse = (AccountAgentApiCallResult);
 
+export type CliAccountAgentApiAccessData = {
+    agentId: string;
+};
+
+export type CliAccountAgentApiAccessResponse = (AccountAgentApiAccess);
+
+export type CliAccountAgentApiIssueKeyData = {
+    requestBody: AccountAgentApiKeyIssueBody;
+};
+
+export type CliAccountAgentApiIssueKeyResponse = (AccountAgentApiKeyIssued);
+
+export type CliAccountAgentApiRevokeKeyData = {
+    requestBody: AccountAgentApiKeyRevokeBody;
+};
+
+export type CliAccountAgentApiRevokeKeyResponse = (AgentApiKeyPublic);
+
+export type CliAccountAgentApiSetScopesData = {
+    requestBody: AccountAgentApiScopesBody;
+};
+
+export type CliAccountAgentApiSetScopesResponse = (AccountAgentApiScopesResult);
+
 export type CliAccountRestartEnvData = {
     agentId: string;
 };
@@ -10135,6 +10348,24 @@ export type CredentialsRevealAgentApiKeyData = {
 };
 
 export type CredentialsRevealAgentApiKeyResponse = (AgentApiKeyRevealResponse);
+
+export type CredentialsReadAgentApiKeyData = {
+    id: string;
+};
+
+export type CredentialsReadAgentApiKeyResponse = (AgentApiKeyHolderInfo);
+
+export type CredentialsRotateAgentApiKeyData = {
+    id: string;
+};
+
+export type CredentialsRotateAgentApiKeyResponse = (AgentApiKeyRotateResponse);
+
+export type CredentialsReadAgentApiKeySpecData = {
+    id: string;
+};
+
+export type CredentialsReadAgentApiKeySpecResponse = (unknown);
 
 export type CredentialsReadAgentApiConnectionData = {
     id: string;
@@ -10552,9 +10783,14 @@ export type ExternalListExternalSessionMessagesResponse = (Array<MessagePublic>)
 
 export type ExternalGetAccountConfigResponse = (AccountConfigResponse);
 
+export type ExternalListCredentialsData = {
+    include?: (string | null);
+};
+
 export type ExternalListCredentialsResponse = (DesktopCredentialList);
 
 export type ExternalMaterializeCredentialsData = {
+    include?: (string | null);
     requestBody: DesktopCredentialMaterializeRequest;
 };
 

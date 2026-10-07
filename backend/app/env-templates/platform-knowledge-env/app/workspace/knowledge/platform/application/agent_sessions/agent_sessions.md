@@ -183,7 +183,7 @@ Session Initiators:
   Server Channel       → ChannelInboundService → ChannelIngestionService (Google Chat webhook, Email poll)
   A2A client           → A2ARequestHandler → SessionService.send_session_message()
   MCP client           → MCPRequestHandler → SessionService.get_or_create_mcp_session()
-  Agent handover tool  → create_agent_task → InputTaskService → SessionService
+  Agent handover tool  → tasks_create (cinna server) → InputTaskService → SessionService
 
 Message Flow:
   User sends message
@@ -209,7 +209,7 @@ Message Flow:
 - **Session title** — Auto-generated from first message content; shows animated "Generating..." placeholder while the title is being created (only when the session has at least one message); shows the static muted label "New session" when no messages exist yet
 - **Mode indicator** — Color-coded dot: orange for Building mode, blue for Conversation mode
 - **Integration badges** — `A2A` badge (purple) when `integration_type="a2a"`; a violet "Via Identity — {caller}" badge for an identity-routed session (App MCP or a channel — matched by the `channel_` prefix). The `Email` badge (indigo) code path still exists but checks the literal value `integration_type==="email"`, which nothing sets any more since email became a channel transport in Phase 4 — a plain, non-identity-routed channel session (Google Chat or Email) currently renders **no** integration badge at all. See [Email Integration](../email_integration/email_integration.md) and [Server Channels](../server_channels/server_channels.md).
-- **Tasks button** — Visible when session has sub-tasks (created via `create_agent_task` tool). Shows colored badge counts per status: violet (new), blue (running), amber (needs input), red (error), green (completed). Toggles sub-tasks side panel
+- **Tasks button** — Visible when session has sub-tasks (created via the `tasks_create` tool). Shows colored badge counts per status: violet (new), blue (running), amber (needs input), red (error), green (completed). Toggles sub-tasks side panel
 - **App button** — Opens the Environment Panel showing agent workspace files. Displays three distinct states:
   - "Activating…" (spinner) — environment is `activating`, `starting`, or `rebuilding`
   - "Suspended" (muted static label, clickable) — environment is `suspended` or `stopped`; tooltip notes it will wake on next message
@@ -251,7 +251,7 @@ Message Flow:
 - **[A2A Protocol](../a2a_integration/a2a_protocol/a2a_protocol.md)** — External A2A clients create and manage sessions via JSON-RPC; session maps 1:1 to A2A Task concept
 - **[MCP Integration](../mcp_integration/agent_mcp_connector.md)** — MCP connector calls create platform sessions; `MCPSessionMeta` tracks authenticated MCP user identity
 - **[Guest Sharing](../../agents/guest_sharing/guest_sharing.md)** — Guest sessions use owner's environment with `guest_share_id` scoping; conversation mode only; token-based unauthenticated access to an agent install
-- **[Agent Handover](../../agents/agent_handover/agent_handover.md)** — Agent's `create_agent_task` tool creates sub-tasks that spawn child sessions; visible in Sub-tasks panel
+- **[Agent Handover](../../agents/agent_handover/agent_handover.md)** — Agent's `tasks_create` tool (with an `assignee`) creates sub-tasks that spawn child sessions; visible in Sub-tasks panel
 - **[Agent Activities](../agent_activities/agent_activities.md)** — Session state changes (streaming completed, result state set) generate activity feed entries
 - **[Agent Environment Data Management](../../agents/agent_environment_data_management/agent_environment_data_management.md)** — Prompt sync happens after building mode sessions complete
 - **[Agent Improvement Requests](../agent_improvement_requests/agent_improvement_requests.md)** — The session's "Improve Agent" menu item and the `/session-improve` command both take a one-time, consent-gated frozen snapshot of the session's messages (never a live read) and hand it to the agent's owner; the source session itself is never modified or re-read afterwards

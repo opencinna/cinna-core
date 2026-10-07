@@ -23,12 +23,23 @@ ownership / ``require_developer`` / superuser check still applies. The denylist
 exists to remove **categories** the account token must never touch even if the
 user could touch them in the UI — i.e. it is strictly *more* restrictive than the
 user's own rights, never less.
+
+Besides segment prefixes, ``EXCLUDED_PATTERNS`` (any method) and
+``EXCLUDED_WRITE_PATTERNS`` (one method) deny single routes by full regex match
+on the API-relative path: routes whose response carries a secret value
+(issued API keys, minted bearer tokens, raw workspace files).
+
+Matching runs on the percent-DECODED path, because that is what the router
+sees (httpx decodes ``%63redentials`` to ``credentials`` before dispatch).
 """
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote
 
-from app.core.config import settings
+# ``app.core.config.settings`` is imported lazily (``_api_base``) so the pure
+# ``route_refusal`` can be imported by the repo-root platform-knowledge sync
+# script, which builds the API-reference catalogue without backend Settings.
 
 
 class ApiProxyDenied(Exception):
@@ -97,6 +108,70 @@ STREAMING_DENY: tuple[str, ...] = (
     "agents/create-flow",
 )
 
+# Single routes denied by FULL regex match on the API-relative path (no
+# ``/api/v1/`` prefix, no trailing slash), any method. Each is a route whose
+# response carries a secret value; see the deny sweep in
+# docs/plans/agent_api_issued_keys_cli_plan.md §2a.
+AGENT_API_KEYS_PATTERN = r"agents/[^/]+/agent-api/keys(?:/.*)?"
+EXCLUDED_PATTERNS: tuple[str, ...] = (
+    # Issued API keys: issue returns a self-issued value; rotate starts a
+    # countdown on a value the CLI cannot deliver. Use `cinna agent-api access`.
+    AGENT_API_KEYS_PATTERN,
+    # Raw workspace files: credentials/credentials.json holds every linked
+    # credential's decrypted value, and a folder download zips it.
+    r"environments/[^/]+/workspace/(?:download|view-file)(?:/.*)?",
+    # Same files through a dashboard block (the file path rides the query).
+    r"dashboards/[^/]+/blocks/[^/]+/env-file",
+)
+
+# Share links: every response carries the share URL (the share token) and the
+# security code, so the whole surface is web-only (team-lead decision, C18).
+SHARE_PATTERNS: tuple[str, ...] = (
+    r"agents/[^/]+/guest-shares(?:/.*)?",
+    r"agents/[^/]+/webapp-shares(?:/.*)?",
+    # Token-keyed guest logins: answer a guest session JWT.
+    r"guest-share/[^/]+/auth",
+    r"webapp-share/[^/]+/auth",
+)
+
+# (method, pattern) pairs: routes that mint a bearer secret and return it once.
+# Their listings and updates return prefixes only and stay reachable.
+EXCLUDED_WRITE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("POST", r"agents/[^/]+/access-tokens"),  # A2A access token
+    ("POST", r"agents/[^/]+/mcp-connectors/[^/]+/tokens"),  # MCP direct token
+    ("POST", r"agents/[^/]+/acp-connectors/[^/]+/tokens"),  # ACP token
+    ("POST", r"agents/[^/]+/webhooks/(?:git-source|script|session)"),
+    ("POST", r"agents/[^/]+/webhooks/[^/]+/regenerate-token"),
+    ("POST", r"tasks/[^/]+/triggers/webhook"),
+    ("POST", r"tasks/[^/]+/triggers/[^/]+/regenerate-token"),
+)
+
+# The dedicated CLI verb that replaces a denied route, by pattern.
+DEDICATED_VERBS: dict[str, str] = {
+    AGENT_API_KEYS_PATTERN: "cinna agent-api access",
+}
+
+_AGENT_API_KEYS_MESSAGE = (
+    "Issued API keys are managed with 'cinna agent-api access'; the escape "
+    "hatch never carries key values."
+)
+_SECRET_ROUTE_MESSAGE = (
+    "The escape hatch never returns secret values (tokens, keys, raw workspace "
+    "files). Use the web app for this action."
+)
+_SHARE_ROUTE_MESSAGE = (
+    "Share links and security codes are managed in the web app; the escape "
+    "hatch never returns them."
+)
+_PREFIX_MESSAGE = (
+    "The escape hatch may not call '{path}' (credential/user-management/admin/"
+    "CLI/auth surfaces are excluded). Use a dedicated command if available."
+)
+_STREAMING_MESSAGE = (
+    "Streaming/long-running routes (create-flow, SSE, exec) are not supported "
+    "via the escape hatch."
+)
+
 # Allowed HTTP methods for the buffered escape hatch.
 ALLOWED_METHODS: frozenset[str] = frozenset(
     {"GET", "POST", "PUT", "PATCH", "DELETE"}
@@ -106,23 +181,19 @@ ALLOWED_METHODS: frozenset[str] = frozenset(
 # only (no ``..``, no scheme, no query — query is carried out-of-band).
 _SAFE_PATH_RE = re.compile(r"^/api/v1(?:/[A-Za-z0-9._~%{}-]+)*/?$")
 
-
-def _excluded_prefixes() -> tuple[str, ...]:
-    """Excluded prefixes with the ``API_V1_STR`` prefix applied once."""
-    base = settings.API_V1_STR.rstrip("/")
-    return tuple(f"{base}/{p}" for p in EXCLUDED_PREFIXES)
-
-
-def _streaming_prefixes() -> tuple[str, ...]:
-    base = settings.API_V1_STR.rstrip("/")
-    return tuple(f"{base}/{p}" for p in STREAMING_DENY)
+# Control characters after decoding. Starlette routes a trailing ``%0A``
+# (``$`` matches before a final newline) while ``re.fullmatch`` misses it,
+# which would reopen every excluded pattern. A plain space is allowed: route
+# templates never end a literal segment in a space, so ``keys%20`` reaches no
+# key route (checked against the app's route table).
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
-def _user_allow_exact() -> frozenset[tuple[str, str]]:
-    base = settings.API_V1_STR.rstrip("/")
-    return frozenset(
-        (method, f"{base}/{path}") for method, path in USER_PATH_ALLOW_EXACT
-    )
+def _api_base() -> str:
+    """``settings.API_V1_STR`` without a trailing slash (lazy import)."""
+    from app.core.config import settings
+
+    return settings.API_V1_STR.rstrip("/")
 
 
 def _segment_prefix_match(path: str, prefix: str) -> bool:
@@ -132,6 +203,50 @@ def _segment_prefix_match(path: str, prefix: str) -> bool:
     ``/api/v1/users-public`` does NOT (segment boundary respected).
     """
     return path == prefix or path.startswith(prefix + "/")
+
+
+def route_refusal(method: str, relative_path: str) -> ApiProxyDenied | None:
+    """The refusal for a well-formed ``(method, path)``, or None when allowed.
+
+    ``relative_path`` is API-relative (``agents/{id}/...``: no ``/api/v1/``, no
+    trailing slash, already percent-decoded). Pure and settings-free, so the
+    API-reference catalogue marks exactly the routes this policy refuses.
+    """
+    method = (method or "").upper()
+    path = relative_path.strip("/")
+
+    # Streaming / exec / create-flow routes the buffered proxy can't represent.
+    if any(_segment_prefix_match(path, p) for p in STREAMING_DENY):
+        return ApiProxyDenied("excluded_method", _STREAMING_MESSAGE)
+
+    # Prefix denylist, after the exact user-path carve-outs.
+    if (method, path) in USER_PATH_ALLOW_EXACT:
+        return None
+    if any(_segment_prefix_match(path, p) for p in EXCLUDED_PREFIXES):
+        return ApiProxyDenied(
+            "excluded_path", _PREFIX_MESSAGE.format(path=f"/{path}")
+        )
+
+    # Single routes whose response carries a secret value.
+    if re.fullmatch(AGENT_API_KEYS_PATTERN, path):
+        return ApiProxyDenied("excluded_path", _AGENT_API_KEYS_MESSAGE)
+    if any(re.fullmatch(pattern, path) for pattern in EXCLUDED_PATTERNS):
+        return ApiProxyDenied("excluded_path", _SECRET_ROUTE_MESSAGE)
+    if any(re.fullmatch(pattern, path) for pattern in SHARE_PATTERNS):
+        return ApiProxyDenied("excluded_path", _SHARE_ROUTE_MESSAGE)
+    for denied_method, pattern in EXCLUDED_WRITE_PATTERNS:
+        if method == denied_method and re.fullmatch(pattern, path):
+            return ApiProxyDenied("excluded_path", _SECRET_ROUTE_MESSAGE)
+    return None
+
+
+def dedicated_verb(relative_path: str) -> str | None:
+    """The CLI verb that replaces a denied route, when one exists."""
+    path = relative_path.strip("/")
+    for pattern, verb in DEDICATED_VERBS.items():
+        if re.fullmatch(pattern, path):
+            return verb
+    return None
 
 
 def assert_api_proxy_allowed(method: str, normalized_path: str) -> None:
@@ -144,14 +259,26 @@ def assert_api_proxy_allowed(method: str, normalized_path: str) -> None:
     caller guarantees this; we re-assert defensively here).
     """
     method = (method or "").upper()
-    path = normalized_path.rstrip("/") or normalized_path
+    # Match on the decoded path: the inner dispatch decodes percent-escapes
+    # before routing, so an encoded segment must not slip past the denylist.
+    decoded_path = unquote(normalized_path)
 
     # 1. Shape / safety — re-assert the caller's contract defensively.
-    if ".." in normalized_path or not _SAFE_PATH_RE.match(normalized_path):
+    if (
+        ".." in decoded_path
+        # A ``.`` segment is refused, never collapsed.
+        or "." in decoded_path.split("/")
+        or not _SAFE_PATH_RE.match(normalized_path)
+        or _CONTROL_CHARS_RE.search(decoded_path)
+        # A '%' left after one decode is double encoding.
+        or "%" in decoded_path
+        or "//" in decoded_path
+    ):
         raise ApiProxyDenied(
             "malformed_path",
             f"Malformed proxy path '{normalized_path}'. Paths must be relative to "
-            "the API root, contain no '..' segments, and target /api/v1.",
+            "the API root, target /api/v1, and contain no control characters, "
+            "'.'/'..' segments, '//' or double encoding.",
         )
 
     # 2. Method allowlist (the proxy is buffered HTTP only).
@@ -162,27 +289,12 @@ def assert_api_proxy_allowed(method: str, normalized_path: str) -> None:
             f"(allowed: {', '.join(sorted(ALLOWED_METHODS))}).",
         )
 
-    # 3. Streaming / exec / create-flow routes the buffered proxy can't represent.
-    for prefix in _streaming_prefixes():
-        if _segment_prefix_match(path, prefix):
-            raise ApiProxyDenied(
-                "excluded_method",
-                "Streaming/long-running routes (create-flow, SSE, exec) are not "
-                "supported via the escape hatch.",
-            )
-
-    # 4. Denylist — but allow the exact user-path carve-outs first.
-    if (method, path) in _user_allow_exact():
-        return
-
-    for prefix in _excluded_prefixes():
-        if _segment_prefix_match(path, prefix):
-            raise ApiProxyDenied(
-                "excluded_path",
-                f"The escape hatch may not call '{normalized_path}' "
-                "(credential/user-management/admin/CLI/auth surfaces are excluded). "
-                "Use a dedicated command if available.",
-            )
+    # 3. Streaming routes, the prefix denylist and the single secret routes.
+    base = _api_base() + "/"
+    relative = decoded_path[len(base):] if decoded_path.startswith(base) else ""
+    refusal = route_refusal(method, relative)
+    if refusal is not None:
+        raise refusal
 
     # Default-allow: every other control-plane route is reachable, still subject
     # to the inner route's own per-route authorization.

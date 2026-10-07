@@ -37,6 +37,7 @@ from typing import Any, Literal
 
 from sqlmodel import Session, col, select
 
+from app.models.agent_api.agent_api_token import AgentApiKeyStatus
 from app.models.agents.agent import Agent
 from app.models.credentials.credential import (
     Credential,
@@ -66,6 +67,7 @@ from app.services.credentials.credential_provisioner import (
     credential_type_value,
     spec_slot,
 )
+from app.services.agent_api.agent_api_key_status import key_states_by_credential
 from app.services.credentials.credentials_service import CredentialsService
 
 logger = logging.getLogger(__name__)
@@ -671,7 +673,9 @@ class SkillSlotIndex:
     with the agent owner. A share row alone is not enough: older sharing-disable
     paths could leave it behind. Otherwise the reason is ``not_linked`` (no
     candidate), ``not_configured`` (a placeholder) or
-    ``access_revoked``.
+    ``access_revoked``. An issued agent API key is usable only while its key
+    status is ``active``: a revoked, expired, paused or orphaned key leaves its
+    slot ``access_revoked`` (``inactive_key_ids``).
 
     The same reasons judge the ``(slot, type)`` pairs a local or plugin skill
     declares (:meth:`issues_for_declarations`). Those have no revision, so they
@@ -687,12 +691,14 @@ class SkillSlotIndex:
         linked: list[Credential],
         shared_ids: set[uuid.UUID],
         bundle_claimed_ids: set[uuid.UUID],
+        inactive_key_ids: set[uuid.UUID] | None = None,
     ) -> None:
         self._owner_id = owner_id
         self._specs_by_link = specs_by_link
         self._linked = linked
         self._shared_ids = shared_ids
         self._bundle_claimed_ids = frozenset(bundle_claimed_ids)
+        self._inactive_key_ids = frozenset(inactive_key_ids or ())
 
     @classmethod
     def build_for_agent(
@@ -768,6 +774,7 @@ class SkillSlotIndex:
             bundle_claimed_ids=bundle_claimed_credential_ids(
                 session, agent=agent, linked_credentials=linked
             ),
+            inactive_key_ids=_inactive_issued_key_ids(session, linked),
         )
 
     def specs_for_link(self, link_id: uuid.UUID) -> list[ParsedCredentialSpec]:
@@ -857,9 +864,35 @@ class SkillSlotIndex:
     def _usable(self, credential: Credential) -> bool:
         if credential.is_placeholder:
             return False
+        if credential.id in self._inactive_key_ids:
+            return False
         if credential.owner_id == self._owner_id:
             return True
         return bool(credential.allow_sharing) and credential.id in self._shared_ids
+
+
+def _inactive_issued_key_ids(
+    session: Session, linked: list[Credential]
+) -> set[uuid.UUID]:
+    """Linked issued agent API keys whose key status is not ``active``.
+
+    One batched read over the ``agent_api`` credentials; connections (no
+    external key) are absent from the key states and stay usable.
+    """
+    agent_api_ids = [
+        credential.id
+        for credential in linked
+        if credential_type_value(credential) == CredentialType.AGENT_API.value
+    ]
+    if not agent_api_ids:
+        return set()
+    return {
+        credential_id
+        for credential_id, state in key_states_by_credential(
+            session, agent_api_ids
+        ).items()
+        if state.status != AgentApiKeyStatus.ACTIVE
+    }
 
 
 def _shared_with(

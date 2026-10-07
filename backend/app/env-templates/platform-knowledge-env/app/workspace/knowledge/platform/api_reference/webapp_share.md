@@ -13,6 +13,8 @@ Auto-generated from OpenAPI spec. Tag: `webapp-share`
 ## POST `/api/v1/webapp-share/{token}/auth`
 **Webapp Share Authenticate**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `token`: string
 

@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-keys`
 ## GET `/api/v1/admin/ai-credentials/keys/`
 **List Ai Keys**
 
+> Not available via `cinna api` (excluded_path).
+
 **Query parameters:**
 - `q`: string | null
 - `status`: array | null
@@ -20,6 +22,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-keys`
 ## DELETE `/api/v1/admin/ai-credentials/keys/{membership_id}`
 **Revoke Ai Key**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `membership_id`: uuid
 
@@ -33,6 +37,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-keys`
 ## POST `/api/v1/admin/ai-credentials/keys/{membership_id}/rotate`
 **Rotate Ai Key**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `membership_id`: uuid
 
@@ -43,6 +49,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-keys`
 ## POST `/api/v1/admin/ai-credentials/keys/{membership_id}/default`
 **Set Ai Key As Default**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `membership_id`: uuid
 
@@ -52,6 +60,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-ai-keys`
 
 ## POST `/api/v1/admin/ai-credentials/keys/{membership_id}/retry`
 **Retry Ai Key**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `membership_id`: uuid

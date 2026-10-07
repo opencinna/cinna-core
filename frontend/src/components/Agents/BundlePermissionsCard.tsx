@@ -42,6 +42,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { agentApiAccessQueryKey } from "@/hooks/useAgentApiKeys"
 import useCustomToast from "@/hooks/useCustomToast"
 import { cn } from "@/lib/utils"
 
@@ -167,7 +168,7 @@ export function BundlePermissionsCard({
       })
       for (const producerId of touchedProducerIds) {
         queryClient.invalidateQueries({
-          queryKey: ["agentApiGrants", producerId],
+          queryKey: agentApiAccessQueryKey(producerId),
         })
       }
       if (failures.length > 0) {

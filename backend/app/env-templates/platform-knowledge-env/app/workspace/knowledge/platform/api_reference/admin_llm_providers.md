@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 ## POST `/api/v1/admin/llm-providers/`
 **Create Managed Ai Credential**
 
+> Not available via `cinna api` (excluded_path).
+
 **Request body** (`ManagedAICredentialCreate`):
   - `name`: string (required)
   - `type`: AICredentialType (required)
@@ -28,6 +30,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 ## GET `/api/v1/admin/llm-providers/`
 **List Managed Ai Credentials**
 
+> Not available via `cinna api` (excluded_path).
+
 **Query parameters:**
 - `managed_by_id`: string | null
 - `target_user_id`: string | null
@@ -36,6 +40,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 
 ## GET `/api/v1/admin/llm-providers/{managed_credential_id}`
 **Get Managed Ai Credential**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `managed_credential_id`: uuid
@@ -46,6 +52,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 
 ## PATCH `/api/v1/admin/llm-providers/{managed_credential_id}`
 **Update Managed Ai Credential**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `managed_credential_id`: uuid
@@ -75,6 +83,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 ## DELETE `/api/v1/admin/llm-providers/{managed_credential_id}`
 **Delete Managed Ai Credential**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `managed_credential_id`: uuid
 
@@ -88,6 +98,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 ## POST `/api/v1/admin/llm-providers/{managed_credential_id}/set-default`
 **Set Managed Ai Credential Default**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `managed_credential_id`: uuid
 
@@ -97,6 +109,8 @@ Auto-generated from OpenAPI spec. Tag: `admin-llm-providers`
 
 ## POST `/api/v1/admin/llm-providers/test-connection`
 **Test Managed Ai Credential Connection**
+
+> Not available via `cinna api` (excluded_path).
 
 **Query parameters:**
 - `managed_credential_id`: string | null

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, Share2 } from "lucide-react"
-import { useEffect, useState } from "react"
+import { type ReactNode, useEffect, useState } from "react"
 import type { CredentialPublic } from "@/client"
 import { CredentialsService } from "@/client"
 import { ListRowGroup } from "@/components/Common/ListRow"
@@ -43,9 +43,15 @@ import { BundleUsageRow, SkillUsageRow } from "./CredentialUsageRows"
 
 interface CredentialSharingProps {
   credential: CredentialPublic
+  /**
+   * Optional first line of the card body — a type-specific steer (the
+   * ``agent_api`` connection's "give them a key instead"). Other types pass
+   * nothing.
+   */
+  hint?: ReactNode
 }
 
-export function CredentialSharing({ credential }: CredentialSharingProps) {
+export function CredentialSharing({ credential, hint }: CredentialSharingProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { isAgentUser } = useRole()
@@ -257,6 +263,7 @@ export function CredentialSharing({ credential }: CredentialSharingProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {hint}
         {allowSharing && isLocallyDeliverableCredentialType(credential.type) && (
           <div className="flex items-start justify-between gap-4">
             <div><p className="text-sm font-medium">Allow use on recipients’ computers</p>

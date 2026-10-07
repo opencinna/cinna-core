@@ -5,12 +5,16 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 ## GET `/api/v1/ai-credentials/`
 **List Ai Credentials**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `AICredentialsPublic`
 
 ---
 
 ## POST `/api/v1/ai-credentials/`
 **Create Ai Credential**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`AICredentialCreate`):
   - `name`: string (required)
@@ -27,10 +31,14 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 ## GET `/api/v1/ai-credentials/provisioning`
 **List My Key Provisionings**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## GET `/api/v1/ai-credentials/resolve-default/{sdk_engine}`
 **Resolve Default Credential**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `sdk_engine`: string
@@ -39,6 +47,8 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 
 ## POST `/api/v1/ai-credentials/test-connection`
 **Test Ai Credential Connection**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`AICredentialTestRequest`):
   - `type`: AICredentialType (required)
@@ -53,6 +63,8 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 ## GET `/api/v1/ai-credentials/{credential_id}`
 **Get Ai Credential**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `credential_id`: uuid
 
@@ -62,6 +74,8 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 
 ## PATCH `/api/v1/ai-credentials/{credential_id}`
 **Update Ai Credential**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `credential_id`: uuid
@@ -80,6 +94,8 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 ## DELETE `/api/v1/ai-credentials/{credential_id}`
 **Delete Ai Credential**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `credential_id`: uuid
 
@@ -93,6 +109,8 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 ## GET `/api/v1/ai-credentials/{credential_id}/deletion-impact`
 **Get Ai Credential Deletion Impact**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `credential_id`: uuid
 
@@ -103,6 +121,8 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 ## POST `/api/v1/ai-credentials/{credential_id}/set-default`
 **Set Ai Credential Default**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `credential_id`: uuid
 
@@ -112,6 +132,8 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 
 ## GET `/api/v1/ai-credentials/{credential_id}/affected-environments`
 **Get Affected Environments**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `credential_id`: uuid

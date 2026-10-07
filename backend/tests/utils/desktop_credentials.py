@@ -30,11 +30,20 @@ def desktop_session(
 
 
 def list_desktop_credentials(
-    client: TestClient, headers: dict[str, str], etag: str | None = None
+    client: TestClient,
+    headers: dict[str, str],
+    etag: str | None = None,
+    include: str | None = None,
 ):
-    """GET /external/credentials. Returns the raw response (callers check 200/304)."""
+    """GET /external/credentials. Returns the raw response (callers check 200/304).
+
+    ``include`` is the opt-in query value (e.g. ``"agent_api_keys"``).
+    """
     extra = {"If-None-Match": etag} if etag else {}
-    return client.get(DESKTOP_CREDENTIALS_URL, headers={**headers, **extra})
+    params = {"include": include} if include else None
+    return client.get(
+        DESKTOP_CREDENTIALS_URL, headers={**headers, **extra}, params=params
+    )
 
 
 def materialize_desktop_credentials(
@@ -42,11 +51,13 @@ def materialize_desktop_credentials(
     headers: dict[str, str],
     credential_ids: list[str],
     include_current_user: bool = False,
+    include: str | None = None,
 ) -> dict:
     """POST /external/credentials/materialize, asserting 200 + no-store."""
     r = client.post(
         MATERIALIZE_URL,
         headers=headers,
+        params={"include": include} if include else None,
         json={
             "credential_ids": credential_ids,
             "include_current_user": include_current_user,

@@ -366,8 +366,18 @@ def read_agent_credentials(
     # Get credentials via service
     credentials = CredentialsService.get_agent_credentials(session=session, agent_id=id)
 
+    from app.models.credentials.credential import CredentialType
+    from app.services.agent_api.agent_api_key_status import (
+        key_states_by_credential,
+    )
+
+    key_states = key_states_by_credential(
+        session,
+        [c.id for c in credentials if c.type == CredentialType.AGENT_API],
+    )
     public = []
     for credential in credentials:
+        key_state = key_states.get(credential.id)
         credential_data = CredentialsService.decrypt_credential_data(
             session=session, credential=credential
         )
@@ -397,6 +407,9 @@ def read_agent_credentials(
                 "is_placeholder": credential.is_placeholder,
                 "placeholder_source_id": credential.placeholder_source_id,
                 "status": status,
+                "agent_api_key_status": (
+                    key_state.status.value if key_state is not None else None
+                ),
             }
         )
     return CredentialsPublic(data=public, count=len(public))

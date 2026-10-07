@@ -26,12 +26,16 @@ Auto-generated from OpenAPI spec. Tag: `server-config`
 ## GET `/api/v1/admin/server-config`
 **Get Server Config**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `ServerConfig`
 
 ---
 
 ## PUT `/api/v1/admin/server-config`
 **Update Server Config**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`ServerConfigUpdate`):
   - `disclaimer_enabled`: boolean | null

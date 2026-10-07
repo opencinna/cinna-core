@@ -21,6 +21,8 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { AgentApiKeyStatusBadge } from "@/components/Credentials/AgentApiKeyStatusBadge"
+import { agentApiKeyStatusSentence } from "@/components/Credentials/agentApiKeyCopy"
 import {
   Tooltip,
   TooltipContent,
@@ -48,6 +50,8 @@ export interface CredentialCardModel {
   allow_sharing?: boolean
   share_count?: number
   status?: string | null
+  /** Issued agent_api keys only (owner rows): the key's status. */
+  agent_api_key_status?: string | null
   // Shared-only fields (only meaningful when is_shared).
   owner_email?: string | null
   shared_at?: string | null
@@ -165,6 +169,17 @@ export function CredentialCard({ credential }: CredentialCardProps) {
             <Badge variant="secondary">
               {getCredentialTypeLabel(credential.type)}
             </Badge>
+
+            {/* An issued key that no longer works (or is paused) says so here;
+                a working key shows nothing. */}
+            <AgentApiKeyStatusBadge
+              status={credential.agent_api_key_status}
+              sentence={
+                credential.agent_api_key_status
+                  ? agentApiKeyStatusSentence(credential.agent_api_key_status)
+                  : undefined
+              }
+            />
 
             {/* Incomplete badge — owner only (we never decrypt shared creds). */}
             {!isShared && isIncomplete && (

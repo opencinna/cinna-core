@@ -115,8 +115,8 @@ requests keep landing between two agents, redraw the boundary; never copy a scri
 over and what to pass, never which tool to call.
 
 *Locally:* a second agent is a sibling folder plus `handovers[]` (kit guide 09);
-agent APIs and connectors exist only in the cloud, so keep that boundary as a
-module (§3). *In the cloud:* `REST_API_BUILDING.md` builds the producer; consumers
+producers and connectors exist only in the cloud (a local agent can still call a
+producer through an issued key), so keep that boundary as a module (§3). *In the cloud:* `REST_API_BUILDING.md` builds the producer; consumers
 connect with `cinna connect agent-api`.
 
 ## 3. The credential lives in one producer; consumers hold a connection
@@ -159,22 +159,32 @@ def _read_contracts(client, domain):
   smoke-test each consumer from its own environment; (5) update this file in the
   same change.
 
-In each consumer, every call carries **two** things: the connection's bearer token
-("this agent may call") and the caller-identity header ("and I am this person").
-In the cloud, `credentials.agent_api_session("<slot>")` builds a session with both
-when the platform provided an identity. Reading `credentials.json` by hand, match
-the connection by `type == "agent_api"` **and** `producer_agent_id` — never by label
-or "the first one" — and read the identity header's name from its entry. A missing
-connection, a missing identity, or a 401 from a producer that answers per person is
-a **setup problem**: print the fix (`cinna connect agent-api --producer … --consumer
-…`) and exit 3. Never turn it into a question for the user, and never let a call go
-out anonymous — an anonymous answer carries the wrong permissions and looks right.
+What a consumer call carries depends on what it holds. A **connection** (one
+platform agent wired to another) carries two things: its bearer token ("this agent
+may call") and the caller-identity header ("and I am this person"). An **issued
+key** (an API key the producer's owner gave to a person) carries only its token:
+the identity is the key's recipient, so no identity header is sent or honoured.
+In the cloud, `credentials.agent_api_session("<slot>")` builds a session for either
+(with the identity header when the platform provided one); locally,
+`cinna_credentials.agent_api_session("<slot>")` does the same for an issued key
+the user attached in Cinna Desktop. Both send the token only to the producer's own
+origin. Reading `credentials.json` by hand, match by `service_uri` (the slot) or by
+`type == "agent_api"` **and** `producer_agent_id` — never by label or "the first
+one". A missing connection or key, a missing identity, an entry with
+`unavailable_reason` (`key_revoked`, `key_expired`, `key_paused`) or a 401 from a
+producer that answers per person is a **setup problem**: print the fix (connect the
+agents, or ask the producer's owner for a key) and exit 3. Never turn it into a
+question for the user, and never let a call go out anonymous — an anonymous answer
+carries the wrong permissions and looks right.
 
-*Locally:* there is no agent API. Keep the boundary as one module:
-`scripts/<system>_client.py` is the only file that reads the credential, holds the
-field constants and exposes a few functions, so it lifts into a producer when the
-agent goes to the cloud. *In the cloud:* `REST_API_BUILDING.md` — and never import
-one `agent_api/*.py` from another; shared code lives under `scripts/`.
+*Locally:* an agent can call a producer through an issued key, with the same
+`agent_api_session("<slot>")` call; the producer itself still lives only in the
+cloud. When the agent reads the external system directly instead, keep the
+boundary as one module: `scripts/<system>_client.py` is the only file that reads
+the credential, holds the field constants and exposes a few functions, so it lifts
+into a producer when the agent goes to the cloud. *In the cloud:*
+`REST_API_BUILDING.md` — and never import one `agent_api/*.py` from another;
+shared code lives under `scripts/`.
 
 ## 4. One rich payload per question; the model computes nothing
 

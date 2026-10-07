@@ -87,7 +87,7 @@ Scripts read them through the container SDK rather than by hand:
 
 - `credentials.by_slot("<slot>")` → the entry, or `None`
 - `credentials.require_slot("<slot>")` → the entry, or a `CredentialMissing` whose message names the slot and the fix — a sentence the agent can relay to the user verbatim
-- `credentials.agent_api_session("<slot>")` → a `requests.Session` for an `agent_api` connection, pre-loaded with the bearer token and the caller-identity header
+- `credentials.agent_api_session("<slot>")` → a `requests.Session` for an `agent_api` connection, pre-loaded with the bearer token and the caller-identity header; for an issued key the same call returns a bearer-only session (identity is bound to the key)
 
 When several linked credentials carry the same slot, the helpers prefer a filled
 entry over a placeholder, keeping file order among equally ready entries. If
@@ -288,9 +288,13 @@ When a user saves their locale/communication preferences (via `PATCH /users/me`)
 
 Because the block carries no secrets (only the owner's public identity and their own self-authored notes), it is intentionally exempt from the whitelist/redaction machinery and appears fully unredacted in `credentials/README.md`. The `## Current User` section in the README tells the agent who it is operating on behalf of and includes a one-line access snippet.
 
+### Issued API keys on cloud entries: `unavailable_reason` and `key_status`
+
+An issued `agent_api` key (see [Agent REST API — Issued Keys](../agent_api/agent_api.md#issued-keys)) syncs into `credentials.json` only for environments whose agent owner is the key's recipient. An **active** key is a normal entry with its token. A key that is not active is **not dropped**: it ships token-less with two top-level fields — `unavailable_reason` (`key_revoked` | `key_expired` | `key_paused`) and `key_status` (`revoked_by_issuer`, `producer_removed`, `issuer_removed`, `expired`, `api_disabled`, `external_access_paused`) — and `credential_data` cut to `{base_url, spec_url, label, producer_agent_id}`. `key_paused` recovers by itself; the other two do not. The SDK helpers raise an error naming the reason instead of returning a token, so an agent can tell the user what to fix. The same vocabulary is used on Desktop.
+
 ### Related synthetic entry: `owner_identity_token`
 
-`current_user` is not the only synthetic, host-computed entry. When an environment has at least one linked `agent_api` connection, a second reserved entry (`id="owner_identity"`, `type="owner_identity_token"`) is appended the same way — built host-side from the install owner, never stored, never redacted, never user-editable. It carries a short-lived signed token the agent sends on Agent REST API calls so the producer can identify the calling user (and apply per-user scopes). It appears unredacted in `credentials/README.md` (the token is meant to be sent on the wire, not hidden). Full detail lives in the agent_api feature docs — see [Agent REST API → Caller Identity & Producer Scopes](../agent_api/agent_api.md#caller-identity--producer-scopes).
+`current_user` is not the only synthetic, host-computed entry. When an environment has at least one linked `agent_api` **connection** (an issued key never triggers it — its identity is bound to the key), a second reserved entry (`id="owner_identity"`, `type="owner_identity_token"`) is appended the same way — built host-side from the install owner, never stored, never redacted, never user-editable. It carries a short-lived signed token the agent sends on Agent REST API calls so the producer can identify the calling user (and apply per-user scopes). It appears unredacted in `credentials/README.md` (the token is meant to be sent on the wire, not hidden). Full detail lives in the agent_api feature docs — see [Agent REST API → Caller Identity & Producer Scopes](../agent_api/agent_api.md#caller-identity--producer-scopes).
 
 ## Best Practices
 

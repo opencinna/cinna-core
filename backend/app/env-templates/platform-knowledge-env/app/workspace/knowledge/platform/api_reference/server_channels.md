@@ -13,15 +13,21 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 ## GET `/api/v1/admin/server-channels/channel-types`
 **List Channel Types**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## GET `/api/v1/admin/server-channels/auto-install-list`
 **List Auto Install Bundles**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## POST `/api/v1/admin/server-channels/auto-install-list`
 **Add Auto Install Bundle**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`AutoInstallBundleAdd`):
   - `bundle_uuid`: uuid (required)
@@ -31,6 +37,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 ## DELETE `/api/v1/admin/server-channels/auto-install-list/{bundle_uuid}`
 **Remove Auto Install Bundle**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `bundle_uuid`: uuid
 
@@ -39,10 +47,14 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 ## GET `/api/v1/admin/server-channels`
 **List Channels**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## POST `/api/v1/admin/server-channels`
 **Create Channel**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`ServerChannelCreate`):
   - `channel_type`: string (required)
@@ -63,6 +75,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 
 ## PUT `/api/v1/admin/server-channels/{channel_id}`
 **Update Channel**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `channel_id`: uuid
@@ -88,6 +102,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 ## DELETE `/api/v1/admin/server-channels/{channel_id}`
 **Delete Channel**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `channel_id`: uuid
 
@@ -95,6 +111,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 
 ## GET `/api/v1/admin/server-channels/{channel_id}/setup-instructions`
 **Get Setup Instructions**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `channel_id`: uuid
@@ -105,6 +123,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 
 ## POST `/api/v1/admin/server-channels/{channel_id}/test-outbound`
 **Test Outbound**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `channel_id`: uuid
@@ -121,6 +141,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 ## GET `/api/v1/admin/server-channels/{channel_id}/recent-senders`
 **List Recent Senders**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `channel_id`: uuid
 
@@ -128,6 +150,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 
 ## GET `/api/v1/admin/server-channels/{channel_id}/debug-events`
 **List Debug Events**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `channel_id`: uuid
@@ -139,6 +163,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 ## DELETE `/api/v1/admin/server-channels/{channel_id}/debug-events`
 **Clear Debug Events**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `channel_id`: uuid
 
@@ -149,6 +175,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 ## GET `/api/v1/admin/server-channels/{channel_id}/grants`
 **List Channel Grants**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `channel_id`: uuid
 
@@ -156,6 +184,8 @@ Auto-generated from OpenAPI spec. Tag: `server-channels`
 
 ## PUT `/api/v1/admin/server-channels/{channel_id}/grants`
 **Replace Channel Grants**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `channel_id`: uuid

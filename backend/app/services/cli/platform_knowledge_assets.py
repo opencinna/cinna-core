@@ -238,8 +238,41 @@ def _tag_title(tag: str) -> str:
     return tag.replace("-", " ").replace("_", " ").title()
 
 
+_API_PREFIX = "/api/v1/"
+
+
+def cinna_api_note(method: str, path: str) -> str | None:
+    """Catalogue note for a route the ``cinna api`` escape hatch refuses.
+
+    Driven by the hatch's own policy (``route_refusal``), so the catalogue can
+    never drift from what the proxy actually denies. Routes outside
+    ``/api/v1`` are not reachable through the hatch and carry no note.
+    """
+    from app.services.cli.account_api_proxy_policy import (
+        dedicated_verb,
+        route_refusal,
+    )
+
+    if not path.startswith(_API_PREFIX):
+        return None
+    relative = path[len(_API_PREFIX):]
+    refusal = route_refusal(method, relative)
+    if refusal is None:
+        return None
+    note = f"> Not available via `cinna api` ({refusal.reason})."
+    verb = dedicated_verb(relative)
+    if verb:
+        note += f" Use `{verb}`."
+    return note
+
+
 def generate_api_reference(spec: dict) -> dict[str, str]:
-    """Generate markdown content per OpenAPI tag. Returns {tag: markdown}."""
+    """Generate markdown content per OpenAPI tag. Returns {tag: markdown}.
+
+    Every route the ``cinna api`` escape hatch refuses is marked in place
+    (``cinna_api_note``) rather than dropped: the web app and other clients
+    still call it, and the agent should learn why the hatch refuses it.
+    """
     # Group endpoints by tag
     by_tag: dict[str, list[tuple[str, str, dict]]] = {}
     for path, methods in spec.get("paths", {}).items():
@@ -264,6 +297,10 @@ def generate_api_reference(spec: dict) -> dict[str, str]:
             if summary:
                 lines.append(f"**{summary}**")
             lines.append("")
+            note = cinna_api_note(method, path)
+            if note:
+                lines.append(note)
+                lines.append("")
 
             # Parameters
             params = op.get("parameters", [])
@@ -327,6 +364,10 @@ def api_reference_index(spec: dict, references: dict[str, str]) -> str:
         "",
         "Auto-generated from the backend OpenAPI specification.",
         "Each file below documents one API domain.",
+        "",
+        "Routes marked *Not available via `cinna api`* are refused by the "
+        "account CLI escape hatch (exit code 2); the note names the dedicated "
+        "`cinna` verb where one exists.",
         "",
         "| Domain | File | Endpoints |",
         "|--------|------|-----------|",

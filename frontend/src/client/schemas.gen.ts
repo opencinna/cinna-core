@@ -2164,6 +2164,50 @@ export const AccessTokenScopeSchema = {
     description: 'Scope for the token - determines session visibility.'
 } as const;
 
+export const AccountAgentApiAccessSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiAccessEntry'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        external_access_enabled: {
+            type: 'boolean',
+            title: 'External Access Enabled'
+        },
+        identity_enabled: {
+            type: 'boolean',
+            title: 'Identity Enabled'
+        },
+        scope_catalog: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiScope'
+            },
+            type: 'array',
+            title: 'Scope Catalog',
+            default: []
+        },
+        manage_url: {
+            type: 'string',
+            title: 'Manage Url'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count', 'external_access_enabled', 'identity_enabled', 'manage_url'],
+    title: 'AccountAgentApiAccess',
+    description: `Producer API access for \`\`cinna agent-api access list\`\`.
+
+The web access list (grants + issued keys per person, terminal keys
+included) plus the scope catalog and the web page that manages it. Never a
+key value.`
+} as const;
+
 export const AccountAgentApiCallBodySchema = {
     properties: {
         agent_id: {
@@ -2286,6 +2330,292 @@ route is path-free, consistent with the connect verbs). \`\`enabled\`\` defaults
 to \`\`True\`\` (the common case); pass \`\`False\`\` to disable.`
 } as const;
 
+export const AccountAgentApiKeyIssueBodySchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        issued_to_email: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Issued To Email'
+        },
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        },
+        expires_in_days: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 3650,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires In Days'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'AccountAgentApiKeyIssueBody',
+    description: `Issue a key on a producer — \`\`cinna agent-api access issue\`\`.
+
+The recipient is resolved server-side from \`\`issued_to_email\`\` (exact,
+case-insensitive, active users; None = the caller). \`\`scopes\`\` None leaves
+the grant as is; \`\`[]\`\` writes an explicit empty grant.`
+} as const;
+
+export const AccountAgentApiKeyIssuedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        },
+        agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        issued_to: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiKeyUser'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        status: {
+            '$ref': '#/components/schemas/AgentApiKeyStatus'
+        },
+        is_usable: {
+            type: 'boolean',
+            title: 'Is Usable'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        revoked_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revoked At'
+        },
+        rotated_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Rotated At'
+        },
+        linked_agent_count: {
+            type: 'integer',
+            title: 'Linked Agent Count',
+            default: 0
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        base_url: {
+            type: 'string',
+            title: 'Base Url'
+        },
+        spec_url: {
+            type: 'string',
+            title: 'Spec Url'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
+        },
+        issued_to_self: {
+            type: 'boolean',
+            title: 'Issued To Self'
+        },
+        credential_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Url'
+        },
+        unknown_scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Unknown Scopes',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'issued_to', 'read_only', 'is_active', 'status', 'is_usable', 'expires_at', 'last_used_at', 'created_at', 'base_url', 'spec_url', 'issued_to_self'],
+    title: 'AccountAgentApiKeyIssued',
+    description: `The issued key as the account CLI sees it. Never the value.
+
+Inherits \`\`AgentApiKeyPublic\`\` (which has no \`\`token\`\` field); a self-issue
+carries \`\`credential_url\`\`, the web page where the user reveals the value.`
+} as const;
+
+export const AccountAgentApiKeyRevokeBodySchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        key_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Key Id'
+        }
+    },
+    type: 'object',
+    required: ['agent_id', 'key_id'],
+    title: 'AccountAgentApiKeyRevokeBody',
+    description: 'Revoke an issued key — ``cinna agent-api access revoke`` (idempotent).'
+} as const;
+
 export const AccountAgentApiRefreshBodySchema = {
     properties: {
         agent_id: {
@@ -2303,6 +2633,76 @@ Maps to the producer \`\`POST /_refresh\`\` action: re-imports the agent's
 \`\`agent_api/\`\` modules to refresh the cached OpenAPI spec and re-parses
 \`\`policy.yaml\`\`. Returns the resulting status (never raises on a harvest
 failure — the status carries \`\`last_error\`\`).`
+} as const;
+
+export const AccountAgentApiScopesBodySchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        user_email: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Email'
+        },
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    required: ['agent_id', 'scopes'],
+    title: 'AccountAgentApiScopesBody',
+    description: `Set or remove a person's scopes — \`\`cinna agent-api access scopes\`\`.
+
+\`\`scopes\`\` is required but nullable: a list sets the \`\`(producer, user)\`\`
+grant to exactly that list, an explicit \`\`null\`\` removes the grant. It has
+no default so an omitted field can never silently delete a grant.`
+} as const;
+
+export const AccountAgentApiScopesResultSchema = {
+    properties: {
+        entry: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiAccessEntry'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        unknown_scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Unknown Scopes',
+            default: []
+        }
+    },
+    type: 'object',
+    title: 'AccountAgentApiScopesResult',
+    description: "The person's access after a scopes change (None when nothing is left)."
 } as const;
 
 export const AccountAgentCreateBodySchema = {
@@ -5052,6 +5452,46 @@ export const AgentAddonsPublicSchema = {
     description: 'Everything one agent can do beyond its prompt, in one list.'
 } as const;
 
+export const AgentApiAccessEntrySchema = {
+    properties: {
+        user: {
+            '$ref': '#/components/schemas/AgentApiKeyUser'
+        },
+        grant_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Grant Id'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
+        },
+        keys: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiKeyPublic'
+            },
+            type: 'array',
+            title: 'Keys',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['user'],
+    title: 'AgentApiAccessEntry',
+    description: 'One person with access to a producer: their grant and their keys.'
+} as const;
+
 export const AgentApiAccessGrantCreateSchema = {
     properties: {
         scopes: {
@@ -5168,6 +5608,34 @@ export const AgentApiAccessGrantsPublicSchema = {
     title: 'AgentApiAccessGrantsPublic'
 } as const;
 
+export const AgentApiAccessListSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiAccessEntry'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        external_access_enabled: {
+            type: 'boolean',
+            title: 'External Access Enabled'
+        },
+        identity_enabled: {
+            type: 'boolean',
+            title: 'Identity Enabled'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count', 'external_access_enabled', 'identity_enabled'],
+    title: 'AgentApiAccessList',
+    description: "The producer's API access surface: grants and issued keys per person."
+} as const;
+
 export const AgentApiConnectedAgentSchema = {
     properties: {
         id: {
@@ -5255,6 +5723,11 @@ export const AgentApiConnectionInfoSchema = {
             ],
             title: 'Producer Ui Color Preset'
         },
+        producer_owned_by_viewer: {
+            type: 'boolean',
+            title: 'Producer Owned By Viewer',
+            default: false
+        },
         base_url: {
             type: 'string',
             title: 'Base Url'
@@ -5326,10 +5799,28 @@ export const AgentApiKeyCreateSchema = {
             ],
             title: 'Label'
         },
-        subject_user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Subject User Id'
+        issued_to_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Issued To User Id'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         },
         scopes: {
             anyOf: [
@@ -5365,13 +5856,12 @@ export const AgentApiKeyCreateSchema = {
         }
     },
     type: 'object',
-    required: ['subject_user_id'],
     title: 'AgentApiKeyCreate',
-    description: `Request to mint an external API key on a producer agent (plan D9).
+    description: `Request to issue an API key on a producer agent.
 
 \`\`scopes\`\` is a convenience: it **upserts** the \`\`agent_api_access_grant\`\`
-for \`\`(producer, subject_user_id)\`\`. Scopes live on the grant, never on the
-key (plan D5) — the same row the producer's Access & Scopes card edits.`
+for \`\`(producer, recipient)\`\`. Scopes live on the grant, never on the key —
+the same row the producer's API access surface edits.`
 } as const;
 
 export const AgentApiKeyCreatedSchema = {
@@ -5394,8 +5884,15 @@ export const AgentApiKeyCreatedSchema = {
             title: 'Credential Id'
         },
         agent_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Agent Id'
         },
         label: {
@@ -5413,10 +5910,10 @@ export const AgentApiKeyCreatedSchema = {
             type: 'string',
             title: 'Token Prefix'
         },
-        subject: {
+        issued_to: {
             anyOf: [
                 {
-                    '$ref': '#/components/schemas/AgentApiKeySubject'
+                    '$ref': '#/components/schemas/AgentApiKeyUser'
                 },
                 {
                     type: 'null'
@@ -5430,6 +5927,9 @@ export const AgentApiKeyCreatedSchema = {
         is_active: {
             type: 'boolean',
             title: 'Is Active'
+        },
+        status: {
+            '$ref': '#/components/schemas/AgentApiKeyStatus'
         },
         is_usable: {
             type: 'boolean',
@@ -5459,13 +5959,49 @@ export const AgentApiKeyCreatedSchema = {
             ],
             title: 'Last Used At'
         },
+        revoked_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revoked At'
+        },
+        rotated_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Rotated At'
+        },
+        linked_agent_count: {
+            type: 'integer',
+            title: 'Linked Agent Count',
+            default: 0
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
             title: 'Created At'
         },
         token: {
-            type: 'string',
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Token'
         },
         base_url: {
@@ -5478,9 +6014,182 @@ export const AgentApiKeyCreatedSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'subject', 'read_only', 'is_active', 'is_usable', 'expires_at', 'last_used_at', 'created_at', 'token', 'base_url', 'spec_url'],
+    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'issued_to', 'read_only', 'is_active', 'status', 'is_usable', 'expires_at', 'last_used_at', 'created_at', 'base_url', 'spec_url'],
     title: 'AgentApiKeyCreated',
-    description: 'Returned on mint — carries the token value plus where to call it.'
+    description: 'Returned on issue. ``token`` only when issued to the caller themself.'
+} as const;
+
+export const AgentApiKeyHolderInfoSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        status: {
+            '$ref': '#/components/schemas/AgentApiKeyStatus'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
+        },
+        producer: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiKeyProducer'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        issuer: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiKeyUser'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes'
+        },
+        read_only: {
+            type: 'boolean',
+            title: 'Read Only'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        rotated_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Rotated At'
+        },
+        previous_valid_until: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Previous Valid Until'
+        },
+        issuer_saw_value: {
+            type: 'boolean',
+            title: 'Issuer Saw Value'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        spec_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Spec Url'
+        },
+        linked_agents: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiConnectedAgent'
+            },
+            type: 'array',
+            title: 'Linked Agents'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'token_prefix', 'status', 'service_uri', 'producer', 'issuer', 'scopes', 'read_only', 'expires_at', 'last_used_at', 'rotated_at', 'previous_valid_until', 'issuer_saw_value', 'base_url', 'spec_url', 'linked_agents'],
+    title: 'AgentApiKeyHolderInfo',
+    description: 'An issued key as its RECIPIENT (the credential owner) sees it.'
+} as const;
+
+export const AgentApiKeyProducerSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ui Color Preset'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'AgentApiKeyProducer',
+    description: 'The producer an issued key calls, as the recipient sees it.'
 } as const;
 
 export const AgentApiKeyPublicSchema = {
@@ -5503,8 +6212,15 @@ export const AgentApiKeyPublicSchema = {
             title: 'Credential Id'
         },
         agent_id: {
-            type: 'string',
-            format: 'uuid',
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Agent Id'
         },
         label: {
@@ -5522,10 +6238,10 @@ export const AgentApiKeyPublicSchema = {
             type: 'string',
             title: 'Token Prefix'
         },
-        subject: {
+        issued_to: {
             anyOf: [
                 {
-                    '$ref': '#/components/schemas/AgentApiKeySubject'
+                    '$ref': '#/components/schemas/AgentApiKeyUser'
                 },
                 {
                     type: 'null'
@@ -5539,6 +6255,9 @@ export const AgentApiKeyPublicSchema = {
         is_active: {
             type: 'boolean',
             title: 'Is Active'
+        },
+        status: {
+            '$ref': '#/components/schemas/AgentApiKeyStatus'
         },
         is_usable: {
             type: 'boolean',
@@ -5568,6 +6287,35 @@ export const AgentApiKeyPublicSchema = {
             ],
             title: 'Last Used At'
         },
+        revoked_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revoked At'
+        },
+        rotated_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Rotated At'
+        },
+        linked_agent_count: {
+            type: 'integer',
+            title: 'Linked Agent Count',
+            default: 0
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -5575,9 +6323,9 @@ export const AgentApiKeyPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'subject', 'read_only', 'is_active', 'is_usable', 'expires_at', 'last_used_at', 'created_at'],
+    required: ['id', 'credential_id', 'agent_id', 'label', 'token_prefix', 'issued_to', 'read_only', 'is_active', 'status', 'is_usable', 'expires_at', 'last_used_at', 'created_at'],
     title: 'AgentApiKeyPublic',
-    description: 'One external key as listed on the producer card. Never the value.'
+    description: 'One issued key as the ISSUER sees it. Never the value.'
 } as const;
 
 export const AgentApiKeyRevealResponseSchema = {
@@ -5590,13 +6338,45 @@ export const AgentApiKeyRevealResponseSchema = {
     type: 'object',
     required: ['token'],
     title: 'AgentApiKeyRevealResponse',
-    description: `The value of an external key, returned by the dedicated reveal endpoint.
+    description: `The value of an issued key, returned by the dedicated reveal endpoint.
 
-The **only** way to read a key back after mint (plan D4): \`\`with-data\`\`
-deliberately strips it, so every reveal goes through one audited call.`
+The way to read a key back after issue: \`\`with-data\`\` deliberately strips
+it, so every reveal goes through one audited call.`
 } as const;
 
-export const AgentApiKeySubjectSchema = {
+export const AgentApiKeyRotateResponseSchema = {
+    properties: {
+        token: {
+            type: 'string',
+            title: 'Token'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        previous_valid_until: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Previous Valid Until'
+        }
+    },
+    type: 'object',
+    required: ['token', 'token_prefix', 'previous_valid_until'],
+    title: 'AgentApiKeyRotateResponse',
+    description: 'The new value of a rotated key (returned once; reveal still works).'
+} as const;
+
+export const AgentApiKeyStatusSchema = {
+    type: 'string',
+    enum: ['active', 'revoked_by_issuer', 'producer_removed', 'issuer_removed', 'expired', 'api_disabled', 'external_access_paused'],
+    title: 'AgentApiKeyStatus',
+    description: `The one status vocabulary of an issued key (plan D4).
+
+Precedence top-down; computed only by \`\`agent_api_key_status.key_status\`\`.
+The first four are terminal; the last two recover by themselves.`
+} as const;
+
+export const AgentApiKeyUserSchema = {
     properties: {
         id: {
             type: 'string',
@@ -5628,27 +6408,8 @@ export const AgentApiKeySubjectSchema = {
     },
     type: 'object',
     required: ['id'],
-    title: 'AgentApiKeySubject',
-    description: 'The platform user an external key is bound to.'
-} as const;
-
-export const AgentApiKeysPublicSchema = {
-    properties: {
-        data: {
-            items: {
-                '$ref': '#/components/schemas/AgentApiKeyPublic'
-            },
-            type: 'array',
-            title: 'Data'
-        },
-        count: {
-            type: 'integer',
-            title: 'Count'
-        }
-    },
-    type: 'object',
-    required: ['data', 'count'],
-    title: 'AgentApiKeysPublic'
+    title: 'AgentApiKeyUser',
+    description: 'A platform user shown next to a key (recipient or issuer).'
 } as const;
 
 export const AgentApiProducerConnectionSchema = {
@@ -9048,6 +9809,11 @@ export const AgentSubtaskCreateSchema = {
                 }
             ],
             title: 'External Ref'
+        },
+        own_queue: {
+            type: 'boolean',
+            title: 'Own Queue',
+            default: false
         }
     },
     type: 'object',
@@ -9185,6 +9951,11 @@ export const AgentTaskCreateSchema = {
                 }
             ],
             title: 'External Ref'
+        },
+        own_queue: {
+            type: 'boolean',
+            title: 'Own Queue',
+            default: false
         }
     },
     type: 'object',
@@ -14431,6 +15202,17 @@ export const CredentialPublicSchema = {
             type: 'boolean',
             title: 'Used In Bundle',
             default: false
+        },
+        agent_api_key_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Key Status'
         }
     },
     type: 'object',
@@ -14911,6 +15693,17 @@ export const CredentialWithDataSchema = {
             title: 'Used In Bundle',
             default: false
         },
+        agent_api_key_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Key Status'
+        },
         credential_data: {
             additionalProperties: true,
             type: 'object',
@@ -15343,6 +16136,85 @@ export const DelegationResultPublicSchema = {
     description: 'The stored structured result of a delegated task, as the requester reads it.'
 } as const;
 
+export const DesktopAgentApiKeyFactsSchema = {
+    properties: {
+        producer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Agent Id'
+        },
+        producer_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Name'
+        },
+        issuer_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Issuer Email'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        spec_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Spec Url'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        }
+    },
+    type: 'object',
+    title: 'DesktopAgentApiKeyFacts',
+    description: `Non-secret facts of an issued agent_api key (D16). Null for non-keys.
+
+URLs are the PUBLIC origin (\`\`settings.backend_base_url\`\`), recomputed on
+every read. \`\`producer_agent_id\`\` / \`\`base_url\`\` / \`\`spec_url\`\` are null once
+the producer is removed; \`\`issuer_email\`\` once the issuer is removed.`
+} as const;
+
 export const DesktopCredentialListSchema = {
     properties: {
         items: {
@@ -15458,6 +16330,27 @@ export const DesktopCredentialListItemSchema = {
                 }
             ],
             title: 'User Workspace Id'
+        },
+        key_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Key Status'
+        },
+        agent_api: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DesktopAgentApiKeyFacts'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         }
     },
     type: 'object',
@@ -15543,8 +16436,19 @@ export const DesktopCredentialRefusalSchema = {
         },
         reason: {
             type: 'string',
-            enum: ['not_found', 'no_access', 'not_local_category', 'local_use_not_allowed', 'unsupported_type'],
+            enum: ['not_found', 'no_access', 'not_local_category', 'local_use_not_allowed', 'unsupported_type', 'key_revoked', 'key_expired', 'key_paused'],
             title: 'Reason'
+        },
+        key_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Key Status'
         }
     },
     type: 'object',

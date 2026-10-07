@@ -124,12 +124,15 @@ Auto-generated from OpenAPI spec. Tag: `agent-api`
 ## POST `/api/v1/agents/{agent_id}/agent-api/keys`
 **Create Agent Api Key**
 
+> Not available via `cinna api` (excluded_path). Use `cinna agent-api access`.
+
 **Path parameters:**
 - `agent_id`: uuid
 
 **Request body** (`AgentApiKeyCreate`):
   - `label`: string | null
-  - `subject_user_id`: uuid (required)
+  - `issued_to_user_id`: string | null
+  - `service_uri`: string | null
   - `scopes`: array | null
   - `read_only_override`: boolean
   - `expires_in_days`: integer | null
@@ -138,23 +141,25 @@ Auto-generated from OpenAPI spec. Tag: `agent-api`
 
 ---
 
-## GET `/api/v1/agents/{agent_id}/agent-api/keys`
-**List Agent Api Keys**
+## GET `/api/v1/agents/{agent_id}/agent-api/access`
+**List Agent Api Access**
 
 **Path parameters:**
 - `agent_id`: uuid
 
-**Response:** `AgentApiKeysPublic`
+**Response:** `AgentApiAccessList`
 
 ---
 
-## DELETE `/api/v1/agents/{agent_id}/agent-api/keys/{key_id}`
-**Delete Agent Api Key**
+## POST `/api/v1/agents/{agent_id}/agent-api/keys/{key_id}/revoke`
+**Revoke Agent Api Key**
+
+> Not available via `cinna api` (excluded_path). Use `cinna agent-api access`.
 
 **Path parameters:**
 - `agent_id`: uuid
 - `key_id`: uuid
 
-**Response:** `Message`
+**Response:** `AgentApiKeyPublic`
 
 ---

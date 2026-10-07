@@ -5,10 +5,14 @@ Auto-generated from OpenAPI spec. Tag: `user-channels`
 ## GET `/api/v1/users/me/channels`
 **List My Channels**
 
+> Not available via `cinna api` (excluded_path).
+
 ---
 
 ## PUT `/api/v1/users/me/channels/{channel_id}`
 **Update My Channel**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `channel_id`: uuid
@@ -26,6 +30,8 @@ Auto-generated from OpenAPI spec. Tag: `user-channels`
 
 ## DELETE `/api/v1/users/me/channels/{channel_id}`
 **Reset My Channel**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `channel_id`: uuid

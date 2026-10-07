@@ -63,11 +63,18 @@ cloud. These are the values `type` may take:
 | `gdrive_oauth`, `gdrive_oauth_readonly` | OAuth tokens | **Cloud-only.** |
 | `gcalendar_oauth`, `gcalendar_oauth_readonly` | OAuth tokens | **Cloud-only.** |
 | `gmeet_oauth`, `gmeet_oauth_readonly` | OAuth tokens | **Cloud-only.** |
+| `agent_api` | `base_url`, `spec_url`, `token` | Another agent's REST API. Never typed in `.env`: see below. |
 
 **OAuth types cannot be filled locally.** There is no local browser consent flow and
 no token refresh. If the agent needs one, either use `google_service_account`
 locally, or build against a fixture and declare the OAuth slot for the cloud step,
 telling the user plainly that this part only works after import.
+
+An `agent_api` slot works locally only with an **issued key** (an API key a
+producer's owner gave the user), attached in Cinna Desktop and matched by its
+`service_uri` (by default `<producer-slug>-api`); call it with
+`agent_api_session("<slot>")` from `scripts/cinna_credentials.py`, which sends the
+key only to the producer.
 
 ## 3. Fill the values
 

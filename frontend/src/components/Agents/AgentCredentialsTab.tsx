@@ -22,6 +22,8 @@ import {
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { AgentApiKeyStatusBadge } from "@/components/Credentials/AgentApiKeyStatusBadge"
+import { agentApiKeyStatusSentence } from "@/components/Credentials/agentApiKeyCopy"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -492,6 +494,16 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                           Setup needed
                         </Badge>
                       )}
+                      <AgentApiKeyStatusBadge
+                        status={credential.agent_api_key_status}
+                        sentence={
+                          credential.agent_api_key_status
+                            ? agentApiKeyStatusSentence(
+                                credential.agent_api_key_status,
+                              )
+                            : undefined
+                        }
+                      />
                       {credential.is_shared && (
                         <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
                           <Users className="h-3 w-3 mr-1" />

@@ -43,8 +43,8 @@ Most pickers share *something with someone else*, so self-selection is meaningle
 - `frontend/src/components/Agents/McpConnectorsCard.tsx` — the direct-connector `allowed_user_ids` ACL and the agent-to-agent connector ACL. (The App MCP route and identity options were removed from this dialog in Phase 5 of the channels & identity unification; identity binding pickers live on `IdentityServerCard.tsx` below.)
 - `frontend/src/components/UserSettings/IdentityServerCard.tsx` — identity binding edit picker.
 - `frontend/src/components/Agents/BundlePermissionsAddUserModal.tsx` — the Bundle tab's unified Permissions management add/edit dialog (single-user selection; the dialog body scrolls, hence the portalled results list).
-- `frontend/src/components/Agents/AgentApiAccessScopesCard.tsx` — Agent REST API per-user scope grants; passes `includeSelf` (owner-grants-self is valid here).
-- `frontend/src/components/Credentials/AgentApiKeyDialog.tsx` — external `agent_api` key subject binding.
+- `frontend/src/components/Agents/AgentApiAccessCard.tsx` — Agent REST API per-person access and scope grants; passes `includeSelf` (owner-grants-self is valid here).
+- `frontend/src/components/Credentials/AgentApiKeyDialog.tsx` — issued `agent_api` key recipient ("Issued to"), through `frontend/src/components/Common/UserSelectField.tsx`, the single-person picker reference.
 - `frontend/src/components/Admin/LlmProviders/ManagedCredentialDialog.tsx` — managed AI credential target-user membership.
 
 ## Pill labels for edit pickers

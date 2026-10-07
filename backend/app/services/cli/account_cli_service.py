@@ -30,7 +30,10 @@ from fastapi import HTTPException, Request
 from sqlmodel import Session, select
 
 if TYPE_CHECKING:
-    from app.models.agent_api.agent_api_token import ConnectAgentApiResponse
+    from app.models.agent_api.agent_api_token import (
+        AgentApiKeyPublic,
+        ConnectAgentApiResponse,
+    )
     from app.models.agents.agent_schedule import (
         AgentSchedule,
         AgentSchedulesPublic,
@@ -42,6 +45,11 @@ if TYPE_CHECKING:
     from app.models.agents.agent_schedule_log import AgentScheduleLogsPublic
     from app.models.agents.agent_status import AgentStatusPublic
     from app.models.cli.account_convenience import (
+        AccountAgentApiAccess,
+        AccountAgentApiKeyIssueBody,
+        AccountAgentApiKeyIssued,
+        AccountAgentApiScopesBody,
+        AccountAgentApiScopesResult,
         AccountAgentCreateBody,
         AccountAgentStatusResult,
         AccountConnectAgentApiBody,
@@ -115,6 +123,17 @@ class WorkspaceNotFoundError(Exception):
     The route maps this to 404 (existence-leak discipline — a foreign workspace
     id is not confirmed to exist).
     """
+
+
+class CredentialDraftRefusedError(Exception):
+    """This credential type is never drafted through the account CLI (400)."""
+
+
+AGENT_API_DRAFT_REFUSAL = (
+    "Agent API credentials are not drafted. Give yourself a key with "
+    "`cinna agent-api access issue <producer> --to me`, or wire a cloud agent "
+    "with `cinna connect agent-api`."
+)
 
 
 class AccountCLIService:
@@ -1006,6 +1025,229 @@ class AccountCLIService:
             "is_json": "json" in content_type.lower(),
         }
 
+    # ------------------------------------------------------------------ #
+    # Issued API keys — ``cinna agent-api access``                         #
+    # ------------------------------------------------------------------ #
+    # Thin wrappers over AgentApiKeyService / AgentApiGrantService (which own
+    # gating, audit and env re-sync). INVARIANT: no key value ever crosses the
+    # account CLI — ``AgentApiKeyCreated`` never leaves ``issue_agent_api_key``
+    # and nothing here logs it. Rotate and reveal stay web-only.
+
+    @staticmethod
+    def _resolve_recipient(db: Session, user: User, email: str | None) -> User:
+        """The person an email names (None/blank = the caller).
+
+        Exact match, case-insensitive, active users only. 404
+        ``recipient_not_found`` when nobody matches; 409 ``ambiguous_recipient``
+        when legacy case-only duplicates match several accounts.
+        """
+        from app.services.agent_api.agent_api_service import AgentApiError
+        from app.services.users.user_service import UserService
+
+        if email is None or not email.strip():
+            return user
+        matches = UserService.find_active_users_by_email_ci(session=db, email=email)
+        if not matches:
+            raise AgentApiError(
+                "No active user with that email",
+                status_code=404,
+                code="recipient_not_found",
+            )
+        if len(matches) > 1:
+            raise AgentApiError(
+                "That email matches several accounts; ask an administrator to "
+                "merge them before giving API access",
+                status_code=409,
+                code="ambiguous_recipient",
+            )
+        return matches[0]
+
+    @staticmethod
+    def _require_producer_owner(db: Session, user: User, agent_id: uuid.UUID) -> None:
+        """Owner-gate the producer (404 ``agent_not_found``, no leak).
+
+        Runs before any email lookup so a non-owner cannot probe which emails
+        belong to accounts.
+        """
+        from app.services.agent_api.agent_api_service import AgentApiService
+
+        AgentApiService.resolve_agent_only(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+
+    @staticmethod
+    def _agent_api_manage_url(agent_id: uuid.UUID) -> str:
+        """The producer's Integrations tab, where access is managed on the web."""
+        return f"{settings.FRONTEND_HOST.rstrip('/')}/agent/{agent_id}#integrations"
+
+    @staticmethod
+    def _unknown_scopes(
+        db: Session, user: User, agent_id: uuid.UUID, scopes: list[str] | None
+    ) -> list[str]:
+        """Requested scopes absent from a non-empty catalog (advisory only)."""
+        from app.services.agent_api.agent_api_grant_service import (
+            AgentApiGrantService,
+        )
+
+        if not scopes:
+            return []
+        catalog = AgentApiGrantService.get_scope_catalog(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+        known = {scope.name for scope in catalog.scopes}
+        if not known:
+            return []
+        requested = dict.fromkeys(s.strip() for s in scopes if isinstance(s, str))
+        return [name for name in requested if name and name not in known]
+
+    @staticmethod
+    def list_agent_api_access(
+        db: Session, user: User, agent_id: uuid.UUID
+    ) -> "AccountAgentApiAccess":
+        """Everyone with access to a producer, plus its scope catalog."""
+        from app.models.cli.account_convenience import AccountAgentApiAccess
+        from app.services.agent_api.agent_api_grant_service import (
+            AgentApiGrantService,
+        )
+        from app.services.agent_api.agent_api_key_service import AgentApiKeyService
+
+        access = AgentApiKeyService.list_access(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+        catalog = AgentApiGrantService.get_scope_catalog(
+            db, agent_id, user.id, is_superuser=user.is_superuser
+        )
+        return AccountAgentApiAccess(
+            **access.model_dump(),
+            scope_catalog=catalog.scopes,
+            manage_url=AccountCLIService._agent_api_manage_url(agent_id),
+        )
+
+    @staticmethod
+    async def issue_agent_api_key(
+        db: Session, user: User, body: "AccountAgentApiKeyIssueBody"
+    ) -> "AccountAgentApiKeyIssued":
+        """Issue a key; the response never carries its value.
+
+        A self-issue answers ``credential_url`` (the web page where the user
+        reveals the value); a key for someone else reaches them as a credential
+        they reveal themselves.
+        """
+        from app.models.agent_api.agent_api_token import AgentApiKeyCreate
+        from app.models.cli.account_convenience import AccountAgentApiKeyIssued
+        from app.models.credentials.credential import Credential
+        from app.services.agent_api.agent_api_key_service import AgentApiKeyService
+        from app.services.agent_api.agent_api_service import AgentApiError
+
+        AccountCLIService._require_producer_owner(db, user, body.agent_id)
+        recipient = AccountCLIService._resolve_recipient(
+            db, user, body.issued_to_email
+        )
+        try:
+            created = await AgentApiKeyService.create_key(
+                db,
+                producer_agent_id=body.agent_id,
+                owner_user_id=user.id,
+                data=AgentApiKeyCreate(
+                    issued_to_user_id=recipient.id,
+                    scopes=body.scopes,
+                    expires_in_days=body.expires_in_days,
+                    service_uri=body.service_uri,
+                    label=body.label,
+                    read_only_override=body.read_only,
+                ),
+                is_superuser=user.is_superuser,
+            )
+        except AgentApiError as e:
+            if e.code != "external_access_disabled":
+                raise
+            # The switch is web-only (C12): point at the page that flips it.
+            manage_url = AccountCLIService._agent_api_manage_url(body.agent_id)
+            raise AgentApiError(
+                f"{e.message} Manage access: {manage_url}",
+                status_code=e.status_code,
+                code=e.code,
+            ) from e
+        key_fields = created.model_dump(exclude={"token"})
+        del created  # the value-bearing object ends here
+
+        credential_id = key_fields.get("credential_id")
+        credential = db.get(Credential, credential_id) if credential_id else None
+        issued_to_self = recipient.id == user.id
+        credential_url = (
+            f"{settings.FRONTEND_HOST.rstrip('/')}/credential/{credential_id}"
+            if issued_to_self and credential_id
+            else None
+        )
+        return AccountAgentApiKeyIssued(
+            **key_fields,
+            service_uri=credential.service_uri if credential is not None else None,
+            issued_to_self=issued_to_self,
+            credential_url=credential_url,
+            unknown_scopes=AccountCLIService._unknown_scopes(
+                db, user, body.agent_id, body.scopes
+            ),
+        )
+
+    @staticmethod
+    async def revoke_agent_api_key(
+        db: Session, user: User, agent_id: uuid.UUID, key_id: uuid.UUID
+    ) -> "AgentApiKeyPublic":
+        """Revoke an issued key now (idempotent; the grant is left alone)."""
+        from app.services.agent_api.agent_api_key_service import AgentApiKeyService
+
+        return await AgentApiKeyService.revoke_key(
+            db, agent_id, key_id, user.id, is_superuser=user.is_superuser
+        )
+
+    @staticmethod
+    async def set_agent_api_scopes(
+        db: Session, user: User, body: "AccountAgentApiScopesBody"
+    ) -> "AccountAgentApiScopesResult":
+        """Set a person's grant to exactly ``scopes``, or remove it (None)."""
+        from app.models.cli.account_convenience import AccountAgentApiScopesResult
+        from app.services.agent_api.agent_api_grant_service import (
+            AgentApiGrantService,
+        )
+        from app.services.agent_api.agent_api_key_service import AgentApiKeyService
+
+        AccountCLIService._require_producer_owner(db, user, body.agent_id)
+        person = AccountCLIService._resolve_recipient(db, user, body.user_email)
+
+        def entry_for_person():
+            access = AgentApiKeyService.list_access(
+                db, body.agent_id, user.id, is_superuser=user.is_superuser
+            )
+            return next((e for e in access.data if e.user.id == person.id), None)
+
+        if body.scopes is not None:
+            await AgentApiGrantService.upsert_grant(
+                db,
+                producer_agent_id=body.agent_id,
+                owner_user_id=user.id,
+                subject_user_id=person.id,
+                scopes=body.scopes,
+                is_superuser=user.is_superuser,
+            )
+        else:
+            # Owner-gates the producer (404 no-leak) even when there is no grant.
+            entry = entry_for_person()
+            if entry is not None and entry.grant_id is not None:
+                await AgentApiGrantService.delete_grant(
+                    db,
+                    producer_agent_id=body.agent_id,
+                    grant_id=entry.grant_id,
+                    owner_user_id=user.id,
+                    is_superuser=user.is_superuser,
+                )
+
+        return AccountAgentApiScopesResult(
+            entry=entry_for_person(),
+            unknown_scopes=AccountCLIService._unknown_scopes(
+                db, user, body.agent_id, body.scopes
+            ),
+        )
+
     @staticmethod
     async def restart_agent_env(
         db: Session,
@@ -1665,14 +1907,20 @@ class AccountCLIService:
     # holding an account CLI token.
 
     @staticmethod
-    def _credential_public(db: Session, credential) -> "CredentialPublic":
+    def _credential_public(
+        db: Session, credential, key_states: dict | None = None
+    ) -> "CredentialPublic":
         """Project a ``Credential`` → ``CredentialPublic`` (no secret values).
 
         Mirrors the credentials route's owner projection: ``share_count`` +
-        computed completeness ``status``. Decryption happens only to compute the
-        status server-side; the plaintext never leaves this function.
+        computed completeness ``status`` + the issued-key status of an
+        ``agent_api`` credential (``key_states`` is the page's batched
+        ``key_states_by_credential``; omitted = resolve this one row). Decryption
+        happens only to compute the status server-side; the plaintext never
+        leaves this function.
         """
         from app.models.credentials.credential import CredentialPublic
+        from app.services.agent_api.agent_api_key_status import key_status_value
         from app.services.credentials.credential_share_service import (
             CredentialShareService,
         )
@@ -1705,6 +1953,7 @@ class AccountCLIService:
             is_placeholder=credential.is_placeholder,
             placeholder_source_id=credential.placeholder_source_id,
             status=status,
+            agent_api_key_status=key_status_value(db, credential, key_states),
         )
 
     @staticmethod
@@ -1726,7 +1975,14 @@ class AccountCLIService:
         Mirrors ``GET /credentials/`` workspace-filter semantics: ``None`` = all,
         ``""`` = Default workspace (NULL), a UUID string = that workspace.
         """
-        from app.models.credentials.credential import Credential, CredentialsPublic
+        from app.models.credentials.credential import (
+            Credential,
+            CredentialsPublic,
+            CredentialType,
+        )
+        from app.services.agent_api.agent_api_key_status import (
+            key_states_by_credential,
+        )
 
         stmt = select(Credential).where(Credential.owner_id == user.id)
         if user_workspace_id is not None:
@@ -1740,8 +1996,12 @@ class AccountCLIService:
                 stmt = stmt.where(Credential.user_workspace_id == ws)
 
         credentials = list(db.exec(stmt).all())
+        key_states = key_states_by_credential(
+            db, [c.id for c in credentials if c.type == CredentialType.AGENT_API]
+        )
         data = [
-            AccountCLIService._credential_public(db, c) for c in credentials
+            AccountCLIService._credential_public(db, c, key_states)
+            for c in credentials
         ]
         return CredentialsPublic(data=data, count=len(data))
 
@@ -1790,8 +2050,12 @@ class AccountCLIService:
         foreign workspace id (route → 404).
         """
         from app.models.cli.account_convenience import AccountCredentialDraftResult
-        from app.models.credentials.credential import CredentialCreate
+        from app.models.credentials.credential import CredentialCreate, CredentialType
         from app.services.credentials.credentials_service import CredentialsService
+
+        if body.type == CredentialType.AGENT_API:
+            # An empty agent_api row has no key bound to it and is never usable.
+            raise CredentialDraftRefusedError(AGENT_API_DRAFT_REFUSAL)
 
         workspace_id = AccountCLIService._resolve_owned_workspace_id(
             db, user, body.user_workspace_id

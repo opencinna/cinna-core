@@ -15,6 +15,8 @@ Auto-generated from OpenAPI spec. Tag: `access-tokens`
 ## POST `/api/v1/agents/{agent_id}/access-tokens/`
 **Create Access Token**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 

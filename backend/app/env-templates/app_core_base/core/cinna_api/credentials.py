@@ -59,22 +59,55 @@ _SYNTHETIC_TYPES = frozenset({_CURRENT_USER_TYPE, _OWNER_IDENTITY_TYPE})
 _AGENT_API_TYPE = "agent_api"
 
 
+#: Human words for an issued agent_api key the platform synced token-less
+#: (the entry's ``unavailable_reason``). Mirrors the Local Agent Kit hints.
+_UNAVAILABLE_REASON_WORDS = {
+    "key_revoked": "the key was revoked by its issuer or its producer is gone",
+    "key_expired": "the key has expired",
+    "key_paused": "the producer has paused API access",
+}
+
+_UNAVAILABLE_REASON_FIXES = {
+    "key_revoked": "ask the producer's owner for a new key.",
+    "key_expired": "ask the producer's owner for a new key.",
+    "key_paused": "it works again by itself once the producer's owner resumes access.",
+}
+
+
 class CredentialMissing(Exception):
     """A slot the script needs has no usable credential.
 
     ``reason`` is ``"not_linked"`` (no credential with this slot is linked to
-    the agent) or ``"not_configured"`` (one is linked but not filled in yet).
+    the agent), ``"not_configured"`` (one is linked but not filled in yet), or,
+    for an issued ``agent_api`` key the platform synced without its token,
+    ``"key_revoked"``, ``"key_expired"`` or ``"key_paused"`` — then
+    ``key_status`` carries the detailed status (e.g. ``"revoked_by_issuer"``).
     ``str(exc)`` is stable and written for a person: relay it verbatim.
     """
 
-    def __init__(self, slot: str, reason: str):
+    def __init__(self, slot: str, reason: str, key_status: str | None = None):
         # ``args`` must be the constructor arguments so the exception
         # round-trips through pickle; ``__str__`` builds the message.
-        super().__init__(slot, reason)
+        super().__init__(slot, reason, key_status)
         self.slot = slot
         self.reason = reason
+        self.key_status = key_status
 
     def __str__(self) -> str:
+        if self.reason in _UNAVAILABLE_REASON_WORDS:
+            detail = f", {self.key_status}" if self.key_status else ""
+            return (
+                f"credential_unavailable: the credential for slot '{self.slot}' "
+                f"is unavailable: {_UNAVAILABLE_REASON_WORDS[self.reason]} "
+                f"({self.reason}{detail}). Fix: "
+                f"{_UNAVAILABLE_REASON_FIXES[self.reason]}"
+            )
+        if self.reason not in ("not_linked", "not_configured"):
+            detail = f", {self.key_status}" if self.key_status else ""
+            return (
+                f"credential_unavailable: the credential for slot '{self.slot}' "
+                f"is unavailable ({self.reason}{detail})."
+            )
         if self.reason == "not_configured":
             return (
                 f"credential_missing: the credential for slot '{self.slot}' is "
@@ -409,7 +442,8 @@ class _Credentials:
     def by_slot(self, slot: str) -> dict | None:
         """
         Return a real credential whose ``service_uri`` equals ``slot``, or
-        None. Prefer a filled credential over any remaining placeholder, so
+        None. Prefer an available, filled credential over a token-less
+        (``unavailable_reason``) one and over any remaining placeholder, so
         linking a replacement makes the slot usable immediately. Synthetic
         entries never match. Reads the file fresh.
         """
@@ -419,18 +453,24 @@ class _Credentials:
         """
         Return the credential for ``slot``, or raise :class:`CredentialMissing`:
         ``not_linked`` when none is linked, ``not_configured`` when the linked
-        one is still a placeholder. Reads the file fresh.
+        one is still a placeholder, or the entry's ``unavailable_reason``
+        (``key_revoked`` / ``key_expired`` / ``key_paused``, with
+        ``.key_status``) for an issued key synced without its token. Reads the
+        file fresh.
         """
         return self._require_slot_in(self._load(), slot)
 
     def agent_api_session(self, slot: str) -> Any:
         """
         Return an ``AgentApiSession`` (a ``requests.Session``) for the
-        ``agent_api`` connection in ``slot``: ``Authorization: Bearer <token>``
-        plus the caller-identity header when the platform provided one, and
-        ``.base_url`` / ``.spec_url`` from the connection.
+        ``agent_api`` credential in ``slot`` (a connection or an issued key):
+        ``Authorization: Bearer <token>`` plus the caller-identity header when
+        the platform provided one (an issued key's identity is bound to the key;
+        the producer ignores the header for it), and ``.base_url`` /
+        ``.spec_url`` from the credential.
 
-        Raises :class:`CredentialMissing` like :meth:`require_slot`, and
+        Raises :class:`CredentialMissing` like :meth:`require_slot` (including
+        ``key_revoked`` / ``key_expired`` / ``key_paused``), and
         ``ValueError`` when the slot holds a credential of another type.
         """
         entries = self._load()
@@ -462,16 +502,24 @@ class _Credentials:
 
     @staticmethod
     def _find_slot(entries: list[dict], slot: str) -> dict | None:
+        """The best entry for ``slot``: an available, filled one first, then an
+        unavailable (token-less issued key) one, then a placeholder."""
+        unavailable = None
         placeholder = None
         for cred in entries:
             if cred.get("type") in _SYNTHETIC_TYPES:
                 continue
-            if cred.get("service_uri") == slot:
-                if cred.get("is_placeholder") is not True:
-                    return cred
+            if cred.get("service_uri") != slot:
+                continue
+            if cred.get("is_placeholder") is True:
                 if placeholder is None:
                     placeholder = cred
-        return placeholder
+            elif cred.get("unavailable_reason"):
+                if unavailable is None:
+                    unavailable = cred
+            else:
+                return cred
+        return unavailable or placeholder
 
     @classmethod
     def _require_slot_in(cls, entries: list[dict], slot: str) -> dict:
@@ -480,6 +528,10 @@ class _Credentials:
             raise CredentialMissing(slot, "not_linked")
         if entry.get("is_placeholder") is True:
             raise CredentialMissing(slot, "not_configured")
+        if entry.get("unavailable_reason"):
+            raise CredentialMissing(
+                slot, str(entry["unavailable_reason"]), entry.get("key_status")
+            )
         return entry
 
 

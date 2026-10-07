@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## GET `/api/v1/users/`
 **Read Users**
 
+> Not available via `cinna api` (excluded_path).
+
 **Query parameters:**
 - `skip`: integer, default: `0`
 - `limit`: integer, default: `100`
@@ -16,6 +18,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ## POST `/api/v1/users/`
 **Create User**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`UserCreate`):
   - `email`: string (required)
@@ -45,6 +49,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## POST `/api/v1/users/invite`
 **Invite User**
 
+> Not available via `cinna api` (excluded_path).
+
 **Request body** (`InviteUserRequest`):
   - `email`: string (required)
   - `full_name`: string | null
@@ -62,6 +68,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## GET `/api/v1/users/{user_id}/invitation`
 **Read User Invitation**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `user_id`: uuid
 
@@ -71,6 +79,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ## POST `/api/v1/users/{user_id}/invitation/resend`
 **Resend User Invitation**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `user_id`: uuid
@@ -82,6 +92,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## POST `/api/v1/users/{user_id}/invitation/revoke`
 **Revoke User Invitation**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `user_id`: uuid
 
@@ -91,6 +103,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ## GET `/api/v1/users/{user_id}/invitation/link`
 **Read User Invitation Link**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `user_id`: uuid
@@ -109,12 +123,16 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## DELETE `/api/v1/users/me`
 **Delete User Me**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `Message`
 
 ---
 
 ## PATCH `/api/v1/users/me`
 **Update User Me**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`UserUpdateMe`):
   - `full_name`: string | null
@@ -141,6 +159,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## PATCH `/api/v1/users/me/password`
 **Update Password Me**
 
+> Not available via `cinna api` (excluded_path).
+
 **Request body** (`UpdatePassword`):
   - `current_password`: string (required)
   - `new_password`: string (required)
@@ -152,6 +172,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## POST `/api/v1/users/me/set-password`
 **Set Password Me**
 
+> Not available via `cinna api` (excluded_path).
+
 **Request body** (`SetPassword`):
   - `new_password`: string (required)
 
@@ -162,12 +184,16 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## GET `/api/v1/users/me/details`
 **Read User Details Me**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `UserDetailsPublic`
 
 ---
 
 ## PATCH `/api/v1/users/me/details`
 **Update User Details Me**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`UserDetailsUpdate`):
   - `details_raw`: string (required)
@@ -178,6 +204,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ## PATCH `/api/v1/users/me/locale-defaults`
 **Update User Locale Defaults**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`UserLocaleDefaults`):
   - `timezone`: string | null
@@ -191,6 +219,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## POST `/api/v1/users/me/resend-confirmation`
 **Resend Confirmation Me**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `ResendConfirmationResponse`
 
 ---
@@ -198,12 +228,16 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## GET `/api/v1/users/me/role`
 **Read My Role**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `UserRolePublic`
 
 ---
 
 ## PATCH `/api/v1/users/{user_id}/role`
 **Update User Role**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `user_id`: uuid
@@ -218,6 +252,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## POST `/api/v1/users/signup`
 **Register User**
 
+> Not available via `cinna api` (excluded_path).
+
 **Request body** (`UserRegister`):
   - `email`: string (required)
   - `password`: string (required)
@@ -230,6 +266,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## GET `/api/v1/users/{user_id}`
 **Read User By Id**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `user_id`: uuid
 
@@ -239,6 +277,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 
 ## PATCH `/api/v1/users/{user_id}`
 **Update User**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `user_id`: uuid
@@ -259,6 +299,8 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## DELETE `/api/v1/users/{user_id}`
 **Delete User**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `user_id`: uuid
 
@@ -269,12 +311,16 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## GET `/api/v1/users/me/ai-credentials/status`
 **Get Ai Credentials Status**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `UserPublicWithAICredentials`
 
 ---
 
 ## GET `/api/v1/users/me/ai-credentials`
 **Get Ai Credentials**
+
+> Not available via `cinna api` (excluded_path).
 
 **Response:** `AIServiceCredentials`
 
@@ -283,12 +329,16 @@ Auto-generated from OpenAPI spec. Tag: `users`
 ## DELETE `/api/v1/users/me/ai-credentials`
 **Delete Ai Credentials**
 
+> Not available via `cinna api` (excluded_path).
+
 **Response:** `Message`
 
 ---
 
 ## PATCH `/api/v1/users/me/ai-credentials`
 **Update Ai Credentials**
+
+> Not available via `cinna api` (excluded_path).
 
 **Request body** (`AIServiceCredentialsUpdate`):
   - `anthropic_api_key`: string | null

@@ -5,6 +5,8 @@ Auto-generated from OpenAPI spec. Tag: `guest-share`
 ## POST `/api/v1/guest-share/{token}/auth`
 **Guest Share Authenticate**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `token`: string
 

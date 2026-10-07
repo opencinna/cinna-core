@@ -171,6 +171,8 @@ Auto-generated from OpenAPI spec. Tag: `agents`
 ## POST `/api/v1/agents/create-flow`
 **Create Agent With Flow**
 
+> Not available via `cinna api` (excluded_method).
+
 **Request body** (`AgentCreateFlowRequest`):
   - `description`: string (required)
   - `mode`: string

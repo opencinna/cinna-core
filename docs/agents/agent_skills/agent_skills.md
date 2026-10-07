@@ -504,7 +504,7 @@ blocks it. Instead:
 - the skill's Addons row turns amber with `credential_missing` and names the
   slots, each with a reason — `not_linked` (nothing carries the slot),
   `not_configured` (a placeholder nobody filled in) or `access_revoked` (the
-  credential is linked but no longer usable). Revoking a share or disabling
+  credential is linked but no longer usable; an issued `agent_api` key that is revoked, expired, paused or orphaned counts here). Revoking a share or disabling
   sharing through either credential update path unlinks the credential from the
   installer's agents as well, so that normally reads `not_linked`;
 - the install response says the same thing at the moment of installing;

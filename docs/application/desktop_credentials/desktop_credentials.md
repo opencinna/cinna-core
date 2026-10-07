@@ -36,8 +36,16 @@ plain computer are ever eligible, and only with the credential owner's explicit,
   Rules.
 - **Refusal reason** — materialization is per-item, never batch-fatal: each requested credential
   either comes back with a value or a typed reason (`not_found`, `no_access`,
-  `not_local_category`, `local_use_not_allowed`, `unsupported_type`). A Local Agent Kit script
-  sees the same reason as `unavailable_reason` on the entry.
+  `not_local_category`, `local_use_not_allowed`, `unsupported_type`, plus the issued-key reasons
+  `key_revoked`, `key_expired`, `key_paused`). A Local Agent Kit script sees the same reason as
+  `unavailable_reason` on the entry.
+- **Issued API key (`agent_api`, opt-in)** — a key a producer's owner issued *to the caller* (see
+  [Agent REST API — Issued Keys](../../agents/agent_api/agent_api.md#issued-keys)). It is the one
+  `agent_api` shape Desktop can carry, because identity is bound to the key and a local script can
+  call the producer with a plain bearer token. A Desktop client must ask for keys explicitly
+  (`include=agent_api_keys`) on both the list and the materialize call; without that flag no
+  `agent_api` item is listed and any `agent_api` id is refused `unsupported_type`, so a Desktop
+  version that predates keys can never receive one it would mislabel.
 
 ## User Stories / Flows
 
@@ -98,12 +106,30 @@ plain computer are ever eligible, and only with the credential owner's explicit,
   needs the OAuth client secret, which only the backend server holds — a copied OAuth entry would
   simply stop working once its access token expired, with no way for the local machine to renew
   it. SSH keys are excluded because the private key material never leaves Core in the first place.
-  Agent API connection credentials and MCP provider credentials are excluded because they are not
-  portable credential files: an Agent API credential is bound to the platform's anonymous
-  connection model, and an MCP provider credential is an SDK MCP-server manifest entry, not
+  Agent API **connection** credentials and MCP provider credentials are excluded because they are
+  not portable credential files: a connection is bound to the platform's anonymous agent-to-agent
+  model, and an MCP provider credential is an SDK MCP-server manifest entry, not
   something a local script can read a value out of. **Desktop credential delivery never refreshes
   an OAuth token as part of materialization** — the question does not arise, because OAuth types
   are never listed or delivered at all.
+- **Issued keys: eligibility and delivery.** An `agent_api` credential is eligible only when the
+  client opted in, the caller **owns** it, it is an issued key (never a connection) and it was
+  **issued to the caller**; every other `agent_api` credential is `unsupported_type` and never
+  listed. Eligible keys are listed with their status; only an **active** key is delivered. Others
+  are refused per item with `key_revoked` (revoked by the issuer, producer removed, issuer
+  removed: terminal), `key_expired` (terminal) or `key_paused` (API disabled or the producer's kill
+  switch off: recovers by itself, so Desktop keeps polling), each carrying the detailed
+  `key_status`. A key is exempt from the `allow_local_use` consent (it is the caller's own).
+- **Public origin rule.** A delivered key's `base_url` / `spec_url` are the **public** origin
+  (`BACKEND_BASE_URL`, else `WEBHOOK_BASE_URL`, else `FRONTEND_HOST`), recomputed on every
+  list/materialize, never the Docker-internal origin agents use in the cloud. Operators must
+  configure Desktop's server URL to that origin; Desktop logs a mismatch, Core does not guess.
+- **Revision.** A key's `revision` is a hash of its `updated_at`, its read-time status, its expiry
+  and its public `base_url`, so rotating, revoking, pausing, a producer/issuer removal, expiry and a
+  change of public origin all change the revision (and the list ETag) with no write. Other
+  credentials keep their revision rule.
+- **Rotation reaches a running local agent.** The previous value keeps working for 5 minutes after a
+  rotate, and the kit helper re-reads the credential files on every request.
 - **The session must be interactive.** Materialization requires a live, non-revoked Desktop client,
   and specifically one whose current token was **not** obtained through the CLI account-token
   exchange (see [Desktop App Authentication — CLI account-token
@@ -117,7 +143,7 @@ plain computer are ever eligible, and only with the credential owner's explicit,
   credential was shared with the requester by someone else, a second event logs on the *owner's*
   account naming the recipient, so an owner can see who has copied their secret locally. No event
   ever carries the credential's value.
-- **Disabling local-use consent, or revoking a share, does not recall a value already copied.** Both
+- **Disabling local-use consent, or revoking a share or an issued key, does not recall a value already copied.** Both
   the sharing UI and this doc are explicit about that: consent gates future materialization, it is
   not a remote wipe.
 

@@ -66,7 +66,7 @@ write that ends the token's life.
 | `AGENT_AUTH_TOKEN` (env token) | [agent_environments](../agents/agent_environments/agent_environments.md) | `backend/app/services/environments/environment_lifecycle.py` `_generate_auth_token` | one `(env, agent, owner)` triple | `AGENT_ENV_TOKEN_EXPIRE_DAYS` = 365 | **plaintext** in `AgentEnvironment.config["auth_token"]` + SHA-256 `auth_token_hash` | rotate by reconfigure — the hash is the anchor |
 | A2A access token | [a2a_access_tokens](../application/a2a_integration/a2a_access_tokens/a2a_access_tokens.md) | `backend/app/services/a2a/access_token_service.py` `_create_a2a_jwt` | one agent, one `mode` × `scope` | 1825 days | SHA-256 + 8-char prefix in `agent_access_tokens` | `is_revoked = True`, or row delete |
 | `agent_api` connection token | [agent_api](../agents/agent_api/agent_api.md) | `backend/app/services/agent_api/agent_api_token_service.py` `create_token` | proxy calls to one producer agent | none | SHA-256 + prefix; raw value Fernet-encrypted inside the paired credential | delete the credential → `ON DELETE CASCADE` |
-| `agent_api` external key | [agent_api](../agents/agent_api/agent_api.md) | `backend/app/services/agent_api/agent_api_key_service.py` `create_key` | same proxy, identity pinned to `subject_user_id` | optional `expires_at` | SHA-256 + prefix | `is_active = False` |
+| `agent_api` issued key | [agent_api](../agents/agent_api/agent_api.md) | `backend/app/services/agent_api/agent_api_key_service.py` `create_key` | same proxy, identity pinned to the recipient (`subject_user_id`) | optional `expires_at` | SHA-256 + prefix (raw value Fernet-encrypted in the recipient's credential); previous hash kept 5 min after a rotate | issuer: soft revoke (`is_active = False`, `revoked_at`); recipient: delete the credential |
 | `owner_identity_token` | [agent_api](../agents/agent_api/agent_api.md) | `backend/app/services/agent_api/agent_api_identity_service.py` `mint` | attribution only (`aud="agent_api_caller"`) | `AGENT_API_IDENTITY_TOKEN_EXPIRE_DAYS` = 30 | **never persisted** — lives only in the container's `credentials.json` | drop the grant; stop injecting on next sync |
 | MCP connector OAuth tokens | [mcp_integration](../application/mcp_integration/agent_mcp_architecture.md) | `backend/app/services/mcp/mcp_oauth_service.py` | one connector, `scope` string | access 1 h / refresh 30 d | **plaintext** `mcp_token.token` | `revoked = True` |
 | MCP direct token | [agent_to_agent_mcp_connector](../application/mcp_integration/agent_to_agent_mcp_connector.md) | `backend/app/services/mcp/mcp_direct_token_service.py` `create_token` | one connector, acts as its owner | 5 years | **plaintext** `mcp_token.token`, 8-char prefix in projections | `revoked = True`, or row delete |
@@ -217,9 +217,16 @@ write that ends the token's life.
     `backend/app/api/routes/agent_api_public.py`. They differ in identity and in how you kill them: a
     **connection** *is* the `agent_api` credential (its raw value rides Fernet-encrypted inside
     `Credential.credential_data`), so deleting the credential cascades the token away; an
-    **external key** is bound to `subject_user_id`, revealable once through the audited
-    `POST /api/v1/credentials/{id}/agent-api-key/reveal`, and revoked by `is_active = False`.
-    `Agent.agent_api_external_access_enabled` is a kill switch checked at validation time.
+    **issued key** is bound to `subject_user_id` (the recipient, who owns the credential),
+    revealable only by the recipient through the audited
+    `POST /api/v1/credentials/{id}/agent-api-key/reveal`, rotated in place by the recipient
+    (`.../agent-api-key/rotate`; the replaced hash still validates for 5 minutes via
+    `previous_token_hash`), and revoked by the issuer **softly** (`is_active = False`, `revoked_at`;
+    the credential survives so the recipient sees why). Its status is one of seven values computed
+    by `agent_api_key_status.key_status`; `Agent.agent_api_external_access_enabled` is a kill switch
+    checked at validation time, and a deleted issuer (`owner_id` NULL) or producer (`agent_id` NULL)
+    makes the key dead at the proxy. Desktop receives a key only on an opted-in, owned-key path (see
+    [desktop_credentials](../application/desktop_credentials/desktop_credentials.md)).
 
 18. **`owner_identity_token`.** Synthesised host-side on every credential sync as a synthetic
     `credentials.json` entry (`id="owner_identity"`), `aud = "agent_api_caller"`,
@@ -298,7 +305,7 @@ write that ends the token's life.
 | change refresh rotation | `DesktopAuthService.refresh_tokens` | the `revoked_at is NULL` invariant used by every hard-revoke path (`revoke_token_family`, `_stamp_grant`) |
 | change the account-token blast radius | `AccountCLIService.revoke_account_token` | child `CLIToken`s, `DesktopAuthService.revoke_clients_for_account_token`, and the exchange route's docstring |
 | rotate or scope the env token | `EnvironmentLifecycle._generate_auth_token` | `auth_token_hash` write in the configure pass, `_resolve_agent_env_context`, and `session_context_signer` (the token is also the HMAC key) |
-| revoke an `agent_api` connection | delete the `agent_api` credential | the `credential_id` cascade is the *only* revocation for a connection token; external keys use `is_active` instead |
+| revoke an `agent_api` connection | delete the `agent_api` credential | the `credential_id` cascade is the *only* revocation for a connection token; an issued key is revoked by the issuer with `POST .../keys/{key_id}/revoke` (soft) and removed by the recipient deleting the credential |
 | add an `agent_api` scope | `AgentApiGrantService` + `policy.yaml` handling in `agent_api_service.py` | `owner_identity_token` carries no scopes — grants are resolved live, so nothing in the token needs changing |
 | make a share expire sooner | the `expires_at` on the share row | the derived JWT is `min(share_expiry, now + 24 h)` — shortening the row shortens the JWT, but already-issued JWTs live out their cap |
 | shorten signed-URL exposure | `WORKSPACE_VIEW_TOKEN_EXPIRY` / `FILE_DOWNLOAD_TOKEN_EXPIRY` in `agent_workspace_token_service.py` | nothing else — but note these are the only tokens with no revocation at all |

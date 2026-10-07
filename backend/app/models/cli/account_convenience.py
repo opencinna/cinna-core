@@ -14,6 +14,12 @@ from typing import Any, Literal
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
+from app.models.agent_api.agent_api_access_grant import AgentApiScope
+from app.models.agent_api.agent_api_token import (
+    AgentApiAccessEntry,
+    AgentApiAccessList,
+    AgentApiKeyPublic,
+)
 from app.models.agents.agent_status import AgentStatusPublic
 from app.models.credentials.credential import CredentialPublic, CredentialType
 
@@ -123,6 +129,77 @@ class AccountAgentApiCallResult(SQLModel):
     headers: dict[str, str]
     body: str
     is_json: bool
+
+
+class AccountAgentApiAccess(AgentApiAccessList):
+    """Producer API access for ``cinna agent-api access list``.
+
+    The web access list (grants + issued keys per person, terminal keys
+    included) plus the scope catalog and the web page that manages it. Never a
+    key value.
+    """
+
+    scope_catalog: list[AgentApiScope] = []
+    manage_url: str
+
+
+class AccountAgentApiKeyIssueBody(SQLModel):
+    """Issue a key on a producer — ``cinna agent-api access issue``.
+
+    The recipient is resolved server-side from ``issued_to_email`` (exact,
+    case-insensitive, active users; None = the caller). ``scopes`` None leaves
+    the grant as is; ``[]`` writes an explicit empty grant.
+    """
+
+    agent_id: uuid.UUID
+    issued_to_email: str | None = Field(default=None, max_length=255)
+    scopes: list[str] | None = None
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+    service_uri: str | None = Field(default=None, max_length=255)
+    label: str | None = Field(default=None, max_length=255)
+    read_only: bool = False
+
+
+class AccountAgentApiKeyIssued(AgentApiKeyPublic):
+    """The issued key as the account CLI sees it. Never the value.
+
+    Inherits ``AgentApiKeyPublic`` (which has no ``token`` field); a self-issue
+    carries ``credential_url``, the web page where the user reveals the value.
+    """
+
+    base_url: str
+    spec_url: str
+    service_uri: str | None = None
+    issued_to_self: bool
+    credential_url: str | None = None
+    unknown_scopes: list[str] = []
+
+
+class AccountAgentApiKeyRevokeBody(SQLModel):
+    """Revoke an issued key — ``cinna agent-api access revoke`` (idempotent)."""
+
+    agent_id: uuid.UUID
+    key_id: uuid.UUID
+
+
+class AccountAgentApiScopesBody(SQLModel):
+    """Set or remove a person's scopes — ``cinna agent-api access scopes``.
+
+    ``scopes`` is required but nullable: a list sets the ``(producer, user)``
+    grant to exactly that list, an explicit ``null`` removes the grant. It has
+    no default so an omitted field can never silently delete a grant.
+    """
+
+    agent_id: uuid.UUID
+    user_email: str | None = Field(default=None, max_length=255)
+    scopes: list[str] | None
+
+
+class AccountAgentApiScopesResult(SQLModel):
+    """The person's access after a scopes change (None when nothing is left)."""
+
+    entry: AgentApiAccessEntry | None = None
+    unknown_scopes: list[str] = []
 
 
 class AccountAgentInspectCredentialItem(SQLModel):

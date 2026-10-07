@@ -7,8 +7,7 @@ docs:
   multi-sdk: multi_sdk.md
   multi-sdk tech: multi_sdk_tech.md
   knowledge tool: knowledge_tool.md
-  create agent task tool: create_agent_task_tool.md
-  session state tools: session_state_tools.md
+  cinna tasks tools: cinna_tasks_tools.md
   opencode interactive questions: opencode_interactive_questions.md
   opencode interactive questions tech: opencode_interactive_questions_tech.md
   claude code interactive tools: claude_code_interactive_tools.md
@@ -44,7 +43,7 @@ Pluggable adapter system supporting multiple AI providers. Each adapter converts
 
 Extension tools that give agents additional capabilities beyond built-in SDK tools:
 - **Knowledge Query** - RAG-based queries against indexed knowledge sources
-- **Agent Task Tools** - Six `mcp__agent_task__*` tools for task collaboration: add comments (with file attachments), update status, create tasks, create subtasks (team agents only), get task details, list tasks
+- **Cinna Task Tools** - The Cinna Task Protocol's eight `tasks_*` tools on the `cinna` MCP server (conversation mode): report a task's outcome, keep an own queue, delegate and receive results, answer questions, comment, read tasks. See [Cinna Task Tools](cinna_tasks_tools.md)
 
 ### Unified Event Format
 
@@ -197,8 +196,8 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
 - **Streaming** - Response events flow through the backend streaming pipeline. See [Streaming](../../application/realtime_events/frontend_backend_agentenv_streaming.md)
 - **Agent Environment Data Management** - Prompt sync and credential sync operations. See [Data Management](../agent_environment_data_management/agent_environment_data_management.md)
 - **Knowledge Query Tool** - RAG-based knowledge queries from building mode. See [Knowledge Tool](knowledge_tool.md) aspect and [Knowledge Sources](../../application/knowledge_sources/knowledge_sources.md)
-- **Agent Handover** - Create/respond task tools enable agent-to-agent delegation. See [Agent Handover](../agent_handover/agent_handover.md) and [Create Agent Task Tool](create_agent_task_tool.md)
-- **Input Tasks** - Six `mcp__agent_task__*` tools let agents report findings as comments, attach files, manage status, and delegate subtasks. See [Input Tasks](../../application/input_tasks/input_tasks.md)
+- **Agent Handover** - `tasks_targets` / `tasks_create` with an `assignee` delegate to another agent; configured handovers are prompt data. See [Agent Handover](../agent_handover/agent_handover.md) and [Cinna Task Tools](cinna_tasks_tools.md)
+- **Input Tasks** - The `cinna` server's `tasks_*` tools report outcomes (`tasks_report`), comment with files, and create own-queue tasks, delegations and subtasks; the report rule blocks unreported agent-given work on protocol environments. See [Input Tasks](../../application/input_tasks/input_tasks.md)
 - **Tools Approval** - Plugin-provided tools require explicit user approval before autonomous use; approval state synced to environments. See [Tools Approval Management](tools_approval_management.md)
 - **Agent Skills credential slots** - `core/cinna_api/credentials.py` gains `by_slot` / `require_slot` / `agent_api_session`, so a skill's script finds the credential it needs by **slot** (the entry's top-level `service_uri`) instead of by uuid, and fails with a sentence naming the slot when it is missing or unfilled. `BUILDING_AGENT.md` carries the authoring guidance — how to declare `credentials:` in a `SKILL.md`, how a script consumes a slot, and the convention that a script reporting a missing credential should tell the user how to fix it. **New SDK code means an environment rebuild**: a pre-feature container still receives `service_uri` and `is_placeholder` in `credentials.json`, it simply has no helper to read them with. See [Agent Skills](../agent_skills/agent_skills.md) and [Agent Credentials](../agent_credentials/agent_credentials.md)
 - **Agent Webapp** - Three dedicated endpoints serve static files, execute Python data scripts, and report webapp metadata from `/app/workspace/webapp/`. See [Agent Webapp](../agent_webapp/agent_webapp.md)
@@ -206,59 +205,13 @@ Backend ──HTTP POST──→ Environment Container (FastAPI)
 
 ## Agent Task MCP Tools
 
-All task tools are pre-approved (no per-call user confirmation required). They are injected into the system prompt only when the session is linked to a task (`source_task_id` is set). Building mode sessions do not receive task tools.
+Conversation-mode sessions get the Cinna Task Protocol's `cinna` MCP server: `tasks_targets`, `tasks_list`, `tasks_get`, `tasks_create`, `tasks_update`, `tasks_comment`, `tasks_report`, `tasks_reply` (Claude Code names `mcp__cinna__tasks_*`, OpenCode names `cinna_tasks_*`). All are pre-approved. Building mode sessions get no task tools. Names, descriptions and input schemas are read at runtime from `/app/core/protocols/tasks.schema.json`, installed with the `cinna-tasks` platform skill at every create and rebuild.
 
-### Tool Set
+The former `agent_task` server (`create_task`, `create_subtask`, `add_comment`, `update_status`, `get_details`, `list_tasks`, `handover_report`) is no longer registered; its names stay, deprecated, only in the pre-approval lists for environments built before the change.
 
-**`mcp__agent_task__add_comment`** — Primary reporting tool. Post findings, results, and progress as comments on the task. Accepts optional `files` (list of workspace paths) to attach deliverables.
+The system prompt carries data only — a task context block (current task with `report required`, chain depth, open delegations, ready tasks) and the configured handovers — while the `cinna-tasks` skill explains the tools. Each environment's `task_protocol_version` (announced on the stream's `done` event) gates these prompts and the report rule; an environment at 0 keeps the legacy texts.
 
-**`mcp__agent_task__update_status`** — Edge-case status override. Use only for: `blocked` (waiting for external input), explicit `completed` (before session ends), or `cancelled`. Standard transitions (`in_progress`, `completed`) are handled automatically by the backend from session lifecycle events.
-
-**`mcp__agent_task__create_task`** — Create a new standalone task. For team agents, the task inherits the team context. Replaces the old `create_agent_task` tool.
-
-**`mcp__agent_task__create_subtask`** — Team agents only. Create a child task under the current task and optionally assign it to a connected team member. The team connection topology is enforced — target agent must be reachable via a directed connection from the calling agent's node.
-
-**`mcp__agent_task__get_details`** — Read a task's full detail: title, description, status, priority, recent comments (last 10, content capped at 3000 chars each), and subtask progress summary. Accepts optional `task` short code; defaults to current task.
-
-**`mcp__agent_task__list_tasks`** — List tasks by scope: `assigned` (default — tasks assigned to this agent), `created` (tasks this agent created), or `team` (all tasks in the agent's team; team agents only).
-
-### Tool Availability
-
-| Tool | Standalone Agent (with task) | Team Agent |
-|------|------------------------------|------------|
-| `mcp__agent_task__add_comment` | Yes | Yes |
-| `mcp__agent_task__update_status` | Yes | Yes |
-| `mcp__agent_task__get_details` | Yes | Yes |
-| `mcp__agent_task__list_tasks` | Yes | Yes |
-| `mcp__agent_task__create_task` | Yes | Yes |
-| `mcp__agent_task__create_subtask` | No | Yes |
-
-### Removed Tools (Breaking Change)
-
-The following tools from the previous MCP task server were removed and replaced:
-
-| Removed Tool | Replacement |
-|--------------|------------|
-| `mcp__agent_task__create_agent_task` | `mcp__agent_task__create_task` |
-| `mcp__agent_task__update_session_state` | `mcp__agent_task__update_status` |
-| `mcp__agent_task__respond_to_task` | `mcp__agent_task__add_comment` on parent task |
-| `mcp__agent_task__create_collaboration` | `mcp__agent_task__create_subtask` (multiple calls) |
-| `mcp__agent_task__post_finding` | `mcp__agent_task__add_comment` |
-| `mcp__agent_task__get_collaboration_status` | `mcp__agent_task__get_details` |
-
-All old tools are removed from the MCP server, prompt templates, and pre-approved tool lists.
-
-### Task Context Prompt Injection
-
-When a session is created for a task, the system prompt includes a task context section. Content varies based on team membership:
-
-**Standalone agent:** task short code, title, priority, status, description, creator identity, and reporting instructions ("use `mcp__agent_task__add_comment` to post findings").
-
-**Team agent (extends standalone):** additionally includes team name, the agent's node role name, parent task context (if subtask — who delegated and why via connection prompt), and the list of downstream team members available for delegation.
-
-### MCP Server File
-
-`backend/app/env-templates/app_core_base/core/server/tools/mcp_bridge/task_server.py` — MCP stdio bridge server that wraps all six `mcp__agent_task__*` tools for OpenCode adapter. Claude Code adapter registers tools directly via `claude_code_sdk_adapter.py`.
+Tool-by-tool behaviour, prompts and file references: [Cinna Task Tools](cinna_tasks_tools.md).
 
 ---
 
@@ -345,13 +298,13 @@ When a session is created for a task, the system prompt includes a task context 
 │   │   │   └── sqlite_session_service.py  # SQLite-based session persistence
 │   │   └── tools/                 # Custom agent tools
 │   │       ├── knowledge_query.py # RAG knowledge source queries
-│   │       ├── create_agent_task.py  # Agent-to-agent task creation
-│   │       ├── respond_to_task.py    # Task response tool
-│   │       ├── update_session_state.py  # Session state modification
+│   │       ├── cinna_tasks_protocol.py  # `cinna` task tools: specs from tasks.schema.json, backend client
+│   │       ├── cinna_tasks_claude.py    # `cinna` in-process SDK server (Claude Code)
 │   │       └── mcp_bridge/        # MCP stdio servers for OpenCode custom tools
 │   │           ├── knowledge_server.py   # Wraps knowledge_query tool
-│   │           ├── task_server.py        # Wraps create_agent_task, respond_to_task, update_session_state
-│   │           └── collaboration_server.py  # Wraps create_collaboration, post_finding, get_collaboration_status
+│   │           └── cinna_server.py       # `cinna` task tools (OpenCode)
+│   ├── protocols/tasks.schema.json  # Installed per environment from the kit (Cinna Task Protocol)
+│   ├── skills/cinna-tasks/          # Installed per environment from the kit (platform skill)
 │   └── scripts/
 │       └── get_session_context.py # Stdlib-only helper for agent scripts
 └── workspace/                     # User workspace (volume-mounted, persists across rebuilds)
