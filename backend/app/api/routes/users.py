@@ -858,13 +858,15 @@ def read_user_by_id(
     Get a specific user by id.
     """
     user = session.get(User, user_id)
-    if user == current_user:
+    if user is not None and user == current_user:
         return _user_to_public(session, user)
     if not current_user.is_superuser:
         raise HTTPException(
             status_code=403,
             detail="The user doesn't have enough privileges",
         )
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
     return _user_to_public(session, user)
 
 
