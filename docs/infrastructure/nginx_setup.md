@@ -3,6 +3,8 @@ feature: nginx_setup
 domain: infrastructure
 one_liner: "Reference for the nginx location blocks the platform requires in production and in the frontend container, with links to the features that depend on them."
 primary_label: reference
+docs:
+  data volumes: data_volumes.md
 ---
 # Nginx Setup
 
@@ -119,6 +121,13 @@ Note: `/hooks/` (task triggers) carries the same requirement. Both paths must ap
 **Local dev (Vite):** the Vite dev server has no nginx in front, so `frontend/vite.config.ts` carries the same rule as a `server.proxy` entry (`^/agent-start(/|$)` → `VITE_API_URL`). Without it `http://localhost:5173/agent-start` falls through to the SPA and 404s.
 
 **`/api/agent-start` alias:** the same router is mounted a second time under `/api/agent-start`, which the universal `/api/` block above already proxies. Every link *inside* the kit points at the alias, so an instance whose reverse proxy was never given a `/agent-start` block still serves a fully working kit — only the pretty URL is affected. Adding the block is still recommended: the pasteable prompt is the feature's entry point.
+
+### `/git/`
+
+**Feature:** team library git smart HTTP (`/git/<repo_id>.git/...`) — see [Team Library](../application/team_library/team_library.md).
+**Why a dedicated block:** clones and pushes stream large packs both ways. The generic `/api/` block's 1 MB body default would break pushes, and there is deliberately no `/api/...` alias.
+**Special requirements:** `proxy_buffering off`, `proxy_request_buffering off`, `proxy_cache off`, `client_max_body_size 256m` (matches `GIT_MAX_PUSH_BYTES`), `proxy_read_timeout`/`proxy_send_timeout` 600s (matches `GIT_HTTP_TIMEOUT_SECONDS`), forwarded headers. Declare before `/`.
+**Upstream:** backend.
 
 ### `/`
 

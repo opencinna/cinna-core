@@ -235,6 +235,16 @@ ROUTING_TRACES_CLEARED = "ROUTING_TRACES_CLEARED"
 # a simulate that spends LLM budget and then fails still leaves a record.
 ROUTING_SIMULATE_RUN = "ROUTING_SIMULATE_RUN"
 
+# ── Team library event-type constants ────────────────────────────────
+# Emitted by the team library (``app.services.library``): an accepted share
+# (git push) to a library agent, a grant list replaced, an agent created or
+# removed. ``user_id`` is the acting person; details carry ``repo_id`` and
+# ``slug`` (plus ``before``/``after`` for a push), never file contents.
+LIBRARY_PUSH_ACCEPTED = "LIBRARY_PUSH_ACCEPTED"
+LIBRARY_GRANTS_CHANGED = "LIBRARY_GRANTS_CHANGED"
+LIBRARY_AGENT_CREATED = "LIBRARY_AGENT_CREATED"
+LIBRARY_AGENT_DELETED = "LIBRARY_AGENT_DELETED"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

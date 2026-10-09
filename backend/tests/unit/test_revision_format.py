@@ -415,3 +415,393 @@ def test_generate_gitignore_lists_every_denylisted_name() -> None:
     # Stable / non-empty.
     assert body.endswith("\n")
     assert body == RevisionFormat.generate_gitignore()
+
+
+# ── Tree v3 (kit agent folder as git wire format) ──────────────────────────────
+# API-observable checkout/pull/push paths live in
+# tests/api/agents/git/agents_git_tree_v3_test.py.
+
+_V3_KIT_ID = "11111111-2222-4333-8444-555555555555"
+
+
+def _v3_manifest(**overrides) -> dict:
+    manifest = RevisionFormat.build_manifest(
+        install=_fake_install(),
+        env=_fake_env(),
+        cred_specs=_CRED_SPECS,
+        schedule_specs=_SCHEDULE_SPECS,
+        plugin_specs=_PLUGIN_SPECS,
+        skills_summary=[],
+        revision_number=4,
+        version="2.0",
+        release_notes="shared",
+    )
+    manifest["sdk"] = {
+        "building": "opencode/anthropic",
+        "conversation": "claude-code/anthropic",
+        "model_override_building": None,
+        "model_override_conversation": None,
+    }
+    manifest["metadata"] = {
+        "description": "Shared agent",
+        "example_prompts": ["Do the thing"],
+    }
+    manifest["prompts"] = {
+        "workflow": "WF text",
+        "entrypoint": "EP text",
+        "refiner": None,
+        "router_trigger": "route me",
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def _write_v3_tree(root: Path, kit: dict, files: dict) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "cinna-agent.json").write_text(json.dumps(kit))
+    _make_env_workspace(root, files)
+
+
+def test_detect_tree_layout_distinguishes_v2_v3_and_unknown(tmp_path: Path) -> None:
+    v2 = tmp_path / "v2"
+    (v2 / "workspace").mkdir(parents=True)
+    (v2 / GIT_MANIFEST_FILENAME).write_text("{}")
+    v3 = tmp_path / "v3"
+    v3.mkdir()
+    (v3 / "cinna-agent.json").write_text("{}")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    # workspace/ next to the kit manifest is not a v3 tree (that is a v2 shape)
+    mixed = tmp_path / "mixed"
+    (mixed / "workspace").mkdir(parents=True)
+    (mixed / "cinna-agent.json").write_text("{}")
+
+    assert RevisionFormat.detect_tree_layout(v2) == "v2"
+    assert RevisionFormat.detect_tree_layout(v3) == "v3"
+    assert RevisionFormat.detect_tree_layout(empty) is None
+    assert RevisionFormat.detect_tree_layout(mixed) is None
+
+
+def test_read_v3_tree_applies_excludes_and_reads_prompts_from_files(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "v3"
+    _write_v3_tree(
+        src,
+        {
+            "contract_version": "1.8.0",
+            "id": _V3_KIT_ID,
+            "name": "Shared",
+            "description": "Shared agent",
+            "example_prompts": ["hello"],
+            "router_trigger_prompt": "route me",
+            "prompts": {
+                "workflow": "docs/WORKFLOW_PROMPT.md",
+                "entrypoint": "docs/ENTRYPOINT_PROMPT.md",
+            },
+            "bundle": {
+                "bundle_id": "io.test.v3",
+                "revision_number": 7,
+                "version": "1.3",
+                "content_hash": "sha256:abc",
+            },
+        },
+        {
+            "docs": {
+                "WORKFLOW_PROMPT.md": "workflow body",
+                "ENTRYPOINT_PROMPT.md": "entry body",
+            },
+            "scripts": {"run.sh": "echo hi"},
+            "AGENTS.md": "wrapper",
+            "README.md": "readme",
+            "Makefile": "all:",
+            "credentials": {"x.json": "{}", ".env": "K=V"},
+            "app-data": {"desktop.json": "{}"},
+            ".env": "SECRET=1",
+        },
+    )
+    dest = tmp_path / "view" / "workspace"
+
+    manifest = RevisionFormat.read_v3_tree(src, dest)
+
+    assert manifest["schema_version"] == REVISION_SCHEMA_VERSION
+    assert manifest["bundle_id"] == "io.test.v3"
+    assert manifest["revision_number"] == 7
+    assert manifest["version"] == "1.3"
+    assert manifest["metadata"]["description"] == "Shared agent"
+    assert manifest["metadata"]["example_prompts"] == ["hello"]
+    # Prompt texts come from the files named in `prompts`; absent kinds are None.
+    assert manifest["prompts"]["workflow"] == "workflow body"
+    assert manifest["prompts"]["entrypoint"] == "entry body"
+    assert manifest["prompts"]["refiner"] is None
+    assert manifest["prompts"]["router_trigger"] == "route me"
+
+    # cloud_import_excludes applied: content copied, wrapper/secret paths not.
+    assert (dest / "scripts" / "run.sh").read_text() == "echo hi"
+    assert (dest / "docs" / "WORKFLOW_PROMPT.md").is_file()
+    for excluded in (
+        "AGENTS.md", "README.md", "Makefile", "credentials", "app-data", ".env",
+    ):
+        assert not (dest / excluded).exists(), excluded
+    # The source clone is never mutated.
+    assert (src / "AGENTS.md").is_file()
+    assert (src / "credentials" / ".env").is_file()
+
+
+def test_read_v3_tree_without_bundle_block_has_no_bundle_id(tmp_path: Path) -> None:
+    src = tmp_path / "desktop_made"
+    _write_v3_tree(
+        src,
+        {
+            "contract_version": "1.8.0",
+            "id": _V3_KIT_ID,
+            "name": "Desk",
+            "description": "Made on the desktop",
+        },
+        {"docs": {"WORKFLOW_PROMPT.md": "wf"}},
+    )
+    manifest = RevisionFormat.read_v3_tree(src, tmp_path / "view" / "workspace")
+    assert "bundle_id" not in manifest
+    assert manifest["prompts"]["workflow"] == "wf"
+    assert manifest["metadata"]["description"] == "Made on the desktop"
+
+
+def test_read_v3_tree_never_follows_symlinked_prompt_or_content(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("TOP SECRET")
+    src = tmp_path / "v3"
+    _write_v3_tree(
+        src,
+        {"contract_version": "1.8.0", "id": _V3_KIT_ID, "name": "S", "description": "d"},
+        {"docs": {}},
+    )
+    (src / "docs" / "WORKFLOW_PROMPT.md").symlink_to(outside)
+    (src / "link.txt").symlink_to(outside)
+    dest = tmp_path / "view" / "workspace"
+
+    manifest = RevisionFormat.read_v3_tree(src, dest)
+
+    assert manifest["prompts"]["workflow"] is None
+    assert not (dest / "link.txt").exists()
+
+
+def test_write_v3_tree_round_trips_through_reader(tmp_path: Path) -> None:
+    env_root = tmp_path / "env"
+    _make_env_workspace(
+        env_root / WORKSPACE_ROOT_REL,
+        {
+            "scripts": {"run.sh": "echo hi"},
+            "credentials": {"secret.json": "{}"},
+        },
+    )
+    manifest = _v3_manifest()
+    original = json.loads(json.dumps(manifest))
+    dest = tmp_path / "clone"
+    dest.mkdir()
+
+    result = RevisionFormat.write_v3_tree(
+        env_workspace_root=env_root,
+        dest=dest,
+        manifest=manifest,
+        existing_kit_manifest=None,
+        name="Shared Agent",
+    )
+    content_hash = result.content_hash
+    assert result.dropped_paths == []
+
+    assert content_hash and ":" not in content_hash
+    assert RevisionFormat.detect_tree_layout(dest) == "v3"
+    assert (dest / "scripts" / "run.sh").read_text() == "echo hi"
+    assert not (dest / "credentials").exists()
+    assert not (dest / "workspace").exists()
+    assert (dest / "docs" / "WORKFLOW_PROMPT.md").read_text() == "WF text"
+    assert (dest / "docs" / "ENTRYPOINT_PROMPT.md").read_text() == "EP text"
+    assert (dest / ".gitignore").is_file()
+
+    kit = json.loads((dest / "cinna-agent.json").read_text())
+    assert kit["contract_version"] == "1.8.0"
+    assert kit["name"] == "Shared Agent"
+    assert kit["slug"] == "shared-agent"
+    assert kit["description"] == "Shared agent"
+    assert kit["router_trigger_prompt"] == "route me"
+    # claude-code/anthropic conversation SDK → "claude" engine
+    assert kit["runtime"]["engine"] == "claude"
+    assert uuid_like(kit["id"])
+    assert kit["bundle"]["bundle_id"] == original["bundle_id"]
+    assert "prompts" not in kit["bundle"]
+
+    # Reader yields the input manifest back (minus content_hash / the prompt
+    # kinds that were None, which the reader reports as None).
+    back = RevisionFormat.read_v3_tree(dest, tmp_path / "view" / "workspace")
+    assert manifest["content_hash"] == f"sha256:{content_hash}"
+    for key in (
+        "bundle_id", "revision_number", "version", "published_at", "sdk",
+        "required_credential_specs", "schedules", "plugin_specs", "release_notes",
+    ):
+        assert back[key] == original[key], key
+    assert back["content_hash"] == manifest["content_hash"]
+    assert back["metadata"]["description"] == "Shared agent"
+    assert back["metadata"]["example_prompts"] == ["Do the thing"]
+    assert back["prompts"]["workflow"] == "WF text"
+    assert back["prompts"]["entrypoint"] == "EP text"
+    assert back["prompts"]["router_trigger"] == "route me"
+
+
+def uuid_like(value: str) -> bool:
+    import uuid
+
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def test_write_v3_tree_preserves_unknown_kit_keys_id_and_excluded_files(
+    tmp_path: Path,
+) -> None:
+    env_root = tmp_path / "env"
+    _make_env_workspace(
+        env_root / WORKSPACE_ROOT_REL,
+        {"scripts": {"new.sh": "echo new"}},
+    )
+    dest = tmp_path / "clone"
+    # A desktop teammate's previous export: old content, their AGENTS.md, and a
+    # file the reader would import that the new export no longer carries.
+    _make_env_workspace(
+        dest,
+        {
+            "AGENTS.md": "teammate wrapper",
+            "README.md": "teammate readme",
+            "scripts": {"old.sh": "echo old"},
+            "stale.txt": "gone after export",
+        },
+    )
+    existing = {
+        "contract_version": "1.7.0",
+        "id": _V3_KIT_ID,
+        "name": "Old name",
+        "slug": "kept-slug",
+        "x-teammate": {"custom": True},
+        "runtime": {"engine": "opencode", "extra": 1},
+    }
+    manifest = _v3_manifest()
+
+    RevisionFormat.write_v3_tree(
+        env_workspace_root=env_root,
+        dest=dest,
+        manifest=manifest,
+        existing_kit_manifest=existing,
+        name="New name",
+    )
+
+    kit = json.loads((dest / "cinna-agent.json").read_text())
+    assert kit["id"] == _V3_KIT_ID
+    assert kit["x-teammate"] == {"custom": True}
+    assert kit["slug"] == "kept-slug"
+    assert kit["name"] == "New name"
+    assert kit["contract_version"] == "1.8.0"
+    assert kit["runtime"] == {"engine": "claude", "extra": 1}
+    # Prune only removed what the reader would import.
+    assert (dest / "AGENTS.md").read_text() == "teammate wrapper"
+    assert (dest / "README.md").read_text() == "teammate readme"
+    assert not (dest / "stale.txt").exists()
+    assert not (dest / "scripts" / "old.sh").exists()
+    assert (dest / "scripts" / "new.sh").read_text() == "echo new"
+    # the existing dict handed in is not mutated
+    assert existing["contract_version"] == "1.7.0"
+
+
+def test_write_v3_tree_engine_opencode_and_invalid_slug_falls_back(
+    tmp_path: Path,
+) -> None:
+    env_root = tmp_path / "env"
+    _make_env_workspace(env_root / WORKSPACE_ROOT_REL, {"a.txt": "x"})
+    manifest = _v3_manifest()
+    manifest["sdk"] = {"building": "opencode/anthropic", "conversation": "opencode/anthropic"}
+    dest = tmp_path / "clone"
+    dest.mkdir()
+
+    RevisionFormat.write_v3_tree(
+        env_workspace_root=env_root, dest=dest, manifest=manifest,
+        existing_kit_manifest=None, name="!!!", slug="Bad Slug",
+    )
+    kit = json.loads((dest / "cinna-agent.json").read_text())
+    assert kit["runtime"]["engine"] == "opencode"
+    # "!!!" slugifies to nothing usable → the safe fallback, never the bad slug
+    assert kit["slug"] == "agent"
+
+
+def test_kit_path_excluded_semantics() -> None:
+    from app.services.bundles.revision_format import kit_path_excluded
+
+    pats = ["credentials/", "**/.env", "AGENTS.md", "**/*.pem", ".git/"]
+    # trailing slash covers the dir and everything under it
+    assert kit_path_excluded("credentials", pats)
+    assert kit_path_excluded("credentials/x.json", pats)
+    # ** spans any depth including zero segments
+    assert kit_path_excluded(".env", pats)
+    assert kit_path_excluded("a/b/.env", pats)
+    assert kit_path_excluded("keys/server.pem", pats)
+    # patterns without leading ** are anchored at the agent root
+    assert kit_path_excluded("AGENTS.md", pats)
+    assert not kit_path_excluded("docs/AGENTS.md", pats)
+    # `*` does not cross segments; near-misses are kept
+    assert not kit_path_excluded(".env.example", pats)
+    assert not kit_path_excluded("scripts/run.sh", pats)
+    assert not kit_path_excluded("credentials.txt", pats)
+    # normalisation: ./ and leading slash tolerated
+    assert kit_path_excluded("./credentials/x", pats)
+    # empty path / pattern never match
+    assert not kit_path_excluded("", pats)
+    assert not kit_path_excluded("a", ["", "  "])
+
+
+def test_v3_write_example_prompts_are_cleaned_and_empty_description_round_trips(
+    tmp_path: Path,
+) -> None:
+    env_root = tmp_path / "env"
+    _make_env_workspace(env_root / WORKSPACE_ROOT_REL, {"a.txt": "x"})
+    manifest = _v3_manifest()
+    manifest["metadata"] = {
+        "description": "",
+        "example_prompts": ["ok", "", "   ", "y" * 900] + [f"p{i}" for i in range(40)],
+    }
+    dest = tmp_path / "clone"
+    dest.mkdir()
+    RevisionFormat.write_v3_tree(
+        env_workspace_root=env_root, dest=dest, manifest=manifest,
+        existing_kit_manifest=None, name="Named",
+    )
+    kit = json.loads((dest / "cinna-agent.json").read_text())
+    prompts = kit["example_prompts"]
+    assert len(prompts) <= 20
+    assert all(p.strip() and len(p) <= 500 for p in prompts)
+    assert prompts[0] == "ok"
+
+    back = RevisionFormat.read_v3_tree(dest, tmp_path / "view" / "workspace")
+    # an empty description stays empty; the name must not leak back as one
+    assert back["metadata"].get("description", "") in ("", None)
+    assert back["metadata"]["description"] != "Named"
+
+
+def test_v3_write_preserves_a_custom_prompts_map(tmp_path: Path) -> None:
+    env_root = tmp_path / "env"
+    _make_env_workspace(env_root / WORKSPACE_ROOT_REL, {"a.txt": "x"})
+    dest = tmp_path / "clone"
+    dest.mkdir()
+    existing = {
+        "id": _V3_KIT_ID,
+        "prompts": {"workflow": "prompts/main.md", "entrypoint": "prompts/entry.md"},
+    }
+    RevisionFormat.write_v3_tree(
+        env_workspace_root=env_root, dest=dest, manifest=_v3_manifest(),
+        existing_kit_manifest=existing, name="N",
+    )
+    kit = json.loads((dest / "cinna-agent.json").read_text())
+    assert kit["prompts"]["workflow"] == "prompts/main.md"
+    assert (dest / "prompts" / "main.md").read_text() == "WF text"
+    back = RevisionFormat.read_v3_tree(dest, tmp_path / "view" / "workspace")
+    assert back["prompts"]["workflow"] == "WF text"

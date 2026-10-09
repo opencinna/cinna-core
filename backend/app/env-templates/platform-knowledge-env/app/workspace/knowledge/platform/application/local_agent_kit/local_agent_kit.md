@@ -61,7 +61,7 @@ agent into it with one command.
     guide, template or tool edit. Answers *"is my copy of the kit current?"*,
     and it is what `kit.py refresh` polls and what every ETag is keyed on. It
     gates nothing.
-  - `contract_version` — a hand-maintained semantic version (`1.7.0` today),
+  - `contract_version` — a hand-maintained semantic version (`1.8.0` today; 1.8.0 adds `layout.json` `shared_remote`, the `Marketplaces` workshop role and `schema/cinna-marketplace.schema.json`, see [Team Library](../team_library/team_library.md)),
     carried in three places that must agree: the `CONTRACT_VERSION` file,
     `kit.json` and `layout.json`. Every manifest records the one it was
     scaffolded with. Answers *"may this tool operate this folder?"*
@@ -95,8 +95,8 @@ agent into it with one command.
   pre-computed payload per question so the model never does arithmetic, SQLite
   state under `app-data/storage/`, side effects behind a gate, `--dry-run`,
   idempotency key and audit log, recorded test scenarios under
-  `docs/test_scenarios/`, a strong building model with a small conversation
-  model, and a `docs/AGENT_DEVELOPMENT.md` with a defects log. Its §0 advisor
+  `docs/test_scenarios/`, a strong building model with a small conversation <!-- nocheck -->
+  model, and a `docs/AGENT_DEVELOPMENT.md` with a defects log. Its §0 advisor <!-- nocheck -->
   table makes the assistant *recommend* a pattern with its reason when a trigger
   fires, before building, and then build what the user chooses. The guide is the
   single source for every channel: `make sync-platform-knowledge` also copies it
@@ -104,7 +104,7 @@ agent into it with one command.
   carry no placeholder), the §0 table is copied into `BUILDING_AGENT.md` and the
   cinna-cli `CLAUDE.md` templates, and the account context package ships it
   inside `context/local-kit/`. `kit.py list` reports the `design` rung once an
-  agent has `docs/AGENT_DEVELOPMENT.md` or `docs/test_scenarios/`.
+  agent has `docs/AGENT_DEVELOPMENT.md` or `docs/test_scenarios/`. <!-- nocheck -->
 - **The three roles** — the assistant switches between *Orchestrator* (root
   folder; creates/lists/coordinates agents), *Builder* (inside one agent's
   folder; writes its scripts, prompts, config, manifest), and *Agent* (inside

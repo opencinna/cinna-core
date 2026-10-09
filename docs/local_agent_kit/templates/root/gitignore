@@ -33,6 +33,10 @@
 Cloud/.cinna/
 Cloud/*/.cinna/
 
+# External marketplace checkouts: each is its own clone, managed by the host that
+# added it, and re-fetchable from where it came from.
+Marketplaces/
+
 # The kit is re-downloadable from the platform; do not version it here.
 .cinna-kit/
 # Redundant while the line above stands, and here for the workshop that decides to

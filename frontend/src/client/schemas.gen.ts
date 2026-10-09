@@ -22140,6 +22140,553 @@ than policy: :class:\`AccessPolicyPublic\` is fetched by every login and
 signup page load under one shared cache key, and none of them render this.`
 } as const;
 
+export const LibraryAgentSchema = {
+    properties: {
+        repo_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Repo Id'
+        },
+        slug: {
+            type: 'string',
+            title: 'Slug'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            type: 'string',
+            title: 'Description'
+        },
+        clone_url: {
+            type: 'string',
+            title: 'Clone Url'
+        },
+        default_branch: {
+            type: 'string',
+            title: 'Default Branch'
+        },
+        head_sha: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Head Sha'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        maintainers: {
+            items: {
+                '$ref': '#/components/schemas/LibraryMaintainer'
+            },
+            type: 'array',
+            title: 'Maintainers',
+            default: []
+        },
+        manifest: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/LibraryManifest'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        cloud_install_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cloud Install Id'
+        },
+        access: {
+            type: 'string',
+            enum: ['read', 'write', 'maintain'],
+            title: 'Access'
+        }
+    },
+    type: 'object',
+    required: ['repo_id', 'slug', 'name', 'description', 'clone_url', 'default_branch', 'updated_at', 'access'],
+    title: 'LibraryAgent'
+} as const;
+
+export const LibraryAgentAdminSchema = {
+    properties: {
+        repo_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Repo Id'
+        },
+        slug: {
+            type: 'string',
+            title: 'Slug'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            type: 'string',
+            title: 'Description'
+        },
+        clone_url: {
+            type: 'string',
+            title: 'Clone Url'
+        },
+        default_branch: {
+            type: 'string',
+            title: 'Default Branch'
+        },
+        head_sha: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Head Sha'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        maintainers: {
+            items: {
+                '$ref': '#/components/schemas/LibraryMaintainer'
+            },
+            type: 'array',
+            title: 'Maintainers',
+            default: []
+        },
+        manifest: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/LibraryManifest'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        cloud_install_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cloud Install Id'
+        },
+        owner: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/LibraryOwner'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        grants: {
+            items: {
+                '$ref': '#/components/schemas/LibraryGrantPublic'
+            },
+            type: 'array',
+            title: 'Grants',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['repo_id', 'slug', 'name', 'description', 'clone_url', 'default_branch', 'updated_at'],
+    title: 'LibraryAgentAdmin',
+    description: `Admin listing row: a library agent without the caller's \`\`access\`\`,
+plus its creator and every grant.`
+} as const;
+
+export const LibraryAgentCreateSchema = {
+    properties: {
+        slug: {
+            type: 'string',
+            pattern: '^[a-z0-9][a-z0-9-]{1,62}$',
+            title: 'Slug'
+        },
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        description: {
+            type: 'string',
+            maxLength: 10000,
+            title: 'Description',
+            default: ''
+        }
+    },
+    type: 'object',
+    required: ['slug', 'name'],
+    title: 'LibraryAgentCreate',
+    description: 'Body of ``POST /library/agents``.'
+} as const;
+
+export const LibraryGrantInSchema = {
+    properties: {
+        principal: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/LibraryPrincipalUser'
+                },
+                {
+                    '$ref': '#/components/schemas/LibraryPrincipalRole'
+                },
+                {
+                    type: 'string',
+                    const: 'everyone'
+                }
+            ],
+            title: 'Principal'
+        },
+        access: {
+            type: 'string',
+            enum: ['read', 'write', 'maintain'],
+            title: 'Access'
+        }
+    },
+    type: 'object',
+    required: ['principal', 'access'],
+    title: 'LibraryGrantIn',
+    description: 'One entry of ``PUT /library/agents/{repo_id}/grants`` (full replace).'
+} as const;
+
+export const LibraryGrantPublicSchema = {
+    properties: {
+        principal: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/LibraryPrincipalUser'
+                },
+                {
+                    '$ref': '#/components/schemas/LibraryPrincipalRole'
+                },
+                {
+                    type: 'string',
+                    const: 'everyone'
+                }
+            ],
+            title: 'Principal'
+        },
+        access: {
+            type: 'string',
+            enum: ['read', 'write', 'maintain'],
+            title: 'Access'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        granted_by: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Granted By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['principal', 'access', 'display_name', 'created_at'],
+    title: 'LibraryGrantPublic'
+} as const;
+
+export const LibraryListingSchema = {
+    properties: {
+        agents: {
+            items: {
+                '$ref': '#/components/schemas/LibraryAgent'
+            },
+            type: 'array',
+            title: 'Agents',
+            default: []
+        },
+        mirrors: {
+            items: {
+                '$ref': '#/components/schemas/LibraryMirror'
+            },
+            type: 'array',
+            title: 'Mirrors',
+            default: []
+        }
+    },
+    type: 'object',
+    title: 'LibraryListing',
+    description: 'Response of ``GET /library``.'
+} as const;
+
+export const LibraryMaintainerSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'display_name'],
+    title: 'LibraryMaintainer'
+} as const;
+
+export const LibraryManifestSchema = {
+    properties: {
+        id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Id'
+        },
+        name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        runtime: {
+            '$ref': '#/components/schemas/LibraryManifestRuntime'
+        },
+        contract_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Contract Version'
+        }
+    },
+    type: 'object',
+    title: 'LibraryManifest',
+    description: 'The projection of ``cinna-agent.json`` at HEAD the library shows.'
+} as const;
+
+export const LibraryManifestRuntimeSchema = {
+    properties: {
+        engine: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Engine'
+        }
+    },
+    type: 'object',
+    title: 'LibraryManifestRuntime'
+} as const;
+
+export const LibraryMirrorSchema = {
+    properties: {
+        marketplace_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Marketplace Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        clone_url: {
+            type: 'string',
+            title: 'Clone Url'
+        },
+        head_sha: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Head Sha'
+        },
+        format: {
+            type: 'string',
+            enum: ['claude', 'codex', 'skills', 'cinna'],
+            title: 'Format'
+        },
+        entries: {
+            items: {
+                '$ref': '#/components/schemas/LibraryMirrorEntry'
+            },
+            type: 'array',
+            title: 'Entries',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['marketplace_id', 'name', 'clone_url', 'format'],
+    title: 'LibraryMirror'
+} as const;
+
+export const LibraryMirrorEntrySchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        kind: {
+            type: 'string',
+            enum: ['agent', 'plugin', 'skill'],
+            title: 'Kind'
+        },
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        supported: {
+            type: 'boolean',
+            title: 'Supported'
+        },
+        unsupported_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Unsupported Reason'
+        }
+    },
+    type: 'object',
+    required: ['name', 'kind', 'path', 'supported'],
+    title: 'LibraryMirrorEntry'
+} as const;
+
+export const LibraryOwnerSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'display_name'],
+    title: 'LibraryOwner'
+} as const;
+
+export const LibraryPrincipalRoleSchema = {
+    properties: {
+        role: {
+            type: 'string',
+            title: 'Role'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['role'],
+    title: 'LibraryPrincipalRole'
+} as const;
+
+export const LibraryPrincipalUserSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['user_id'],
+    title: 'LibraryPrincipalUser'
+} as const;
+
 export const LoginTokenSchema = {
     properties: {
         kind: {

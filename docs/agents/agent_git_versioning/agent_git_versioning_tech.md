@@ -42,6 +42,7 @@
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `GIT_SOURCE_ALLOW_PRIVATE_HOSTS` | `false` | When `true`, egress guard allows git URLs resolving to private/loopback/link-local addresses (for self-hosted git on private LANs) |
+| `GIT_EXPORT_TREE_V3` | `false` | Push writes tree v3 (kit folder as-is) instead of v2; readers accept both always; a remote already v3 is kept v3 |
 | `GIT_SOURCE_MAX_FILE_BYTES` | (configured in settings) | Maximum size (bytes) for any single workspace file accepted during checkout or pushed to the remote; `_assert_no_oversized_files` enforces this before committing or before any bundle/revision row is created |
 | `GIT_SOURCE_NETWORK_TIMEOUT_SECONDS` | `30` | Timeout applied to remote-probe operations on read paths (`ls_remote_head`, `git_log_subdir`, `subdir_changed_between`) via GitPython `kill_after_timeout`. Also sets `GIT_HTTP_LOW_SPEED_LIMIT`/`GIT_HTTP_LOW_SPEED_TIME` for HTTP transports and SSH `ConnectTimeout`/`ServerAliveInterval`/`ServerAliveCountMax`. Not applied to full-history clones on write paths |
 
@@ -553,6 +554,10 @@ Dispatches filename: tries `manifest.json` then `cinna.agent.json`. Validates `s
 Maps manifest keys to `AgentBundleRevision` constructor kwargs: `workflow_prompt`, `entrypoint_prompt`, `refiner_prompt`, `router_trigger_prompt`, `agent_sdk_building`, `agent_sdk_conversation`, `model_override_building`, `model_override_conversation`, `required_credential_specs`, `schedules`, `plugin_specs`, `version`, `release_notes`, and the 8 metadata fields: `description`, `example_prompts`, `status_refresh_command`, `agent_api_enabled`, `agent_api_identity_enabled`, `a2a_config`, `agent_sdk_config`, `webapp_enabled`. Does not produce `bundle_id` (FK uuid), `revision_number`, `snapshot_path`, `content_hash`, or `published_by_user_id` — those are caller-supplied.
 
 Missing-key-tolerant: the `metadata` sub-dict is read with `.get()` defaults — a manifest written before this block was added yields `None` for all 8 metadata kwargs, mapping to `NULL` columns on the revision row, which the restore side treats as "do not overwrite the consumer's current value".
+
+### Tree v3 (kit agent folder)
+
+`RevisionFormat` reads v3 kit-folder trees (`cinna-agent.json` at the root, content beside it, revision block under the manifest's `bundle` key) always: `detect_tree_layout` returns `v2`/`v3`, `read_v3_tree` materialises a v2 workspace plus a v2-equivalent manifest (marked with `TREE_LAYOUT_KEY = "v3"`), so install, checkout and pull stay v2. Git export writes v3 via `write_v3_tree` when `GIT_EXPORT_TREE_V3` is true or the remote already holds a v3 tree (a v3 remote is never downgraded); bundle storage stays v2 and the stored baseline manifest carries the v3 marker. Paths the kit excludes (`cloud_import_excludes`, e.g. `README.md`) do not travel in a v3 tree; they are returned as `dropped_paths`, logged, and `project_v3_view` removes them from the live side of dirty checks (`compute_dirty` and status) when the baseline is v3, so a push leaves the agent clean. The library is one such remote, see [Team Library](../../application/team_library/team_library_tech.md).
 
 ### Git-ignore generation
 

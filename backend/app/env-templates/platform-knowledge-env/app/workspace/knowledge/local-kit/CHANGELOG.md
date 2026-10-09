@@ -16,6 +16,35 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.8.0 — shared agents
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.8.0 folder, because the majors match.
+
+### Added
+
+- **`layout.json` → `shared_remote`.** How an agent folder travels through a
+  shared remote such as a team library: the agent folder is the tree as it is
+  on disk (`tree: "agent_folder"`, `cinna-agent.json` at the root), on one
+  branch (`default_branch: "main"`, `one_branch: true`). `never_travels` names
+  the paths of the `credentials` and `runtime_data` roles (`credentials/`,
+  `app-data/`) and points at the `secret_files` rule; `local_state` names where
+  a host keeps its per-machine link to the remote (`app-data/desktop.json`, key
+  `shared_remote`, fields `kind`, `repo_id`, `clone_url`, `kind` one of
+  `cinna`/`external`). That file sits under `app-data/`, so it never travels.
+  Hosts and the server read these keys rather than prose.
+- **Workshop role `Marketplaces`** (`role: "marketplaces"`, a directory that
+  survives updates): external marketplace checkouts, managed by the host and
+  never edited by the workshop assistant. `templates/root/gitignore` ignores it.
+- **`schema/cinna-marketplace.schema.json`** for `.cinna-plugin/marketplace.json`,
+  Claude-compatible at the top level, with an optional `metadata.cinna` block per
+  entry (`kind`, `minContract`). Unknown keys are accepted everywhere; a host
+  warns about them and never rejects. Pointed at from `kit.json` →
+  `marketplace_schema`.
+- **`bundle` in `cinna-agent.json`** is registered (`x-scope: "host:cinna-core"`,
+  ignored on import): the revision block cinna-core writes when it exports an
+  agent to a shared tree. Other hosts preserve it and ignore it.
+
 ## 1.7.0 — issued agent API keys
 
 Additive. Every 1.x folder is still valid and needs no change, and a tool built

@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencinna.io/schema/cinna-marketplace.schema.json",
+  "title": ".cinna-plugin/marketplace.json",
+  "description": "A marketplace catalog: the file at <root>/.cinna-plugin/marketplace.json, where the directory holding .cinna-plugin/ is the marketplace root. Compatible with the Claude Code marketplace file at the top level and per entry, so one repository validates in both tools. Cinna-specific data lives under plugins[].metadata.cinna. Contract 1.8.0.",
+  "$comment": "additionalProperties is true at every level on purpose: an unknown key is reported as a warning by the host and never makes the file invalid (the Claude Code rule). Relative sources resolve from the marketplace root, start with './' and never contain '..'.",
+  "type": "object",
+  "required": ["name", "owner", "plugins"],
+  "additionalProperties": true,
+  "properties": {
+    "name": {
+      "description": "Marketplace name: letters, digits, '.', '_' and '-', starting with a letter or digit.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "owner": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "email": {"type": "string"},
+        "url": {"type": "string"}
+      }
+    },
+    "description": {"type": "string"},
+    "version": {"type": "string"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "pluginRoot": {
+          "description": "Directory relative sources are resolved under, relative to the marketplace root.",
+          "type": "string"
+        }
+      }
+    },
+    "renames": {
+      "description": "Append-only map from an old entry name to its new name; null means the entry was removed.",
+      "type": "object",
+      "additionalProperties": {"type": ["string", "null"]}
+    },
+    "plugins": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["name", "source"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "source": {"$ref": "#/$defs/source"},
+        "description": {"type": "string"},
+        "version": {"type": "string"},
+        "dependencies": {
+          "type": "array",
+          "items": {"type": ["string", "object"]}
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "cinna": {
+              "description": "Cinna extensions, all optional.",
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "kind": {
+                  "description": "What the entry is. Absent means agent in a Cinna marketplace.",
+                  "enum": ["agent", "skill", "plugin"]
+                },
+                "minContract": {
+                  "description": "Lowest kit contract version the entry needs.",
+                  "type": "string",
+                  "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?$"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "source": {
+      "$comment": "The four source types Cinna resolves, plus a fallback branch so a Claude Code file using a source type Cinna does not resolve (archive, npm, command, ...) still validates; a host reports such an entry as not installable instead of rejecting the file.",
+      "oneOf": [
+        {
+          "description": "Relative path from the marketplace root.",
+          "type": "string",
+          "pattern": "^\\./",
+          "not": {"pattern": "(^|/)\\.\\.(/|$)"}
+        },
+        {
+          "type": "object",
+          "required": ["source", "repo"],
+          "additionalProperties": true,
+          "properties": {
+            "source": {"const": "github"},
+            "repo": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+            "ref": {"type": "string"},
+            "sha": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["source", "url"],
+          "additionalProperties": true,
+          "properties": {
+            "source": {"const": "url"},
+            "url": {"type": "string", "minLength": 1},
+            "ref": {"type": "string"},
+            "sha": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["source", "url", "path"],
+          "additionalProperties": true,
+          "properties": {
+            "source": {"const": "git-subdir"},
+            "url": {"type": "string", "minLength": 1},
+            "path": {"type": "string", "minLength": 1},
+            "ref": {"type": "string"},
+            "sha": {"type": "string"}
+          }
+        },
+        {
+          "description": "A source type Cinna does not resolve.",
+          "type": "object",
+          "required": ["source"],
+          "additionalProperties": true,
+          "properties": {
+            "source": {"type": "string", "not": {"enum": ["github", "url", "git-subdir"]}}
+          }
+        }
+      ]
+    }
+  }
+}

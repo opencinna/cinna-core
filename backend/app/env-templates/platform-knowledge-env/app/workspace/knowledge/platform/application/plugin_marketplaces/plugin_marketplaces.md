@@ -64,6 +64,8 @@ This means marketplace sync is now purely a metadata operation — fast, statele
 
 ## Business Rules
 
+- **Mirrors (planned, deferred)**: the team library has groundwork (`kind='mirror'`, `git_repo.marketplace_id`) for hosting a marketplace mirror on the core git host; no mirror is created or synced yet. See [Team Library](../team_library/team_library.md).
+
 - **Admin-only management**: Creating, updating, deleting, and syncing marketplaces requires superuser access.
 - **Automatic initial sync**: Marketplace registration always triggers an immediate sync.
 - **Temp-clone, no persistent cache**: Every sync (initial or manual) clones to a new throwaway directory and discards it. The backend holds only Postgres rows — no plugin files on disk.

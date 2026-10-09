@@ -13,6 +13,8 @@ App Sync is the server-side sync substrate that lets authenticated native client
 
 The canonical scenario: a user creates jobs and notes in Cinna Desktop, logs out (the local cache is wiped), then logs back in on the same or a different device. App Sync restores the full dataset seamlessly. A second device signed into the same Cinna account sees the same data immediately.
 
+**Contrast:** [Team Library](../team_library/team_library.md) trees are plaintext on the server by design; the zero-knowledge guarantee below does not apply to them.
+
 **The design's north star is zero-knowledge privacy.** The server stores only ciphertext it cannot decrypt. There is no server-readable mode, no fallback, and no server-held key. Even a fully compromised server or a compelled disclosure yields only undecryptable blobs.
 
 ---

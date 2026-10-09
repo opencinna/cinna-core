@@ -70,6 +70,10 @@ services:
       # here on each plugin sync, so an unmounted path would silently lose the
       # content behind every install
       - ${HOST_SKILL_STORAGE_DIR:-./backend/data/skills}:/app/data/skills
+      # Team library bare repositories (GIT_STORAGE_DIR) — must persist across
+      # backend container recreation: they ARE the shared agents (Postgres only
+      # caches head_sha). Multi-replica deployments need a shared volume.
+      - ${HOST_GIT_STORAGE_DIR:-./backend/data/git}:/app/data/git
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
       interval: 10s

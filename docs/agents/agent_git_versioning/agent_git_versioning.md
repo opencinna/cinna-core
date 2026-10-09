@@ -365,6 +365,8 @@ Planned but not yet implemented: per-field value diffs (local vs. baseline text 
 
 ## Integration Points
 
+Shared team remote: the [Team Library](../../application/team_library/team_library.md) is a core-hosted git remote using the v3 tree (the kit agent folder as-is). Reading v3 is always supported; writing v3 is behind `GIT_EXPORT_TREE_V3` or happens when the remote is already v3. Files the kit excludes from shared trees (e.g. `README.md`) do not travel and are ignored by the dirty check.
+
 | Feature | Relationship |
 |---------|-------------|
 | [Agent Bundles](../agent_bundles/agent_bundles.md) | Git is an external layer over `AgentBundleRevision`. Every git operation persists/reads a revision; checkout and pull reuse `InstallService._install_from_revision` and `replace_bundle_content`; push and connect reuse `RevisionFormat.write_tree` (which calls `PublishService._snapshot_workspace_tree`). `publisher_user_id = NULL` on git-imported `AgentBundle` rows is enabled by migration `c8a4f1e09b27_agent_bundle_publisher_nullable`. Push and connect now also persist an `AgentBundleRevision` as the dirty-check baseline. A resolved pull (either `conflict_resolution`) additionally persists a pre-mutation backup revision of the live agent, ordered below the incoming revision so it never becomes the new dirty-check baseline; `InstallService._apply_revision_metadata` gained a `skip_fields` parameter so pull's `keep_local` can narrow which metadata columns it restores from the incoming revision |

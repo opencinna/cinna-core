@@ -147,6 +147,14 @@ class EventType:
     IMPROVEMENT_REQUEST_CREATED = "improvement_request_created"
     IMPROVEMENT_REQUEST_UPDATED = "improvement_request_updated"
 
+    # Team library — refresh hints for Cinna Desktop, sent to each reader's
+    # ``user_{id}`` room (never broadcast). ``library.updated`` meta:
+    # ``{repo_id, head_sha, pushed_by: {user_id, display_name}}``;
+    # ``library.granted`` meta: ``{repo_id}`` to users who just gained access.
+    # Wire names are contract (cinna-desktop team-sharing README §4.3).
+    LIBRARY_UPDATED = "library.updated"
+    LIBRARY_GRANTED = "library.granted"
+
     # Generic notification
     NOTIFICATION = "notification"
 

@@ -5191,6 +5191,132 @@ export type LandingPagePublic = {
     landing_markdown: string;
 };
 
+export type LibraryAgent = {
+    repo_id: string;
+    slug: string;
+    name: string;
+    description: string;
+    clone_url: string;
+    default_branch: string;
+    head_sha?: (string | null);
+    updated_at: string;
+    maintainers?: Array<LibraryMaintainer>;
+    manifest?: (LibraryManifest | null);
+    cloud_install_id?: (string | null);
+    access: 'read' | 'write' | 'maintain';
+};
+
+export type access = 'read' | 'write' | 'maintain';
+
+/**
+ * Admin listing row: a library agent without the caller's ``access``,
+ * plus its creator and every grant.
+ */
+export type LibraryAgentAdmin = {
+    repo_id: string;
+    slug: string;
+    name: string;
+    description: string;
+    clone_url: string;
+    default_branch: string;
+    head_sha?: (string | null);
+    updated_at: string;
+    maintainers?: Array<LibraryMaintainer>;
+    manifest?: (LibraryManifest | null);
+    cloud_install_id?: (string | null);
+    owner?: (LibraryOwner | null);
+    grants?: Array<LibraryGrantPublic>;
+};
+
+/**
+ * Body of ``POST /library/agents``.
+ */
+export type LibraryAgentCreate = {
+    slug: string;
+    name: string;
+    description?: string;
+};
+
+/**
+ * One entry of ``PUT /library/agents/{repo_id}/grants`` (full replace).
+ */
+export type LibraryGrantIn = {
+    principal: (LibraryPrincipalUser | LibraryPrincipalRole | "everyone");
+    access: 'read' | 'write' | 'maintain';
+};
+
+export type LibraryGrantPublic = {
+    principal: (LibraryPrincipalUser | LibraryPrincipalRole | "everyone");
+    access: 'read' | 'write' | 'maintain';
+    display_name: string;
+    granted_by?: (string | null);
+    created_at: string;
+};
+
+/**
+ * Response of ``GET /library``.
+ */
+export type LibraryListing = {
+    agents?: Array<LibraryAgent>;
+    mirrors?: Array<LibraryMirror>;
+};
+
+export type LibraryMaintainer = {
+    user_id: string;
+    display_name: string;
+};
+
+/**
+ * The projection of ``cinna-agent.json`` at HEAD the library shows.
+ */
+export type LibraryManifest = {
+    id?: (string | null);
+    name?: (string | null);
+    description?: (string | null);
+    runtime?: LibraryManifestRuntime;
+    contract_version?: (string | null);
+};
+
+export type LibraryManifestRuntime = {
+    engine?: (string | null);
+};
+
+export type LibraryMirror = {
+    marketplace_id: string;
+    name: string;
+    clone_url: string;
+    head_sha?: (string | null);
+    format: 'claude' | 'codex' | 'skills' | 'cinna';
+    entries?: Array<LibraryMirrorEntry>;
+};
+
+export type format = 'claude' | 'codex' | 'skills' | 'cinna';
+
+export type LibraryMirrorEntry = {
+    name: string;
+    kind: 'agent' | 'plugin' | 'skill';
+    path: string;
+    description?: (string | null);
+    version?: (string | null);
+    supported: boolean;
+    unsupported_reason?: (string | null);
+};
+
+export type kind2 = 'agent' | 'plugin' | 'skill';
+
+export type LibraryOwner = {
+    user_id: string;
+    display_name: string;
+};
+
+export type LibraryPrincipalRole = {
+    role: string;
+};
+
+export type LibraryPrincipalUser = {
+    user_id: string;
+};
+
 /**
  * Schema for creating a plugin marketplace.
  *
@@ -7664,7 +7790,7 @@ export type TaskTarget = {
     requires_approval?: boolean;
 };
 
-export type kind2 = 'folder' | 'kit' | 'cinna' | 'desktop' | 'external';
+export type kind3 = 'folder' | 'kit' | 'cinna' | 'desktop' | 'external';
 
 export type location = 'local' | 'remote';
 
@@ -11232,6 +11358,41 @@ export type KnowledgeSourcesRemoveKnowledgeSourceSharedUserData = {
 };
 
 export type KnowledgeSourcesRemoveKnowledgeSourceSharedUserResponse = (unknown);
+
+export type LibraryListLibraryResponse = (LibraryListing);
+
+export type LibraryCreateLibraryAgentData = {
+    requestBody: LibraryAgentCreate;
+};
+
+export type LibraryCreateLibraryAgentResponse = (LibraryAgent);
+
+export type LibraryListLibraryAdminAgentsResponse = (Array<LibraryAgentAdmin>);
+
+export type LibraryGetLibraryAgentData = {
+    repoId: string;
+};
+
+export type LibraryGetLibraryAgentResponse = (LibraryAgent);
+
+export type LibraryDeleteLibraryAgentData = {
+    repoId: string;
+};
+
+export type LibraryDeleteLibraryAgentResponse = (void);
+
+export type LibraryGetLibraryAgentGrantsData = {
+    repoId: string;
+};
+
+export type LibraryGetLibraryAgentGrantsResponse = (Array<LibraryGrantPublic>);
+
+export type LibraryPutLibraryAgentGrantsData = {
+    repoId: string;
+    requestBody: Array<LibraryGrantIn>;
+};
+
+export type LibraryPutLibraryAgentGrantsResponse = (Array<LibraryGrantPublic>);
 
 export type LlmPluginsCreateMarketplaceData = {
     requestBody: LLMPluginMarketplaceCreate;

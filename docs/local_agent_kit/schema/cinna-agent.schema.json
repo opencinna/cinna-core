@@ -306,6 +306,13 @@
         "agent_api": {"type": "boolean", "x-scope": "portable", "x-import": "ignored"}
       }
     },
+    "bundle": {
+      "description": "Revision metadata cinna-core writes when it exports an agent to a shared tree (contract 1.8.0): bundle_id, revision_number, version, published_at, content_hash, sdk, required_credential_specs, schedules, plugin_specs, metadata, release_notes. Read back by cinna-core when the tree is checked out; every other host preserves it and ignores it.",
+      "type": "object",
+      "additionalProperties": true,
+      "x-scope": "host:cinna-core",
+      "x-import": "ignored"
+    },
     "cloud": {
       "description": "DEPRECATED, replaced by the publications[] ledger, which lives in the sibling file publications.json and not in this one. Still accepted so a folder written before contract 1.0.0 parses; a tool that writes this manifest for any other reason migrates it into publications.json and drops the key. Never migrated at export time - an export must not mutate the manifest.",
       "type": "object",

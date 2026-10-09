@@ -58,6 +58,7 @@ import { Route as LayoutAgenticTeamsTeamIdRouteImport } from './routes/_layout/a
 import { Route as LayoutAgentCreatingRouteImport } from './routes/_layout/agent/creating'
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
 import { Route as LayoutAdminUsersRouteImport } from './routes/_layout/admin/users'
+import { Route as LayoutAdminTeamLibraryRouteImport } from './routes/_layout/admin/team-library'
 import { Route as LayoutAdminServerConfigurationRouteImport } from './routes/_layout/admin/server-configuration'
 import { Route as LayoutAdminRoutingTuningRouteImport } from './routes/_layout/admin/routing-tuning'
 import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
@@ -326,6 +327,11 @@ const LayoutAdminUsersRoute = LayoutAdminUsersRouteImport.update({
   path: '/admin/users',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutAdminTeamLibraryRoute = LayoutAdminTeamLibraryRouteImport.update({
+  id: '/admin/team-library',
+  path: '/admin/team-library',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutAdminServerConfigurationRoute =
   LayoutAdminServerConfigurationRouteImport.update({
     id: '/admin/server-configuration',
@@ -457,6 +463,7 @@ export interface FileRoutesByFullPath {
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
+  '/admin/team-library': typeof LayoutAdminTeamLibraryRoute
   '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
@@ -519,6 +526,7 @@ export interface FileRoutesByTo {
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
+  '/admin/team-library': typeof LayoutAdminTeamLibraryRoute
   '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
@@ -587,6 +595,7 @@ export interface FileRoutesById {
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/_layout/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/_layout/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
+  '/_layout/admin/team-library': typeof LayoutAdminTeamLibraryRoute
   '/_layout/admin/users': typeof LayoutAdminUsersRoute
   '/_layout/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/_layout/agent/creating': typeof LayoutAgentCreatingRoute
@@ -655,6 +664,7 @@ export interface FileRouteTypes {
     | '/admin/marketplaces'
     | '/admin/routing-tuning'
     | '/admin/server-configuration'
+    | '/admin/team-library'
     | '/admin/users'
     | '/agent/$agentId'
     | '/agent/creating'
@@ -717,6 +727,7 @@ export interface FileRouteTypes {
     | '/admin/marketplaces'
     | '/admin/routing-tuning'
     | '/admin/server-configuration'
+    | '/admin/team-library'
     | '/admin/users'
     | '/agent/$agentId'
     | '/agent/creating'
@@ -784,6 +795,7 @@ export interface FileRouteTypes {
     | '/_layout/admin/marketplaces'
     | '/_layout/admin/routing-tuning'
     | '/_layout/admin/server-configuration'
+    | '/_layout/admin/team-library'
     | '/_layout/admin/users'
     | '/_layout/agent/$agentId'
     | '/_layout/agent/creating'
@@ -1182,6 +1194,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminUsersRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/admin/team-library': {
+      id: '/_layout/admin/team-library'
+      path: '/admin/team-library'
+      fullPath: '/admin/team-library'
+      preLoaderRoute: typeof LayoutAdminTeamLibraryRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/admin/server-configuration': {
       id: '/_layout/admin/server-configuration'
       path: '/admin/server-configuration'
@@ -1382,6 +1401,7 @@ interface LayoutRouteChildren {
   LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
   LayoutAdminRoutingTuningRoute: typeof LayoutAdminRoutingTuningRoute
   LayoutAdminServerConfigurationRoute: typeof LayoutAdminServerConfigurationRoute
+  LayoutAdminTeamLibraryRoute: typeof LayoutAdminTeamLibraryRoute
   LayoutAdminUsersRoute: typeof LayoutAdminUsersRoute
   LayoutAgentAgentIdRoute: typeof LayoutAgentAgentIdRouteWithChildren
   LayoutAgentCreatingRoute: typeof LayoutAgentCreatingRoute
@@ -1417,6 +1437,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
   LayoutAdminRoutingTuningRoute: LayoutAdminRoutingTuningRoute,
   LayoutAdminServerConfigurationRoute: LayoutAdminServerConfigurationRoute,
+  LayoutAdminTeamLibraryRoute: LayoutAdminTeamLibraryRoute,
   LayoutAdminUsersRoute: LayoutAdminUsersRoute,
   LayoutAgentAgentIdRoute: LayoutAgentAgentIdRouteWithChildren,
   LayoutAgentCreatingRoute: LayoutAgentCreatingRoute,

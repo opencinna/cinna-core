@@ -50,6 +50,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Invitations | [invitations.md](./invitations.md) | 2 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
 | Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 15 |
+| Library | [library.md](./library.md) | 7 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 13 |
 | Mail Servers | [mail_servers.md](./mail_servers.md) | 6 |
 | Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 9 |

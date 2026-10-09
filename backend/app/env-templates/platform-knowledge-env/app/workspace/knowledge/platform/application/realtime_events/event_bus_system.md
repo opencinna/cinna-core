@@ -61,6 +61,7 @@ Frontend Components                    Backend Services
 **Streaming**: `stream_started`, `stream_completed`, `stream_error`, `stream_interrupted`, `session_interaction_status_changed`
 **Tasks**: `task_created`, `task_updated`, `task_status_updated`, `task_status_changed`, `task_comment_added`, `task_attachment_added`, `task_subtask_created`, `subtask_completed`
 **Todo Progress**: `todo_list_updated`, `task_todo_updated`
+**Team library**: `library.updated` (meta `repo_id`, `head_sha`, `pushed_by`) and `library.granted` (meta `repo_id`) go to each reader's own `user_{id}` room, never broadcast; they are refresh hints for Cinna Desktop. See [Team Library](../team_library/team_library.md).
 **Generic**: `notification`
 
 ### Desktop task subscriptions

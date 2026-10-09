@@ -8,6 +8,7 @@ from starlette.middleware.cors import CORSMiddleware
 from app.acp.server import router as acp_router, acp_runtime
 from app.api.main import api_router
 from app.api.routes.agent_hooks import router as agent_hooks_router
+from app.api.routes.git_http import router as git_http_router
 from app.api.routes.cli import setup_router as cli_setup_router
 from app.api.routes.desktop_auth import router as desktop_auth_router  # noqa: F401 (used below)
 from app.api.routes.local_agent_kit import start_router as local_agent_kit_router
@@ -210,6 +211,11 @@ from app.services.system.status_repair_scheduler import (
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
     # --- Startup ---
+    # Team library: a missing / non-executable pre-receive hook means every
+    # share is refused (503); say so loudly at boot rather than on first push.
+    from app.services.library.git_http_service import GitHttpService
+
+    GitHttpService.log_hook_status()
     # Background schedulers run real APScheduler BackgroundSchedulers whose jobs
     # bind to the application DB engine. The pytest harness sets
     # ``settings.TESTING`` so they never start under test (an isolation escape:
@@ -497,6 +503,10 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 # Public agent webhook execution endpoint — no /api/v1 prefix, no JWT auth.
 # Authenticated via encrypted bearer token inside the service layer.
 app.include_router(agent_hooks_router, prefix="/agent-hooks")
+
+# Team library git smart HTTP (/git/<repo_id>.git/...) — no /api/v1 prefix, not
+# in the OpenAPI schema; token auth in the route (Bearer or Basic password).
+app.include_router(git_http_router)
 
 # CLI setup bootstrap endpoint (top-level, short URL for curl oneliner)
 app.include_router(cli_setup_router)

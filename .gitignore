@@ -14,6 +14,7 @@ backend/data/uploads/
 backend/data/agents/
 backend/data/bundles/
 backend/data/skills/
+backend/data/git/
 notes.txt
 
 # The Local Agent Kit ships a scaffold whose `.claude/` contents are CONTENT,

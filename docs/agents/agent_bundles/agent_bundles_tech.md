@@ -509,6 +509,8 @@ ${BUNDLE_STORAGE_DIR}/                       # config: defaults to <DATA_DIR>/bu
 
 ## Manifest Format
 
+**RevisionFormat v3:** besides the v2 `manifest.json` + `workspace/` layout, `RevisionFormat` reads and writes tree v3, the kit agent folder (`cinna-agent.json` at the root) used as a git wire format only. `read_v3_tree` yields a v2 view, `write_v3_tree` exports; bundle storage never holds v3. See [Git-Backed Agent Versioning tech](../agent_git_versioning/agent_git_versioning_tech.md).
+
 Each revision writes `manifest.json` into the snapshot directory:
 
 ```json

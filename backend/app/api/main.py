@@ -48,6 +48,7 @@ from app.api.routes import (
     invitations,
     knowledge,
     knowledge_sources,
+    library,
     llm_plugins,
     login,
     mail_servers,
@@ -139,6 +140,7 @@ api_router.include_router(security_events.router)
 api_router.include_router(events.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(knowledge_sources.router)
+api_router.include_router(library.router)
 api_router.include_router(admin_environments.router)
 api_router.include_router(admin_llm_providers.router)
 # /admin/ai-providers/* — the provider surface, including the adapters

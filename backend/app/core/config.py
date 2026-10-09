@@ -1,4 +1,5 @@
 import secrets
+from pathlib import Path
 import warnings
 from typing import Annotated, Any, Literal
 
@@ -116,6 +117,11 @@ class Settings(BaseSettings):
     # (``GIT_HTTP_LOW_SPEED_LIMIT`` / ``GIT_HTTP_LOW_SPEED_TIME``), and the SSH
     # ``ConnectTimeout`` / keepalive. Default 30s.
     GIT_SOURCE_NETWORK_TIMEOUT_SECONDS: int = 30
+    # Git export tree format. False (default): push writes the v2 tree
+    # (``workspace/`` + ``cinna.agent.json``). True: push writes tree v3, the kit
+    # agent folder as-is (``cinna-agent.json`` at the root). Readers accept both
+    # always, and a remote that already holds a v3 tree is never downgraded.
+    GIT_EXPORT_TREE_V3: bool = False
     # Redirect URI for the MCP-provider OAuth/DCR authorization-code flow
     # (Phase 5). The target AS redirects the browser back here after consent; the
     # frontend route forwards (code, state) to POST /mcp-providers/oauth/callback.
@@ -1027,6 +1033,27 @@ class Settings(BaseSettings):
     # sync, so losing this directory on redeploy would break every installed
     # catalog skill. See the backend volume in ``docker-compose.yml``.
     SKILL_STORAGE_DIR: str = "/app/data/skills"
+
+    # Team library git storage (bare repos served at ``/git/<repo_id>.git``).
+    #   <GIT_STORAGE_DIR>/<repo_id>.git          one bare repo per library entry
+    #   <GIT_STORAGE_DIR>/.deleted/<repo_id>-<utc>  removed repos, purged by the operator
+    #
+    # MUST be a persisted mount, not container-local scratch: the bare repos ARE
+    # the team library's content (the DB holds only metadata and grants), so
+    # losing this directory on redeploy loses every shared agent. Never
+    # bind-mounted into agent containers, so there is no HOST_ counterpart.
+    GIT_STORAGE_DIR: str = "/app/data/git"
+    # Hooks every library repo runs (``core.hooksPath``). Lives in the image,
+    # not the data volume, and is passed as ``git -c core.hooksPath=`` on every
+    # spawn so a stale path stored in a repo's config can never be used.
+    GIT_HOOKS_DIR: str = str(Path(__file__).resolve().parents[1] / "git_hooks")
+    # Push caps enforced by the pre-receive policy and the HTTP handler.
+    GIT_MAX_BLOB_BYTES: int = 10 * 1024 * 1024
+    GIT_MAX_TREE_BYTES: int = 200 * 1024 * 1024
+    GIT_MAX_PUSH_BYTES: int = 256 * 1024 * 1024
+    # Wall-clock cap (seconds) for one git smart-HTTP request (upload-pack /
+    # receive-pack subprocess).
+    GIT_HTTP_TIMEOUT_SECONDS: int = 600
 
     # Host-side path to ``APP_DATA_STORAGE_DIR`` for docker-compose volume
     # mounts. Mirrors ``HOST_AGENT_ENVIRONMENTS_DIR`` for Docker-in-Docker

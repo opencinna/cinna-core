@@ -845,6 +845,82 @@ def _resolve_platform_user_from_token(db: Session, raw_token: str) -> User:
     return user
 
 
+# ── Team library git smart-HTTP auth ──────────────────────────────────
+
+
+class GitHttpAuthError(Exception):
+    """Any failure to authenticate a ``/git/...`` request. The route answers
+    401 with a Basic challenge whatever the reason, so a git client can retry
+    with credentials and nothing about the token is disclosed."""
+
+
+# Scoped tokens that never authenticate git: agent-environment, A2A agent
+# access, guest-share and webapp-viewer tokens.
+_DISALLOWED_GIT_TOKEN_TYPES = {"agent_env", "agent", "guest_share", "webapp_share"}
+
+
+def _git_http_token(authorization: str | None) -> str:
+    """The token from ``Authorization: Bearer <t>`` or ``Basic`` (password = token)."""
+    import base64
+    import binascii
+
+    if not authorization:
+        raise GitHttpAuthError("Missing credentials")
+    scheme, _, value = authorization.strip().partition(" ")
+    value = value.strip()
+    if scheme.lower() == "bearer" and value:
+        return value
+    if scheme.lower() == "basic" and value:
+        try:
+            decoded = base64.b64decode(value, validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as e:
+            raise GitHttpAuthError("Malformed Basic credentials") from e
+        _username, sep, password = decoded.partition(":")
+        if sep and password:
+            return password
+    raise GitHttpAuthError("Unsupported credentials")
+
+
+def resolve_git_http_user(db: Session, authorization: str | None) -> User:
+    """Resolve the person behind a git smart-HTTP request (team library).
+
+    No new token type: the existing resolvers decide. A per-agent CLI token
+    (``token_type == "cli"``) resolves to the agent's owner, an account CLI
+    token to its user, and anything else must be a platform access JWT (web or
+    desktop; desktop revocation honoured). Audience-bearing tokens (agent-env,
+    agent-api identity) already fail the decode below. Raises
+    :class:`GitHttpAuthError` on any failure.
+
+    Not ``CurrentUser``: ``get_current_user`` answers 403/404 for bad tokens and
+    would look a CLI token id up as a user id.
+    """
+    from app.services.cli.cli_auth import CLIAuthError
+
+    token = _git_http_token(authorization)
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[security.ALGORITHM])
+    except InvalidTokenError as e:
+        raise GitHttpAuthError("Could not validate credentials") from e
+
+    token_type = payload.get("token_type")
+    if token_type in _DISALLOWED_GIT_TOKEN_TYPES:
+        raise GitHttpAuthError("Token type not allowed")
+    try:
+        if token_type == "cli":
+            user = _resolve_cli_context(db, token).user
+        elif token_type == "cli-account":
+            user = _resolve_account_cli_context(db, token).user
+        elif token_type is None:
+            user = _resolve_platform_user_from_token(db, token)
+        else:
+            raise GitHttpAuthError("Token type not allowed")
+    except (CLIAuthError, ValueError) as e:
+        raise GitHttpAuthError(str(e)) from e
+    if not AccessPolicyService.is_account_valid(user):
+        raise GitHttpAuthError("Inactive user")
+    return user
+
+
 def _extract_ws_token(websocket: WebSocket) -> str:
     """Extract a platform JWT from a WS handshake (Authorization header or
     ``?token=`` query param). Raises ``ValueError`` when absent."""

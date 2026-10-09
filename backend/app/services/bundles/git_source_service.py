@@ -71,6 +71,8 @@ from app.services.bundles.install_service import InstallError, InstallService
 from app.services.bundles.publish_service import PublishService
 from app.services.bundles.revision_format import (
     GIT_MANIFEST_FILENAME,
+    KIT_MANIFEST_FILENAME,
+    TREE_LAYOUT_KEY,
     RevisionFormat,
     RevisionFormatError,
 )
@@ -387,8 +389,9 @@ class GitSourceService:
                 repo_url, branch=ref, ssh_key_path=ssh_key_path
             ) as (repo_path, repo):
                 last_synced_commit = get_current_commit_hash(repo)
-                src = _resolve_subdir(repo_path, subdir)
-                manifest = _read_and_validate_tree(src)
+                src, manifest = _read_and_validate_tree(
+                    _resolve_subdir(repo_path, subdir), Path(repo_path).parent
+                )
                 bundle_id = _require_bundle_id(manifest)
                 _assert_no_oversized_files(src / "workspace")
 
@@ -721,14 +724,21 @@ class GitSourceService:
             repo_url, branch=ref, ssh_key_path=key, depth=None
         ) as (repo_path, repo):
             src = _resolve_subdir(repo_path, subdir)
-            if (src / GIT_MANIFEST_FILENAME).exists():
+            if (src / GIT_MANIFEST_FILENAME).exists() or (
+                src / KIT_MANIFEST_FILENAME
+            ).exists():
                 if adopt_existing:
                     # Adopt the existing remote folder: record its current
                     # content as the synced baseline (no push). The dirty check
                     # then surfaces local-vs-remote differences, and the user
                     # commits (push) or pulls from there.
                     return GitSourceService._connect_adopt_existing(
-                        session, source=source, owner=owner, src=src, repo=repo
+                        session,
+                        source=source,
+                        owner=owner,
+                        src=src,
+                        repo=repo,
+                        view_parent=Path(repo_path).parent,
                     )
                 raise GitSourceExistingAgentError(
                     "This repository/subdir already holds an agent — use "
@@ -755,6 +765,7 @@ class GitSourceService:
         owner: User,
         src: Path,
         repo,
+        view_parent: Path,
     ) -> str:
         """Adopt an existing remote agent folder as the synced baseline (no push).
 
@@ -768,7 +779,7 @@ class GitSourceService:
         becomes ``last_synced_commit`` (so ``update_available`` is ``False`` —
         local-vs-remote drift surfaces through the dirty check, not the banner).
         """
-        manifest = _read_and_validate_tree(src)
+        src, manifest = _read_and_validate_tree(src, view_parent)
         remote_bundle_id = _require_bundle_id(manifest)
         bundle = session.get(AgentBundle, source.bundle_uuid)
         if bundle is None:
@@ -1090,6 +1101,12 @@ class GitSourceService:
                             ),
                         }
 
+        # A v3 baseline holds only what the tree carries; the live capture is
+        # projected the same way before comparing (read before the release).
+        baseline_is_v3 = synced_rev is not None and RevisionFormat.is_v3_manifest(
+            synced_rev.manifest
+        )
+
         # Release the pooled DB connection before the heavy workspace copy/hash.
         session.commit()
 
@@ -1113,6 +1130,8 @@ class GitSourceService:
                 PublishService._snapshot_workspace_tree(
                     env_workspace_root, temp_dir
                 )
+                if baseline_is_v3:
+                    RevisionFormat.project_v3_view(temp_dir / "workspace")
                 live_digest = PublishService.hash_workspace_tree(
                     temp_dir / "workspace"
                 )
@@ -1260,6 +1279,11 @@ class GitSourceService:
                             ),
                         }
 
+        # A v3 baseline holds only what the tree carries (mirrors compute_dirty).
+        baseline_is_v3 = synced_rev is not None and RevisionFormat.is_v3_manifest(
+            synced_rev.manifest
+        )
+
         # Release the pooled DB connection before the heavy per-file diff.
         session.commit()
 
@@ -1283,6 +1307,8 @@ class GitSourceService:
                 PublishService._snapshot_workspace_tree(
                     env_workspace_root, temp_dir
                 )
+                if baseline_is_v3:
+                    RevisionFormat.project_v3_view(temp_dir / "workspace")
                 live_files = GitSourceService._file_hashes(
                     temp_dir / "workspace"
                 )
@@ -1680,8 +1706,10 @@ class GitSourceService:
                     source.repo_url, branch=source.ref, ssh_key_path=key
                 ) as (repo_path, repo):
                     pulled_sha = get_current_commit_hash(repo)
-                    src = _resolve_subdir(repo_path, source.subdir)
-                    manifest = _read_and_validate_tree(src)
+                    src, manifest = _read_and_validate_tree(
+                        _resolve_subdir(repo_path, source.subdir),
+                        Path(repo_path).parent,
+                    )
                     _assert_no_oversized_files(src / "workspace")
 
                     bundle = (
@@ -2467,55 +2495,106 @@ class GitSourceService:
             release_notes=commit_message,
         )
 
-        # Remove the existing captured workspace so deletions propagate
-        # (write_tree only overwrites/creates; it never prunes).
-        stale_workspace = src / "workspace"
-        if stale_workspace.exists():
-            shutil.rmtree(stale_workspace)
-
-        RevisionFormat.write_tree(
-            env_workspace_root=env_workspace_root,
-            dest=src,
-            manifest=manifest,
-            manifest_filename=GIT_MANIFEST_FILENAME,
+        # Tree v3 when the instance opts in, or when the remote already holds
+        # one: a v3 remote is never downgraded to v2 (D1).
+        write_v3 = (
+            settings.GIT_EXPORT_TREE_V3
+            or RevisionFormat.detect_tree_layout(src) == "v3"
         )
-        (src / ".gitignore").write_text(RevisionFormat.generate_gitignore())
+        # What is persisted as the internal v2 revision after the push.
+        persist_root = src
+        try:
+            if write_v3:
+                # The remote's kit manifest wins (a teammate's unknown keys and
+                # the folder id survive); else the one an imported agent carries
+                # in its workspace.
+                existing_kit = _load_json_object(
+                    src / KIT_MANIFEST_FILENAME
+                ) or _load_json_object(
+                    env_workspace_root / WORKSPACE_ROOT_REL / KIT_MANIFEST_FILENAME
+                )
+                dropped_paths = RevisionFormat.write_v3_tree(
+                    env_workspace_root=env_workspace_root,
+                    dest=src,
+                    manifest=manifest,
+                    existing_kit_manifest=existing_kit,
+                    name=install.name,
+                ).dropped_paths
+                if dropped_paths:
+                    logger.warning(
+                        "git capture: agent %s — %s do not travel in a shared "
+                        "agent folder and were left out",
+                        install.id, ", ".join(dropped_paths),
+                    )
+                # The baseline WORKSPACE is the tree exactly as a later pull /
+                # baseline re-materialisation reads it back, never the raw
+                # capture: paths the kit excludes are not on the remote, so the
+                # baseline must not hold them either (the dirty check projects
+                # the live side to match, see ``project_v3_view``). The baseline
+                # MANIFEST stays the live one, so the settings diff compares the
+                # agent's own values and is clean right after the push.
+                # Read from the working tree, not the commit: a file the kit
+                # .gitignore keeps out of git but the excludes let through (rare,
+                # e.g. a nested .gitignore) is in the baseline yet not on the
+                # remote; a later pull drops it.
+                persist_root = Path(tempfile.mkdtemp(prefix="v2view-"))
+                RevisionFormat.read_v3_tree(src, persist_root / "workspace")
+                manifest[TREE_LAYOUT_KEY] = "v3"
+                # Binary-in-git hygiene: reject oversized captured assets before commit.
+                _assert_no_oversized_files(persist_root / "workspace")
+            else:
+                # Remove the existing captured workspace so deletions propagate
+                # (write_tree only overwrites/creates; it never prunes).
+                stale_workspace = src / "workspace"
+                if stale_workspace.exists():
+                    shutil.rmtree(stale_workspace)
 
-        # Binary-in-git hygiene: reject oversized captured assets before commit.
-        _assert_no_oversized_files(src / "workspace")
+                RevisionFormat.write_tree(
+                    env_workspace_root=env_workspace_root,
+                    dest=src,
+                    manifest=manifest,
+                    manifest_filename=GIT_MANIFEST_FILENAME,
+                )
+                (src / ".gitignore").write_text(RevisionFormat.generate_gitignore())
 
-        author_name = owner.full_name or owner.email
-        new_sha = commit_all(repo, commit_message, author_name, owner.email)
-        if head_before is not None and new_sha == head_before:
-            # Nothing changed (existing remote, identical tree): no push, no new
-            # revision — the latest revision already reflects this tree.
-            logger.info(
-                "git capture: agent %s — working tree unchanged, nothing to push",
-                install.id,
-            )
+                # Binary-in-git hygiene: reject oversized captured assets before commit.
+                _assert_no_oversized_files(src / "workspace")
+
+            author_name = owner.full_name or owner.email
+            new_sha = commit_all(repo, commit_message, author_name, owner.email)
+            if head_before is not None and new_sha == head_before:
+                # Nothing changed (existing remote, identical tree): no push, no new
+                # revision — the latest revision already reflects this tree.
+                logger.info(
+                    "git capture: agent %s — working tree unchanged, nothing to push",
+                    install.id,
+                )
+                return new_sha
+
+            # ff-only; raises GitNonFastForwardError on a non-ff remote. On the
+            # first push (absent remote ref) this creates the branch.
+            #
+            # Two-system gap (acceptable, fail-loud): the commit is on the remote
+            # once this returns. If the revision persist or the caller's source-row
+            # commit then fails, the remote is ahead of the platform record. The
+            # external repo is the durable record (Decision 2); a retry re-detects
+            # the now-non-empty subdir (→ 409 "use checkout") rather than
+            # double-pushing, and the developer reconciles via their own git client.
+            fast_forward_push(repo, source_like.ref, key)
+
+            # Persist the captured tree as the internal SSOT + dirty baseline.
+            if bundle is not None:
+                GitSourceService._persist_revision(
+                    session,
+                    bundle=bundle,
+                    src=persist_root,
+                    manifest=manifest,
+                    published_by_user_id=owner.id,
+                )
             return new_sha
-
-        # ff-only; raises GitNonFastForwardError on a non-ff remote. On the
-        # first push (absent remote ref) this creates the branch.
-        #
-        # Two-system gap (acceptable, fail-loud): the commit is on the remote
-        # once this returns. If the revision persist or the caller's source-row
-        # commit then fails, the remote is ahead of the platform record. The
-        # external repo is the durable record (Decision 2); a retry re-detects
-        # the now-non-empty subdir (→ 409 "use checkout") rather than
-        # double-pushing, and the developer reconciles via their own git client.
-        fast_forward_push(repo, source_like.ref, key)
-
-        # Persist the captured tree as the internal SSOT + dirty baseline.
-        if bundle is not None:
-            GitSourceService._persist_revision(
-                session,
-                bundle=bundle,
-                src=src,
-                manifest=manifest,
-                published_by_user_id=owner.id,
-            )
-        return new_sha
+        finally:
+            if persist_root != src:
+                shutil.rmtree(persist_root, ignore_errors=True)
 
     @staticmethod
     def _cleanup_orphan_bundle(session: Session, bundle_uuid: uuid.UUID) -> None:
@@ -2663,8 +2742,9 @@ class GitSourceService:
                     depth=None,
                 ) as (repo_path, repo):
                     repo.git.checkout(last_synced_commit)
-                    src = _resolve_subdir(repo_path, subdir)
-                    manifest = _read_and_validate_tree(src)
+                    src, manifest = _read_and_validate_tree(
+                        _resolve_subdir(repo_path, subdir), Path(repo_path).parent
+                    )
                     _persist_clone_as_snapshot(src, tmp_snapshot, manifest)
             try:
                 tmp_snapshot.replace(snapshot_dir)
@@ -3307,18 +3387,39 @@ def _resolve_subdir(repo_path: str, subdir: str | None) -> Path:
     return target
 
 
-def _read_and_validate_tree(src: Path) -> dict:
-    """Validate ``src`` is a v2 snapshot and return its parsed manifest.
+def _read_and_validate_tree(src: Path, view_parent: Path) -> tuple[Path, dict]:
+    """Validate the agent tree at ``src``; return ``(tree_root, manifest)``.
 
-    Raises :class:`GitSourceValidationError` for a non-v2 layout and
+    ``tree_root`` always holds a v2 ``workspace/`` subtree. For a v2 tree it is
+    ``src`` itself. For a tree v3 (kit agent folder) the tree is materialised
+    into a fresh ``_v2view-*`` directory under ``view_parent`` (the clone's
+    temp parent, removed with it) via :meth:`RevisionFormat.read_v3_tree`, so
+    the clone is never mutated — a later commit would otherwise record moves.
+
+    Raises :class:`GitSourceValidationError` for an unknown layout and
     :class:`RevisionFormatError` for a malformed / unsupported manifest.
     """
+    if RevisionFormat.detect_tree_layout(src) == "v3":
+        view_root = view_parent / f"_v2view-{uuid.uuid4().hex}"
+        manifest = RevisionFormat.read_v3_tree(src, view_root / "workspace")
+        return view_root, manifest
     if snapshot_layout(src) != "v2_workspace":
         raise GitSourceValidationError(
             "Not a Cinna agent repo: expected a 'workspace/' directory and a "
             f"'{GIT_MANIFEST_FILENAME}' manifest at the checkout path."
         )
-    return RevisionFormat.read_manifest(src)
+    return src, RevisionFormat.read_manifest(src)
+
+
+def _load_json_object(path: Path) -> dict | None:
+    """Parse ``path`` as a JSON object; ``None`` when absent or not an object."""
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
 
 
 def _require_bundle_id(manifest: dict) -> str:
