@@ -16,8 +16,7 @@ function EmptyLibrary() {
   return (
     <div className="flex flex-col items-center justify-center rounded-md border py-16 text-center">
       <p className="max-w-md text-sm text-muted-foreground">
-        No agents have been shared with the team yet. People add one from Cinna
-        Desktop or the CLI.
+        Agents shared from Cinna Desktop or the CLI appear here.
       </p>
     </div>
   )

@@ -22183,6 +22183,16 @@ export const LibraryAgentSchema = {
             format: 'date-time',
             title: 'Updated At'
         },
+        pushed_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/LibraryPusher'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
         maintainers: {
             items: {
                 '$ref': '#/components/schemas/LibraryMaintainer'
@@ -22267,6 +22277,16 @@ export const LibraryAgentAdminSchema = {
             format: 'date-time',
             title: 'Updated At'
         },
+        pushed_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/LibraryPusher'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
         maintainers: {
             items: {
                 '$ref': '#/components/schemas/LibraryMaintainer'
@@ -22341,6 +22361,20 @@ export const LibraryAgentCreateSchema = {
             maxLength: 10000,
             title: 'Description',
             default: ''
+        },
+        grants: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/LibraryGrantIn'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Grants'
         }
     },
     type: 'object',
@@ -22685,6 +22719,24 @@ export const LibraryPrincipalUserSchema = {
     type: 'object',
     required: ['user_id'],
     title: 'LibraryPrincipalUser'
+} as const;
+
+export const LibraryPusherSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'display_name'],
+    title: 'LibraryPusher',
+    description: 'The person behind the last accepted push.'
 } as const;
 
 export const LoginTokenSchema = {

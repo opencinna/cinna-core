@@ -81,12 +81,13 @@ def create_library_agent(
     slug: str | None = None,
     name: str = "Library Agent",
     description: str = "Shared with the team",
+    grants: list[dict] | None = None,
 ) -> dict:
-    r = client.post(
-        f"{_BASE}/agents",
-        headers=headers,
-        json={"slug": slug or random_slug(), "name": name, "description": description},
-    )
+    """``grants`` is sent only when given (omitted = creator only)."""
+    body = {"slug": slug or random_slug(), "name": name, "description": description}
+    if grants is not None:
+        body["grants"] = grants
+    r = client.post(f"{_BASE}/agents", headers=headers, json=body)
     assert r.status_code == 200, f"Create library agent failed: {r.text}"
     return r.json()
 

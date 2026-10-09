@@ -96,10 +96,13 @@ def test_real_git_round_trip_over_protocol_v0_and_v2(
     """
     owner = make_person(client, superuser_token_headers)
     reader = make_person(client, superuser_token_headers)
-    repo = create_library_agent(client, owner.headers, name="Round Trip")
+    repo = create_library_agent(
+        client, owner.headers, name="Round Trip", grants=[user_grant(reader.id, "read")]
+    )
     repo_id = repo["repo_id"]
     assert repo["clone_url"].endswith(f"/git/{repo_id}.git")
     assert repo["head_sha"] is None and repo["manifest"] is None
+    assert repo["pushed_by"] is None
 
     # ── Phase 1-2: clone empty, push ──────────────────────────────────
     git, work, sha1 = _seed_first_push(client, bridge, tmp_path, owner, repo)
@@ -107,6 +110,7 @@ def test_real_git_round_trip_over_protocol_v0_and_v2(
     assert got["head_sha"] == sha1
     assert got["manifest"]["name"] == "My Agent"
     assert got["manifest"]["contract_version"]
+    assert got["pushed_by"]["user_id"] == owner.id
     assert repo["slug"] in library_slugs(list_library(client, owner.headers))
 
     # ── Phase 3: another person clones, over both wire protocols ──────
@@ -338,8 +342,8 @@ def test_grants_matrix_over_the_wire(
     assert codes(_bearer(plain.token)) == (403, 403)
     assert codes(_bearer(owner.token)) == (200, 200)
 
-    # Superuser: management without git access until a grant matches.
-    assert codes(superuser_token_headers) == (403, 403)
+    # Superuser: may clone any repo, but pushing still needs a grant.
+    assert codes(superuser_token_headers) == (200, 403)
     put_grants(client, owner.headers, repo_id, [owner_grant, role_grant("admin", "read")])
     assert codes(superuser_token_headers) == (200, 403)
 
@@ -349,7 +353,7 @@ def test_real_git_honours_grants(
 ) -> None:
     """
     1. Reader (user read) clones but cannot push (403)
-    2. Writer (role write) pushes; the owner's clone pulls it
+    2. Writer (role write) pushes; the listing names them as pushed_by; the owner's clone pulls it
     3. Narrowed to the owner: the former reader can no longer clone (403)
     """
     owner = make_person(client, superuser_token_headers)
@@ -384,6 +388,8 @@ def test_real_git_honours_grants(
     pushed = wgit.push(wwork)
     assert pushed.ok, pushed.output
     assert _head_sha(client, owner.headers, repo_id) == sha_w
+    listed = next(a for a in list_library(client, owner.headers)["agents"] if a["repo_id"] == repo_id)
+    assert listed["pushed_by"]["user_id"] == writer.id
     assert ogit.run("pull", "--ff-only", "origin", "main", cwd=owork).ok
     assert (owork / "w.md").exists()
 

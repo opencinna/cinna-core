@@ -7,8 +7,9 @@ a level (``read`` < ``write`` < ``maintain``). Effective access is the maximum
 over the grants matching the caller.
 
 Superusers *manage* every repo (edit grants, delete, admin listing) through
-:meth:`LibraryAccessService.can_manage`, but read/write over git and
-``GET /library`` follow grants only.
+:meth:`LibraryAccessService.can_manage` and may clone any of them (see
+``GitHttpService.authorize``), but pushing and ``GET /library`` follow grants
+only.
 """
 from __future__ import annotations
 
@@ -158,7 +159,7 @@ class LibraryAccessService:
         Returns ``(before_readers, after_readers)`` so the caller can notify the
         users who just gained access.
         """
-        rows = LibraryAccessService._validate_grants(session, repo, grants, actor)
+        rows = LibraryAccessService.validate_grants(session, repo, grants, actor)
 
         try:
             # Serialize concurrent replacements of the same repo's grants: the
@@ -190,12 +191,15 @@ class LibraryAccessService:
         return before, after
 
     @staticmethod
-    def _validate_grants(
+    def validate_grants(
         session: Session,
         repo: GitRepo,
         grants: list[LibraryGrantIn],
         actor: User,
     ) -> list[GitRepoGrant]:
+        """``grants`` as unsaved rows of ``repo``, or a validation error (role
+        values, users exist and are active, no principal twice, at least one
+        person maintains)."""
         seen: set[tuple[str, str]] = set()
         rows: list[GitRepoGrant] = []
         for grant in grants:

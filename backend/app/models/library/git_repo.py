@@ -128,6 +128,10 @@ class GitRepo(SQLModel, table=True):
     )
     # NULL until the first accepted push.
     head_sha: str | None = Field(default=None, max_length=64, nullable=True)
+    # Who made the last accepted push; NULL before it or once they are deleted.
+    last_pushed_by_user_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", ondelete="SET NULL", nullable=True
+    )
     # ``{id, name, description, runtime: {engine}, contract_version}`` read from
     # ``cinna-agent.json`` at HEAD; NULL until the first accepted push.
     manifest_cache: dict | None = Field(
@@ -221,6 +225,13 @@ class LibraryMaintainer(SQLModel):
     display_name: str
 
 
+class LibraryPusher(SQLModel):
+    """The person behind the last accepted push."""
+
+    user_id: uuid.UUID
+    display_name: str
+
+
 class LibraryManifestRuntime(SQLModel):
     engine: str | None = None
 
@@ -244,6 +255,8 @@ class LibraryAgentBase(SQLModel):
     default_branch: str
     head_sha: str | None = None
     updated_at: datetime
+    # NULL until the first accepted push, or once its pusher is deleted.
+    pushed_by: LibraryPusher | None = None
     maintainers: list[LibraryMaintainer] = []
     # NULL until the first accepted push.
     manifest: LibraryManifest | None = None
@@ -288,6 +301,9 @@ class LibraryAgentCreate(SQLModel):
     slug: Annotated[str, StringConstraints(pattern=LIBRARY_SLUG_PATTERN)]
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=10_000)
+    # Who else may reach it, validated like ``PUT …/grants``. The creator is
+    # always added as ``maintain``; omitted means creator only.
+    grants: list[LibraryGrantIn] | None = None
 
 
 class LibraryOwner(SQLModel):

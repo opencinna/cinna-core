@@ -39,13 +39,15 @@ Each library agent has a list of grants. A grant names a principal and an access
 - **Principals**: one user, every user of a role (`agent-user`, `agent-developer`, `admin`), or everyone.
   A role grant for `admin` also matches superusers.
 - **Effective access** is the highest level among the grants that match the caller.
-- The creator gets `maintain`, and a new agent also gets `everyone: read` (the team can see it
-  at once). A maintainer narrows it afterwards.
+- **Private by default**: the creator gets `maintain` and only the people (or roles) named on
+  create get anything else. Create without a `grants` list means only the creator can see it;
+  nobody else can see the entry at any moment unless named. A maintainer widens it afterwards,
+  including to everyone.
 - **Maintainers are always people**: only a user grant can be `maintain` for the listing, and every
   grant list must keep at least one person at `maintain` (409 otherwise).
-- **Superusers manage but do not get git access**: they can list all agents, edit grants and remove
-  an agent, but reading or pushing over git, and `GET /library`, follow grants only. An admin who
-  wants the content grants themselves access.
+- **Superusers manage and can clone, but not push**: they see every agent in the admin listing,
+  edit grants, remove an agent and clone any library repo over git. Pushing and their own
+  `GET /library` still follow grants; an admin who wants to share changes grants themselves `write`.
 - Slugs follow the kit pattern `^[a-z0-9][a-z0-9-]{1,62}$` and are unique per instance.
 
 ## Push policy
@@ -73,6 +75,9 @@ Without `write` a push gets 403 "You can't share changes to this agent."; withou
 "You don't have access to this agent."
 
 ## Events
+
+Each listed agent carries `pushed_by`, the person whose push is the current version (clients show
+"Last shared <date> by <name>"); it is empty before the first push.
 
 After an accepted push, core emits `library.updated` (`repo_id`, `head_sha`, `pushed_by`) to every
 reader's own user room. When a grant change gives people access they did not have, they get

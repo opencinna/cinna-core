@@ -11,9 +11,9 @@
 - Events/audit constants: `backend/app/models/events/event.py`, `backend/app/models/events/security_event.py`
 - Frontend: `frontend/src/routes/_layout/admin/team-library.tsx`, `frontend/src/components/Admin/TeamLibrary/` (`TeamLibraryTable`, `teamLibraryColumns`, `TeamLibraryRowActions`, `LibraryAccessDialog`, `LibraryGrantRow`, `LibraryPrincipalPicker`, `RemoveLibraryAgentDialog`), menu entry in `frontend/src/components/Sidebar/AdminMenu.tsx`
 
-## Database (migration `0e62eb9df5d4`)
+## Database (migrations `0e62eb9df5d4`, `08bfa6ee8d9f`)
 
-`git_repo`: `id`, `kind` (`agent`/`mirror`, plain string), `slug`, `name`, `description`, `owner_user_id` (FK user, SET NULL), `marketplace_id` (FK `llm_plugin_marketplace`, SET NULL, mirrors only), `default_branch` (`main`), `head_sha` (NULL until first accepted push), `manifest_cache` (JSON projection `{id, name, description, runtime.engine, contract_version}`), `created_at`, `updated_at`. Partial unique index `uq_git_repo_agent_slug` on `slug` where `kind='agent'`.
+`git_repo`: `id`, `kind` (`agent`/`mirror`, plain string), `slug`, `name`, `description`, `owner_user_id` (FK user, SET NULL), `marketplace_id` (FK `llm_plugin_marketplace`, SET NULL, mirrors only), `default_branch` (`main`), `head_sha` (NULL until first accepted push), `last_pushed_by_user_id` (FK user, SET NULL; who made the last accepted push), `manifest_cache` (JSON projection `{id, name, description, runtime.engine, contract_version}`), `created_at`, `updated_at`. Partial unique index `uq_git_repo_agent_slug` on `slug` where `kind='agent'`.
 
 `git_repo_grant`: `repo_id` (FK CASCADE), `principal_kind` (`user`/`role`/`everyone`), `principal_id` (user uuid text / role value / `*`), `user_id` (FK user CASCADE, user grants only), `access` (`read`/`write`/`maintain`), `granted_by_user_id` (SET NULL), `created_at`. Unique `(repo_id, principal_kind, principal_id)`.
 
@@ -22,12 +22,16 @@
 | Route | Notes |
 |-------|-------|
 | `GET /library` | `LibraryListing {agents, mirrors}`; agents the caller can read, with `access`; `mirrors` always `[]`. Follows grants only, also for superusers |
-| `POST /library/agents` | `LibraryAgentCreate {slug, name, description}`; creates row, bare repo, creator `maintain` + `everyone: read`; emits `library.granted` to other readers |
+| `POST /library/agents` | `LibraryAgentCreate {slug, name, description, grants?}`; validates `grants` like the PUT before writing anything, then creates row, bare repo and grants (creator `maintain` + `grants`; the creator named again folds into `maintain`; omitted = creator only) in one transaction; emits `library.granted` to other readers; audit `LIBRARY_AGENT_CREATED` carries the grant labels |
 | `GET /library/agents/{repo_id}` | One agent |
 | `GET /library/agents/{repo_id}/grants` | Maintainer or superuser |
 | `PUT /library/agents/{repo_id}/grants` | Body `list[LibraryGrantIn]`, full replace; validates roles/users, rejects duplicates, requires a person at `maintain`; emits `library.granted` to users who gained access; audit `LIBRARY_GRANTS_CHANGED` |
 | `DELETE /library/agents/{repo_id}` | 204; 409 while another person's `AgentGitSource.repo_url` points at the repo; repo dir moves to `.deleted/<repo_id>-<utc>` |
 | `GET /library/admin/agents` | Superuser only; `LibraryAgentAdmin` with `owner` and `grants` |
+
+`LibraryAgent.pushed_by` is `{user_id, display_name}` of the last accepted push (set by `LibraryEvents.after_receive`), null before it or once that user is deleted.
+
+Git access (`GitHttpService.authorize`): `read` grant for upload-pack, or any superuser; `write` grant for receive-pack (superusers included); mirrors never take a push.
 
 `LibraryAgent.clone_url` is `<backend_base_url>/git/<repo_id>.git`; `cloud_install_id` is computed from the caller's `AgentGitSource.repo_url` matching it (null in practice until cloud twins). Principal wire shapes: `{"user_id"}`, `{"role"}`, `"everyone"`.
 

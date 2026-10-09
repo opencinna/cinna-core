@@ -83,9 +83,8 @@ def test_granted_event_goes_only_to_newly_gained_readers(
     first = make_person(client, superuser_token_headers)
     second = make_person(client, superuser_token_headers)
     repo_id = create_library_agent(client, owner.headers)["repo_id"]
-    # Creation granted everyone read -> others were notified; start clean.
-    put_grants(client, owner.headers, repo_id, [user_grant(owner.id, "maintain")])
-    socket_stub.emitted_events.clear()
+    # Created without grants: creator only, nobody else is told.
+    assert _emits(socket_stub, "library.granted") == []
 
     put_grants(
         client, owner.headers, repo_id,

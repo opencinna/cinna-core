@@ -192,8 +192,8 @@ class GitHttpService:
     def authorize(session: Session, repo: GitRepo, user: User, service: str) -> None:
         """Grant decision for one transport call; raises ``LibraryAccessDeniedError``.
 
-        ``read`` for upload-pack, ``write`` for receive-pack; mirrors are never
-        writable.
+        ``read`` for upload-pack (any superuser may clone, for oversight),
+        ``write`` for receive-pack; mirrors are never writable.
         """
         access = LibraryAccessService.effective_access(session, repo, user)
         if service == RECEIVE_PACK:
@@ -201,7 +201,7 @@ class GitHttpService:
                 LibraryAccess.WRITE
             ):
                 raise LibraryAccessDeniedError("You can't share changes to this agent.")
-        elif access is None:
+        elif access is None and not user.is_superuser:
             raise LibraryAccessDeniedError("You don't have access to this agent.")
 
     @staticmethod

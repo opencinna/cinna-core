@@ -5200,6 +5200,7 @@ export type LibraryAgent = {
     default_branch: string;
     head_sha?: (string | null);
     updated_at: string;
+    pushed_by?: (LibraryPusher | null);
     maintainers?: Array<LibraryMaintainer>;
     manifest?: (LibraryManifest | null);
     cloud_install_id?: (string | null);
@@ -5221,6 +5222,7 @@ export type LibraryAgentAdmin = {
     default_branch: string;
     head_sha?: (string | null);
     updated_at: string;
+    pushed_by?: (LibraryPusher | null);
     maintainers?: Array<LibraryMaintainer>;
     manifest?: (LibraryManifest | null);
     cloud_install_id?: (string | null);
@@ -5235,6 +5237,7 @@ export type LibraryAgentCreate = {
     slug: string;
     name: string;
     description?: string;
+    grants?: (Array<LibraryGrantIn> | null);
 };
 
 /**
@@ -5315,6 +5318,14 @@ export type LibraryPrincipalRole = {
 
 export type LibraryPrincipalUser = {
     user_id: string;
+};
+
+/**
+ * The person behind the last accepted push.
+ */
+export type LibraryPusher = {
+    user_id: string;
+    display_name: string;
 };
 
 /**

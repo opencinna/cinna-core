@@ -43,7 +43,7 @@ def create_library_agent(
     background_tasks: BackgroundTasks,
 ) -> Any:
     """Add an agent to the team library; the caller becomes its maintainer and
-    everyone can get it."""
+    only the people in ``grants`` (none when omitted) can get it."""
     try:
         agent, readers = LibraryService.create_agent(session, current_user, body)
     except LibraryError as exc:

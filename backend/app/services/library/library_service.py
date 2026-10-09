@@ -27,7 +27,6 @@ from app.models.events.security_event import (
     LIBRARY_GRANTS_CHANGED,
 )
 from app.models.library.git_repo import (
-    EVERYONE_PRINCIPAL_ID,
     GitRepo,
     GitRepoGrant,
     GitRepoKind,
@@ -44,6 +43,7 @@ from app.models.library.git_repo import (
     LibraryPrincipalKind,
     LibraryPrincipalRole,
     LibraryPrincipalUser,
+    LibraryPusher,
 )
 from app.models.users.user import User
 from app.services.library.exceptions import (
@@ -105,9 +105,16 @@ class LibraryService:
         pairs = LibraryAccessService.accessible_repos(session, user, kind=GitRepoKind.AGENT)
         repos = [repo for repo, _access in pairs]
         maintainers = LibraryService._maintainers_by_repo(session, repos)
+        pushers = LibraryService._pushers_by_repo(session, repos)
         installs = LibraryService._cloud_installs(session, user, repos)
         agents = [
-            LibraryService._to_agent(repo, access, maintainers.get(repo.id, []), installs.get(repo.id))
+            LibraryService._to_agent(
+                repo,
+                access,
+                maintainers.get(repo.id, []),
+                pushers.get(repo.id),
+                installs.get(repo.id),
+            )
             for repo, access in pairs
         ]
         return LibraryListing(agents=agents, mirrors=[])
@@ -119,9 +126,10 @@ class LibraryService:
         if access is None:
             raise LibraryNotFoundError(NOT_FOUND_DETAIL)
         maintainers = LibraryService._maintainers_by_repo(session, [repo])
+        pushers = LibraryService._pushers_by_repo(session, [repo])
         installs = LibraryService._cloud_installs(session, user, [repo])
         return LibraryService._to_agent(
-            repo, access, maintainers.get(repo.id, []), installs.get(repo.id)
+            repo, access, maintainers.get(repo.id, []), pushers.get(repo.id), installs.get(repo.id)
         )
 
     @staticmethod
@@ -139,6 +147,7 @@ class LibraryService:
             ).all()
         )
         maintainers = LibraryService._maintainers_by_repo(session, repos)
+        pushers = LibraryService._pushers_by_repo(session, repos)
         grants = LibraryService._grants_by_repo(session, repos)
         owner_ids = {repo.owner_user_id for repo in repos if repo.owner_user_id}
         owners = LibraryService._users_by_id(session, owner_ids)
@@ -147,7 +156,9 @@ class LibraryService:
             owner = owners.get(repo.owner_user_id) if repo.owner_user_id else None
             result.append(
                 LibraryAgentAdmin(
-                    **LibraryService._agent_fields(repo, maintainers.get(repo.id, [])),
+                    **LibraryService._agent_fields(
+                        repo, maintainers.get(repo.id, []), pushers.get(repo.id)
+                    ),
                     owner=LibraryOwner(user_id=owner.id, display_name=display_name(owner))
                     if owner
                     else None,
@@ -162,9 +173,13 @@ class LibraryService:
     def create_agent(
         session: Session, user: User, data: LibraryAgentCreate
     ) -> tuple[LibraryAgent, set[uuid.UUID]]:
-        """New agent repo: row → bare repo → grants (creator ``maintain``,
-        ``everyone: read``) → commit. Returns the agent and every other reader
-        (to receive ``library.granted``)."""
+        """New agent repo: row → bare repo → grants → commit, all or nothing.
+
+        Grants are the creator's ``maintain`` plus ``data.grants`` (validated
+        like :meth:`replace_grants`; the creator listed again is folded into
+        their ``maintain``). Omitted ``grants`` means creator only, so the
+        entry is never readable by anyone the creator did not name. Returns
+        the agent and every other reader (to receive ``library.granted``)."""
         if LibraryService._slug_taken(session, data.slug):
             raise LibraryConflictError(LibraryService._duplicate_detail(data.slug))
 
@@ -175,6 +190,19 @@ class LibraryService:
             description=data.description,
             owner_user_id=user.id,
         )
+        requested = [
+            g
+            for g in (data.grants or [])
+            if not (isinstance(g.principal, LibraryPrincipalUser) and g.principal.user_id == user.id)
+        ]
+        grants = [
+            LibraryGrantIn(principal=LibraryPrincipalUser(user_id=user.id), access=LibraryAccess.MAINTAIN),
+            *requested,
+        ]
+        _require_people_maintainers(grants)
+        # Validated before anything is written, so a refusal leaves no row or repo.
+        grant_rows = LibraryAccessService.validate_grants(session, repo, grants, user)
+
         session.add(repo)
         try:
             session.flush()
@@ -188,30 +216,12 @@ class LibraryService:
             session.rollback()
             raise
 
-        session.add(
-            GitRepoGrant(
-                repo_id=repo.id,
-                principal_kind=LibraryPrincipalKind.USER,
-                principal_id=str(user.id),
-                user_id=user.id,
-                access=LibraryAccess.MAINTAIN,
-                granted_by_user_id=user.id,
-            )
-        )
-        session.add(
-            GitRepoGrant(
-                repo_id=repo.id,
-                principal_kind=LibraryPrincipalKind.EVERYONE,
-                principal_id=EVERYONE_PRINCIPAL_ID,
-                access=LibraryAccess.READ,
-                granted_by_user_id=user.id,
-            )
-        )
+        session.add_all(grant_rows)
         add_audit_event(
             session,
             user.id,
             LIBRARY_AGENT_CREATED,
-            {"repo_id": str(repo.id), "slug": repo.slug},
+            {"repo_id": str(repo.id), "slug": repo.slug, "grants": _grant_labels(grants)},
         )
         repo_id = repo.id
         try:
@@ -237,11 +247,7 @@ class LibraryService:
         """Full replace of one agent's grants (maintainer or superuser).
         Returns the new grants and the users who just gained access."""
         repo = LibraryService._get_managed_repo(session, user, repo_id)
-        for grant in grants:
-            if grant.access == LibraryAccess.MAINTAIN and not isinstance(
-                grant.principal, LibraryPrincipalUser
-            ):
-                raise LibraryValidationError(PEOPLE_ONLY_MAINTAIN_DETAIL)
+        _require_people_maintainers(grants)
 
         before, after = LibraryAccessService.replace_grants(session, repo, grants, user)
         add_audit_event(
@@ -251,9 +257,7 @@ class LibraryService:
             {
                 "repo_id": str(repo.id),
                 "slug": repo.slug,
-                "grants": [
-                    {"principal": _principal_label(g), "access": g.access} for g in grants
-                ],
+                "grants": _grant_labels(grants),
             },
         )
         session.commit()
@@ -328,7 +332,9 @@ class LibraryService:
         return f"An agent called {slug} is already in the team library."
 
     @staticmethod
-    def _agent_fields(repo: GitRepo, maintainers: list[LibraryMaintainer]) -> dict:
+    def _agent_fields(
+        repo: GitRepo, maintainers: list[LibraryMaintainer], pushed_by: LibraryPusher | None
+    ) -> dict:
         manifest = (
             LibraryManifest.model_validate(repo.manifest_cache) if repo.manifest_cache else None
         )
@@ -341,6 +347,7 @@ class LibraryService:
             "default_branch": repo.default_branch,
             "head_sha": repo.head_sha,
             "updated_at": repo.updated_at,
+            "pushed_by": pushed_by,
             "maintainers": maintainers,
             "manifest": manifest,
         }
@@ -350,10 +357,11 @@ class LibraryService:
         repo: GitRepo,
         access: str,
         maintainers: list[LibraryMaintainer],
+        pushed_by: LibraryPusher | None,
         cloud_install_id: uuid.UUID | None,
     ) -> LibraryAgent:
         return LibraryAgent(
-            **LibraryService._agent_fields(repo, maintainers),
+            **LibraryService._agent_fields(repo, maintainers, pushed_by),
             access=access,
             cloud_install_id=cloud_install_id,
         )
@@ -364,6 +372,21 @@ class LibraryService:
             return {}
         users = session.exec(select(User).where(col(User.id).in_(user_ids))).all()
         return {u.id: u for u in users}
+
+    @staticmethod
+    def _pushers_by_repo(
+        session: Session, repos: list[GitRepo]
+    ) -> dict[uuid.UUID, LibraryPusher]:
+        """The person behind each repo's last accepted push (one query)."""
+        people = LibraryService._users_by_id(
+            session, {r.last_pushed_by_user_id for r in repos if r.last_pushed_by_user_id}
+        )
+        result: dict[uuid.UUID, LibraryPusher] = {}
+        for repo in repos:
+            person = people.get(repo.last_pushed_by_user_id) if repo.last_pushed_by_user_id else None
+            if person:
+                result[repo.id] = LibraryPusher(user_id=person.id, display_name=display_name(person))
+        return result
 
     @staticmethod
     def _maintainers_by_repo(
@@ -467,6 +490,19 @@ def _principal_and_name(
     if grant.principal_kind == LibraryPrincipalKind.ROLE:
         return LibraryPrincipalRole(role=grant.principal_id), grant.principal_id
     return LibraryPrincipalKind.EVERYONE, EVERYONE_DISPLAY_NAME
+
+
+def _require_people_maintainers(grants: list[LibraryGrantIn]) -> None:
+    for grant in grants:
+        if grant.access == LibraryAccess.MAINTAIN and not isinstance(
+            grant.principal, LibraryPrincipalUser
+        ):
+            raise LibraryValidationError(PEOPLE_ONLY_MAINTAIN_DETAIL)
+
+
+def _grant_labels(grants: list[LibraryGrantIn]) -> list[dict]:
+    """Grants as the audit rows record them."""
+    return [{"principal": _principal_label(g), "access": g.access} for g in grants]
 
 
 def _principal_label(grant: LibraryGrantIn) -> str:

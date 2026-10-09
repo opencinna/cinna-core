@@ -4,7 +4,7 @@
   after a ``git-receive-pack`` stream ends. receive-pack exits 0 even when the
   ``pre-receive`` hook refuses, so the ref on disk is the truth: when
   ``refs/heads/main`` now points at the SHA this push asked for, the row's ``head_sha`` / ``manifest_cache`` /
-  ``updated_at`` follow, a ``LIBRARY_PUSH_ACCEPTED`` audit row is written and
+  ``last_pushed_by_user_id`` / ``updated_at`` follow, a ``LIBRARY_PUSH_ACCEPTED`` audit row is written and
   ``library.updated`` goes to every reader's ``user_{id}`` room.
 - :meth:`LibraryEvents.granted` sends ``library.granted`` to users who just
   gained access.
@@ -135,7 +135,12 @@ class LibraryEvents:
                     col(GitRepo.id) == repo_id,
                     col(GitRepo.head_sha).is_not_distinct_from(before_sha),
                 )
-                .values(head_sha=new_sha, manifest_cache=manifest, updated_at=now)
+                .values(
+                    head_sha=new_sha,
+                    manifest_cache=manifest,
+                    last_pushed_by_user_id=pusher_id,
+                    updated_at=now,
+                )
             )
             if result.rowcount == 0:
                 # Lost a race with another push's bookkeeping, or an earlier
@@ -148,6 +153,8 @@ class LibraryEvents:
                 if current and current != repo.head_sha:
                     repo.head_sha = current
                     repo.manifest_cache = GitRepoStorage.read_manifest_at(repo_id, current)
+                    if current == new_sha:
+                        repo.last_pushed_by_user_id = pusher_id
                     repo.updated_at = now
                     session.add(repo)
                 new_sha = current or new_sha

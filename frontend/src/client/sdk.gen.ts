@@ -11294,7 +11294,7 @@ export class LibraryService {
     /**
      * Create Library Agent
      * Add an agent to the team library; the caller becomes its maintainer and
-     * everyone can get it.
+     * only the people in ``grants`` (none when omitted) can get it.
      * @param data The data for the request.
      * @param data.requestBody
      * @returns LibraryAgent Successful Response

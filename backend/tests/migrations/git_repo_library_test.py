@@ -32,6 +32,8 @@ from app.services.library.library_access_service import LibraryAccessService as 
 
 BEFORE = "49c748e2c50a"
 AFTER = "0e62eb9df5d4"
+#: ``git_repo.last_pushed_by_user_id``; the ORM-level tests need the model's full shape.
+PUSHER = "08bfa6ee8d9f"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -123,9 +125,25 @@ def test_upgrade_creates_tables_indexes_and_downgrade_removes_them(scratch) -> N
     assert "git_repo" in _tables(engine)
 
 
+def test_last_pusher_column_upgrade_and_downgrade(scratch) -> None:
+    """Nullable FK to user (SET NULL); downgrade drops it and keeps the tables."""
+    engine, url = scratch
+    command.upgrade(_config(url), PUSHER)
+    insp = inspect(engine)
+    cols = {c["name"]: c for c in insp.get_columns("git_repo")}
+    assert cols["last_pushed_by_user_id"]["nullable"]
+    fk = next(f for f in insp.get_foreign_keys("git_repo") if f["constrained_columns"] == ["last_pushed_by_user_id"])
+    assert fk["referred_table"] == "user" and fk["options"].get("ondelete") == "SET NULL"
+
+    command.downgrade(_config(url), AFTER)
+    assert "last_pushed_by_user_id" not in {c["name"] for c in inspect(engine).get_columns("git_repo")}
+    command.upgrade(_config(url), PUSHER)
+    assert "last_pushed_by_user_id" in {c["name"] for c in inspect(engine).get_columns("git_repo")}
+
+
 def test_slug_uniqueness_is_partial_and_grants_cascade(scratch) -> None:
     engine, url = scratch
-    command.upgrade(_config(url), AFTER)
+    command.upgrade(_config(url), PUSHER)
     with Session(engine) as s:
         owner = _user(s)
         other = _user(s)
@@ -172,7 +190,7 @@ def test_slug_uniqueness_is_partial_and_grants_cascade(scratch) -> None:
 
 def test_effective_access_takes_the_max_over_user_role_and_everyone(scratch) -> None:
     engine, url = scratch
-    command.upgrade(_config(url), AFTER)
+    command.upgrade(_config(url), PUSHER)
     with Session(engine) as s:
         owner = _user(s, "agent-developer")
         dev = _user(s, "agent-developer")
@@ -224,7 +242,7 @@ def test_effective_access_takes_the_max_over_user_role_and_everyone(scratch) -> 
 
 def test_replace_grants_validates_requires_a_maintainer_and_reports_readers(scratch) -> None:
     engine, url = scratch
-    command.upgrade(_config(url), AFTER)
+    command.upgrade(_config(url), PUSHER)
     with Session(engine) as s:
         owner = _user(s, "agent-developer", full_name="Olga Owner")
         alice = _user(s)

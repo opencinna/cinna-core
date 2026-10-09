@@ -16,6 +16,7 @@ Auto-generated from OpenAPI spec. Tag: `library`
   - `slug`: string (required)
   - `name`: string (required)
   - `description`: string
+  - `grants`: array | null
 
 **Response:** `LibraryAgent`
 

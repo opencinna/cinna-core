@@ -31,8 +31,8 @@ _BASE = "/api/v1/library"
 
 def test_create_agent_and_validation(client: TestClient, superuser_token_headers) -> None:
     """
-    1. Create -> creator maintain, everyone read, no head/manifest, clone url
-    2. Grants listing shows both rows
+    1. Create without grants -> creator maintain only, no head/manifest/pusher, clone url
+    2. Grants listing shows only the creator; another person can't see it
     3. Duplicate slug -> 409; bad slugs / empty name -> 422; no auth -> 401/403
     """
     owner = make_person(client, superuser_token_headers)
@@ -45,12 +45,12 @@ def test_create_agent_and_validation(client: TestClient, superuser_token_headers
     assert created["clone_url"].endswith(f"/git/{created['repo_id']}.git")
     assert [m["user_id"] for m in created["maintainers"]] == [owner.id]
     assert created["cloud_install_id"] is None
+    assert created["pushed_by"] is None
 
     grants = get_grants(client, owner.headers, created["repo_id"])
-    assert {(str(g["principal"]), g["access"]) for g in grants} == {
-        (str({"user_id": owner.id}), "maintain"),
-        ("everyone", "read"),
-    }
+    assert [(g["principal"], g["access"]) for g in grants] == [({"user_id": owner.id}, "maintain")]
+    other = make_person(client, superuser_token_headers)
+    assert slug not in library_slugs(list_library(client, other.headers))
 
     dup = client.post(f"{_BASE}/agents", headers=owner.headers, json={"slug": slug, "name": "x"})
     assert dup.status_code == 409
@@ -61,6 +61,66 @@ def test_create_agent_and_validation(client: TestClient, superuser_token_headers
     r = client.post(f"{_BASE}/agents", headers=owner.headers, json={"slug": random_slug(), "name": ""})
     assert r.status_code == 422
     assert client.post(f"{_BASE}/agents", json={"slug": random_slug(), "name": "x"}).status_code in (401, 403)
+
+
+def test_create_with_grants_is_private_from_the_start(
+    client: TestClient, superuser_token_headers, socket_stub, git_storage
+) -> None:
+    """
+    1. grants=[B read] -> B lists it (read), C does not; only B gets library.granted
+    2. grants=[] -> only the creator lists it
+    3. Creator repeated in grants (even as read) -> one maintain grant
+    4. Unknown user, everyone maintain, a principal twice -> 422 and no row, no bare repo
+    """
+    owner = make_person(client, superuser_token_headers)
+    reader = make_person(client, superuser_token_headers)
+    stranger = make_person(client, superuser_token_headers)
+
+    # ── 1: named people only ──────────────────────────────────────────
+    socket_stub.emitted_events.clear()
+    shared = create_library_agent(client, owner.headers, grants=[user_grant(reader.id, "read")])
+    assert next(a for a in list_library(client, reader.headers)["agents"] if a["slug"] == shared["slug"])["access"] == "read"
+    assert shared["slug"] not in library_slugs(list_library(client, stranger.headers))
+    granted = [
+        e for e in socket_stub.emitted_events
+        if e["event"] == "event" and e["data"]["type"] == "library.granted"
+    ]
+    assert {e["room"] for e in granted} == {f"user_{reader.id}"}
+    assert {(str(g["principal"]), g["access"]) for g in get_grants(client, owner.headers, shared["repo_id"])} == {
+        (str({"user_id": owner.id}), "maintain"),
+        (str({"user_id": reader.id}), "read"),
+    }
+
+    # ── 2: empty list = creator only ──────────────────────────────────
+    alone = create_library_agent(client, owner.headers, grants=[])
+    assert alone["slug"] in library_slugs(list_library(client, owner.headers))
+    for person in (reader, stranger):
+        assert alone["slug"] not in library_slugs(list_library(client, person.headers))
+
+    # ── 3: the creator named again folds into their maintain ──────────
+    again = create_library_agent(
+        client, owner.headers, grants=[user_grant(owner.id, "read"), user_grant(reader.id, "write")]
+    )
+    grants = get_grants(client, owner.headers, again["repo_id"])
+    assert [(g["principal"], g["access"]) for g in grants] == [
+        ({"user_id": owner.id}, "maintain"),
+        ({"user_id": reader.id}, "write"),
+    ]
+
+    # ── 4: refusals leave nothing behind ──────────────────────────────
+    for bad in (
+        [user_grant(str(uuid.uuid4()), "read")],
+        [everyone_grant("maintain")],
+        [user_grant(reader.id, "read"), user_grant(reader.id, "write")],
+    ):
+        repos_before = {p.name for p in git_storage.iterdir()}
+        slug = random_slug()
+        r = client.post(
+            f"{_BASE}/agents", headers=owner.headers, json={"slug": slug, "name": "x", "grants": bad}
+        )
+        assert r.status_code == 422, (bad, r.text)
+        assert {p.name for p in git_storage.iterdir()} == repos_before
+        create_library_agent(client, owner.headers, slug=slug)  # slug still free: no row
 
 
 def test_listing_follows_grants_and_mirrors_is_empty(
