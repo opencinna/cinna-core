@@ -129,14 +129,15 @@ def _load(rel: str):
     return json.loads((KIT_DIR / rel).read_text(encoding="utf-8"))
 
 
-def test_contract_version_1_8_0_is_coherent_across_the_four_carriers() -> None:
+def test_contract_version_is_coherent_across_the_four_carriers() -> None:
     # LocalAgentKitService 503s the contract when these disagree.
     file_version = (KIT_DIR / "CONTRACT_VERSION").read_text(encoding="utf-8").strip()
-    assert file_version == "1.8.0"
+    assert file_version == "1.9.0"
     assert _load("kit.json")["contract_version"] == file_version
     assert _load("layout.json")["contract_version"] == file_version
     changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert f"## {file_version} — shared agents" in changelog
+    assert f"## {file_version} — " in changelog
+    assert "## 1.8.0 — shared agents" in changelog
     # newest entry first: no higher-numbered heading precedes it
     first_heading = re.search(r"^## (\d+\.\d+\.\d+)", changelog, re.MULTILINE)
     assert first_heading is not None and first_heading.group(1) == file_version
@@ -151,9 +152,16 @@ def test_layout_declares_the_shared_remote_section() -> None:
     never = remote["never_travels"]
     assert never["secret_rule"] == "secret_files"
     assert set(never["roles"]) == {"credentials", "runtime_data"}
-    # the paths are derived from those two roles, not free text
+    # the directory paths are derived from those two roles, not free text;
+    # the one file entry (1.9.0) belongs to no role
     roles = {r["role"]: r["path"] for r in layout["agent"]["roles"]}
-    assert set(never["paths"]) == {roles["credentials"] + "/", roles["runtime_data"] + "/"}
+    assert set(never["paths"]) == {
+        roles["credentials"] + "/",
+        roles["runtime_data"] + "/",
+        ".claude/settings.local.json",
+    }
+    agent_ignore = (KIT_DIR / "templates" / "agent" / "gitignore").read_text(encoding="utf-8")
+    assert ".claude/settings.local.json" in agent_ignore.splitlines()
     local = remote["local_state"]
     assert local["file"] == "app-data/desktop.json"
     assert local["key"] == "shared_remote"

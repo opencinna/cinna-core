@@ -58,7 +58,7 @@ def _make_v3_tree(
 ) -> Path:
     """A minimal kit agent folder (tree v3) that passes checkout validation."""
     kit: dict = {
-        "contract_version": "1.8.0",
+        "contract_version": "1.9.0",
         "id": _KIT_ID,
         "name": "Shared v3 agent",
         "slug": "shared-v3-agent",
@@ -228,7 +228,7 @@ def test_v3_checkout_pull_and_push_layouts(
     kit = json.loads((push_dir / "cinna-agent.json").read_text())
     assert kit["id"] == _KIT_ID
     assert kit["bundle"]["bundle_id"] == bundle_id
-    assert kit["contract_version"] == "1.8.0"
+    assert kit["contract_version"] == "1.9.0"
 
     # ── Phase 5: v2 remote, flag OFF → v2 layout ─────────────────────────────
     v2_bundle = f"io.test.git.v2.{random_lower_string()[:6]}"
@@ -387,7 +387,7 @@ def test_v3_export_leaves_no_spurious_dirty_when_workspace_holds_excluded_paths(
             "docs": {"workflow.md": "# Workflow\nv1"},
             "scripts": {"run.sh": "echo hi", ".gitignore": "*.log\n"},
             "cinna-agent.json": json.dumps(
-                {"contract_version": "1.8.0", "id": _KIT_ID, "name": "X", "description": "d"}
+                {"contract_version": "1.9.0", "id": _KIT_ID, "name": "X", "description": "d"}
             ),
             "README.md": "readme",
             "CLAUDE.md": "claude",

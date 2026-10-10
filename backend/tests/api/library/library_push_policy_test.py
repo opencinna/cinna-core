@@ -234,3 +234,41 @@ def test_junk_git_protocol_header_is_dropped(client: TestClient, shared: Shared,
         headers={"Authorization": headers["Authorization"], "Git-Protocol": "x=\x01junk"},
     )
     assert r.status_code == 200
+
+
+CLAUDE_SETTINGS = (
+    "This change includes the agent's Claude permission settings "
+    "(.claude/settings.local.json), which never leave your computer."
+)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".claude/settings.local.json", ".Claude/Settings.Local.json", ".CLAUDE/SETTINGS.LOCAL.JSON"],
+)
+def test_refuses_claude_local_settings_file_any_case(shared: Shared, path: str) -> None:
+    shared.commit({path: "{}"})
+    shared.refused(CLAUDE_SETTINGS)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".claude/settings.json",
+        ".claude/settings.local.json.example",
+        ".claude/settings.local.jsonx",
+    ],
+)
+def test_similarly_named_claude_files_are_accepted(shared: Shared, path: str) -> None:
+    """File entries match one exact path, not a prefix."""
+    shared.commit({path: "{}"})
+    result = shared.git.push(shared.work)
+    assert result.ok, result.output
+    assert shared.head() != shared.baseline
+
+
+def test_refuses_claude_settings_added_then_removed(shared: Shared) -> None:
+    """Like a secret, the file still travels in the pack of an intermediate commit."""
+    shared.commit({".claude/settings.local.json": "{}"})
+    shared.commit(remove=[".claude/settings.local.json"])
+    shared.refused(CLAUDE_SETTINGS)

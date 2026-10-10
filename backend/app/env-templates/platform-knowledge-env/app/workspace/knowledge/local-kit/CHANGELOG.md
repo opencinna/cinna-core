@@ -16,6 +16,33 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.9.0 — Claude permission settings stay on your computer
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.9.0 folder, because the majors match.
+
+### Added
+
+- **`.claude/settings.local.json` never travels.** `layout.json` →
+  `shared_remote.never_travels.paths` gains it beside `credentials/` and
+  `app-data/`. The file holds one machine's Claude permission allow rules
+  (`Bash(uv run:*)`, `Bash(make:*)`); a shared copy would let anyone with write
+  access widen what runs without a prompt on every teammate's computer at their
+  next update. It belongs to no folder role, so `never_travels.roles` is
+  unchanged.
+- **`never_travels.paths` holds files as well as folders.** An entry ending in
+  `/` is a directory and covers everything under it; any other entry is one
+  file, matched exactly. Both compare case-insensitively.
+- `templates/agent/gitignore` ignores `.claude/settings.local.json`. The rest
+  of `.claude/` is untouched by this rule.
+
+### For hosts
+
+- Drop every `never_travels` path from what you share, files included. A
+  team library refuses a version that still contains the file; a version that
+  removes it is accepted, so a folder that already shared it heals on its next
+  share. Nothing to migrate.
+
 ## 1.8.0 — shared agents
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built

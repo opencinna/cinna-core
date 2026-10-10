@@ -180,12 +180,12 @@ def test_head_sha_and_manifest_reading(storage: Path, tmp_path: Path) -> None:
     sha1 = _push_manifest(
         bare, work,
         {"id": "i", "name": "N", "description": "D", "runtime": {"engine": "claude"},
-         "contract_version": "1.8.0", "bundle": {"x": 1}},
+         "contract_version": "1.9.0", "bundle": {"x": 1}},
     )
     assert GitRepoStorage.head_sha(rid) == sha1
     assert GitRepoStorage.read_manifest_at(rid, sha1) == {
         "id": "i", "name": "N", "description": "D",
-        "runtime": {"engine": "claude"}, "contract_version": "1.8.0",
+        "runtime": {"engine": "claude"}, "contract_version": "1.9.0",
     }
 
     # garbage / non-object / oversized manifests yield None, never an exception

@@ -55,6 +55,10 @@ MSG_APP_DATA = (
     "This change includes the agent's app-data folder (its private working files), "
     "which can't be shared."
 )
+MSG_CLAUDE_SETTINGS = (
+    "This change includes the agent's Claude permission settings "
+    "(.claude/settings.local.json), which never leave your computer."
+)
 MSG_NEVER_TRAVELS = "This change includes {path}, which never leaves your computer."
 MSG_SYMLINK = (
     "This change includes {path}, a shortcut (symlink) to another file, "
@@ -77,10 +81,11 @@ WARN_CONTRACT_MINOR_NEWER = (
     "It was shared, but settings this server doesn't know yet are kept as they are."
 )
 
-# Paths of the kit's ``never_travels`` roots with a dedicated sentence.
+# Kit ``never_travels`` entries with a dedicated sentence.
 _NEVER_TRAVELS_SENTENCES = {
     "credentials/": MSG_CREDENTIALS,
     "app-data/": MSG_APP_DATA,
+    ".claude/settings.local.json": MSG_CLAUDE_SETTINGS,
 }
 
 
@@ -133,14 +138,22 @@ class KitRules:
             raise PolicyUnavailable("layout.json has no shared_remote.never_travels.paths")
         return cls(
             secret_rules=[r for r in rules if isinstance(r, dict)],
-            never_travels=[_as_dir_prefix(p) for p in paths],
+            never_travels=[_normalize_entry(p) for p in paths],
             kit_dir=root,
         )
 
 
-def _as_dir_prefix(path: str) -> str:
-    path = path.strip().removeprefix("./").lstrip("/")
-    return path if path.endswith("/") else f"{path}/"
+def _normalize_entry(path: str) -> str:
+    """A ``never_travels`` entry, agent-root relative. A trailing ``/`` marks a
+    directory (everything under it); anything else is one file, matched exactly."""
+    return path.strip().removeprefix("./").lstrip("/")
+
+
+def _never_travels_hit(folded_path: str, entry: str) -> bool:
+    folded_entry = entry.casefold()
+    if folded_entry.endswith("/"):
+        return folded_path == folded_entry.rstrip("/") or folded_path.startswith(folded_entry)
+    return folded_path == folded_entry
 
 
 # Case-insensitive on purpose: ``.ENV`` or ``Credentials/`` lands on the same
@@ -184,14 +197,15 @@ def is_secret_path(path: str, rules: Iterable[dict[str, Any]]) -> bool:
 
 
 def check_path(path: str, size: int | None, rules: KitRules, max_blob: int) -> None:
-    """Refuse one blob path: never-travels root, secret file, oversized file.
-    Path comparisons are case-insensitive (see ``_SECRET_CLAUSE_TESTS``)."""
+    """Refuse one blob path: never-travels directory or file, secret file,
+    oversized file. Path comparisons are case-insensitive (see
+    ``_SECRET_CLAUSE_TESTS``). Only paths present in the pushed version are
+    checked, so a version that removes a never-travels file is accepted."""
     folded = path.casefold()
-    for prefix in rules.never_travels:
-        root = prefix.casefold()
-        if folded == root.rstrip("/") or folded.startswith(root):
-            sentence = _NEVER_TRAVELS_SENTENCES.get(prefix)
-            raise PushRefused(sentence or MSG_NEVER_TRAVELS.format(path=prefix.rstrip("/")))
+    for entry in rules.never_travels:
+        if _never_travels_hit(folded, entry):
+            sentence = _NEVER_TRAVELS_SENTENCES.get(entry)
+            raise PushRefused(sentence or MSG_NEVER_TRAVELS.format(path=entry.rstrip("/")))
     if is_secret_path(path, rules.secret_rules):
         raise PushRefused(MSG_SECRET.format(path=path))
     if size is not None and size > max_blob:

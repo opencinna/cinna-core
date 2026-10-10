@@ -61,7 +61,7 @@ agent into it with one command.
     guide, template or tool edit. Answers *"is my copy of the kit current?"*,
     and it is what `kit.py refresh` polls and what every ETag is keyed on. It
     gates nothing.
-  - `contract_version` — a hand-maintained semantic version (`1.8.0` today; 1.8.0 adds `layout.json` `shared_remote`, the `Marketplaces` workshop role and `schema/cinna-marketplace.schema.json`, see [Team Library](../team_library/team_library.md)),
+  - `contract_version` — a hand-maintained semantic version (`1.9.0` today; 1.9.0 makes `.claude/settings.local.json` a never-travels file entry of `shared_remote` (a `/`-ending entry is a folder, otherwise one exact file), so the team library refuses it; 1.8.0 adds `layout.json` `shared_remote`, the `Marketplaces` workshop role and `schema/cinna-marketplace.schema.json`, see [Team Library](../team_library/team_library.md)),
     carried in three places that must agree: the `CONTRACT_VERSION` file,
     `kit.json` and `layout.json`. Every manifest records the one it was
     scaffolded with. Answers *"may this tool operate this folder?"*

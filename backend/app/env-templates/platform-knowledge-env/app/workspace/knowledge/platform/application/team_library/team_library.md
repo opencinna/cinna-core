@@ -55,8 +55,13 @@ Each library agent has a list of grants. A grant names a principal and an access
 A push is accepted only when all of these hold, enforced by a `pre-receive` hook on the server:
 
 - Only the `main` branch exists; no force pushes, no deletes.
-- No path under the kit's `never_travels` roots (`credentials/`, `app-data/`) and no secret file
-  (the kit's `secret_files` rule); path matching is case-insensitive.
+- No path matching a kit `never_travels` entry (`credentials/`, `app-data/` and the single file
+  `.claude/settings.local.json`, the agent's Claude permission settings) and no secret file
+  (the kit's `secret_files` rule); path matching is case-insensitive. An entry ending in `/` is a
+  folder, any other entry is one exact file. A version whose tree still contains `.claude/settings.local.json` is refused even if the change
+  did not touch it (same as `credentials/` and `app-data/`); deleting it in a new version is accepted; repos that already track it are not migrated, the desktop's next share
+  removes it. Reason: a teammate with write access could otherwise widen what runs without a
+  permission prompt on every member's machine.
 - No symlinks.
 - No file over 10 MB and no tree over 200 MB; a request body over 256 MB is refused with 413.
 - `cinna-agent.json` exists, validates against the kit schema, and its `contract_version` has the
@@ -65,7 +70,8 @@ A push is accepted only when all of these hold, enforced by a `pre-receive` hook
 
 A refusal is one plain sentence that clients show verbatim, written in the user vocabulary (never
 "branch", "commit", "push" or "SHA"). Examples: "This change includes credentials/, ... which never
-leaves your computer.", "The file X is larger than 10 MB, too big to share with the team.", "This
+leaves your computer.", "This change includes the agent's Claude permission settings
+(.claude/settings.local.json), which never leave your computer.", "The file X is larger than 10 MB, too big to share with the team.", "This
 agent has no cinna-agent.json, so it can't be shared.", "Only the agent's main version can be shared
 to the team library." If the policy cannot run, the server answers with "The team library can't
 accept changes right now. Ask your admin to look at the Cinna server." (503). Exact sentences live in
@@ -111,7 +117,7 @@ secret rules above are what keeps keys and credentials out.
 - [Git-Backed Agent Versioning](../../agents/agent_git_versioning/agent_git_versioning.md): a library
   repo is a remote like any other; cloud twins will be an `AgentGitSource` pointing at it. The shared
   tree format is tree v3 (the kit folder as-is).
-- [Local Agent Kit](../local_agent_kit/local_agent_kit.md): contract 1.8.0 `shared_remote`, the policy
+- [Local Agent Kit](../local_agent_kit/local_agent_kit.md): contract 1.8.0 `shared_remote`, 1.9.0 `.claude/settings.local.json` in `never_travels`, the policy
   data (`never_travels`, `secret_files`) and the manifest schema the hook validates against.
 - [Event Bus](../realtime_events/event_bus_system.md): `library.updated`, `library.granted`.
 - [User Roles](../user_roles/user_roles.md): role principals use `User.role` values.

@@ -17,7 +17,7 @@ A bundle revision on disk is a directory holding:
 * an optional generated ``.gitignore`` (git trees) listing the same denylist so
   excluded state can never be committed.
 
-**Tree v3** (kit contract 1.8.0) is a git wire format only: the kit agent folder
+**Tree v3** (kit contract 1.8.0+) is a git wire format only: the kit agent folder
 as-is — ``cinna-agent.json`` at the tree root, the workspace content beside it,
 the prompts in the files the kit manifest names, and the revision block under the
 manifest's ``bundle`` key. :meth:`RevisionFormat.read_v3_tree` turns such a tree
@@ -98,9 +98,6 @@ KIT_MANIFEST_FILENAME = "cinna-agent.json"
 # uses it to project the live side the way a v3 tree sees it
 # (:meth:`RevisionFormat.project_v3_view`).
 TREE_LAYOUT_KEY = "tree_layout"
-
-# Contract version a v3 export stamps into ``cinna-agent.json``.
-KIT_CONTRACT_VERSION = "1.8.0"
 
 # Prompt kinds stored as files in a kit folder (router_trigger is a manifest field).
 _KIT_PROMPT_KINDS = ("workflow", "entrypoint", "refiner")
@@ -560,6 +557,19 @@ def _kit_dir() -> Path:
     return local_kit_dir()
 
 
+def _kit_contract_version() -> str:
+    """The kit's ``CONTRACT_VERSION``, which a v3 export stamps into
+    ``cinna-agent.json`` so the stamp always matches the kit files it writes."""
+    path = _kit_dir() / "CONTRACT_VERSION"
+    try:
+        version = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RevisionFormatError(f"Kit contract version {path} could not be read: {exc}") from exc
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise RevisionFormatError(f"Kit contract version {path} is not a version: {version!r}")
+    return version
+
+
 def _kit_layout() -> dict:
     """The kit's ``layout.json``; a missing or unreadable one is an error."""
     path = _kit_dir() / "layout.json"
@@ -649,7 +659,7 @@ def _build_kit_manifest(
     metadata = manifest.get("metadata") or {}
     prompts = manifest.get("prompts") or {}
 
-    kit["contract_version"] = KIT_CONTRACT_VERSION
+    kit["contract_version"] = _kit_contract_version()
     if not (isinstance(kit.get("id"), str) and _UUID_RE.match(kit["id"])):
         kit["id"] = str(uuid.uuid4())
     kit["name"] = name

@@ -15,6 +15,10 @@ credentials.json
 !*.sample
 !*.template
 
+# Claude permission allow rules for this machine (layout.json →
+# shared_remote.never_travels). The rest of .claude/ is not ignored here.
+.claude/settings.local.json
+
 # Python
 .venv/
 __pycache__/

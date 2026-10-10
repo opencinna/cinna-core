@@ -489,7 +489,7 @@ def test_read_v3_tree_applies_excludes_and_reads_prompts_from_files(
     _write_v3_tree(
         src,
         {
-            "contract_version": "1.8.0",
+            "contract_version": "1.9.0",
             "id": _V3_KIT_ID,
             "name": "Shared",
             "description": "Shared agent",
@@ -553,7 +553,7 @@ def test_read_v3_tree_without_bundle_block_has_no_bundle_id(tmp_path: Path) -> N
     _write_v3_tree(
         src,
         {
-            "contract_version": "1.8.0",
+            "contract_version": "1.9.0",
             "id": _V3_KIT_ID,
             "name": "Desk",
             "description": "Made on the desktop",
@@ -574,7 +574,7 @@ def test_read_v3_tree_never_follows_symlinked_prompt_or_content(
     src = tmp_path / "v3"
     _write_v3_tree(
         src,
-        {"contract_version": "1.8.0", "id": _V3_KIT_ID, "name": "S", "description": "d"},
+        {"contract_version": "1.9.0", "id": _V3_KIT_ID, "name": "S", "description": "d"},
         {"docs": {}},
     )
     (src / "docs" / "WORKFLOW_PROMPT.md").symlink_to(outside)
@@ -621,7 +621,7 @@ def test_write_v3_tree_round_trips_through_reader(tmp_path: Path) -> None:
     assert (dest / ".gitignore").is_file()
 
     kit = json.loads((dest / "cinna-agent.json").read_text())
-    assert kit["contract_version"] == "1.8.0"
+    assert kit["contract_version"] == "1.9.0"
     assert kit["name"] == "Shared Agent"
     assert kit["slug"] == "shared-agent"
     assert kit["description"] == "Shared agent"
@@ -702,7 +702,7 @@ def test_write_v3_tree_preserves_unknown_kit_keys_id_and_excluded_files(
     assert kit["x-teammate"] == {"custom": True}
     assert kit["slug"] == "kept-slug"
     assert kit["name"] == "New name"
-    assert kit["contract_version"] == "1.8.0"
+    assert kit["contract_version"] == "1.9.0"
     assert kit["runtime"] == {"engine": "claude", "extra": 1}
     # Prune only removed what the reader would import.
     assert (dest / "AGENTS.md").read_text() == "teammate wrapper"
