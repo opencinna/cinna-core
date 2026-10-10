@@ -104,6 +104,7 @@ export function invalidateAddons(
   queryClient.invalidateQueries({ queryKey: ["agent", agentId, "skills"] })
   if (options?.catalog) {
     queryClient.invalidateQueries({ queryKey: ["skills-catalog"] })
+    queryClient.invalidateQueries({ queryKey: ["catalog-items"] })
   }
   if (options?.credentials) {
     queryClient.invalidateQueries({ queryKey: ["agent-credentials", agentId] })

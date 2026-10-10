@@ -6,7 +6,9 @@ skill packages), keyed on the item uuid (README §5.1). Access rules live in
 projections and item mutations in
 :class:`~app.services.catalog.catalog_item_service.CatalogItemService`,
 desktop agent creation in
-:class:`~app.services.catalog.desktop_agent_service.DesktopAgentService`.
+:class:`~app.services.catalog.desktop_agent_service.DesktopAgentService`,
+local installs Cinna Desktop reports in
+:class:`~app.services.catalog.local_install_service.LocalInstallService`.
 Registered before ``catalog.router`` so ``/catalog/items/...`` is not read as
 ``/catalog/{bundle_id}``.
 """
@@ -17,6 +19,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, 
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models.catalog.catalog_access import CatalogGrant, CatalogGrantIn
+from app.models.catalog.catalog_local_install import LocalInstallIn
 from app.models.catalog.catalog_item import (
     CatalogItem,
     CatalogItemDetail,
@@ -29,12 +32,16 @@ from app.services.catalog.catalog_events import CatalogEvents
 from app.services.catalog.catalog_item_service import CatalogItemService
 from app.services.catalog.desktop_agent_service import DesktopAgentService
 from app.services.catalog.exceptions import CatalogError
+from app.services.catalog.local_install_service import LocalInstallService
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 
 def _http_error(exc: CatalogError) -> HTTPException:
-    return HTTPException(status_code=exc.http_status, detail=str(exc))
+    """``detail`` is the sentence, or the structured body an error carries
+    (``{code, message}``, e.g. ``cloud_only``)."""
+    detail = getattr(exc, "detail", None) or str(exc)
+    return HTTPException(status_code=exc.http_status, detail=detail)
 
 
 @router.get("/items", response_model=CatalogItemsPublic)
@@ -144,3 +151,43 @@ def put_catalog_item_grants(
         raise _http_error(exc)
     background_tasks.add_task(CatalogEvents.granted, spec.wire_kind, item_id, gained)
     return grants
+
+
+@router.post("/items/{item_uuid}/local-installs", response_model=CatalogItem)
+def record_local_install(
+    item_uuid: uuid.UUID,
+    body: LocalInstallIn,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Cinna Desktop reports that the caller got this item on a computer (an
+    agent) or pinned it into a local agent (a skill, ``host_manifest_id``
+    required). A repeat moves ``revision_number``. 404 unless the caller may
+    use the item (for a skill, also when a desktop agent they can use pins
+    this version); 409 ``cloud_only`` for an agent that runs in Cinna; 422 for
+    an unknown version or a wrong ``host_manifest_id``."""
+    try:
+        spec, item, access = LocalInstallService.record(
+            session, current_user, item_uuid, body
+        )
+        return CatalogItemService.project(session, current_user, spec, item, access)
+    except CatalogError as exc:
+        raise _http_error(exc)
+
+
+@router.delete(
+    "/items/{item_uuid}/local-installs/{device_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_local_install(
+    item_uuid: uuid.UUID,
+    device_id: str,
+    session: SessionDep,
+    current_user: CurrentUser,
+    host_manifest_id: uuid.UUID | None = Query(default=None),
+) -> Response:
+    """Cinna Desktop reports a removal: the caller's row for this item on
+    ``device_id`` (for ``host_manifest_id`` when given, else every row on that
+    device). Idempotent; never touches another person's rows."""
+    LocalInstallService.remove(session, current_user, item_uuid, device_id, host_manifest_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

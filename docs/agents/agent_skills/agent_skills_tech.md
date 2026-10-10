@@ -1282,7 +1282,7 @@ plainly exists.
 | `frontend/src/utils/skills.ts` | `skillsIndexErrorCopy`, `skillRowStatus`, `formatSkillSize`, `sortSkills`, `skillKey` — shared so the card, the row and the sheet cannot drift on sort order or on what a dot means. Still live: `utils/addons.ts` builds on it rather than duplicating it |
 | `frontend/src/components/Agents/AgentConfigTab.tsx` | Hosted the card until the Addons tab took it. Was deliberately **not** gated on `showOperationalSettings` or `readOnly`, which is why `"addons"` had to join the `agentUserTabs` set in the same change |
 | `frontend/src/components/Chat/SlashCommandPopup.tsx` | `kind === "skill"` renders a `h-5` outline `Badge`, visible text inside the `role="option"` row (so it is part of the accessible name and needs no `sr-only` twin) |
-| `frontend/src/components/Catalog/CatalogCard.tsx` | One muted `GraduationCap` line, ≤3 names + `+N more`. `skills` is typed `Array<unknown> \| null` (there is no `SkillSummaryPublic` to import), narrowed defensively |
+| `frontend/src/components/Catalog/CatalogItemCard.tsx` | One muted `GraduationCap` line, ≤3 names + `+N more`. `skills` is typed `Array<unknown> \| null` (there is no `SkillSummaryPublic` to import), narrowed defensively |
 
 `skillKey` is `${source}:${plugin_ref}:${name}` — the name alone is not unique
 when a local and a plugin skill share one, and two rows keyed the same would make
@@ -1296,8 +1296,7 @@ The Phase-3 surfaces shipped. Two of the rows below were then **superseded by
 `ShareSkillSuccessPanel`, and the `users` visibility with its people picker), and
 S11's `Agents/InstalledPluginRow.tsx` / `AllInstalledPluginsSheet.tsx` were
 deleted into `Addons/AddonRow.tsx` / `AllAddonsSheet.tsx`. The package detail
-route (S7) additionally gained `Catalog/SkillPackageAccessCard.tsx` and its
-grant row / dialog / sheet, and later a **Content** fact on the Package card
+route (S7) gained access management through the shared People dialog (`Catalog/People/*`, opened from the package card's `CatalogItemMenu`; the former access card and its grant row / dialog / sheet were deleted, and `EditSkillPackageDialog` no longer carries Visibility), and later a **Content** fact on the Package card
 (a file count, e.g. "4 files") opening `Catalog/SkillRevisionFilesSheet.tsx` —
 the `.../files` listing rendered as rows — beside a **download** action that
 fetches `.../download`:

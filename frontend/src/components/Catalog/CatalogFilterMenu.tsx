@@ -28,7 +28,7 @@ interface CatalogFilterMenuProps<T extends string> {
 /**
  * The subset filter for a catalog grid, as **one** button that opens a menu.
  *
- * It used to be a row of four pills directly under `CatalogSectionTabs` — and
+ * It used to be a row of four pills directly under the section tabs — and
  * those tabs are also a row of pills, built to the same skeleton on purpose. So
  * the page opened with eight identical controls in two rows, half of them
  * navigation and half of them a filter, with nothing but their labels saying
@@ -37,9 +37,8 @@ interface CatalogFilterMenuProps<T extends string> {
  * on the toolbar that looks like a choice of place.
  *
  * The active subset rides on the trigger, so a narrowed grid always says why it
- * is short without the menu being open. Shared by both catalog sections —
- * `CatalogFilters` and `SkillCatalogFilters` are their option lists and nothing
- * else, which is how the two toolbars stay one toolbar.
+ * is short without the menu being open. `CatalogItemFilters` is its option
+ * list and nothing else.
  */
 export function CatalogFilterMenu<T extends string>({
   options,

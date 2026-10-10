@@ -21,6 +21,7 @@ export function useBundleInstallNavigation() {
   return async (install: AgentPublic) => {
     queryClient.invalidateQueries({ queryKey: ["agents"] })
     queryClient.invalidateQueries({ queryKey: ["catalog"] })
+    queryClient.invalidateQueries({ queryKey: ["catalog-items"] })
 
     let isReady = false
     try {

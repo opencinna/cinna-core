@@ -62,6 +62,7 @@ import { Route as LayoutAdminServerConfigurationRouteImport } from './routes/_la
 import { Route as LayoutAdminRoutingTuningRouteImport } from './routes/_layout/admin/routing-tuning'
 import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
 import { Route as LayoutAdminLlmProvidersRouteImport } from './routes/_layout/admin/llm-providers'
+import { Route as LayoutAdminCatalogRouteImport } from './routes/_layout/admin/catalog'
 import { Route as LayoutAdminAiCredentialsRouteImport } from './routes/_layout/admin/ai-credentials'
 import { Route as LayoutAdminAgentEnvsRouteImport } from './routes/_layout/admin/agent-envs'
 import { Route as LayoutCatalogSkillsIndexRouteImport } from './routes/_layout/catalog/skills/index'
@@ -69,6 +70,7 @@ import { Route as LayoutSessionsAgentAgentIdRouteImport } from './routes/_layout
 import { Route as LayoutEnvironmentEnvIdFileRouteImport } from './routes/_layout/environment/$envId/file'
 import { Route as LayoutEnvironmentEnvIdDatabaseRouteImport } from './routes/_layout/environment/$envId/database'
 import { Route as LayoutCatalogSkillsPackageIdRouteImport } from './routes/_layout/catalog/skills/$packageId'
+import { Route as LayoutCatalogItemsUuidRouteImport } from './routes/_layout/catalog/items/$uuid'
 import { Route as LayoutCatalogAgentsInstallRouteImport } from './routes/_layout/catalog/agents/install'
 import { Route as LayoutAgentAgentIdConversationsRouteImport } from './routes/_layout/agent/$agentId/conversations'
 import { Route as LayoutAdminMarketplaceMarketplaceIdRouteImport } from './routes/_layout/admin/marketplace/$marketplaceId'
@@ -348,6 +350,11 @@ const LayoutAdminLlmProvidersRoute = LayoutAdminLlmProvidersRouteImport.update({
   path: '/admin/llm-providers',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutAdminCatalogRoute = LayoutAdminCatalogRouteImport.update({
+  id: '/admin/catalog',
+  path: '/admin/catalog',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutAdminAiCredentialsRoute =
   LayoutAdminAiCredentialsRouteImport.update({
     id: '/admin/ai-credentials',
@@ -389,6 +396,11 @@ const LayoutCatalogSkillsPackageIdRoute =
     path: '/skills/$packageId',
     getParentRoute: () => LayoutCatalogRoute,
   } as any)
+const LayoutCatalogItemsUuidRoute = LayoutCatalogItemsUuidRouteImport.update({
+  id: '/items/$uuid',
+  path: '/items/$uuid',
+  getParentRoute: () => LayoutCatalogRoute,
+} as any)
 const LayoutCatalogAgentsInstallRoute =
   LayoutCatalogAgentsInstallRouteImport.update({
     id: '/install',
@@ -453,6 +465,7 @@ export interface FileRoutesByFullPath {
   '/login/': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
+  '/admin/catalog': typeof LayoutAdminCatalogRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
@@ -478,6 +491,7 @@ export interface FileRoutesByFullPath {
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
+  '/catalog/items/$uuid': typeof LayoutCatalogItemsUuidRoute
   '/catalog/skills/$packageId': typeof LayoutCatalogSkillsPackageIdRoute
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
@@ -515,6 +529,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
+  '/admin/catalog': typeof LayoutAdminCatalogRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
@@ -540,6 +555,7 @@ export interface FileRoutesByTo {
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
+  '/catalog/items/$uuid': typeof LayoutCatalogItemsUuidRoute
   '/catalog/skills/$packageId': typeof LayoutCatalogSkillsPackageIdRoute
   '/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
@@ -583,6 +599,7 @@ export interface FileRoutesById {
   '/login/': typeof LoginIndexRoute
   '/_layout/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/_layout/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
+  '/_layout/admin/catalog': typeof LayoutAdminCatalogRoute
   '/_layout/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/_layout/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
@@ -608,6 +625,7 @@ export interface FileRoutesById {
   '/_layout/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
   '/_layout/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/_layout/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
+  '/_layout/catalog/items/$uuid': typeof LayoutCatalogItemsUuidRoute
   '/_layout/catalog/skills/$packageId': typeof LayoutCatalogSkillsPackageIdRoute
   '/_layout/environment/$envId/database': typeof LayoutEnvironmentEnvIdDatabaseRoute
   '/_layout/environment/$envId/file': typeof LayoutEnvironmentEnvIdFileRoute
@@ -651,6 +669,7 @@ export interface FileRouteTypes {
     | '/login/'
     | '/admin/agent-envs'
     | '/admin/ai-credentials'
+    | '/admin/catalog'
     | '/admin/llm-providers'
     | '/admin/marketplaces'
     | '/admin/routing-tuning'
@@ -676,6 +695,7 @@ export interface FileRouteTypes {
     | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
     | '/catalog/agents/install'
+    | '/catalog/items/$uuid'
     | '/catalog/skills/$packageId'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
@@ -713,6 +733,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/admin/agent-envs'
     | '/admin/ai-credentials'
+    | '/admin/catalog'
     | '/admin/llm-providers'
     | '/admin/marketplaces'
     | '/admin/routing-tuning'
@@ -738,6 +759,7 @@ export interface FileRouteTypes {
     | '/admin/marketplace/$marketplaceId'
     | '/agent/$agentId/conversations'
     | '/catalog/agents/install'
+    | '/catalog/items/$uuid'
     | '/catalog/skills/$packageId'
     | '/environment/$envId/database'
     | '/environment/$envId/file'
@@ -780,6 +802,7 @@ export interface FileRouteTypes {
     | '/login/'
     | '/_layout/admin/agent-envs'
     | '/_layout/admin/ai-credentials'
+    | '/_layout/admin/catalog'
     | '/_layout/admin/llm-providers'
     | '/_layout/admin/marketplaces'
     | '/_layout/admin/routing-tuning'
@@ -805,6 +828,7 @@ export interface FileRouteTypes {
     | '/_layout/admin/marketplace/$marketplaceId'
     | '/_layout/agent/$agentId/conversations'
     | '/_layout/catalog/agents/install'
+    | '/_layout/catalog/items/$uuid'
     | '/_layout/catalog/skills/$packageId'
     | '/_layout/environment/$envId/database'
     | '/_layout/environment/$envId/file'
@@ -1210,6 +1234,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminLlmProvidersRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/admin/catalog': {
+      id: '/_layout/admin/catalog'
+      path: '/admin/catalog'
+      fullPath: '/admin/catalog'
+      preLoaderRoute: typeof LayoutAdminCatalogRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/admin/ai-credentials': {
       id: '/_layout/admin/ai-credentials'
       path: '/admin/ai-credentials'
@@ -1257,6 +1288,13 @@ declare module '@tanstack/react-router' {
       path: '/skills/$packageId'
       fullPath: '/catalog/skills/$packageId'
       preLoaderRoute: typeof LayoutCatalogSkillsPackageIdRouteImport
+      parentRoute: typeof LayoutCatalogRoute
+    }
+    '/_layout/catalog/items/$uuid': {
+      id: '/_layout/catalog/items/$uuid'
+      path: '/items/$uuid'
+      fullPath: '/catalog/items/$uuid'
+      preLoaderRoute: typeof LayoutCatalogItemsUuidRouteImport
       parentRoute: typeof LayoutCatalogRoute
     }
     '/_layout/catalog/agents/install': {
@@ -1326,6 +1364,7 @@ const LayoutCatalogAgentsRouteWithChildren =
 interface LayoutCatalogRouteChildren {
   LayoutCatalogAgentsRoute: typeof LayoutCatalogAgentsRouteWithChildren
   LayoutCatalogIndexRoute: typeof LayoutCatalogIndexRoute
+  LayoutCatalogItemsUuidRoute: typeof LayoutCatalogItemsUuidRoute
   LayoutCatalogSkillsPackageIdRoute: typeof LayoutCatalogSkillsPackageIdRoute
   LayoutCatalogSkillsIndexRoute: typeof LayoutCatalogSkillsIndexRoute
 }
@@ -1333,6 +1372,7 @@ interface LayoutCatalogRouteChildren {
 const LayoutCatalogRouteChildren: LayoutCatalogRouteChildren = {
   LayoutCatalogAgentsRoute: LayoutCatalogAgentsRouteWithChildren,
   LayoutCatalogIndexRoute: LayoutCatalogIndexRoute,
+  LayoutCatalogItemsUuidRoute: LayoutCatalogItemsUuidRoute,
   LayoutCatalogSkillsPackageIdRoute: LayoutCatalogSkillsPackageIdRoute,
   LayoutCatalogSkillsIndexRoute: LayoutCatalogSkillsIndexRoute,
 }
@@ -1378,6 +1418,7 @@ interface LayoutRouteChildren {
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutAdminAgentEnvsRoute: typeof LayoutAdminAgentEnvsRoute
   LayoutAdminAiCredentialsRoute: typeof LayoutAdminAiCredentialsRoute
+  LayoutAdminCatalogRoute: typeof LayoutAdminCatalogRoute
   LayoutAdminLlmProvidersRoute: typeof LayoutAdminLlmProvidersRoute
   LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
   LayoutAdminRoutingTuningRoute: typeof LayoutAdminRoutingTuningRoute
@@ -1413,6 +1454,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutAdminAgentEnvsRoute: LayoutAdminAgentEnvsRoute,
   LayoutAdminAiCredentialsRoute: LayoutAdminAiCredentialsRoute,
+  LayoutAdminCatalogRoute: LayoutAdminCatalogRoute,
   LayoutAdminLlmProvidersRoute: LayoutAdminLlmProvidersRoute,
   LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
   LayoutAdminRoutingTuningRoute: LayoutAdminRoutingTuningRoute,

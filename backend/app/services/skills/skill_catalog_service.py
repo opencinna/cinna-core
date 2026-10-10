@@ -86,6 +86,8 @@ from app.services.bundles.credential_spec import ParsedCredentialSpec
 from app.services.bundles.publish_service import PublishService
 from app.services.catalog.catalog_access_service import SKILL, CatalogAccessService
 from app.services.catalog.exceptions import CatalogConflictError
+from app.services.catalog.catalog_events import CatalogEvents
+from app.services.catalog.local_install_service import LocalInstallService
 from app.services.credentials.credential_provisioner import (
     SKILL_INSTALL_POLICY,
     CredentialProvisioner,
@@ -561,6 +563,9 @@ class SkillCatalogService:
         logger.info(
             "skill_published package_id=%s revision=%s agent_id=%s size=%s",
             package.package_id, revision.revision_number, agent.id, size_bytes,
+        )
+        await CatalogEvents.revision_published(
+            session, SKILL.wire_kind, package, revision.revision_number
         )
 
         # The write-back changed a file the index is a cache of, so the agent's
@@ -1629,6 +1634,16 @@ class SkillCatalogService:
                     mine = installed_in.setdefault(pkg_id, [])
                     if agent_id not in mine:
                         mine.append(agent_id)
+            # Local installs Cinna Desktop reported count too, one per person
+            # across cloud and local, with the same publisher exclusion.
+            for pkg_id, people in LocalInstallService.people_by_item(
+                session, SKILL.wire_kind, package_ids
+            ).items():
+                publisher_id = publisher_by_package.get(pkg_id)
+                counted.setdefault(pkg_id, set()).update(
+                    p for p in people if publisher_id is None or p != publisher_id
+                )
+            counted = {k: v for k, v in counted.items() if v}
             install_counts = {k: len(v) for k, v in counted.items()}
             # Stable order: the rows come back in whatever order Postgres
             # chooses, and an identical refetch should not reshuffle a response
@@ -1802,7 +1817,8 @@ class SkillCatalogService:
         storage directory after commit.
 
         Refused (``package_in_use``, 409) while an agent of another person
-        links any revision of it, and (``package_linked_by_you``, 409) while
+        links any revision of it or holds a local install of it, and
+        (``package_linked_by_you``, 409) while
         one of the caller's own agents does: links are never deleted silently.
         The caller has already been authorised (maintainer or superuser).
         """
@@ -1817,6 +1833,9 @@ class SkillCatalogService:
             .where(SkillPackageRevision.package_id == package.id)
         ).all()
         others = {owner for owner in owners if owner != user.id}
+        others |= LocalInstallService.other_people(
+            session, SKILL.wire_kind, package.id, user.id
+        )
         if others:
             raise SkillCatalogError("package_in_use", people_use_detail(len(others)))
         if owners:
@@ -1824,6 +1843,7 @@ class SkillCatalogService:
                 "package_linked_by_you", "Remove it from your agents first."
             )
         package_uuid = package.id
+        LocalInstallService.delete_for_item(session, SKILL.wire_kind, package_uuid)
         package.latest_revision_id = None
         session.add(package)
         session.flush()

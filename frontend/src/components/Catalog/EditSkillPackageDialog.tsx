@@ -3,7 +3,6 @@ import { useState } from "react"
 
 import type { SkillPackageDetailPublic } from "@/client"
 import { SkillsService } from "@/client"
-import { TooltipToggleItem } from "@/components/Common/TooltipToggleItem"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -18,9 +17,7 @@ import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { ToggleGroup } from "@/components/ui/toggle-group"
 import useCustomToast from "@/hooks/useCustomToast"
-import { SKILL_VISIBILITY_OPTIONS } from "@/utils/skillCatalog"
 import { SkillCatalogErrorAlert } from "./SkillCatalogErrorAlert"
 
 interface EditSkillPackageDialogProps {
@@ -30,12 +27,13 @@ interface EditSkillPackageDialogProps {
 }
 
 /**
- * "Rename it, retitle it, or make it public" — S8.
+ * "Rename it, or retitle it" — S8.
  *
  * The Edit story, split from S7's View per §1: the package route reads, this
- * dialog writes. One section, four fields, explicit Save / Cancel with dirty
+ * dialog writes. One section, three fields, explicit Save / Cancel with dirty
  * tracking — nothing here persists on change, including the `is_listed`
  * `Switch`, which is a form field like the others and not an auto-save control.
+ * Visibility is not here: it lives in the People dialog, so it has one home.
  */
 export function EditSkillPackageDialog({
   pkg,
@@ -47,13 +45,11 @@ export function EditSkillPackageDialog({
 
   const [displayName, setDisplayName] = useState(pkg.display_name)
   const [description, setDescription] = useState(pkg.description ?? "")
-  const [visibility, setVisibility] = useState(pkg.visibility)
   const [isListed, setIsListed] = useState(pkg.is_listed)
 
   const isDirty =
     displayName.trim() !== pkg.display_name ||
     description !== (pkg.description ?? "") ||
-    visibility !== pkg.visibility ||
     isListed !== pkg.is_listed
 
   const saveMutation = useMutation({
@@ -63,13 +59,13 @@ export function EditSkillPackageDialog({
         requestBody: {
           display_name: displayName.trim(),
           description: description.trim() || null,
-          visibility,
           is_listed: isListed,
         },
       }),
     onSuccess: () => {
       showSuccessToast("Package updated")
       queryClient.invalidateQueries({ queryKey: ["skills-catalog"] })
+      queryClient.invalidateQueries({ queryKey: ["catalog-items"] })
       onOpenChange(false)
     },
     // The refusal is coded (`invalid_display_name`, `invalid_visibility`) and
@@ -115,43 +111,6 @@ export function EditSkillPackageDialog({
               placeholder="What this skill does, in one or two sentences."
               onChange={(e) => setDescription(e.target.value)}
             />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Visibility</Label>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              value={visibility}
-              disabled={isPending}
-              // A single-select group can be emptied by clicking the active
-              // segment; visibility has no "unset", so an empty value keeps the
-              // current one rather than sending `null`.
-              onValueChange={(next) => next && setVisibility(next)}
-              aria-label="Who can install this package"
-            >
-              {SKILL_VISIBILITY_OPTIONS.map((option) => (
-                <TooltipToggleItem
-                  key={option.value}
-                  value={option.value}
-                  label={option.hint}
-                >
-                  {option.label}
-                </TooltipToggleItem>
-              ))}
-            </ToggleGroup>
-            {/* The picker itself lives in "Who can see this" below, not here:
-                opening it from inside this dialog would be a dialog on a
-                dialog (guidelines R8). That card mounts off the *saved*
-                visibility, so on a first switch to People it is not on the
-                page yet — the hint says "once you save" rather than pointing
-                at something the reader cannot find. */}
-            {visibility === "users" && (
-              <p className="text-xs text-muted-foreground">
-                Save, then choose who in <em>Who can see this</em> below.
-              </p>
-            )}
           </div>
 
           <div className="flex items-center justify-between gap-3">

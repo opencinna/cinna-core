@@ -13726,9 +13726,11 @@ export const CatalogInstallSchema = {
     type: 'object',
     required: ['where'],
     title: 'CatalogInstall',
-    description: `One of the caller's installs of the item. C2 reports cloud installs
-only: an \`\`Agent\`\` built from a bundle (\`\`install_id\`\` = the agent) or a
-skill link on one of the caller's agents (\`\`install_id\`\` = that agent).`
+    description: `One of the caller's installs of the item. \`\`cloud\`\`: an \`\`Agent\`\`
+built from a bundle (\`\`install_id\`\` = the agent) or a skill link on one of
+the caller's agents (\`\`install_id\`\` = that agent). \`\`local\`\`: a row Cinna
+Desktop reported (\`\`device_id\`\`; \`\`host_manifest_id\`\` = the local agent a
+skill is pinned into).`
 } as const;
 
 export const CatalogInstallContextSchema = {
@@ -23024,6 +23026,38 @@ export const LandingPagePublicSchema = {
 Its own projection, and its own endpoint, because it is content rather
 than policy: :class:\`AccessPolicyPublic\` is fetched by every login and
 signup page load under one shared cache key, and none of them render this.`
+} as const;
+
+export const LocalInstallInSchema = {
+    properties: {
+        device_id: {
+            type: 'string',
+            maxLength: 128,
+            minLength: 1,
+            title: 'Device Id'
+        },
+        revision_number: {
+            type: 'integer',
+            minimum: 1,
+            title: 'Revision Number'
+        },
+        host_manifest_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Host Manifest Id'
+        }
+    },
+    type: 'object',
+    required: ['device_id', 'revision_number'],
+    title: 'LocalInstallIn',
+    description: 'Body of ``POST /catalog/items/{uuid}/local-installs``.'
 } as const;
 
 export const LoginTokenSchema = {

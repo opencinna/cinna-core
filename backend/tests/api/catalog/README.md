@@ -73,6 +73,20 @@ C2 — desktop agents are bundles:
 - `catalog_desktop_user_delete_test.py` — deleting a desktop agent's creator
   (self or by a superuser) leaves the agent ownerless and managed by superusers.
 
+C3 — unified listing, local installs, events:
+- `catalog_local_installs_test.py` — `POST/DELETE /catalog/items/{uuid}/local-installs`:
+  gate, validation, upsert (one row, version moves), per-device / per-host
+  rows, idempotent own-rows-only delete, `cloud_only` 409, superuser gate,
+  U7 (a skill reached through a usable desktop agent's latest pin), and the
+  delete guard counting other people's local installs (agent and skill).
+- `catalog_listing_matrix_test.py` — `GET /catalog/items` visibility × grants
+  × roles across cloud bundle, desktop agent and skill; P4 with a role
+  `edit` grant; `install_count` / `my_installs` across cloud + local
+  (publisher excluded; `/skills/catalog` count agrees).
+- `catalog_events_test.py` — `catalog.updated` audience per publish kind
+  (cloud bundle, skill, desktop push): grant readers + cloud installers;
+  local installers only while they still have access; no public fan-out.
+
 Unit (no database): `tests/unit/test_push_policy_bound_manifest_id.py` (the
 policy's bound manifest id), `tests/unit/test_desktop_bundle_id.py` (minting).
 
@@ -85,3 +99,7 @@ policy's bound manifest id), `tests/unit/test_desktop_bundle_id.py` (minting).
 - The old per-kind grant lists show user grants without the publisher's own
   `maintain` row; co-maintainers appear with their `access`. Re-granting never
   downgrades.
+- `catalog.updated` follows effective grants: a `use` grant is inert under
+  `public`, so its holder stops hearing updates once an item goes public
+  (public reach never fans out); `edit`/`maintain` holders and installers
+  keep hearing them.

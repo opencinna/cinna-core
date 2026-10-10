@@ -19,6 +19,12 @@ interface SkillRevisionCredentialsSheetProps {
   requirements: SkillCredentialRequirementPublic[]
   /** How the shown revision is named, for the description line. */
   revisionLabel: string
+  /**
+   * The Sheet's description, when the default (a skill's install story) does
+   * not fit the host — a desktop agent's credentials are set up on the
+   * computer, not on an agent here.
+   */
+  description?: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -35,6 +41,7 @@ interface SkillRevisionCredentialsSheetProps {
 export function SkillRevisionCredentialsSheet({
   requirements,
   revisionLabel,
+  description,
   open,
   onOpenChange,
 }: SkillRevisionCredentialsSheetProps) {
@@ -44,8 +51,8 @@ export function SkillRevisionCredentialsSheet({
         <SheetHeader>
           <SheetTitle>Credentials</SheetTitle>
           <SheetDescription>
-            What installing {revisionLabel} needs. The publisher's credentials
-            are shared with you on install; you fill in the rest on the agent.
+            {description ??
+              `What installing ${revisionLabel} needs. The publisher's credentials are shared with you on install; you fill in the rest on the agent.`}
           </SheetDescription>
         </SheetHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">

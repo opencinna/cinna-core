@@ -85,6 +85,11 @@ export const EventTypes = {
   INSTALL_UPDATE_APPLIED: "install_update_applied",        // Apply succeeded
   INSTALL_UPDATE_FAILED: "install_update_failed",          // Apply errored
 
+  // Unified catalog — a new version of an item, or a grant change reaching
+  // the caller. Meta carries `{kind, uuid}`; both invalidate catalog reads.
+  CATALOG_UPDATED: "catalog.updated",
+  CATALOG_GRANTED: "catalog.granted",
+
   // Install setup gate events (Phase 4 — pre-LLM gate + setup page)
   INSTALL_SETUP_REQUIRED: "install_setup_required",        // Gate blocked an interaction; setup needed
   INSTALL_SETUP_COMPLETED: "install_setup_completed",      // Last placeholder filled; install ready

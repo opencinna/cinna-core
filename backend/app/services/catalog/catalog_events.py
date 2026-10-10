@@ -13,6 +13,7 @@ import json
 import logging
 import uuid
 from collections.abc import Iterable
+from typing import Any
 
 from sqlmodel import Session
 
@@ -56,8 +57,35 @@ class CatalogEvents:
         item_uuid: uuid.UUID, user_ids: Iterable[uuid.UUID], meta: dict
     ) -> None:
         """``catalog.updated`` (``meta`` as documented on the event type) to
-        each user reached through the item's grants."""
+        each of ``user_ids`` (the item's update audience)."""
         await CatalogEvents._emit_each(EventType.CATALOG_UPDATED, item_uuid, user_ids, meta)
+
+    @staticmethod
+    async def revision_published(
+        session: Session, kind: str, item: Any, revision_number: int
+    ) -> None:
+        """``catalog.updated`` after a cloud bundle or skill package revision
+        commit, to the item's update audience (grants ∪ cloud and local
+        installers, P9). Never raises: the publish has already succeeded."""
+        # Lazy: local_install_service → catalog_access_service → this module.
+        from app.services.catalog.catalog_access_service import BUNDLE, SKILL
+        from app.services.catalog.local_install_service import LocalInstallService
+
+        spec = BUNDLE if kind == BUNDLE.wire_kind else SKILL
+        try:
+            audience = LocalInstallService.update_audience(session, spec, item)
+        except Exception:
+            logger.exception("Failed to resolve catalog.updated audience for %s", item.id)
+            # Leave the caller's session usable after a failed query.
+            session.rollback()
+            return
+        meta = {
+            "kind": spec.wire_kind,
+            "uuid": str(item.id),
+            "id": item.bundle_id if spec is BUNDLE else item.package_id,
+            "revision_number": revision_number,
+        }
+        await CatalogEvents.updated(item.id, audience, meta)
 
     @staticmethod
     async def _emit_each(

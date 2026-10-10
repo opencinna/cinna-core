@@ -148,8 +148,10 @@ class EventType:
     IMPROVEMENT_REQUEST_UPDATED = "improvement_request_updated"
 
     # Catalog — ``catalog.updated`` meta ``{kind, uuid, id, revision_number,
-    # head_sha?}``, sent after a new revision (a desktop agent's accepted share)
-    # to each user reached through the item's grants (role grants expanded).
+    # head_sha?}`` (``head_sha`` for desktop agents only), sent after a new
+    # revision (a desktop agent's accepted share, a cloud bundle publish, a
+    # skill publish) to each user reached through the item's grants (role
+    # grants expanded) and to its cloud and local installers.
     # Replaces the earlier team-library's ``library.updated`` / ``library.granted``.
     CATALOG_UPDATED = "catalog.updated"
 

@@ -724,9 +724,7 @@ Deleted at parity: `AgentPluginsTab.tsx`, `InstalledPluginsCard.tsx`,
 `PluginCard.tsx`, `AgentSkillsCard.tsx`, `AllSkillsSheet.tsx`, `SkillRow.tsx`,
 `SkillContentDialog.tsx`, `PublishSkillDialog.tsx`.
 
-New catalog surfaces: `Catalog/SkillPackageAccessCard.tsx`,
-`SkillPackageGrantRow.tsx`, `AddSkillPackageGrantDialog.tsx`,
-`AllSkillPackageGrantsSheet.tsx`.
+Skill package access is managed in the shared People dialog (`Catalog/People/*`); the earlier skill-only access card and grant components were deleted.
 
 **Tab registration.** `routes/_layout/agent/$agentId.tsx` registers
 `{ value: "addons", title: "Addons" }` and — load-bearing — adds `"addons"` to the

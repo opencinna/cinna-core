@@ -5,13 +5,16 @@
  * description, and a compact summary of required credentials so the
  * user always knows what they're installing while scrolling the form.
  */
+import { useQuery } from "@tanstack/react-query"
 import { Bot, Globe, Lock, Users } from "lucide-react"
 import type { ReactNode } from "react"
 
-import type {
-  CatalogEntryPublic,
-  InstallContextSpec,
+import {
+  type CatalogEntryPublic,
+  CatalogService,
+  type InstallContextSpec,
 } from "@/client"
+import { CatalogItemMenu } from "@/components/Catalog/CatalogItemMenu"
 import { PublisherEmailConfirmedIcon } from "@/components/Common/PublisherEmailConfirmedIcon"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -21,6 +24,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  catalogAccessFact,
+  catalogItemQueryKey,
+  catalogVersionLabel,
+} from "@/utils/catalogItems"
 
 interface InstallAgentHeaderCardProps {
   entry: CatalogEntryPublic
@@ -37,6 +45,24 @@ export function InstallAgentHeaderCard({
   entry,
   serviceSpecs,
 }: InstallAgentHeaderCardProps) {
+  // The install context carries no access level, so the maintainer's menu
+  // reads the catalog item (the same cache the detail routes use).
+  const { data: item } = useQuery({
+    queryKey: catalogItemQueryKey(entry.bundle_uuid),
+    queryFn: () =>
+      CatalogService.getCatalogItem({ itemUuid: entry.bundle_uuid }),
+    // Only feeds the maintainer menu; a 404 (no access) is an answer, not a
+    // failure worth three retries.
+    retry: false,
+  })
+  const versionLabel =
+    entry.latest_revision_number !== null
+      ? catalogVersionLabel({
+          version: entry.latest_version,
+          revision_number: entry.latest_revision_number,
+        })
+      : null
+
   return (
     <Card className="lg:sticky lg:top-4">
       <CardHeader>
@@ -45,9 +71,19 @@ export function InstallAgentHeaderCard({
             <Bot className="h-5 w-5 text-muted-foreground" />
           </div>
           <div className="flex-1 min-w-0">
-            <CardTitle className="text-xl break-words">
-              {entry.display_name}
-            </CardTitle>
+            <div className="flex items-start justify-between gap-2">
+              <CardTitle className="min-w-0 text-xl break-words">
+                {entry.display_name}
+              </CardTitle>
+              {item && (
+                <div className="shrink-0">
+                  <CatalogItemMenu
+                    item={item}
+                    canMaintain={item.access === "maintain"}
+                  />
+                </div>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
               <span className="truncate">
                 by{" "}
@@ -85,17 +121,15 @@ export function InstallAgentHeaderCard({
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" className="gap-1 font-normal">
             {VISIBILITY_ICONS[entry.visibility]}
-            {entry.visibility}
+            {catalogAccessFact(
+              item ?? { visibility: entry.visibility, is_listed: true },
+            )}
           </Badge>
-          {entry.latest_version ? (
+          {versionLabel && (
             <Badge variant="outline" className="font-normal">
-              v{entry.latest_version}
+              {versionLabel}
             </Badge>
-          ) : entry.latest_revision_number !== null ? (
-            <Badge variant="outline" className="font-normal">
-              rev {entry.latest_revision_number}
-            </Badge>
-          ) : null}
+          )}
         </div>
 
         {serviceSpecs.length > 0 && (
@@ -105,10 +139,7 @@ export function InstallAgentHeaderCard({
             </p>
             <ul className="space-y-1">
               {serviceSpecs.map((spec) => (
-                <li
-                  key={spec.name}
-                  className="text-sm flex items-center gap-2"
-                >
+                <li key={spec.name} className="text-sm flex items-center gap-2">
                   <Badge variant="secondary" className="text-xs">
                     {spec.type}
                   </Badge>
@@ -128,17 +159,6 @@ export function InstallAgentHeaderCard({
             {entry.bundle_id}
           </code>
         </div>
-
-        {entry.latest_revision_number !== null && (
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">
-              Latest revision
-            </p>
-            <code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded break-all">
-              rev {entry.latest_revision_number}
-            </code>
-          </div>
-        )}
       </CardContent>
     </Card>
   )

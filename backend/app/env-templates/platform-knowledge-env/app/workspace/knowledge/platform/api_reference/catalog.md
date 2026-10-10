@@ -80,6 +80,33 @@ Auto-generated from OpenAPI spec. Tag: `catalog`
 
 ---
 
+## POST `/api/v1/catalog/items/{item_uuid}/local-installs`
+**Record Local Install**
+
+**Path parameters:**
+- `item_uuid`: uuid
+
+**Request body** (`LocalInstallIn`):
+  - `device_id`: string (required)
+  - `revision_number`: integer (required)
+  - `host_manifest_id`: string | null
+
+**Response:** `CatalogItem`
+
+---
+
+## DELETE `/api/v1/catalog/items/{item_uuid}/local-installs/{device_id}`
+**Remove Local Install**
+
+**Path parameters:**
+- `item_uuid`: uuid
+- `device_id`: string
+
+**Query parameters:**
+- `host_manifest_id`: string | null
+
+---
+
 ## GET `/api/v1/catalog/`
 **List Catalog**
 

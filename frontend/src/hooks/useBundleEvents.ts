@@ -13,6 +13,7 @@
  */
 import { useQueryClient } from "@tanstack/react-query"
 
+import { invalidateCatalogItem } from "@/components/Catalog/catalogQueries"
 import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
 
 export function useBundleEvents() {
@@ -24,6 +25,8 @@ export function useBundleEvents() {
       EventTypes.INSTALL_UPDATE_AVAILABLE,
       EventTypes.INSTALL_UPDATE_APPLIED,
       EventTypes.INSTALL_UPDATE_FAILED,
+      EventTypes.CATALOG_UPDATED,
+      EventTypes.CATALOG_GRANTED,
     ],
     (event) => {
       switch (event.type) {
@@ -60,6 +63,21 @@ export function useBundleEvents() {
             queryClient.invalidateQueries({ queryKey: ["environments"] })
           }
           queryClient.invalidateQueries({ queryKey: ["agents"] })
+          if (event.type === EventTypes.INSTALL_UPDATE_APPLIED) {
+            // The tile's "update available" is derived from the install's
+            // revision, which just moved.
+            queryClient.invalidateQueries({ queryKey: ["catalog-items"] })
+          }
+          break
+        }
+        case EventTypes.CATALOG_UPDATED:
+        case EventTypes.CATALOG_GRANTED: {
+          // Every catalog list, and the item's own detail when it is open.
+          const uuid = event.meta?.uuid
+          invalidateCatalogItem(
+            queryClient,
+            typeof uuid === "string" ? uuid : undefined,
+          )
           break
         }
         default:

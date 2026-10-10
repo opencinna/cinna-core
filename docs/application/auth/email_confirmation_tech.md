@@ -43,7 +43,7 @@
 - `frontend/src/routes/confirm-email.tsx` — public confirm-email landing page (token from URL)
 - `frontend/src/components/UserSettings/UserInformation.tsx` — confirmation status indicator + resend button with cooldown countdown
 - `frontend/src/components/Common/PublisherEmailConfirmedIcon.tsx` — reusable green-check / amber-warning icon component
-- `frontend/src/components/Catalog/CatalogCard.tsx` — publisher email indicator via `PublisherEmailConfirmedIcon`
+- `frontend/src/components/Catalog/CatalogItemCard.tsx` — publisher email indicator via `PublisherEmailConfirmedIcon`
 - `frontend/src/components/Install/InstallAgentHeaderCard.tsx` — publisher email indicator via `PublisherEmailConfirmedIcon`
 
 ---
@@ -285,7 +285,7 @@ Reusable icon component. Accepts `confirmed: boolean`. Renders:
 - `confirmed=false`: amber warning icon with tooltip "Publisher email not confirmed"
 
 Used in:
-- `frontend/src/components/Catalog/CatalogCard.tsx` — beside `entry.publisher_email` (appears in both the email-above-name and email-below-name positions depending on card variant)
+- `frontend/src/components/Catalog/CatalogItemCard.tsx` — beside `entry.publisher_email` (appears in both the email-above-name and email-below-name positions depending on card variant)
 - `frontend/src/components/Install/InstallAgentHeaderCard.tsx` — beside the publisher email in the install detail header
 
 ### State Management

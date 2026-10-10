@@ -3099,9 +3099,11 @@ export type CatalogGrantIn = {
 };
 
 /**
- * One of the caller's installs of the item. C2 reports cloud installs
- * only: an ``Agent`` built from a bundle (``install_id`` = the agent) or a
- * skill link on one of the caller's agents (``install_id`` = that agent).
+ * One of the caller's installs of the item. ``cloud``: an ``Agent``
+ * built from a bundle (``install_id`` = the agent) or a skill link on one of
+ * the caller's agents (``install_id`` = that agent). ``local``: a row Cinna
+ * Desktop reported (``device_id``; ``host_manifest_id`` = the local agent a
+ * skill is pinned into).
  */
 export type CatalogInstall = {
     where: 'cloud' | 'local';
@@ -5492,6 +5494,15 @@ export type LLMPluginMarketplaceUpdate = {
     ssh_key_id?: (string | null);
     public_discovery?: (boolean | null);
     type?: ('claude' | 'codex' | 'skills' | null);
+};
+
+/**
+ * Body of ``POST /catalog/items/{uuid}/local-installs``.
+ */
+export type LocalInstallIn = {
+    device_id: string;
+    revision_number: number;
+    host_manifest_id?: (string | null);
 };
 
 /**
@@ -10111,6 +10122,21 @@ export type CatalogPutCatalogItemGrantsData = {
 };
 
 export type CatalogPutCatalogItemGrantsResponse = (Array<CatalogGrant>);
+
+export type CatalogRecordLocalInstallData = {
+    itemUuid: string;
+    requestBody: LocalInstallIn;
+};
+
+export type CatalogRecordLocalInstallResponse = (CatalogItem);
+
+export type CatalogRemoveLocalInstallData = {
+    deviceId: string;
+    hostManifestId?: (string | null);
+    itemUuid: string;
+};
+
+export type CatalogRemoveLocalInstallResponse = (void);
 
 export type CatalogListCatalogResponse = (CatalogPublic);
 

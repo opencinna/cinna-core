@@ -1,8 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import {
   ArrowDownToLine,
   Download,
-  EyeOff,
   Files,
   GraduationCap,
   History,
@@ -16,17 +15,6 @@ import type { SkillPackageDetailPublic } from "@/client"
 import { SkillsService } from "@/client"
 import { CopyableValue } from "@/components/Common/CopyableValue"
 import { PublisherEmailConfirmedIcon } from "@/components/Common/PublisherEmailConfirmedIcon"
-import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -35,17 +23,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import {
   fetchAuthenticatedResponse,
@@ -53,8 +37,8 @@ import {
   getErrorMessage,
   saveBlobAs,
 } from "@/utils"
+import { catalogAccessFact } from "@/utils/catalogItems"
 import {
-  SKILL_VISIBILITY_OPTIONS,
   skillPackageVersionLabel,
   skillPublisherLabel,
   skillRevisionLabel,
@@ -62,6 +46,7 @@ import {
 import { requirementsSummary } from "@/utils/skillCredentials"
 import { AddSkillToAgentDialog } from "./AddSkillToAgentDialog"
 import { AllSkillRevisionsSheet } from "./AllSkillRevisionsSheet"
+import { CatalogItemMenu } from "./CatalogItemMenu"
 import { EditSkillPackageDialog } from "./EditSkillPackageDialog"
 import { SkillRevisionCredentialsSheet } from "./SkillRevisionCredentialsSheet"
 import { SkillRevisionFilesSheet } from "./SkillRevisionFilesSheet"
@@ -103,33 +88,12 @@ export function SkillPackageCard({
   selectedRevisionNumber,
   onSelectRevision,
 }: SkillPackageCardProps) {
-  const queryClient = useQueryClient()
-  const { user } = useAuth()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { showErrorToast } = useCustomToast()
   const [addOpen, setAddOpen] = useState(false)
   const [revisionsOpen, setRevisionsOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
-  const [delistOpen, setDelistOpen] = useState(false)
-
-  // Delisting is superuser-only server-side (`SkillCatalogService.delist`), and
-  // no capability field reports it, so this is read off the account rather than
-  // off the payload. Deliberately not `useRole().isAdmin`, which is also true
-  // for the `admin` *role* without `is_superuser` — offering a verb the API
-  // would refuse is worse than not offering it.
-  const canDelist = !!user?.is_superuser && pkg.is_listed
-
-  const delistMutation = useMutation({
-    mutationFn: () => SkillsService.delistSkillPackage({ packageId: pkg.id }),
-    onSuccess: () => {
-      showSuccessToast("Package delisted")
-      setDelistOpen(false)
-      queryClient.invalidateQueries({ queryKey: ["skills-catalog"] })
-    },
-    onError: (err) =>
-      showErrorToast(getErrorMessage(err, "Failed to delist the package")),
-  })
 
   // What the shown revision ships. Its own read rather than a field on the
   // package: the file list is a walk of an immutable snapshot on disk, it
@@ -176,15 +140,9 @@ export function SkillPackageCard({
   })
 
   const versionLabel = skillPackageVersionLabel(pkg) ?? "No revision yet"
-  // Three visibilities since `users` shipped, and a delisting on top of any of
-  // them. The old two-branch expression printed "Private" for a package shared
-  // with named people — telling its publisher the opposite of what they did.
-  const visibilityLabel = (() => {
-    const base =
-      SKILL_VISIBILITY_OPTIONS.find((option) => option.value === pkg.visibility)
-        ?.label ?? "Private"
-    return pkg.is_listed ? base : `${base}, delisted`
-  })()
+  // General access in the People dialog's words, a delisting on top — the
+  // same fact the desktop agent's detail names "Access".
+  const visibilityLabel = catalogAccessFact(pkg)
   const revisions = pkg.revisions ?? []
   // What the SKILL.md panel is showing, which is not always the latest — the
   // fact would otherwise say `v2` at somebody reading `v1`. No count beside it:
@@ -247,40 +205,30 @@ export function SkillPackageCard({
             <GraduationCap className="h-5 w-5 shrink-0" />
             Package
           </CardTitle>
-          {(pkg.can_manage || canDelist) && (
-            <div className="shrink-0">
-              <RowActionsMenu
-                label={`the package ${pkg.display_name}`}
-                disabled={delistMutation.isPending}
-              >
-                {pkg.can_manage && (
-                  <DropdownMenuItem
-                    onSelect={(e) => {
-                      // The item unmounts on select and would take the dialog's
-                      // own pending state with it.
-                      e.preventDefault()
-                      setEditOpen(true)
-                    }}
-                  >
+          {/* S3c: People…, Edit details…, the superuser's listing switch,
+              Delete…. The menu renders nothing for a reader who may not
+              manage the package (maintain, or a superuser — P2). */}
+          <div className="shrink-0">
+            <CatalogItemMenu
+              item={{
+                uuid: pkg.id,
+                kind: "skill",
+                runs_on: null,
+                display_name: pkg.display_name,
+                visibility: pkg.visibility,
+                is_listed: pkg.is_listed,
+              }}
+              canMaintain={!!pkg.can_manage}
+              extraItems={
+                pkg.can_manage ? (
+                  <DropdownMenuItem onSelect={() => setEditOpen(true)}>
                     <Pencil />
                     Edit details…
                   </DropdownMenuItem>
-                )}
-                {pkg.can_manage && canDelist && <DropdownMenuSeparator />}
-                {canDelist && (
-                  <DropdownMenuItem
-                    onSelect={(e) => {
-                      e.preventDefault()
-                      setDelistOpen(true)
-                    }}
-                  >
-                    <EyeOff />
-                    Delist from the catalog
-                  </DropdownMenuItem>
-                )}
-              </RowActionsMenu>
-            </div>
-          )}
+                ) : undefined
+              }
+            />
+          </div>
         </div>
         <CardDescription>
           {pkg.description || "This package has no description."}
@@ -407,7 +355,7 @@ export function SkillPackageCard({
               value={`${myInstalls} ${myInstalls === 1 ? "agent" : "agents"}`}
             />
           )}
-          <Fact label="Visibility" value={visibilityLabel} />
+          <Fact label="Access" value={visibilityLabel} />
         </div>
 
         <CopyableValue label="Package id" value={pkg.package_id} />
@@ -455,43 +403,6 @@ export function SkillPackageCard({
         open={revisionsOpen}
         onOpenChange={setRevisionsOpen}
       />
-
-      {/* Owned by the card rather than nested in the menu item that opens it:
-          a `DropdownMenuItem` unmounts on select and would take the confirm's
-          pending state with it. Delisting is reversible by the publisher
-          (`is_listed` on the edit dialog), so the confirm names the package and
-          says what it does rather than warning about permanence. */}
-      <AlertDialog
-        open={delistOpen}
-        onOpenChange={(next) => {
-          if (!delistMutation.isPending) setDelistOpen(next)
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delist {pkg.display_name}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              The package disappears from the skills catalog for everyone. It is
-              not deleted, and agents that already installed it keep working —
-              their link points at a revision, which delisting does not touch.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={delistMutation.isPending}>
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault()
-                delistMutation.mutate()
-              }}
-              disabled={delistMutation.isPending}
-            >
-              {delistMutation.isPending ? "Delisting…" : "Delist package"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Card>
   )
 }

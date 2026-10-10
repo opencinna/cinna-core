@@ -16,7 +16,7 @@ transaction
   ``CATALOG_DESKTOP_PUSH_ACCEPTED`` audit row is written.
 
 After commit, ``catalog.updated`` goes to every user reached through the
-bundle's grants (P9). A push whose bookkeeping lost the race to a later one
+bundle's grants and to its cloud and local installers (P9). A push whose bookkeeping lost the race to a later one
 gets no revision of its own: the later revision's notes cover both.
 """
 from __future__ import annotations
@@ -43,8 +43,9 @@ from app.models.bundles.agent_bundle_revision import (
 from app.models.events.security_event import CATALOG_DESKTOP_PUSH_ACCEPTED
 from app.models.library.git_repo import GitRepo
 from app.models.skills.skill_package import SkillPackage
-from app.services.catalog.catalog_access_service import BUNDLE, CatalogAccessService
+from app.services.catalog.catalog_access_service import BUNDLE
 from app.services.catalog.catalog_events import CatalogEvents, add_audit_event
+from app.services.catalog.local_install_service import LocalInstallService
 from app.services.library.git_repo_storage import MANIFEST_PATH, GitRepoStorage
 
 logger = logging.getLogger(__name__)
@@ -183,7 +184,8 @@ class DesktopAgentRevisions:
                     "revision_number": revision.revision_number,
                 },
             )
-            readers = CatalogAccessService.readers(session, BUNDLE, bundle)
+            # Grants ∪ cloud and local installers (P9).
+            readers = LocalInstallService.update_audience(session, BUNDLE, bundle)
             recorded = _Recorded(
                 bundle_uuid=bundle.id,
                 bundle_id=bundle.bundle_id,

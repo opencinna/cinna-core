@@ -254,6 +254,10 @@ from .catalog.catalog_item import (
     CatalogItemUpdate,
     DesktopAgentCreate,
 )
+from .catalog.catalog_local_install import (
+    CatalogLocalInstall,
+    LocalInstallIn,
+)
 from .library.git_repo import (
     GitRepo,
     GitRepoKind,
@@ -1793,6 +1797,8 @@ __all__ = [
     "CatalogItemsPublic",
     "CatalogItemUpdate",
     "DesktopAgentCreate",
+    "CatalogLocalInstall",
+    "LocalInstallIn",
     # Desktop agent repos
     "GitRepo",
     "GitRepoKind",

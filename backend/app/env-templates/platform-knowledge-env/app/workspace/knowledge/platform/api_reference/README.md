@@ -31,7 +31,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | App Auth | [app_auth.md](./app_auth.md) | 9 |
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
-| Catalog | [catalog.md](./catalog.md) | 12 |
+| Catalog | [catalog.md](./catalog.md) | 14 |
 | Cli | [cli.md](./cli.md) | 65 |
 | Credentials | [credentials.md](./credentials.md) | 23 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |

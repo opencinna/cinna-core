@@ -38,9 +38,11 @@ class CatalogLatest(SQLModel):
 
 
 class CatalogInstall(SQLModel):
-    """One of the caller's installs of the item. C2 reports cloud installs
-    only: an ``Agent`` built from a bundle (``install_id`` = the agent) or a
-    skill link on one of the caller's agents (``install_id`` = that agent)."""
+    """One of the caller's installs of the item. ``cloud``: an ``Agent``
+    built from a bundle (``install_id`` = the agent) or a skill link on one of
+    the caller's agents (``install_id`` = that agent). ``local``: a row Cinna
+    Desktop reported (``device_id``; ``host_manifest_id`` = the local agent a
+    skill is pinned into)."""
 
     where: Literal["cloud", "local"]
     install_id: UUID | None = None

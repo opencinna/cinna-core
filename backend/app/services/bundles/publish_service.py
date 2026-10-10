@@ -15,7 +15,8 @@ Each publish:
    (``schema_version: 2``); legacy ``schema_version: 1`` revisions used a flat
    allowlist layout at the snapshot root and remain readable by the consumer.
 4. Inserts an ``AgentBundleRevision`` row with the manifest + prompt copies.
-5. Sets ``bundle.latest_revision_id`` and emits ``BUNDLE_PUBLISHED``.
+5. Sets ``bundle.latest_revision_id`` and emits ``BUNDLE_PUBLISHED`` and
+   ``catalog.updated`` (grants ∪ installers).
 6. Notifies dependent installs — manual installs flip ``pending_update``
    and emit ``INSTALL_UPDATE_AVAILABLE``; automatic installs are picked up
    by the suspension scheduler on next idle cycle.
@@ -406,6 +407,12 @@ class PublishService:
             )
         except Exception as e:
             logger.warning("Failed to emit BUNDLE_PUBLISHED event: %s", e)
+
+        from app.services.catalog.catalog_events import CatalogEvents
+
+        await CatalogEvents.revision_published(
+            session, "agent", bundle, revision.revision_number
+        )
 
         await PublishService.notify_installs(session, bundle, revision)
 

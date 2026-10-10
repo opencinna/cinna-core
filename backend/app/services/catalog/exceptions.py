@@ -25,3 +25,20 @@ class CatalogConflictError(CatalogError):
 
 class CatalogValidationError(CatalogError):
     http_status = 422
+
+
+CLOUD_ONLY_CODE = "cloud_only"
+CLOUD_ONLY_MESSAGE = "This agent runs in Cinna."
+
+
+class CloudOnlyError(CatalogConflictError):
+    """A desktop-only path (local installs) was asked to act on a cloud agent:
+    the inverse of ``desktop_only``. Answered as 409 with a structured
+    ``detail`` so clients can match on ``code``."""
+
+    def __init__(self, message: str = CLOUD_ONLY_MESSAGE) -> None:
+        super().__init__(message)
+
+    @property
+    def detail(self) -> dict:
+        return {"code": CLOUD_ONLY_CODE, "message": str(self)}

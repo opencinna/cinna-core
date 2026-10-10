@@ -4,7 +4,6 @@ import { ArrowLeft } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { SkillsService } from "@/client"
-import { SkillPackageAccessCard } from "@/components/Catalog/SkillPackageAccessCard"
 import { SkillPackageCard } from "@/components/Catalog/SkillPackageCard"
 import { SkillSourceCard } from "@/components/Catalog/SkillSourceCard"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
@@ -49,17 +48,17 @@ function SkillPackageRoute() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => goBack("/catalog/skills")}
+          onClick={() => goBack("/catalog?kind=skill")}
           className="shrink-0"
         >
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0">
           <h1 className="text-base font-semibold truncate">
-            {pkg?.display_name ?? "Skill package"}
+            {pkg?.display_name || "Skill package"}
           </h1>
           <p className="text-xs text-muted-foreground truncate">
-            {pkg ? `by ${skillPublisherLabel(pkg)}` : "Skills catalog"}
+            {pkg ? `by ${skillPublisherLabel(pkg)}` : "Catalog"}
           </p>
         </div>
       </div>,
@@ -88,8 +87,12 @@ function SkillPackageRoute() {
                 out is named rather than left to the browser's Back button. */}
             <p className="text-xs">
               If it was delisted or made private, it is no longer in the{" "}
-              <Link to="/catalog/skills" className="underline">
-                skills catalog
+              <Link
+                to="/catalog"
+                search={{ kind: "skill" }}
+                className="underline"
+              >
+                catalog
               </Link>
               .
             </p>
@@ -124,7 +127,7 @@ function SkillPackageRoute() {
                   onSelectRevision={setPinnedRevision}
                 />
               </div>
-              <div className="lg:order-2 space-y-6">
+              <div className="lg:order-2">
                 <SkillSourceCard
                   packageId={packageId}
                   revisionNumber={selectedRevisionNumber}
@@ -134,11 +137,6 @@ function SkillPackageRoute() {
                       : null
                   }
                 />
-                {/* Last in the column, and only for the publisher: a card that
-                    appears and disappears with `visibility` must sit at the
-                    end or it reflows everything under it each time it is
-                    toggled. It self-hides — see the card. */}
-                <SkillPackageAccessCard pkg={pkg} />
               </div>
             </>
           )}

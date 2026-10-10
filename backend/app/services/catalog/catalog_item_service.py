@@ -21,7 +21,6 @@ from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from app.models.agents.agent import Agent
@@ -61,6 +60,7 @@ from app.services.catalog.catalog_access_service import (
 )
 from app.services.catalog.catalog_events import add_audit_event
 from app.services.catalog.desktop_agent_service import DesktopAgentService
+from app.services.catalog.local_install_service import LocalInstallService
 from app.services.catalog.exceptions import (
     CatalogAccessDeniedError,
     CatalogConflictError,
@@ -127,6 +127,14 @@ class CatalogItemService:
     def get_item(session: Session, user: User, item_uuid: uuid.UUID) -> CatalogItem:
         """One item without its versions."""
         spec, item, access = CatalogItemService._visible_item(session, user, item_uuid)
+        return CatalogItemService.project(session, user, spec, item, access)
+
+    @staticmethod
+    def project(
+        session: Session, user: User, spec: CatalogKindSpec, item: Any, access: str
+    ) -> CatalogItem:
+        """One item as ``user`` sees it, at an access level the caller has
+        already established (e.g. the U7 ``use`` of a local skill install)."""
         if spec is BUNDLE:
             return CatalogItemService._project_bundles(session, user, [(item, access)])[0]
         return CatalogItemService._project_skills(session, user, [(item, access)])[0]
@@ -175,6 +183,9 @@ class CatalogItemService:
 
         if item.runs_on == BundleRunsOn.DESKTOP:
             holders = DesktopAgentService.other_holders(session, item, user)
+            holders |= LocalInstallService.other_people(
+                session, BUNDLE.wire_kind, item.id, user.id
+            )
         else:
             # Every consumer install counts, the caller's own included, exactly
             # as ``BundleService.delete_bundle`` (``foreign_install_count``)
@@ -190,6 +201,7 @@ class CatalogItemService:
         if holders:
             raise CatalogConflictError(people_use_detail(len(holders)))
         add_audit_event(session, user.id, CATALOG_ITEM_DELETED, audit)
+        LocalInstallService.delete_for_item(session, BUNDLE.wire_kind, item.id)
         if item.runs_on == BundleRunsOn.DESKTOP:
             DesktopAgentService.delete(session, item)
             return
@@ -266,16 +278,24 @@ class CatalogItemService:
             [b.publisher_user_id for b in bundles]
             + [r.published_by_user_id for r in revisions.values()],
         )
-        install_counts = dict(
-            session.exec(
-                select(Agent.bundle_uuid, func.count(func.distinct(Agent.owner_id)))
-                .where(
-                    col(Agent.bundle_uuid).in_(ids),
-                    Agent.is_publisher_install == False,  # noqa: E712
-                )
-                .group_by(Agent.bundle_uuid)
-            ).all()
-        )
+        # Distinct people over cloud installs (the publisher's working install
+        # excluded, as before) and local rows (the publisher excluded).
+        installers: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+        for bundle_uuid, owner_id in session.exec(
+            select(Agent.bundle_uuid, Agent.owner_id)
+            .where(
+                col(Agent.bundle_uuid).in_(ids),
+                Agent.is_publisher_install == False,  # noqa: E712
+            )
+            .distinct()
+        ).all():
+            installers[bundle_uuid].add(owner_id)
+        publishers = {b.id: b.publisher_user_id for b in bundles}
+        for bundle_uuid, people_ids in LocalInstallService.people_by_item(
+            session, BUNDLE.wire_kind, ids
+        ).items():
+            installers[bundle_uuid] |= people_ids - {publishers.get(bundle_uuid)}
+        install_counts = {k: len(v) for k, v in installers.items()}
         my_agents = session.exec(
             select(Agent.id, Agent.bundle_uuid, Agent.installed_revision_id).where(
                 col(Agent.bundle_uuid).in_(ids), Agent.owner_id == user.id
@@ -299,6 +319,10 @@ class CatalogItemService:
                     revision_number=installed_numbers.get(rev_id) if rev_id else None,
                 )
             )
+        for bundle_uuid, local in LocalInstallService.mine(
+            session, user.id, BUNDLE.wire_kind, ids
+        ).items():
+            my_installs[bundle_uuid].extend(local)
 
         items: list[CatalogItem] = []
         for bundle, access in pairs:
@@ -390,6 +414,10 @@ class CatalogItemService:
             my_installs[package_id].append(
                 CatalogInstall(where="cloud", install_id=agent_id, revision_number=number)
             )
+        for package_id, local in LocalInstallService.mine(
+            session, user.id, SKILL.wire_kind, ids
+        ).items():
+            my_installs[package_id].extend(local)
 
         items: list[CatalogItem] = []
         for package, access in pairs:
