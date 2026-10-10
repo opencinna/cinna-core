@@ -19,9 +19,14 @@ another.
 """
 import logging
 import uuid
+from collections.abc import Callable, Coroutine
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+from pydantic import ValidationError
 
 from app.api.deps import AgentEnvContextDep, CurrentUser, SessionDep
 from app.models import (
@@ -37,8 +42,10 @@ from app.models import (
     SkillPackageRevisionPublic,
     SkillPackagesPublic,
     SkillPackageUpdate,
+    SkillDesktopPublishPreviewIn,
     SkillPublishPreview,
     SkillPublishRequest,
+    SkillUploadMeta,
     SkillRevisionContentPublic,
     SkillRevisionFilesPublic,
 )
@@ -46,10 +53,14 @@ from app.models.skills.skill_package import SkillPackage
 from app.services.credentials.credentials_service import CredentialsService
 from app.services.plugins.llm_plugin_service import LLMPluginService
 from app.services.skills.exceptions import SkillCatalogError, http_error_for
-from app.services.skills.skill_catalog_service import SkillCatalogService
+from app.services.skills.skill_catalog_service import (
+    MAX_PACKAGE_BYTES,
+    SkillCatalogService,
+)
 from app.services.skills.skill_credential_requirements import (
     SkillCredentialRequirements,
 )
+from app.services.skills.skill_upload import SkillUploadService
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +83,92 @@ def list_skill_catalog(session: SessionDep, current_user: CurrentUser) -> Any:
     """
     entries = SkillCatalogService.list_catalog(session, current_user)
     return SkillPackagesPublic(data=entries, count=len(entries))
+
+
+@router.post("/packages/publish-preview", response_model=SkillPublishPreview)
+def preview_desktop_skill_publish(
+    body: SkillDesktopPublishPreviewIn, session: SessionDep, current_user: CurrentUser
+) -> Any:
+    """What publishing a desktop skill would produce: version, package id,
+    credential slots (all filled by installers).
+
+    With ``package_uuid`` the caller needs ``edit`` on that package (404 when
+    they cannot see it, 403 without ``edit``). Any active user may call this.
+    """
+    try:
+        return SkillUploadService.publish_preview(
+            session, user=current_user, body=body
+        )
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
+
+
+#: Largest request body the upload route parses: the archive cap plus room for
+#: the multipart framing and ``meta``. Matches nginx's 17m on this path.
+_UPLOAD_MAX_REQUEST_BYTES = MAX_PACKAGE_BYTES + 1024 * 1024
+
+
+class _UploadSizeGuardRoute(APIRoute):
+    """Refuses an oversized upload by ``Content-Length`` before FastAPI parses
+    (and spools) the multipart body, which it does ahead of any dependency."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def guarded(request: Request) -> Response:
+            length = request.headers.get("content-length")
+            if length and length.isdigit() and int(length) > _UPLOAD_MAX_REQUEST_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": {
+                            "code": "skill_too_large",
+                            "message": "This skill archive is over the "
+                            f"{MAX_PACKAGE_BYTES // (1024 * 1024)} MB limit.",
+                        }
+                    },
+                )
+            return await handler(request)
+
+        return guarded
+
+
+async def publish_desktop_skill(
+    session: SessionDep,
+    current_user: CurrentUser,
+    archive: UploadFile = File(...),
+    meta: str = Form("{}"),
+) -> Any:
+    """Publish a skill from a desktop: ``archive`` is ``tar -C skills -czf
+    x.tgz <name>``, ``meta`` a JSON ``SkillUploadMeta``.
+
+    Refusals: 413 ``skill_too_large`` (compressed bytes), 400
+    ``skill_archive_invalid``, 422 ``skill_invalid`` /
+    ``skill_contains_secrets`` / ``skill_too_large``, 404/403 on
+    ``package_uuid``, 409 ``skill_name_mismatch`` / ``package_exists`` (with
+    ``package_uuid``) / ``grants_require_users_visibility``. Any active user
+    may publish (U5).
+    """
+    try:
+        parsed_meta = SkillUploadMeta.model_validate_json(meta or "{}")
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors(include_url=False)) from exc
+    try:
+        revision = await SkillUploadService.publish(
+            session, user=current_user, archive=archive, meta=parsed_meta
+        )
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
+    return SkillCatalogService.revision_to_public(revision)
+
+
+router.add_api_route(
+    "/packages/publish",
+    publish_desktop_skill,
+    methods=["POST"],
+    response_model=SkillPackageRevisionPublic,
+    route_class_override=_UploadSizeGuardRoute,
+)
 
 
 @router.get("/packages/{package_id}", response_model=SkillPackageDetailPublic)
@@ -161,9 +258,8 @@ def get_skill_package_revision_content(
 ) -> Any:
     """The published ``SKILL.md`` of one revision — the catalog preview."""
     try:
-        package = SkillCatalogService.get_package(session, package_id, current_user)
-        revision = SkillCatalogService.get_revision(
-            session, package, revision_number
+        package, revision = SkillCatalogService.get_readable_revision(
+            session, package_id, revision_number, current_user
         )
         content, truncated = SkillCatalogService.read_revision_content(revision)
     except SkillCatalogError as exc:
@@ -200,9 +296,8 @@ def list_skill_package_revision_files(
     ``snapshot_missing`` (410) when the immutable files are gone from disk.
     """
     try:
-        package = SkillCatalogService.get_package(session, package_id, current_user)
-        revision = SkillCatalogService.get_revision(
-            session, package, revision_number
+        package, revision = SkillCatalogService.get_readable_revision(
+            session, package_id, revision_number, current_user
         )
         files, count, total_bytes = SkillCatalogService.list_revision_files(
             revision
@@ -237,7 +332,8 @@ def download_skill_package_revision(
     and must stay that way (a publisher flipping a package to private must not
     break agents that already have it), while this one is authorised by
     ordinary catalog visibility — if the reader may see the package and read
-    its ``SKILL.md``, they may take the folder those instructions live in. One
+    its ``SKILL.md``, they may take the folder those instructions live in (or,
+    U7, when a desktop agent they can use pins this revision). One
     route with two unrelated authorisation rules is how the weaker of the two
     eventually answers for both.
 
@@ -248,9 +344,8 @@ def download_skill_package_revision(
     tarball; the two are different functions over different inputs.)
     """
     try:
-        package = SkillCatalogService.get_package(session, package_id, current_user)
-        revision = SkillCatalogService.get_revision(
-            session, package, revision_number
+        package, revision = SkillCatalogService.get_readable_revision(
+            session, package_id, revision_number, current_user
         )
         data, sha256 = SkillCatalogService.build_archive(revision)
     except SkillCatalogError as exc:

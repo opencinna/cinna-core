@@ -2897,6 +2897,11 @@ export type Body_mcp_upload_upload_file_to_mcp = {
     workspace_path?: string;
 };
 
+export type Body_skills_publish_desktop_skill = {
+    archive: (Blob | File);
+    meta?: string;
+};
+
 export type Body_tasks_upload_task_attachment = {
     file: (Blob | File);
 };
@@ -7339,6 +7344,20 @@ export type SkillCredentialRequirementPublic = {
 };
 
 /**
+ * Body of ``POST /skills/packages/publish-preview`` (desktop publish).
+ *
+ * The desktop parsed the skill's ``SKILL.md`` itself; core needs only the
+ * name and the frontmatter to answer what a publish would produce.
+ */
+export type SkillDesktopPublishPreviewIn = {
+    name: string;
+    frontmatter?: {
+        [key: string]: unknown;
+    };
+    package_uuid?: (string | null);
+};
+
+/**
  * One skill in the agent's index.
  */
 export type SkillEntryPublic = {
@@ -7584,6 +7603,7 @@ export type SkillPublishPreview = {
     package_id: string;
     package_id_disambiguated?: boolean;
     is_republish?: boolean;
+    package_uuid?: (string | null);
     next_revision_number?: number;
     credentials?: Array<SkillPublishCredentialPreview>;
 };
@@ -12197,6 +12217,18 @@ export type SharedWorkspaceViewSharedWorkspaceFileData = {
 export type SharedWorkspaceViewSharedWorkspaceFileResponse = (unknown);
 
 export type SkillsListSkillCatalogResponse = (SkillPackagesPublic);
+
+export type SkillsPreviewDesktopSkillPublishData = {
+    requestBody: SkillDesktopPublishPreviewIn;
+};
+
+export type SkillsPreviewDesktopSkillPublishResponse = (SkillPublishPreview);
+
+export type SkillsPublishDesktopSkillData = {
+    formData: Body_skills_publish_desktop_skill;
+};
+
+export type SkillsPublishDesktopSkillResponse = (SkillPackageRevisionPublic);
 
 export type SkillsGetSkillPackageData = {
     packageId: string;

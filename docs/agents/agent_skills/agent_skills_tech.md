@@ -1075,6 +1075,21 @@ a visibility check. It previously loaded through the visibility-gated path, whic
 was both an existence oracle and the reason a `users` package could not be
 delisted.
 
+#### Desktop publish
+
+Both routes sit on `router`, declared before the `/packages/{package_id}` routes. Logic: `backend/app/services/skills/skill_upload.py` (`SkillUploadService`).
+
+| Method + path | Deps | Purpose |
+|---------------|------|---------|
+| `POST /skills/packages/publish-preview` | `CurrentUser` | body `SkillDesktopPublishPreviewIn {name, frontmatter, package_uuid?}` -> `SkillPublishPreview` (now with `package_uuid`). With `package_uuid` the caller needs `edit` (404 unseen, 403 otherwise). Credentials parsed from `frontmatter.credentials`, all `provided_by='user'` |
+| `POST /skills/packages/publish` | `CurrentUser` | multipart `archive` (tar.gz of `skills/<name>/`, one top-level dir) + `meta` JSON string `SkillUploadMeta {package_uuid?, version?, release_notes?, visibility?, grants?: CatalogGrantIn[] (max 50)}` -> `SkillPackageRevisionPublic`. A malformed `meta` is a 422 request validation error |
+
+Order, with nothing written before step 4: `read_capped` (compressed bytes over `MAX_PACKAGE_BYTES`, 16 MiB -> 413 `skill_too_large`); `safe_extract` into a temp dir (rejects absolute/`..` paths, links, devices, several top-level dirs, more than `MAX_ARCHIVE_MEMBERS` = 2000 members, unpacked total over the cap, all `skill_archive_invalid` 400); `parse_skill_dir` + `validate_entry` (same codes as the cloud path); package resolution (`package_uuid` -> `edit` plus name match else 409 `skill_name_mismatch`; none and caller already publishes that name -> 409 `package_exists` with `package_uuid` via `SkillCatalogError.extra`); `_check_sharing` (visibility/grants on an existing package need `maintain`, `use` grants need `users` visibility, 409 `grants_require_users_visibility`); `build_specs` with `provided_by='user'`; `_resolve_package(source_agent_id=None)` for a new package; `_publish_tree` under the per-package publish lock (version write-back lands in the temp copy so the snapshot carries it; `source_agent_id` stays unchanged when `None`). Then `CatalogEvents.revision_published` and, for newly granted users, `CatalogEvents.granted`.
+
+`SkillCatalogError` gained `status` (per-raise override, used for the 413) and `extra` (merged into the detail body); `STATUS_BY_CODE` gained `package_exists`, `skill_name_mismatch` (409), `skill_archive_invalid` (400), `invalid_grants` (422).
+
+The `content`, `files` and `download` routes call `SkillCatalogService.get_readable_revision`: `user_can_see`, else `LocalInstallService.pinned_by_usable_desktop_agent`, else 404. `GET /catalog/items/{uuid}` is not opened by the pin rule.
+
 #### Version and package-id derivation — `SkillCatalogService`
 
 | Member | Notes |

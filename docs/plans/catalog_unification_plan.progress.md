@@ -13,3 +13,5 @@ Spec: drafts/catalog_unification/{README,core}.md. Plan: docs/plans/catalog_unif
 - 2026-10-10 C2 review fixes approved, tests 53 new, regression 123+185+366+148 green; committed 94c4c493 (removes /library); core-status + §5.1 in both READMEs updated. Next: C3 (UI spec already in plan).
 - 2026-10-10 C3 backend done (ab3170c): mig 3c1f7a2d9e40, local-install routes, counts, events; 119+76+78 green. Launched review a3b7e5b, tests a5354e6, ui-dev ad11e40 in parallel.
 - 2026-10-10 C3 FE done (ad11e40): designer PASS 10/10 after 2 rounds; screenshots frontend/.ui-shots/c3-*. Backend review fixes done, tests 12 new (a5354e6). Docs written (a01561a), reconciling with built UI. FE code review a9cbbbd running.
+- 2026-10-10 C3 FE review fixes approved; regression 126+154+155+221 green; committed c133ee17; core-status updated. Next: C4.
+- 2026-10-10 C4 dev a13dcc4 done: publish-preview, publish by upload, U7 download/content/files; catalog 80, skills 66 green. Review afa340f, tests a0953d7, docs a9620c2 in parallel.

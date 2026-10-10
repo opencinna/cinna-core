@@ -87,6 +87,21 @@ C3 — unified listing, local installs, events:
   (cloud bundle, skill, desktop push): grant readers + cloud installers;
   local installers only while they still have access; no public fan-out.
 
+C4 — skills from a desktop:
+- `catalog_skill_upload_publish_test.py` — `POST /skills/packages/publish-preview`
+  and multipart `POST /skills/packages/publish` (archives built in memory with
+  `tarfile`): first publish by a plain user, version write-back visible in the
+  downloaded archive (hash == `X-Content-SHA256`), credential slots →
+  `provided_by='user'`, republish needs `edit` (`package_exists`,
+  `skill_name_mismatch`, `use` 403), additive grants, `catalog.updated` /
+  `catalog.granted`, content refusals, oversize (413 / 400) and every
+  unsafe-archive shape.
+- `catalog_skill_download_via_agent_test.py` — U7 end to end over real git:
+  `download`/`content`/`files` of a private skill open to a `use` holder of a
+  desktop agent whose latest version pins that exact revision; other
+  revisions, a removed pin and lost agent access answer 404; the skill's
+  catalog item never opens this way.
+
 Unit (no database): `tests/unit/test_push_policy_bound_manifest_id.py` (the
 policy's bound manifest id), `tests/unit/test_desktop_bundle_id.py` (minting).
 

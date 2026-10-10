@@ -9,6 +9,29 @@ Auto-generated from OpenAPI spec. Tag: `skills`
 
 ---
 
+## POST `/api/v1/skills/packages/publish-preview`
+**Preview Desktop Skill Publish**
+
+**Request body** (`SkillDesktopPublishPreviewIn`):
+  - `name`: string (required)
+  - `frontmatter`: object
+  - `package_uuid`: string | null
+
+**Response:** `SkillPublishPreview`
+
+---
+
+## POST `/api/v1/skills/packages/publish`
+**Publish Desktop Skill**
+
+**Request body** (`Body_skills-publish_desktop_skill`):
+  - `archive`: binary (required)
+  - `meta`: string
+
+**Response:** `SkillPackageRevisionPublic`
+
+---
+
 ## GET `/api/v1/skills/packages/{package_id}`
 **Get Skill Package**
 

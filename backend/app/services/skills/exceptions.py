@@ -21,10 +21,25 @@ class SkillCatalogError(Exception):
     telling the publisher to go hunting.
     """
 
-    def __init__(self, code: str, message: str, *, paths: list[str] | None = None):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        paths: list[str] | None = None,
+        status: int | None = None,
+        extra: dict[str, Any] | None = None,
+    ):
         self.code = code
         self.message = message
         self.paths = paths or []
+        #: Overrides :data:`STATUS_BY_CODE` for one raise site: an upload over
+        #: the compressed byte cap is ``skill_too_large`` like an oversized
+        #: tree, but answered 413 because it was refused before parsing.
+        self.status = status
+        #: Extra machine-readable keys merged into the detail body
+        #: (``package_exists`` carries ``package_uuid``).
+        self.extra = extra or {}
         super().__init__(message)
 
 
@@ -70,6 +85,10 @@ STATUS_BY_CODE: dict[str, int] = {
     "package_id_invalid": 422,
     "package_id_taken": 409,
     "package_id_immutable": 409,
+    "package_exists": 409,
+    "skill_name_mismatch": 409,
+    "skill_archive_invalid": 400,
+    "invalid_grants": 422,
     "invalid_visibility": 422,
     "invalid_display_name": 422,
     # Install
@@ -106,6 +125,7 @@ def http_error_for(exc: SkillCatalogError) -> HTTPException:
     detail: dict[str, Any] = {"code": exc.code, "message": exc.message}
     if exc.paths:
         detail["paths"] = exc.paths
+    detail.update(exc.extra)
     return HTTPException(
-        status_code=STATUS_BY_CODE.get(exc.code, 400), detail=detail
+        status_code=exc.status or STATUS_BY_CODE.get(exc.code, 400), detail=detail
     )

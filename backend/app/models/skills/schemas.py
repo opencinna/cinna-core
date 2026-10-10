@@ -12,6 +12,19 @@ from typing import Literal
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
+from app.models.catalog.catalog_access import CatalogGrantIn
+
+
+def _single_line_version(value: str | None) -> str | None:
+    """Refuse a version carrying a newline or any other control character."""
+    if value is None:
+        return None
+    if any(ch == "\r" or ch == "\n" or ch < " " for ch in value):
+        raise ValueError(
+            "A version must be a single line with no control characters."
+        )
+    return value
+
 
 class SkillCredentialRequirementPublic(SQLModel):
     """One credential slot a published revision requires.
@@ -256,13 +269,7 @@ class SkillPublishRequest(SQLModel):
         ships. A 422 naming the field beats a version the server quietly
         dropped.
         """
-        if value is None:
-            return None
-        if any(ch == "\r" or ch == "\n" or ch < " " for ch in value):
-            raise ValueError(
-                "A version must be a single line with no control characters."
-            )
-        return value
+        return _single_line_version(value)
 
 
 class SkillPublishPreview(SQLModel):
@@ -293,11 +300,49 @@ class SkillPublishPreview(SQLModel):
     package_id_disambiguated: bool = False
     #: Whether this skill already has a package behind it.
     is_republish: bool = False
+    #: The uuid of that package. Set by the desktop preview only (a desktop
+    #: sends it back as ``package_uuid`` on the publish).
+    package_uuid: uuid.UUID | None = None
     next_revision_number: int = 1
     #: How each credential slot the skill declares would be provided to
     #: installers if it were published now. Empty when the skill declares none
     #: or is invalid (publish refuses an invalid skill anyway).
     credentials: list[SkillPublishCredentialPreview] = []
+
+
+class SkillDesktopPublishPreviewIn(SQLModel):
+    """Body of ``POST /skills/packages/publish-preview`` (desktop publish).
+
+    The desktop parsed the skill's ``SKILL.md`` itself; core needs only the
+    name and the frontmatter to answer what a publish would produce.
+    """
+
+    name: str = Field(max_length=64)
+    frontmatter: dict = {}
+    #: The package to publish into (a republish, or a package somebody else
+    #: maintains that the caller may ``edit``).
+    package_uuid: uuid.UUID | None = None
+
+
+class SkillUploadMeta(SQLModel):
+    """The ``meta`` form field (JSON) of ``POST /skills/packages/publish``."""
+
+    package_uuid: uuid.UUID | None = None
+    #: One line, like :attr:`SkillPublishRequest.version`.
+    version: str | None = Field(default=None, max_length=64)
+    release_notes: str | None = Field(default=None, max_length=10_000)
+    #: ``private`` / ``users`` / ``public``; ``None`` leaves an existing
+    #: package's visibility alone (a new one starts ``private``).
+    visibility: str | None = None
+    #: Additive: a principal not named keeps its grant, a named one is raised
+    #: to the requested level and never lowered. ``use`` grants need an
+    #: effective visibility of ``users``.
+    grants: list[CatalogGrantIn] = Field(default=[], max_length=50)
+
+    @field_validator("version")
+    @classmethod
+    def _version_is_one_line(cls, value: str | None) -> str | None:
+        return _single_line_version(value)
 
 
 class SkillInstallRequest(SQLModel):

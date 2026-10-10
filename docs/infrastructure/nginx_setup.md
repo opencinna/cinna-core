@@ -51,6 +51,13 @@ Present only in the production reverse proxy. In local dev the SPA calls the bac
 
 **Upstream:** backend.
 
+### `= /api/v1/skills/packages/publish`
+
+**Feature:** skill publish from a desktop (tar.gz upload) — see [Desktop Agents in the Catalog](../application/catalog/desktop_agents.md).
+**Why a dedicated block:** the generic `/api/` block keeps nginx's 1 MB body default, and a skill archive may be up to 16 MiB; without this block normal uploads get an nginx HTML 413 instead of the backend's JSON.
+**Special requirements:** exact match (`location =`), `client_max_body_size 17m` (the backend refuses bodies over 17 MiB with 413 `skill_too_large` itself), forwarded headers. Declare before `/api/`. **A production reverse proxy needs the same limit on this path.**
+**Upstream:** backend.
+
 ### `/api/v1/env-console/`
 
 **Feature:** Agent Environment Console — live container-logs follow (`WS /api/v1/env-console/{id}/logs/stream`) and interactive web terminal (`WS /api/v1/env-console/{id}/terminal`). See [Agent Environment Console](../agents/agent_environments/agent_env_console.md).

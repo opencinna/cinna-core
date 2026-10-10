@@ -24,6 +24,12 @@
 | `POST /api/v1/catalog/items/{item_uuid}/local-installs` | `LocalInstallIn {device_id, revision_number, host_manifest_id?}` -> `CatalogItem`; 404 without use (skill pinned by a usable desktop agent's latest version passes), 409 `cloud_only`, 422 for missing/extra host id or unknown version |
 | `DELETE /api/v1/catalog/items/{item_uuid}/local-installs/{device_id}` | optional `host_manifest_id` query; 204, idempotent, own rows only |
 
+## Skills from a desktop
+
+Routes live in `backend/app/api/routes/skills.py`, logic in `backend/app/services/skills/skill_upload.py` (`SkillUploadService.publish_preview` / `publish`, `read_capped`, `safe_extract`), and the shared write core is `SkillCatalogService._publish_tree` (also used by the cloud-agent publish). See [Agent Skills tech](../../agents/agent_skills/agent_skills_tech.md#desktop-publish).
+
+`SkillCatalogService.get_readable_revision` gates download, content and files: catalog visibility first, else `LocalInstallService.pinned_by_usable_desktop_agent`; otherwise 404 `package_not_found`.
+
 ## Service layer
 
 - `LocalInstallService.record` upserts with a single `INSERT ... ON CONFLICT` on `uq_catalog_local_install`; `remove` deletes own rows; `delete_for_item` stages deletion for an item being removed.
@@ -38,3 +44,7 @@
 ## Frontend
 
 `catalog.updated` and `catalog.granted` invalidate catalog queries. Query keys `["catalog-items", filters]` and `["catalog-item", uuid]`; the search params `kind` and `filter` hold the page state. Kind words and glyphs are shared across tile, detail and admin table; one version-label helper renders `v<version>` or `Version <n>`.
+
+## Changelog
+
+- Desktop skill publish and pin-based revision reads documented.

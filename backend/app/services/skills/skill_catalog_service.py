@@ -52,7 +52,11 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.agents.agent import Agent
-from app.models.catalog.catalog_access import CatalogAccess, CatalogPrincipalKind
+from app.models.catalog.catalog_access import (
+    CatalogAccess,
+    CatalogGrantIn,
+    CatalogPrincipalKind,
+)
 from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
 from app.models.skills.schemas import (
     SkillInstallPreview,
@@ -72,12 +76,14 @@ from app.models.skills.skill_package_access_grant import (
     SkillPackageAccessGrant,
 )
 from app.models.skills.skill_package_revision import SkillPackageRevision
+from app.models.events.security_event import CATALOG_GRANTS_CHANGED
 from app.models.users.user import User
 from app.services.agents.agent_service import AgentService, CanBuildError
 from app.services.agents.agent_skills_service import AgentSkillsService
 from app.services.agents.skill_manifest import (
     DEFAULT_MAX_TOTAL_BYTES,
     SKILL_NAME_RE,
+    SkillEntry,
     coerce_version,
     parse_skill_dir,
 )
@@ -86,7 +92,7 @@ from app.services.bundles.credential_spec import ParsedCredentialSpec
 from app.services.bundles.publish_service import PublishService
 from app.services.catalog.catalog_access_service import SKILL, CatalogAccessService
 from app.services.catalog.exceptions import CatalogConflictError
-from app.services.catalog.catalog_events import CatalogEvents
+from app.services.catalog.catalog_events import CatalogEvents, add_audit_event
 from app.services.catalog.local_install_service import LocalInstallService
 from app.services.credentials.credential_provisioner import (
     SKILL_INSTALL_POLICY,
@@ -328,24 +334,7 @@ class SkillCatalogService:
 
         # 3. Validate. One parse, three refusals.
         entry = parse_skill_dir(skill_dir, rel_path=f"skills/{skill_name}")
-        if entry.error is not None:
-            raise SkillCatalogError(
-                "skill_invalid",
-                f"This skill cannot be published: {entry.error.message}",
-            )
-        if entry.secret_paths:
-            raise SkillCatalogError(
-                "skill_contains_secrets",
-                "These files inside the skill look like credentials and must "
-                "not be published: " + ", ".join(entry.secret_paths),
-                paths=list(entry.secret_paths),
-            )
-        if entry.size_bytes > MAX_PACKAGE_BYTES:
-            raise SkillCatalogError(
-                "skill_too_large",
-                f"This skill is {entry.size_bytes // (1024 * 1024)} MB; the "
-                f"limit is {MAX_PACKAGE_BYTES // (1024 * 1024)} MB.",
-            )
+        SkillCatalogService.validate_entry(entry)
 
         visibility = SkillCatalogService._normalise_visibility(visibility)
 
@@ -457,7 +446,7 @@ class SkillCatalogService:
             package, created = SkillCatalogService._resolve_package(
                 session,
                 user=user,
-                agent=agent,
+                source_agent_id=agent.id,
                 entry_name=entry.name,
                 description=entry.description,
                 requested_package_id=package_id,
@@ -475,94 +464,25 @@ class SkillCatalogService:
                     "Only a maintainer of this skill can change its visibility.",
                 )
 
-            next_number, published_versions, latest_version = (
-                SkillCatalogService._version_history(session, package.id)
-            )
-
-            resolved_version = SkillCatalogService.resolve_version(
-                requested=version,
-                frontmatter_version=entry.version,
-                published_versions=published_versions,
-                latest_version=latest_version,
-            )
-
-            # Written back BEFORE the snapshot is taken, so the published
-            # bytes carry the version in their own header — the snapshot is
-            # immutable and there is no second chance to put it there. A
-            # failure here is logged and not fatal: the revision row still
-            # carries the version, and a workspace that cannot be written to
-            # is not a reason to refuse a publish that is otherwise valid.
-            version_written = await asyncio.to_thread(
-                SkillCatalogService._write_version_to_skill_md,
-                skill_dir / "SKILL.md",
-                resolved_version,
-            )
-            if not version_written:
-                logger.warning(
-                    "skill_version_writeback_failed agent_id=%s skill=%s "
-                    "version=%s — publishing anyway; the revision carries the "
-                    "version even though its SKILL.md does not",
-                    agent.id, entry.name, resolved_version,
-                )
-
-            revision_dir = SkillCatalogService.revision_dir(package.id, next_number)
-            content_hash, size_bytes, archive_sha256 = await asyncio.to_thread(
-                SkillCatalogService._write_snapshot_to_disk,
-                package_uuid=package.id,
-                skill_dir=skill_dir,
-                skill_name=entry.name,
-                revision_dir=revision_dir,
-                revision_number=next_number,
-            )
-
-            revision = SkillPackageRevision(
-                package_id=package.id,
-                revision_number=next_number,
-                version=resolved_version,
-                # The frontmatter as the snapshot now carries it, not as it was
-                # parsed a moment ago: the write-back above added or changed
-                # the version key, and a revision whose stored frontmatter
-                # disagreed with its own snapshot would be a second answer to
-                # "what version is this".
-                #
-                # Which is exactly why the merge is conditional. On the
-                # degraded path the branch above tolerates — the workspace
-                # could not be written — the snapshot carries no ``version:``
-                # at all, so merging one in here would manufacture the
-                # disagreement this line exists to prevent. The revision's own
-                # ``version`` column still records what it was published as.
-                frontmatter=(
-                    {**(entry.frontmatter or {}), "version": resolved_version}
-                    if version_written
-                    else dict(entry.frontmatter or {})
-                ),
-                snapshot_path=str(revision_dir / "skills" / entry.name),
-                content_hash=content_hash,
-                archive_sha256=archive_sha256,
-                size_bytes=size_bytes,
-                release_notes=release_notes or None,
-                published_by_user_id=user.id,
-                required_credential_specs=credential_specs,
-            )
-            session.add(revision)
-            session.commit()
-            session.refresh(revision)
-
-            SkillCatalogService._apply_publish_to_package(
+            revision, _ = await SkillCatalogService._publish_tree(
                 session,
+                user=user,
                 package=package,
-                revision=revision,
-                entry_description=entry.description,
                 created=created,
+                skill_dir=skill_dir,
+                entry=entry,
+                version=version,
+                release_notes=release_notes,
                 visibility=visibility,
-                agent=agent,
+                credential_specs=credential_specs,
+                source_agent_id=agent.id,
                 grant_targets=grant_targets,
-                granted_by=user,
             )
 
         logger.info(
             "skill_published package_id=%s revision=%s agent_id=%s size=%s",
-            package.package_id, revision.revision_number, agent.id, size_bytes,
+            package.package_id, revision.revision_number, agent.id,
+            revision.size_bytes,
         )
         await CatalogEvents.revision_published(
             session, SKILL.wire_kind, package, revision.revision_number
@@ -597,6 +517,146 @@ class SkillCatalogService:
             )
 
         return revision
+
+    @staticmethod
+    def validate_entry(entry: SkillEntry) -> None:
+        """The three content refusals every publish runs, cloud or upload."""
+        if entry.error is not None:
+            raise SkillCatalogError(
+                "skill_invalid",
+                f"This skill cannot be published: {entry.error.message}",
+            )
+        if entry.secret_paths:
+            raise SkillCatalogError(
+                "skill_contains_secrets",
+                "These files inside the skill look like credentials and must "
+                "not be published: " + ", ".join(entry.secret_paths),
+                paths=list(entry.secret_paths),
+            )
+        if entry.size_bytes > MAX_PACKAGE_BYTES:
+            raise SkillCatalogError(
+                "skill_too_large",
+                f"This skill is {entry.size_bytes // (1024 * 1024)} MB; the "
+                f"limit is {MAX_PACKAGE_BYTES // (1024 * 1024)} MB.",
+            )
+
+    @staticmethod
+    async def _publish_tree(
+        session: Session,
+        *,
+        user: User,
+        package: SkillPackage,
+        created: bool,
+        skill_dir: Path,
+        entry: SkillEntry,
+        version: str | None,
+        release_notes: str | None,
+        visibility: str | None,
+        credential_specs: list[dict],
+        source_agent_id: uuid.UUID | None,
+        grant_targets: list[User] | None = None,
+        catalog_grants: list[CatalogGrantIn] | None = None,
+    ) -> tuple[SkillPackageRevision, set[uuid.UUID]]:
+        """Write one revision of ``package`` from the validated ``skill_dir``.
+
+        The shared core of the agent publish and the desktop upload: version
+        resolution, the version write-back into ``skill_dir/SKILL.md``, the
+        snapshot plus deterministic archive, the revision row and the package
+        update (with the publish-time grants). The caller has run every
+        refusal and **holds the publish lock** for this package; this method
+        refuses nothing.
+
+        ``source_agent_id`` is ``None`` for an upload, which leaves the
+        package's ``source_agent_id`` unchanged. Returns the revision and the
+        users who gained access through ``catalog_grants``.
+        """
+        next_number, published_versions, latest_version = (
+            SkillCatalogService._version_history(session, package.id)
+        )
+
+        resolved_version = SkillCatalogService.resolve_version(
+            requested=version,
+            frontmatter_version=entry.version,
+            published_versions=published_versions,
+            latest_version=latest_version,
+        )
+
+        # Written back BEFORE the snapshot is taken, so the published
+        # bytes carry the version in their own header — the snapshot is
+        # immutable and there is no second chance to put it there. A
+        # failure here is logged and not fatal: the revision row still
+        # carries the version, and a workspace that cannot be written to
+        # is not a reason to refuse a publish that is otherwise valid.
+        version_written = await asyncio.to_thread(
+            SkillCatalogService._write_version_to_skill_md,
+            skill_dir / "SKILL.md",
+            resolved_version,
+        )
+        if not version_written:
+            logger.warning(
+                "skill_version_writeback_failed source_agent_id=%s skill=%s "
+                "version=%s — publishing anyway; the revision carries the "
+                "version even though its SKILL.md does not",
+                source_agent_id, entry.name, resolved_version,
+            )
+
+        revision_dir = SkillCatalogService.revision_dir(package.id, next_number)
+        content_hash, size_bytes, archive_sha256 = await asyncio.to_thread(
+            SkillCatalogService._write_snapshot_to_disk,
+            package_uuid=package.id,
+            skill_dir=skill_dir,
+            skill_name=entry.name,
+            revision_dir=revision_dir,
+            revision_number=next_number,
+        )
+
+        revision = SkillPackageRevision(
+            package_id=package.id,
+            revision_number=next_number,
+            version=resolved_version,
+            # The frontmatter as the snapshot now carries it, not as it was
+            # parsed a moment ago: the write-back above added or changed
+            # the version key, and a revision whose stored frontmatter
+            # disagreed with its own snapshot would be a second answer to
+            # "what version is this".
+            #
+            # Which is exactly why the merge is conditional. On the
+            # degraded path the branch above tolerates — the workspace
+            # could not be written — the snapshot carries no ``version:``
+            # at all, so merging one in here would manufacture the
+            # disagreement this line exists to prevent. The revision's own
+            # ``version`` column still records what it was published as.
+            frontmatter=(
+                {**(entry.frontmatter or {}), "version": resolved_version}
+                if version_written
+                else dict(entry.frontmatter or {})
+            ),
+            snapshot_path=str(revision_dir / "skills" / entry.name),
+            content_hash=content_hash,
+            archive_sha256=archive_sha256,
+            size_bytes=size_bytes,
+            release_notes=release_notes or None,
+            published_by_user_id=user.id,
+            required_credential_specs=credential_specs,
+        )
+        session.add(revision)
+        session.commit()
+        session.refresh(revision)
+
+        gained_readers = SkillCatalogService._apply_publish_to_package(
+            session,
+            package=package,
+            revision=revision,
+            entry_description=entry.description,
+            created=created,
+            visibility=visibility,
+            source_agent_id=source_agent_id,
+            grant_targets=grant_targets,
+            catalog_grants=catalog_grants,
+            granted_by=user,
+        )
+        return revision, gained_readers
+
 
     @staticmethod
     def _version_history(
@@ -819,6 +879,99 @@ class SkillCatalogService:
         return targets
 
     @staticmethod
+    def validate_catalog_grants(
+        session: Session,
+        package: SkillPackage | None,
+        actor: User,
+        grants: list[CatalogGrantIn],
+    ) -> list[SkillPackageAccessGrant]:
+        """Publish-time ``grants`` as unsaved rows, or a catalog refusal.
+
+        Read-only, so the upload publish can run it before anything is
+        written. ``package`` is ``None`` before a first publish creates the
+        package. The actor's own ``maintain`` is folded in only to satisfy
+        the "a person maintains" rule of the shared validator (the creator
+        becomes maintainer anyway, and an existing package already has one);
+        it is dropped again unless the request named the actor itself.
+        """
+        actor_named = any(
+            getattr(g.principal, "user_id", None) == actor.id for g in grants
+        )
+        item = package if package is not None else SkillPackage(id=uuid.uuid4())
+        rows = CatalogAccessService.validate_grants(
+            session,
+            SKILL,
+            item,
+            [
+                *grants,
+                CatalogGrantIn.model_validate(
+                    {"principal": {"user_id": actor.id}, "access": CatalogAccess.MAINTAIN}
+                ),
+            ],
+            actor,
+        )
+        return [
+            row
+            for row in rows
+            if actor_named
+            or not (
+                row.principal_kind == CatalogPrincipalKind.USER
+                and row.user_id == actor.id
+            )
+        ]
+
+    @staticmethod
+    def add_catalog_grants(
+        session: Session,
+        package: SkillPackage,
+        actor: User,
+        grants: list[CatalogGrantIn],
+    ) -> set[uuid.UUID]:
+        """Add publish-time grants to ``package``. Flushes, never commits.
+
+        **Additive**, like the email grants of the agent publish: a principal
+        not named keeps its grant, and a named one is only ever raised to the
+        requested level, never lowered. Lowering and removing are
+        ``PUT /catalog/items/{uuid}/grants``. Returns the users who gained
+        access, for ``catalog.granted``.
+        """
+        rows = SkillCatalogService.validate_catalog_grants(
+            session, package, actor, grants
+        )
+        before = CatalogAccessService.readers(session, SKILL, package)
+        existing = {
+            (row.principal_kind, row.principal_id): row
+            for row in CatalogAccessService.grant_rows(session, SKILL, package.id)
+        }
+        for row in rows:
+            old = existing.get((row.principal_kind, row.principal_id))
+            if old is None:
+                session.add(row)
+            elif CatalogAccess.rank(row.access) > CatalogAccess.rank(old.access):
+                old.access = row.access
+                old.granted_by_user_id = actor.id
+                session.add(old)
+        add_audit_event(
+            session,
+            actor.id,
+            CATALOG_GRANTS_CHANGED,
+            {
+                "kind": SKILL.wire_kind,
+                "uuid": str(package.id),
+                "grants": [
+                    {
+                        "principal": f"{row.principal_kind}:{row.principal_id}",
+                        "access": row.access,
+                    }
+                    for row in rows
+                ],
+                "mode": "publish_additive",
+            },
+        )
+        session.flush()
+        return CatalogAccessService.readers(session, SKILL, package) - before
+
+    @staticmethod
     def _find_publisher_package(
         session: Session,
         *,
@@ -881,7 +1034,7 @@ class SkillCatalogService:
         session: Session,
         *,
         user: User,
-        agent: Agent,
+        source_agent_id: uuid.UUID | None,
         entry_name: str,
         description: str,
         requested_package_id: str | None,
@@ -948,7 +1101,7 @@ class SkillCatalogService:
             display_name=entry_name,
             description=description or None,
             publisher_user_id=user.id,
-            source_agent_id=agent.id,
+            source_agent_id=source_agent_id,
             visibility=SkillPackageVisibility.PRIVATE,
             is_listed=True,
         )
@@ -1285,10 +1438,11 @@ class SkillCatalogService:
         entry_description: str,
         created: bool,
         visibility: str | None,
-        agent: Agent,
+        source_agent_id: uuid.UUID | None,
         grant_targets: list[User] | None = None,
+        catalog_grants: list[CatalogGrantIn] | None = None,
         granted_by: User | None = None,
-    ) -> None:
+    ) -> set[uuid.UUID]:
         """Point the package at the new revision and refresh its metadata.
 
         The description follows the skill's own frontmatter **until a publisher
@@ -1309,7 +1463,8 @@ class SkillCatalogService:
             package.description = entry_description or None
 
         package.latest_revision_id = revision.id
-        package.source_agent_id = agent.id
+        if source_agent_id is not None:
+            package.source_agent_id = source_agent_id
         if visibility is not None:
             package.visibility = visibility
         package.updated_at = datetime.now(UTC)
@@ -1330,14 +1485,20 @@ class SkillCatalogService:
         #
         # Additive — a re-publish never revokes an address it omits, because
         # the dialog it came from may simply be out of date.
+        gained: set[uuid.UUID] = set()
         if granted_by is not None:
             for target in grant_targets or []:
                 SkillCatalogService.grant_to_user(
                     session, package, target, granted_by, commit=False
                 )
+            if catalog_grants:
+                gained = SkillCatalogService.add_catalog_grants(
+                    session, package, granted_by, catalog_grants
+                )
 
         session.commit()
         session.refresh(package)
+        return gained
 
     # ── Read ───────────────────────────────────────────────────────────
 
@@ -1390,6 +1551,34 @@ class SkillCatalogService:
         ):
             raise SkillCatalogError("package_not_found", "Skill package not found")
         return package
+
+    @staticmethod
+    def get_readable_revision(
+        session: Session, package_uuid: uuid.UUID, revision_number: int, user: User
+    ) -> tuple[SkillPackage, SkillPackageRevision]:
+        """A revision whose files ``user`` may read: download, content, files.
+
+        Catalog visibility first; failing that, U7 — some desktop agent the
+        user can ``use`` pins exactly this revision in its latest revision's
+        ``catalog_skills[]``, so sharing an agent carries its skills. The
+        package's own detail (``GET /catalog/items/{uuid}``) does not open this
+        way. Anything else answers ``package_not_found`` (404), whether or not
+        the package or the revision exists.
+        """
+        package = session.get(SkillPackage, package_uuid)
+        if package is None:
+            raise SkillCatalogError("package_not_found", "Skill package not found")
+        if SkillCatalogService.user_can_see(session, package, user):
+            return package, SkillCatalogService.get_revision(
+                session, package, revision_number
+            )
+        if not LocalInstallService.pinned_by_usable_desktop_agent(
+            session, package, revision_number, user
+        ):
+            raise SkillCatalogError("package_not_found", "Skill package not found")
+        return package, SkillCatalogService.get_revision(
+            session, package, revision_number
+        )
 
     @staticmethod
     def get_revision(

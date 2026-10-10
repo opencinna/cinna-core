@@ -12570,6 +12570,24 @@ export const Body_mcp_upload_upload_file_to_mcpSchema = {
     title: 'Body_mcp-upload-upload_file_to_mcp'
 } as const;
 
+export const Body_skills_publish_desktop_skillSchema = {
+    properties: {
+        archive: {
+            type: 'string',
+            format: 'binary',
+            title: 'Archive'
+        },
+        meta: {
+            type: 'string',
+            title: 'Meta',
+            default: '{}'
+        }
+    },
+    type: 'object',
+    required: ['archive'],
+    title: 'Body_skills-publish_desktop_skill'
+} as const;
+
 export const Body_tasks_upload_task_attachmentSchema = {
     properties: {
         file: {
@@ -30631,6 +30649,41 @@ Projected from the revision's frozen \`\`required_credential_specs\`\`. Ids
 only — never a template payload, never credential data.`
 } as const;
 
+export const SkillDesktopPublishPreviewInSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 64,
+            title: 'Name'
+        },
+        frontmatter: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Frontmatter',
+            default: {}
+        },
+        package_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Package Uuid'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'SkillDesktopPublishPreviewIn',
+    description: `Body of \`\`POST /skills/packages/publish-preview\`\` (desktop publish).
+
+The desktop parsed the skill's \`\`SKILL.md\`\` itself; core needs only the
+name and the frontmatter to answer what a publish would produce.`
+} as const;
+
 export const SkillEntryPublicSchema = {
     properties: {
         name: {
@@ -31644,6 +31697,18 @@ export const SkillPublishPreviewSchema = {
             type: 'boolean',
             title: 'Is Republish',
             default: false
+        },
+        package_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Package Uuid'
         },
         next_revision_number: {
             type: 'integer',

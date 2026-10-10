@@ -62,6 +62,19 @@ person when a newer version exists.
 - **Refusals**: a cloud agent answers 409 `cloud_only` ("This agent runs in Cinna."); a skill needs the
   host agent id and an agent refuses one; an unknown version is refused.
 
+## Skills from a desktop
+
+A skill that exists only on a computer can be published straight into the catalog by Cinna Desktop (preview,
+then a folder upload). Any signed-in user may publish a new skill; a new version needs `edit`, and visibility or
+grants need `maintain`. Grants sent with a publish are additive. Every credential slot the skill declares is filled
+by each installer. The chosen version is returned so the desktop writes it back locally, and `catalog.updated`
+and `catalog.granted` fire as for any publish. Details and refusals:
+[Agent Skills](../../agents/agent_skills/agent_skills.md#5c-publishing-a-skill-from-a-desktop).
+
+**Download through an agent.** A person who can use a desktop agent may download, list the files of and read the
+`SKILL.md` of a skill revision that the agent's latest version pins exactly, even without seeing the skill in the
+catalog. The skill's own detail stays hidden that way.
+
 ## Deleting an item
 
 A maintainer or superuser can delete an item only while nobody else uses it. If other people use it the
@@ -127,3 +140,4 @@ row. It replaces the former admin team library page.
 ## Changelog
 
 - One unified listing replaced the separate agent and skill catalog pages; local installs, the local-aware delete guard and `catalog.updated` for cloud and skill publishes were added.
+- Skills can be published from a desktop, and a skill revision pinned by a usable desktop agent can be downloaded through that agent.

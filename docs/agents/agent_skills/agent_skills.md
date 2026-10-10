@@ -340,6 +340,44 @@ still describe the whole revision, and the Sheet says so ("showing the first
 it always carries every file — so a reader who needs what the list could not
 show still gets it by taking the whole folder.
 
+### 5c. Publishing a skill from a desktop
+
+Cinna Desktop can publish a skill that lives only on the person's computer, with no
+cloud agent involved. The desktop sends the skill folder as one archive plus a few
+options; core runs the same checks as a cloud publish and appends a revision.
+
+- **Who**: any signed-in user may publish a **new** skill. A later version of an
+  existing package needs `edit` on it. Changing visibility or granting access needs
+  `maintain`; the creator of a new package is its maintainer.
+- **Preview first**: the desktop sends the skill name and frontmatter and gets back
+  the version and package id a publish would take, the credential slots, and the
+  package's uuid when it already exists.
+- **Same refusals as the cloud path**: invalid skill (including a folder name that is
+  not the frontmatter name), a file named like a credential, a folder over 16 MB.
+  Plus safe-extraction refusals (`skill_archive_invalid`, 400): absolute or `..`
+  paths, links and special files, more than one top-level folder, over 2000 entries,
+  or an unpacked size over the cap. A compressed upload over 16 MB is refused with
+  413 `skill_too_large` before anything is read.
+- **Which package**: with `package_uuid` the package must exist, the caller needs
+  `edit` and the name must match (409 `skill_name_mismatch`). Without it, when the
+  caller already publishes a skill of that name, the answer is 409 `package_exists`
+  carrying that `package_uuid`, so the desktop retries as a new version instead of
+  creating a duplicate.
+- **Grants are additive**: those named are added or raised, never lowered, and
+  everyone else keeps their access. Replacing the whole list is the catalog's grants
+  call. `use` grants need the package to be limited to listed people.
+- **Credentials**: every slot the skill declares becomes a required slot that each
+  installer fills with their own credential; a desktop publish never links or shares
+  the publisher's credentials.
+- **Version**: the chosen version is written into the stored `SKILL.md` and returned,
+  so the desktop writes the same version back into its local copy.
+- **Realtime**: `catalog.updated` (kind `skill`) goes to the people who can see the
+  package, and `catalog.granted` to anyone newly granted.
+
+Reading a revision's content, file list or download also opens to a person who can
+use a desktop agent whose latest version pins exactly that revision, so sharing an
+agent carries its skills. The skill's own catalog detail does not open that way.
+
 ### 6. Installing a catalog skill
 
 From the skills catalog, a user picks one of their own agents. This creates an
@@ -831,3 +869,4 @@ sweep skips denylisted names — it simply never travels again.
 ## Changelog
 
 - 2026-10-06: Platform skills — `cinna-tasks` (Cinna Task Protocol) is installed into every environment's core, projected beside the agent's skills, reserved against workspace skills, and listed by the fallback Agent Skills block.
+- 2026-10-10: Skills can be published from a desktop (preview + archive upload, additive grants, user-provided credential slots), and a revision pinned by a usable desktop agent can be downloaded and read without catalog visibility.
