@@ -54,6 +54,61 @@
           }
         }
       }
+    },
+    "skills": {
+      "description": "One entry per skill of this agent (a folder under skills/) published to a catalog (contract 1.10.0). It travels with the agent, so anyone who edits the agent and may publish the package can publish its next version. A publish resolves the entry whose platform_url and name match; absent until the first skill is published. A folder that records only skills still carries an empty `publications` array.",
+      "type": "array",
+      "x-scope": "portable",
+      "x-import": "written after a skill is published; read to find the package to publish the next version to",
+      "items": {
+        "type": "object",
+        "required": ["platform_url", "name", "package_id", "package_uuid", "revision_number", "content_hash"],
+        "additionalProperties": true,
+        "properties": {
+          "platform_url": {
+            "description": "Origin of the instance whose catalog holds the package.",
+            "type": "string",
+            "minLength": 1,
+            "x-scope": "portable",
+            "x-import": "matched against the instance a publish runs against"
+          },
+          "name": {
+            "description": "The skill's folder name under skills/.",
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "x-scope": "portable",
+            "x-import": "matched against the skill being published"
+          },
+          "package_id": {
+            "description": "The package id the catalog gave the skill.",
+            "type": "string",
+            "minLength": 1,
+            "x-scope": "portable",
+            "x-import": "written by the publish"
+          },
+          "package_uuid": {
+            "description": "The package's id on that instance; a later publish sends it to add a version.",
+            "type": "string",
+            "minLength": 1,
+            "x-scope": "portable",
+            "x-import": "written by the publish"
+          },
+          "revision_number": {
+            "description": "The revision the last publish created.",
+            "type": "integer",
+            "minimum": 1,
+            "x-scope": "portable",
+            "x-import": "written by the publish"
+          },
+          "content_hash": {
+            "description": "Hash of the skill folder at the last publish, as the catalog computed it. A mismatch against the folder now means there are changes to publish.",
+            "type": "string",
+            "minLength": 1,
+            "x-scope": "portable",
+            "x-import": "written by the publish"
+          }
+        }
+      }
     }
   }
 }

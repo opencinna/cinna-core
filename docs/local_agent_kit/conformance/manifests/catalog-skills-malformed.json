@@ -1,0 +1,33 @@
+{
+  "description": "A catalog skill pin with every field malformed: each field is an error of its own (contract 1.10.0).",
+  "manifest": {
+    "contract_version": "1.10.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "catalog_skills": [
+      {
+        "package_id": "not a package id",
+        "package_uuid": "nope",
+        "revision_number": 0,
+        "version": 7,
+        "archive_sha256": "ABC",
+        "name": "Not_A_Name"
+      }
+    ]
+  },
+  "expect": {
+    "errors": [
+      "catalog_skills.package_id",
+      "catalog_skills.package_uuid",
+      "catalog_skills.name",
+      "catalog_skills.revision_number",
+      "catalog_skills.version",
+      "catalog_skills.archive_sha256"
+    ]
+  }
+}

@@ -295,6 +295,62 @@
         }
       }
     },
+    "catalog_skills": {
+      "description": "Skills from the platform's catalog that this agent uses, pinned by reference (contract 1.10.0). The skill's files are never copied into skills/: a host downloads the pinned version, checks it against archive_sha256, and gives it to the engine beside the agent's own skills. Updating a catalog skill is changing its pin. A pin's `name` must not be the name of a folder under skills/ or of a skill the platform provides.",
+      "type": "array",
+      "x-scope": "portable",
+      "x-import": "mapped to catalog skill links on cloud import (later)",
+      "items": {
+        "type": "object",
+        "required": ["package_id", "package_uuid", "name", "revision_number", "archive_sha256"],
+        "additionalProperties": true,
+        "properties": {
+          "package_id": {
+            "description": "The catalog's package id, e.g. io.example.team.skill.pdf-report. The platform derives <reversed host>.skill.<name>, with the publisher's id appended when the plain one was taken.",
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9.\\-]{1,253}$",
+            "x-scope": "portable",
+            "x-import": "mapped with the entry (later)"
+          },
+          "package_uuid": {
+            "description": "The catalog package's id on the instance it came from.",
+            "type": "string",
+            "format": "uuid",
+            "x-scope": "portable",
+            "x-import": "mapped with the entry (later)"
+          },
+          "name": {
+            "description": "The skill's name, as in its SKILL.md. It is the name the engine knows the skill by, so it must not be the name of a folder under skills/, of a skill the platform provides, or of another pin.",
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "maxLength": 64,
+            "x-scope": "portable",
+            "x-import": "mapped with the entry (later)"
+          },
+          "revision_number": {
+            "description": "The pinned version of the package, as the catalog numbers its revisions.",
+            "type": "integer",
+            "minimum": 1,
+            "x-scope": "portable",
+            "x-import": "mapped with the entry (later)"
+          },
+          "version": {
+            "description": "The pinned revision's version label from its SKILL.md, for display only.",
+            "type": ["string", "null"],
+            "maxLength": 64,
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "archive_sha256": {
+            "description": "SHA-256 of the revision's downloaded archive, lowercase hex. A host refuses a download that does not match.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "x-scope": "portable",
+            "x-import": "ignored"
+          }
+        }
+      }
+    },
     "features": {
       "description": "Cloud-only capabilities the agent expects once imported. Ignored locally.",
       "type": "object",

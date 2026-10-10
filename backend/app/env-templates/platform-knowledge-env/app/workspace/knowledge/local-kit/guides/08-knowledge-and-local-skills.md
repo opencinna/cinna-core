@@ -127,6 +127,42 @@ A skill name must not collide with a platform command name: `files`, `files-all`
 Past either limit the extra skills are dropped, not truncated. Large fixtures belong
 in `files/`, large outputs in `app-data/storage/`.
 
+In the cloud the budget covers the agent's own skills and its catalog skills
+together. `kit.py validate` counts only the folders under `skills/`, so an agent
+close to the limit with catalog skills pinned can pass here and still lose skills
+in the cloud.
+
+### Credentials a skill needs
+
+A skill whose scripts log in somewhere declares each credential it needs under
+`credentials:` in its frontmatter. The declaration names the need; it never holds a
+value.
+
+```markdown
+---
+name: invoice-sync
+description: Pull open invoices from Odoo and mail a summary. Use when the user asks to sync or summarise invoices.
+credentials:
+  - slot: odoo.acme.example
+    type: odoo
+    description: The Odoo account the invoices are read from.
+  - slot: billing-mailbox
+    type: email_smtp
+---
+```
+
+| Key | Rule |
+|-----|------|
+| `slot` | Required. The **service URI** of the credential that fills it — the same value as a credential's *service URI* on the platform. Letters, digits and `. _ : / @ + -`, no spaces, at most 255 characters, and unique within the block. Quote it if it would read as a number. |
+| `type` | Required. A platform credential type: `email_imap`, `email_smtp`, `odoo`, `gmail_oauth`, `gmail_oauth_readonly`, `gdrive_oauth`, `gdrive_oauth_readonly`, `gcalendar_oauth`, `gcalendar_oauth_readonly`, `gmeet_oauth`, `gmeet_oauth_readonly`, `google_service_account`, `api_token`, `ssh_key`, `agent_api`. **Not `mcp_provider`** — that kind of credential never reaches a script. |
+| `description` | Optional, at most 1024 characters. What the account is for, in words the person setting the skill up recognises. |
+
+At most **20** entries. A slot is filled by a credential of exactly that type whose
+service URI equals the slot: when the agent is set up, the person installing it
+attaches one, and the skill's scripts read it like any other credential of the
+agent (guide 04). An
+invalid block makes the whole skill invalid, the same as a bad `name`.
+
 ### Referencing a skill from the workflow prompt
 
 The workflow prompt names the skill and its trigger. It never repeats the skill's
@@ -225,10 +261,13 @@ Prepare the folder before either:
   a missing `SKILL.md`, frontmatter that will not parse, a file that cannot be read.
   Those are refusals; the two-field table above and `skills/README.md` in the
   scaffold carry the same rules, because they are the ones that keep a skill in the
-  engine's index. A body over 64 KB is only a flag: it publishes. **`kit.py validate` checks
-  none of it** — it has no `SKILL.md` validator at all, so its silence is not a
-  verdict. A broken skill is refused by the publish call, with `skill_invalid`
-  naming the rule it broke.
+  engine's index. A body over 64 KB is only a flag: it publishes. **`kit.py validate`
+  checks the same rules** (since contract 1.10.0) — every `skills/<name>/SKILL.md`,
+  its `credentials:` block, and the 50-skill / 16 MB budget — and reports a broken
+  skill as an error. It also flags a credential-named file anywhere in the folder —
+  a warning for key material such as `*.pem`, an error for an `.env` file outside
+  `credentials/` — and publish refuses a skill holding either; the refusal is
+  `skill_invalid` naming the rule it broke.
 
 - **A `version` in the frontmatter, or none — either is fine.** Publish never
   refuses over a version. If `SKILL.md` carries a `version:` that has not been
@@ -272,6 +311,50 @@ Once a skill is in the catalog, other people get it by installing it from there.
 Copying `skills/<name>/` into a second agent folder forks one capability into two
 files that drift apart, and it is the wrong move for any agent that could reach the
 catalog instead.
+
+### Skills from the catalog
+
+An agent on your computer uses a catalog skill **by reference**. Getting it adds a
+pin to `cinna-agent.json`; the skill's files are kept by the host, outside the agent
+folder, and **never land under `skills/`**. `skills/` holds only the skills written
+for this agent.
+
+```json
+"catalog_skills": [
+  {
+    "package_id": "io.example.team.skill.pdf-report",
+    "package_uuid": "0b5c1f8e-6a43-4d7e-9a51-2f0c7d1e9b34",
+    "name": "pdf-report",
+    "revision_number": 3,
+    "version": "1.2.0",
+    "archive_sha256": "<64 lowercase hex characters>"
+  }
+]
+```
+
+| Key | Meaning |
+|-----|---------|
+| `package_id` | The catalog's id for the skill. |
+| `package_uuid` | The package on the instance it came from. |
+| `name` | The skill's name, as in its `SKILL.md` — the name the engine knows it by. |
+| `revision_number` | Which version is pinned. |
+| `version` | Optional. The pinned version's label, for display. |
+| `archive_sha256` | Checksum of the pinned version's download. A host refuses a download that does not match. |
+
+The host writes these entries when someone gets or updates a catalog skill; you do
+not write them by hand. Updating a catalog skill is changing its pin, so the agent
+always says exactly which version it runs, and sharing the agent shares the pins.
+
+A pin's `name` must not be the name of a folder under `skills/`, of a skill the
+platform provides (`cinna-tasks`), or of another pin: two skills with one name would
+leave the engine to pick one. `kit.py validate` reports each clash as an error. To
+change a catalog skill, publish a new version of it; to make a private variant,
+write a skill with a different name under `skills/`.
+
+Skills this agent publishes are recorded in `publications.json` → `skills[]`
+(`platform_url`, `name`, `package_id`, `package_uuid`, `revision_number`,
+`content_hash`). The record travels with the agent, so anyone who can edit the agent
+and may publish the package can publish its next version.
 
 ### The legacy form: `docs/skill_<name>.md`
 

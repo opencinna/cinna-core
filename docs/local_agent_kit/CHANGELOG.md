@@ -16,6 +16,53 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.10.0 — catalog skills in a local agent
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.10.0 folder, because the majors match.
+
+### Added
+
+- **`catalog_skills[]` in `cinna-agent.json`** (`x-scope: "portable"`). Skills
+  from the platform's catalog that the agent uses, pinned by reference: each
+  entry is `{package_id, package_uuid, name, revision_number, version?, archive_sha256}`.
+  A catalog skill's files never live under `skills/`; a host downloads the
+  pinned version, checks it against `archive_sha256`, and gives it to the
+  engine beside the agent's own skills. Updating one is changing its pin. The
+  pin's `name` (the skill's name, as in its `SKILL.md`) must not be a folder
+  under `skills/`, a skill the platform provides, or another pin's name. Cloud import maps
+  the pins to catalog skill links in a later contract; today it ignores them.
+- **`skills[]` in `publications.json`**, beside `publications[]`: one entry per
+  skill of this agent published to a catalog, `{platform_url, name, package_id,
+  package_uuid, revision_number, content_hash}`. It travels with the agent, so
+  anyone who may edit the agent and publish the package can publish its next
+  version. A file that records only skills still carries `"publications": []`.
+- **`layout.json` → `shared_remote.local_state.fields`** gains `bundle_id`: the
+  catalog id of a shared agent, kept per machine in `app-data/desktop.json`.
+- **SKILL.md `credentials:`** is documented in guide 08: a list of at most 20
+  entries, each `slot` (the credential's service URI), `type` (any platform
+  credential type except `mcp_provider`) and an optional `description`.
+- **`kit.py validate` checks skills.** Every `skills/<name>/SKILL.md` is read
+  by the platform's rules — name shape and folder match, reserved command and
+  platform skill names, description, the `credentials:` block, the 50-skill /
+  16 MB budget — and a broken one is an error, because the platform leaves it
+  out of the engine and refuses to publish it. An unusable `version` and a body
+  over 64 KB are warnings. `catalog_skills[]` entries are checked field by
+  field and for name clashes; `publications.json` → `skills[]` entries are
+  checked like `publications[]`.
+
+### Changed
+
+- `kit.py` keeps every other key of `publications.json` when it migrates a
+  legacy ledger into it, instead of rewriting the file with `publications`
+  alone.
+
+### For hosts
+
+- Preserve `catalog_skills[]` and `publications.json` → `skills[]` when you
+  rewrite either file. Never copy a catalog skill into `skills/`.
+- Report the same SKILL.md findings as `kit.py validate` (validator parity).
+
 ## 1.9.0 — Claude permission settings stay on your computer
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built

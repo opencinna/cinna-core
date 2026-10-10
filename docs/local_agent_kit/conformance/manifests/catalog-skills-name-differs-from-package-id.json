@@ -1,0 +1,28 @@
+{
+  "description": "A pin whose name differs from the name its package id seems to carry: the pin's name counts, so it is a warning on package_id, never an error.",
+  "manifest": {
+    "contract_version": "1.10.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "catalog_skills": [
+      {
+        "package_id": "io.example.team.skill.pdf-report",
+        "package_uuid": "0b5c1f8e-6a43-4d7e-9a51-2f0c7d1e9b34",
+        "name": "pdf-summary",
+        "revision_number": 1,
+        "archive_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ]
+  },
+  "expect": {
+    "errors": [],
+    "warnings": [
+      "catalog_skills.package_id"
+    ]
+  }
+}

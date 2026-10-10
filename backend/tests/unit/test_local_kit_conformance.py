@@ -132,7 +132,7 @@ def _load(rel: str):
 def test_contract_version_is_coherent_across_the_four_carriers() -> None:
     # LocalAgentKitService 503s the contract when these disagree.
     file_version = (KIT_DIR / "CONTRACT_VERSION").read_text(encoding="utf-8").strip()
-    assert file_version == "1.9.0"
+    assert file_version == "1.10.0"
     assert _load("kit.json")["contract_version"] == file_version
     assert _load("layout.json")["contract_version"] == file_version
     changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -165,7 +165,7 @@ def test_layout_declares_the_shared_remote_section() -> None:
     local = remote["local_state"]
     assert local["file"] == "app-data/desktop.json"
     assert local["key"] == "shared_remote"
-    assert local["fields"] == ["kind", "repo_id", "clone_url"]
+    assert local["fields"] == ["kind", "repo_id", "clone_url", "bundle_id"]
     assert local["kind_values"] == ["cinna", "external"]
     # local state lives under a never-travelling path, so it can't leak into the tree
     assert any(local["file"].startswith(p) for p in never["paths"])

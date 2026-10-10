@@ -702,9 +702,14 @@ def write_manifest(agent_dir: Path, manifest: dict) -> None:
     # Written only when something was actually absorbed, so a write that migrates
     # nothing never reformats a ledger somebody hand-edited.
     if ledger_changed:
-        (agent_dir / PUBLICATIONS_NAME).write_text(
-            _serialise({"publications": migrated}), encoding="utf-8"
-        )
+        # Every other key of the file is kept — `skills[]` (contract 1.10.0) and
+        # whatever a later contract adds beside `publications`. `read_publications`
+        # has already proved the file is absent or an object.
+        ledger_path = agent_dir / PUBLICATIONS_NAME
+        ledger = read_json(ledger_path) if ledger_path.is_file() else {}
+        ledger = dict(ledger) if isinstance(ledger, dict) else {}
+        ledger["publications"] = migrated
+        ledger_path.write_text(_serialise(ledger), encoding="utf-8")
 
 
 def kit_version() -> str | None:
@@ -1583,6 +1588,7 @@ def validate_manifest(manifest: dict, report: Report) -> None:
     _validate_credentials(manifest.get("credentials", []), report)
     _validate_schedules(manifest.get("schedules", []), report)
     _validate_handovers(manifest.get("handovers", []), manifest.get("slug"), report)
+    _validate_catalog_skills(manifest.get("catalog_skills"), report)
     _validate_manifest_ledger_keys(manifest, report)
 
     features = manifest.get("features", {})
@@ -1781,6 +1787,8 @@ def _validate_publications(agent_dir: Path, report: Report) -> None:
         )
         return
 
+    _validate_skill_publications(document.get("skills"), report)
+
     publications = document.get("publications")
     if publications is None:
         # An object with no `publications` key is a file that says nothing, not a
@@ -1808,6 +1816,43 @@ def _validate_publications(agent_dir: Path, report: Report) -> None:
             value = entry.get(key)
             if value is not None and not isinstance(value, str):
                 report.error(f"{PUBLICATIONS_NAME}: `{label}.{key}` must be a string or null.")
+
+
+# `publications.schema.json` → `skills[]` (contract 1.10.0): one entry per skill
+# of this agent published to a catalog.
+SKILL_LEDGER_STRING_KEYS = ("platform_url", "name", "package_id", "package_uuid", "content_hash")
+
+
+def _validate_skill_publications(entries: object, report: Report) -> None:
+    """`publications.json` → `skills[]`, at the same severity as `publications[]`."""
+    if entries is None:
+        return
+    if not isinstance(entries, list):
+        report.error(f"{PUBLICATIONS_NAME}: `skills` must be an array.")
+        return
+    for index, entry in enumerate(entries):
+        label = f"skills[{index}]"
+        if not isinstance(entry, dict):
+            report.error(f"{PUBLICATIONS_NAME}: `{label}` must be an object.")
+            continue
+        for key in SKILL_LEDGER_STRING_KEYS:
+            value = entry.get(key)
+            if not isinstance(value, str) or not value.strip():
+                report.error(f"{PUBLICATIONS_NAME}: `{label}.{key}` is required.")
+        name = entry.get("name")
+        if isinstance(name, str) and name.strip() and not SKILL_NAME_RE.match(name):
+            report.error(
+                f"{PUBLICATIONS_NAME}: `{label}.name` must be a skill folder name under skills/."
+            )
+        revision_number = entry.get("revision_number")
+        if (
+            not isinstance(revision_number, int)
+            or isinstance(revision_number, bool)
+            or revision_number < 1
+        ):
+            report.error(
+                f"{PUBLICATIONS_NAME}: `{label}.revision_number` must be a whole number of 1 or more."
+            )
 
 
 def _validate_credentials(credentials: object, report: Report) -> None:
@@ -2617,6 +2662,539 @@ def _validate_status_file(agent_dir: Path, report: Report) -> None:
         report.warn(f"{relative} has no `status` field.")
 
 
+# --------------------------------------------------------------------------- #
+# Skills: `skills/<name>/SKILL.md` and the manifest's `catalog_skills[]`
+# --------------------------------------------------------------------------- #
+#
+# A port of the platform's own skill validator (`skill_manifest.py` in
+# cinna-core), contract 1.10.0. The platform excludes a skill that breaks one of
+# these rules from the engine's index and refuses to publish it, so the kit
+# reports the same rules as errors. The port keeps the platform's restricted
+# frontmatter parser rather than this file's `_parse_frontmatter`: the
+# `credentials:` block is a list of mappings, which the status-file parser
+# cannot read, and a second, looser reading of the same file would let `validate`
+# pass a skill the platform drops. Constants and messages match the platform's;
+# a backend test compares the two.
+
+SKILL_MD_NAME = "SKILL.md"
+SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+SKILL_MAX_NAME_LENGTH = 64
+SKILL_MAX_DESCRIPTION_LENGTH = 1024
+SKILL_MAX_VERSION_LENGTH = 64
+SKILL_MAX_BODY_BYTES = 64 * 1024
+SKILL_MAX_COUNT = 50
+SKILL_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+
+# Platform slash-command names a skill may not take: `/<name>` would reach the
+# command instead of the skill.
+RESERVED_SKILL_NAMES = frozenset(
+    {
+        "files",
+        "files-all",
+        "run",
+        "run-list",
+        "skills",
+        "session-recover",
+        "session-reset",
+        "session-improve",
+        "webapp",
+        "rebuild-env",
+        "agent-status",
+    }
+)
+
+# Skills the platform itself ships. `kit.json` → `platform_skills` is the
+# authority; this is the fallback when that file says nothing.
+DEFAULT_PLATFORM_SKILL_NAMES = frozenset({"cinna-tasks"})
+
+# A credential slot a skill declares is a credential's `service_uri`.
+SKILL_CREDENTIAL_SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
+SKILL_MAX_SLOT_LENGTH = 255
+SKILL_MAX_CREDENTIALS = 20
+
+# Credential types a skill may declare a slot for: every platform type except
+# `mcp_provider`, which never reaches a script.
+SKILL_CREDENTIAL_TYPES = frozenset(
+    {
+        "email_imap",
+        "email_smtp",
+        "odoo",
+        "gmail_oauth",
+        "gmail_oauth_readonly",
+        "gdrive_oauth",
+        "gdrive_oauth_readonly",
+        "gcalendar_oauth",
+        "gcalendar_oauth_readonly",
+        "gmeet_oauth",
+        "gmeet_oauth_readonly",
+        "google_service_account",
+        "api_token",
+        "ssh_key",
+        "agent_api",
+    }
+)
+
+# The platform's sentence for each rule, keyed by the platform's issue code.
+SKILL_ISSUE_MESSAGES = {
+    "missing_skill_md": "This folder has no SKILL.md.",
+    "unreadable": "SKILL.md could not be read.",
+    "invalid_frontmatter": "SKILL.md has no valid frontmatter block.",
+    "missing_name": "SKILL.md frontmatter has no name.",
+    "invalid_name": (
+        "The name must be lowercase words joined by single hyphens, at most 64 characters."
+    ),
+    "name_mismatch": "The name in SKILL.md does not match the folder name.",
+    "reserved_name": "This name is reserved by a platform command.",
+    "missing_description": "SKILL.md frontmatter has no description.",
+    "description_too_long": "The description is longer than 1024 characters.",
+    "invalid_credentials": "The credentials block in SKILL.md is invalid.",
+}
+
+_SKILL_KEY_RE = re.compile(r"^([A-Za-z0-9_.\-]+)\s*:\s*(.*)$")
+_SKILL_ITEM_KEY_RE = re.compile(r"^([A-Za-z0-9_.\-]+):(?:\s+(.*))?$")
+
+# A catalog package id: reverse-DNS, `<reversed host>.skill.<name>` when the
+# platform derived it. Same shape the platform accepts.
+CATALOG_PACKAGE_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.\-]{1,253}$")
+SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+CATALOG_PACKAGE_ID_SKILL_SEGMENT = "skill"
+
+
+def _skill_coerce_scalar(raw: str) -> object:
+    """One frontmatter scalar, coerced exactly as the platform does."""
+    value = raw.strip()
+    if not value:
+        return ""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    lowered = value.lower()
+    if lowered in ("true", "yes"):
+        return True
+    if lowered in ("false", "no"):
+        return False
+    if lowered in ("null", "~"):
+        return None
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    if re.fullmatch(r"-?\d+\.\d+", value):
+        return float(value)
+    return value
+
+
+def _skill_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def parse_skill_frontmatter(text: str) -> tuple[dict, str]:
+    """Split a SKILL.md into (frontmatter, body) with the platform's parser.
+
+    The restricted YAML subset the platform reads: top-level scalars, flow and
+    block sequences (a `- key: value` item opens a flat mapping that following
+    indented `key: value` lines extend), block scalars, one level of nesting.
+    Unclassifiable lines are skipped. Raises ValueError when the fence is
+    missing or never closes.
+    """
+    if not text.startswith("---"):
+        raise ValueError("missing frontmatter fence")
+    lines = text.splitlines()
+    end_index = None
+    for index in range(1, len(lines)):
+        if lines[index].strip() in ("---", "..."):
+            end_index = index
+            break
+    if end_index is None:
+        raise ValueError("unterminated frontmatter fence")
+
+    body = "\n".join(lines[end_index + 1 :]).lstrip("\n")
+    mapping: dict = {}
+    index = 1
+    while index < end_index:
+        line = lines[index]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or _skill_indent(line) > 0:
+            index += 1
+            continue
+        match = _SKILL_KEY_RE.match(stripped)
+        if match is None:
+            index += 1
+            continue
+        key, raw_value = match.group(1), match.group(2).strip()
+
+        if raw_value in ("|", ">", "|-", ">-", "|+", ">+"):
+            block: list[str] = []
+            index += 1
+            while index < end_index and (
+                not lines[index].strip() or _skill_indent(lines[index]) > 0
+            ):
+                block.append(lines[index].strip())
+                index += 1
+            mapping[key] = ("\n" if raw_value.startswith("|") else " ").join(block).strip()
+            continue
+        if raw_value.startswith("[") and raw_value.endswith("]"):
+            inner = raw_value[1:-1].strip()
+            mapping[key] = [_skill_coerce_scalar(part) for part in inner.split(",")] if inner else []
+            index += 1
+            continue
+        if raw_value:
+            mapping[key] = _skill_coerce_scalar(raw_value)
+            index += 1
+            continue
+
+        index += 1
+        items: list = []
+        nested: dict = {}
+        current_item: dict | None = None
+        while index < end_index:
+            child = lines[index]
+            if not child.strip():
+                index += 1
+                continue
+            if _skill_indent(child) == 0 and not child.strip().startswith("- "):
+                break
+            child_stripped = child.strip()
+            if child_stripped.startswith("- "):
+                remainder = child_stripped[2:]
+                item_match = _SKILL_ITEM_KEY_RE.match(remainder.strip())
+                if item_match is not None:
+                    current_item = {item_match.group(1): _skill_coerce_scalar(item_match.group(2) or "")}
+                    items.append(current_item)
+                else:
+                    items.append(_skill_coerce_scalar(remainder))
+                    current_item = None
+            else:
+                child_match = _SKILL_KEY_RE.match(child_stripped)
+                if child_match is not None:
+                    target = current_item if current_item is not None else nested
+                    target[child_match.group(1)] = _skill_coerce_scalar(child_match.group(2))
+            index += 1
+        mapping[key] = items if items else (nested if nested else "")
+    return mapping, body
+
+
+def _bounded(value: str, limit: int = 64) -> str:
+    return value if len(value) <= limit else value[:limit] + "…"
+
+
+def skill_credentials_problem(raw: object) -> str | None:
+    """The first problem in a SKILL.md `credentials:` block, or None.
+
+    Same rules and wording as the platform: a list of at most 20 entries, each
+    with a `slot` (a credential's service_uri, unique in the block), a `type`
+    (any platform type except `mcp_provider`) and an optional `description`.
+    Absent or empty declares nothing; unknown item keys are ignored.
+    """
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, list):
+        return "it must be a list of entries, each with a slot and a type"
+    if len(raw) > SKILL_MAX_CREDENTIALS:
+        return f"it declares more than {SKILL_MAX_CREDENTIALS} credentials"
+    seen: set[str] = set()
+    for position, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            return f"entry {position} is not a mapping with a slot and a type"
+        slot = item.get("slot")
+        if "slot" in item and not isinstance(slot, str):
+            return f"entry {position}: slot must be text; quote it in SKILL.md"
+        if not isinstance(slot, str) or not slot.strip():
+            return f"entry {position} has no slot"
+        slot = slot.strip()
+        if len(slot) > SKILL_MAX_SLOT_LENGTH:
+            return f"the slot of entry {position} is longer than {SKILL_MAX_SLOT_LENGTH} characters"
+        if not SKILL_CREDENTIAL_SLOT_RE.match(slot):
+            return (
+                f"the slot '{_bounded(slot)}' is not a valid service URI "
+                "(letters, digits and . _ : / @ + -, no spaces)"
+            )
+        if slot in seen:
+            return f"the slot '{_bounded(slot)}' is declared twice"
+        credential_type = item.get("type")
+        if "type" in item and not isinstance(credential_type, str):
+            return f"the type of the slot '{_bounded(slot)}' must be text; quote it in SKILL.md"
+        if not isinstance(credential_type, str) or not credential_type.strip():
+            return f"the slot '{_bounded(slot)}' has no type"
+        credential_type = credential_type.strip()
+        if credential_type == "mcp_provider":
+            return f"the slot '{_bounded(slot)}' has type 'mcp_provider', which a skill cannot declare"
+        if credential_type not in SKILL_CREDENTIAL_TYPES:
+            return f"the slot '{_bounded(slot)}' has an unknown type '{_bounded(credential_type)}'"
+        description = item.get("description")
+        if description is not None and not isinstance(description, str):
+            return (
+                f"the description of the slot '{_bounded(slot)}' must be text; quote it in SKILL.md"
+            )
+        if isinstance(description, str) and len(description.strip()) > SKILL_MAX_DESCRIPTION_LENGTH:
+            return (
+                f"the description of the slot '{_bounded(slot)}' is longer than "
+                f"{SKILL_MAX_DESCRIPTION_LENGTH} characters"
+            )
+        seen.add(slot)
+    return None
+
+
+def skill_version_problem(raw: object) -> str | None:
+    """Why the platform would not keep a frontmatter `version` as written, or None.
+
+    Absent is fine and a number is kept as text. A list, a mapping, a boolean or
+    a value with a line break or control character is dropped; a value longer
+    than 64 characters is cut to 64.
+    """
+    if raw is None or (isinstance(raw, (int, float)) and not isinstance(raw, bool)):
+        return None
+    if not isinstance(raw, str) or any(ch < " " for ch in raw.strip()):
+        return (
+            "`version` must be one line of text; this one is ignored and publishing "
+            "picks the next version itself."
+        )
+    if len(raw.strip()) > SKILL_MAX_VERSION_LENGTH:
+        return (
+            f"`version` is longer than {SKILL_MAX_VERSION_LENGTH} characters; the "
+            f"platform keeps only the first {SKILL_MAX_VERSION_LENGTH}."
+        )
+    return None
+
+
+def skill_issue(skill_dir: Path) -> tuple[str | None, str | None]:
+    """(issue code, detail) for one `skills/<name>/` folder; (None, None) when valid."""
+    if skill_dir.is_symlink():
+        return "not_a_directory", None
+    skill_md = skill_dir / SKILL_MD_NAME
+    if not skill_md.is_file():
+        return "missing_skill_md", None
+    try:
+        raw = skill_md.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return "unreadable", None
+    try:
+        frontmatter, _body = parse_skill_frontmatter(raw)
+    except ValueError:
+        return "invalid_frontmatter", None
+
+    name = frontmatter.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return "missing_name", None
+    name = name.strip()
+    if len(name) > SKILL_MAX_NAME_LENGTH or not SKILL_NAME_RE.match(name):
+        return "invalid_name", None
+    if name != skill_dir.name:
+        return "name_mismatch", None
+    if name in RESERVED_SKILL_NAMES:
+        return "reserved_name", None
+    if name in platform_skill_names():
+        return "reserved_name", "This name is reserved by a platform skill."
+
+    description = frontmatter.get("description")
+    if not isinstance(description, str) or not description.strip():
+        return "missing_description", None
+    if len(description.strip()) > SKILL_MAX_DESCRIPTION_LENGTH:
+        return "description_too_long", None
+
+    problem = skill_credentials_problem(frontmatter.get("credentials"))
+    if problem is not None:
+        return "invalid_credentials", f"The credentials block in SKILL.md is invalid: {problem}."
+    return None, None
+
+
+def platform_skill_names() -> frozenset[str]:
+    """Names of the skills the platform ships (`kit.json` → `platform_skills`)."""
+    try:
+        declared = kit_config().get("platform_skills")
+    except KitError:
+        declared = None
+    if isinstance(declared, dict) and declared:
+        return frozenset(str(key) for key in declared)
+    return DEFAULT_PLATFORM_SKILL_NAMES
+
+
+def _skill_tree_bytes(skill_dir: Path) -> int:
+    """Bytes the platform charges a skill against the 16 MB budget."""
+    total = 0
+    for dir_path, dir_names, file_names in os.walk(skill_dir, followlinks=False):
+        dir_names[:] = [
+            d for d in dir_names if d not in SKIP_DIRS and not Path(dir_path, d).is_symlink()
+        ]
+        for file_name in file_names:
+            full = Path(dir_path, file_name)
+            if full.is_symlink():
+                continue
+            try:
+                total += full.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def catalog_skill_name(package_id: object) -> str | None:
+    """The skill name a catalog package id seems to carry, or None.
+
+    Advisory only: a pin's `name` is the authority. This reading is used to warn
+    when the two disagree.
+
+    The platform derives `<reversed host>.skill.<name>`, with the publisher's
+    id appended (`….skill.<name>.<8 hex>`) when the plain id was taken. The
+    name is the segment right after the last `skill` segment. A package id
+    chosen by hand need not have one; then nothing can be read.
+    """
+    if not isinstance(package_id, str):
+        return None
+    segments = package_id.split(".")
+    for position in range(len(segments) - 2, -1, -1):
+        if segments[position] == CATALOG_PACKAGE_ID_SKILL_SEGMENT:
+            candidate = segments[position + 1]
+            return candidate if SKILL_NAME_RE.match(candidate) else None
+    return None
+
+
+def _validate_catalog_skills(catalog_skills: object, report: Report) -> None:
+    """The manifest's `catalog_skills[]` pins (contract 1.10.0), field by field."""
+    if catalog_skills is None:
+        return
+    if not isinstance(catalog_skills, list):
+        report.error(f"{MANIFEST_NAME}: `catalog_skills` must be an array.")
+        return
+    seen_uuids: set[str] = set()
+    seen_names: set[str] = set()
+    for index, pin in enumerate(catalog_skills):
+        label = f"catalog_skills[{index}]"
+        if not isinstance(pin, dict):
+            report.error(f"{MANIFEST_NAME}: `{label}` must be an object.")
+            continue
+        package_id = pin.get("package_id")
+        if not isinstance(package_id, str) or not CATALOG_PACKAGE_ID_RE.match(package_id):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.package_id` must be the catalog's package id, "
+                "e.g. io.example.team.skill.pdf-report."
+            )
+        name = pin.get("name")
+        if (
+            not isinstance(name, str)
+            or len(name) > SKILL_MAX_NAME_LENGTH
+            or not SKILL_NAME_RE.match(name)
+        ):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.name` must be the skill's name: lowercase words "
+                "joined by single hyphens, at most 64 characters."
+            )
+        else:
+            if name in seen_names:
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.name` pins a second skill named `{name}`; "
+                    "an agent holds one skill per name."
+                )
+            seen_names.add(name)
+            derived = catalog_skill_name(package_id)
+            if derived is not None and derived != name:
+                report.warn(
+                    f"{MANIFEST_NAME}: `{label}.package_id` reads as the skill `{derived}`, "
+                    f"but the pin is named `{name}`. The name is what counts; check the pin."
+                )
+        package_uuid = pin.get("package_uuid")
+        try:
+            canonical = str(uuid.UUID(package_uuid)) if isinstance(package_uuid, str) else None
+        except ValueError:
+            canonical = None
+        if canonical is None:
+            report.error(f"{MANIFEST_NAME}: `{label}.package_uuid` must be a UUID.")
+        elif canonical in seen_uuids:
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.package_uuid` pins the same catalog skill twice."
+            )
+        else:
+            seen_uuids.add(canonical)
+        revision_number = pin.get("revision_number")
+        if (
+            not isinstance(revision_number, int)
+            or isinstance(revision_number, bool)
+            or revision_number < 1
+        ):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.revision_number` must be a whole number of 1 or more."
+            )
+        version = pin.get("version")
+        if version is not None and (
+            not isinstance(version, str) or len(version) > SKILL_MAX_VERSION_LENGTH
+        ):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.version` must be a string of at most "
+                f"{SKILL_MAX_VERSION_LENGTH} characters, or null."
+            )
+        archive_sha256 = pin.get("archive_sha256")
+        if not isinstance(archive_sha256, str) or not SHA256_HEX_RE.match(archive_sha256):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.archive_sha256` must be 64 lowercase hex characters."
+            )
+
+
+def _validate_skills(agent_dir: Path, manifest: dict, report: Report) -> None:
+    """`skills/<name>/SKILL.md` by the platform's rules, then the agent's budget,
+    then `catalog_skills[]` names against authored and platform skills.
+
+    Mirrors the platform's scan: plain files and dot-folders under `skills/`
+    are skipped (the scaffold ships `skills/README.md`), folders are read in
+    name order, and the budget charges only valid skills, so which ones fall
+    past it is the same here as on the platform.
+    """
+    skills_root = agent_dir / "skills"
+    authored: set[str] = set()
+    if skills_root.is_dir():
+        accepted = 0
+        total_bytes = 0
+        for child in sorted(skills_root.iterdir(), key=lambda p: p.name):
+            if child.name.startswith(".") or not child.is_dir():
+                continue
+            authored.add(child.name)
+            relative = f"skills/{child.name}"
+            code, detail = skill_issue(child)
+            if code == "not_a_directory":
+                report.error(f"{relative}: only folders directly under skills/ are read as skills.")
+                continue
+            if code is not None:
+                report.error(f"{relative}/{SKILL_MD_NAME}: {detail or SKILL_ISSUE_MESSAGES[code]}")
+                continue
+            frontmatter, body = parse_skill_frontmatter(
+                (child / SKILL_MD_NAME).read_text(encoding="utf-8-sig")
+            )
+            version_problem = skill_version_problem(frontmatter.get("version"))
+            if version_problem is not None:
+                report.warn(f"{relative}/{SKILL_MD_NAME}: {version_problem}")
+            if len(body.encode("utf-8")) > SKILL_MAX_BODY_BYTES:
+                report.warn(
+                    f"{relative}/{SKILL_MD_NAME}: the body is larger than 64 KB — move long "
+                    "material into references/."
+                )
+            size = _skill_tree_bytes(child)
+            if accepted >= SKILL_MAX_COUNT or total_bytes + size > SKILL_MAX_TOTAL_BYTES:
+                report.error(
+                    f"{relative}: excluded — the agent is over its skill budget "
+                    f"({SKILL_MAX_COUNT} skills, 16 MB across skills/)."
+                )
+                continue
+            accepted += 1
+            total_bytes += size
+
+    catalog_skills = manifest.get("catalog_skills")
+    if not isinstance(catalog_skills, list):
+        return
+    platform_names = platform_skill_names()
+    for index, pin in enumerate(catalog_skills):
+        if not isinstance(pin, dict):
+            continue
+        name = pin.get("name")
+        if not isinstance(name, str) or not SKILL_NAME_RE.match(name):
+            continue  # reported by `_validate_catalog_skills`
+        if name in authored:
+            report.error(
+                f"{MANIFEST_NAME}: `catalog_skills[{index}]` is the catalog skill `{name}`, "
+                f"and skills/{name}/ is a skill of the same name written here. Remove the "
+                "pin or rename the folder — a catalog skill never lives under skills/."
+            )
+        elif name in platform_names:
+            report.error(
+                f"{MANIFEST_NAME}: `catalog_skills[{index}]` is named `{name}`, which is a "
+                "skill the platform provides."
+            )
+
+
 def template_description() -> str | None:
     """The scaffold's placeholder description, so validate can spot an unedited one."""
     template_manifest = TEMPLATE_DIR / MANIFEST_NAME
@@ -2822,6 +3400,7 @@ def validate_agent(agent_dir: Path, fix: bool, cloud_ready: bool = False) -> Rep
         lambda: _validate_commands(agent_dir, manifest, report),
         lambda: _validate_scripts_catalog(agent_dir, report),
         lambda: _validate_status_file(agent_dir, report),
+        lambda: _validate_skills(agent_dir, manifest, report),
         lambda: _validate_publications(agent_dir, report),
     )
     for check in checks:
