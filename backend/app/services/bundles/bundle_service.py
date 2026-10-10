@@ -33,6 +33,7 @@ from app.models.bundles.bundle_access_grant import (
     BundleAccessGrant,
     BundleAccessGrantPublic,
 )
+from app.models.catalog.catalog_access import CatalogPrincipalKind
 from app.models.credentials.ai_credential import AICredential
 from app.models.environments.environment import AgentEnvironment
 from app.models.users.user import User
@@ -45,6 +46,8 @@ from app.services.bundles.exceptions import (
     RevisionInUseError,
     RevisionNotFoundError,
 )
+from app.services.catalog.catalog_access_service import BUNDLE, CatalogAccessService
+from app.services.catalog.exceptions import CatalogConflictError
 from app.services.environments.sdk_constants import sdk_expected_credential_type
 
 logger = logging.getLogger(__name__)
@@ -76,17 +79,21 @@ class BundleService:
     def get_for_publisher(
         session: Session, bundle_uuid: uuid.UUID, user: User
     ) -> AgentBundle:
-        """Resolve a bundle for the given publisher (or any superuser).
+        """Resolve a bundle the caller manages: a holder of ``maintain`` (the
+        publisher always is one) or any superuser (plan P2).
 
         Raises:
             BundleNotFoundError: bundle does not exist.
-            BundleAccessDeniedError: caller is neither the publisher nor a
-                superuser.
+            BundleAccessDeniedError: caller neither maintains the bundle nor
+                is a superuser.
         """
         bundle = BundleService.get_bundle_by_uuid(session, bundle_uuid)
         if bundle is None:
             raise BundleNotFoundError("Bundle not found")
-        if bundle.publisher_user_id != user.id and not user.is_superuser:
+        if user.is_superuser:
+            return bundle
+        access = CatalogAccessService.effective_access(session, BUNDLE, bundle, user)
+        if not CatalogAccessService.can_manage(access, user):
             raise BundleAccessDeniedError("Not your bundle")
         return bundle
 
@@ -232,6 +239,9 @@ class BundleService:
         ``publisher_user_id=None`` for an ownerless / shared row). Callers are
         responsible for re-using an existing bundle (looked up by ``bundle_id``)
         before invoking this — duplicate ``bundle_id`` raises an integrity error.
+
+        The publisher becomes the bundle's first maintainer in the same
+        transaction; an ownerless git bundle gets no grant.
         """
         bundle = AgentBundle(
             bundle_id=bundle_id,
@@ -240,6 +250,11 @@ class BundleService:
             description=description,
         )
         session.add(bundle)
+        if publisher_user_id is not None:
+            publisher = session.get(User, publisher_user_id)
+            if publisher is not None:
+                session.flush()
+                CatalogAccessService.ensure_maintainer(session, BUNDLE, bundle, publisher)
         session.commit()
         session.refresh(bundle)
         logger.info(
@@ -490,18 +505,29 @@ class BundleService:
             bundle_id=grant.bundle_id,
             user_id=grant.user_id,
             user_email=user.email if user is not None else None,
+            access=grant.access,
             granted_by_user_id=grant.granted_by_user_id,
             created_at=grant.created_at,
         )
 
     @staticmethod
     def list_grants(session: Session, bundle: AgentBundle) -> list[BundleAccessGrant]:
+        """User grants of ``bundle``, newest first — the shape of the old
+        per-user grant list. Role grants are left out (they have no user), and
+        so is the publisher's own ``maintain`` row: the publisher was never a
+        grantee in this list."""
         stmt = (
             select(BundleAccessGrant)
-            .where(BundleAccessGrant.bundle_id == bundle.id)
+            .where(
+                BundleAccessGrant.bundle_id == bundle.id,
+                BundleAccessGrant.principal_kind == CatalogPrincipalKind.USER,
+            )
             .order_by(BundleAccessGrant.created_at.desc())
         )
-        return list(session.exec(stmt).all())
+        return [
+            g for g in session.exec(stmt).all()
+            if g.user_id != bundle.publisher_user_id
+        ]
 
     @staticmethod
     def grant_access(
@@ -510,22 +536,14 @@ class BundleService:
         target_user: User,
         granted_by_user_id: uuid.UUID,
     ) -> BundleAccessGrant:
-        # Idempotent: return existing grant if already present.
-        stmt = select(BundleAccessGrant).where(
-            BundleAccessGrant.bundle_id == bundle.id,
-            BundleAccessGrant.user_id == target_user.id,
+        """Give ``target_user`` ``use``. Idempotent: an existing grant (at any
+        level) is returned as is, never downgraded."""
+        grant, created = CatalogAccessService.add_user_use(
+            session, BUNDLE, bundle, target_user, granted_by_user_id
         )
-        existing = session.exec(stmt).first()
-        if existing:
-            return existing
-        grant = BundleAccessGrant(
-            bundle_id=bundle.id,
-            user_id=target_user.id,
-            granted_by_user_id=granted_by_user_id,
-        )
-        session.add(grant)
-        session.commit()
-        session.refresh(grant)
+        if created:
+            session.commit()
+            session.refresh(grant)
         return grant
 
     @staticmethod
@@ -535,15 +553,9 @@ class BundleService:
         grant = session.get(BundleAccessGrant, grant_id)
         if not grant or grant.bundle_id != bundle.id:
             raise GrantNotFoundError("Grant not found for this bundle")
+        try:
+            CatalogAccessService.assert_removable(session, BUNDLE, grant)
+        except CatalogConflictError as exc:
+            raise BundleConflictError(str(exc)) from exc
         session.delete(grant)
         session.commit()
-
-    @staticmethod
-    def user_has_grant(
-        session: Session, bundle: AgentBundle, user_id: uuid.UUID
-    ) -> bool:
-        stmt = select(BundleAccessGrant).where(
-            BundleAccessGrant.bundle_id == bundle.id,
-            BundleAccessGrant.user_id == user_id,
-        )
-        return session.exec(stmt).first() is not None

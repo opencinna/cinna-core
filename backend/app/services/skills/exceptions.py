@@ -45,6 +45,8 @@ STATUS_BY_CODE: dict[str, int] = {
     # Granting the publisher access to their own package. 409 rather than 400:
     # nothing about the request is malformed, the state already satisfies it.
     "self_grant": 409,
+    # Revoking the last person who maintains the package.
+    "last_maintainer": 409,
     # A publish that names people to share with while its effective visibility
     # is not ``users``, where a grant row would have no effect. 409 for the same
     # reason as ``self_grant``: each half of the request is well-formed, the

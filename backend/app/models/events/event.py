@@ -155,6 +155,11 @@ class EventType:
     LIBRARY_UPDATED = "library.updated"
     LIBRARY_GRANTED = "library.granted"
 
+    # Catalog — ``catalog.granted`` meta ``{kind: 'agent'|'skill', uuid}``, sent
+    # after commit to each user's ``user_{id}`` room when a grant change gave
+    # them access (role grants expanded). Refresh hint only; never broadcast.
+    CATALOG_GRANTED = "catalog.granted"
+
     # Generic notification
     NOTIFICATION = "notification"
 

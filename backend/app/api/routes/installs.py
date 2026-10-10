@@ -13,11 +13,11 @@ from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep, require_developer
 from app.models.agents.agent import Agent, AgentPublic
+from app.models.bundles.agent_bundle import AgentBundle
 from app.models.bundles.agent_bundle_revision import (
     AgentBundleRevisionPublic,
     PublishRequest,
 )
-from app.models.bundles.agent_bundle import AgentBundle
 from app.models.bundles.bundle_permissions import BundlePermissionsOverview
 from app.models.bundles.catalog import (
     BundleCredentialDrift,
@@ -39,6 +39,7 @@ from app.services.agents.agent_service import AgentService
 from app.services.bundles.bundle_permissions_service import (
     BundlePermissionsService,
 )
+from app.services.bundles.exceptions import BundleError
 from app.services.bundles.install_readiness_gate import InstallReadinessGate
 from app.services.bundles.install_service import InstallError, InstallService
 from app.services.bundles.publish_service import PublishService
@@ -103,6 +104,8 @@ async def publish_agent(
             bundle_id_override=request.bundle_id if request else None,
             version=request.version if request else None,
         )
+    except BundleError as e:
+        raise HTTPException(status_code=e.http_status, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # Wire response with install_count (just-published revision = 0+ installs).

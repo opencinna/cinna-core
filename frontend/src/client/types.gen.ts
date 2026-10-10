@@ -2924,6 +2924,7 @@ export type BundleAccessGrantPublic = {
     bundle_id: string;
     user_id: string;
     user_email?: (string | null);
+    access?: string;
     granted_by_user_id?: (string | null);
     created_at: string;
 };
@@ -3065,6 +3066,24 @@ export type CatalogEntryPublic = {
     publisher_ai_credential_building_id?: (string | null);
 };
 
+export type CatalogGrant = {
+    principal: (CatalogPrincipalUser | CatalogPrincipalRole);
+    access: 'use' | 'edit' | 'maintain';
+    display_name: string;
+    granted_by?: (CatalogPerson | null);
+    created_at: string;
+};
+
+export type access = 'use' | 'edit' | 'maintain';
+
+/**
+ * One entry of ``PUT /catalog/items/{uuid}/grants`` (full replace).
+ */
+export type CatalogGrantIn = {
+    principal: (CatalogPrincipalUser | CatalogPrincipalRole);
+    access: 'use' | 'edit' | 'maintain';
+};
+
 /**
  * Response body for ``GET /catalog/{bundle_id}/install-context``.
  *
@@ -3086,6 +3105,19 @@ export type CatalogInstallContext = {
     ai_publisher_credential_summaries: InstallContextAIPublisherSummaries;
     service_specs: Array<InstallContextSpec>;
     credentials_payload_schema?: (InstallCredentialSelection | null);
+};
+
+export type CatalogPerson = {
+    user_id: string;
+    display_name: string;
+};
+
+export type CatalogPrincipalRole = {
+    role: string;
+};
+
+export type CatalogPrincipalUser = {
+    user_id: string;
 };
 
 export type CatalogPublic = {
@@ -5207,7 +5239,7 @@ export type LibraryAgent = {
     access: 'read' | 'write' | 'maintain';
 };
 
-export type access = 'read' | 'write' | 'maintain';
+export type access2 = 'read' | 'write' | 'maintain';
 
 /**
  * Admin listing row: a library agent without the caller's ``access``,
@@ -7365,6 +7397,7 @@ export type SkillPackageAccessGrantPublic = {
     package_id: string;
     user_id: string;
     user_email?: (string | null);
+    access?: string;
     granted_by_user_id?: (string | null);
     created_at: string;
 };
@@ -10003,6 +10036,19 @@ export type BundlesRevokeGrantData = {
 export type BundlesRevokeGrantResponse = ({
     [key: string]: unknown;
 });
+
+export type CatalogListCatalogItemGrantsData = {
+    itemUuid: string;
+};
+
+export type CatalogListCatalogItemGrantsResponse = (Array<CatalogGrant>);
+
+export type CatalogPutCatalogItemGrantsData = {
+    itemUuid: string;
+    requestBody: Array<CatalogGrantIn>;
+};
+
+export type CatalogPutCatalogItemGrantsResponse = (Array<CatalogGrant>);
 
 export type CatalogListCatalogResponse = (CatalogPublic);
 

@@ -170,12 +170,12 @@ def get_bundle(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> AgentBundlePublic:
-    """Bundle detail (publisher only for unlisted; visibility-aware otherwise)."""
+    """Bundle detail for anyone with catalog access (the publisher holds
+    ``maintain``)."""
     bundle = BundleService.get_bundle_by_uuid(session, bundle_uuid)
     if bundle is None:
         raise HTTPException(status_code=404, detail="Bundle not found")
-    is_publisher = bundle.publisher_user_id == current_user.id
-    if not is_publisher and not CatalogService.user_can_see(session, bundle, current_user):
+    if not CatalogService.user_can_see(session, bundle, current_user):
         raise HTTPException(status_code=403, detail="Not authorized to view this bundle")
     return _bundle_to_public(session, bundle)
 

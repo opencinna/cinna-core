@@ -18,6 +18,7 @@ from app.api.routes import (
     app_sync,
     bundles,
     catalog,
+    catalog_items,
     cli,
     activities,
     agents,
@@ -110,6 +111,7 @@ api_router.include_router(agents.router)
 api_router.include_router(installs.router)  # Bundle install actions on /agents/{id}
 api_router.include_router(agent_git.router)  # Git-backed checkout/pull/push on /agents
 api_router.include_router(bundles.router)
+api_router.include_router(catalog_items.router)  # Must be before catalog.router — /catalog/items vs /catalog/{bundle_id}
 api_router.include_router(catalog.router)
 api_router.include_router(agent_webhooks.router)
 api_router.include_router(agent_api.router)  # /agents/{id}/agent-api/* (owner preview + tokens)

@@ -1044,6 +1044,10 @@ parsing prose.
 files that are not there will not reappear on a retry, and "try again later"
 would send the caller down the wrong path.
 
+### Access model
+
+`skill_package_access_grant` gained `principal_kind`, `principal_id`, `role` and `access` (unique key on item + kind + principal id) like the bundle table (see [Catalog access model](../agent_bundles/agent_bundles_tech.md#catalog-access-model)). `SkillCatalogService.user_can_manage` = holds `maintain` (no superuser bypass on the per-kind routes; an admin's lever there is `delist`); `not_publisher` (403) is raised for a visible package without `edit` on publish, and "Only a maintainer can change this package." on `update_package`. Skill-specific error codes live in `backend/app/services/skills/exceptions.py`. The per-user `GET`/`POST`/`DELETE .../grants` routes below now delegate to the shared access service.
+
 ### Routes — `backend/app/api/routes/skills.py`
 
 Two routers, one `skills` tag → one `SkillsService` in the generated client.

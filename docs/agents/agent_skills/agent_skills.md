@@ -654,6 +654,14 @@ a reader of the folder cannot see. The publisher is never asked to invent one:
 - The package **description** follows the skill's frontmatter until a publisher
   edits it in the catalog; after that a re-publish leaves the edited blurb alone.
 
+### Access: same model as bundles
+
+Access is visibility plus grants (user or role x use/edit/maintain); publishing a new version needs edit. The model is shared with [Agent Bundles](../agent_bundles/agent_bundles.md#access-visibility-plus-grants-one-access-model) (rule P1, maintainers are people, at least one required, `PUT /api/v1/catalog/items/{uuid}/grants`).
+
+- Publishing a new revision of an existing package needs `edit`; changing visibility needs `maintain`. A caller who can see the package but lacks `edit` gets 403 `not_publisher`.
+- Managing a package through `/skills/packages/*` needs `maintain`; an admin can still delist (a superuser may see and delist a public package). Publishers became `maintain` rows in migration `6ab98dfbbe62`.
+- The old per-user grant routes still work, list user grants without the publisher's own row, never downgrade, and refuse to revoke the last maintainer.
+
 ### Install counts are computed, per person, excluding the publisher
 
 There is no `install_count` column. An install is an `AgentPluginLink` row that

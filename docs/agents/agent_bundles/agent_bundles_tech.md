@@ -137,6 +137,18 @@ Unique constraint: `uq_revision_bundle_number` on `(bundle_id, revision_number)`
 
 Unique constraint: `uq_bundle_grant_bundle_user` on `(bundle_id, user_id)`.
 
+### Catalog access model
+
+Shared with skill packages; rules in one place.
+
+- `backend/app/models/catalog/catalog_access.py` — `CatalogAccess` (`use` < `edit` < `maintain`, `rank`/`max`), `CatalogPrincipalKind` (`user`/`role`), API schemas `CatalogGrantIn`, `CatalogGrant`, principal unions (`extra="forbid"`).
+- `backend/app/services/catalog/catalog_access_service.py` — `CatalogAccessService` (effective access per rule P1, `list_item_grants`, `put_item_grants` full-replace with >=1 user-maintainer check, `ensure_maintainer`, `user_can_manage`), `CatalogKindSpec` (per-kind table/column mapping for bundles and skill packages).
+- `backend/app/services/catalog/catalog_events.py` — `CatalogEvents.granted` emits `catalog.granted {kind, uuid}` into each newly reached user's `user_{id}` room; `add_audit_event` stages a low-severity `SecurityEvent`.
+- `backend/app/services/catalog/exceptions.py` — `CatalogError` hierarchy (`CatalogNotFoundError` 404, `CatalogAccessDeniedError` 403, `CatalogConflictError` 409, `CatalogValidationError`).
+- `backend/app/api/routes/catalog_items.py` — `GET`/`PUT /api/v1/catalog/items/{item_uuid}/grants` (`CurrentUser`; 404 when the caller cannot see the item, 403 when not maintainer/superuser). Registered before the `catalog` router so `/catalog/items/...` is not read as `/catalog/{bundle_id}`.
+- `bundle_access_grant` gained `principal_kind` (`user`/`role`), `principal_id`, `role`, and `access` (`use`/`edit`/`maintain`); `user_id` is nullable for role grants (migration `6ab98dfbbe62`, which also inserts a `maintain` row per publisher). The legacy `uq_bundle_grant_bundle_user` unique moved to (bundle, `principal_kind`, `principal_id`).
+- `BundleService` resolves management as "holds `maintain` or superuser"; `PublishService` requires `edit` (403 above) and calls `CatalogAccessService.ensure_maintainer` for a new bundle's publisher; `CatalogService` visibility uses P1.
+
 ### `agent` (modified for Install model)
 
 New columns (added in Phase 2 migration):
@@ -245,7 +257,6 @@ Unique constraints on `agent`:
 | `list_grants(session, bundle)` | |
 | `grant_access(session, bundle, target_user, granted_by_user_id)` | Idempotent |
 | `revoke_grant(session, bundle, grant_id)` | |
-| `user_has_grant(session, bundle, user_id)` | |
 
 ### `PublishService`
 

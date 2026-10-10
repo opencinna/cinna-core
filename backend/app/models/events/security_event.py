@@ -245,6 +245,12 @@ LIBRARY_GRANTS_CHANGED = "LIBRARY_GRANTS_CHANGED"
 LIBRARY_AGENT_CREATED = "LIBRARY_AGENT_CREATED"
 LIBRARY_AGENT_DELETED = "LIBRARY_AGENT_DELETED"
 
+# ── Catalog event-type constants ─────────────────────────────────────
+# ``PUT /catalog/items/{uuid}/grants`` replaced an item's grants. ``user_id`` is
+# the acting person; details carry ``kind`` (``agent``/``skill``), ``uuid`` and
+# the new grants as ``{principal: 'user:<id>'|'role:<value>', access}``.
+CATALOG_GRANTS_CHANGED = "CATALOG_GRANTS_CHANGED"
+
 
 class SecurityEvent(SQLModel, table=True):
     """

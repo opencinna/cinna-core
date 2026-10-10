@@ -1,14 +1,11 @@
 """CatalogService — visibility-aware listing of installable bundles.
 
-Returns ``CatalogEntryPublic`` rows for the current user. A bundle is
-visible when:
-
-- ``visibility = 'public' AND is_listed = true``, OR
-- ``visibility = 'users' AND is_listed = true AND BundleAccessGrant exists
-  for (bundle, user)``, OR
-- the user is the publisher (always sees their own bundles even when not
-  listed — the publisher manages from the bundle CRUD API, but having the
-  publisher catch a glimpse of their own bundle in the catalog is harmless).
+Returns ``CatalogEntryPublic`` rows for the current user. Who sees a bundle is
+decided by the one catalog access model
+(:class:`~app.services.catalog.catalog_access_service.CatalogAccessService`,
+rule P1): ``public`` and listed for everyone, a ``use`` grant (user or role)
+while ``visibility='users'`` and listed, and an ``edit`` / ``maintain`` grant
+at any visibility — the publisher holds ``maintain``.
 
 The publisher's working install row (``is_publisher_install=True``) is the
 dev / source copy and is NOT counted as a consumer install — the catalog
@@ -26,9 +23,8 @@ from sqlmodel import Session, select
 from sqlalchemy import func
 
 from app.models.agents.agent import Agent
-from app.models.bundles.agent_bundle import AgentBundle, BundleVisibility
+from app.models.bundles.agent_bundle import AgentBundle
 from app.models.bundles.agent_bundle_revision import AgentBundleRevision
-from app.models.bundles.bundle_access_grant import BundleAccessGrant
 from app.models.bundles.catalog import (
     CatalogEntryPublic,
     CatalogInstallContext,
@@ -40,6 +36,7 @@ from app.models.credentials.ai_credential import AICredential
 from app.models.credentials.credential import Credential
 from app.models.users.user import User
 from app.services.bundles.credential_spec import parse_credential_spec
+from app.services.catalog.catalog_access_service import BUNDLE, CatalogAccessService
 
 logger = logging.getLogger(__name__)
 
@@ -51,38 +48,10 @@ class CatalogService:
     def list_for_user(
         session: Session, user: User
     ) -> list[CatalogEntryPublic]:
-        # Public listed bundles + bundles with explicit grants.
-        public_stmt = select(AgentBundle).where(
-            AgentBundle.is_listed == True,  # noqa: E712
-            AgentBundle.visibility == BundleVisibility.PUBLIC,
-        )
-        public_bundles = list(session.exec(public_stmt).all())
-
-        granted_stmt = (
-            select(AgentBundle)
-            .join(BundleAccessGrant, BundleAccessGrant.bundle_id == AgentBundle.id)
-            .where(
-                AgentBundle.is_listed == True,  # noqa: E712
-                AgentBundle.visibility == BundleVisibility.USERS,
-                BundleAccessGrant.user_id == user.id,
-            )
-        )
-        granted_bundles = list(session.exec(granted_stmt).all())
-
-        # Publisher's own bundles (always visible).
-        own_stmt = select(AgentBundle).where(
-            AgentBundle.publisher_user_id == user.id
-        )
-        own_bundles = list(session.exec(own_stmt).all())
-
-        # Deduplicate by uuid.
-        all_bundles: dict[uuid.UUID, AgentBundle] = {}
-        for b in public_bundles + granted_bundles + own_bundles:
-            all_bundles[b.id] = b
-
+        accessible = CatalogAccessService.accessible_items(session, BUNDLE, user)
         return [
-            CatalogService._bundle_to_entry(session, b, user)
-            for b in all_bundles.values()
+            CatalogService._bundle_to_entry(session, bundle, user)
+            for bundle, _ in accessible.values()
         ]
 
     @staticmethod
@@ -101,20 +70,10 @@ class CatalogService:
     def user_can_see(
         session: Session, bundle: AgentBundle, user: User
     ) -> bool:
-        if bundle.publisher_user_id == user.id:
-            return True
-        if not bundle.is_listed:
-            # Unlisted bundles are publisher-only.
-            return False
-        if bundle.visibility == BundleVisibility.PUBLIC:
-            return True
-        if bundle.visibility == BundleVisibility.USERS:
-            stmt = select(BundleAccessGrant).where(
-                BundleAccessGrant.bundle_id == bundle.id,
-                BundleAccessGrant.user_id == user.id,
-            )
-            return session.exec(stmt).first() is not None
-        return False
+        return (
+            CatalogAccessService.effective_access(session, BUNDLE, bundle, user)
+            is not None
+        )
 
     @staticmethod
     def user_can_install(

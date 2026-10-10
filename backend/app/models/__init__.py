@@ -231,6 +231,16 @@ from .bundles.agent_git_source import (
     GitSyncDirection,
     GitSourceStatus,
 )
+from .catalog.catalog_access import (
+    CatalogAccess,
+    CatalogPrincipalKind,
+    CatalogPrincipalUser,
+    CatalogPrincipalRole,
+    CatalogGrantIn,
+    CatalogPerson,
+    CatalogMaintainer,
+    CatalogGrant,
+)
 from .library.git_repo import (
     GitRepo,
     GitRepoGrant,
@@ -1768,6 +1778,15 @@ __all__ = [
     "RoutingRecommendationRequest",
     "RoutingRecommendationPublic",
     "RECOMMENDATION_ADVISORY_NOTICE",
+    # Catalog access
+    "CatalogAccess",
+    "CatalogPrincipalKind",
+    "CatalogPrincipalUser",
+    "CatalogPrincipalRole",
+    "CatalogGrantIn",
+    "CatalogPerson",
+    "CatalogMaintainer",
+    "CatalogGrant",
     # Team library
     "GitRepo",
     "GitRepoGrant",

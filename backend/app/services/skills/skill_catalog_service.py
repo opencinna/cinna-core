@@ -52,6 +52,7 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.agents.agent import Agent
+from app.models.catalog.catalog_access import CatalogAccess, CatalogPrincipalKind
 from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
 from app.models.skills.schemas import (
     SkillInstallPreview,
@@ -83,6 +84,8 @@ from app.services.agents.skill_manifest import (
 from app.services.bundles.bundle_id_service import BUNDLE_ID_REGEX, BundleIdService
 from app.services.bundles.credential_spec import ParsedCredentialSpec
 from app.services.bundles.publish_service import PublishService
+from app.services.catalog.catalog_access_service import SKILL, CatalogAccessService
+from app.services.catalog.exceptions import CatalogConflictError
 from app.services.credentials.credential_provisioner import (
     SKILL_INSTALL_POLICY,
     CredentialProvisioner,
@@ -175,9 +178,12 @@ class _EntryContext:
     publishers: dict[uuid.UUID, "User"] = field(default_factory=dict)
     install_counts: dict[uuid.UUID, int] = field(default_factory=dict)
     installed_in: dict[uuid.UUID, list[uuid.UUID]] = field(default_factory=dict)
-    #: Packages of this listing the viewer holds an access grant on. Also
-    #: viewer-bound, for the same reason ``installed_in`` is.
+    #: Packages of this listing the viewer holds an access grant on (any
+    #: level, user or role). Also viewer-bound, for the same reason
+    #: ``installed_in`` is.
     granted_package_ids: set[uuid.UUID] = field(default_factory=set)
+    #: The viewer's effective access per package (rule P1).
+    access_levels: dict[uuid.UUID, str] = field(default_factory=dict)
 
 
 def _publish_lock_for(key: str) -> asyncio.Lock:
@@ -236,47 +242,42 @@ class SkillCatalogService:
     def user_can_see(
         session: Session, package: SkillPackage, user: User
     ) -> bool:
-        """The publisher; anyone once listed and public; a granted user; an
-        admin once public.
+        """Whether ``user`` has any effective access to ``package``.
 
-        §4 says ``private`` means "the publisher only", and that is honoured
-        literally: a private package is prompt text its author has not chosen
-        to share, and an administrator has no product reason to read one.
-
-        The one bypass is deliberately keyed on **visibility, not listing**: an
-        admin may see a package the publisher made public even after it has
-        been delisted. Without that, :meth:`delist` would be a trapdoor — its
-        own output would 404 for the admin who produced it, a second delist
-        would not be idempotent, and a publisher could re-list at will with the
-        admin unable to look at what they were re-listing.
-
-        A ``users`` package is visible to the people named on it, and — like a
-        public one — only while it is listed: delisting is the administrator's
-        one lever over a harmful package, and a grant must not be a way around
-        it. The admin bypass is not extended here: ``users`` is an explicit
-        allowlist, and an administrator is not on it.
+        The one catalog access model decides (rule P1, see
+        :class:`~app.services.catalog.catalog_access_service.CatalogAccessService`):
+        an ``edit`` / ``maintain`` grant at any visibility (the publisher holds
+        ``maintain``); a ``use`` grant only while ``visibility='users'`` and
+        listed, because delisting is the administrator's one lever over a
+        harmful package and a grant must not be a way around it; anyone once
+        public and listed; and an administrator once public, even delisted —
+        otherwise :meth:`delist` would be a trapdoor whose own output 404s for
+        the admin who produced it.
         """
-        if package.publisher_user_id and package.publisher_user_id == user.id:
-            return True
-        if package.visibility == SkillPackageVisibility.PUBLIC:
-            return package.is_listed or user.is_superuser
-        if package.visibility == SkillPackageVisibility.USERS:
-            return package.is_listed and SkillCatalogService.user_has_grant(
-                session, package, user.id
-            )
-        return False
+        return SkillCatalogService.access_of(session, package, user) is not None
 
     @staticmethod
-    def user_can_manage(package: SkillPackage, user: User) -> bool:
-        """Who may rename, re-describe or change the visibility of a package.
+    def access_of(
+        session: Session, package: SkillPackage, user: User
+    ) -> str | None:
+        """``use`` / ``edit`` / ``maintain`` or ``None``."""
+        return CatalogAccessService.effective_access(session, SKILL, package, user)
 
-        The publisher, and only the publisher (§4). An administrator's power
-        here is :meth:`delist` — a narrower verb on purpose, so "hide something
-        harmful from the catalog" never widens into "edit or publish somebody
-        else's unpublished skill".
+    @staticmethod
+    def user_can_manage(
+        session: Session, package: SkillPackage, user: User
+    ) -> bool:
+        """Who may rename, re-describe, change the visibility of a package or
+        manage who it is shared with: holders of ``maintain``.
+
+        An administrator's power on these per-kind routes is :meth:`delist` —
+        a narrower verb on purpose, so "hide something harmful from the
+        catalog" never widens into "edit somebody else's skill". (Superuser
+        management of grants lives on ``/catalog/items``.)
         """
-        return bool(
-            package.publisher_user_id and package.publisher_user_id == user.id
+        return (
+            SkillCatalogService.access_of(session, package, user)
+            == CatalogAccess.MAINTAIN
         )
 
     # ── Publish ────────────────────────────────────────────────────────
@@ -347,7 +348,24 @@ class SkillCatalogService:
             session, grant_emails, publisher_user_id=user.id
         )
 
-        lock = _publish_lock_for(f"{user.id}:{skill_name}")
+        # A package another person publishes, named by ``package_id``, that the
+        # caller may publish into (``edit``). Otherwise identity stays per
+        # publisher.
+        shared_package = SkillCatalogService._find_editable_package(
+            session, user=user, package_id=package_id, entry_name=entry.name
+        )
+        # Every publish into an existing package serialises on that package,
+        # whoever publishes it (publisher or editor); ``{user}:{name}`` guards
+        # only the creation of a new one.
+        target_package = shared_package or SkillCatalogService._find_publisher_package(
+            session, publisher_user_id=user.id, entry_name=entry.name
+        )
+        lock_key = (
+            f"package:{target_package.id}"
+            if target_package is not None
+            else f"{user.id}:{entry.name}"
+        )
+        lock = _publish_lock_for(lock_key)
         async with lock:
             # 5. Refuse addresses that a grant row could not act on. Grants are
             #    consulted by ``user_can_see`` and ``is_granted`` under
@@ -381,9 +399,21 @@ class SkillCatalogService:
             #    :meth:`_resolve_grant_targets` deliberately treats that as a no-op
             #    inside a publish rather than a refusal.
             if grant_targets:
-                existing_package = SkillCatalogService._find_publisher_package(
-                    session, publisher_user_id=user.id, entry_name=entry.name
+                existing_package = shared_package or (
+                    SkillCatalogService._find_publisher_package(
+                        session, publisher_user_id=user.id, entry_name=entry.name
+                    )
                 )
+                # Publish-time grants are additive and still a sharing change:
+                # on an existing package they need ``maintain``.
+                if existing_package is not None and not SkillCatalogService.user_can_manage(
+                    session, existing_package, user
+                ):
+                    raise SkillCatalogError(
+                        "not_publisher",
+                        "Only a maintainer of this skill can share it with more "
+                        "people. Publish without the email addresses.",
+                    )
                 effective_visibility = visibility or (
                     existing_package.visibility
                     if existing_package is not None
@@ -422,7 +452,19 @@ class SkillCatalogService:
                 entry_name=entry.name,
                 description=entry.description,
                 requested_package_id=package_id,
+                shared_package=shared_package,
             )
+            # Visibility is a maintainer's lever; an editor publishes revisions.
+            if (
+                not created
+                and visibility is not None
+                and visibility != package.visibility
+                and not SkillCatalogService.user_can_manage(session, package, user)
+            ):
+                raise SkillCatalogError(
+                    "not_publisher",
+                    "Only a maintainer of this skill can change its visibility.",
+                )
 
             next_number, published_versions, latest_version = (
                 SkillCatalogService._version_history(session, package.id)
@@ -788,6 +830,41 @@ class SkillCatalogService:
         ).first()
 
     @staticmethod
+    def _find_editable_package(
+        session: Session,
+        *,
+        user: User,
+        package_id: str | None,
+        entry_name: str,
+    ) -> SkillPackage | None:
+        """The package ``package_id`` names when another person publishes it,
+        it carries this skill's name, and ``user`` holds ``edit`` on it.
+        ``None`` otherwise (the per-publisher lookup applies). Read-only.
+
+        Raises ``not_publisher`` (403) when the caller can see that package
+        but lacks ``edit``. A package they cannot see falls through to the
+        create path's ``package_id_taken``, so its existence does not leak.
+        """
+        requested = (package_id or "").strip()
+        if not requested:
+            return None
+        package = session.exec(
+            select(SkillPackage).where(SkillPackage.package_id == requested)
+        ).first()
+        if package is None or package.publisher_user_id == user.id:
+            return None
+        access = SkillCatalogService.access_of(session, package, user)
+        if access is None:
+            return None
+        if not CatalogAccessService.at_least(access, CatalogAccess.EDIT):
+            raise SkillCatalogError(
+                "not_publisher", "You can't publish new versions of this skill."
+            )
+        if package.name != entry_name:
+            return None
+        return package
+
+    @staticmethod
     def _resolve_package(
         session: Session,
         *,
@@ -796,17 +873,31 @@ class SkillCatalogService:
         entry_name: str,
         description: str,
         requested_package_id: str | None,
+        shared_package: SkillPackage | None = None,
     ) -> tuple[SkillPackage, bool]:
         """Find this publisher's package for ``entry_name``, or create it.
 
         Returns ``(package, created)``. Identity is per publisher (§9): two
         people may both publish ``pdf-report``; ``package_id`` disambiguates.
+        ``shared_package`` (from :meth:`_find_editable_package`) wins when set.
+        Publishing into an existing package needs ``edit``; a new package's
+        publisher becomes its first maintainer in the same transaction.
         """
+        if shared_package is not None:
+            return shared_package, False
+
         existing = SkillCatalogService._find_publisher_package(
             session, publisher_user_id=user.id, entry_name=entry_name
         )
 
         if existing is not None:
+            if not CatalogAccessService.at_least(
+                SkillCatalogService.access_of(session, existing, user),
+                CatalogAccess.EDIT,
+            ):
+                raise SkillCatalogError(
+                    "not_publisher", "You can't publish new versions of this skill."
+                )
             if (
                 requested_package_id
                 and requested_package_id.strip() != existing.package_id
@@ -851,6 +942,8 @@ class SkillCatalogService:
         )
         session.add(package)
         try:
+            session.flush()
+            CatalogAccessService.ensure_maintainer(session, SKILL, package, user)
             session.commit()
         except IntegrityError as exc:
             # The check above is a read, and ``derive_package_id`` is
@@ -1245,36 +1338,12 @@ class SkillCatalogService:
         published skill on the instance, and paging a list that small buys
         nothing but a worse filter experience.
         """
-        visible_stmt = select(SkillPackage).where(
-            SkillPackage.is_listed == True,  # noqa: E712
-            SkillPackage.visibility == SkillPackageVisibility.PUBLIC,
-        )
         packages: dict[uuid.UUID, SkillPackage] = {
-            p.id: p for p in session.exec(visible_stmt).all()
+            item_id: item
+            for item_id, (item, _) in CatalogAccessService.accessible_items(
+                session, SKILL, user
+            ).items()
         }
-        # Packages shared with this user by name. Listed-only, exactly like
-        # public ones: a grant is the publisher's lever, delisting is the
-        # administrator's, and a grant must not be a way around it.
-        granted_stmt = (
-            select(SkillPackage)
-            .join(
-                SkillPackageAccessGrant,
-                SkillPackageAccessGrant.package_id == SkillPackage.id,
-            )
-            .where(
-                SkillPackage.is_listed == True,  # noqa: E712
-                SkillPackage.visibility == SkillPackageVisibility.USERS,
-                SkillPackageAccessGrant.user_id == user.id,
-            )
-        )
-        for package in session.exec(granted_stmt).all():
-            packages[package.id] = package
-
-        own_stmt = select(SkillPackage).where(
-            SkillPackage.publisher_user_id == user.id
-        )
-        for package in session.exec(own_stmt).all():
-            packages[package.id] = package
 
         # A package whose publish failed between creating the row and committing
         # its first revision has nothing to show; it is private, it self-heals
@@ -1560,16 +1629,29 @@ class SkillCatalogService:
             for agent_ids in installed_in.values():
                 agent_ids.sort(key=str)
 
-        granted_package_ids: set[uuid.UUID] = set()
-        if package_ids:
-            granted_package_ids = set(
-                session.exec(
-                    select(SkillPackageAccessGrant.package_id).where(
-                        SkillPackageAccessGrant.package_id.in_(package_ids),
-                        SkillPackageAccessGrant.user_id == user.id,
-                    )
-                ).all()
-            )
+        # The viewer's grant rows (user or role) on these packages, folded to
+        # the highest level per package, then rule P1 per package.
+        raw_grants: dict[uuid.UUID, str | None] = {}
+        if package_ids and user.is_active:
+            for pkg_id, access in session.exec(
+                select(
+                    SkillPackageAccessGrant.package_id,
+                    SkillPackageAccessGrant.access,
+                ).where(
+                    SkillPackageAccessGrant.package_id.in_(package_ids),
+                    CatalogAccessService.grant_matches_user(SKILL, user),
+                )
+            ).all():
+                raw_grants[pkg_id] = CatalogAccess.max(raw_grants.get(pkg_id), access)
+        granted_package_ids = set(raw_grants)
+        access_levels: dict[uuid.UUID, str] = {}
+        if user.is_active:
+            for package in packages:
+                level = CatalogAccessService.level_from(
+                    package, raw_grants.get(package.id), user
+                )
+                if level is not None:
+                    access_levels[package.id] = level
 
         return _EntryContext(
             viewer_id=user.id,
@@ -1578,6 +1660,7 @@ class SkillCatalogService:
             install_counts=install_counts,
             installed_in=installed_in,
             granted_package_ids=granted_package_ids,
+            access_levels=access_levels,
         )
 
     @staticmethod
@@ -1639,10 +1722,11 @@ class SkillCatalogService:
             ),
             install_count=ctx.install_counts.get(package.id, 0),
             installed_in_agent_ids=ctx.installed_in.get(package.id, []),
-            can_manage=SkillCatalogService.user_can_manage(package, user),
+            can_manage=ctx.access_levels.get(package.id) == CatalogAccess.MAINTAIN,
+            # Any grant row the viewer holds, except the publisher's own
+            # ``maintain`` row: the publisher was never "granted" their skill.
             is_granted=(
-                package.visibility == SkillPackageVisibility.USERS
-                and package.publisher_user_id != user.id
+                package.publisher_user_id != user.id
                 and package.id in ctx.granted_package_ids
             ),
         )
@@ -1669,9 +1753,9 @@ class SkillCatalogService:
         user: User,
         data: SkillPackageUpdate,
     ) -> SkillPackage:
-        if not SkillCatalogService.user_can_manage(package, user):
+        if not SkillCatalogService.user_can_manage(session, package, user):
             raise SkillCatalogError(
-                "not_publisher", "Only the publisher can change this package."
+                "not_publisher", "Only a maintainer can change this package."
             )
         if data.display_name is not None:
             # An all-whitespace name passes the schema's min_length but would
@@ -1723,31 +1807,26 @@ class SkillCatalogService:
     # ── Access grants (``visibility='users'``) ──────────────────────────
 
     @staticmethod
-    def user_has_grant(
-        session: Session, package: SkillPackage, user_id: uuid.UUID
-    ) -> bool:
-        return (
-            session.exec(
-                select(SkillPackageAccessGrant).where(
-                    SkillPackageAccessGrant.package_id == package.id,
-                    SkillPackageAccessGrant.user_id == user_id,
-                )
-            ).first()
-            is not None
-        )
-
-    @staticmethod
     def list_grants(
         session: Session, package: SkillPackage
     ) -> list[SkillPackageAccessGrant]:
-        """Every grant on one package, newest first."""
-        return list(
-            session.exec(
+        """User grants on one package, newest first — the shape of the old
+        per-user list. Role grants are left out (they have no user), and so is
+        the publisher's own ``maintain`` row: the publisher was never a grantee
+        in this list."""
+        return [
+            g
+            for g in session.exec(
                 select(SkillPackageAccessGrant)
-                .where(SkillPackageAccessGrant.package_id == package.id)
+                .where(
+                    SkillPackageAccessGrant.package_id == package.id,
+                    SkillPackageAccessGrant.principal_kind
+                    == CatalogPrincipalKind.USER,
+                )
                 .order_by(SkillPackageAccessGrant.created_at.desc())
             ).all()
-        )
+            if g.user_id != package.publisher_user_id
+        ]
 
     @staticmethod
     def resolve_grant_user(
@@ -1821,28 +1900,17 @@ class SkillCatalogService:
         Re-granting somebody who already holds a grant returns the existing row
         rather than refusing: the publisher's intent ("this person can see it")
         is already true, and a 409 would make a retried request look like a
-        failure.
+        failure. The new row is ``user/use``; an existing row keeps its level
+        (never downgraded).
 
         ``commit=False`` leaves the row pending in the caller's transaction —
         that is how publish makes the grants and the package land together or
         not at all.
         """
-        existing = session.exec(
-            select(SkillPackageAccessGrant).where(
-                SkillPackageAccessGrant.package_id == package.id,
-                SkillPackageAccessGrant.user_id == target.id,
-            )
-        ).first()
-        if existing is not None:
-            return existing
-
-        grant = SkillPackageAccessGrant(
-            package_id=package.id,
-            user_id=target.id,
-            granted_by_user_id=granted_by.id,
+        grant, created = CatalogAccessService.add_user_use(
+            session, SKILL, package, target, granted_by
         )
-        session.add(grant)
-        if commit:
+        if created and commit:
             session.commit()
             session.refresh(grant)
         return grant
@@ -1861,16 +1929,17 @@ class SkillCatalogService:
         an install they already made — the archive route authorises on the
         install, never on visibility, so a running agent keeps working.
         """
-        grant = session.exec(
-            select(SkillPackageAccessGrant).where(
-                SkillPackageAccessGrant.package_id == package.id,
-                SkillPackageAccessGrant.user_id == user_id,
-            )
-        ).first()
+        grant = CatalogAccessService.find_user_grant(
+            session, SKILL, package.id, user_id
+        )
         if grant is None:
             raise SkillCatalogError(
                 "grant_not_found", "That user has no access to this skill."
             )
+        try:
+            CatalogAccessService.assert_removable(session, SKILL, grant)
+        except CatalogConflictError as exc:
+            raise SkillCatalogError("last_maintainer", str(exc)) from exc
         session.delete(grant)
         session.commit()
 
@@ -1914,6 +1983,7 @@ class SkillCatalogService:
             package_id=grant.package_id,
             user_id=grant.user_id,
             user_email=user.email if user is not None else None,
+            access=grant.access,
             granted_by_user_id=grant.granted_by_user_id,
             created_at=grant.created_at,
         )

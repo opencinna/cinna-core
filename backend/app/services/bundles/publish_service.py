@@ -31,27 +31,31 @@ import json
 import logging
 import shutil
 import uuid
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlmodel import Session, select
 from sqlalchemy import func
+from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle, BundleInstallMode
 from app.models.bundles.agent_bundle_revision import (
-    AgentBundleRevision,
     REVISION_ORIGIN_PUBLISH,
+    AgentBundleRevision,
 )
-from app.models.environments.environment import AgentEnvironment
-from app.models.events.event import EventType
+from app.models.catalog.catalog_access import CatalogAccess
 from app.models.credentials.credential import Credential
 from app.models.credentials.link_models import AgentCredentialLink
+from app.models.environments.environment import AgentEnvironment
+from app.models.events.event import EventType
+from app.models.users.user import User
 from app.services.bundles.bundle_service import BundleService
 from app.services.bundles.credential_spec import build_spec
+from app.services.bundles.exceptions import BundleAccessDeniedError
 from app.services.bundles.revision_format import RevisionFormat
+from app.services.catalog.catalog_access_service import BUNDLE, CatalogAccessService
 from app.services.credentials.credentials_service import CredentialsService
 from app.services.environments.workspace_classification import (
     PLUGIN_DERIVED_FILES,
@@ -179,8 +183,18 @@ class PublishService:
             # frontend writes to them via PATCH /bundles/{uuid}.
             PublishService._apply_pre_publish_ai_drafts(session, install, bundle)
         else:
-            if bundle.publisher_user_id != publisher_user_id:
-                raise ValueError("This bundle belongs to a different publisher")
+            # Publishing a new version needs ``edit`` on the bundle (the
+            # publisher holds ``maintain``).
+            publisher = session.get(User, publisher_user_id)
+            access = (
+                CatalogAccessService.effective_access(session, BUNDLE, bundle, publisher)
+                if publisher is not None
+                else None
+            )
+            if not CatalogAccessService.at_least(access, CatalogAccess.EDIT):
+                raise BundleAccessDeniedError(
+                    "You can't publish new versions of this agent."
+                )
             if not install.is_publisher_install:
                 raise ValueError(
                     "This install is not the publisher install for the bundle"
@@ -920,8 +934,8 @@ class PublishService:
         Included in the manifest body that feeds ``content_hash`` so a
         plugin-only change yields a new hash → installs see a pending update.
         """
-        from app.services.bundles.plugin_sync import snapshot_plugin_specs
         from app.models.plugins.llm_plugin import AgentPluginLink
+        from app.services.bundles.plugin_sync import snapshot_plugin_specs
 
         links = list(
             session.exec(

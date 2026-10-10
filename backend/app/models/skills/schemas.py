@@ -375,6 +375,7 @@ class SkillPackageAccessGrantPublic(SQLModel):
     package_id: uuid.UUID
     user_id: uuid.UUID
     user_email: str | None = None
+    access: str = "use"
     granted_by_user_id: uuid.UUID | None = None
     created_at: datetime
 

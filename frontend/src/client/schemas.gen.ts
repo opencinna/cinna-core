@@ -12652,6 +12652,11 @@ export const BundleAccessGrantPublicSchema = {
             ],
             title: 'User Email'
         },
+        access: {
+            type: 'string',
+            title: 'Access',
+            default: 'use'
+        },
         granted_by_user_id: {
             anyOf: [
                 {
@@ -13533,6 +13538,74 @@ export const CatalogEntryPublicSchema = {
     description: "One row in the user's catalog."
 } as const;
 
+export const CatalogGrantSchema = {
+    properties: {
+        principal: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalUser'
+                },
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalRole'
+                }
+            ],
+            title: 'Principal'
+        },
+        access: {
+            type: 'string',
+            enum: ['use', 'edit', 'maintain'],
+            title: 'Access'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        granted_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['principal', 'access', 'display_name', 'created_at'],
+    title: 'CatalogGrant'
+} as const;
+
+export const CatalogGrantInSchema = {
+    properties: {
+        principal: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalUser'
+                },
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalRole'
+                }
+            ],
+            title: 'Principal'
+        },
+        access: {
+            type: 'string',
+            enum: ['use', 'edit', 'maintain'],
+            title: 'Access'
+        }
+    },
+    type: 'object',
+    required: ['principal', 'access'],
+    title: 'CatalogGrantIn',
+    description: 'One entry of ``PUT /catalog/items/{uuid}/grants`` (full replace).'
+} as const;
+
 export const CatalogInstallContextSchema = {
     properties: {
         bundle: {
@@ -13579,6 +13652,50 @@ reads that type when building the install request body (the
 request type itself is left as a loose dict to preserve the
 backward-compat shim that accepts the legacy
 \`\`dict[str, uuid_str | data_dict]\`\` shape).`
+} as const;
+
+export const CatalogPersonSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'display_name'],
+    title: 'CatalogPerson'
+} as const;
+
+export const CatalogPrincipalRoleSchema = {
+    properties: {
+        role: {
+            type: 'string',
+            title: 'Role'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['role'],
+    title: 'CatalogPrincipalRole'
+} as const;
+
+export const CatalogPrincipalUserSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['user_id'],
+    title: 'CatalogPrincipalUser'
 } as const;
 
 export const CatalogPublicSchema = {
@@ -30611,6 +30728,11 @@ export const SkillPackageAccessGrantPublicSchema = {
                 }
             ],
             title: 'User Email'
+        },
+        access: {
+            type: 'string',
+            title: 'Access',
+            default: 'use'
         },
         granted_by_user_id: {
             anyOf: [

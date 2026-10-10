@@ -1,4 +1,9 @@
-"""SkillPackageAccessGrant — explicit per-user access for ``visibility='users'``.
+"""SkillPackageAccessGrant — one principal's access to one skill package.
+
+A row names a principal (one ``user``, or every holder of a ``role``) and a
+level (``use`` < ``edit`` < ``maintain``; see
+:mod:`app.models.catalog.catalog_access`). ``use`` rows count only while the
+package is ``visibility='users'`` and listed. The publisher holds ``maintain``.
 
 Field-for-field mirror of
 :class:`~app.models.bundles.bundle_access_grant.BundleAccessGrant`, because the
@@ -14,17 +19,24 @@ agent they already installed it into.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Index, UniqueConstraint
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
 class SkillPackageAccessGrant(SQLModel, table=True):
-    """Database model for one user's explicit access to one skill package."""
+    """Database model for one principal's access to one skill package."""
 
     __tablename__ = "skill_package_access_grant"
     __table_args__ = (
         UniqueConstraint(
-            "package_id", "user_id", name="uq_skill_grant_package_user"
+            "package_id",
+            "principal_kind",
+            "principal_id",
+            name="uq_skill_grant_principal",
+        ),
+        CheckConstraint(
+            "(principal_kind = 'user') = (user_id IS NOT NULL)",
+            name="ck_skill_grant_user_fk",
         ),
         Index("ix_skill_grant_package", "package_id"),
         Index("ix_skill_grant_user", "user_id"),
@@ -34,8 +46,17 @@ class SkillPackageAccessGrant(SQLModel, table=True):
     package_id: uuid.UUID = Field(
         foreign_key="skill_package.id", nullable=False, ondelete="CASCADE"
     )
-    user_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    principal_kind: str = Field(
+        default="user", max_length=16, sa_column_kwargs={"server_default": "user"}
+    )
+    # User uuid as text, or the role value.
+    principal_id: str = Field(max_length=64, nullable=False)
+    # Set only for ``principal_kind='user'`` so deleting the user drops the grant.
+    user_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", nullable=True, ondelete="CASCADE"
+    )
+    access: str = Field(
+        default="use", max_length=16, sa_column_kwargs={"server_default": "use"}
     )
     # SET NULL rather than CASCADE: the granter leaving the instance must not
     # silently revoke access they handed out.

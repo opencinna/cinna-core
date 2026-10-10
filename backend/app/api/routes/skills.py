@@ -349,19 +349,19 @@ def download_skill_package_archive(
 def _get_managed_package(
     session, package_id: uuid.UUID, user
 ) -> SkillPackage:
-    """Load a package the caller publishes, or raise the coded refusal.
+    """Load a package the caller maintains, or raise the coded refusal.
 
     Two gates in the established order: a package the caller cannot see is a
     404 (its existence is not public information), and one they can see but do
-    not publish is a 403. An administrator gets no bypass here — their power
+    not maintain is a 403 (the publisher holds ``maintain``). An administrator gets no bypass here — their power
     over a package is :func:`delist_skill_package`, and "hide something harmful"
     must never widen into "hand somebody else's skill to a third party".
     """
     package = SkillCatalogService.get_package(session, package_id, user)
-    if not SkillCatalogService.user_can_manage(package, user):
+    if not SkillCatalogService.user_can_manage(session, package, user):
         raise SkillCatalogError(
             "not_publisher",
-            "Only the publisher of a skill can manage who it is shared with.",
+            "Only a maintainer of a skill can manage who it is shared with.",
         )
     return package
 
