@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, delete, func, select
 
+from app.services.catalog.desktop_agent_service import DesktopAgentService
 from app.api.deps import (
     CurrentUser,
     SessionDep,
@@ -817,6 +818,8 @@ def delete_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
     revocations = AccountProvisioningService.on_account_deleted(
         session, current_user, actor_id=None
     )
+    # Desktop agents outlive their creator (superusers manage them).
+    DesktopAgentService.detach_publisher(session, current_user.id)
     session.delete(current_user)
     session.commit()
     # Only after the delete commits. A synchronous handler cannot await a
@@ -958,6 +961,8 @@ def delete_user(
     revocations = AccountProvisioningService.on_account_deleted(
         session, user, actor_id=current_user.id
     )
+    # Desktop agents outlive their creator (superusers manage them).
+    DesktopAgentService.detach_publisher(session, user.id)
     session.delete(user)
     session.commit()
     key_provisioning_service.schedule_revocations(revocations)

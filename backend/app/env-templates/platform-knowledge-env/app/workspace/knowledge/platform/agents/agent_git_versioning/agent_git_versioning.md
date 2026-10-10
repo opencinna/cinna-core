@@ -365,7 +365,7 @@ Planned but not yet implemented: per-field value diffs (local vs. baseline text 
 
 ## Integration Points
 
-Shared team remote: the [Team Library](../../application/team_library/team_library.md) is a core-hosted git remote using the v3 tree (the kit agent folder as-is). Reading v3 is always supported; writing v3 is behind `GIT_EXPORT_TREE_V3` or happens when the remote is already v3. Files the kit excludes from shared trees (e.g. `README.md`) do not travel and are ignored by the dirty check.
+Shared team remote: the [desktop agent repo](../../application/catalog/desktop_agents.md) served by core is a git remote using the v3 tree (the kit agent folder as-is). Reading v3 is always supported; writing v3 is behind `GIT_EXPORT_TREE_V3` or happens when the remote is already v3. Files the kit excludes from shared trees (e.g. `README.md`) do not travel and are ignored by the dirty check.
 
 | Feature | Relationship |
 |---------|-------------|

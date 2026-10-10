@@ -1,8 +1,10 @@
 """CatalogEvents — realtime hints and audit for catalog items.
 
 :meth:`CatalogEvents.granted` sends ``catalog.granted {kind, uuid}`` to each
-user who just gained access, into their ``user_{id}`` room (never broadcast,
-which would reach guest and webapp sockets). Events are refresh hints only;
+user who just gained access, and :meth:`CatalogEvents.updated` sends
+``catalog.updated {kind, uuid, id, revision_number, head_sha?}`` after a new
+revision, each into the user's ``user_{id}`` room (never broadcast, which would
+reach guest and webapp sockets). Events are refresh hints only;
 the catalog listing is the recovery path.
 """
 from __future__ import annotations
@@ -47,15 +49,27 @@ class CatalogEvents:
     ) -> None:
         """``catalog.granted {kind, uuid}`` to each user who just gained access."""
         meta = {"kind": kind, "uuid": str(item_uuid)}
+        await CatalogEvents._emit_each(EventType.CATALOG_GRANTED, item_uuid, user_ids, meta)
+
+    @staticmethod
+    async def updated(
+        item_uuid: uuid.UUID, user_ids: Iterable[uuid.UUID], meta: dict
+    ) -> None:
+        """``catalog.updated`` (``meta`` as documented on the event type) to
+        each user reached through the item's grants."""
+        await CatalogEvents._emit_each(EventType.CATALOG_UPDATED, item_uuid, user_ids, meta)
+
+    @staticmethod
+    async def _emit_each(
+        event_type: str, item_uuid: uuid.UUID, user_ids: Iterable[uuid.UUID], meta: dict
+    ) -> None:
         for user_id in sorted(set(user_ids), key=str):
             try:
                 await event_service.emit_event(
-                    event_type=EventType.CATALOG_GRANTED,
+                    event_type=event_type,
                     model_id=item_uuid,
                     user_id=user_id,
                     meta=meta,
                 )
             except Exception:
-                logger.exception(
-                    "Failed to emit %s to user %s", EventType.CATALOG_GRANTED, user_id
-                )
+                logger.exception("Failed to emit %s to user %s", event_type, user_id)

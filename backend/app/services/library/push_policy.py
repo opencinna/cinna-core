@@ -1,4 +1,4 @@
-"""Team library push policy — the logic behind the ``pre-receive`` hook.
+"""Desktop agent push policy — the logic behind the ``pre-receive`` hook.
 
 Pure on purpose: stdlib + ``jsonschema`` only, no ``app.core`` import and no
 database, so the hook starts fast inside git's environment and unit tests can
@@ -11,6 +11,9 @@ on to the hook):
 - ``CINNA_KIT_DIR`` — the Local Agent Kit snapshot (``layout.json``,
   ``CONTRACT_VERSION``, ``schema/cinna-agent.schema.json``).
 - ``CINNA_GIT_MAX_BLOB_BYTES`` / ``CINNA_GIT_MAX_TREE_BYTES`` — size caps.
+- ``CINNA_BOUND_MANIFEST_ID`` — the manifest ``id`` the catalog bound to this
+  agent at create; a version whose ``cinna-agent.json`` carries another id is
+  refused (an agent's identity never changes).
 
 The pushed objects are only visible through git's quarantine variables
 (``GIT_OBJECT_DIRECTORY`` / ``GIT_ALTERNATE_OBJECT_DIRECTORIES``), so every git
@@ -45,10 +48,11 @@ DEFAULT_MAX_TREE_BYTES = 200 * MIB
 # ── Refusal sentences (S9) ───────────────────────────────────────────
 
 MSG_UNAVAILABLE = (
-    "The team library can't check this change right now. "
+    "The catalog can't check this change right now. "
     "Ask your admin to look at the Cinna server."
 )
-MSG_OTHER_REF = "Only the agent's main version can be shared to the team library."
+MSG_OTHER_REF = "Only the agent's main version can be shared to the catalog."
+MSG_MANIFEST_ID_CHANGED = "This agent's identity changed; share it as a new agent instead."
 MSG_SECRET = "This change includes {path}, a file that can hold a password or key, so it can't be shared."
 MSG_CREDENTIALS = "This change includes the agent's credentials folder, which never leaves your computer."
 MSG_APP_DATA = (
@@ -338,8 +342,12 @@ def _parse_version(value: Any) -> tuple[int, int] | None:
     return int(parts[0]), int(parts[1])
 
 
-def check_manifest(raw: bytes | None, kit_dir: Path, warn: IO[str]) -> None:
-    """Refuse a missing / invalid manifest or an incompatible contract major."""
+def check_manifest(
+    raw: bytes | None, kit_dir: Path, warn: IO[str], bound_id: str | None = None
+) -> None:
+    """Refuse a missing / invalid manifest, a manifest whose ``id`` is not the
+    one bound to the agent (``bound_id``, when set) or an incompatible
+    contract major."""
     if raw is None:
         raise PushRefused(MSG_MANIFEST_MISSING)
     try:
@@ -362,6 +370,9 @@ def check_manifest(raw: bytes | None, kit_dir: Path, warn: IO[str]) -> None:
     error = next(iter(sorted(validator.iter_errors(document), key=lambda e: list(e.path))), None)
     if error is not None:
         raise PushRefused(MSG_MANIFEST_INVALID.format(detail=_error_detail(error)))
+
+    if bound_id and str(document.get("id", "")).strip().lower() != bound_id.strip().lower():
+        raise PushRefused(MSG_MANIFEST_ID_CHANGED)
 
     try:
         server = _parse_version((kit_dir / "CONTRACT_VERSION").read_text().strip())
@@ -434,7 +445,12 @@ def evaluate(
         if sum(size for _path, size in tip) > max_tree:
             raise PushRefused(MSG_TREE_TOO_LARGE.format(n=_mb(max_tree)))
         if kind == "agent":
-            check_manifest(git.show_manifest(new), rules.kit_dir, warn)
+            check_manifest(
+                git.show_manifest(new),
+                rules.kit_dir,
+                warn,
+                bound_id=environ.get("CINNA_BOUND_MANIFEST_ID") or None,
+            )
 
 
 def parse_updates(stdin: IO[str]) -> list[tuple[str, str, str]]:

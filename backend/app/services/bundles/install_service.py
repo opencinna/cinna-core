@@ -323,7 +323,12 @@ class InstallService:
         # existing Agent row), not here.
         from app.services.bundles.app_data_service import AppDataService
         from app.services.bundles.bundle_id_service import BundleIdService
+        from app.services.bundles.bundle_service import BundleService
         from app.services.environments.environment_service import EnvironmentService
+
+        # The choke point of every cloud install (catalog, admin, channel
+        # auto-install, git checkout): a desktop agent never runs here.
+        BundleService.require_cloud(bundle)
 
         # 1. Allocate Install row up-front so the bundle_id can be derived.
         install_id = uuid.uuid4()
@@ -986,6 +991,7 @@ class InstallService:
         bundle = BundleService.get_bundle_by_uuid(session, install.bundle_uuid)
         if bundle is None or bundle.latest_revision_id is None:
             raise InstallError("Bundle has no published revisions")
+        BundleService.require_cloud(bundle)
         revision = session.get(AgentBundleRevision, bundle.latest_revision_id)
         if revision is None:
             raise InstallError("Latest revision row missing")

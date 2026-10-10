@@ -183,6 +183,8 @@ class PublishService:
             # frontend writes to them via PATCH /bundles/{uuid}.
             PublishService._apply_pre_publish_ai_drafts(session, install, bundle)
         else:
+            # A desktop agent's id is never a cloud agent's to publish under.
+            BundleService.require_cloud(bundle)
             # Publishing a new version needs ``edit`` on the bundle (the
             # publisher holds ``maintain``).
             publisher = session.get(User, publisher_user_id)

@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, UTC
 
 from sqlmodel import Field, SQLModel, Column
-from sqlalchemy import Index, UniqueConstraint, text, Text
+from sqlalchemy import CheckConstraint, Index, String, UniqueConstraint, text, Text
 
 
 # Default install/update mode constants. Mirror ``UpdateMode`` on Agent for
@@ -25,6 +25,20 @@ class BundleVisibility:
     PRIVATE = "private"   # Publisher only
     USERS = "users"        # Allowlist via BundleAccessGrant
     PUBLIC = "public"      # All authenticated users on this instance
+
+
+class BundleRunsOn:
+    """Where an installed copy of the bundle runs.
+
+    ``cloud`` — installed into Cinna (snapshot revisions, ``/catalog`` installs).
+    ``desktop`` — a desktop agent: content lives in a ``git_repo``, people get
+    it by git clone in Cinna Desktop; every cloud path refuses it
+    (``desktop_only``).
+    """
+    CLOUD = "cloud"
+    DESKTOP = "desktop"
+
+    ALL = (CLOUD, DESKTOP)
 
 
 class BundleInstallMode:
@@ -54,6 +68,23 @@ class AgentBundle(AgentBundleBase, table=True):
             "is_listed",
             "visibility",
             postgresql_where=text("is_listed = true"),
+        ),
+        Index(
+            "uq_agent_bundle_desktop_manifest_id",
+            "manifest_id",
+            unique=True,
+            postgresql_where=text("runs_on = 'desktop'"),
+        ),
+        Index(
+            "uq_agent_bundle_desktop_slug",
+            "slug",
+            unique=True,
+            postgresql_where=text("runs_on = 'desktop'"),
+        ),
+        CheckConstraint(
+            "runs_on = 'cloud' OR (git_repo_id IS NOT NULL AND manifest_id IS NOT NULL "
+            "AND slug IS NOT NULL)",
+            name="ck_agent_bundle_desktop_fields",
         ),
     )
 
@@ -97,6 +128,27 @@ class AgentBundle(AgentBundleBase, table=True):
         foreign_key="ai_credential.id",
         ondelete="SET NULL",
     )
+
+    # ``cloud`` / ``desktop`` (:class:`BundleRunsOn`); immutable.
+    runs_on: str = Field(
+        default=BundleRunsOn.CLOUD,
+        sa_column=Column(
+            String(16), nullable=False, server_default=text(f"'{BundleRunsOn.CLOUD}'")
+        ),
+    )
+    # Desktop agents only: the bare repo holding the content (1:1).
+    git_repo_id: uuid.UUID | None = Field(
+        default=None,
+        foreign_key="git_repo.id",
+        ondelete="RESTRICT",
+        nullable=True,
+        unique=True,
+    )
+    # Desktop agents only: the ``cinna-agent.json`` ``id`` bound at create; a
+    # push whose manifest carries another id is refused.
+    manifest_id: uuid.UUID | None = Field(default=None, nullable=True)
+    # Desktop agents only: the kit slug (``Local/<slug>/`` on the desktop).
+    slug: str | None = Field(default=None, max_length=64, nullable=True)
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

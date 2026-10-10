@@ -82,6 +82,22 @@ class BundleIdService:
         return f"{prefix}.{suffix}"
 
     @staticmethod
+    def desktop_bundle_id(prefix: str, manifest_id: uuid.UUID, taken: set[str]) -> str:
+        """The catalog id of a desktop agent: ``<prefix>.<8 hex of manifest_id>``,
+        or the first of ``-2``, ``-3``, … not in ``taken``.
+
+        Pure (no database, no settings), so the ``desktop_bundles`` migration
+        mints ids exactly as ``POST /catalog/desktop-agents`` does.
+        """
+        base = f"{prefix}.{manifest_id.hex[:8]}"
+        if base not in taken:
+            return base
+        counter = 2
+        while f"{base}-{counter}" in taken:
+            counter += 1
+        return f"{base}-{counter}"
+
+    @staticmethod
     def is_valid_format(bundle_id: str) -> bool:
         """Return True if ``bundle_id`` matches the DNS-like format contract."""
         return bool(BUNDLE_ID_REGEX.match(bundle_id or ""))

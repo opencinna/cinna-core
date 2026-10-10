@@ -62,6 +62,7 @@ from app.services.bundles.git_source_service import (
     GitSourceService,
     GitSourceValidationError,
 )
+from app.services.bundles.exceptions import DesktopOnlyError
 from app.services.bundles.revision_format import RevisionFormatError
 from app.services.common.egress_guard import EgressBlockedError
 from app.services.knowledge.git_operations import (
@@ -329,6 +330,8 @@ async def checkout_agent(
             sync_direction=request.sync_direction,
             name_override=request.name_override,
         )
+    except DesktopOnlyError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.detail)
     except (
         GitSourceNotFoundError,
         GitSourceConflictError,
@@ -390,6 +393,8 @@ async def connect_git_source(
             commit_message=request.commit_message,
             adopt_existing=request.adopt_existing,
         )
+    except DesktopOnlyError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.detail)
     except GitSourceExistingAgentError as exc:
         # Recoverable 409: the subdir already holds an agent. Surface a machine-
         # readable code so the UI can offer to adopt the existing folder

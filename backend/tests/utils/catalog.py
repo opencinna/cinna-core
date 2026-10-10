@@ -1,18 +1,19 @@
-"""Helpers for the team library tests (API wrappers + a real git client).
+"""Helpers for the catalog's desktop agents (API wrappers + a real git client).
 
 Two kinds of helper live here:
 
-* thin API wrappers (``create_library_agent``, ``put_grants`` ...) following
-  the usual ``tests/utils`` convention;
+* thin API wrappers (``create_desktop_agent``, ``put_grants`` ...) over
+  ``/api/v1/catalog``, following the usual ``tests/utils`` convention;
 * :class:`GitClient`, a real ``git`` subprocess wrapper pointed at the loopback
   bridge in ``tests/utils/git_http_bridge.py``. Credentials never touch a
   keychain: the token travels in an ``http.extraHeader`` injected through
   ``GIT_CONFIG_COUNT/KEY/VALUE``, prompts are off and ``credential.helper`` is
   emptied, and the global/system git config is ignored.
 
-``bind_cloud_install_seam`` is a documented Rule-1 exemption: a cloud install
-bound to a library repo is made by a git checkout flow that needs a remote
-clone, so the test inserts the ``AgentGitSource`` row directly.
+``bind_cloud_install_seam`` is a documented Rule-1 exemption: a cloud agent
+bound to a desktop agent's repo can no longer be made through the API (cloud
+checkouts of core repos answer ``desktop_only``), so the test inserts the
+``AgentGitSource`` row directly.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from tests.utils.utils import random_lower_string
 
-_BASE = f"{settings.API_V1_STR}/library"
+_BASE = f"{settings.API_V1_STR}/catalog"
 
 _KIT_VERSION_FILE = (
     Path(__file__).resolve().parents[2]
@@ -75,33 +76,66 @@ def random_slug() -> str:
     return f"lib-{random_lower_string()[:10]}"
 
 
-def create_library_agent(
+def create_desktop_agent(
     client: TestClient,
     headers: dict[str, str],
     slug: str | None = None,
-    name: str = "Library Agent",
+    display_name: str = "Desktop Agent",
     description: str = "Shared with the team",
+    manifest_id: str | None = None,
+    visibility: str | None = None,
     grants: list[dict] | None = None,
 ) -> dict:
-    """``grants`` is sent only when given (omitted = creator only)."""
-    body = {"slug": slug or random_slug(), "name": name, "description": description}
+    """``POST /catalog/desktop-agents``; returns the ``CatalogItem``.
+
+    ``manifest_id`` defaults to a fresh uuid; push a tree written with
+    ``write_agent_tree(..., manifest_id=item["desktop"]["manifest_id"])``.
+    """
+    body: dict = {
+        "slug": slug or random_slug(),
+        "display_name": display_name,
+        "description": description,
+        "manifest_id": manifest_id or str(uuid.uuid4()),
+    }
+    if visibility is not None:
+        body["visibility"] = visibility
     if grants is not None:
         body["grants"] = grants
-    r = client.post(f"{_BASE}/agents", headers=headers, json=body)
-    assert r.status_code == 200, f"Create library agent failed: {r.text}"
+    r = client.post(f"{_BASE}/desktop-agents", headers=headers, json=body)
+    assert r.status_code == 200, f"Create desktop agent failed: {r.text}"
     return r.json()
 
 
-def get_grants(client: TestClient, headers: dict[str, str], repo_id: str) -> list[dict]:
-    r = client.get(f"{_BASE}/agents/{repo_id}/grants", headers=headers)
-    assert r.status_code == 200, f"Get grants failed: {r.text}"
+def repo_id_of(item: dict) -> str:
+    return item["desktop"]["repo_id"]
+
+
+def manifest_id_of(item: dict) -> str:
+    return item["desktop"]["manifest_id"]
+
+
+def get_item(client: TestClient, headers: dict[str, str], item_uuid: str) -> dict:
+    r = client.get(f"{_BASE}/items/{item_uuid}", headers=headers)
+    assert r.status_code == 200, f"Get catalog item failed: {r.text}"
+    return r.json()
+
+
+def list_items(client: TestClient, headers: dict[str, str], **params: str) -> list[dict]:
+    r = client.get(f"{_BASE}/items", headers=headers, params=params)
+    assert r.status_code == 200, f"List catalog items failed: {r.text}"
+    return r.json()["data"]
+
+
+def patch_item(client: TestClient, headers: dict[str, str], item_uuid: str, **fields) -> dict:
+    r = client.patch(f"{_BASE}/items/{item_uuid}", headers=headers, json=fields)
+    assert r.status_code == 200, f"Patch catalog item failed: {r.text}"
     return r.json()
 
 
 def put_grants(
-    client: TestClient, headers: dict[str, str], repo_id: str, grants: list[dict]
+    client: TestClient, headers: dict[str, str], item_uuid: str, grants: list[dict]
 ) -> list[dict]:
-    r = client.put(f"{_BASE}/agents/{repo_id}/grants", headers=headers, json=grants)
+    r = client.put(f"{_BASE}/items/{item_uuid}/grants", headers=headers, json=grants)
     assert r.status_code == 200, f"Put grants failed: {r.text}"
     return r.json()
 
@@ -114,28 +148,15 @@ def role_grant(role: str, access: str) -> dict:
     return {"principal": {"role": role}, "access": access}
 
 
-def everyone_grant(access: str) -> dict:
-    return {"principal": "everyone", "access": access}
-
-
-def list_library(client: TestClient, headers: dict[str, str]) -> dict:
-    r = client.get(_BASE, headers=headers)
-    assert r.status_code == 200, f"List library failed: {r.text}"
-    return r.json()
-
-
-def library_slugs(listing: dict) -> set[str]:
-    return {a["slug"] for a in listing["agents"]}
-
-
-def delete_library_agent(client: TestClient, headers: dict[str, str], repo_id: str):
-    return client.delete(f"{_BASE}/agents/{repo_id}", headers=headers)
+def delete_item(client: TestClient, headers: dict[str, str], item_uuid: str):
+    return client.delete(f"{_BASE}/items/{item_uuid}", headers=headers)
 
 
 def bind_cloud_install_seam(
     db, agent_id: str, owner_id: str, repo_id: str, host: str | None = None
 ) -> None:
-    """DB seam: bind a cloud agent to a library repo via its ``AgentGitSource``."""
+    """DB seam: bind a cloud agent to a desktop agent's repo via its
+    ``AgentGitSource`` (such rows predate the ``desktop_only`` refusal)."""
     from app.models.bundles.agent_git_source import AgentGitSource
 
     db.add(
@@ -163,10 +184,13 @@ def write_agent_tree(
     contract_version: str | None = None,
     manifest: dict | None | bool = True,
     files: dict[str, bytes | str] | None = None,
+    manifest_id: str | None = None,
 ) -> Path:
     """Write a kit folder (tree v3: ``cinna-agent.json`` at the root).
 
     ``manifest=False`` omits the manifest; a dict replaces it entirely.
+    ``manifest_id`` is the manifest ``id`` (the one bound to the desktop agent
+    the tree is pushed to); a fresh uuid when omitted.
     """
     path.mkdir(parents=True, exist_ok=True)
     if manifest is not False:
@@ -175,7 +199,7 @@ def write_agent_tree(
         else:
             major, minor, patch = server_contract_version()
             document = {
-                "id": str(uuid.uuid4()),
+                "id": manifest_id or str(uuid.uuid4()),
                 "name": "My Agent",
                 "slug": slug,
                 "description": "A test agent",

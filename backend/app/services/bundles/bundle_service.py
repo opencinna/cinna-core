@@ -23,10 +23,11 @@ from app.models.bundles.agent_bundle import (
     AgentBundle,
     AgentBundleUpdate,
     BundleInstallMode,
+    BundleRunsOn,
     BundleVisibility,
 )
 from app.models.bundles.agent_bundle_revision import (
-    REVISION_ORIGIN_PUBLISH,
+    CATALOG_REVISION_ORIGINS,
     AgentBundleRevision,
 )
 from app.models.bundles.bundle_access_grant import (
@@ -42,6 +43,7 @@ from app.services.bundles.exceptions import (
     BundleConflictError,
     BundleNotFoundError,
     BundleValidationError,
+    DesktopOnlyError,
     GrantNotFoundError,
     RevisionInUseError,
     RevisionNotFoundError,
@@ -76,6 +78,14 @@ class BundleService:
         return session.exec(stmt).first()
 
     @staticmethod
+    def require_cloud(bundle: AgentBundle) -> AgentBundle:
+        """``bundle`` when it runs in Cinna; :class:`DesktopOnlyError` (409
+        ``desktop_only``) for a desktop agent, which no cloud path serves."""
+        if bundle.runs_on == BundleRunsOn.DESKTOP:
+            raise DesktopOnlyError()
+        return bundle
+
+    @staticmethod
     def get_for_publisher(
         session: Session, bundle_uuid: uuid.UUID, user: User
     ) -> AgentBundle:
@@ -90,12 +100,13 @@ class BundleService:
         bundle = BundleService.get_bundle_by_uuid(session, bundle_uuid)
         if bundle is None:
             raise BundleNotFoundError("Bundle not found")
-        if user.is_superuser:
-            return bundle
-        access = CatalogAccessService.effective_access(session, BUNDLE, bundle, user)
-        if not CatalogAccessService.can_manage(access, user):
-            raise BundleAccessDeniedError("Not your bundle")
-        return bundle
+        if not user.is_superuser:
+            access = CatalogAccessService.effective_access(session, BUNDLE, bundle, user)
+            if not CatalogAccessService.can_manage(access, user):
+                raise BundleAccessDeniedError("Not your bundle")
+        # After the access check, so a desktop agent's existence is never
+        # confirmed to someone who could not manage it.
+        return BundleService.require_cloud(bundle)
 
     @staticmethod
     def list_publisher_bundles(
@@ -103,7 +114,10 @@ class BundleService:
     ) -> list[AgentBundle]:
         stmt = (
             select(AgentBundle)
-            .where(AgentBundle.publisher_user_id == publisher_user_id)
+            .where(
+                AgentBundle.publisher_user_id == publisher_user_id,
+                AgentBundle.runs_on == BundleRunsOn.CLOUD,
+            )
             .order_by(AgentBundle.created_at.desc())
         )
         return list(session.exec(stmt).all())
@@ -197,12 +211,12 @@ class BundleService:
             select(AgentBundleRevision)
             .where(
                 AgentBundleRevision.bundle_id == bundle.id,
-                # Only user-facing catalog publishes belong in the Revisions
-                # card. Git-versioning baselines (origin="git") are the internal
-                # dirty-check SSOT and must not appear here — nor inflate the
-                # version-suggestion the publish dialog derives from the latest
-                # listed revision.
-                AgentBundleRevision.origin == REVISION_ORIGIN_PUBLISH,
+                # Only catalog versions (publishes, desktop shares) belong in
+                # the Revisions card. Git-versioning baselines (origin="git")
+                # are the internal dirty-check SSOT and must not appear here —
+                # nor inflate the version-suggestion the publish dialog derives
+                # from the latest listed revision.
+                AgentBundleRevision.origin.in_(CATALOG_REVISION_ORIGINS),  # type: ignore[attr-defined]
             )
             .order_by(AgentBundleRevision.revision_number.desc())
         )
@@ -413,7 +427,7 @@ class BundleService:
                 .where(
                     AgentBundleRevision.bundle_id == bundle.id,
                     AgentBundleRevision.id != revision.id,
-                    AgentBundleRevision.origin == REVISION_ORIGIN_PUBLISH,
+                    AgentBundleRevision.origin.in_(CATALOG_REVISION_ORIGINS),  # type: ignore[attr-defined]
                 )
                 .order_by(AgentBundleRevision.revision_number.desc())
                 .limit(1)

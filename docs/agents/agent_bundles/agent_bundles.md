@@ -172,6 +172,14 @@ Access is visibility plus grants (user or role x use/edit/maintain); publishing 
 - **Legacy per-user grant routes** (`/bundles/{uuid}/grants`) still work: they list user grants without the publisher's own row, never downgrade an existing higher grant, and refuse to revoke the last maintainer. Managing a bundle through `/bundles/*` needs `maintain` (or superuser).
 - **Orphaned items:** deleting a user can leave an item with no maintainer; superusers can still manage it.
 
+### Bundles that run on your computer
+
+A bundle is either **Runs in Cinna** (`runs_on='cloud'`, the default: published from a cloud agent, installed as a running copy) or **Runs on your computer** (`runs_on='desktop'`): an agent shared from Cinna Desktop, whose content is a git repo served by core. See [Desktop Agents in the Catalog](../../application/catalog/desktop_agents.md).
+
+- A desktop bundle has no snapshot. Each accepted "Share changes" adds a revision with origin `share` ("Version N"), with release notes taken from the commit messages.
+- Access, listing, grants and delete work as for any bundle (`/api/v1/catalog/items/...`). Creating one is `POST /api/v1/catalog/desktop-agents`.
+- Everything that installs, updates, publishes onto or manages a bundle through the cloud paths refuses a desktop bundle with 409 `desktop_only` ("This agent runs on your computer in Cinna Desktop."). Bundle and catalog listings of cloud bundles (`GET /bundles/`, `GET /catalog/`) leave desktop ones out; `GET /catalog/items` lists both.
+
 ### Managing Permissions Across Bundle Access and Producer Scopes (publisher)
 
 A bundle that ships a connection to another agent's [Agent REST API](../agent_api/agent_api.md) (the "two-credential bundle pattern") forces a publisher to manage access in two independent places: who can see/install the bundle, and which scopes each installer holds on the producer agent's API. The **Permissions management** card on the Bundle tab unifies both into one compact per-user list and one "Add user" modal, so the publisher does not have to remember to also visit the producer agent's own page.

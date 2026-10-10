@@ -1,4 +1,4 @@
-"""GitRepoStorage — the bare repositories behind the team library.
+"""GitRepoStorage — the bare repositories behind desktop agents.
 
 One bare repo per :class:`~app.models.library.git_repo.GitRepo` row, at
 ``<GIT_STORAGE_DIR>/<repo_id>.git``. Paths are derived from the row's UUID only,
@@ -19,8 +19,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
+import tarfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +43,11 @@ DELETED_DIRNAME = ".deleted"
 GIT_CALL_TIMEOUT_SECONDS = 30
 #: A manifest larger than this is not parsed for the listing cache.
 MAX_MANIFEST_BYTES = 1024 * 1024
+#: Release notes built from commit messages are capped at this many characters.
+MAX_COMMIT_MESSAGES_CHARS = 10_000
+_CLONE_URL_SUFFIX_RE = re.compile(
+    r"/git/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:\.git)?/?$"
+)
 
 
 class GitRepoStorageError(Exception):
@@ -61,6 +68,24 @@ class GitRepoStorage:
         """``<GIT_STORAGE_DIR>/<repo_id>.git``; raises ``ValueError`` for a non-UUID."""
         canonical = uuid.UUID(str(repo_id))  # ValueError on anything else
         return GitRepoStorage.storage_dir() / f"{canonical}.git"
+
+    @staticmethod
+    def clone_url(repo_id: uuid.UUID) -> str:
+        """The URL Cinna Desktop clones a desktop agent from."""
+        return f"{settings.backend_base_url}/git/{repo_id}.git"
+
+    @staticmethod
+    def repo_id_in_url(url: str) -> uuid.UUID | None:
+        """The core repo a git URL points at, matched on the
+        ``/git/<repo_id>[.git][/]`` suffix so a changed ``backend_base_url``
+        (or an api./bare-domain origin) still matches."""
+        match = _CLONE_URL_SUFFIX_RE.search(url or "")
+        if not match:
+            return None
+        try:
+            return uuid.UUID(match.group(1))
+        except ValueError:
+            return None
 
     @staticmethod
     def git_env() -> dict[str, str]:
@@ -175,8 +200,105 @@ class GitRepoStorage:
         return sha or None
 
     @staticmethod
+    def tree_id(repo_id: uuid.UUID, sha: str) -> str | None:
+        """The git tree id of commit ``sha`` (a desktop revision's content hash)."""
+        path = GitRepoStorage.repo_path(repo_id)
+        if not path.exists() or not _is_hex_sha(sha):
+            return None
+        result = GitRepoStorage._run(
+            ["rev-parse", "--verify", "-q", f"{sha}^{{tree}}"], cwd=path, check=False
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.decode("ascii", "replace").strip() or None
+
+    @staticmethod
+    def commit_messages(repo_id: uuid.UUID, old_sha: str | None, new_sha: str) -> str | None:
+        """Messages of the commits in ``old_sha..new_sha`` (all of ``new_sha``'s
+        history when ``old_sha`` is None), newest first, trimmed, joined by blank
+        lines and capped at :data:`MAX_COMMIT_MESSAGES_CHARS`. ``None`` when
+        there are none."""
+        path = GitRepoStorage.repo_path(repo_id)
+        if not path.exists() or not _is_hex_sha(new_sha):
+            return None
+        span = f"{old_sha}..{new_sha}" if old_sha and _is_hex_sha(old_sha) else new_sha
+        result = GitRepoStorage._run(
+            ["log", "--format=%B%x00", span], cwd=path, check=False
+        )
+        if result.returncode != 0 and span != new_sha:
+            # The previous version is gone from the history; take the tip only.
+            result = GitRepoStorage._run(
+                ["log", "-1", "--format=%B%x00", new_sha], cwd=path, check=False
+            )
+        if result.returncode != 0:
+            return None
+        messages = [
+            m.strip()
+            for m in result.stdout.decode("utf-8", "replace").split("\x00")
+            if m.strip()
+        ]
+        if not messages:
+            return None
+        text = "\n\n".join(messages)
+        if len(text) > MAX_COMMIT_MESSAGES_CHARS:
+            text = text[: MAX_COMMIT_MESSAGES_CHARS - 1] + "…"
+        return text
+
+    @staticmethod
+    def export_paths(
+        repo_id: uuid.UUID, sha: str, paths: list[str], dest: Path
+    ) -> Path:
+        """Extract ``paths`` of commit ``sha`` into ``dest`` (``git archive``,
+        hardened env). Paths missing from the tree are skipped. Symlinks and
+        anything resolving outside ``dest`` are never written."""
+        repo = GitRepoStorage.repo_path(repo_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        if not repo.exists() or not _is_hex_sha(sha):
+            return dest
+        present = GitRepoStorage._run(
+            ["ls-tree", "--name-only", sha, "--", *paths], cwd=repo, check=False
+        )
+        wanted = [
+            line
+            for line in present.stdout.decode("utf-8", "replace").splitlines()
+            if line
+        ]
+        if present.returncode != 0 or not wanted:
+            return dest
+        archive = dest / ".export.tar"
+        try:
+            with archive.open("wb") as handle:
+                try:
+                    proc = subprocess.run(
+                        [*GitRepoStorage.git_base_args(), "archive", "--format=tar", sha, "--", *wanted],
+                        cwd=str(repo),
+                        env=GitRepoStorage.git_env(),
+                        stdout=handle,
+                        stderr=subprocess.PIPE,
+                        timeout=GIT_CALL_TIMEOUT_SECONDS,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise GitRepoStorageError("git archive timed out") from exc
+            if proc.returncode != 0:
+                stderr = proc.stderr.decode("utf-8", "replace").strip()
+                raise GitRepoStorageError(f"git archive failed: {stderr}")
+            root = dest.resolve()
+            with tarfile.open(archive) as tar:
+                safe = [
+                    m
+                    for m in tar.getmembers()
+                    if (m.isfile() or m.isdir())
+                    and (root / m.name).resolve().is_relative_to(root)
+                ]
+                tar.extractall(dest, members=safe, filter="data")
+        finally:
+            archive.unlink(missing_ok=True)
+        return dest
+
+    @staticmethod
     def read_manifest_at(repo_id: uuid.UUID, sha: str) -> dict | None:
-        """``cinna-agent.json`` at ``sha``, projected to ``LibraryManifest`` fields.
+        """``cinna-agent.json`` at ``sha``, projected for ``git_repo.manifest_cache``.
 
         Returns ``None`` for a missing, oversized or unparseable manifest — the
         listing shows no manifest rather than failing.

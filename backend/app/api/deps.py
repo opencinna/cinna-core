@@ -845,7 +845,7 @@ def _resolve_platform_user_from_token(db: Session, raw_token: str) -> User:
     return user
 
 
-# ── Team library git smart-HTTP auth ──────────────────────────────────
+# ── Desktop agent git smart-HTTP auth ─────────────────────────────────
 
 
 class GitHttpAuthError(Exception):
@@ -882,7 +882,7 @@ def _git_http_token(authorization: str | None) -> str:
 
 
 def resolve_git_http_user(db: Session, authorization: str | None) -> User:
-    """Resolve the person behind a git smart-HTTP request (team library).
+    """Resolve the person behind a git smart-HTTP request (desktop agents).
 
     No new token type: the existing resolvers decide. A per-agent CLI token
     (``token_type == "cli"``) resolves to the agent's owner, an account CLI

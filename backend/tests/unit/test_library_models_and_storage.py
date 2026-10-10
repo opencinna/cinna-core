@@ -1,8 +1,7 @@
-"""Team library building blocks that need no database: access ordering, wire
-models, and ``GitRepoStorage`` against real bare repos under ``tmp_path``.
+"""Desktop agent repo building blocks that need no database: the repo model's
+constants, and ``GitRepoStorage`` against real bare repos under ``tmp_path``.
 
-Grant evaluation against Postgres is in
-``tests/migrations/git_repo_library_test.py``.
+Access to desktop agents is the catalog's (``tests/api/catalog/``).
 """
 import json
 import subprocess
@@ -10,19 +9,12 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+import re
+
 import pytest
-from pydantic import ValidationError
 
 from app.core.config import settings
-from app.models.library.git_repo import (
-    EVERYONE_PRINCIPAL_ID,
-    GitRepoKind,
-    LibraryAccess,
-    LibraryGrantIn,
-    LibraryPrincipalKind,
-    LibraryPrincipalRole,
-    LibraryPrincipalUser,
-)
+from app.models.library.git_repo import KIT_SLUG_PATTERN, GitRepo, GitRepoKind
 from app.services.library.git_repo_storage import (
     GitRepoStorage,
     GitRepoStorageError,
@@ -55,53 +47,29 @@ def _push_manifest(bare: Path, work: Path, manifest: object) -> str:
     return _git("rev-parse", "HEAD", cwd=work)
 
 
-# ── access levels ──────────────────────────────────────────────────────────────
+# ── model ─────────────────────────────────────────────────────────────────────
 
 
-def test_access_levels_are_ordered_and_max_ignores_unknown() -> None:
-    assert LibraryAccess.ORDER == ("read", "write", "maintain")
-    assert [LibraryAccess.rank(x) for x in (None, "bogus", "read", "write", "maintain")] == [0, 0, 1, 2, 3]
-    assert LibraryAccess.max("read", "maintain", "write") == "maintain"
-    assert LibraryAccess.max(None, "read") == "read"
-    assert LibraryAccess.max(None, "bogus") is None
-    assert LibraryAccess.max() is None
-    assert EVERYONE_PRINCIPAL_ID == "*"
-    assert set(LibraryPrincipalKind.ALL) == {"user", "role", "everyone"}
+def test_repo_kinds_slug_pattern_and_slim_columns() -> None:
     assert set(GitRepoKind.ALL) == {"agent", "mirror"}
+    assert re.match(KIT_SLUG_PATTERN, "my-agent") and re.match(KIT_SLUG_PATTERN, "a1")
+    for bad in ("A", "-x", "x", "has space", "a" * 64):
+        assert not re.match(KIT_SLUG_PATTERN, bad), bad
+    # Identity and access moved to the desktop bundle (C2).
+    columns = set(GitRepo.__table__.columns.keys())
+    assert not {"slug", "name", "description", "owner_user_id"} & columns
+    assert {"id", "kind", "head_sha", "manifest_cache", "last_pushed_by_user_id"} <= columns
 
 
-# ── wire models ────────────────────────────────────────────────────────────────
-
-
-def test_grant_in_parses_the_three_principal_shapes_and_rejects_bad_input() -> None:
-    uid = uuid.uuid4()
-    user = LibraryGrantIn.model_validate({"principal": {"user_id": str(uid)}, "access": "read"})
-    role = LibraryGrantIn.model_validate({"principal": {"role": "admin"}, "access": "write"})
-    everyone = LibraryGrantIn.model_validate({"principal": "everyone", "access": "maintain"})
-    assert isinstance(user.principal, LibraryPrincipalUser) and user.principal.user_id == uid
-    assert isinstance(role.principal, LibraryPrincipalRole) and role.principal.role == "admin"
-    assert everyone.principal == "everyone"
-
-    for bad in (
-        {"principal": "nobody", "access": "read"},
-        {"principal": "everyone", "access": "owner"},
-        {"principal": {"user_id": "not-a-uuid"}, "access": "read"},
-        {"access": "read"},
-    ):
-        with pytest.raises(ValidationError):
-            LibraryGrantIn.model_validate(bad)
-
-
-def test_principal_models_forbid_extra_keys() -> None:
-    # A body naming both a user and a role is ambiguous and must not parse.
-    with pytest.raises(ValidationError):
-        LibraryGrantIn.model_validate(
-            {"principal": {"user_id": str(uuid.uuid4()), "role": "admin"}, "access": "read"}
-        )
-    with pytest.raises(ValidationError):
-        LibraryGrantIn.model_validate(
-            {"principal": {"role": "admin", "extra": 1}, "access": "read"}
-        )
+def test_clone_url_and_repo_id_in_url() -> None:
+    rid = uuid.uuid4()
+    url = GitRepoStorage.clone_url(rid)
+    assert url == f"{settings.backend_base_url}/git/{rid}.git"
+    assert GitRepoStorage.repo_id_in_url(url) == rid
+    assert GitRepoStorage.repo_id_in_url(f"https://api.example.com/git/{rid}") == rid
+    assert GitRepoStorage.repo_id_in_url(f"https://x/git/{rid}.git/") == rid
+    for other in ("", "https://github.com/a/b.git", f"https://x/git/{rid}.git/extra"):
+        assert GitRepoStorage.repo_id_in_url(other) is None
 
 
 # ── manifest projection ────────────────────────────────────────────────────────
@@ -218,3 +186,31 @@ def test_remove_moves_to_trash_and_two_removes_never_collide(storage: Path) -> N
     GitRepoStorage.init_bare(a, GitRepoKind.AGENT)
     again = GitRepoStorage.remove(a)
     assert again is not None and again != ta and again.is_dir() and ta.is_dir()
+
+
+def test_commit_messages_tree_id_and_export_paths(storage: Path, tmp_path: Path) -> None:
+    rid = uuid.uuid4()
+    bare = GitRepoStorage.init_bare(rid, GitRepoKind.AGENT)
+    work = tmp_path / "work"
+    (work / "skills" / "hello").mkdir(parents=True)
+    (work / "skills" / "hello" / "SKILL.md").write_text("---\nname: hello\n---\n")
+    (work / "secret.txt").write_text("not exported")
+    sha1 = _push_manifest(bare, work, {"id": "i"})
+    (work / "AGENTS.md").write_text("x")
+    _git("add", "-A", cwd=work)
+    _git("commit", "-m", "Second\n\nwith body", cwd=work)
+    _git("fetch", str(work), "+HEAD:refs/heads/main", cwd=bare)
+    sha2 = _git("rev-parse", "HEAD", cwd=work)
+
+    assert GitRepoStorage.commit_messages(rid, None, sha2) == "Second\n\nwith body\n\nm"
+    assert GitRepoStorage.commit_messages(rid, sha1, sha2) == "Second\n\nwith body"
+    assert GitRepoStorage.commit_messages(rid, sha2, sha2) is None
+    assert GitRepoStorage.tree_id(rid, sha2) == _git("rev-parse", f"{sha2}^{{tree}}", cwd=work)
+    assert GitRepoStorage.tree_id(rid, "main") is None  # not a sha
+
+    dest = GitRepoStorage.export_paths(
+        rid, sha2, ["cinna-agent.json", "skills", "missing"], tmp_path / "out"
+    )
+    assert json.loads((dest / "cinna-agent.json").read_text()) == {"id": "i"}
+    assert (dest / "skills" / "hello" / "SKILL.md").is_file()
+    assert not (dest / "secret.txt").exists() and not (dest / ".export.tar").exists()

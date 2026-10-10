@@ -6,7 +6,7 @@ can't be created through a real push (the hook would refuse it), so it is
 written directly. Covers the migration path Cinna Desktop relies on: a version
 that deletes the file is accepted, a version that keeps it is refused.
 
-Paired API-level file: ``tests/api/library/library_push_policy_test.py``.
+Paired API-level file: ``tests/api/catalog/catalog_desktop_push_policy_test.py``.
 """
 import io
 import os

@@ -147,13 +147,11 @@ class EventType:
     IMPROVEMENT_REQUEST_CREATED = "improvement_request_created"
     IMPROVEMENT_REQUEST_UPDATED = "improvement_request_updated"
 
-    # Team library — refresh hints for Cinna Desktop, sent to each reader's
-    # ``user_{id}`` room (never broadcast). ``library.updated`` meta:
-    # ``{repo_id, head_sha, pushed_by: {user_id, display_name}}``;
-    # ``library.granted`` meta: ``{repo_id}`` to users who just gained access.
-    # Wire names are contract (cinna-desktop team-sharing README §4.3).
-    LIBRARY_UPDATED = "library.updated"
-    LIBRARY_GRANTED = "library.granted"
+    # Catalog — ``catalog.updated`` meta ``{kind, uuid, id, revision_number,
+    # head_sha?}``, sent after a new revision (a desktop agent's accepted share)
+    # to each user reached through the item's grants (role grants expanded).
+    # Replaces the earlier team-library's ``library.updated`` / ``library.granted``.
+    CATALOG_UPDATED = "catalog.updated"
 
     # Catalog — ``catalog.granted`` meta ``{kind: 'agent'|'skill', uuid}``, sent
     # after commit to each user's ``user_{id}`` room when a grant change gave

@@ -1,4 +1,4 @@
-"""GitHttpService — git smart HTTP for the team library.
+"""GitHttpService — git smart HTTP for desktop agents (the catalog's git transport).
 
 Serves ``git upload-pack`` / ``git receive-pack`` in ``--stateless-rpc`` mode
 (what ``git http-backend`` does) from async subprocesses, so a large clone or
@@ -35,12 +35,14 @@ from sqlmodel import Session
 from starlette.requests import ClientDisconnect
 
 from app.core.config import settings
-from app.models.library.git_repo import GitRepo, GitRepoKind, LibraryAccess
+from app.models.bundles.agent_bundle import AgentBundle
+from app.models.catalog.catalog_access import CatalogAccess
+from app.models.library.git_repo import GitRepo, GitRepoKind
 from app.models.users.user import User
+from app.services.catalog.catalog_access_service import BUNDLE, CatalogAccessService
 from app.services.cli.platform_knowledge_assets import local_kit_dir
-from app.services.library.exceptions import LibraryAccessDeniedError
+from app.services.library.exceptions import GitAccessDeniedError
 from app.services.library.git_repo_storage import MAIN_REF, GitRepoStorage
-from app.services.library.library_access_service import LibraryAccessService
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ PRE_RECEIVE_HOOK = "pre-receive"
 _GIT_PROTOCOL_RE = re.compile(r"^[A-Za-z0-9=:._-]{1,256}$")
 
 HOOK_UNAVAILABLE_DETAIL = (
-    "The team library can't accept changes right now. "
+    "The catalog can't accept changes right now. "
     "Ask your admin to look at the Cinna server."
 )
 
@@ -183,26 +185,29 @@ class GitHttpService:
         """Startup check: shout when shares would be refused for a missing hook."""
         if not GitHttpService.hook_ready():
             logger.error(
-                "Team library pre-receive hook missing or not executable at %s; "
+                "Desktop agent pre-receive hook missing or not executable at %s; "
                 "every share (git push) will be refused with 503",
                 GitHttpService.hook_path(),
             )
 
     @staticmethod
-    def authorize(session: Session, repo: GitRepo, user: User, service: str) -> None:
-        """Grant decision for one transport call; raises ``LibraryAccessDeniedError``.
+    def authorize(
+        session: Session, repo: GitRepo, bundle: AgentBundle, user: User, service: str
+    ) -> None:
+        """Grant decision for one transport call; raises ``GitAccessDeniedError``.
 
-        ``read`` for upload-pack (any superuser may clone, for oversight),
-        ``write`` for receive-pack; mirrors are never writable.
+        Access is the desktop bundle's (catalog rule P1): ``use`` for
+        upload-pack (any superuser may clone, for oversight), ``edit`` for
+        receive-pack (superusers too); mirrors are never writable.
         """
-        access = LibraryAccessService.effective_access(session, repo, user)
+        access = CatalogAccessService.effective_access(session, BUNDLE, bundle, user)
         if service == RECEIVE_PACK:
-            if repo.kind == GitRepoKind.MIRROR or LibraryAccess.rank(access) < LibraryAccess.rank(
-                LibraryAccess.WRITE
+            if repo.kind == GitRepoKind.MIRROR or not CatalogAccessService.at_least(
+                access, CatalogAccess.EDIT
             ):
-                raise LibraryAccessDeniedError("You can't share changes to this agent.")
+                raise GitAccessDeniedError("You can't share changes to this agent.")
         elif access is None and not user.is_superuser:
-            raise LibraryAccessDeniedError("You don't have access to this agent.")
+            raise GitAccessDeniedError("You don't have access to this agent.")
 
     @staticmethod
     def spawn_env(
@@ -211,6 +216,7 @@ class GitHttpService:
         *,
         repo_kind: str | None = None,
         pusher_id: uuid.UUID | None = None,
+        bound_manifest_id: str | None = None,
     ) -> dict[str, str]:
         env = GitRepoStorage.git_env()
         git_protocol = GitHttpService.clean_git_protocol(git_protocol)
@@ -224,6 +230,7 @@ class GitHttpService:
                     "CINNA_GIT_MAX_BLOB_BYTES": str(settings.GIT_MAX_BLOB_BYTES),
                     "CINNA_GIT_MAX_TREE_BYTES": str(settings.GIT_MAX_TREE_BYTES),
                     "CINNA_PUSHER_ID": str(pusher_id or ""),
+                    "CINNA_BOUND_MANIFEST_ID": bound_manifest_id or "",
                 }
             )
         return env
@@ -291,7 +298,7 @@ class GitHttpService:
                 repo_id,
                 stderr.decode("utf-8", "replace").strip(),
             )
-            raise GitHttpError(500, "The team library is unavailable")
+            raise GitHttpError(500, "The catalog is unavailable")
         if git_protocol and "version=2" in git_protocol:
             return stdout
         return _pkt_line(f"# service={service}\n") + b"0000" + stdout
@@ -308,6 +315,7 @@ class GitHttpService:
         git_protocol: str | None,
         repo_kind: str | None = None,
         pusher_id: uuid.UUID | None = None,
+        bound_manifest_id: str | None = None,
         commands: ReceiveCommands | None = None,
     ) -> AsyncIterator[bytes]:
         """Run one stateless RPC; yields git's stdout.
@@ -323,7 +331,11 @@ class GitHttpService:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + settings.GIT_HTTP_TIMEOUT_SECONDS
         env = GitHttpService.spawn_env(
-            service, git_protocol, repo_kind=repo_kind, pusher_id=pusher_id
+            service,
+            git_protocol,
+            repo_kind=repo_kind,
+            pusher_id=pusher_id,
+            bound_manifest_id=bound_manifest_id,
         )
         proc = await asyncio.create_subprocess_exec(
             *GitHttpService._args(service, repo_id),

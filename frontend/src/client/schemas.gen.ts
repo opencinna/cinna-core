@@ -13350,6 +13350,70 @@ export const CLITokensPublicSchema = {
     title: 'CLITokensPublic'
 } as const;
 
+export const CatalogDesktopSchema = {
+    properties: {
+        repo_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Repo Id'
+        },
+        clone_url: {
+            type: 'string',
+            title: 'Clone Url'
+        },
+        default_branch: {
+            type: 'string',
+            title: 'Default Branch'
+        },
+        head_sha: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Head Sha'
+        },
+        manifest_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Manifest Id'
+        },
+        slug: {
+            type: 'string',
+            title: 'Slug'
+        },
+        engine: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Engine'
+        },
+        contract_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Contract Version'
+        }
+    },
+    type: 'object',
+    required: ['repo_id', 'clone_url', 'default_branch', 'manifest_id', 'slug'],
+    title: 'CatalogDesktop',
+    description: 'Where Cinna Desktop gets a desktop agent.'
+} as const;
+
 export const CatalogEntryPublicSchema = {
     properties: {
         bundle_id: {
@@ -13606,6 +13670,67 @@ export const CatalogGrantInSchema = {
     description: 'One entry of ``PUT /catalog/items/{uuid}/grants`` (full replace).'
 } as const;
 
+export const CatalogInstallSchema = {
+    properties: {
+        where: {
+            type: 'string',
+            enum: ['cloud', 'local'],
+            title: 'Where'
+        },
+        install_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Install Id'
+        },
+        device_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Device Id'
+        },
+        host_manifest_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Host Manifest Id'
+        },
+        revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revision Number'
+        }
+    },
+    type: 'object',
+    required: ['where'],
+    title: 'CatalogInstall',
+    description: `One of the caller's installs of the item. C2 reports cloud installs
+only: an \`\`Agent\`\` built from a bundle (\`\`install_id\`\` = the agent) or a
+skill link on one of the caller's agents (\`\`install_id\`\` = that agent).`
+} as const;
+
 export const CatalogInstallContextSchema = {
     properties: {
         bundle: {
@@ -13652,6 +13777,511 @@ reads that type when building the install request body (the
 request type itself is left as a loose dict to preserve the
 backward-compat shim that accepts the legacy
 \`\`dict[str, uuid_str | data_dict]\`\` shape).`
+} as const;
+
+export const CatalogItemSchema = {
+    properties: {
+        kind: {
+            type: 'string',
+            enum: ['agent', 'skill'],
+            title: 'Kind'
+        },
+        runs_on: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['cloud', 'desktop']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Runs On'
+        },
+        uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Uuid'
+        },
+        id: {
+            type: 'string',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        publisher: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        maintainers: {
+            items: {
+                '$ref': '#/components/schemas/CatalogMaintainer'
+            },
+            type: 'array',
+            title: 'Maintainers',
+            default: []
+        },
+        access: {
+            type: 'string',
+            enum: ['use', 'edit', 'maintain'],
+            title: 'Access'
+        },
+        visibility: {
+            type: 'string',
+            title: 'Visibility'
+        },
+        is_listed: {
+            type: 'boolean',
+            title: 'Is Listed'
+        },
+        latest: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogLatest'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        install_count: {
+            type: 'integer',
+            title: 'Install Count',
+            default: 0
+        },
+        my_installs: {
+            items: {
+                '$ref': '#/components/schemas/CatalogInstall'
+            },
+            type: 'array',
+            title: 'My Installs',
+            default: []
+        },
+        required_credential_specs: {
+            items: {
+                additionalProperties: true,
+                type: 'object'
+            },
+            type: 'array',
+            title: 'Required Credential Specs',
+            default: []
+        },
+        skills: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/CatalogItemSkill'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skills'
+        },
+        desktop: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogDesktop'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        skill: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogSkillContent'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    required: ['kind', 'uuid', 'id', 'name', 'display_name', 'access', 'visibility', 'is_listed'],
+    title: 'CatalogItem'
+} as const;
+
+export const CatalogItemDetailSchema = {
+    properties: {
+        kind: {
+            type: 'string',
+            enum: ['agent', 'skill'],
+            title: 'Kind'
+        },
+        runs_on: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['cloud', 'desktop']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Runs On'
+        },
+        uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Uuid'
+        },
+        id: {
+            type: 'string',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        publisher: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        maintainers: {
+            items: {
+                '$ref': '#/components/schemas/CatalogMaintainer'
+            },
+            type: 'array',
+            title: 'Maintainers',
+            default: []
+        },
+        access: {
+            type: 'string',
+            enum: ['use', 'edit', 'maintain'],
+            title: 'Access'
+        },
+        visibility: {
+            type: 'string',
+            title: 'Visibility'
+        },
+        is_listed: {
+            type: 'boolean',
+            title: 'Is Listed'
+        },
+        latest: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogLatest'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        install_count: {
+            type: 'integer',
+            title: 'Install Count',
+            default: 0
+        },
+        my_installs: {
+            items: {
+                '$ref': '#/components/schemas/CatalogInstall'
+            },
+            type: 'array',
+            title: 'My Installs',
+            default: []
+        },
+        required_credential_specs: {
+            items: {
+                additionalProperties: true,
+                type: 'object'
+            },
+            type: 'array',
+            title: 'Required Credential Specs',
+            default: []
+        },
+        skills: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/CatalogItemSkill'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skills'
+        },
+        desktop: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogDesktop'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        skill: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogSkillContent'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        revisions: {
+            items: {
+                '$ref': '#/components/schemas/CatalogRevision'
+            },
+            type: 'array',
+            title: 'Revisions',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['kind', 'uuid', 'id', 'name', 'display_name', 'access', 'visibility', 'is_listed'],
+    title: 'CatalogItemDetail',
+    description: `\`\`GET /catalog/items/{uuid}\`\`: the item and its versions, newest first.`
+} as const;
+
+export const CatalogItemSkillSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        source: {
+            type: 'string',
+            enum: ['authored', 'catalog'],
+            title: 'Source'
+        },
+        package_id: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Package Id'
+        },
+        package_uuid: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Package Uuid'
+        }
+    },
+    type: 'object',
+    required: ['name', 'source'],
+    title: 'CatalogItemSkill',
+    description: `A skill an agent comes with: authored in its \`\`skills/\`\` or pinned from
+the catalog.`
+} as const;
+
+export const CatalogItemUpdateSchema = {
+    properties: {
+        display_name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Display Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 10000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        visibility: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['private', 'users', 'public']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Visibility'
+        },
+        is_listed: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Listed'
+        }
+    },
+    type: 'object',
+    title: 'CatalogItemUpdate',
+    description: 'Body of ``PATCH /catalog/items/{uuid}`` (maintainer or superuser).'
+} as const;
+
+export const CatalogItemsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/CatalogItem'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'CatalogItemsPublic'
+} as const;
+
+export const CatalogLatestSchema = {
+    properties: {
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        published_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Published At'
+        },
+        published_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        release_notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Release Notes'
+        }
+    },
+    type: 'object',
+    required: ['revision_number', 'published_at'],
+    title: 'CatalogLatest',
+    description: "The item's newest version."
+} as const;
+
+export const CatalogMaintainerSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'display_name'],
+    title: 'CatalogMaintainer',
+    description: 'A person holding ``maintain`` on an item.'
 } as const;
 
 export const CatalogPersonSchema = {
@@ -13715,6 +14345,100 @@ export const CatalogPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'CatalogPublic'
+} as const;
+
+export const CatalogRevisionSchema = {
+    properties: {
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        published_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Published At'
+        },
+        published_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        release_notes: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Release Notes'
+        },
+        origin: {
+            type: 'string',
+            title: 'Origin'
+        },
+        git_commit_sha: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Git Commit Sha'
+        }
+    },
+    type: 'object',
+    required: ['revision_number', 'published_at', 'origin'],
+    title: 'CatalogRevision'
+} as const;
+
+export const CatalogSkillContentSchema = {
+    properties: {
+        frontmatter: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Frontmatter',
+            default: {}
+        },
+        archive_sha256: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Archive Sha256'
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes',
+            default: 0
+        }
+    },
+    type: 'object',
+    title: 'CatalogSkillContent',
+    description: "A skill package's latest content, as its archive."
 } as const;
 
 export const ChannelDebugEventPublicSchema = {
@@ -16330,6 +17054,51 @@ export const DesktopAgentApiKeyFactsSchema = {
 URLs are the PUBLIC origin (\`\`settings.backend_base_url\`\`), recomputed on
 every read. \`\`producer_agent_id\`\` / \`\`base_url\`\` / \`\`spec_url\`\` are null once
 the producer is removed; \`\`issuer_email\`\` once the issuer is removed.`
+} as const;
+
+export const DesktopAgentCreateSchema = {
+    properties: {
+        slug: {
+            type: 'string',
+            pattern: '^[a-z0-9][a-z0-9-]{1,62}$',
+            title: 'Slug'
+        },
+        display_name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Display Name'
+        },
+        description: {
+            type: 'string',
+            maxLength: 10000,
+            title: 'Description',
+            default: ''
+        },
+        manifest_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Manifest Id'
+        },
+        visibility: {
+            type: 'string',
+            enum: ['private', 'users', 'public'],
+            title: 'Visibility',
+            default: 'private'
+        },
+        grants: {
+            items: {
+                '$ref': '#/components/schemas/CatalogGrantIn'
+            },
+            type: 'array',
+            title: 'Grants',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['slug', 'display_name', 'manifest_id'],
+    title: 'DesktopAgentCreate',
+    description: 'Body of ``POST /catalog/desktop-agents``.'
 } as const;
 
 export const DesktopCredentialListSchema = {
@@ -22255,605 +23024,6 @@ export const LandingPagePublicSchema = {
 Its own projection, and its own endpoint, because it is content rather
 than policy: :class:\`AccessPolicyPublic\` is fetched by every login and
 signup page load under one shared cache key, and none of them render this.`
-} as const;
-
-export const LibraryAgentSchema = {
-    properties: {
-        repo_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Repo Id'
-        },
-        slug: {
-            type: 'string',
-            title: 'Slug'
-        },
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        description: {
-            type: 'string',
-            title: 'Description'
-        },
-        clone_url: {
-            type: 'string',
-            title: 'Clone Url'
-        },
-        default_branch: {
-            type: 'string',
-            title: 'Default Branch'
-        },
-        head_sha: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Head Sha'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        },
-        pushed_by: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/LibraryPusher'
-                },
-                {
-                    type: 'null'
-                }
-            ]
-        },
-        maintainers: {
-            items: {
-                '$ref': '#/components/schemas/LibraryMaintainer'
-            },
-            type: 'array',
-            title: 'Maintainers',
-            default: []
-        },
-        manifest: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/LibraryManifest'
-                },
-                {
-                    type: 'null'
-                }
-            ]
-        },
-        cloud_install_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Cloud Install Id'
-        },
-        access: {
-            type: 'string',
-            enum: ['read', 'write', 'maintain'],
-            title: 'Access'
-        }
-    },
-    type: 'object',
-    required: ['repo_id', 'slug', 'name', 'description', 'clone_url', 'default_branch', 'updated_at', 'access'],
-    title: 'LibraryAgent'
-} as const;
-
-export const LibraryAgentAdminSchema = {
-    properties: {
-        repo_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Repo Id'
-        },
-        slug: {
-            type: 'string',
-            title: 'Slug'
-        },
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        description: {
-            type: 'string',
-            title: 'Description'
-        },
-        clone_url: {
-            type: 'string',
-            title: 'Clone Url'
-        },
-        default_branch: {
-            type: 'string',
-            title: 'Default Branch'
-        },
-        head_sha: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Head Sha'
-        },
-        updated_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Updated At'
-        },
-        pushed_by: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/LibraryPusher'
-                },
-                {
-                    type: 'null'
-                }
-            ]
-        },
-        maintainers: {
-            items: {
-                '$ref': '#/components/schemas/LibraryMaintainer'
-            },
-            type: 'array',
-            title: 'Maintainers',
-            default: []
-        },
-        manifest: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/LibraryManifest'
-                },
-                {
-                    type: 'null'
-                }
-            ]
-        },
-        cloud_install_id: {
-            anyOf: [
-                {
-                    type: 'string',
-                    format: 'uuid'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Cloud Install Id'
-        },
-        owner: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/LibraryOwner'
-                },
-                {
-                    type: 'null'
-                }
-            ]
-        },
-        grants: {
-            items: {
-                '$ref': '#/components/schemas/LibraryGrantPublic'
-            },
-            type: 'array',
-            title: 'Grants',
-            default: []
-        }
-    },
-    type: 'object',
-    required: ['repo_id', 'slug', 'name', 'description', 'clone_url', 'default_branch', 'updated_at'],
-    title: 'LibraryAgentAdmin',
-    description: `Admin listing row: a library agent without the caller's \`\`access\`\`,
-plus its creator and every grant.`
-} as const;
-
-export const LibraryAgentCreateSchema = {
-    properties: {
-        slug: {
-            type: 'string',
-            pattern: '^[a-z0-9][a-z0-9-]{1,62}$',
-            title: 'Slug'
-        },
-        name: {
-            type: 'string',
-            maxLength: 255,
-            minLength: 1,
-            title: 'Name'
-        },
-        description: {
-            type: 'string',
-            maxLength: 10000,
-            title: 'Description',
-            default: ''
-        },
-        grants: {
-            anyOf: [
-                {
-                    items: {
-                        '$ref': '#/components/schemas/LibraryGrantIn'
-                    },
-                    type: 'array'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Grants'
-        }
-    },
-    type: 'object',
-    required: ['slug', 'name'],
-    title: 'LibraryAgentCreate',
-    description: 'Body of ``POST /library/agents``.'
-} as const;
-
-export const LibraryGrantInSchema = {
-    properties: {
-        principal: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/LibraryPrincipalUser'
-                },
-                {
-                    '$ref': '#/components/schemas/LibraryPrincipalRole'
-                },
-                {
-                    type: 'string',
-                    const: 'everyone'
-                }
-            ],
-            title: 'Principal'
-        },
-        access: {
-            type: 'string',
-            enum: ['read', 'write', 'maintain'],
-            title: 'Access'
-        }
-    },
-    type: 'object',
-    required: ['principal', 'access'],
-    title: 'LibraryGrantIn',
-    description: 'One entry of ``PUT /library/agents/{repo_id}/grants`` (full replace).'
-} as const;
-
-export const LibraryGrantPublicSchema = {
-    properties: {
-        principal: {
-            anyOf: [
-                {
-                    '$ref': '#/components/schemas/LibraryPrincipalUser'
-                },
-                {
-                    '$ref': '#/components/schemas/LibraryPrincipalRole'
-                },
-                {
-                    type: 'string',
-                    const: 'everyone'
-                }
-            ],
-            title: 'Principal'
-        },
-        access: {
-            type: 'string',
-            enum: ['read', 'write', 'maintain'],
-            title: 'Access'
-        },
-        display_name: {
-            type: 'string',
-            title: 'Display Name'
-        },
-        granted_by: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Granted By'
-        },
-        created_at: {
-            type: 'string',
-            format: 'date-time',
-            title: 'Created At'
-        }
-    },
-    type: 'object',
-    required: ['principal', 'access', 'display_name', 'created_at'],
-    title: 'LibraryGrantPublic'
-} as const;
-
-export const LibraryListingSchema = {
-    properties: {
-        agents: {
-            items: {
-                '$ref': '#/components/schemas/LibraryAgent'
-            },
-            type: 'array',
-            title: 'Agents',
-            default: []
-        },
-        mirrors: {
-            items: {
-                '$ref': '#/components/schemas/LibraryMirror'
-            },
-            type: 'array',
-            title: 'Mirrors',
-            default: []
-        }
-    },
-    type: 'object',
-    title: 'LibraryListing',
-    description: 'Response of ``GET /library``.'
-} as const;
-
-export const LibraryMaintainerSchema = {
-    properties: {
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
-        display_name: {
-            type: 'string',
-            title: 'Display Name'
-        }
-    },
-    type: 'object',
-    required: ['user_id', 'display_name'],
-    title: 'LibraryMaintainer'
-} as const;
-
-export const LibraryManifestSchema = {
-    properties: {
-        id: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Id'
-        },
-        name: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Name'
-        },
-        description: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Description'
-        },
-        runtime: {
-            '$ref': '#/components/schemas/LibraryManifestRuntime'
-        },
-        contract_version: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Contract Version'
-        }
-    },
-    type: 'object',
-    title: 'LibraryManifest',
-    description: 'The projection of ``cinna-agent.json`` at HEAD the library shows.'
-} as const;
-
-export const LibraryManifestRuntimeSchema = {
-    properties: {
-        engine: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Engine'
-        }
-    },
-    type: 'object',
-    title: 'LibraryManifestRuntime'
-} as const;
-
-export const LibraryMirrorSchema = {
-    properties: {
-        marketplace_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'Marketplace Id'
-        },
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        clone_url: {
-            type: 'string',
-            title: 'Clone Url'
-        },
-        head_sha: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Head Sha'
-        },
-        format: {
-            type: 'string',
-            enum: ['claude', 'codex', 'skills', 'cinna'],
-            title: 'Format'
-        },
-        entries: {
-            items: {
-                '$ref': '#/components/schemas/LibraryMirrorEntry'
-            },
-            type: 'array',
-            title: 'Entries',
-            default: []
-        }
-    },
-    type: 'object',
-    required: ['marketplace_id', 'name', 'clone_url', 'format'],
-    title: 'LibraryMirror'
-} as const;
-
-export const LibraryMirrorEntrySchema = {
-    properties: {
-        name: {
-            type: 'string',
-            title: 'Name'
-        },
-        kind: {
-            type: 'string',
-            enum: ['agent', 'plugin', 'skill'],
-            title: 'Kind'
-        },
-        path: {
-            type: 'string',
-            title: 'Path'
-        },
-        description: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Description'
-        },
-        version: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Version'
-        },
-        supported: {
-            type: 'boolean',
-            title: 'Supported'
-        },
-        unsupported_reason: {
-            anyOf: [
-                {
-                    type: 'string'
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Unsupported Reason'
-        }
-    },
-    type: 'object',
-    required: ['name', 'kind', 'path', 'supported'],
-    title: 'LibraryMirrorEntry'
-} as const;
-
-export const LibraryOwnerSchema = {
-    properties: {
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
-        display_name: {
-            type: 'string',
-            title: 'Display Name'
-        }
-    },
-    type: 'object',
-    required: ['user_id', 'display_name'],
-    title: 'LibraryOwner'
-} as const;
-
-export const LibraryPrincipalRoleSchema = {
-    properties: {
-        role: {
-            type: 'string',
-            title: 'Role'
-        }
-    },
-    additionalProperties: false,
-    type: 'object',
-    required: ['role'],
-    title: 'LibraryPrincipalRole'
-} as const;
-
-export const LibraryPrincipalUserSchema = {
-    properties: {
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        }
-    },
-    additionalProperties: false,
-    type: 'object',
-    required: ['user_id'],
-    title: 'LibraryPrincipalUser'
-} as const;
-
-export const LibraryPusherSchema = {
-    properties: {
-        user_id: {
-            type: 'string',
-            format: 'uuid',
-            title: 'User Id'
-        },
-        display_name: {
-            type: 'string',
-            title: 'Display Name'
-        }
-    },
-    type: 'object',
-    required: ['user_id', 'display_name'],
-    title: 'LibraryPusher',
-    description: 'The person behind the last accepted push.'
 } as const;
 
 export const LoginTokenSchema = {

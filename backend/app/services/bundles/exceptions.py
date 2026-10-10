@@ -40,3 +40,22 @@ class RevisionInUseError(BundleConflictError):
 
 class GrantNotFoundError(BundleNotFoundError):
     pass
+
+
+DESKTOP_ONLY_CODE = "desktop_only"
+DESKTOP_ONLY_MESSAGE = "This agent runs on your computer in Cinna Desktop."
+
+
+class DesktopOnlyError(BundleConflictError):
+    """A cloud path was asked to act on a desktop agent (``runs_on='desktop'``).
+
+    Answered as 409 with the structured ``detail`` below, so clients can match
+    on ``code`` rather than on the sentence.
+    """
+
+    def __init__(self, message: str = DESKTOP_ONLY_MESSAGE) -> None:
+        super().__init__(message)
+
+    @property
+    def detail(self) -> dict:
+        return {"code": DESKTOP_ONLY_CODE, "message": str(self)}

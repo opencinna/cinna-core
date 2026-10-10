@@ -124,7 +124,7 @@ Note: `/hooks/` (task triggers) carries the same requirement. Both paths must ap
 
 ### `/git/`
 
-**Feature:** team library git smart HTTP (`/git/<repo_id>.git/...`) — see [Team Library](../application/team_library/team_library.md).
+**Feature:** desktop agent git smart HTTP (`/git/<repo_id>.git/...`) — see [Desktop Agents in the Catalog](../application/catalog/desktop_agents.md).
 **Why a dedicated block:** clones and pushes stream large packs both ways. The generic `/api/` block's 1 MB body default would break pushes, and there is deliberately no `/api/...` alias.
 **Special requirements:** `proxy_buffering off`, `proxy_request_buffering off`, `proxy_cache off`, `client_max_body_size 256m` (matches `GIT_MAX_PUSH_BYTES`), `proxy_read_timeout`/`proxy_send_timeout` 600s (matches `GIT_HTTP_TIMEOUT_SECONDS`), forwarded headers. Declare before `/`.
 **Upstream:** backend.

@@ -1,20 +1,22 @@
-"""Team library git smart HTTP, driven by a real ``git`` binary.
+"""Desktop agents over git smart HTTP, driven by a real ``git`` binary.
 
 ``git clone`` / ``commit`` / ``push`` / ``pull`` run as subprocesses against a
 loopback bridge (``tests/utils/git_http_bridge.py``) that forwards to the app
-under test, so route registration, auth, the grants check, ``git
+under test, so route registration, auth, the catalog access check, ``git
 upload-pack``/``receive-pack``, the ``pre-receive`` hook and the post-push
-bookkeeping all execute for real. See ``tests/api/library/README.md``.
+revision all execute for real. See ``tests/api/catalog/README.md``.
 
 Scenarios:
-  1. Round trip: clone empty -> push -> clone elsewhere -> second push -> pull,
-     over protocol v0 and v2.
+  1. Round trip: clone empty -> push (Version 1) -> clone elsewhere -> second
+     push (Version 2, notes = commit message) -> pull, over protocol v0 and v2.
   2. Non-fast-forward and branch delete are refused; head_sha is untouched.
   3. Auth: 401 + Basic challenge, Basic ``x-access-token``, every accepted
      token kind and every rejected one.
-  4. Grants matrix (read/write/maintain x user/role/everyone) over the wire.
-  5. Real git honours the grants (reader push 403, stranger clone 403).
+  4. Access matrix (use/edit/maintain x user/role, public visibility) over the wire.
+  5. Real git honours the grants (user push 403, stranger clone 403).
   6. gzip request body on upload-pack.
+  7. An accepted push sends ``catalog.updated`` to grant holders and audits;
+     a refused one does neither.
 """
 import base64
 import gzip
@@ -33,19 +35,22 @@ from tests.utils.cli import (
     revoke_cli_token,
 )
 from tests.utils.desktop_auth import obtain_desktop_tokens, revoke_desktop_client
-from tests.utils.library import (
+from tests.utils.catalog import (
     GitClient,
-    create_library_agent,
-    everyone_grant,
-    list_library,
-    library_slugs,
+    create_desktop_agent,
+    get_item,
+    list_items,
     make_person,
+    manifest_id_of,
+    patch_item,
     put_grants,
+    repo_id_of,
     role_grant,
     user_grant,
     write_agent_tree,
 )
 from tests.utils.platform_token import mint_platform_token
+from tests.utils.security_event import events_of_type
 
 
 def _bearer(token: str) -> dict[str, str]:
@@ -63,10 +68,8 @@ def _refs(client: TestClient, repo_id: str, service: str, headers=None):
     )
 
 
-def _head_sha(client: TestClient, headers: dict, repo_id: str) -> str | None:
-    r = client.get(f"/api/v1/library/agents/{repo_id}", headers=headers)
-    assert r.status_code == 200, r.text
-    return r.json()["head_sha"]
+def _head_sha(client: TestClient, headers: dict, item: dict) -> str | None:
+    return get_item(client, headers, item["uuid"])["desktop"]["head_sha"]
 
 
 def _pkt(payload: bytes) -> bytes:
@@ -77,8 +80,8 @@ def _seed_first_push(client, bridge, tmp_path, owner, repo) -> tuple[GitClient, 
     """Clone the empty repo as ``owner``, push a valid agent, return (git, work, sha)."""
     git = GitClient(tmp_path, token=owner.token)
     work = tmp_path / "work-a"
-    assert git.clone(bridge.repo_url(repo["repo_id"]), work).ok
-    write_agent_tree(work, slug=repo["slug"])
+    assert git.clone(bridge.repo_url(repo_id_of(repo)), work).ok
+    write_agent_tree(work, slug=repo["name"], manifest_id=manifest_id_of(repo))
     sha = git.commit_all(work, "first")
     result = git.push(work)
     assert result.ok, result.output
@@ -89,29 +92,32 @@ def test_real_git_round_trip_over_protocol_v0_and_v2(
     client: TestClient, bridge, tmp_path, superuser_token_headers
 ) -> None:
     """
-    1. Owner creates a library agent and clones the empty repo
-    2. Owner commits a valid agent and pushes -> API shows head_sha + manifest
+    1. Owner creates a desktop agent and clones the empty repo
+    2. Owner commits a valid agent and pushes -> Version 1 with head_sha + manifest
     3. A second person clones it (protocol v0 and v2) and sees the files
-    4. Owner pushes a second commit; the second person pulls it
+    4. Owner pushes a second commit -> Version 2; the second person pulls it
     """
     owner = make_person(client, superuser_token_headers)
     reader = make_person(client, superuser_token_headers)
-    repo = create_library_agent(
-        client, owner.headers, name="Round Trip", grants=[user_grant(reader.id, "read")]
+    repo = create_desktop_agent(
+        client, owner.headers, display_name="Round Trip", visibility="users",
+        grants=[user_grant(reader.id, "use")],
     )
-    repo_id = repo["repo_id"]
-    assert repo["clone_url"].endswith(f"/git/{repo_id}.git")
-    assert repo["head_sha"] is None and repo["manifest"] is None
-    assert repo["pushed_by"] is None
+    repo_id = repo_id_of(repo)
+    assert repo["desktop"]["clone_url"].endswith(f"/git/{repo_id}.git")
+    assert repo["desktop"]["head_sha"] is None and repo["latest"] is None
+    assert repo["runs_on"] == "desktop" and repo["access"] == "maintain"
 
     # ── Phase 1-2: clone empty, push ──────────────────────────────────
     git, work, sha1 = _seed_first_push(client, bridge, tmp_path, owner, repo)
-    got = client.get(f"/api/v1/library/agents/{repo_id}", headers=owner.headers).json()
-    assert got["head_sha"] == sha1
-    assert got["manifest"]["name"] == "My Agent"
-    assert got["manifest"]["contract_version"]
-    assert got["pushed_by"]["user_id"] == owner.id
-    assert repo["slug"] in library_slugs(list_library(client, owner.headers))
+    got = get_item(client, owner.headers, repo["uuid"])
+    assert got["desktop"]["head_sha"] == sha1
+    assert got["desktop"]["contract_version"]
+    assert got["latest"]["revision_number"] == 1
+    assert got["latest"]["published_by"]["user_id"] == owner.id
+    assert got["latest"]["release_notes"] == "first"
+    assert [r["git_commit_sha"] for r in got["revisions"]] == [sha1]
+    assert repo["uuid"] in {i["uuid"] for i in list_items(client, reader.headers, kind="agent")}
 
     # ── Phase 3: another person clones, over both wire protocols ──────
     for protocol in ("0", "2"):
@@ -127,7 +133,9 @@ def test_real_git_round_trip_over_protocol_v0_and_v2(
     (work / "notes.md").write_text("second\n")
     sha2 = git.commit_all(work, "second")
     assert git.push(work).ok
-    assert _head_sha(client, owner.headers, repo_id) == sha2
+    assert _head_sha(client, owner.headers, repo) == sha2
+    latest = get_item(client, owner.headers, repo["uuid"])["latest"]
+    assert latest["revision_number"] == 2 and latest["release_notes"] == "second"
     pulled = rgit.run("pull", "--ff-only", "origin", "main", cwd=tmp_path / "clone-v2")
     assert pulled.ok, pulled.output
     assert (tmp_path / "clone-v2" / "notes.md").read_text() == "second\n"
@@ -144,8 +152,8 @@ def test_non_fast_forward_and_branch_delete_are_refused(
     4. After a rebase the second push goes through; head_sha follows
     """
     owner = make_person(client, superuser_token_headers)
-    repo = create_library_agent(client, owner.headers)
-    repo_id = repo["repo_id"]
+    repo = create_desktop_agent(client, owner.headers)
+    repo_id = repo_id_of(repo)
     git, work_a, _ = _seed_first_push(client, bridge, tmp_path, owner, repo)
     work_b = tmp_path / "work-b"
     assert git.clone(bridge.repo_url(repo_id), work_b).ok
@@ -160,20 +168,20 @@ def test_non_fast_forward_and_branch_delete_are_refused(
     rejected = git.push(work_b)
     assert not rejected.ok
     assert "rejected" in rejected.output.lower()
-    assert _head_sha(client, owner.headers, repo_id) == sha_a
+    assert _head_sha(client, owner.headers, repo) == sha_a
 
     # ── Phase 3: forced overwrite and delete are refused too ──────────
     forced = git.push(work_b, "--force", "HEAD:refs/heads/main")
     assert not forced.ok
-    assert _head_sha(client, owner.headers, repo_id) == sha_a
+    assert _head_sha(client, owner.headers, repo) == sha_a
     deleted = git.push(work_b, ":main")
     assert not deleted.ok
-    assert _head_sha(client, owner.headers, repo_id) == sha_a
+    assert _head_sha(client, owner.headers, repo) == sha_a
 
     # ── Phase 4: rebase and push ──────────────────────────────────────
     assert git.run("pull", "--rebase", "origin", "main", cwd=work_b).ok
     assert git.push(work_b).ok
-    new_head = _head_sha(client, owner.headers, repo_id)
+    new_head = _head_sha(client, owner.headers, repo)
     assert new_head not in (sha_a, sha_b, None)
     fresh = tmp_path / "fresh"
     assert git.clone(bridge.repo_url(repo_id), fresh).ok
@@ -190,8 +198,8 @@ def test_authentication_over_http(
     4. A real git without credentials cannot clone
     """
     owner = make_person(client, superuser_token_headers)
-    repo = create_library_agent(client, owner.headers)
-    repo_id = repo["repo_id"]
+    repo = create_desktop_agent(client, owner.headers)
+    repo_id = repo_id_of(repo)
 
     # ── Phase 1: unauthenticated ──────────────────────────────────────
     for service in ("git-upload-pack", "git-receive-pack"):
@@ -239,8 +247,8 @@ def test_every_accepted_and_rejected_token_kind(
     revoked CLI token, agent-env token, expired token.
     """
     dev = make_person(client, superuser_token_headers, role="agent-developer")
-    repo = create_library_agent(client, dev.headers)
-    repo_id = repo["repo_id"]
+    repo = create_desktop_agent(client, dev.headers)
+    repo_id = repo_id_of(repo)
     url = bridge.repo_url(repo_id)
 
     def upload(headers):
@@ -291,20 +299,23 @@ def test_every_accepted_and_rejected_token_kind(
     ).ok
 
 
-def test_grants_matrix_over_the_wire(
+def test_access_matrix_over_the_wire(
     client: TestClient, tmp_path, superuser_token_headers
 ) -> None:
     """
-    For every (principal kind x access level) the matching subject can read
-    (upload-pack advertisement) and, from ``write`` up, push (receive-pack);
-    a non-matching person gets 403 both ways. Effective access is the max over
-    grants; a superuser has no git access without a grant.
+    For every (principal kind x level) the matching subject can clone
+    (upload-pack advertisement) and, from ``edit`` up, push (receive-pack); a
+    non-matching person gets 403 both ways. ``use`` counts only while the agent
+    is ``visibility='users'``; ``public`` gives everyone ``use``. Effective
+    access is the max over grants; a superuser may clone any agent but needs
+    ``edit`` to push.
     """
     owner = make_person(client, superuser_token_headers)
     plain = make_person(client, superuser_token_headers)
     other = make_person(client, superuser_token_headers)
     developer = make_person(client, superuser_token_headers, role="agent-developer")
-    repo_id = create_library_agent(client, owner.headers)["repo_id"]
+    item = create_desktop_agent(client, owner.headers, visibility="users")
+    repo_id = repo_id_of(item)
     owner_grant = user_grant(owner.id, "maintain")
 
     def codes(person_headers):
@@ -313,60 +324,64 @@ def test_grants_matrix_over_the_wire(
             _refs(client, repo_id, "git-receive-pack", person_headers).status_code,
         )
 
-    expected = {"read": (200, 403), "write": (200, 200), "maintain": (200, 200)}
+    expected = {"use": (200, 403), "edit": (200, 200), "maintain": (200, 200)}
     cases = [
-        ("user", plain, lambda a: user_grant(plain.id, a), ("read", "write", "maintain")),
-        ("role", developer, lambda a: role_grant("agent-developer", a), ("read", "write")),
-        ("everyone", plain, everyone_grant, ("read", "write")),
+        ("user", plain, lambda a: user_grant(plain.id, a), ("use", "edit", "maintain")),
+        ("role", developer, lambda a: role_grant("agent-developer", a), ("use", "edit")),
     ]
     for kind, subject, make_grant, levels in cases:
         for level in levels:
-            put_grants(client, owner.headers, repo_id, [owner_grant, make_grant(level)])
+            put_grants(client, owner.headers, item["uuid"], [owner_grant, make_grant(level)])
             assert codes(_bearer(subject.token)) == expected[level], (kind, level)
-            if kind != "everyone":
-                assert codes(_bearer(other.token)) == (403, 403), (kind, level)
+            assert codes(_bearer(other.token)) == (403, 403), (kind, level)
 
-    # Everyone-level grant reaches any person, including the non-matching one.
-    put_grants(client, owner.headers, repo_id, [owner_grant, everyone_grant("read")])
+    # ``use`` stops counting once the agent is private again.
+    put_grants(client, owner.headers, item["uuid"], [owner_grant, user_grant(plain.id, "use")])
+    patch_item(client, owner.headers, item["uuid"], visibility="private")
+    assert codes(_bearer(plain.token)) == (403, 403)
+
+    # Public reaches any person, for cloning only.
+    patch_item(client, owner.headers, item["uuid"], visibility="public")
     assert codes(_bearer(other.token)) == (200, 403)
 
-    # Max over several matching grants: user read + everyone write -> write.
+    # Max over several matching grants: user use + role edit -> edit.
     put_grants(
-        client, owner.headers, repo_id,
-        [owner_grant, user_grant(plain.id, "read"), everyone_grant("write")],
+        client, owner.headers, item["uuid"],
+        [owner_grant, user_grant(developer.id, "use"), role_grant("agent-developer", "edit")],
     )
-    assert codes(_bearer(plain.token)) == (200, 200)
+    assert codes(_bearer(developer.token)) == (200, 200)
 
-    # Narrowed back to the owner: everyone else is out.
-    put_grants(client, owner.headers, repo_id, [owner_grant])
+    # Narrowed back to the owner and private: everyone else is out.
+    patch_item(client, owner.headers, item["uuid"], visibility="private")
+    put_grants(client, owner.headers, item["uuid"], [owner_grant])
     assert codes(_bearer(plain.token)) == (403, 403)
     assert codes(_bearer(owner.token)) == (200, 200)
 
-    # Superuser: may clone any repo, but pushing still needs a grant.
+    # Superuser: may clone any repo, but pushing still needs ``edit``.
     assert codes(superuser_token_headers) == (200, 403)
-    put_grants(client, owner.headers, repo_id, [owner_grant, role_grant("admin", "read")])
-    assert codes(superuser_token_headers) == (200, 403)
+    put_grants(client, owner.headers, item["uuid"], [owner_grant, role_grant("admin", "edit")])
+    assert codes(superuser_token_headers) == (200, 200)
 
 
 def test_real_git_honours_grants(
     client: TestClient, bridge, tmp_path, superuser_token_headers
 ) -> None:
     """
-    1. Reader (user read) clones but cannot push (403)
-    2. Writer (role write) pushes; the listing names them as pushed_by; the owner's clone pulls it
-    3. Narrowed to the owner: the former reader can no longer clone (403)
+    1. A ``use`` holder clones but cannot push (403)
+    2. An ``edit`` holder (role) pushes; the new version names them; the owner's clone pulls it
+    3. Narrowed to the owner: the former user can no longer clone (403)
     """
     owner = make_person(client, superuser_token_headers)
     reader = make_person(client, superuser_token_headers)
     writer = make_person(client, superuser_token_headers, role="agent-developer")
-    repo = create_library_agent(client, owner.headers)
-    repo_id = repo["repo_id"]
+    repo = create_desktop_agent(client, owner.headers, visibility="users")
+    repo_id = repo_id_of(repo)
     url = bridge.repo_url(repo_id)
     ogit, owork, sha1 = _seed_first_push(client, bridge, tmp_path, owner, repo)
     owner_grant = user_grant(owner.id, "maintain")
     put_grants(
-        client, owner.headers, repo_id,
-        [owner_grant, user_grant(reader.id, "read"), role_grant("agent-developer", "write")],
+        client, owner.headers, repo["uuid"],
+        [owner_grant, user_grant(reader.id, "use"), role_grant("agent-developer", "edit")],
     )
 
     # ── Phase 1: reader ───────────────────────────────────────────────
@@ -377,7 +392,7 @@ def test_real_git_honours_grants(
     rgit.commit_all(rwork, "reader change")
     denied = rgit.push(rwork)
     assert not denied.ok and "403" in denied.output
-    assert _head_sha(client, owner.headers, repo_id) == sha1
+    assert _head_sha(client, owner.headers, repo) == sha1
 
     # ── Phase 2: writer ───────────────────────────────────────────────
     wgit = GitClient(tmp_path, token=writer.token)
@@ -387,14 +402,15 @@ def test_real_git_honours_grants(
     sha_w = wgit.commit_all(wwork, "writer change")
     pushed = wgit.push(wwork)
     assert pushed.ok, pushed.output
-    assert _head_sha(client, owner.headers, repo_id) == sha_w
-    listed = next(a for a in list_library(client, owner.headers)["agents"] if a["repo_id"] == repo_id)
-    assert listed["pushed_by"]["user_id"] == writer.id
+    assert _head_sha(client, owner.headers, repo) == sha_w
+    latest = get_item(client, owner.headers, repo["uuid"])["latest"]
+    assert latest["published_by"]["user_id"] == writer.id
+    assert latest["release_notes"] == "writer change"
     assert ogit.run("pull", "--ff-only", "origin", "main", cwd=owork).ok
     assert (owork / "w.md").exists()
 
     # ── Phase 3: access removed ───────────────────────────────────────
-    put_grants(client, owner.headers, repo_id, [owner_grant])
+    put_grants(client, owner.headers, repo["uuid"], [owner_grant])
     gone = rgit.clone(url, tmp_path / "reader2")
     assert not gone.ok and "403" in gone.output
     assert not wgit.run("fetch", "origin", cwd=wwork).ok
@@ -405,9 +421,9 @@ def test_gzip_request_body_is_accepted_by_upload_pack(
 ) -> None:
     """A raw POST of gzip-compressed pkt-lines (what git sends for big wants) -> 200 + pack."""
     owner = make_person(client, superuser_token_headers)
-    repo = create_library_agent(client, owner.headers)
+    repo = create_desktop_agent(client, owner.headers)
     _git, _work, sha = _seed_first_push(client, bridge, tmp_path, owner, repo)
-    url = f"/git/{repo['repo_id']}.git/git-upload-pack"
+    url = f"/git/{repo_id_of(repo)}.git/git-upload-pack"
     request = _pkt(f"want {sha} ofs-delta agent=test\n".encode()) + b"0000" + _pkt(b"done\n")
     headers = {
         **_bearer(owner.token),
@@ -432,3 +448,63 @@ def test_gzip_request_body_is_accepted_by_upload_pack(
     )
     assert bad.status_code in (200, 400, 413)
     assert b"PACK" not in bad.content
+
+
+def _emits(stub, event_type: str) -> list[dict]:
+    return [
+        e for e in stub.emitted_events
+        if e["event"] == "event" and e["data"]["type"] == event_type
+    ]
+
+
+def test_push_events_audit_and_refused_push_silence(
+    client: TestClient, bridge, tmp_path, superuser_token_headers, socket_stub
+) -> None:
+    """
+    1. Owner shares with one ``use`` holder only (a bystander has no grant)
+    2. Accepted push -> catalog.updated to owner + holder rooms, not bystander;
+       a CATALOG_DESKTOP_PUSH_ACCEPTED audit row
+    3. Refused push -> no further catalog.updated, no further audit row
+    """
+    owner = make_person(client, superuser_token_headers)
+    reader = make_person(client, superuser_token_headers)
+    bystander = make_person(client, superuser_token_headers)
+    item = create_desktop_agent(
+        client, owner.headers, visibility="users", grants=[user_grant(reader.id, "use")]
+    )
+
+    git = GitClient(tmp_path, token=owner.token)
+    work = tmp_path / "w"
+    assert git.clone(bridge.repo_url(repo_id_of(item)), work).ok
+    write_agent_tree(work, slug=item["name"], manifest_id=manifest_id_of(item))
+    sha = git.commit_all(work, "first")
+    socket_stub.emitted_events.clear()
+    assert git.push(work).ok
+
+    updated = _emits(socket_stub, "catalog.updated")
+    rooms = {e["room"] for e in updated}
+    assert rooms == {f"user_{owner.id}", f"user_{reader.id}"}
+    assert f"user_{bystander.id}" not in rooms
+    assert all(e["room"] for e in socket_stub.emitted_events)  # never a no-room broadcast
+    meta = updated[0]["data"]["meta"]
+    assert meta == {
+        "kind": "agent",
+        "uuid": item["uuid"],
+        "id": item["id"],
+        "revision_number": 1,
+        "head_sha": sha,
+    }
+
+    audit = events_of_type(client, owner.headers, "CATALOG_DESKTOP_PUSH_ACCEPTED")
+    assert len(audit) == 1
+    assert audit[0]["details"]["slug"] == item["name"]
+    assert audit[0]["details"]["after"] == sha and audit[0]["details"]["before"] is None
+    assert events_of_type(client, owner.headers, "CATALOG_DESKTOP_AGENT_CREATED")
+
+    # ── refused push ──────────────────────────────────────────────────
+    (work / ".env").write_text("K=1")
+    git.commit_all(work, "secret")
+    socket_stub.emitted_events.clear()
+    assert not git.push(work).ok
+    assert _emits(socket_stub, "catalog.updated") == []
+    assert len(events_of_type(client, owner.headers, "CATALOG_DESKTOP_PUSH_ACCEPTED")) == 1

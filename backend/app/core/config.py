@@ -1034,12 +1034,12 @@ class Settings(BaseSettings):
     # catalog skill. See the backend volume in ``docker-compose.yml``.
     SKILL_STORAGE_DIR: str = "/app/data/skills"
 
-    # Team library git storage (bare repos served at ``/git/<repo_id>.git``).
-    #   <GIT_STORAGE_DIR>/<repo_id>.git          one bare repo per library entry
+    # Desktop agents' git storage (bare repos served at ``/git/<repo_id>.git``).
+    #   <GIT_STORAGE_DIR>/<repo_id>.git          one bare repo per desktop agent
     #   <GIT_STORAGE_DIR>/.deleted/<repo_id>-<utc>  removed repos, purged by the operator
     #
     # MUST be a persisted mount, not container-local scratch: the bare repos ARE
-    # the team library's content (the DB holds only metadata and grants), so
+    # desktop agents' content (the DB holds only catalog metadata and grants), so
     # losing this directory on redeploy loses every shared agent. Never
     # bind-mounted into agent containers, so there is no HOST_ counterpart.
     GIT_STORAGE_DIR: str = "/app/data/git"

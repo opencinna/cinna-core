@@ -160,6 +160,26 @@ The install wizard is re-entered; when `InstallService` calls `AppDataService.ge
 4. The `BundleAccessGrant` row is created; the target user now sees the bundle in the catalog
 5. Publisher revokes a user's access from the same card's per-row **Remove** action. Removal is cascading and single-action: after an `AlertDialog` confirmation it revokes the bundle grant (if present) together with every producer-scope grant that user holds across the producers the publisher manages. Revoking every user leaves the bundle in `users` visibility but invisible to everyone except the publisher
 
+### Access: visibility plus grants (one access model)
+
+Access is visibility plus grants (user or role x use/edit/maintain); publishing a new version needs edit. Bundles and skill packages share this model (see [Agent Skills](../agent_skills/agent_skills.md)).
+
+- **Visibility** `private` / `users` / `public`, plus `is_listed`. **Grants** name a principal (one user, or every holder of a role) and a level: `use` (see and install), `edit` (publish new versions), `maintain` (change access and visibility, delete).
+- **Rule P1 (effective access):** an inactive user has none. A user's level is the highest grant matching them (a user grant, or a role grant on their role; the `admin` role also matches superusers). `edit` and `maintain` count at any visibility and listing state. A `use` grant counts only when visibility is `users` and the item is listed. `public` and listed gives everyone `use`. `private` gives nothing beyond `edit`/`maintain` grants (stored `use` rows stay but do nothing). A superuser may see a delisted public item.
+- **Only people maintain:** `maintain` grants go to users, not roles, and an item always keeps at least one maintainer (409 otherwise).
+- **Managing grants:** `GET`/`PUT /api/v1/catalog/items/{uuid}/grants` — the PUT replaces the whole list. Allowed to a maintainer or a superuser. Users newly reaching the item get a `catalog.granted` realtime hint.
+- **Publishers became maintainers:** migration `6ab98dfbbe62` turned each publisher into a `maintain` row. Publishing a new bundle version needs `edit`; without it the call answers 403 "You can't publish new versions of this agent."
+- **Legacy per-user grant routes** (`/bundles/{uuid}/grants`) still work: they list user grants without the publisher's own row, never downgrade an existing higher grant, and refuse to revoke the last maintainer. Managing a bundle through `/bundles/*` needs `maintain` (or superuser).
+- **Orphaned items:** deleting a user can leave an item with no maintainer; superusers can still manage it.
+
+### Bundles that run on your computer
+
+A bundle is either **Runs in Cinna** (`runs_on='cloud'`, the default: published from a cloud agent, installed as a running copy) or **Runs on your computer** (`runs_on='desktop'`): an agent shared from Cinna Desktop, whose content is a git repo served by core. See [Desktop Agents in the Catalog](../../application/catalog/desktop_agents.md).
+
+- A desktop bundle has no snapshot. Each accepted "Share changes" adds a revision with origin `share` ("Version N"), with release notes taken from the commit messages.
+- Access, listing, grants and delete work as for any bundle (`/api/v1/catalog/items/...`). Creating one is `POST /api/v1/catalog/desktop-agents`.
+- Everything that installs, updates, publishes onto or manages a bundle through the cloud paths refuses a desktop bundle with 409 `desktop_only` ("This agent runs on your computer in Cinna Desktop."). Bundle and catalog listings of cloud bundles (`GET /bundles/`, `GET /catalog/`) leave desktop ones out; `GET /catalog/items` lists both.
+
 ### Managing Permissions Across Bundle Access and Producer Scopes (publisher)
 
 A bundle that ships a connection to another agent's [Agent REST API](../agent_api/agent_api.md) (the "two-credential bundle pattern") forces a publisher to manage access in two independent places: who can see/install the bundle, and which scopes each installer holds on the producer agent's API. The **Permissions management** card on the Bundle tab unifies both into one compact per-user list and one "Add user" modal, so the publisher does not have to remember to also visit the producer agent's own page.

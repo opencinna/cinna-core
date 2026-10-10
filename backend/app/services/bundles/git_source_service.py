@@ -379,6 +379,7 @@ class GitSourceService:
 
         Returns ``(install, git_source)``.
         """
+        GitSourceService._refuse_desktop_repo(session, repo_url)
         bundle: AgentBundle
         bundle_created: bool
         revision: AgentBundleRevision
@@ -517,6 +518,7 @@ class GitSourceService:
         check then compares the live install against it. This is the "set the
         remote on an existing folder and re-check status" path.
         """
+        GitSourceService._refuse_desktop_repo(session, repo_url)
         async with _lock_for(str(agent_id)):
             return GitSourceService._connect_locked(
                 session,
@@ -2163,6 +2165,18 @@ class GitSourceService:
         return source
 
     @staticmethod
+    def _refuse_desktop_repo(session: Session, repo_url: str) -> None:
+        """A URL served by this instance's ``/git/<repo_id>.git`` is a desktop
+        agent: refuse with ``desktop_only`` before cloning anything."""
+        from app.models.library.git_repo import GitRepo
+        from app.services.bundles.exceptions import DesktopOnlyError
+        from app.services.library.git_repo_storage import GitRepoStorage
+
+        repo_id = GitRepoStorage.repo_id_in_url(repo_url)
+        if repo_id is not None and session.get(GitRepo, repo_id) is not None:
+            raise DesktopOnlyError()
+
+    @staticmethod
     def _resolve_or_create_bundle(
         session: Session,
         *,
@@ -2197,6 +2211,7 @@ class GitSourceService:
         """
         existing = BundleService.get_bundle_by_id(session, bundle_id)
         if existing is not None:
+            BundleService.require_cloud(existing)
             if (
                 existing.publisher_user_id is not None
                 and existing.publisher_user_id != user.id

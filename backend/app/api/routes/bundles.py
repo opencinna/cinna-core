@@ -46,8 +46,9 @@ router = APIRouter(prefix="/bundles", tags=["bundles"])
 
 
 def _handle_bundle_error(e: BundleError) -> HTTPException:
-    """Translate a domain exception to its HTTP equivalent."""
-    return HTTPException(status_code=e.http_status, detail=str(e))
+    """Translate a domain exception to its HTTP equivalent (a structured
+    ``detail`` when the error carries one, e.g. ``desktop_only``)."""
+    return HTTPException(status_code=e.http_status, detail=getattr(e, "detail", None) or str(e))
 
 
 def _bundle_to_public(session, bundle: AgentBundle) -> AgentBundlePublic:
@@ -177,6 +178,10 @@ def get_bundle(
         raise HTTPException(status_code=404, detail="Bundle not found")
     if not CatalogService.user_can_see(session, bundle, current_user):
         raise HTTPException(status_code=403, detail="Not authorized to view this bundle")
+    try:
+        BundleService.require_cloud(bundle)
+    except BundleError as e:
+        raise _handle_bundle_error(e)
     return _bundle_to_public(session, bundle)
 
 

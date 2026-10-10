@@ -64,7 +64,7 @@ This means marketplace sync is now purely a metadata operation — fast, statele
 
 ## Business Rules
 
-- **Mirrors (planned, deferred)**: the team library has groundwork (`kind='mirror'`, `git_repo.marketplace_id`) for hosting a marketplace mirror on the core git host; no mirror is created or synced yet. See [Team Library](../team_library/team_library.md).
+- **Mirrors (planned, deferred)**: the core git host has groundwork (`kind='mirror'`, `git_repo.marketplace_id`) for hosting a marketplace mirror on the core git host; no mirror is created or synced yet. See [Desktop Agents in the Catalog](../catalog/desktop_agents.md).
 
 - **Admin-only management**: Creating, updating, deleting, and syncing marketplaces requires superuser access.
 - **Automatic initial sync**: Marketplace registration always triggers an immediate sync.

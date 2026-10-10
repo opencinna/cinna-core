@@ -235,21 +235,22 @@ ROUTING_TRACES_CLEARED = "ROUTING_TRACES_CLEARED"
 # a simulate that spends LLM budget and then fails still leaves a record.
 ROUTING_SIMULATE_RUN = "ROUTING_SIMULATE_RUN"
 
-# ── Team library event-type constants ────────────────────────────────
-# Emitted by the team library (``app.services.library``): an accepted share
-# (git push) to a library agent, a grant list replaced, an agent created or
-# removed. ``user_id`` is the acting person; details carry ``repo_id`` and
-# ``slug`` (plus ``before``/``after`` for a push), never file contents.
-LIBRARY_PUSH_ACCEPTED = "LIBRARY_PUSH_ACCEPTED"
-LIBRARY_GRANTS_CHANGED = "LIBRARY_GRANTS_CHANGED"
-LIBRARY_AGENT_CREATED = "LIBRARY_AGENT_CREATED"
-LIBRARY_AGENT_DELETED = "LIBRARY_AGENT_DELETED"
 
 # ── Catalog event-type constants ─────────────────────────────────────
 # ``PUT /catalog/items/{uuid}/grants`` replaced an item's grants. ``user_id`` is
 # the acting person; details carry ``kind`` (``agent``/``skill``), ``uuid`` and
 # the new grants as ``{principal: 'user:<id>'|'role:<value>', access}``.
 CATALOG_GRANTS_CHANGED = "CATALOG_GRANTS_CHANGED"
+# ``POST /catalog/desktop-agents`` created a desktop agent (details: ``uuid``,
+# ``bundle_id``, ``repo_id``, ``slug``, grants).
+CATALOG_DESKTOP_AGENT_CREATED = "CATALOG_DESKTOP_AGENT_CREATED"
+# A share (git push) to a desktop agent was accepted and became a revision
+# (details: ``uuid``, ``repo_id``, ``before``/``after``, ``revision_number``);
+# never file contents.
+CATALOG_DESKTOP_PUSH_ACCEPTED = "CATALOG_DESKTOP_PUSH_ACCEPTED"
+# ``DELETE /catalog/items/{uuid}`` removed an item (details: ``kind``,
+# ``uuid``, ``id``).
+CATALOG_ITEM_DELETED = "CATALOG_ITEM_DELETED"
 
 
 class SecurityEvent(SQLModel, table=True):

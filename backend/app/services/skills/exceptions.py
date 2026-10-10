@@ -47,6 +47,9 @@ STATUS_BY_CODE: dict[str, int] = {
     "self_grant": 409,
     # Revoking the last person who maintains the package.
     "last_maintainer": 409,
+    # ``DELETE /catalog/items/{uuid}`` while agents still link the package.
+    "package_in_use": 409,
+    "package_linked_by_you": 409,
     # A publish that names people to share with while its effective visibility
     # is not ``users``, where a grant row would have no effect. 409 for the same
     # reason as ``self_grant``: each half of the request is well-formed, the

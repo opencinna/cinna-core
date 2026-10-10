@@ -194,6 +194,13 @@ def _publish_lock_for(key: str) -> asyncio.Lock:
     return lock
 
 
+def people_use_detail(count: int) -> str:
+    """The refusal of a catalog delete while other people use the item."""
+    if count == 1:
+        return "1 person uses this. It can be removed once nobody does."
+    return f"{count} people use this. It can be removed once nobody does."
+
+
 class SkillCatalogService:
     """Publish / browse / install operations on catalog skill packages."""
 
@@ -1757,6 +1764,15 @@ class SkillCatalogService:
             raise SkillCatalogError(
                 "not_publisher", "Only a maintainer can change this package."
             )
+        return SkillCatalogService.apply_update(session, package, data)
+
+    @staticmethod
+    def apply_update(
+        session: Session, package: SkillPackage, data: SkillPackageUpdate
+    ) -> SkillPackage:
+        """Write ``data`` to ``package`` and commit. The caller has already
+        decided the actor may (``update_package``, or ``/catalog/items`` for a
+        maintainer or superuser)."""
         if data.display_name is not None:
             # An all-whitespace name passes the schema's min_length but would
             # leave the package with no readable label.
@@ -1779,6 +1795,44 @@ class SkillCatalogService:
         session.commit()
         session.refresh(package)
         return package
+
+    @staticmethod
+    def delete_package(session: Session, package: SkillPackage, user: User) -> None:
+        """Remove a package, its revisions and grants (plan P12), then its
+        storage directory after commit.
+
+        Refused (``package_in_use``, 409) while an agent of another person
+        links any revision of it, and (``package_linked_by_you``, 409) while
+        one of the caller's own agents does: links are never deleted silently.
+        The caller has already been authorised (maintainer or superuser).
+        """
+        owners = session.exec(
+            select(Agent.owner_id)
+            .select_from(AgentPluginLink)
+            .join(
+                SkillPackageRevision,
+                SkillPackageRevision.id == AgentPluginLink.skill_package_revision_id,
+            )
+            .join(Agent, Agent.id == AgentPluginLink.agent_id)
+            .where(SkillPackageRevision.package_id == package.id)
+        ).all()
+        others = {owner for owner in owners if owner != user.id}
+        if others:
+            raise SkillCatalogError("package_in_use", people_use_detail(len(others)))
+        if owners:
+            raise SkillCatalogError(
+                "package_linked_by_you", "Remove it from your agents first."
+            )
+        package_uuid = package.id
+        package.latest_revision_id = None
+        session.add(package)
+        session.flush()
+        session.delete(package)  # revisions and grants cascade in the database
+        session.commit()
+        try:
+            shutil.rmtree(SkillCatalogService.package_dir(package_uuid), ignore_errors=True)
+        except Exception:  # pragma: no cover — defensive
+            logger.exception("Failed to remove storage of skill package %s", package_uuid)
 
     @staticmethod
     def delist(

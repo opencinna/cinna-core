@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Team library pre-receive hook.
+"""Desktop agent (catalog) pre-receive hook.
 
 Passed to every ``git receive-pack`` as ``-c core.hooksPath=<GIT_HOOKS_DIR>``;
 the rules live in ``app.services.library.push_policy`` (pure, no database).

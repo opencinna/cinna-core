@@ -24,12 +24,22 @@ from app.models.bundles.catalog import (
 from app.models.users.user import User
 from app.services.agents.agent_service import AgentService
 from app.services.bundles.bundle_service import BundleService
+from app.models.bundles.agent_bundle import AgentBundle
 from app.services.bundles.catalog_service import CatalogService
+from app.services.bundles.exceptions import DesktopOnlyError
 from app.services.bundles.install_service import InstallError, InstallService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
+
+
+def _require_cloud(bundle: AgentBundle) -> None:
+    """409 ``desktop_only`` for a desktop agent: these routes install into Cinna."""
+    try:
+        BundleService.require_cloud(bundle)
+    except DesktopOnlyError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.detail)
 
 
 @router.get("/", response_model=CatalogPublic)
@@ -44,6 +54,10 @@ def get_catalog_entry(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> CatalogEntryPublic:
+    bundle = BundleService.get_bundle_by_id(session, bundle_id)
+    if not bundle or not CatalogService.user_can_see(session, bundle, current_user):
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    _require_cloud(bundle)
     entry = CatalogService.get_for_user(session, bundle_id, current_user)
     if not entry:
         raise HTTPException(status_code=404, detail="Bundle not found")
@@ -67,6 +81,7 @@ def get_install_context(
     bundle = BundleService.get_bundle_by_id(session, bundle_id)
     if not bundle or not CatalogService.user_can_see(session, bundle, current_user):
         raise HTTPException(status_code=404, detail="Bundle not found")
+    _require_cloud(bundle)
     return CatalogService.build_install_context(session, bundle, current_user)
 
 
@@ -80,6 +95,8 @@ async def install_bundle(
     bundle = BundleService.get_bundle_by_id(session, bundle_id)
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
+    if CatalogService.user_can_see(session, bundle, current_user):
+        _require_cloud(bundle)
     if not CatalogService.user_can_install(session, bundle, current_user):
         raise HTTPException(status_code=403, detail="Bundle is not installable")
     try:
@@ -108,6 +125,7 @@ async def admin_install_bundle(
     bundle = BundleService.get_bundle_by_id(session, bundle_id)
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
+    _require_cloud(bundle)
     target_user = session.get(User, request.target_user_id)
     if not target_user:
         raise HTTPException(status_code=404, detail="Target user not found")

@@ -33,8 +33,15 @@ from sqlalchemy import JSON, Index, String, UniqueConstraint, Text, text
 #   Data keying, install bookkeeping, and the git dirty check, but they are NOT
 #   catalog publishes — so they are hidden from the Revisions listing and never
 #   influence the suggested next version.
+# ``share`` — an accepted push to a desktop agent's repo
+#   (``DesktopAgentRevisions.after_receive``): a catalog version like
+#   ``publish``, with no snapshot on disk (``snapshot_path`` NULL) and
+#   ``git_commit_sha`` set.
 REVISION_ORIGIN_PUBLISH = "publish"
 REVISION_ORIGIN_GIT = "git"
+REVISION_ORIGIN_SHARE = "share"
+#: Origins that are catalog versions (shown in revision lists).
+CATALOG_REVISION_ORIGINS = (REVISION_ORIGIN_PUBLISH, REVISION_ORIGIN_SHARE)
 
 
 class AgentBundleRevision(SQLModel, table=True):
@@ -172,11 +179,16 @@ class AgentBundleRevision(SQLModel, table=True):
     )
     webapp_enabled: bool | None = Field(default=None)
 
-    # Filesystem location of the snapshot under ``BUNDLE_STORAGE_DIR``.
-    snapshot_path: str = Field(max_length=1024, nullable=False)
+    # Filesystem location of the snapshot under ``BUNDLE_STORAGE_DIR``. NULL
+    # for a ``share`` revision of a desktop agent (its content is in git).
+    snapshot_path: str | None = Field(default=None, max_length=1024, nullable=True)
 
-    # SHA-256 hex digest over canonical snapshot content.
+    # SHA-256 hex digest over canonical snapshot content; for a ``share``
+    # revision, the git tree id of the pushed commit.
     content_hash: str = Field(max_length=64, nullable=False)
+
+    # ``share`` revisions only: the commit this version points at.
+    git_commit_sha: str | None = Field(default=None, max_length=40, nullable=True)
 
     # Author of this revision (kept even if user deleted via SET NULL).
     published_by_user_id: uuid.UUID | None = Field(

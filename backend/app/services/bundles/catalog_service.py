@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 from sqlalchemy import func
 
 from app.models.agents.agent import Agent
-from app.models.bundles.agent_bundle import AgentBundle
+from app.models.bundles.agent_bundle import AgentBundle, BundleRunsOn
 from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 from app.models.bundles.catalog import (
     CatalogEntryPublic,
@@ -49,9 +49,11 @@ class CatalogService:
         session: Session, user: User
     ) -> list[CatalogEntryPublic]:
         accessible = CatalogAccessService.accessible_items(session, BUNDLE, user)
+        # Desktop agents are listed by ``/catalog/items`` only (plan P5).
         return [
             CatalogService._bundle_to_entry(session, bundle, user)
             for bundle, _ in accessible.values()
+            if bundle.runs_on == BundleRunsOn.CLOUD
         ]
 
     @staticmethod
@@ -79,8 +81,10 @@ class CatalogService:
     def user_can_install(
         session: Session, bundle: AgentBundle, user: User
     ) -> bool:
-        """A bundle is installable if visible AND has at least one revision."""
-        if bundle.latest_revision_id is None:
+        """A bundle is installable if it runs in Cinna, is visible AND has at
+        least one revision. A desktop agent never is (channel Pass 2 records
+        ``not_installable``)."""
+        if bundle.runs_on != BundleRunsOn.CLOUD or bundle.latest_revision_id is None:
             return False
         return CatalogService.user_can_see(session, bundle, user)
 

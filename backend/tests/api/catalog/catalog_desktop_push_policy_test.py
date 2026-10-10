@@ -1,7 +1,7 @@
-"""Team library ``pre-receive`` policy, one real ``git push`` per refusal.
+"""Desktop agent ``pre-receive`` policy, one real ``git push`` per refusal.
 
 Every refused push must (a) fail on the client, (b) print the S9 sentence in
-git's output (``remote: ...``) and (c) leave the library's ``head_sha`` where
+git's output (``remote: ...``) and (c) leave the agent's ``head_sha`` where
 it was. Accepted edge cases (``.env.example``, a newer minor contract) are
 asserted to move ``head_sha``.
 """
@@ -12,10 +12,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from tests.utils.library import (
+from tests.utils.catalog import (
     GitClient,
-    create_library_agent,
+    create_desktop_agent,
+    get_item,
     make_person,
+    manifest_id_of,
+    repo_id_of,
     server_contract_version,
     write_agent_tree,
 )
@@ -25,20 +28,19 @@ from unittest.mock import patch
 class Shared:
     def __init__(self, client, bridge, tmp_path, owner, repo):
         self.client, self.owner, self.repo = client, owner, repo
+        self.repo_id = repo_id_of(repo)
+        self.manifest_id = manifest_id_of(repo)
         self.git = GitClient(tmp_path, token=owner.token)
         self.work = tmp_path / "work"
-        assert self.git.clone(bridge.repo_url(repo["repo_id"]), self.work).ok
-        write_agent_tree(self.work, slug=repo["slug"])
+        assert self.git.clone(bridge.repo_url(self.repo_id), self.work).ok
+        write_agent_tree(self.work, slug=repo["name"], manifest_id=self.manifest_id)
         self.git.commit_all(self.work, "baseline")
         first = self.git.push(self.work)
         assert first.ok, first.output
         self.baseline = self.head()
 
     def head(self) -> str | None:
-        r = self.client.get(
-            f"/api/v1/library/agents/{self.repo['repo_id']}", headers=self.owner.headers
-        )
-        return r.json()["head_sha"]
+        return get_item(self.client, self.owner.headers, self.repo["uuid"])["desktop"]["head_sha"]
 
     def commit(self, files: dict | None = None, remove: list[str] | None = None, manifest=None):
         if manifest is not None:
@@ -61,7 +63,7 @@ class Shared:
 @pytest.fixture()
 def shared(client: TestClient, bridge, tmp_path, superuser_token_headers) -> Shared:
     owner = make_person(client, superuser_token_headers)
-    repo = create_library_agent(client, owner.headers)
+    repo = create_desktop_agent(client, owner.headers)
     return Shared(client, bridge, tmp_path, owner, repo)
 
 
@@ -151,33 +153,42 @@ def test_refuses_missing_or_invalid_manifest(shared: Shared, content, sentence) 
 def test_contract_major_mismatch_refused_and_minor_newer_warns(shared: Shared) -> None:
     major, minor, _patch = server_contract_version()
 
-    shared.commit(manifest=_manifest(contract_version=f"{major + 1}.0.0"))
+    shared.commit(manifest=_manifest(id=shared.manifest_id, contract_version=f"{major + 1}.0.0"))
     shared.refused(
         "This agent was made with a newer version of Cinna than this server. "
         "Ask your admin to update Cinna."
     )
 
-    shared.commit(manifest=_manifest(contract_version=f"{major - 1}.9.0"))
+    shared.commit(manifest=_manifest(id=shared.manifest_id, contract_version=f"{major - 1}.9.0"))
     shared.refused(
         "This agent was made with an older version of Cinna. "
         "Open it in Cinna Desktop to update it, then share again."
     )
 
-    shared.commit(manifest=_manifest(contract_version=f"{major}.{minor + 1}.0"))
+    shared.commit(manifest=_manifest(id=shared.manifest_id, contract_version=f"{major}.{minor + 1}.0"))
     result = shared.git.push(shared.work)
     assert result.ok, result.output
     assert "slightly newer version of Cinna" in result.output
     assert shared.head() != shared.baseline
 
 
+def test_refuses_a_changed_manifest_id(shared: Shared) -> None:
+    """The manifest ``id`` bound at create is the agent's identity."""
+    shared.commit(manifest=_manifest())
+    shared.refused("This agent's identity changed; share it as a new agent instead.")
+    shared.commit(manifest=_manifest(id=shared.manifest_id.upper()))
+    result = shared.git.push(shared.work)
+    assert result.ok, result.output  # the same id in another case is the same agent
+
+
 def test_refuses_refs_other_than_main(shared: Shared) -> None:
     shared.commit({"x.md": "x"})
     shared.refused(
-        "Only the agent's main version can be shared to the team library.",
+        "Only the agent's main version can be shared to the catalog.",
         "HEAD:refs/heads/other",
     )
     shared.refused(
-        "Only the agent's main version can be shared to the team library.",
+        "Only the agent's main version can be shared to the catalog.",
         "HEAD:refs/tags/v1",
     )
 
@@ -209,7 +220,7 @@ def test_receive_pack_is_unavailable_without_the_hook(
     empty = tmp_path / "no-hooks"
     empty.mkdir()
     headers = {"Authorization": f"Bearer {shared.owner.token}"}
-    repo_id = shared.repo["repo_id"]
+    repo_id = shared.repo_id
     with patch.object(settings, "GIT_HOOKS_DIR", str(empty)):
         r = client.get(
             f"/git/{repo_id}.git/info/refs", params={"service": "git-receive-pack"}, headers=headers
@@ -229,7 +240,7 @@ def test_junk_git_protocol_header_is_dropped(client: TestClient, shared: Shared,
         "Git-Protocol": "version=2; rm -rf /\nevil=1",
     }
     r = client.get(
-        f"/git/{shared.repo['repo_id']}.git/info/refs",
+        f"/git/{shared.repo_id}.git/info/refs",
         params={"service": "git-upload-pack"},
         headers={"Authorization": headers["Authorization"], "Git-Protocol": "x=\x01junk"},
     )

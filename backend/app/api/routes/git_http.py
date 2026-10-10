@@ -1,4 +1,4 @@
-"""Git smart HTTP for the team library (``/git/<repo_id>.git/...``).
+"""Git smart HTTP for desktop agents (``/git/<repo_id>.git/...``).
 
 Mounted at the app root, outside ``/api/v1`` and the OpenAPI schema:
 
@@ -8,8 +8,9 @@ Mounted at the app root, outside ``/api/v1`` and the OpenAPI schema:
 
 Auth: ``Authorization: Bearer <token>`` or Basic with the token as password
 (``resolve_git_http_user``). Any auth failure → 401 with a Basic challenge;
-unknown repo → 404; missing grant → 403 (``read`` for upload-pack, ``write`` for
-receive-pack; mirrors are never writable). The database session is only held
+unknown repo (or one with no desktop bundle) → 404; missing access → 403
+(``use`` for upload-pack, ``edit`` for receive-pack, on the repo's
+``AgentBundle``; mirrors are never writable). The database session is only held
 while authorizing, never for the length of a transfer.
 """
 from __future__ import annotations
@@ -20,14 +21,16 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from sqlmodel import Session
+from sqlmodel import Session, select
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import GitHttpAuthError, resolve_git_http_user
 from app.core.db import engine
+from app.models.bundles.agent_bundle import AgentBundle
 from app.models.library.git_repo import GitRepo
-from app.services.library.exceptions import LibraryAccessDeniedError
+from app.services.catalog.desktop_agent_revisions import DesktopAgentRevisions
+from app.services.library.exceptions import GitAccessDeniedError
 from app.services.library.git_http_service import (
     RECEIVE_PACK,
     SERVICES,
@@ -39,7 +42,6 @@ from app.services.library.git_http_service import (
     result_content_type,
 )
 from app.services.library.git_repo_storage import GitRepoStorage
-from app.services.library.library_events import LibraryEvents
 
 router = APIRouter(prefix="/git", tags=["git"], include_in_schema=False)
 
@@ -55,6 +57,8 @@ class _Authorized:
     repo_id: uuid.UUID
     repo_kind: str
     user_id: uuid.UUID
+    bundle_id: uuid.UUID
+    bound_manifest_id: str
 
 
 def _plain(status_code: int, message: str, headers: dict[str, str] | None = None) -> Response:
@@ -69,7 +73,7 @@ def _plain(status_code: int, message: str, headers: dict[str, str] | None = None
 def _unauthorized() -> Response:
     return _plain(
         401,
-        "Sign in to Cinna to reach the team library.",
+        "Sign in to Cinna to reach the catalog.",
         {"WWW-Authenticate": 'Basic realm="cinna"'},
     )
 
@@ -89,11 +93,22 @@ def _authorize_sync(repo_file: str, service: str, authorization: str | None) -> 
         repo = session.get(GitRepo, repo_id) if repo_id else None
         if repo is None or not GitRepoStorage.repo_path(repo.id).exists():
             raise _Denied(_plain(404, "Not found"))
+        bundle = session.exec(
+            select(AgentBundle).where(AgentBundle.git_repo_id == repo.id)
+        ).first()
+        if bundle is None:
+            raise _Denied(_plain(404, "Not found"))
         try:
-            GitHttpService.authorize(session, repo, user, service)
-        except LibraryAccessDeniedError as exc:
+            GitHttpService.authorize(session, repo, bundle, user, service)
+        except GitAccessDeniedError as exc:
             raise _Denied(_plain(403, str(exc)))
-        return _Authorized(repo_id=repo.id, repo_kind=repo.kind, user_id=user.id)
+        return _Authorized(
+            repo_id=repo.id,
+            repo_kind=repo.kind,
+            user_id=user.id,
+            bundle_id=bundle.id,
+            bound_manifest_id=str(bundle.manifest_id or ""),
+        )
 
 
 async def _authorize(request: Request, repo_file: str, service: str) -> _Authorized:
@@ -152,6 +167,7 @@ async def _rpc(request: Request, repo_file: str, service: str) -> Response:
         git_protocol=request.headers.get("git-protocol"),
         repo_kind=auth.repo_kind,
         pusher_id=auth.user_id,
+        bound_manifest_id=auth.bound_manifest_id,
         commands=commands,
     )
     # Pull the first chunk before answering so a too-large body or a timeout
@@ -196,7 +212,7 @@ async def _after_receive(
 ) -> None:
     """Bookkeeping for this push only: the SHA it asked main to become is read
     once the stream (and so the feeder) has finished."""
-    await LibraryEvents.after_receive(repo_id, before_sha, pusher_id, commands.main_new)
+    await DesktopAgentRevisions.after_receive(repo_id, before_sha, pusher_id, commands.main_new)
 
 
 @router.post("/{repo_file}/git-upload-pack")

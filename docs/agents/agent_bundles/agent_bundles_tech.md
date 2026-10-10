@@ -81,6 +81,10 @@ Deleted in Phase 3 (replaced by the single-page install):
 | `is_listed` | bool DEFAULT false | Shown in catalog |
 | `visibility` | varchar(32) DEFAULT 'private' | `private`, `users`, `public` |
 | `default_install_mode` | varchar(32) DEFAULT 'manual' | `manual`, `automatic` |
+| `runs_on` | varchar(16) NOT NULL DEFAULT 'cloud' | `cloud` or `desktop` (`BundleRunsOn`). Desktop bundles are served from a git repo, not a snapshot; see [Desktop Agents tech](../../application/catalog/desktop_agents_tech.md) |
+| `git_repo_id` | UUID FK → git_repo ON DELETE RESTRICT, unique, NULLABLE | Desktop only |
+| `manifest_id` | UUID NULLABLE | Desktop only; the manifest `id` the repo is bound to. Partial unique index `uq_agent_bundle_desktop_manifest_id` |
+| `slug` | varchar(64) NULLABLE | Desktop only; kit slug. Partial unique index `uq_agent_bundle_desktop_slug`. Check `ck_agent_bundle_desktop_fields` requires `git_repo_id`, `manifest_id`, `slug` for desktop rows |
 | `publisher_ai_credential_conversation_id` | UUID FK → ai_credential ON DELETE SET NULL NULLABLE | Publisher-provided AI for conversation mode. NULL = user provides at install time. |
 | `publisher_ai_credential_building_id` | UUID FK → ai_credential ON DELETE SET NULL NULLABLE | Publisher-provided AI for building mode. NULL = user provides at install time. |
 | `created_at` | timestamp | |
@@ -116,12 +120,13 @@ Indexes: `ix_agent_bundle_publisher` on `publisher_user_id`; `ix_agent_bundle_li
 | `a2a_config` | JSON NULLABLE | Snapshot of the full `Agent.a2a_config` dict (skills / version / generated_at / enabled). The A2A card (`skills` with LLM-generated descriptions) does not auto-regenerate on install, so the published capability contract is preserved here. Per-install `AgentAccessToken` rows are NOT snapshotted. `NULL` = absent from older snapshots. Added in migration `d9b3e1a7c45f` |
 | `agent_sdk_config` | JSON NULLABLE | Snapshot of `Agent.agent_sdk_config` (tool approval allowlists). `NULL` = absent from older snapshots. Added in migration `d9b3e1a7c45f` |
 | `webapp_enabled` | bool NULLABLE | Snapshot of `Agent.webapp_enabled`. `NULL` = absent from older snapshots. Added in migration `d9b3e1a7c45f` |
-| `snapshot_path` | varchar(1024) NOT NULL | Absolute path under `BUNDLE_STORAGE_DIR` |
+| `snapshot_path` | varchar(1024) NULLABLE | Absolute path under `BUNDLE_STORAGE_DIR`; NULL for `share` revisions |
+| `git_commit_sha` | varchar(40) NULLABLE | Commit a `share` revision was cut from |
 | `content_hash` | varchar(64) NOT NULL | SHA-256 hex over snapshot tree + manifest |
 | `published_by_user_id` | UUID FK → user ON DELETE SET NULL | |
 | `published_at` | timestamp NOT NULL | |
 | `release_notes` | text | |
-| `origin` | varchar(32) NOT NULL DEFAULT `'publish'` | Provenance discriminator: `"publish"` for catalog publishes (written by `PublishService`) or `"git"` for internal dirty-check baselines written by git operations (push, connect, checkout, pull). Module constants `REVISION_ORIGIN_PUBLISH = "publish"` and `REVISION_ORIGIN_GIT = "git"` in `backend/app/models/bundles/agent_bundle_revision.py`. Migration `878bc3f6579f`. Not exposed on `AgentBundleRevisionPublic` — filtering is server-side. |
+| `origin` | varchar(32) NOT NULL DEFAULT `'publish'` | Provenance discriminator: `"publish"` for catalog publishes (written by `PublishService`), `"share"` for an accepted push to a desktop agent (written by `DesktopAgentRevisions`; counted by revision lists and `delete_revision` together with `publish`) or `"git"` for internal dirty-check baselines written by git operations (push, connect, checkout, pull). Module constants `REVISION_ORIGIN_PUBLISH = "publish"` and `REVISION_ORIGIN_GIT = "git"` in `backend/app/models/bundles/agent_bundle_revision.py`. Migration `878bc3f6579f`. Not exposed on `AgentBundleRevisionPublic` — filtering is server-side. |
 
 Unique constraint: `uq_revision_bundle_number` on `(bundle_id, revision_number)`. Index: `ix_revision_bundle` on `bundle_id`.
 
@@ -191,6 +196,8 @@ Unique constraints on `agent`:
 | `DELETE` | `/bundles/{bundle_uuid}/grants/{grant_id}` | `require_developer` + owner | |
 
 ### Catalog & Install (`/api/v1/catalog`)
+
+Every route below refuses a desktop bundle with 409 `{"code":"desktop_only"}` (`DesktopOnlyError`, `BundleService.require_cloud`); the same guard covers `/bundles/{uuid}` routes, install and update in `InstallService`, first publish onto a desktop `bundle_id` and `POST /agents/checkout` for a core repo URL. `GET /catalog/items` (kind, runs_on, scope) lists both runtimes and skills; see [Desktop Agents tech](../../application/catalog/desktop_agents_tech.md).
 
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|

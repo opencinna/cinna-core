@@ -8,13 +8,13 @@ The backend keeps durable files under `/app/data/*`. These mounts must persist a
 | `/app/data/app-data` | `HOST_APP_DATA_DIR` (host side) | Per-user agent App Data |
 | `/app/data/bundles` | `BUNDLE_STORAGE_DIR` | Agent bundle revisions, see [Agent Bundles](../agents/agent_bundles/agent_bundles.md) |
 | `/app/data/skills` | `HOST_SKILL_STORAGE_DIR` (host side) | Skill packages |
-| `/app/data/git` | `GIT_STORAGE_DIR` | Team library bare repositories, see [Team Library](../application/team_library/team_library.md) |
+| `/app/data/git` | `GIT_STORAGE_DIR` | Bare git repositories of desktop agents, see [Desktop Agents in the Catalog](../application/catalog/desktop_agents.md) |
 
 Host paths come from `docker-compose.yml` (for git: `HOST_GIT_STORAGE_DIR`, default `./backend/data/git`).
 
 ## Git volume specifics
 
-- Layout: `<repo_id>.git` per library entry; `.deleted/<repo_id>-<utc>` for removed ones, purged by the operator.
+- Layout: `<repo_id>.git` per desktop agent; `.deleted/<repo_id>-<utc>` for removed ones, purged by the operator.
 - The repos ARE the content. Postgres holds only metadata, grants and a cached `head_sha`; losing the directory loses every shared agent.
 - **Multi-replica**: `GIT_STORAGE_DIR` (like `BUNDLE_STORAGE_DIR`) must be a shared volume visible to every backend replica.
 

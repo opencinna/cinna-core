@@ -1,27 +1,11 @@
-"""Domain exceptions for the team library.
+"""Domain exceptions for the git transport of desktop agents.
 
-Routes catch ``LibraryError`` and translate to HTTP via ``http_status``; the
-message is user-facing and uses the library's vocabulary (S9).
+The message is user-facing (S9 vocabulary) and is sent as the plain-text body
+of the git smart-HTTP answer.
 """
 
 
-class LibraryError(Exception):
-    """Base class for every library-layer domain error."""
+class GitAccessDeniedError(Exception):
+    """The caller may not run this git service on this repo (HTTP 403)."""
 
-    http_status: int = 500
-
-
-class LibraryNotFoundError(LibraryError):
-    http_status = 404
-
-
-class LibraryAccessDeniedError(LibraryError):
-    http_status = 403
-
-
-class LibraryConflictError(LibraryError):
-    http_status = 409
-
-
-class LibraryValidationError(LibraryError):
-    http_status = 422
+    http_status: int = 403

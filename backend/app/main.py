@@ -211,7 +211,7 @@ from app.services.system.status_repair_scheduler import (
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
     # --- Startup ---
-    # Team library: a missing / non-executable pre-receive hook means every
+    # Desktop agents (git): a missing / non-executable pre-receive hook means every
     # share is refused (503); say so loudly at boot rather than on first push.
     from app.services.library.git_http_service import GitHttpService
 
@@ -504,7 +504,7 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 # Authenticated via encrypted bearer token inside the service layer.
 app.include_router(agent_hooks_router, prefix="/agent-hooks")
 
-# Team library git smart HTTP (/git/<repo_id>.git/...) — no /api/v1 prefix, not
+# Desktop agents' git smart HTTP (/git/<repo_id>.git/...) — no /api/v1 prefix, not
 # in the OpenAPI schema; token auth in the route (Bearer or Basic password).
 app.include_router(git_http_router)
 

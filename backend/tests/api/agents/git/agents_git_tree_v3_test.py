@@ -17,6 +17,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
+from app.services.cli.platform_knowledge_assets import local_kit_dir
 from tests.api.agents.git.agents_git_source_test import (
     _CLONE_CTX,
     _COMMIT_ALL,
@@ -228,7 +229,10 @@ def test_v3_checkout_pull_and_push_layouts(
     kit = json.loads((push_dir / "cinna-agent.json").read_text())
     assert kit["id"] == _KIT_ID
     assert kit["bundle"]["bundle_id"] == bundle_id
-    assert kit["contract_version"] == "1.9.0"
+    # The export stamps the server's own kit contract version.
+    assert kit["contract_version"] == (
+        (local_kit_dir() / "CONTRACT_VERSION").read_text().strip()
+    )
 
     # ── Phase 5: v2 remote, flag OFF → v2 layout ─────────────────────────────
     v2_bundle = f"io.test.git.v2.{random_lower_string()[:6]}"

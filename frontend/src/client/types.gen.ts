@@ -3040,6 +3040,20 @@ export type BundleVersionInfo = {
 };
 
 /**
+ * Where Cinna Desktop gets a desktop agent.
+ */
+export type CatalogDesktop = {
+    repo_id: string;
+    clone_url: string;
+    default_branch: string;
+    head_sha?: (string | null);
+    manifest_id: string;
+    slug: string;
+    engine?: (string | null);
+    contract_version?: (string | null);
+};
+
+/**
  * One row in the user's catalog.
  */
 export type CatalogEntryPublic = {
@@ -3085,6 +3099,21 @@ export type CatalogGrantIn = {
 };
 
 /**
+ * One of the caller's installs of the item. C2 reports cloud installs
+ * only: an ``Agent`` built from a bundle (``install_id`` = the agent) or a
+ * skill link on one of the caller's agents (``install_id`` = that agent).
+ */
+export type CatalogInstall = {
+    where: 'cloud' | 'local';
+    install_id?: (string | null);
+    device_id?: (string | null);
+    host_manifest_id?: (string | null);
+    revision_number?: (number | null);
+};
+
+export type where = 'cloud' | 'local';
+
+/**
  * Response body for ``GET /catalog/{bundle_id}/install-context``.
  *
  * Powers the single-screen install page — the catalog entry plus
@@ -3107,6 +3136,108 @@ export type CatalogInstallContext = {
     credentials_payload_schema?: (InstallCredentialSelection | null);
 };
 
+export type CatalogItem = {
+    kind: 'agent' | 'skill';
+    runs_on?: ('cloud' | 'desktop' | null);
+    uuid: string;
+    id: string;
+    name: string;
+    display_name: string;
+    description?: (string | null);
+    publisher?: (CatalogPerson | null);
+    maintainers?: Array<CatalogMaintainer>;
+    access: 'use' | 'edit' | 'maintain';
+    visibility: string;
+    is_listed: boolean;
+    latest?: (CatalogLatest | null);
+    install_count?: number;
+    my_installs?: Array<CatalogInstall>;
+    required_credential_specs?: Array<{
+        [key: string]: unknown;
+    }>;
+    skills?: (Array<CatalogItemSkill> | null);
+    desktop?: (CatalogDesktop | null);
+    skill?: (CatalogSkillContent | null);
+};
+
+export type kind = 'agent' | 'skill';
+
+/**
+ * ``GET /catalog/items/{uuid}``: the item and its versions, newest first.
+ */
+export type CatalogItemDetail = {
+    kind: 'agent' | 'skill';
+    runs_on?: ('cloud' | 'desktop' | null);
+    uuid: string;
+    id: string;
+    name: string;
+    display_name: string;
+    description?: (string | null);
+    publisher?: (CatalogPerson | null);
+    maintainers?: Array<CatalogMaintainer>;
+    access: 'use' | 'edit' | 'maintain';
+    visibility: string;
+    is_listed: boolean;
+    latest?: (CatalogLatest | null);
+    install_count?: number;
+    my_installs?: Array<CatalogInstall>;
+    required_credential_specs?: Array<{
+        [key: string]: unknown;
+    }>;
+    skills?: (Array<CatalogItemSkill> | null);
+    desktop?: (CatalogDesktop | null);
+    skill?: (CatalogSkillContent | null);
+    revisions?: Array<CatalogRevision>;
+};
+
+/**
+ * A skill an agent comes with: authored in its ``skills/`` or pinned from
+ * the catalog.
+ */
+export type CatalogItemSkill = {
+    name: string;
+    description?: (string | null);
+    source: 'authored' | 'catalog';
+    package_id?: (string | null);
+    package_uuid?: (string | null);
+};
+
+export type source = 'authored' | 'catalog';
+
+export type CatalogItemsPublic = {
+    data: Array<CatalogItem>;
+    count: number;
+};
+
+/**
+ * Body of ``PATCH /catalog/items/{uuid}`` (maintainer or superuser).
+ */
+export type CatalogItemUpdate = {
+    display_name?: (string | null);
+    description?: (string | null);
+    visibility?: ('private' | 'users' | 'public' | null);
+    is_listed?: (boolean | null);
+};
+
+/**
+ * The item's newest version.
+ */
+export type CatalogLatest = {
+    revision_number: number;
+    version?: (string | null);
+    published_at: string;
+    published_by?: (CatalogPerson | null);
+    release_notes?: (string | null);
+};
+
+/**
+ * A person holding ``maintain`` on an item.
+ */
+export type CatalogMaintainer = {
+    user_id: string;
+    display_name: string;
+};
+
 export type CatalogPerson = {
     user_id: string;
     display_name: string;
@@ -3123,6 +3254,27 @@ export type CatalogPrincipalUser = {
 export type CatalogPublic = {
     data: Array<CatalogEntryPublic>;
     count: number;
+};
+
+export type CatalogRevision = {
+    revision_number: number;
+    version?: (string | null);
+    published_at: string;
+    published_by?: (CatalogPerson | null);
+    release_notes?: (string | null);
+    origin: string;
+    git_commit_sha?: (string | null);
+};
+
+/**
+ * A skill package's latest content, as its archive.
+ */
+export type CatalogSkillContent = {
+    frontmatter?: {
+        [key: string]: unknown;
+    };
+    archive_sha256?: (string | null);
+    size_bytes?: number;
 };
 
 /**
@@ -3786,7 +3938,7 @@ export type DelegationArtifact = {
     ref?: (string | null);
 };
 
-export type kind = 'file' | 'link';
+export type kind2 = 'file' | 'link';
 
 /**
  * Which parts of the delegation contract this server supports.
@@ -3863,6 +4015,20 @@ export type DesktopAgentApiKeyFacts = {
     spec_url?: (string | null);
     expires_at?: (string | null);
 };
+
+/**
+ * Body of ``POST /catalog/desktop-agents``.
+ */
+export type DesktopAgentCreate = {
+    slug: string;
+    display_name: string;
+    description?: string;
+    manifest_id: string;
+    visibility?: 'private' | 'users' | 'public';
+    grants?: Array<CatalogGrantIn>;
+};
+
+export type visibility = 'private' | 'users' | 'public';
 
 export type DesktopCredentialList = {
     items: Array<DesktopCredentialListItem>;
@@ -5221,143 +5387,6 @@ export type KnowledgeSourceSharedUserPublic = {
  */
 export type LandingPagePublic = {
     landing_markdown: string;
-};
-
-export type LibraryAgent = {
-    repo_id: string;
-    slug: string;
-    name: string;
-    description: string;
-    clone_url: string;
-    default_branch: string;
-    head_sha?: (string | null);
-    updated_at: string;
-    pushed_by?: (LibraryPusher | null);
-    maintainers?: Array<LibraryMaintainer>;
-    manifest?: (LibraryManifest | null);
-    cloud_install_id?: (string | null);
-    access: 'read' | 'write' | 'maintain';
-};
-
-export type access2 = 'read' | 'write' | 'maintain';
-
-/**
- * Admin listing row: a library agent without the caller's ``access``,
- * plus its creator and every grant.
- */
-export type LibraryAgentAdmin = {
-    repo_id: string;
-    slug: string;
-    name: string;
-    description: string;
-    clone_url: string;
-    default_branch: string;
-    head_sha?: (string | null);
-    updated_at: string;
-    pushed_by?: (LibraryPusher | null);
-    maintainers?: Array<LibraryMaintainer>;
-    manifest?: (LibraryManifest | null);
-    cloud_install_id?: (string | null);
-    owner?: (LibraryOwner | null);
-    grants?: Array<LibraryGrantPublic>;
-};
-
-/**
- * Body of ``POST /library/agents``.
- */
-export type LibraryAgentCreate = {
-    slug: string;
-    name: string;
-    description?: string;
-    grants?: (Array<LibraryGrantIn> | null);
-};
-
-/**
- * One entry of ``PUT /library/agents/{repo_id}/grants`` (full replace).
- */
-export type LibraryGrantIn = {
-    principal: (LibraryPrincipalUser | LibraryPrincipalRole | "everyone");
-    access: 'read' | 'write' | 'maintain';
-};
-
-export type LibraryGrantPublic = {
-    principal: (LibraryPrincipalUser | LibraryPrincipalRole | "everyone");
-    access: 'read' | 'write' | 'maintain';
-    display_name: string;
-    granted_by?: (string | null);
-    created_at: string;
-};
-
-/**
- * Response of ``GET /library``.
- */
-export type LibraryListing = {
-    agents?: Array<LibraryAgent>;
-    mirrors?: Array<LibraryMirror>;
-};
-
-export type LibraryMaintainer = {
-    user_id: string;
-    display_name: string;
-};
-
-/**
- * The projection of ``cinna-agent.json`` at HEAD the library shows.
- */
-export type LibraryManifest = {
-    id?: (string | null);
-    name?: (string | null);
-    description?: (string | null);
-    runtime?: LibraryManifestRuntime;
-    contract_version?: (string | null);
-};
-
-export type LibraryManifestRuntime = {
-    engine?: (string | null);
-};
-
-export type LibraryMirror = {
-    marketplace_id: string;
-    name: string;
-    clone_url: string;
-    head_sha?: (string | null);
-    format: 'claude' | 'codex' | 'skills' | 'cinna';
-    entries?: Array<LibraryMirrorEntry>;
-};
-
-export type format = 'claude' | 'codex' | 'skills' | 'cinna';
-
-export type LibraryMirrorEntry = {
-    name: string;
-    kind: 'agent' | 'plugin' | 'skill';
-    path: string;
-    description?: (string | null);
-    version?: (string | null);
-    supported: boolean;
-    unsupported_reason?: (string | null);
-};
-
-export type kind2 = 'agent' | 'plugin' | 'skill';
-
-export type LibraryOwner = {
-    user_id: string;
-    display_name: string;
-};
-
-export type LibraryPrincipalRole = {
-    role: string;
-};
-
-export type LibraryPrincipalUser = {
-    user_id: string;
-};
-
-/**
- * The person behind the last accepted push.
- */
-export type LibraryPusher = {
-    user_id: string;
-    display_name: string;
 };
 
 /**
@@ -10037,6 +10066,39 @@ export type BundlesRevokeGrantResponse = ({
     [key: string]: unknown;
 });
 
+export type CatalogListCatalogItemsData = {
+    kind?: ('agent' | 'skill' | null);
+    runsOn?: ('cloud' | 'desktop' | null);
+    scope?: ("all" | null);
+};
+
+export type CatalogListCatalogItemsResponse = (CatalogItemsPublic);
+
+export type CatalogCreateDesktopAgentData = {
+    requestBody: DesktopAgentCreate;
+};
+
+export type CatalogCreateDesktopAgentResponse = (CatalogItem);
+
+export type CatalogGetCatalogItemData = {
+    itemUuid: string;
+};
+
+export type CatalogGetCatalogItemResponse = (CatalogItemDetail);
+
+export type CatalogUpdateCatalogItemData = {
+    itemUuid: string;
+    requestBody: CatalogItemUpdate;
+};
+
+export type CatalogUpdateCatalogItemResponse = (CatalogItem);
+
+export type CatalogDeleteCatalogItemData = {
+    itemUuid: string;
+};
+
+export type CatalogDeleteCatalogItemResponse = (void);
+
 export type CatalogListCatalogItemGrantsData = {
     itemUuid: string;
 };
@@ -11415,41 +11477,6 @@ export type KnowledgeSourcesRemoveKnowledgeSourceSharedUserData = {
 };
 
 export type KnowledgeSourcesRemoveKnowledgeSourceSharedUserResponse = (unknown);
-
-export type LibraryListLibraryResponse = (LibraryListing);
-
-export type LibraryCreateLibraryAgentData = {
-    requestBody: LibraryAgentCreate;
-};
-
-export type LibraryCreateLibraryAgentResponse = (LibraryAgent);
-
-export type LibraryListLibraryAdminAgentsResponse = (Array<LibraryAgentAdmin>);
-
-export type LibraryGetLibraryAgentData = {
-    repoId: string;
-};
-
-export type LibraryGetLibraryAgentResponse = (LibraryAgent);
-
-export type LibraryDeleteLibraryAgentData = {
-    repoId: string;
-};
-
-export type LibraryDeleteLibraryAgentResponse = (void);
-
-export type LibraryGetLibraryAgentGrantsData = {
-    repoId: string;
-};
-
-export type LibraryGetLibraryAgentGrantsResponse = (Array<LibraryGrantPublic>);
-
-export type LibraryPutLibraryAgentGrantsData = {
-    repoId: string;
-    requestBody: Array<LibraryGrantIn>;
-};
-
-export type LibraryPutLibraryAgentGrantsResponse = (Array<LibraryGrantPublic>);
 
 export type LlmPluginsCreateMarketplaceData = {
     requestBody: LLMPluginMarketplaceCreate;

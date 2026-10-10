@@ -33,12 +33,17 @@ The migration that converted the old grant rows is tested separately in
 
 Desktop agents (C2) are bundles whose content store is a git repo. Those tests
 run a real `git` subprocess against the app through
-`tests/utils/git_http_bridge.py`, exactly as `tests/api/library/README.md`
-describes: the bridge forwards each request to the `TestClient`, git env comes
-from `GitClient` (token via `http.extraHeader`, no prompt, no credential
-helper, no global config), and the git path's own `Session(engine)` call sites
-are patched to a non-closing proxy of the test session. Copy that seam into
-this `conftest.py` when the first git test lands here.
+`tests/utils/git_http_bridge.py`: the bridge forwards each request (raw/chunked
+body, headers) to the `TestClient`, git env comes from `GitClient`
+(`tests/utils/catalog.py`: token via `http.extraHeader`, no prompt, no
+credential helper, no global config). The git route's authorize step and
+`DesktopAgentRevisions._record_push` open their own `Session(engine)` by
+design; `conftest.py` patches both to a non-closing proxy of the test session
+(`patch_git_path_sessions`, autouse) and points `GIT_STORAGE_DIR` at a tmp dir
+(`git_storage`). A pushed tree must carry the agent's bound manifest id:
+`write_agent_tree(path, manifest_id=item["desktop"]["manifest_id"])`.
+`bind_cloud_install_seam` inserts an `AgentGitSource` row directly (Rule-1
+exemption: cloud checkouts of core repos now answer `desktop_only`).
 
 ## Files (one scenario file per phase topic)
 
@@ -48,6 +53,28 @@ C1 — one access model:
 - `catalog_grants_test.py` — `GET/PUT /catalog/items/{uuid}/grants` gates,
   validation, full replace, `catalog.granted`, audit, and the old
   `/bundles/*/grants` and `/skills/packages/*/grants` routes.
+
+C2 — desktop agents are bundles:
+- `catalog_desktop_git_test.py` — real git round trip (v0+v2, Version N per
+  push, notes = commit messages), non-ff/delete, auth + token kinds, access
+  matrix over the wire, grants over real git, gzip body, `catalog.updated` +
+  audit (moved from `tests/api/library/`).
+- `catalog_desktop_push_policy_test.py` — one push per refusal sentence,
+  including a changed manifest id.
+- `catalog_desktop_agents_test.py` — `POST /catalog/desktop-agents`: create,
+  validation, slug / manifest-id conflicts, minted `bundle_id`, grants.
+- `catalog_desktop_only_guards_test.py` — every cloud path answers 409
+  `desktop_only` for a desktop agent; old lists show cloud bundles only.
+- `catalog_items_test.py` — `GET/PATCH/DELETE /catalog/items[/{uuid}]`:
+  listing rules (P3/P4, `scope=all`), detail with revisions, management gates,
+  delete guards ("1 person uses this…" / "N people use this…").
+- `catalog_desktop_revisions_test.py` — each accepted share becomes a revision
+  (notes, manifest projection, credential specs, skills summary).
+- `catalog_desktop_user_delete_test.py` — deleting a desktop agent's creator
+  (self or by a superuser) leaves the agent ownerless and managed by superusers.
+
+Unit (no database): `tests/unit/test_push_policy_bound_manifest_id.py` (the
+policy's bound manifest id), `tests/unit/test_desktop_bundle_id.py` (minting).
 
 ## Behaviour pinned here that is easy to get wrong
 

@@ -105,7 +105,9 @@ async def publish_agent(
             version=request.version if request else None,
         )
     except BundleError as e:
-        raise HTTPException(status_code=e.http_status, detail=str(e))
+        raise HTTPException(
+            status_code=e.http_status, detail=getattr(e, "detail", None) or str(e)
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # Wire response with install_count (just-published revision = 0+ installs).
