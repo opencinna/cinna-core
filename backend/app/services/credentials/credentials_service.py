@@ -20,7 +20,10 @@ from app.core.ssh_key_utils import (
     validate_key_pair,
 )
 from app.models import Credential, Agent, AgentApiTokenKind, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType, User
-from app.models.credentials.credential_share import CredentialShare
+from app.models.credentials.credential_share import (
+    SHARE_SOURCE_SKILL_LOCAL_INSTALL,
+    CredentialShare,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -3475,7 +3478,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
              managed, so it is "mine", not auto-managed.)
           3. Owned + any other type                             → "mine".
           4. Shared + share_source == "bundle_install"          → "bundle".
-          4b. Shared + share_source == "skill_install"          → "automatic".
+          4b. Shared + share_source ∈ {"skill_install", "skill_local_install"}
+                                                                 → "automatic".
              (D6, deliberate exception: the share was created for the
              installer by adding a catalog skill, not by any hand action, so it
              sits with the other connection records the platform created.)
@@ -3504,8 +3508,9 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # alone, never the type.
         if share_source == "bundle_install":
             return "bundle"
-        if share_source == "skill_install":
-            # D6: shared for the installer by adding a catalog skill.
+        if share_source in ("skill_install", SHARE_SOURCE_SKILL_LOCAL_INSTALL):
+            # D6: shared for the installer by adding a catalog skill (to a
+            # cloud agent, or on a Desktop through provision-local).
             return "automatic"
         return "mine"
 

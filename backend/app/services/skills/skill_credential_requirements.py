@@ -6,7 +6,9 @@ frontmatter (``credentials: [{slot, type, description}]``, validated by
 ``Credential.service_uri`` value.
 
 At publish, each declaration is resolved against the credentials **linked to
-the publishing agent** and frozen onto the immutable
+the publishing agent** (a Desktop upload, which has no agent, names its
+publisher-provided slots explicitly: :meth:`resolve_for_desktop_publish`) and
+frozen onto the immutable
 ``SkillPackageRevision.required_credential_specs`` — the same spec schema as a
 bundle revision, written by ``credential_spec.build_spec`` and read back by
 ``credential_spec.parse_credential_spec``.
@@ -49,6 +51,8 @@ from app.models.credentials.link_models import AgentCredentialLink
 from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
 from app.models.skills.schemas import (
     SkillCredentialProvisionPublic,
+    SkillPublishCredentialCandidate,
+    SkillPublisherCredentialIn,
     SkillCredentialRequirementPublic,
     SkillPublishCredentialPreview,
 )
@@ -69,6 +73,7 @@ from app.services.credentials.credential_provisioner import (
 )
 from app.services.agent_api.agent_api_key_status import key_states_by_credential
 from app.services.credentials.credentials_service import CredentialsService
+from app.services.skills.exceptions import SkillCatalogError
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +187,125 @@ class SkillCredentialRequirements:
             )
             for declaration in declarations
         ]
+
+    @staticmethod
+    def resolve_for_desktop_publish(
+        session: Session,
+        *,
+        publisher: User,
+        declarations: list[dict[str, Any]],
+        publisher_credentials: Iterable[SkillPublisherCredentialIn],
+    ) -> list[SkillCredentialResolution]:
+        """Resolve a desktop publish, which has no agent to link credentials.
+
+        Nothing is inferred: a desktop has no link step, so an owned,
+        shareable credential carrying the slot would otherwise go to every
+        user of the package unasked. Only a slot named in
+        ``publisher_credentials`` resolves to ``publisher`` / ``template``, and
+        only against exactly that credential (the caller's own, filled, the
+        declared type, ``service_uri == slot``, and ``allow_sharing`` →
+        ``publisher`` or a non-leaking ``allow_template_sharing`` →
+        ``template``). Every other slot is ``user``.
+
+        Raises:
+            SkillCatalogError: ``invalid_publisher_credential`` for a choice
+                naming an undeclared or repeated slot, or a credential that
+                cannot provide it.
+        """
+        declared = {declaration["slot"]: declaration for declaration in declarations}
+        chosen: dict[str, uuid.UUID] = {}
+        for choice in publisher_credentials:
+            if choice.slot not in declared:
+                raise _invalid_publisher_credential(
+                    f"The skill declares no credential slot '{choice.slot}'."
+                )
+            if choice.slot in chosen:
+                raise _invalid_publisher_credential(
+                    f"The credential slot '{choice.slot}' is named twice."
+                )
+            chosen[choice.slot] = choice.credential_id
+
+        resolutions: list[SkillCredentialResolution] = []
+        for declaration in declarations:
+            slot = declaration["slot"]
+            if slot not in chosen:
+                resolutions.append(_user_resolution(declaration))
+                continue
+            credential = session.get(Credential, chosen[slot])
+            if (
+                credential is None
+                or credential.owner_id != publisher.id
+                or credential.is_placeholder
+                or credential_type_value(credential) != declaration["type"]
+                or credential.service_uri != slot
+            ):
+                raise _invalid_publisher_credential(
+                    f"The credential for slot '{slot}' must be one of your own "
+                    f"filled {declaration['type']} credentials whose slot is "
+                    f"'{slot}'."
+                )
+            resolution = SkillCredentialRequirements._resolve_one(
+                session, declaration=declaration, linked=[credential], publisher=publisher
+            )
+            if resolution.provided_by == "user":
+                raise _invalid_publisher_credential(
+                    f"The credential for slot '{slot}' allows neither sharing nor "
+                    "a template without secrets."
+                    if resolution.reason != REASON_TEMPLATE_WOULD_LEAK_SECRET
+                    else f"A template of the credential for slot '{slot}' would "
+                    "carry a secret field. Mark it private, or allow sharing."
+                )
+            resolutions.append(resolution)
+        return resolutions
+
+    @staticmethod
+    def desktop_publish_candidates(
+        session: Session, *, publisher: User, declarations: list[dict[str, Any]]
+    ) -> dict[str, list[SkillPublishCredentialCandidate]]:
+        """Per declared slot, the caller's own credentials that may be named
+        for it in ``publisher_credentials``, and as what. Read-only."""
+        slots = {declaration["slot"] for declaration in declarations}
+        if not slots:
+            return {}
+        owned = session.exec(
+            select(Credential)
+            .where(
+                Credential.owner_id == publisher.id,
+                col(Credential.service_uri).in_(slots),
+            )
+            .order_by(Credential.id.desc())
+        ).all()
+        candidates: dict[str, list[SkillPublishCredentialCandidate]] = {}
+        for declaration in declarations:
+            slot, credential_type = declaration["slot"], declaration["type"]
+            for credential in owned:
+                if (
+                    credential.is_placeholder
+                    or credential.service_uri != slot
+                    or credential_type_value(credential) != credential_type
+                ):
+                    continue
+                options: list[Literal["publisher", "template"]] = []
+                if credential.allow_sharing:
+                    options.append("publisher")
+                if (
+                    credential.allow_template_sharing
+                    and credential_type != _AGENT_API_TYPE
+                    and not SkillCredentialRequirements._template_leaking_secret_fields(
+                        credential, credential_type
+                    )
+                ):
+                    options.append("template")
+                if options:
+                    candidates.setdefault(slot, []).append(
+                        SkillPublishCredentialCandidate(
+                            id=credential.id,
+                            name=credential.name,
+                            type=credential_type,
+                            can_provide_as=options,
+                        )
+                    )
+        return candidates
 
     @staticmethod
     def _resolve_one(
@@ -909,3 +1033,20 @@ def _shared_with(
             )
         ).all()
     )
+
+
+def _user_resolution(declaration: dict[str, Any]) -> SkillCredentialResolution:
+    """A slot each installer fills (``provided_by='user'``)."""
+    return SkillCredentialResolution(
+        slot=declaration["slot"],
+        type=declaration["type"],
+        description=declaration.get("description"),
+        provided_by="user",
+        credential=None,
+        reason=None,
+        producer_agent_id=None,
+    )
+
+
+def _invalid_publisher_credential(message: str) -> SkillCatalogError:
+    return SkillCatalogError("invalid_publisher_credential", message)

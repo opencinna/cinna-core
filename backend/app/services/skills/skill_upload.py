@@ -36,6 +36,8 @@ from sqlmodel import Session
 from app.models.catalog.catalog_access import CatalogAccess
 from app.models.skills.schemas import (
     SkillDesktopPublishPreviewIn,
+    SkillPublishCredentialPreview,
+    SkillPublisherCredentialIn,
     SkillPublishPreview,
     SkillUploadMeta,
 )
@@ -59,7 +61,6 @@ from app.services.skills.skill_catalog_service import (
 )
 from app.services.skills.skill_credential_requirements import (
     SkillCredentialRequirements,
-    SkillCredentialResolution,
 )
 
 logger = logging.getLogger(__name__)
@@ -251,23 +252,6 @@ def _write_member(tar: tarfile.TarFile, member: tarfile.TarInfo, target: Path) -
     target.chmod(0o755 if member.mode & 0o111 else 0o644)
 
 
-def _user_provided(declarations: list[dict[str, Any]]) -> list[SkillCredentialResolution]:
-    """A desktop publish has no agent to resolve slots against: every declared
-    slot is filled by each installer (``provided_by='user'``)."""
-    return [
-        SkillCredentialResolution(
-            slot=declaration["slot"],
-            type=declaration["type"],
-            description=declaration.get("description"),
-            provided_by="user",
-            credential=None,
-            reason=None,
-            producer_agent_id=None,
-        )
-        for declaration in declarations
-    ]
-
-
 def _editable_package(
     session: Session, package_uuid: uuid.UUID, user: User
 ) -> SkillPackage:
@@ -286,6 +270,20 @@ def _editable_package(
             "not_publisher", "You can't publish new versions of this skill."
         )
     return package
+
+
+def _check_credential_provider(
+    existing: SkillPackage | None, user: User, choices: list
+) -> None:
+    """Publisher-provided slots are re-checked against the package publisher at
+    every install, so an editor's own credential could never be provisioned:
+    refuse it rather than freeze a spec that always degrades."""
+    if choices and existing is not None and existing.publisher_user_id != user.id:
+        raise SkillCatalogError(
+            "invalid_publisher_credential",
+            "Only the person who first shared this skill can provide credentials "
+            "for it.",
+        )
 
 
 def _name_mismatch(package: SkillPackage, name: str) -> SkillCatalogError:
@@ -326,6 +324,7 @@ class SkillUploadService:
             )
             if existing.name != name:
                 raise _name_mismatch(existing, name)
+            _check_credential_provider(existing, user, body.publisher_credentials)
         else:
             existing = SkillCatalogService._find_publisher_package(
                 session, publisher_user_id=user.id, entry_name=name
@@ -348,7 +347,12 @@ class SkillUploadService:
             frontmatter.get("credentials")
         )
         credentials = (
-            SkillCredentialRequirements.to_publish_preview(_user_provided(declarations))
+            SkillUploadService._preview_credentials(
+                session,
+                user=user,
+                declarations=declarations,
+                choices=body.publisher_credentials,
+            )
             if problem is None
             else []
         )
@@ -408,6 +412,7 @@ class SkillUploadService:
                 )
                 if existing.name != entry.name:
                     raise _name_mismatch(existing, entry.name)
+                _check_credential_provider(existing, user, meta.publisher_credentials)
             else:
                 existing = SkillCatalogService._find_publisher_package(
                     session, publisher_user_id=user.id, entry_name=entry.name
@@ -436,10 +441,23 @@ class SkillUploadService:
                     meta=meta,
                 )
 
-                # 6. Every declared slot is filled by each installer.
-                credential_specs = SkillCredentialRequirements.build_specs(
-                    session, _user_provided(entry.credentials)
-                )
+                # 6. Only slots named in ``publisher_credentials`` are
+                #    publisher/template-provided (C5); read-only, ahead of any
+                #    write.
+                try:
+                    credential_specs = SkillCredentialRequirements.build_specs(
+                        session,
+                        SkillCredentialRequirements.resolve_for_desktop_publish(
+                            session,
+                            publisher=user,
+                            declarations=entry.credentials,
+                            publisher_credentials=meta.publisher_credentials,
+                        ),
+                    )
+                except ValueError as exc:
+                    raise SkillCatalogError(
+                        "credential_template_unreadable", str(exc)
+                    ) from exc
 
                 if existing is not None:
                     package, created = existing, False
@@ -494,6 +512,31 @@ class SkillUploadService:
         if gained:
             await CatalogEvents.granted(SKILL.wire_kind, package.id, gained)
         return revision
+
+    @staticmethod
+    def _preview_credentials(
+        session: Session,
+        *,
+        user: User,
+        declarations: list[dict[str, Any]],
+        choices: list[SkillPublisherCredentialIn],
+    ) -> list[SkillPublishCredentialPreview]:
+        """The slots as the publish would freeze them with ``choices``, each
+        carrying the caller's credentials that could be offered for it."""
+        previews = SkillCredentialRequirements.to_publish_preview(
+            SkillCredentialRequirements.resolve_for_desktop_publish(
+                session,
+                publisher=user,
+                declarations=declarations,
+                publisher_credentials=choices,
+            )
+        )
+        candidates = SkillCredentialRequirements.desktop_publish_candidates(
+            session, publisher=user, declarations=declarations
+        )
+        for preview in previews:
+            preview.candidates = candidates.get(preview.slot, [])
+        return previews
 
     @staticmethod
     def _check_sharing(

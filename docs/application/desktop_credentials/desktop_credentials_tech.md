@@ -112,7 +112,7 @@
 - `local_access_refusal(credential, user_id, shared_sources, categories) ->
   DesktopCredentialRefusalReason | None` — the single authorization rule: `not_found` → `no_access`
   (not owned and (no share or `allow_sharing` now false)) → `not_local_category` (category ≠
-  "mine") → `local_use_not_allowed` (not owned and `allow_local_use` false). Used identically by
+  "mine") → `local_use_not_allowed` (not owned and `allow_local_use` false). A non-owned share with `source == "skill_local_install"` (`SHARE_SOURCE_SKILL_LOCAL_INSTALL`) passes the category step although its category is `automatic`. Used identically by
   list visibility and by materialize.
 - `revision(credential, key_state=None) -> str` — non-keys: `sha256(str(credential.updated_at))[:32]`
   (byte-for-byte unchanged). Issued keys: `sha256(f"{updated_at}|{key_status}|{expires_at}|{base_url}")[:32]`

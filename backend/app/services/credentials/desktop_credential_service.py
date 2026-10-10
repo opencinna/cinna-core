@@ -12,7 +12,8 @@ Two operations back ``/external/credentials``:
 Authorization (``local_access_refusal``) is one rule, applied in a single
 pass. Only the caller's "mine" credentials qualify: "automatic" and "bundle"
 ones (per ``CredentialsService.classify_credential_category``) are never
-listed or delivered. Only ``LOCALLY_COMPATIBLE_TYPES`` — types that work on a
+listed or delivered — except a share stamped ``skill_local_install``, which
+``provision-local`` creates precisely so a Desktop can copy it. Only ``LOCALLY_COMPATIBLE_TYPES`` — types that work on a
 device out of the box — are listed or delivered at all.
 
 Issued ``agent_api`` keys (plan §6/§7) are opt-in: only with
@@ -30,7 +31,10 @@ from datetime import UTC
 from sqlmodel import Session, select
 
 from app.models.credentials.credential import Credential, CredentialType
-from app.models.credentials.credential_share import CredentialShare
+from app.models.credentials.credential_share import (
+    SHARE_SOURCE_SKILL_LOCAL_INSTALL,
+    CredentialShare,
+)
 from app.models.credentials.desktop_credential import (
     DesktopAgentApiKeyFacts,
     DesktopCredentialList,
@@ -153,7 +157,8 @@ class DesktopCredentialService:
 
         Owners may, for their "mine" credentials. A recipient needs a live share
         *and* the owner's ``allow_sharing``, a share that makes it "mine" (not a
-        bundle or skill install), plus the owner's local-use consent. Superuser
+        bundle or cloud skill install; a ``skill_local_install`` share counts),
+        plus the owner's local-use consent. Superuser
         status grants nothing here. ``categories`` comes from ``_categories``.
 
         ``agent_api``: only when ``include_agent_api_keys`` and the credential is
@@ -179,7 +184,10 @@ class DesktopCredentialService:
                 or state.token.subject_user_id != user_id
             ):
                 return "unsupported_type"
-        if categories.get(credential.id) != "mine":
+        if categories.get(credential.id) != "mine" and not (
+            not is_owned
+            and shared_sources.get(credential.id) == SHARE_SOURCE_SKILL_LOCAL_INSTALL
+        ):
             return "not_local_category"
         if not is_owned and not credential.allow_local_use:
             return "local_use_not_allowed"

@@ -102,6 +102,17 @@ C4 — skills from a desktop:
   revisions, a removed pin and lost agent access answer 404; the skill's
   catalog item never opens this way.
 
+C5 — skill credentials for local installs:
+- `catalog_skill_provision_local_test.py` — desktop publish with
+  `meta.publisher_credentials` freezes `publisher` / `template` / `user`
+  specs (unlisted slots stay `user`, bad choices 422
+  `invalid_publisher_credential`, preview candidates);
+  `POST .../revisions/{n}/provision-local` outcomes matrix, idempotency,
+  404s, U7 caller, the share reaching `/external/credentials` (and nobody
+  else's Desktop), consent withdrawn after publish; edge cases (pre-existing
+  direct / `skill_install` / `bundle_install` share, editor republish) in
+  separate `test_edge_*` tests.
+
 Unit (no database): `tests/unit/test_push_policy_bound_manifest_id.py` (the
 policy's bound manifest id), `tests/unit/test_desktop_bundle_id.py` (minting).
 

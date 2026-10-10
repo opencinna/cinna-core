@@ -81,6 +81,9 @@ STATUS_BY_CODE: dict[str, int] = {
     # data could not be decrypted. 409: the request is fine, the publisher's
     # credential is in a state that has to be fixed (re-saved) first.
     "credential_template_unreadable": 409,
+    # A desktop publish named a credential for a slot that cannot provide it
+    # (not the caller's, placeholder, wrong type or slot, no consent flag).
+    "invalid_publisher_credential": 422,
     # Identity
     "package_id_invalid": 422,
     "package_id_taken": 409,

@@ -7355,6 +7355,7 @@ export type SkillDesktopPublishPreviewIn = {
         [key: string]: unknown;
     };
     package_uuid?: (string | null);
+    publisher_credentials?: Array<SkillPublisherCredentialIn>;
 };
 
 /**
@@ -7436,6 +7437,27 @@ export type SkillIssuePublic = {
     message?: string;
     paths?: Array<(string)>;
 };
+
+/**
+ * Response of ``POST /skills/packages/{uuid}/revisions/{n}/provision-local``.
+ */
+export type SkillLocalProvisionResult = {
+    slots?: Array<SkillLocalSlotPublic>;
+};
+
+/**
+ * One slot of ``POST .../provision-local``. Never carries credential data;
+ * ``credential_id`` is set only when the caller may now copy it locally.
+ */
+export type SkillLocalSlotPublic = {
+    slot: string;
+    type: string;
+    provided_by: string;
+    outcome: 'shared' | 'already_shared' | 'not_allowed_locally' | 'not_shareable' | 'user_provides';
+    credential_id?: (string | null);
+};
+
+export type outcome2 = 'shared' | 'already_shared' | 'not_allowed_locally' | 'not_shareable' | 'user_provides';
 
 /**
  * Body of ``POST /skills/packages/{package_id}/grants``.
@@ -7570,6 +7592,17 @@ export type SkillPackageUpdate = {
 };
 
 /**
+ * A credential of the caller's that could provide a slot on a desktop
+ * publish (named in ``publisher_credentials``). Never carries data.
+ */
+export type SkillPublishCredentialCandidate = {
+    id: string;
+    name: string;
+    type: string;
+    can_provide_as?: Array<('publisher' | 'template')>;
+};
+
+/**
  * How publishing now would resolve one declared credential slot.
  *
  * ``credential_id`` / ``credential_name`` name the **publisher's own**
@@ -7585,6 +7618,16 @@ export type SkillPublishCredentialPreview = {
     producer_agent_id?: (string | null);
     producer_agent_name?: (string | null);
     reason?: ('no_linked_credential' | 'not_shareable' | 'not_owned' | 'template_would_leak_secret' | null);
+    candidates?: Array<SkillPublishCredentialCandidate>;
+};
+
+/**
+ * One explicit choice of a desktop publish: ``slot`` is provided by the
+ * caller's own credential ``credential_id``.
+ */
+export type SkillPublisherCredentialIn = {
+    slot: string;
+    credential_id: string;
 };
 
 /**
@@ -12269,6 +12312,13 @@ export type SkillsDownloadSkillPackageRevisionData = {
 };
 
 export type SkillsDownloadSkillPackageRevisionResponse = (unknown);
+
+export type SkillsProvisionSkillPackageRevisionLocallyData = {
+    packageId: string;
+    revisionNumber: number;
+};
+
+export type SkillsProvisionSkillPackageRevisionLocallyResponse = (SkillLocalProvisionResult);
 
 export type SkillsDownloadSkillPackageArchiveData = {
     packageId: string;

@@ -50,6 +50,25 @@ class SkillCredentialRequirementPublic(SQLModel):
     producer_agent_name: str | None = None
 
 
+class SkillPublishCredentialCandidate(SQLModel):
+    """A credential of the caller's that could provide a slot on a desktop
+    publish (named in ``publisher_credentials``). Never carries data."""
+
+    id: uuid.UUID
+    name: str
+    type: str
+    #: Which ``provided_by`` this credential may be offered as.
+    can_provide_as: list[Literal["publisher", "template"]] = []
+
+
+class SkillPublisherCredentialIn(SQLModel):
+    """One explicit choice of a desktop publish: ``slot`` is provided by the
+    caller's own credential ``credential_id``."""
+
+    slot: str = Field(max_length=255)
+    credential_id: uuid.UUID
+
+
 class SkillPublishCredentialPreview(SQLModel):
     """How publishing now would resolve one declared credential slot.
 
@@ -79,6 +98,9 @@ class SkillPublishCredentialPreview(SQLModel):
         ]
         | None
     ) = None
+    #: Desktop publish-preview only: the caller's credentials that may be
+    #: named for this slot in ``publisher_credentials``. Empty elsewhere.
+    candidates: list[SkillPublishCredentialCandidate] = []
 
 
 #: What installing a skill does, or would do, for one credential slot (C4).
@@ -322,6 +344,11 @@ class SkillDesktopPublishPreviewIn(SQLModel):
     #: The package to publish into (a republish, or a package somebody else
     #: maintains that the caller may ``edit``).
     package_uuid: uuid.UUID | None = None
+    #: Slots the caller provides from their own credentials (C5). Unlisted
+    #: slots are filled by each installer.
+    publisher_credentials: list[SkillPublisherCredentialIn] = Field(
+        default=[], max_length=50
+    )
 
 
 class SkillUploadMeta(SQLModel):
@@ -338,6 +365,14 @@ class SkillUploadMeta(SQLModel):
     #: to the requested level and never lowered. ``use`` grants need an
     #: effective visibility of ``users``.
     grants: list[CatalogGrantIn] = Field(default=[], max_length=50)
+    #: Slots the caller provides from their own credentials (C5): each named
+    #: credential must be the caller's, carry the slot as ``service_uri`` and
+    #: the declared type, and allow sharing (→ ``publisher``) or template
+    #: sharing (→ ``template``); else 422 ``invalid_publisher_credential``.
+    #: Unlisted slots are filled by each installer (``user``).
+    publisher_credentials: list[SkillPublisherCredentialIn] = Field(
+        default=[], max_length=50
+    )
 
     @field_validator("version")
     @classmethod
@@ -436,3 +471,36 @@ class SkillPackageAccessGrantCreate(SQLModel):
     """Body of ``POST /skills/packages/{package_id}/grants``."""
 
     email: str
+
+
+#: How one credential slot of a skill stands for a **local** (desktop) install.
+#: ``shared`` — the publisher's credential was shared with the caller just now;
+#: ``already_shared`` — the caller already holds it (a share, or it is theirs);
+#: ``not_allowed_locally`` — shareable, but the owner has not consented to
+#: desktop use (or the type does not work on a device); ``not_shareable`` — the
+#: publisher no longer provides it; ``user_provides`` — the slot is filled by
+#: the installer (``user`` and ``template`` specs).
+SkillLocalSlotOutcome = Literal[
+    "shared",
+    "already_shared",
+    "not_allowed_locally",
+    "not_shareable",
+    "user_provides",
+]
+
+
+class SkillLocalSlotPublic(SQLModel):
+    """One slot of ``POST .../provision-local``. Never carries credential data;
+    ``credential_id`` is set only when the caller may now copy it locally."""
+
+    slot: str
+    type: str
+    provided_by: str
+    outcome: SkillLocalSlotOutcome
+    credential_id: uuid.UUID | None = None
+
+
+class SkillLocalProvisionResult(SQLModel):
+    """Response of ``POST /skills/packages/{uuid}/revisions/{n}/provision-local``."""
+
+    slots: list[SkillLocalSlotPublic] = []

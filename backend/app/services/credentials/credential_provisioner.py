@@ -19,6 +19,7 @@ The provisioner is synchronous and never commits; the caller owns the
 transaction.
 """
 
+import functools
 import json
 import logging
 import uuid
@@ -26,15 +27,20 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from app.core.security import encrypt_field
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle_revision import AgentBundleRevision
 from app.models.credentials.credential import Credential, CredentialType
-from app.models.credentials.credential_share import CredentialShare
+from app.models.credentials.credential_share import (
+    SHARE_SOURCE_SKILL_LOCAL_INSTALL,
+    CredentialShare,
+)
 from app.models.credentials.link_models import AgentCredentialLink
-from app.models.skills.schemas import SkillSlotOutcome
+from app.models.skills.schemas import SkillLocalSlotPublic, SkillSlotOutcome
+from app.models.users.user import User
 from app.services.bundles.credential_spec import (
     ParsedCredentialSpec,
     parse_credential_spec,
@@ -255,6 +261,131 @@ class CredentialProvisioner:
                 report=report,
             )
         return report
+
+    @staticmethod
+    def provision_local(
+        session: Session,
+        *,
+        user: User,
+        specs: list[ParsedCredentialSpec],
+        publisher: PublisherBoundary,
+    ) -> list[SkillLocalSlotPublic]:
+        """Share each publisher-provided slot with ``user`` for a Desktop install.
+
+        No agent and no link: the only write is a ``CredentialShare`` stamped
+        ``skill_local_install`` (first-writer-wins, with one exception: a
+        ``skill_install`` share is promoted to ``skill_local_install``, both
+        being "automatic"; a ``bundle_install`` share is left alone and the
+        slot answers ``not_allowed_locally``), which is what puts the credential into ``user``'s
+        ``/external/credentials``. Each ``publisher`` spec is re-checked live:
+        the credential still exists, is owned by the package publisher, still
+        allows sharing, still carries the spec's type and slot, works on a
+        device, and its owner consented to local use. ``user`` and
+        ``template`` specs are filled by the installer. Idempotent. Flushes,
+        never commits. Role plays no part (a credential exchange is never
+        gated on role).
+        """
+        from app.services.credentials.desktop_credential_service import (
+            LOCALLY_COMPATIBLE_TYPES,
+        )
+
+        slots: list[SkillLocalSlotPublic] = []
+        for parsed in specs:
+            slot = spec_slot(parsed)
+            outcome = functools.partial(CredentialProvisioner._local_slot, parsed)
+            if parsed.provided_by != "publisher":
+                slots.append(outcome("user_provides"))
+                continue
+            credential = (
+                session.get(Credential, parsed.publisher_credential_id)
+                if parsed.publisher_credential_id is not None
+                else None
+            )
+            if (
+                credential is None
+                or publisher.user_id is None
+                or credential.owner_id != publisher.user_id
+                or not credential.allow_sharing
+                or credential_type_value(credential) != parsed.type
+                or credential.service_uri != slot
+            ):
+                slots.append(outcome("not_shareable"))
+                continue
+            if credential.owner_id == user.id:
+                # The installer is the publisher: the credential is theirs.
+                slots.append(outcome("already_shared", credential.id))
+                continue
+            if (
+                not credential.allow_local_use
+                or credential.type not in LOCALLY_COMPATIBLE_TYPES
+                or credential.type == CredentialType.AGENT_API
+            ):
+                slots.append(outcome("not_allowed_locally"))
+                continue
+            existing = CredentialProvisioner._share_row(
+                session, credential_id=credential.id, user_id=user.id
+            )
+            if existing is not None:
+                if existing.source == "bundle_install":
+                    # A bundle share stays the bundle's; Desktop never copies it.
+                    slots.append(outcome("not_allowed_locally"))
+                    continue
+                if existing.source == "skill_install":
+                    # The one exception to first-writer-wins: both sources are
+                    # "automatic", and only the local one reaches a Desktop.
+                    existing.source = SHARE_SOURCE_SKILL_LOCAL_INSTALL
+                    session.add(existing)
+                    session.flush()
+                slots.append(outcome("already_shared", credential.id))
+                continue
+            inserted = CredentialProvisioner._insert_share(
+                session,
+                credential=credential,
+                user_id=user.id,
+                source=SHARE_SOURCE_SKILL_LOCAL_INSTALL,
+            )
+            slots.append(
+                outcome("shared" if inserted else "already_shared", credential.id)
+            )
+        return slots
+
+    @staticmethod
+    def _local_slot(
+        parsed: ParsedCredentialSpec,
+        outcome: str,
+        credential_id: uuid.UUID | None = None,
+    ) -> SkillLocalSlotPublic:
+        return SkillLocalSlotPublic(
+            slot=spec_slot(parsed),
+            type=parsed.type,
+            provided_by=parsed.provided_by,
+            outcome=outcome,
+            credential_id=credential_id,
+        )
+
+    @staticmethod
+    def _insert_share(
+        session: Session, *, credential: Credential, user_id: uuid.UUID, source: str
+    ) -> bool:
+        """Insert a share in a savepoint; ``False`` when a concurrent request
+        inserted the same ``(credential, user)`` row first."""
+        savepoint = session.begin_nested()
+        try:
+            session.add(
+                CredentialShare(
+                    credential_id=credential.id,
+                    shared_with_user_id=user_id,
+                    shared_by_user_id=credential.owner_id,
+                    access_level="read",
+                    source=source,
+                )
+            )
+            session.flush()
+            savepoint.commit()
+        except IntegrityError:
+            savepoint.rollback()
+            return False
+        return True
 
     @staticmethod
     def preview(
@@ -963,16 +1094,24 @@ class CredentialProvisioner:
         return True
 
     @staticmethod
+    def _share_row(
+        session: Session, *, credential_id: uuid.UUID, user_id: uuid.UUID
+    ) -> CredentialShare | None:
+        return session.exec(
+            select(CredentialShare).where(
+                CredentialShare.credential_id == credential_id,
+                CredentialShare.shared_with_user_id == user_id,
+            )
+        ).first()
+
+    @staticmethod
     def _has_share(
         session: Session, *, credential_id: uuid.UUID, user_id: uuid.UUID
     ) -> bool:
         return (
-            session.exec(
-                select(CredentialShare).where(
-                    CredentialShare.credential_id == credential_id,
-                    CredentialShare.shared_with_user_id == user_id,
-                )
-            ).first()
+            CredentialProvisioner._share_row(
+                session, credential_id=credential_id, user_id=user_id
+            )
             is not None
         )
 

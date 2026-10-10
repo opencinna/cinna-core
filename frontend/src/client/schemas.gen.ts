@@ -30673,6 +30673,15 @@ export const SkillDesktopPublishPreviewInSchema = {
                 }
             ],
             title: 'Package Uuid'
+        },
+        publisher_credentials: {
+            items: {
+                '$ref': '#/components/schemas/SkillPublisherCredentialIn'
+            },
+            type: 'array',
+            maxItems: 50,
+            title: 'Publisher Credentials',
+            default: []
         }
     },
     type: 'object',
@@ -30943,6 +30952,61 @@ Error codes: \`\`not_a_directory\`\`, \`\`missing_skill_md\`\`, \`\`unreadable\`
 \`\`description_too_long\`\`, \`\`invalid_credentials\`\`, \`\`budget\`\`,
 \`\`projection_error\`\`.
 Warning codes: \`\`secrets\`\`, \`\`shadowed\`\`, \`\`oversized\`\`.`
+} as const;
+
+export const SkillLocalProvisionResultSchema = {
+    properties: {
+        slots: {
+            items: {
+                '$ref': '#/components/schemas/SkillLocalSlotPublic'
+            },
+            type: 'array',
+            title: 'Slots',
+            default: []
+        }
+    },
+    type: 'object',
+    title: 'SkillLocalProvisionResult',
+    description: 'Response of ``POST /skills/packages/{uuid}/revisions/{n}/provision-local``.'
+} as const;
+
+export const SkillLocalSlotPublicSchema = {
+    properties: {
+        slot: {
+            type: 'string',
+            title: 'Slot'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        provided_by: {
+            type: 'string',
+            title: 'Provided By'
+        },
+        outcome: {
+            type: 'string',
+            enum: ['shared', 'already_shared', 'not_allowed_locally', 'not_shareable', 'user_provides'],
+            title: 'Outcome'
+        },
+        credential_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Credential Id'
+        }
+    },
+    type: 'object',
+    required: ['slot', 'type', 'provided_by', 'outcome'],
+    title: 'SkillLocalSlotPublic',
+    description: `One slot of \`\`POST .../provision-local\`\`. Never carries credential data;
+\`\`credential_id\`\` is set only when the caller may now copy it locally.`
 } as const;
 
 export const SkillPackageAccessGrantCreateSchema = {
@@ -31561,6 +31625,38 @@ export const SkillPackagesPublicSchema = {
     description: 'List response for the skills catalog.'
 } as const;
 
+export const SkillPublishCredentialCandidateSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        can_provide_as: {
+            items: {
+                type: 'string',
+                enum: ['publisher', 'template']
+            },
+            type: 'array',
+            title: 'Can Provide As',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'type'],
+    title: 'SkillPublishCredentialCandidate',
+    description: `A credential of the caller's that could provide a slot on a desktop
+publish (named in \`\`publisher_credentials\`\`). Never carries data.`
+} as const;
+
 export const SkillPublishCredentialPreviewSchema = {
     properties: {
         slot: {
@@ -31645,6 +31741,14 @@ export const SkillPublishCredentialPreviewSchema = {
                 }
             ],
             title: 'Reason'
+        },
+        candidates: {
+            items: {
+                '$ref': '#/components/schemas/SkillPublishCredentialCandidate'
+            },
+            type: 'array',
+            title: 'Candidates',
+            default: []
         }
     },
     type: 'object',
@@ -31797,6 +31901,26 @@ export const SkillPublishRequestSchema = {
     type: 'object',
     title: 'SkillPublishRequest',
     description: 'Body of ``POST /agents/{agent_id}/skills/{name}/publish``.'
+} as const;
+
+export const SkillPublisherCredentialInSchema = {
+    properties: {
+        slot: {
+            type: 'string',
+            maxLength: 255,
+            title: 'Slot'
+        },
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        }
+    },
+    type: 'object',
+    required: ['slot', 'credential_id'],
+    title: 'SkillPublisherCredentialIn',
+    description: `One explicit choice of a desktop publish: \`\`slot\`\` is provided by the
+caller's own credential \`\`credential_id\`\`.`
 } as const;
 
 export const SkillRevisionContentPublicSchema = {

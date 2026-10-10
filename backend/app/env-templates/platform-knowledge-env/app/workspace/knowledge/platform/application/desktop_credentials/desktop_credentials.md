@@ -22,7 +22,10 @@ plain computer are ever eligible, and only with the credential owner's explicit,
 - **"Mine" category** — the only credentials Desktop may ever see or copy are the caller's **My
   Credentials** (owned credentials other than automatic ones, and credentials shared directly with
   them). Automatic credentials (Agent API connections, agent2agent MCP providers) and bundle/skill
-  install credentials are never listed or delivered, regardless of type or consent. See
+  install credentials are never listed or delivered, regardless of type or consent. The one exception is
+  a share made for a skill installed on a Desktop (`skill_local_install`): it is listed as category
+  `automatic` and still needs the owner's `allow_local_use`. See
+  [Agent Skills](../../agents/agent_skills/agent_skills.md#5c-publishing-a-skill-from-a-desktop). See
   [Agent Credentials — Credentials Page: Filter Tabs](../../agents/agent_credentials/credential_sharing.md#credentials-page-filter-tabs-and-category-assignment)
   for how a credential earns the "mine" category.
 - **Local-use consent (`allow_local_use`)** — a per-credential switch, off by default, that only the

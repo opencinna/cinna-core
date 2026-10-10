@@ -34,6 +34,7 @@ from app.models import (
     PluginSyncResponse,
     SkillInstallPreview,
     SkillInstallRequest,
+    SkillLocalProvisionResult,
     SkillPackageAccessGrantCreate,
     SkillPackageAccessGrantPublic,
     SkillPackageAccessGrantsPublic,
@@ -90,7 +91,8 @@ def preview_desktop_skill_publish(
     body: SkillDesktopPublishPreviewIn, session: SessionDep, current_user: CurrentUser
 ) -> Any:
     """What publishing a desktop skill would produce: version, package id,
-    credential slots (all filled by installers).
+    credential slots (publisher-provided where the caller owns a shareable
+    credential carrying the slot, else filled by installers).
 
     With ``package_uuid`` the caller needs ``edit`` on that package (404 when
     they cannot see it, 403 without ``edit``). Any active user may call this.
@@ -368,6 +370,32 @@ def download_skill_package_revision(
             ),
         },
     )
+
+
+@router.post(
+    "/packages/{package_id}/revisions/{revision_number}/provision-local",
+    response_model=SkillLocalProvisionResult,
+)
+def provision_skill_package_revision_locally(
+    package_id: uuid.UUID,
+    revision_number: int,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Share this revision's publisher-provided credentials with the caller so
+    a Desktop install can copy them through ``/external/credentials`` (U11).
+
+    Gated like ``/download``: ``use`` on the package, or U7 (a desktop agent
+    the caller can use pins this revision); otherwise 404. Idempotent. Each
+    slot answers ``shared`` / ``already_shared`` / ``not_allowed_locally`` /
+    ``not_shareable`` / ``user_provides``; no credential data is returned.
+    """
+    try:
+        return SkillCatalogService.provision_local(
+            session, package_id, revision_number, current_user
+        )
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
 
 
 @router.get(

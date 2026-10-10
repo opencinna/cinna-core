@@ -30,6 +30,8 @@ Routes live in `backend/app/api/routes/skills.py`, logic in `backend/app/service
 
 `SkillCatalogService.get_readable_revision` gates download, content and files: catalog visibility first, else `LocalInstallService.pinned_by_usable_desktop_agent`; otherwise 404 `package_not_found`.
 
+`POST /api/v1/skills/packages/{uuid}/revisions/{n}/provision-local` (`SkillCatalogService.provision_local` -> `CredentialProvisioner.provision_local`) shares publisher-provided slot credentials as `skill_local_install` shares; `publisher_credentials` on the publish meta and preview picks them. See [Agent Skills tech](../../agents/agent_skills/agent_skills_tech.md#local-provisioning).
+
 ## Service layer
 
 - `LocalInstallService.record` upserts with a single `INSERT ... ON CONFLICT` on `uq_catalog_local_install`; `remove` deletes own rows; `delete_for_item` stages deletion for an item being removed.
@@ -48,3 +50,4 @@ Routes live in `backend/app/api/routes/skills.py`, logic in `backend/app/service
 ## Changelog
 
 - Desktop skill publish and pin-based revision reads documented.
+- Desktop skill credentials: publisher credential selection and `provision-local` documented.

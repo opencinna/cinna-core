@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from app.models.users.user import User
 
 
+#: ``CredentialShare.source`` of a share ``provision-local`` creates for a
+#: skill installed on a Desktop.
+SHARE_SOURCE_SKILL_LOCAL_INSTALL = "skill_local_install"
+
+
 class CredentialShareBase(SQLModel):
     """Base model for credential shares."""
     access_level: str = Field(default="read", max_length=20)  # Currently only 'read' is supported
@@ -23,9 +28,13 @@ class CredentialShareBase(SQLModel):
     # share created via the credential detail sharing UI; "bundle_install" = an
     # auto-created share from installing a bundle whose publisher provides the
     # credential (PBP); "skill_install" = the same for a catalog skill whose
-    # publisher provides a credential slot. NULL = legacy row (pre-feature),
-    # read as "direct" everywhere. First writer wins. Never inferred after the
-    # fact, never accepted from client input.
+    # publisher provides a credential slot; "skill_local_install" = the same
+    # for a skill installed on a Desktop (no agent, no link), the one automatic
+    # source Desktop may copy locally. NULL = legacy row (pre-feature), read as
+    # "direct" everywhere. First writer wins, with one exception:
+    # provision-local promotes "skill_install" to "skill_local_install" (both
+    # "automatic"). Never inferred after the fact, never accepted from client
+    # input.
     source: str | None = Field(default=None, max_length=20)
 
 
@@ -87,7 +96,7 @@ class CredentialSharePublic(SQLModel):
     shared_by_email: str
     shared_at: datetime
     access_level: str
-    source: str | None = None  # "direct" | "bundle_install" | "skill_install"; NULL = legacy (direct)
+    source: str | None = None  # "direct" | "bundle_install" | "skill_install" | "skill_local_install"; NULL = legacy (direct)
 
 
 class CredentialShareCreate(SQLModel):
@@ -113,10 +122,10 @@ class SharedCredentialPublic(SQLModel):
     access_level: str
     # Tab discriminator computed via CredentialsService.classify_credential_category.
     # For shared rows this is "bundle" (share.source == "bundle_install"),
-    # "automatic" (share.source == "skill_install") or "mine".
+    # "automatic" (share.source in "skill_install"/"skill_local_install") or "mine".
     category: str = "mine"
     # Raw provenance marker (debug / forward-compat).
-    # "direct" | "bundle_install" | "skill_install" | None.
+    # "direct" | "bundle_install" | "skill_install" | "skill_local_install" | None.
     source: str | None = None
     # Agents the recipient has linked this shared credential to (recipient-scoped).
     agent_usage_count: int = 0

@@ -366,13 +366,43 @@ options; core runs the same checks as a cloud publish and appends a revision.
 - **Grants are additive**: those named are added or raised, never lowered, and
   everyone else keeps their access. Replacing the whole list is the catalog's grants
   call. `use` grants need the package to be limited to listed people.
-- **Credentials**: every slot the skill declares becomes a required slot that each
-  installer fills with their own credential; a desktop publish never links or shares
-  the publisher's credentials.
+- **Credentials**: every slot the skill declares is filled by each installer with
+  their own credential, unless the publisher names one per slot in
+  `publisher_credentials: [{slot, credential_id}]` (in the upload meta and the
+  preview). Nothing is inferred: unlike a cloud publish, where credentials linked to
+  the publishing agent decide, a desktop publish provides a slot only when asked to.
+  The named credential must be the publisher's own, not a placeholder, of the
+  declared type, with `service_uri` equal to the slot, and must allow sharing (the
+  slot becomes publisher-provided) or template sharing (it becomes a template);
+  otherwise 422 `invalid_publisher_credential` (also when an editor who is not the package's publisher names any). The preview lists, per slot, the
+  candidate credentials (`id`, `name`, `type`, `can_provide_as`) and never their data.
 - **Version**: the chosen version is written into the stored `SKILL.md` and returned,
   so the desktop writes the same version back into its local copy.
 - **Realtime**: `catalog.updated` (kind `skill`) goes to the people who can see the
   package, and `catalog.granted` to anyone newly granted.
+
+**Credentials for a local install.** When a desktop installs a revision with
+publisher-provided slots, it asks core to provision them
+(`POST /api/v1/skills/packages/{uuid}/revisions/{n}/provision-local`). The caller
+needs `use` on the skill, or `use` on a desktop agent that pins that revision. Each
+slot answers with one outcome, re-checked live at every call:
+
+- `user_provides`: the slot is filled by the installer (user or template specs).
+- `not_shareable`: the publisher no longer provides it (credential gone, sharing
+  turned off, type or slot changed, or it is an Agent API connection).
+- `not_allowed_locally`: the owner has not turned on local use, the type does not
+  work on a computer, or the caller's only access is a bundle-install share.
+- `already_shared`: the caller already owns it or holds a share.
+- `shared`: a share was just created for the caller.
+
+The share is marked `skill_local_install` and reaches Cinna Desktop through
+`/external/credentials` as an automatic credential
+([Desktop Credentials](../../application/desktop_credentials/desktop_credentials.md)).
+An existing skill-install share is promoted to this mark. Calling again changes
+nothing, and no credential data is returned. Shares persist after the caller loses
+access to the skill; turning off sharing or local use stops the next Desktop copy,
+and the publisher can delete the share. Deleting a credential does not yet count
+local-install shares in its impact tiers.
 
 Reading a revision's content, file list or download also opens to a person who can
 use a desktop agent whose latest version pins exactly that revision, so sharing an
@@ -870,3 +900,4 @@ sweep skips denylisted names — it simply never travels again.
 
 - 2026-10-06: Platform skills — `cinna-tasks` (Cinna Task Protocol) is installed into every environment's core, projected beside the agent's skills, reserved against workspace skills, and listed by the fallback Agent Skills block.
 - 2026-10-10: Skills can be published from a desktop (preview + archive upload, additive grants, user-provided credential slots), and a revision pinned by a usable desktop agent can be downloaded and read without catalog visibility.
+- Desktop publish can name a publisher credential per slot, and a desktop install provisions those slots through `provision-local` as `skill_local_install` shares.

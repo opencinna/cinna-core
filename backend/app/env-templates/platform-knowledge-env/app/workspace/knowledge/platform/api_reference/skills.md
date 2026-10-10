@@ -16,6 +16,7 @@ Auto-generated from OpenAPI spec. Tag: `skills`
   - `name`: string (required)
   - `frontmatter`: object
   - `package_uuid`: string | null
+  - `publisher_credentials`: SkillPublisherCredentialIn[]
 
 **Response:** `SkillPublishPreview`
 
@@ -96,6 +97,17 @@ Auto-generated from OpenAPI spec. Tag: `skills`
 **Path parameters:**
 - `package_id`: uuid
 - `revision_number`: integer
+
+---
+
+## POST `/api/v1/skills/packages/{package_id}/revisions/{revision_number}/provision-local`
+**Provision Skill Package Revision Locally**
+
+**Path parameters:**
+- `package_id`: uuid
+- `revision_number`: integer
+
+**Response:** `SkillLocalProvisionResult`
 
 ---
 

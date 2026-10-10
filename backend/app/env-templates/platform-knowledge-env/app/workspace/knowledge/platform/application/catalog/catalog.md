@@ -67,13 +67,20 @@ person when a newer version exists.
 A skill that exists only on a computer can be published straight into the catalog by Cinna Desktop (preview,
 then a folder upload). Any signed-in user may publish a new skill; a new version needs `edit`, and visibility or
 grants need `maintain`. Grants sent with a publish are additive. Every credential slot the skill declares is filled
-by each installer. The chosen version is returned so the desktop writes it back locally, and `catalog.updated`
+by each installer unless the publisher names one of their own credentials for it (publisher-provided or template);
+a desktop install then asks core to share the publisher-provided ones so the computer can copy them. The chosen version is returned so the desktop writes it back locally, and `catalog.updated`
 and `catalog.granted` fire as for any publish. Details and refusals:
 [Agent Skills](../../agents/agent_skills/agent_skills.md#5c-publishing-a-skill-from-a-desktop).
 
 **Download through an agent.** A person who can use a desktop agent may download, list the files of and read the
 `SKILL.md` of a skill revision that the agent's latest version pins exactly, even without seeing the skill in the
 catalog. The skill's own detail stays hidden that way.
+
+**Credentials for a local install.** `POST /api/v1/skills/packages/{uuid}/revisions/{n}/provision-local` shares a
+revision's publisher-provided credentials with a person installing it on a computer. It needs `use` on the skill or on
+a desktop agent that pins that revision. Per slot it answers `user_provides`, `not_shareable`, `not_allowed_locally`,
+`already_shared` or `shared`; the owner's sharing and local-use switches are re-checked each time. Details:
+[Agent Skills](../../agents/agent_skills/agent_skills.md#5c-publishing-a-skill-from-a-desktop).
 
 ## Deleting an item
 
@@ -130,6 +137,8 @@ row. It replaces the former admin team library page.
 - Local installs are best effort reports from Cinna Desktop; the desktop's own state stays the truth
   for itself.
 
+- Deleting a credential does not yet count the shares made for local skill installs in its impact tiers.
+
 ## Integration points
 
 - [Agent Bundles](../../agents/agent_bundles/agent_bundles.md), [Agent Skills](../../agents/agent_skills/agent_skills.md), [Desktop Agents](desktop_agents.md): the three kinds and their publish paths.
@@ -141,3 +150,4 @@ row. It replaces the former admin team library page.
 
 - One unified listing replaced the separate agent and skill catalog pages; local installs, the local-aware delete guard and `catalog.updated` for cloud and skill publishes were added.
 - Skills can be published from a desktop, and a skill revision pinned by a usable desktop agent can be downloaded through that agent.
+- Desktop skill publish can name publisher credentials per slot, and local installs can be provisioned with them.

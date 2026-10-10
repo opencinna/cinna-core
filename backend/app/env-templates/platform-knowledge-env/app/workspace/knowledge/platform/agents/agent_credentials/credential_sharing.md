@@ -204,7 +204,7 @@ The single source of truth is `CredentialsService.classify_credential_category(*
 | Owned, type `mcp_provider`, external (`none` / `fixed_token` / `oauth_dcr` / NULL) | Manually managed → mine | **My Credentials** |
 | Owned, any other type | | **My Credentials** |
 | Shared (received), `share.source == "bundle_install"` | Bundle-installed → bundle | **Bundle Credentials** |
-| Shared (received), `share.source == "skill_install"` | Shared **for** the installer by adding a catalog skill, not by any hand action → automatic | **Automatic Credentials** |
+| Shared (received), `share.source in ("skill_install", "skill_local_install")` | Shared **for** the installer by adding a catalog skill, not by any hand action → automatic | **Automatic Credentials** |
 | Shared (received), `share.source ∈ {"direct", NULL}` | NULL is read as "direct" | **My Credentials** |
 
 A received share is categorised by its **provenance alone**, never by its type. The `skill_install` row is the one deliberate exception to "shared credentials are never automatic": nobody asked for it, the install created it, and it sits with the other connection records the platform made on the user's behalf — the same place a user goes looking for "things my agents got by themselves".
@@ -226,6 +226,7 @@ A nullable `source` column (`varchar(20)`) on the `credential_shares` table reco
 | `"direct"` | Created by the owner explicitly sharing with a specific user |
 | `"bundle_install"` | Created automatically when an installer installed a bundle that provides this credential (PBP flow) |
 | `"skill_install"` | Created automatically when an installer added a catalog **skill** whose revision provides this credential |
+| `"skill_local_install"` | Created by `POST /skills/packages/{uuid}/revisions/{n}/provision-local` when a catalog skill is installed on a Desktop (no agent, no link). Category **automatic**; the one automatic source Desktop may copy. An existing `skill_install` share is promoted to it (the single exception to first-writer-wins); a `bundle_install` share is never touched |
 | `NULL` | Legacy row (pre-feature); read as `"direct"` everywhere |
 
 The value is **stamped at creation time, never updated after the fact**. Two code paths stamp it:

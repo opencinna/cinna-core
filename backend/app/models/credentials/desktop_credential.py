@@ -59,8 +59,9 @@ class DesktopCredentialListItem(SQLModel):
     status: str
     is_placeholder: bool
     relation: DesktopCredentialRelation
-    # The caller's credentials-page category. Only "mine" is ever listed;
-    # carried so a Desktop can enforce the same rule on what it receives.
+    # The caller's credentials-page category. Only "mine" is ever listed,
+    # plus "automatic" for a share ``provision-local`` created for a skill
+    # installed on a Desktop (``CredentialShare.source="skill_local_install"``).
     category: str
     owner_email: str | None = None
     local_use_allowed: bool

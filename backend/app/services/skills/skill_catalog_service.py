@@ -60,6 +60,7 @@ from app.models.catalog.catalog_access import (
 from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
 from app.models.skills.schemas import (
     SkillInstallPreview,
+    SkillLocalProvisionResult,
     SkillPackageAccessGrantPublic,
     SkillPackageDetailPublic,
     SkillPackageEntry,
@@ -1579,6 +1580,36 @@ class SkillCatalogService:
         return package, SkillCatalogService.get_revision(
             session, package, revision_number
         )
+
+    @staticmethod
+    def provision_local(
+        session: Session, package_uuid: uuid.UUID, revision_number: int, user: User
+    ) -> SkillLocalProvisionResult:
+        """Share a revision's publisher-provided credentials with ``user`` for
+        an install on their Desktop (U11). Gated like the download: ``use`` on
+        the package, or U7. Idempotent."""
+        package, revision = SkillCatalogService.get_readable_revision(
+            session, package_uuid, revision_number, user
+        )
+        slots = CredentialProvisioner.provision_local(
+            session,
+            user=user,
+            specs=SkillCredentialRequirements.parse_specs(
+                revision.required_credential_specs
+            ),
+            publisher=PublisherBoundary(package.publisher_user_id),
+        )
+        # Also persists a ``skill_install`` share promoted to local use.
+        session.commit()
+        if any(item.outcome == "shared" for item in slots):
+            logger.info(
+                "skill_provision_local package_id=%s revision=%s user_id=%s shared=%s",
+                package.package_id,
+                revision_number,
+                user.id,
+                sum(item.outcome == "shared" for item in slots),
+            )
+        return SkillLocalProvisionResult(slots=slots)
 
     @staticmethod
     def get_revision(
