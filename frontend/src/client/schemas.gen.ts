@@ -7221,6 +7221,11 @@ export const AgentCreateSchema = {
                 }
             ],
             title: 'User Workspace Id'
+        },
+        auto_generate_description: {
+            type: 'boolean',
+            title: 'Auto Generate Description',
+            default: false
         }
     },
     type: 'object',
@@ -15850,6 +15855,24 @@ export const CredentialDeletionImpactSchema = {
             type: 'integer',
             title: 'Active Skill Install Count',
             default: 0
+        },
+        local_install_share_count: {
+            type: 'integer',
+            title: 'Local Install Share Count',
+            default: 0
+        },
+        active_local_skill_install_count: {
+            type: 'integer',
+            title: 'Active Local Skill Install Count',
+            default: 0
+        },
+        local_install_skill_usages: {
+            items: {
+                '$ref': '#/components/schemas/CredentialSkillUsage'
+            },
+            type: 'array',
+            title: 'Local Install Skill Usages',
+            default: []
         }
     },
     type: 'object',
@@ -15866,7 +15889,8 @@ export const CredentialDeletionImpactSchema = {
   credential is not PBP in any published bundle. Deletion is allowed with
   a warning (recipients lose access immediately).
 - \`\`2\`\` (PBP in a published bundle, or in a published catalog skill, with
-  ≥1 active foreign install): deleting breaks other users' installs.
+  ≥1 active foreign install, cloud or local): deleting breaks other
+  users' installs.
   Blocked by default (HTTP 409); the owner may force the deletion via
   \`\`force=true\`\`.
 
@@ -16081,6 +16105,33 @@ export const CredentialPublicSchema = {
     title: 'CredentialPublic'
 } as const;
 
+export const CredentialShareAgentUsageSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        skill_display_names: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Skill Display Names',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'CredentialShareAgentUsage',
+    description: `A recipient's cloud agent that links the shared credential through at
+least one of the owner's catalog skills.`
+} as const;
+
 export const CredentialShareCreateSchema = {
     properties: {
         shared_with_email: {
@@ -16092,6 +16143,44 @@ export const CredentialShareCreateSchema = {
     required: ['shared_with_email'],
     title: 'CredentialShareCreate',
     description: 'Request model for creating a credential share.'
+} as const;
+
+export const CredentialShareLocalSkillUsageSchema = {
+    properties: {
+        package_uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Package Uuid'
+        },
+        package_id: {
+            type: 'string',
+            title: 'Package Id'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        host_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Host Agent Name'
+        }
+    },
+    type: 'object',
+    required: ['package_uuid', 'package_id', 'display_name', 'revision_number'],
+    title: 'CredentialShareLocalSkillUsage',
+    description: `A skill of the owner, providing the credential, that the recipient
+installed into a local agent on Cinna Desktop.`
 } as const;
 
 export const CredentialSharePublicSchema = {
@@ -16151,6 +16240,27 @@ export const CredentialSharePublicSchema = {
                 }
             ],
             title: 'Source'
+        },
+        agent_usages: {
+            items: {
+                '$ref': '#/components/schemas/CredentialShareAgentUsage'
+            },
+            type: 'array',
+            title: 'Agent Usages',
+            default: []
+        },
+        direct_agent_use_count: {
+            type: 'integer',
+            title: 'Direct Agent Use Count',
+            default: 0
+        },
+        local_skill_usages: {
+            items: {
+                '$ref': '#/components/schemas/CredentialShareLocalSkillUsage'
+            },
+            type: 'array',
+            title: 'Local Skill Usages',
+            default: []
         }
     },
     type: 'object',

@@ -101,6 +101,7 @@ When "+ New Agent" is selected:
 **Agent Routes:** `backend/app/api/routes/agents.py`
 - `POST /agents/create-flow`: SSE endpoint streaming creation progress
   - Extracts all fields from `AgentCreateFlowRequest` — including all six new env-preconfig fields — and forwards them to `AgentService.create_agent_flow()`
+  - Pre-check before any insert: a missing AI key for the chosen SDK returns 400 `Missing required API key for SDK '<sdk>'. Please add it in user settings.` with no agent row created and no model call; `POST /agents/` behaves the same. The wizard sends `auto_generate_description=true` (see [Agent Prompts](../../agents/agent_prompts/agent_prompts.md))
   - Restricted to `agent-developer` and `admin` roles (`require_developer` dependency)
 - `POST /agents/{id}/credentials`: Endpoint for sharing credentials with agent
 

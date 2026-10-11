@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session, delete, func, select
 
 from app.services.catalog.desktop_agent_service import DesktopAgentService
@@ -14,6 +14,7 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.services.users.user_service import UserService
+from app.services.users.user_data_cleanup_service import UserDataCleanupService
 from app.models import (
     InvitationLinkPublic,
     InviteUserRequest,
@@ -803,7 +804,9 @@ async def update_user_role(
 
 
 @router.delete("/me", response_model=Message)
-def delete_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
+def delete_user_me(
+    session: SessionDep, current_user: CurrentUser, background_tasks: BackgroundTasks
+) -> Any:
     """
     Delete own user.
     """
@@ -818,10 +821,13 @@ def delete_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
     revocations = AccountProvisioningService.on_account_deleted(
         session, current_user, actor_id=None
     )
+    # Containers and folders the cascade below orphans, read while the rows exist.
+    cleanup = UserDataCleanupService.snapshot(session, current_user.id)
     # Desktop agents outlive their creator (superusers manage them).
     DesktopAgentService.detach_publisher(session, current_user.id)
     session.delete(current_user)
     session.commit()
+    background_tasks.add_task(UserDataCleanupService.run, cleanup)
     # Only after the delete commits. A synchronous handler cannot await a
     # provider call, and must not destroy a key for a deletion that did not
     # happen.
@@ -943,7 +949,10 @@ async def update_user(
 
 @router.delete("/{user_id}", dependencies=[Depends(get_current_active_superuser)])
 def delete_user(
-    session: SessionDep, current_user: CurrentUser, user_id: uuid.UUID
+    session: SessionDep,
+    current_user: CurrentUser,
+    user_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
 ) -> Message:
     """
     Delete a user.
@@ -961,10 +970,12 @@ def delete_user(
     revocations = AccountProvisioningService.on_account_deleted(
         session, user, actor_id=current_user.id
     )
+    cleanup = UserDataCleanupService.snapshot(session, user.id)
     # Desktop agents outlive their creator (superusers manage them).
     DesktopAgentService.detach_publisher(session, user.id)
     session.delete(user)
     session.commit()
+    background_tasks.add_task(UserDataCleanupService.run, cleanup)
     key_provisioning_service.schedule_revocations(revocations)
     return Message(message="User deleted successfully")
 

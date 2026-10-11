@@ -256,7 +256,55 @@ class EnvironmentService:
         """
         Background task to create environment instance.
         Uses its own database session to avoid conflicts.
+
+        Whatever happens, the tail checks whether the environment row still
+        exists: a delete that lands mid-build (an uninstall seconds after
+        install) cannot remove a folder the build is still copying into, so
+        the build removes what it left once its own steps have stopped.
         """
+        try:
+            await EnvironmentService._build_environment(
+                env_id, agent_id, credential_bag, auto_start,
+                source_environment_id, bundle_snapshot_path,
+            )
+        finally:
+            await EnvironmentService._discard_if_deleted_during_build(env_id)
+
+    @staticmethod
+    async def _discard_if_deleted_during_build(env_id: UUID) -> None:
+        """Tear down the instance of an environment deleted while it built.
+
+        Reads the row in a fresh session, so it also catches a delete served
+        by another worker. Runs after every build step has returned (the
+        template copy included), so nothing writes into the folder after it
+        is removed. Never raises.
+        """
+        try:
+            with create_session() as session:
+                if session.get(AgentEnvironment, env_id) is not None:
+                    return
+            logger.info(
+                "Environment %s was deleted while it was building; "
+                "removing its container and instance folder",
+                env_id,
+            )
+            await EnvironmentService.get_lifecycle_manager().discard_instance(env_id)
+        except Exception as e:
+            logger.warning(
+                "Failed to clean up environment %s deleted during its build: %s",
+                env_id, e,
+            )
+
+    @staticmethod
+    async def _build_environment(
+        env_id: UUID,
+        agent_id: UUID,
+        credential_bag: dict[str, str | None],
+        auto_start: bool,
+        source_environment_id: UUID | None,
+        bundle_snapshot_path: str | None,
+    ) -> None:
+        """The build steps of ``_create_environment_background``."""
         # Create new database session for background task
         with create_session() as session:
             try:
@@ -754,6 +802,68 @@ class EnvironmentService:
         return bag, conversation_ai_credential_id, building_ai_credential_id
 
     @staticmethod
+    def resolve_sdks_and_credentials(
+        session: Session,
+        user: User,
+        data: AgentEnvironmentCreate,
+    ) -> tuple[str, str | None, dict, UUID | None, UUID | None]:
+        """Normalize + validate the environment's SDKs and resolve its credentials.
+
+        Writes nothing, so callers that create other rows first (agent
+        creation) can run it up front and fail before any row exists.
+
+        Returns ``(sdk_conversation, sdk_building, bag,
+        conversation_ai_credential_id, building_ai_credential_id)``.
+
+        Raises ``AgentEnvironmentError`` on an invalid SDK and
+        ``EnvironmentCredentialError`` (400) on inaccessible/incompatible
+        credentials or a missing required API key.
+        """
+        # Normalize SDK values (use user's defaults, then fall back to global default)
+        # Conversation SDK is always required
+        sdk_conversation = data.agent_sdk_conversation or user.default_sdk_conversation or DEFAULT_SDK
+        # Building SDK can be None (e.g., for user-mode clones that don't need building)
+        # Only apply defaults if not explicitly set to None
+        if data.agent_sdk_building is None:
+            # Explicitly None means "not needed" (e.g., user-mode clones)
+            sdk_building = None
+        else:
+            sdk_building = data.agent_sdk_building or user.default_sdk_building or DEFAULT_SDK
+
+        # Validate SDK values
+        if not is_valid_sdk(sdk_conversation):
+            raise AgentEnvironmentError(
+                f"Invalid agent_sdk_conversation: '{sdk_conversation}'. "
+                f"Must be a known SDK or engine/provider format. Valid engines: {VALID_SDK_ENGINES}"
+            )
+        if sdk_building is not None and not is_valid_sdk(sdk_building):
+            raise AgentEnvironmentError(
+                f"Invalid agent_sdk_building: '{sdk_building}'. "
+                f"Must be a known SDK or engine/provider format. Valid engines: {VALID_SDK_ENGINES}"
+            )
+
+        # Resolve the per-mode credential bag + the credential ids to persist.
+        bag, conversation_ai_credential_id, building_ai_credential_id = (
+            EnvironmentService._resolve_credentials(
+                session=session,
+                user=user,
+                sdk_conversation=sdk_conversation,
+                sdk_building=sdk_building,
+                use_default_ai_credentials=data.use_default_ai_credentials,
+                requested_conversation_credential_id=data.conversation_ai_credential_id,
+                requested_building_credential_id=data.building_ai_credential_id,
+            )
+        )
+
+        return (
+            sdk_conversation,
+            sdk_building,
+            bag,
+            conversation_ai_credential_id,
+            building_ai_credential_id,
+        )
+
+    @staticmethod
     async def create_environment(
         session: Session,
         agent_id: UUID,
@@ -793,40 +903,14 @@ class EnvironmentService:
         if not agent:
             raise AgentNotFoundError(f"Agent {agent_id} not found")
 
-        # Normalize SDK values (use user's defaults, then fall back to global default)
-        # Conversation SDK is always required
-        sdk_conversation = data.agent_sdk_conversation or user.default_sdk_conversation or DEFAULT_SDK
-        # Building SDK can be None (e.g., for user-mode clones that don't need building)
-        # Only apply defaults if not explicitly set to None
-        if data.agent_sdk_building is None:
-            # Explicitly None means "not needed" (e.g., user-mode clones)
-            sdk_building = None
-        else:
-            sdk_building = data.agent_sdk_building or user.default_sdk_building or DEFAULT_SDK
-
-        # Validate SDK values
-        if not is_valid_sdk(sdk_conversation):
-            raise AgentEnvironmentError(
-                f"Invalid agent_sdk_conversation: '{sdk_conversation}'. "
-                f"Must be a known SDK or engine/provider format. Valid engines: {VALID_SDK_ENGINES}"
-            )
-        if sdk_building is not None and not is_valid_sdk(sdk_building):
-            raise AgentEnvironmentError(
-                f"Invalid agent_sdk_building: '{sdk_building}'. "
-                f"Must be a known SDK or engine/provider format. Valid engines: {VALID_SDK_ENGINES}"
-            )
-
-        # Resolve the per-mode credential bag + the credential ids to persist.
-        bag, conversation_ai_credential_id, building_ai_credential_id = (
-            EnvironmentService._resolve_credentials(
-                session=session,
-                user=user,
-                sdk_conversation=sdk_conversation,
-                sdk_building=sdk_building,
-                use_default_ai_credentials=data.use_default_ai_credentials,
-                requested_conversation_credential_id=data.conversation_ai_credential_id,
-                requested_building_credential_id=data.building_ai_credential_id,
-            )
+        (
+            sdk_conversation,
+            sdk_building,
+            bag,
+            conversation_ai_credential_id,
+            building_ai_credential_id,
+        ) = EnvironmentService.resolve_sdks_and_credentials(
+            session=session, user=user, data=data
         )
 
         # Generate a memorable instance name if not provided

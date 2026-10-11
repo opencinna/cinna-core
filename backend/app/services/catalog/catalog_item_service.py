@@ -49,6 +49,7 @@ from app.models.skills.skill_package import SkillPackage
 from app.models.skills.skill_package_revision import SkillPackageRevision
 from app.models.users.user import User
 from app.services.bundles.bundle_service import BundleService
+from app.services.bundles.credential_spec import listing_credential_specs
 from app.services.bundles.exceptions import BundleError
 from app.services.catalog.catalog_access_service import (
     BUNDLE,
@@ -346,7 +347,9 @@ class CatalogItemService:
                     latest=_latest(latest, people) if latest else None,
                     install_count=install_counts.get(bundle.id, 0),
                     my_installs=my_installs.get(bundle.id, []),
-                    required_credential_specs=list(latest.required_credential_specs or [])
+                    required_credential_specs=listing_credential_specs(
+                        latest.required_credential_specs
+                    )
                     if latest
                     else [],
                     skills=_skills(latest.skills_summary if latest else None),
@@ -442,7 +445,9 @@ class CatalogItemService:
                     latest=_latest(latest, people) if latest else None,
                     install_count=ctx.install_counts.get(package.id, 0),
                     my_installs=my_installs.get(package.id, []),
-                    required_credential_specs=list(latest.required_credential_specs or [])
+                    required_credential_specs=listing_credential_specs(
+                        latest.required_credential_specs
+                    )
                     if latest
                     else [],
                     skill=CatalogSkillContent(

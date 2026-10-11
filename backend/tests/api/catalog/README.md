@@ -112,6 +112,14 @@ C5 — skill credentials for local installs:
   else's Desktop), consent withdrawn after publish; edge cases (pre-existing
   direct / `skill_install` / `bundle_install` share, editor republish) in
   separate `test_edge_*` tests.
+- `catalog_skill_credential_revocation_test.py` — an owner's unshare
+  (`DELETE /credentials/{id}/shares/{share_id}`) is final: provision-local
+  answers `not_shareable` until the owner shares again (T4.8 (ii)); sharing
+  off/on keeps individual revocations; a later version that stops providing
+  the credential keeps the share; the owner's share list `agent_usages` /
+  `local_skill_usages`; deletion impact's local-install counts and tier 2.
+  Cloud installs after an unshare: `tests/api/agents/skill_credentials/` and
+  `tests/api/agents/bundles_install/` (`*_revoked_share_test.py`).
 
 Unit (no database): `tests/unit/test_push_policy_bound_manifest_id.py` (the
 policy's bound manifest id), `tests/unit/test_desktop_bundle_id.py` (minting).

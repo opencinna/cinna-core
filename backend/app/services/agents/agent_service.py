@@ -60,8 +60,18 @@ def _generate_description_background(
                 db=db_session,
             )
 
-            agent = db_session.get(Agent, agent_id)
-            if agent:
+            # Re-read the opt-in under a row lock: a description PUT that
+            # landed while the model call ran turned it off and must win.
+            agent = db_session.get(
+                Agent, agent_id, populate_existing=True, with_for_update=True
+            )
+            if agent and not agent.auto_generate_description:
+                logger.info(
+                    "Skipping description update for agent %s: auto-generation "
+                    "was turned off while the description was being generated",
+                    agent_id,
+                )
+            elif agent:
                 agent.description = description
                 agent.updated_at = datetime.now(UTC)
                 db_session.add(agent)
@@ -424,19 +434,7 @@ class AgentService:
         AgentService._enforce_agent_creation_limit(session=session, user=user)
         from app.services.bundles.bundle_id_service import BundleIdService
 
-        # Generate the agent UUID up front so the auto-generated bundle_id can
-        # be derived from it before the row is inserted (the column is NOT NULL).
-        agent_id = uuid.uuid4()
-        bundle_id = BundleIdService.generate_bundle_id(agent_id)
-        agent = Agent.model_validate(
-            data,
-            update={"owner_id": user_id, "id": agent_id, "bundle_id": bundle_id},
-        )
-        session.add(agent)
-        session.commit()
-        session.refresh(agent)
-
-        # Create default environment for the agent
+        # Default environment for the agent.
         # auto_start=True means it will automatically start and activate after build completes
         default_env_data = AgentEnvironmentCreate(
             env_name=settings.DEFAULT_AGENT_ENV_NAME,
@@ -447,6 +445,35 @@ class AgentService:
             agent_sdk_conversation=agent_sdk_conversation,
             agent_sdk_building=agent_sdk_building,
         )
+        # Validate the environment's SDKs and AI credentials before any row is
+        # written. ``create_environment`` runs the same check, but only after
+        # the agent is committed, so a missing AI key would leave an agent with
+        # no environment behind. Raises ``AgentEnvironmentError`` /
+        # ``EnvironmentCredentialError`` (400).
+        EnvironmentService.resolve_sdks_and_credentials(
+            session=session, user=user, data=default_env_data
+        )
+
+        # Generate the agent UUID up front so the auto-generated bundle_id can
+        # be derived from it before the row is inserted (the column is NOT NULL).
+        agent_id = uuid.uuid4()
+        bundle_id = BundleIdService.generate_bundle_id(agent_id)
+        agent = Agent.model_validate(
+            data,
+            update={
+                "owner_id": user_id,
+                "id": agent_id,
+                "bundle_id": bundle_id,
+                # A caller-supplied description is never rewritten.
+                "auto_generate_description": bool(
+                    data.auto_generate_description and not data.description
+                ),
+            },
+        )
+        session.add(agent)
+        session.commit()
+        session.refresh(agent)
+
         default_env = await EnvironmentService.create_environment(
             session=session,
             agent_id=agent.id,
@@ -490,6 +517,13 @@ class AgentService:
             user_id: Optional user ID for per-user AI provider routing
         """
         import threading
+
+        # The description is model-written only for agents that opted in
+        # (AgentCreate.auto_generate_description); never for one whose owner
+        # wrote it.
+        trigger_description_update = (
+            trigger_description_update and agent.auto_generate_description
+        )
 
         # Run LLM-powered regeneration in a background thread to avoid blocking
         # the asyncio event loop (these are synchronous LLM calls that can take
@@ -559,6 +593,15 @@ class AgentService:
             return None
 
         update_dict = data.model_dump(exclude_unset=True)
+
+        # An owner-written description is never rewritten by the model again.
+        # Cleared before the workflow handler below reads the flag, so a PUT
+        # that sets both fields keeps the description it sent.
+        if (
+            "description" in update_dict
+            and update_dict["description"] != agent.description
+        ):
+            agent.auto_generate_description = False
 
         # Handle workflow_prompt change with unified method
         if "workflow_prompt" in update_dict and update_dict["workflow_prompt"] != agent.workflow_prompt:
@@ -734,6 +777,34 @@ class AgentService:
         return True
 
     @staticmethod
+    def build_flow_environment_data(
+        *,
+        env_name: str | None = None,
+        agent_sdk_conversation: str | None = None,
+        agent_sdk_building: str | None = None,
+        model_override_conversation: str | None = None,
+        model_override_building: str | None = None,
+        use_default_ai_credentials: bool = True,
+        conversation_ai_credential_id: UUID | None = None,
+        building_ai_credential_id: UUID | None = None,
+    ) -> AgentEnvironmentCreate:
+        """The default environment ``create_agent_flow`` creates for a new agent."""
+        return AgentEnvironmentCreate(
+            env_name=env_name or settings.DEFAULT_AGENT_ENV_NAME,
+            env_version=settings.DEFAULT_AGENT_ENV_VERSION,
+            instance_name="Default",
+            type="docker",
+            config={},
+            agent_sdk_conversation=agent_sdk_conversation,
+            agent_sdk_building=agent_sdk_building,
+            model_override_conversation=model_override_conversation,
+            model_override_building=model_override_building,
+            use_default_ai_credentials=use_default_ai_credentials,
+            conversation_ai_credential_id=conversation_ai_credential_id,
+            building_ai_credential_id=building_ai_credential_id,
+        )
+
+    @staticmethod
     async def create_agent_flow(
         session: Session,
         user: User,
@@ -777,6 +848,23 @@ class AgentService:
             # client gets a clean 4xx instead of a mid-stream error.
             AgentService._enforce_agent_creation_limit(session=session, user=user)
 
+            # Validate the environment's SDKs and AI credentials before the
+            # billed configuration call and before any row is written (the
+            # route runs the same check up front for a clean 400).
+            default_env_data = AgentService.build_flow_environment_data(
+                env_name=env_name,
+                agent_sdk_conversation=agent_sdk_conversation,
+                agent_sdk_building=agent_sdk_building,
+                model_override_conversation=model_override_conversation,
+                model_override_building=model_override_building,
+                use_default_ai_credentials=use_default_ai_credentials,
+                conversation_ai_credential_id=conversation_ai_credential_id,
+                building_ai_credential_id=building_ai_credential_id,
+            )
+            EnvironmentService.resolve_sdks_and_credentials(
+                session=session, user=user, data=default_env_data
+            )
+
             # Step 1: Create agent from description
             yield {
                 "step": "creating_agent",
@@ -819,7 +907,15 @@ class AgentService:
             bundle_id = BundleIdService.generate_bundle_id(agent_id)
             agent = Agent.model_validate(
                 agent_data,
-                update={"owner_id": user.id, "id": agent_id, "bundle_id": bundle_id},
+                update={
+                    "owner_id": user.id,
+                    "id": agent_id,
+                    "bundle_id": bundle_id,
+                    # The web create flow opts in: ``description`` here is the
+                    # person's request, which the description generator turns
+                    # into a real description once the agent is built.
+                    "auto_generate_description": True,
+                },
             )
             session.add(agent)
             session.commit()
@@ -838,21 +934,6 @@ class AgentService:
                 "message": "Building default environment...",
                 "current_step": "start_environment"
             }
-
-            default_env_data = AgentEnvironmentCreate(
-                env_name=env_name or settings.DEFAULT_AGENT_ENV_NAME,
-                env_version=settings.DEFAULT_AGENT_ENV_VERSION,
-                instance_name="Default",
-                type="docker",
-                config={},
-                agent_sdk_conversation=agent_sdk_conversation,
-                agent_sdk_building=agent_sdk_building,
-                model_override_conversation=model_override_conversation,
-                model_override_building=model_override_building,
-                use_default_ai_credentials=use_default_ai_credentials,
-                conversation_ai_credential_id=conversation_ai_credential_id,
-                building_ai_credential_id=building_ai_credential_id,
-            )
 
             environment = await EnvironmentService.create_environment(
                 session=session,

@@ -6,10 +6,15 @@
  * dot, no menu. The one control opens the package in a **new tab**, so a
  * confirm is never left by navigating out of it.
  */
-import { Box, GraduationCap, type LucideIcon } from "lucide-react"
+import { Bot, Box, GraduationCap, Laptop, type LucideIcon } from "lucide-react"
 
-import type { CredentialBundleUsage, CredentialSkillUsage } from "@/client"
-import { ListRow, RowInfo } from "@/components/Common/ListRow"
+import type {
+  CredentialBundleUsage,
+  CredentialShareAgentUsage,
+  CredentialShareLocalSkillUsage,
+  CredentialSkillUsage,
+} from "@/client"
+import { ListRow, RowFlag, RowInfo } from "@/components/Common/ListRow"
 import { NewTabIconLink } from "@/components/Common/NewTabIconLink"
 import { providedByPublisherLabel } from "@/utils/skillCredentials"
 
@@ -79,5 +84,44 @@ export function SkillUsageRow({ usage }: { usage: CredentialSkillUsage }) {
         }}
       />
     </ListRow>
+  )
+}
+
+/**
+ * What one share recipient loses when the owner unshares from them: a cloud
+ * agent of theirs that uses it through one of the owner's skills (agents
+ * that use it directly are only counted, by the caller). No link — it is not the
+ * owner's agent to open.
+ */
+export function RecipientAgentRow({
+  usage,
+}: {
+  usage: CredentialShareAgentUsage
+}) {
+  const skills = usage.skill_display_names ?? []
+  return (
+    <ListRow
+      icon={<UsageTile icon={Bot} />}
+      title={usage.name}
+      meta={
+        skills.length > 0 ? `Uses it through ${skills.join(", ")}` : undefined
+      }
+    />
+  )
+}
+
+/** A skill of the owner the recipient installed on their own computer. */
+export function RecipientLocalSkillRow({
+  usage,
+}: {
+  usage: CredentialShareLocalSkillUsage
+}) {
+  return (
+    <ListRow
+      icon={<UsageTile icon={GraduationCap} />}
+      title={usage.display_name}
+      meta={usage.host_agent_name ? `in ${usage.host_agent_name}` : undefined}
+      flags={<RowFlag icon={Laptop} label="On their computer" />}
+    />
   )
 }

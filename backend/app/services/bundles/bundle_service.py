@@ -18,6 +18,7 @@ from pathlib import Path
 from sqlalchemy import func
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import (
     AgentBundle,
@@ -38,6 +39,7 @@ from app.models.catalog.catalog_access import CatalogPrincipalKind
 from app.models.credentials.ai_credential import AICredential
 from app.models.environments.environment import AgentEnvironment
 from app.models.users.user import User
+from app.services.common.data_dirs import remove_data_subdir
 from app.services.bundles.exceptions import (
     BundleAccessDeniedError,
     BundleConflictError,
@@ -473,6 +475,11 @@ class BundleService:
             bundle_id_str,
         )
         if bundle_was_unpublished:
+            # The bundle row is gone, so its whole storage folder (now at most
+            # an empty ``<bundle_id>/``) goes with it.
+            remove_data_subdir(
+                settings.BUNDLE_STORAGE_DIR, bundle_id_str, what="bundle storage"
+            )
             logger.info(
                 "Auto-deleted empty AgentBundle id=%s bundle_id=%s "
                 "(last revision removed)",
@@ -494,9 +501,13 @@ class BundleService:
                 f"Cannot delete bundle with {foreign} dependent install(s). "
                 "Have those users uninstall first."
             )
+        bundle_uuid, bundle_id_str = bundle.id, bundle.bundle_id
         session.delete(bundle)
         session.commit()
-        logger.info("Deleted AgentBundle id=%s bundle_id=%s", bundle.id, bundle.bundle_id)
+        # Every revision snapshot lives under ``<BUNDLE_STORAGE_DIR>/<bundle_id>/``
+        # and the revisions cascaded with the row, so the folder goes too.
+        remove_data_subdir(settings.BUNDLE_STORAGE_DIR, bundle_id_str, what="bundle storage")
+        logger.info("Deleted AgentBundle id=%s bundle_id=%s", bundle_uuid, bundle_id_str)
 
     # ── Access grants ──────────────────────────────────────────────
 

@@ -193,3 +193,49 @@ def parse_credential_spec(spec: object) -> ParsedCredentialSpec | None:
         producer_agent_id=_optional_uuid(spec.get("producer_agent_id")),
         producer_agent_name=producer_agent_name,
     )
+
+
+#: The spec keys a catalog listing may show: what labels a slot and who fills
+#: it. ``template_data`` / ``template_private_fields`` (the publisher's shipped
+#: field values) and the consent flags stay server-side; the install flows read
+#: them off the revision row, never off a listing.
+_LISTING_SPEC_KEYS = (
+    "name",
+    "type",
+    "description",
+    "provided_by",
+    "publisher_credential_id",
+    "service_uri",
+    "producer_agent_id",
+    "producer_agent_name",
+)
+
+
+def listing_credential_specs(specs: object) -> list[dict]:
+    """Project ``required_credential_specs`` for a catalog listing.
+
+    Keeps only :data:`_LISTING_SPEC_KEYS` (absent keys stay absent) and drops
+    entries that are not dicts. Everything a catalog response carries about a
+    credential slot goes through here.
+
+    A ``service_uri`` the publisher marked private (listed in the spec's
+    ``template_private_fields``) is omitted, as the install context and
+    ``CredentialProvisioner._materialise_template`` already hide it.
+    """
+    if not isinstance(specs, list):
+        return []
+    return [_listing_spec(spec) for spec in specs if isinstance(spec, dict)]
+
+
+def _listing_spec(spec: dict) -> dict:
+    private = spec.get("template_private_fields")
+    hidden = (
+        {"service_uri"}
+        if isinstance(private, list) and "service_uri" in private
+        else set()
+    )
+    return {
+        key: spec[key]
+        for key in _LISTING_SPEC_KEYS
+        if key in spec and key not in hidden
+    }

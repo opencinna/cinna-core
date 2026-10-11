@@ -3155,6 +3155,9 @@ export class AgentsService {
      * Create new agent with default environment.
      *
      * Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
+     *
+     * Answers 400 when the default environment cannot be created (invalid SDK,
+     * or a missing / inaccessible AI credential); no agent row is written then.
      * @param data The data for the request.
      * @param data.requestBody
      * @returns AgentPublic Successful Response

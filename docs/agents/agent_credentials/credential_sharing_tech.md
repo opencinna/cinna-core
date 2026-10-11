@@ -49,6 +49,8 @@
 - `backend/app/alembic/versions/3f8f2a2e7f23_add_credential_service_uri.py` - `service_uri` (TEXT, nullable) column on credential table; partial btree index `ix_credential_service_uri (service_uri) WHERE service_uri IS NOT NULL`. All existing rows backfill to NULL (legacy behavior unchanged). Downgrade drops the index then the column
 - `backend/app/alembic/versions/3c3c37a5e144_add_credential_share_source.py` - Adds `source` (VARCHAR(20), nullable, no server default) to `credential_shares`. `down_revision = 65d1ef4899be`. No index, no FK, no data backfill — existing rows default to NULL (read everywhere as `"direct"`). Downgrade drops the column.
 
+- `backend/app/alembic/versions/bfd8b2ff2e3c_credential_share_revocation.py` - Creates `credential_share_revocation`
+
 ### Router Registration
 - `backend/app/api/main.py` - Added `credential_shares.router` import and registration
 
@@ -75,6 +77,13 @@
 - `access_level` (varchar, default 'read')
 - `source` (varchar(20), nullable) — provenance marker: `"direct"` | `"bundle_install"` | `"skill_install"` | NULL (legacy, read as `"direct"`). Stamped at creation, never updated. Added in migration `3c3c37a5e144` (nullable, no server default, no index, no backfill); the skill source uses the existing column.
 - Unique constraint: `(credential_id, shared_with_user_id)`
+
+### New Table: `credential_share_revocation`
+Records that the owner removed a person's share. Written by `revoke_credential_share` on `DELETE /credentials/{id}/shares/{share_id}` for any source (`INSERT ... ON CONFLICT DO NOTHING`); cleared only by the owner's direct re-share via `share_credential`. Read by `provision-local` (answers `not_shareable`) and by the cloud bundle/skill install path (`CredentialProvisioner`: publisher credential treated as unavailable, giving `publisher_unavailable` / placeholder). Turning sharing off neither writes nor clears rows. Migration `bfd8b2ff2e3c`.
+
+### Share and deletion-impact payload additions
+- `CredentialSharePublic` gains `agent_usages [{id, name, skill_display_names}]` (only agents with at least one owner skill), `direct_agent_use_count`, and `local_skill_usages [{package_uuid, package_id, display_name, revision_number, host_agent_name?}]` (`host_agent_name` only when the recipient published that desktop agent).
+- `CredentialDeletionImpact` gains `local_install_share_count`, `active_local_skill_install_count`, `local_install_skill_usages`. Active local skill installs make delete Tier 2 (409 unless `force=true`).
 
 ### Bundle Revision Spec (no DB column — JSON inside `agent_bundle_revision.required_credential_specs`)
 
@@ -185,6 +194,9 @@ Each entry the publish flow emits:
 - "Used in Skills" block listing `skill_pbp_usages`; each entry deep-links to `/catalog/skills/{package_uuid}`. Both blocks cap at five with a "Show all" `CredentialUsagesSheet` (one shell, rows supplied by the caller), and both hide only once known to be empty, so a failed read never reads as "used nowhere"
 - Early-returns `null` when `useRole().isAgentUser` is true, so the entire card is hidden from `agent-user` accounts
 
+### UnshareCredentialDialog (`frontend/src/components/Credentials/CredentialUsageRows.tsx` and `CredentialSharing.tsx`)
+- Opens on removing a person only when that person has usages (agents, skills, skills on their computer); otherwise removal is immediate. The sharing-off confirm lists the same usages plus a re-enable note.
+
 ### DeleteCredential (`frontend/src/components/Credentials/DeleteCredential.tsx`)
 - Service credential delete dialog used from the credential detail page and credential card dropdown menu
 - Fetches `GET /credentials/{id}/deletion-impact` (query key `["credential-deletion-impact", id]`) when the dialog opens
@@ -192,6 +204,7 @@ Each entry the publish flow emits:
 - Tier 1: shows a destructive alert "N users will lose access to this credential immediately"
 - Tier 2: shows a destructive alert describing the broken installs, lists affected bundles from `bundle_pbp_usages` with "Open" links to the publisher install's Bundle tab, and replaces the "Delete" button with "Force delete & break installs" (passes `force=true`)
 - All tiers: when `bundle_usages` (all-modes) is non-empty, a "Used in bundles" section is rendered below the tier-specific alert showing every bundle the credential belongs to, with its provisioning-mode label (`Shared with installers` / `Template` / `User-provided`) and an "Open" deep-link; this is informational and does not change tier/block logic
+- Adds a sentence for active local skill installs (`active_local_skill_install_count`, `local_install_skill_usages`)
 - On a 409 race (a non-forced delete that comes back 409 mid-dialog): invalidates the impact query and shows an inline error toast instead of a generic error
 
 ### DeleteAICredentialDialog (`frontend/src/components/UserSettings/DeleteAICredentialDialog.tsx`)

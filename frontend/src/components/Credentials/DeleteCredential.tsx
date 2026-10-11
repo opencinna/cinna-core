@@ -33,6 +33,7 @@ import {
   skillImpactSentence,
 } from "@/utils/skillCredentials"
 import { BundleUsageRow, SkillUsageRow } from "./CredentialUsageRows"
+import { localSkillImpactSentence } from "./localSkillImpact"
 
 interface DeleteCredentialProps {
   credential: CredentialPublic
@@ -119,6 +120,7 @@ const DeleteCredential = ({
   const activeInstallCount = impact?.active_install_count ?? 0
   const skillUsages = impact?.skill_pbp_usages ?? []
   const activeSkillInstallCount = impact?.active_skill_install_count ?? 0
+  const localSkillInstallers = impact?.active_local_skill_install_count ?? 0
 
   // Tier 2 is reached through bundles, skills, or both, so the alert says only
   // what is true: each source's sentence appears only when that source has
@@ -135,6 +137,11 @@ const DeleteCredential = ({
           activeSkillInstallCount,
           "delete",
         )
+      : null
+  // Tier 2 can come from skills installed on recipients' computers alone.
+  const localSkillTierSentence =
+    localSkillInstallers > 0
+      ? localSkillImpactSentence(localSkillInstallers, "delete")
       : null
 
   return (
@@ -213,17 +220,24 @@ const DeleteCredential = ({
             )}
 
             {/* Tier 2: publisher-provided in published bundles or skills with installs */}
-            {isTier2 && (bundleTierSentence || skillTierSentence) && (
-              <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>This credential is in use</AlertTitle>
-                <AlertDescription>
-                  {[bundleTierSentence, skillTierSentence]
-                    .filter(Boolean)
-                    .join(" ")}
-                </AlertDescription>
-              </Alert>
-            )}
+            {isTier2 &&
+              (bundleTierSentence ||
+                skillTierSentence ||
+                localSkillTierSentence) && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>This credential is in use</AlertTitle>
+                  <AlertDescription>
+                    {[
+                      bundleTierSentence,
+                      skillTierSentence,
+                      localSkillTierSentence,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  </AlertDescription>
+                </Alert>
+              )}
 
             {/* All tiers: the bundles and skills this credential is part of */}
             {bundleUsages.length > 0 && (

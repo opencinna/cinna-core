@@ -161,6 +161,7 @@ An optional mixin interface for adapters that can provide direct local filesyste
 - `_update_environment_config(image_tag)` - Regenerate auth token, docker-compose.yml (with `${TEMPLATE_IMAGE_TAG}` substituted), .env
 - `_generate_compose_file(image_tag)` - Produce docker-compose.yml; substitutes `${TEMPLATE_IMAGE_TAG}` with the tag from `TemplateImageService`
 - `_generate_auth_token(user_id, env_id, agent_id)` - Mint the scoped env JWT (`aud`/`token_type == "agent_env"`, `env_id`/`agent_id` claims, `sub` = owner id, TTL `AGENT_ENV_TOKEN_EXPIRE_DAYS`); caller stores `sha256(token)` on `auth_token_hash`
+- Build vs delete: the build tail re-reads the environment row; if it was deleted mid-build, it runs compose down and removes the instance folder. An aborted build releases its port. Known limit: a delete during a *rebuild* is not covered.
 - `_generate_env_file()` - Generate .env with AI credential auto-detection by prefix
 
 **Constants**:
@@ -189,7 +190,7 @@ Manages one shared Docker image per template, tagged by a content hash of the bu
 - `start()` - UP operation (`docker-compose up -d`), wait for health check
 - `stop()` - STOP operation (`docker-compose stop`)
 - `rebuild()` - DOWN + optional UP; no `docker-compose build` step (image is pre-built by `TemplateImageService`)
-- `delete()` - DOWN with volumes (`docker-compose down -v --remove-orphans`)
+- `delete()` - DOWN with volumes (`docker-compose down -v --remove-orphans`); tolerates a missing `docker-compose.yml`
 - `install_custom_packages()` - Install workspace Python dependencies from `workspace_requirements.txt`
 - `install_system_packages()` - Install OS-level packages from `workspace_system_packages.txt` via `apt-get`
 - `set_agent_prompts()` - Sync prompts via HTTP API to agent-env

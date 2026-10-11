@@ -387,7 +387,8 @@ class CredentialDeletionImpact(SQLModel):
       credential is not PBP in any published bundle. Deletion is allowed with
       a warning (recipients lose access immediately).
     - ``2`` (PBP in a published bundle, or in a published catalog skill, with
-      ≥1 active foreign install): deleting breaks other users' installs.
+      ≥1 active foreign install, cloud or local): deleting breaks other
+      users' installs.
       Blocked by default (HTTP 409); the owner may force the deletion via
       ``force=true``.
 
@@ -418,6 +419,15 @@ class CredentialDeletionImpact(SQLModel):
     active_install_count: int = 0
     skill_pbp_usages: list[CredentialSkillUsage] = []
     active_skill_install_count: int = 0
+    #: Shares provision-local made for people who installed one of the
+    #: owner's skills on Cinna Desktop (``source="skill_local_install"``).
+    local_install_share_count: int = 0
+    #: Distinct people (not the owner) holding such a share and a recorded
+    #: local install of a package in ``local_install_skill_usages``.
+    active_local_skill_install_count: int = 0
+    #: The subset of ``skill_pbp_usages`` someone installed locally with the
+    #: credential shared to them.
+    local_install_skill_usages: list[CredentialSkillUsage] = []
 
 
 class AgentCredentialAccessTokenRequest(SQLModel):

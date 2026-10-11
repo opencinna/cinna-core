@@ -1370,6 +1370,7 @@ export type AgentCreate = {
     status_refresh_command?: (string | null);
     description?: (string | null);
     user_workspace_id?: (string | null);
+    auto_generate_description?: boolean;
 };
 
 export type AgentCreateFlowRequest = {
@@ -3739,7 +3740,8 @@ export type CredentialCreate = {
  * credential is not PBP in any published bundle. Deletion is allowed with
  * a warning (recipients lose access immediately).
  * - ``2`` (PBP in a published bundle, or in a published catalog skill, with
- * ≥1 active foreign install): deleting breaks other users' installs.
+ * ≥1 active foreign install, cloud or local): deleting breaks other
+ * users' installs.
  * Blocked by default (HTTP 409); the owner may force the deletion via
  * ``force=true``.
  *
@@ -3770,6 +3772,9 @@ export type CredentialDeletionImpact = {
     active_install_count?: number;
     skill_pbp_usages?: Array<CredentialSkillUsage>;
     active_skill_install_count?: number;
+    local_install_share_count?: number;
+    active_local_skill_install_count?: number;
+    local_install_skill_usages?: Array<CredentialSkillUsage>;
 };
 
 export type CredentialPublic = {
@@ -3801,10 +3806,32 @@ export type CredentialPublic = {
 };
 
 /**
+ * A recipient's cloud agent that links the shared credential through at
+ * least one of the owner's catalog skills.
+ */
+export type CredentialShareAgentUsage = {
+    id: string;
+    name: string;
+    skill_display_names?: Array<(string)>;
+};
+
+/**
  * Request model for creating a credential share.
  */
 export type CredentialShareCreate = {
     shared_with_email: string;
+};
+
+/**
+ * A skill of the owner, providing the credential, that the recipient
+ * installed into a local agent on Cinna Desktop.
+ */
+export type CredentialShareLocalSkillUsage = {
+    package_uuid: string;
+    package_id: string;
+    display_name: string;
+    revision_number: number;
+    host_agent_name?: (string | null);
 };
 
 /**
@@ -3822,6 +3849,9 @@ export type CredentialSharePublic = {
     shared_at: string;
     access_level: string;
     source?: (string | null);
+    agent_usages?: Array<CredentialShareAgentUsage>;
+    direct_agent_use_count?: number;
+    local_skill_usages?: Array<CredentialShareLocalSkillUsage>;
 };
 
 /**

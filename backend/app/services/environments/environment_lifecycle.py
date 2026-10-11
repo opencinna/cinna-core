@@ -267,6 +267,8 @@ class EnvironmentLifecycleManager:
         Returns:
             True if creation successful
         """
+        env_id = environment.id  # read before a failed commit can expire the row
+        allocated_port: int | None = None
         try:
             # Update status: Creating
             _set_status(environment, "creating", "Preparing environment...")
@@ -308,6 +310,7 @@ class EnvironmentLifecycleManager:
             db_session.commit()
 
             port = self._allocate_port(db_session)
+            allocated_port = port
             environment.config["port"] = port
             environment.config["container_name"] = f"agent-{environment.id}"
             flag_modified(environment, "config")
@@ -344,11 +347,28 @@ class EnvironmentLifecycleManager:
             return True
 
         except Exception as e:
-            # Update status to error with detailed message
-            _set_status(environment, "error", f"Failed to create environment: {str(e)}")
-            db_session.add(environment)
-            db_session.commit()
-            logger.error(f"Failed to create environment {environment.id}: {e}")
+            # Update status to error with detailed message. When the row was
+            # deleted mid-build the failure IS that delete (the step's commit
+            # matched no row), so recording it can fail too; the caller's tail
+            # (``EnvironmentService._discard_if_deleted_during_build``) removes
+            # what the build left.
+            try:
+                if not db_session.is_active:
+                    db_session.rollback()
+                _set_status(environment, "error", f"Failed to create environment: {str(e)}")
+                db_session.add(environment)
+                db_session.commit()
+            except Exception as status_error:
+                db_session.rollback()
+                # The row is gone with the port it would have recorded; free
+                # it here, since ``discard_instance`` cannot know it.
+                if allocated_port is not None:
+                    self._allocated_ports.discard(allocated_port)
+                logger.warning(
+                    f"Could not record the build failure of environment {env_id} "
+                    f"(deleted meanwhile?): {status_error}"
+                )
+            logger.error(f"Failed to create environment {env_id}: {e}")
             raise
 
     async def _sync_dynamic_data(
@@ -1793,6 +1813,16 @@ class EnvironmentLifecycleManager:
             self._allocated_ports.discard(environment.config["port"])
 
         return True
+
+    async def discard_instance(self, env_id: UUID) -> None:
+        """Remove what a build left for an environment whose row is gone.
+
+        The row (and with it the env config) no longer exists, so the adapter
+        is resolved from a transient stand-in carrying only the id; a
+        placeholder port keeps ``get_adapter`` from allocating one.
+        """
+        stand_in = AgentEnvironment(id=env_id, type="docker", config={"port": 0})
+        await self.delete_environment_instance(stand_in)
 
     # === Helper Methods ===
 

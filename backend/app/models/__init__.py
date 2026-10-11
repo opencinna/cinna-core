@@ -179,8 +179,11 @@ from .credentials.ai_credential_share import (
 )
 from .credentials.credential_share import (
     CredentialShare,
+    CredentialShareAgentUsage,
     CredentialShareBase,
+    CredentialShareLocalSkillUsage,
     CredentialSharePublic,
+    CredentialShareRevocation,
     CredentialShareCreate,
     CredentialSharesPublic,
     SharedCredentialPublic,
@@ -1161,8 +1164,11 @@ __all__ = [
     "SharedAICredentialsPublic",
     # Credential Shares
     "CredentialShare",
+    "CredentialShareAgentUsage",
     "CredentialShareBase",
+    "CredentialShareLocalSkillUsage",
     "CredentialSharePublic",
+    "CredentialShareRevocation",
     "DesktopCredentialList",
     "DesktopCredentialListItem",
     "DesktopCredentialMaterializeRequest",

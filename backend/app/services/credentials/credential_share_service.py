@@ -2,16 +2,27 @@
 Credential Share Service - Business logic for credential sharing operations.
 """
 import logging
-from uuid import UUID
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
-from sqlmodel import Session, select, and_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlmodel import Session, col, delete, select, and_
 
-from app.models.credentials.credential import Credential
+from app.models.agents.agent import Agent
+from app.models.bundles.agent_bundle import AgentBundle
+from app.models.catalog.catalog_local_install import CatalogLocalInstall
+from app.models.credentials.credential import Credential, CredentialSkillUsage
 from app.models.credentials.credential_share import (
     CredentialShare,
+    CredentialShareAgentUsage,
+    CredentialShareLocalSkillUsage,
     CredentialSharePublic,
+    CredentialShareRevocation,
     SharedCredentialPublic,
 )
+from app.models.credentials.link_models import AgentCredentialLink
+from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
+from app.models.skills.skill_package_revision import SkillPackageRevision
 from app.models.users.user import User
 from app.services.credentials.credentials_service import CredentialsService
 
@@ -102,6 +113,11 @@ class CredentialShareService:
             source=source,
         )
         session.add(share)
+        # The owner sharing again is the one thing that lifts their earlier
+        # removal of this person's share.
+        CredentialShareService.clear_revocation(
+            session, credential_id=credential_id, user_id=target_user.id
+        )
         session.commit()
         session.refresh(share)
 
@@ -158,6 +174,14 @@ class CredentialShareService:
         recipient_id = share.shared_with_user_id
 
         session.delete(share)
+        # Remember the owner's decision so no automatic path (provision-local,
+        # a cloud bundle or skill install) shares it with this person again.
+        CredentialShareService.record_revocation(
+            session,
+            credential_id=credential_id,
+            user_id=recipient_id,
+            revoked_by_user_id=owner_id,
+        )
         session.commit()
 
         logger.info(
@@ -200,6 +224,16 @@ class CredentialShareService:
         )
         shares = session.exec(statement).all()
 
+        (
+            agent_usages,
+            direct_agent_counts,
+            local_skill_usages,
+        ) = CredentialShareService._recipient_usages(
+            session,
+            credential=credential,
+            recipient_ids=[share.shared_with_user_id for share in shares],
+        )
+
         result = []
         for share in shares:
             # Get shared_with user info
@@ -216,9 +250,217 @@ class CredentialShareService:
                 shared_at=share.shared_at,
                 access_level=share.access_level,
                 source=share.source,
+                agent_usages=agent_usages.get(share.shared_with_user_id, []),
+                direct_agent_use_count=direct_agent_counts.get(
+                    share.shared_with_user_id, 0
+                ),
+                local_skill_usages=local_skill_usages.get(
+                    share.shared_with_user_id, []
+                ),
             ))
 
         return result
+
+    # ── Owner revocations ────────────────────────────────────────────────
+
+    @staticmethod
+    def record_revocation(
+        session: Session,
+        *,
+        credential_id: UUID,
+        user_id: UUID,
+        revoked_by_user_id: UUID,
+    ) -> None:
+        """Record that the owner removed ``user_id``'s share. Idempotent and
+        race-safe (``ON CONFLICT DO NOTHING``); never commits."""
+        session.exec(
+            pg_insert(CredentialShareRevocation)
+            .values(
+                id=uuid4(),
+                credential_id=credential_id,
+                user_id=user_id,
+                revoked_by_user_id=revoked_by_user_id,
+                created_at=datetime.now(timezone.utc),
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_credential_share_revocation_credential_user"
+            )
+        )
+
+    @staticmethod
+    def clear_revocation(
+        session: Session, *, credential_id: UUID, user_id: UUID
+    ) -> None:
+        """Lift the owner's removal for ``user_id``. Never commits."""
+        session.exec(
+            delete(CredentialShareRevocation).where(
+                col(CredentialShareRevocation.credential_id) == credential_id,
+                col(CredentialShareRevocation.user_id) == user_id,
+            )
+        )
+
+    @staticmethod
+    def is_revoked(session: Session, *, credential_id: UUID, user_id: UUID) -> bool:
+        """The credential's owner removed ``user_id``'s share and has not
+        shared it with them again."""
+        return (
+            session.exec(
+                select(CredentialShareRevocation.id).where(
+                    CredentialShareRevocation.credential_id == credential_id,
+                    CredentialShareRevocation.user_id == user_id,
+                )
+            ).first()
+            is not None
+        )
+
+    # ── What a share is used for (owner warnings) ────────────────────────
+
+    @staticmethod
+    def owner_skill_usages(
+        session: Session, *, credential: Credential
+    ) -> tuple[list[CredentialSkillUsage], list[UUID]]:
+        """The owner's catalog skill packages providing ``credential``, and
+        every revision id of those packages (see
+        ``SkillCredentialRequirements.publisher_usages_of_credential``)."""
+        from app.services.skills.skill_credential_requirements import (
+            SkillCredentialRequirements,
+        )
+
+        return SkillCredentialRequirements.publisher_usages_of_credential(
+            session,
+            credential_id=credential.id,
+            publisher_user_id=credential.owner_id,
+        )
+
+    @staticmethod
+    def local_skill_installs(
+        session: Session,
+        *,
+        skill_usages: list[CredentialSkillUsage],
+        user_ids: list[UUID],
+    ) -> list[CatalogLocalInstall]:
+        """Recorded Desktop installs, by ``user_ids``, of any package in
+        ``skill_usages``. Any revision counts: a later version that stops
+        providing the credential keeps the share."""
+        if not skill_usages or not user_ids:
+            return []
+        return list(
+            session.exec(
+                select(CatalogLocalInstall)
+                .where(
+                    CatalogLocalInstall.item_kind == "skill",
+                    col(CatalogLocalInstall.item_uuid).in_(
+                        [usage.package_uuid for usage in skill_usages]
+                    ),
+                    col(CatalogLocalInstall.user_id).in_(user_ids),
+                )
+                .order_by(col(CatalogLocalInstall.created_at))
+            ).all()
+        )
+
+    @staticmethod
+    def _recipient_usages(
+        session: Session, *, credential: Credential, recipient_ids: list[UUID]
+    ) -> tuple[
+        dict[UUID, list[CredentialShareAgentUsage]],
+        dict[UUID, int],
+        dict[UUID, list[CredentialShareLocalSkillUsage]],
+    ]:
+        """Per recipient: their cloud agents linking ``credential`` through
+        one of the owner's providing skills (named), the count of the others
+        (not named: the owner has no business knowing them), and their Desktop
+        installs of the owner's providing skills. A fixed number of queries."""
+        agent_usages: dict[UUID, list[CredentialShareAgentUsage]] = {}
+        direct_counts: dict[UUID, int] = {}
+        local_usages: dict[UUID, list[CredentialShareLocalSkillUsage]] = {}
+        if not recipient_ids:
+            return agent_usages, direct_counts, local_usages
+
+        skill_usages, revision_ids = CredentialShareService.owner_skill_usages(
+            session, credential=credential
+        )
+        names_by_package = {u.package_uuid: u.display_name for u in skill_usages}
+
+        agent_rows = session.exec(
+            select(Agent.id, Agent.name, Agent.owner_id)
+            .join(AgentCredentialLink, AgentCredentialLink.agent_id == Agent.id)
+            .where(
+                AgentCredentialLink.credential_id == credential.id,
+                col(Agent.owner_id).in_(recipient_ids),
+            )
+            .order_by(col(Agent.name))
+        ).all()
+        skills_by_agent: dict[UUID, list[str]] = {}
+        if agent_rows and revision_ids:
+            link_rows = session.exec(
+                select(AgentPluginLink.agent_id, SkillPackageRevision.package_id)
+                .join(
+                    SkillPackageRevision,
+                    SkillPackageRevision.id == AgentPluginLink.skill_package_revision_id,
+                )
+                .where(
+                    col(AgentPluginLink.agent_id).in_([row[0] for row in agent_rows]),
+                    AgentPluginLink.source == PluginSource.catalog,
+                    col(AgentPluginLink.skill_package_revision_id).in_(revision_ids),
+                )
+            ).all()
+            for agent_id, package_uuid in link_rows:
+                name = names_by_package.get(package_uuid)
+                names = skills_by_agent.setdefault(agent_id, [])
+                if name is not None and name not in names:
+                    names.append(name)
+        for agent_id, agent_name, owner_id in agent_rows:
+            if not skills_by_agent.get(agent_id):
+                direct_counts[owner_id] = direct_counts.get(owner_id, 0) + 1
+                continue
+            agent_usages.setdefault(owner_id, []).append(
+                CredentialShareAgentUsage(
+                    id=agent_id,
+                    name=agent_name,
+                    skill_display_names=skills_by_agent.get(agent_id, []),
+                )
+            )
+
+        installs = CredentialShareService.local_skill_installs(
+            session, skill_usages=skill_usages, user_ids=recipient_ids
+        )
+        host_ids = {row.host_manifest_id for row in installs if row.host_manifest_id}
+        # (manifest id, publisher) → name: a host agent is named only when the
+        # recipient themselves shared it through core.
+        host_names: dict[tuple[UUID, UUID], str] = {}
+        if host_ids:
+            host_names = {
+                (manifest_id, publisher_id): display_name
+                for manifest_id, publisher_id, display_name in session.exec(
+                    select(
+                        AgentBundle.manifest_id,
+                        AgentBundle.publisher_user_id,
+                        AgentBundle.display_name,
+                    ).where(
+                        AgentBundle.runs_on == "desktop",
+                        col(AgentBundle.manifest_id).in_(host_ids),
+                        col(AgentBundle.publisher_user_id).in_(recipient_ids),
+                    )
+                ).all()
+                if manifest_id is not None and publisher_id is not None
+            }
+        usage_by_package = {u.package_uuid: u for u in skill_usages}
+        for row in installs:
+            usage = usage_by_package[row.item_uuid]
+            local_usages.setdefault(row.user_id, []).append(
+                CredentialShareLocalSkillUsage(
+                    package_uuid=usage.package_uuid,
+                    package_id=usage.package_id,
+                    display_name=usage.display_name,
+                    revision_number=row.revision_number,
+                    host_agent_name=(
+                        host_names.get((row.host_manifest_id, row.user_id))
+                        if row.host_manifest_id
+                        else None
+                    ),
+                )
+            )
+        return agent_usages, direct_counts, local_usages
 
     @staticmethod
     def get_credentials_shared_with_me(

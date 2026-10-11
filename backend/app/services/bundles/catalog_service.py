@@ -35,7 +35,10 @@ from app.models.bundles.catalog import (
 from app.models.credentials.ai_credential import AICredential
 from app.models.credentials.credential import Credential
 from app.models.users.user import User
-from app.services.bundles.credential_spec import parse_credential_spec
+from app.services.bundles.credential_spec import (
+    listing_credential_specs,
+    parse_credential_spec,
+)
 from app.services.catalog.catalog_access_service import BUNDLE, CatalogAccessService
 
 logger = logging.getLogger(__name__)
@@ -103,7 +106,7 @@ class CatalogService:
                 latest_rev_number = rev.revision_number
                 latest_version = rev.version
                 latest_published_at = rev.published_at
-                cred_specs = rev.required_credential_specs or []
+                cred_specs = listing_credential_specs(rev.required_credential_specs)
                 # Left as ``None`` when the revision predates agent skills, so
                 # the card can tell "ships no skills" from "we don't know".
                 skills = rev.skills_summary

@@ -151,6 +151,22 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
         - Networks
         - Orphaned containers
         """
+        if not (self.env_dir / "docker-compose.yml").exists():
+            # The build never wrote the compose file (deleted mid-build, or a
+            # half-removed instance dir): there is nothing for compose to take
+            # down. A container can still exist only in odd partial states, so
+            # remove it by name if it is there.
+            logger.info(
+                f"No docker-compose.yml for {self.container_name}; "
+                "removing the container by name if it exists"
+            )
+            try:
+                container = await asyncio.to_thread(self.get_container)
+                if container is not None:
+                    await asyncio.to_thread(container.remove, force=True, v=True)
+            except Exception as e:
+                logger.warning(f"Removing container {self.container_name} failed: {e}")
+            return True
         try:
             logger.info(f"Deleting container {self.container_name} and all resources")
             # Use -v to remove volumes and --remove-orphans to clean up any orphaned containers

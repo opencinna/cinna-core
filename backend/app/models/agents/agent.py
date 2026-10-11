@@ -47,6 +47,12 @@ class AgentBase(SQLModel):
 class AgentCreate(AgentBase):
     description: str | None = None
     user_workspace_id: uuid.UUID | None = None
+    # Opt-in: let the platform write the agent's description with a (billed)
+    # model call whenever its workflow prompt changes, including the first
+    # sync that pulls the template's default prompt. Default off, so an API
+    # caller is never billed for it unasked. Ignored (stored off) when the
+    # caller supplies a ``description``: that one is never rewritten.
+    auto_generate_description: bool = False
 
 
 # Properties to receive on agent update
@@ -148,6 +154,13 @@ class Agent(AgentBase, table=True):
     is_publisher_install: bool = Field(default=False)
     # NEW FIELDS for agent sessions
     description: str | None = None
+    # Whether a workflow-prompt change (UI edit or env→DB prompt pull)
+    # regenerates ``description`` with a model call. Set on create (opt-in, see
+    # AgentCreate) and cleared when the owner writes a description themselves.
+    auto_generate_description: bool = Field(
+        default=False,
+        sa_column_kwargs={"server_default": text("false")},
+    )
     is_active: bool = Field(default=True)
     active_environment_id: uuid.UUID | None = Field(default=None, foreign_key="agent_environment.id")
     ui_color_preset: str | None = Field(default="slate")

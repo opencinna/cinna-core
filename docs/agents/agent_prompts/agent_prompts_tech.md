@@ -169,7 +169,7 @@ The `AgentEnvironment` table (defined in `backend/app/models/environments/enviro
 
 ### AgentService (`agent_service.py`)
 
-- `handle_workflow_prompt_change(agent, new_workflow_prompt, trigger_description_update)` — regenerates A2A skills; optionally triggers background description generation
+- `handle_workflow_prompt_change(agent, new_workflow_prompt, trigger_description_update)` — regenerates A2A skills; optionally triggers background description generation. The description writer is opt-in per agent: it runs only when `Agent.auto_generate_description` is true, which gates the first prompt sync, web workflow edit and env sync. The flag is set by `AgentCreate.auto_generate_description` (default false; web AddAgent and `/create-flow` opt in; API, CLI and bundle installs do not). Supplying a description on create turns it off, a `PUT` that changes the description clears it, and the background writer re-checks before writing. Migration `c4e1a9d27b63` backfilled existing agents to true except foreign bundle installs
 - `update_agent()` — when a prompt field changes, bumps the matching `agent.<field>_updated_at = now()` before commit; calls `handle_workflow_prompt_change()` when `workflow_prompt` is modified
 
 ## Frontend Components

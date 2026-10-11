@@ -2302,7 +2302,9 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         - Tier 1 (direct shares): shares exist but no Tier-2 condition.
         - Tier 2 (PBP in a published bundle with ≥1 active foreign install, or
           PBP in a published catalog skill with ≥1 distinct foreign agent that
-          links the credential and installs one of those revisions).
+          links the credential and installs one of those revisions, or ≥1
+          person holding a share who recorded a Cinna Desktop install of one
+          of those packages).
 
         Owner-only: raises ``ValueError("Credential not found")`` when the
         credential does not exist OR the requester is not the owner — matching
@@ -2420,8 +2422,38 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 )
             ).one()
 
-        if (bundle_pbp_usages and active_install_count > 0) or (
-            skill_pbp_usages and active_skill_install_count > 0
+        # The same block for skills installed on Cinna Desktop: people holding
+        # a share of this credential (any source — a direct-share holder who
+        # installed the skill uses it just the same) and a recorded local
+        # install of one of those packages. ``local_install_share_count`` is
+        # the shares provision-local made, which turning sharing off removes.
+        share_rows = session.exec(
+            select(CredentialShare.shared_with_user_id, CredentialShare.source).where(
+                CredentialShare.credential_id == credential_id
+            )
+        ).all()
+        local_install_share_count = sum(
+            1
+            for _, source in share_rows
+            if source == SHARE_SOURCE_SKILL_LOCAL_INSTALL
+        )
+        local_installs = CredentialShareService.local_skill_installs(
+            session,
+            skill_usages=skill_pbp_usages,
+            user_ids=[user_id for user_id, _ in share_rows],
+        )
+        active_local_skill_install_count = len({row.user_id for row in local_installs})
+        locally_installed = {row.item_uuid for row in local_installs}
+        local_install_skill_usages = [
+            usage
+            for usage in skill_pbp_usages
+            if usage.package_uuid in locally_installed
+        ]
+
+        if (
+            (bundle_pbp_usages and active_install_count > 0)
+            or (skill_pbp_usages and active_skill_install_count > 0)
+            or active_local_skill_install_count > 0
         ):
             tier = 2
         elif direct_share_count > 0:
@@ -2438,6 +2470,9 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             active_install_count=active_install_count,
             skill_pbp_usages=skill_pbp_usages,
             active_skill_install_count=active_skill_install_count,
+            local_install_share_count=local_install_share_count,
+            active_local_skill_install_count=active_local_skill_install_count,
+            local_install_skill_usages=local_install_skill_usages,
         )
 
     @staticmethod

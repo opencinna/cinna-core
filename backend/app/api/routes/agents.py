@@ -154,11 +154,18 @@ async def create_agent(
     Create new agent with default environment.
 
     Phase 3 — restricted to ``agent-developer`` and ``admin`` roles.
+
+    Answers 400 when the default environment cannot be created (invalid SDK,
+    or a missing / inaccessible AI credential); no agent row is written then.
     """
+    from app.services.environments.environment_service import AgentEnvironmentError
+
     try:
         agent = await AgentService.create_agent(
             session=session, user_id=current_user.id, data=agent_in, user=current_user
         )
+    except AgentEnvironmentError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
     except ValueError as e:
         # Agent-creation limit (and other domain rule failures).
         raise HTTPException(status_code=403, detail=str(e))
@@ -183,12 +190,34 @@ async def create_agent_with_flow(
     # Enforce the agent-creation cap before the stream starts so the client
     # gets a clean 403 rather than an error event mid-stream. The service
     # re-checks defensively.
+    from app.services.environments.environment_service import AgentEnvironmentError
+
     try:
         AgentService._enforce_agent_creation_limit(
             session=session, user=current_user
         )
     except ValueError as e:
         raise HTTPException(status_code=403, detail=str(e))
+
+    # Same SDK / AI-credential check as POST /agents/, before the stream (and
+    # its billed configuration call) starts: a missing key is a clean 400.
+    try:
+        EnvironmentService.resolve_sdks_and_credentials(
+            session=session,
+            user=current_user,
+            data=AgentService.build_flow_environment_data(
+                env_name=request.env_name,
+                agent_sdk_conversation=request.agent_sdk_conversation,
+                agent_sdk_building=request.agent_sdk_building,
+                model_override_conversation=request.model_override_conversation,
+                model_override_building=request.model_override_building,
+                use_default_ai_credentials=request.use_default_ai_credentials,
+                conversation_ai_credential_id=request.conversation_ai_credential_id,
+                building_ai_credential_id=request.building_ai_credential_id,
+            ),
+        )
+    except AgentEnvironmentError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
 
     async def event_generator():
         async for event in AgentService.create_agent_flow(

@@ -74,6 +74,7 @@ const AddAgent = () => {
     const agentData: AgentCreate = {
       ...data,
       user_workspace_id: workspaceFilter || undefined,
+      auto_generate_description: true,
     }
     mutation.mutate(agentData)
   }

@@ -49,5 +49,6 @@ Routes live in `backend/app/api/routes/skills.py`, logic in `backend/app/service
 
 ## Changelog
 
+- `GET /catalog/items`, item detail and the legacy `/catalog/` project `required_credential_specs` to label keys only (`name`, `type`, `description`, `provided_by`, `publisher_credential_id`, `service_uri` unless private, `producer_agent_id`/`name`); no template data.
 - Desktop skill publish and pin-based revision reads documented.
 - Desktop skill credentials: publisher credential selection and `provision-local` documented.

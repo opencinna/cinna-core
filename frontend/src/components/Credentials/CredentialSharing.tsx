@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, Share2 } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
-import type { CredentialPublic } from "@/client"
+import type { CredentialPublic, CredentialSharePublic } from "@/client"
 import { CredentialsService } from "@/client"
 import { ListRowGroup } from "@/components/Common/ListRow"
 import { PreviewList } from "@/components/Common/PreviewList"
@@ -40,6 +40,11 @@ import {
 } from "@/utils/skillCredentials"
 import { CredentialUsagesSheet } from "./CredentialUsagesSheet"
 import { BundleUsageRow, SkillUsageRow } from "./CredentialUsageRows"
+import { localSkillImpactSentence } from "./localSkillImpact"
+import {
+  shareHasUsages,
+  UnshareCredentialDialog,
+} from "./UnshareCredentialDialog"
 
 interface CredentialSharingProps {
   credential: CredentialPublic
@@ -51,13 +56,20 @@ interface CredentialSharingProps {
   hint?: ReactNode
 }
 
-export function CredentialSharing({ credential, hint }: CredentialSharingProps) {
+export function CredentialSharing({
+  credential,
+  hint,
+}: CredentialSharingProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { isAgentUser } = useRole()
   const [isDisableDialogOpen, setIsDisableDialogOpen] = useState(false)
   const [allBundlesOpen, setAllBundlesOpen] = useState(false)
   const [allSkillsOpen, setAllSkillsOpen] = useState(false)
+  // The share whose removal breaks something of the recipient's, awaiting
+  // the owner's confirm.
+  const [pendingUnshare, setPendingUnshare] =
+    useState<CredentialSharePublic | null>(null)
   const [allowSharing, setAllowSharing] = useState(
     credential.allow_sharing ?? false,
   )
@@ -145,16 +157,26 @@ export function CredentialSharing({ credential, hint }: CredentialSharingProps) 
       }),
     onSuccess: () => {
       showSuccessToast("Share revoked successfully")
+      setPendingUnshare(null)
       invalidateShareCaches()
+      // The disable-sharing and delete warnings count this person's installs.
+      queryClient.invalidateQueries({
+        queryKey: ["credential-deletion-impact", credential.id],
+      })
     },
     onError: handleError.bind(showErrorToast),
   })
 
   const localUseMutation = useMutation({
-    mutationFn: (allow_local_use: boolean) => CredentialsService.updateCredential({
-      id: credential.id, requestBody: { allow_local_use },
-    }),
-    onSuccess: () => { invalidateShareCaches(); queryClient.invalidateQueries({ queryKey: ["credential", credential.id] }) },
+    mutationFn: (allow_local_use: boolean) =>
+      CredentialsService.updateCredential({
+        id: credential.id,
+        requestBody: { allow_local_use },
+      }),
+    onSuccess: () => {
+      invalidateShareCaches()
+      queryClient.invalidateQueries({ queryKey: ["credential", credential.id] })
+    },
     onError: handleError.bind(showErrorToast),
   })
 
@@ -224,6 +246,30 @@ export function CredentialSharing({ credential, hint }: CredentialSharingProps) 
   const skillImpact = skillsBreak
     ? skillImpactSentence(pbpSkillUsages.length, activeSkillInstalls, "disable")
     : null
+  // Skills installed on recipients' computers. Their rows are a subset of the
+  // published-skill rows, so they are listed only when those are not.
+  const localSkillUsages = deletionImpact?.local_install_skill_usages ?? []
+  const localSkillInstallers =
+    deletionImpact?.active_local_skill_install_count ?? 0
+  const localSkillsBreak = localSkillInstallers > 0
+  const localSkillImpact = localSkillsBreak
+    ? localSkillImpactSentence(localSkillInstallers, "disable")
+    : null
+
+  // Recipients' cloud agents, from the share list already loaded for the
+  // picker: named agents (through the owner's skills) plus direct uses.
+  const agentUsers = shares.filter(
+    (s) => (s.agent_usages?.length ?? 0) + (s.direct_agent_use_count ?? 0) > 0,
+  )
+  const recipientAgentCount = agentUsers.reduce(
+    (sum, s) =>
+      sum + (s.agent_usages?.length ?? 0) + (s.direct_agent_use_count ?? 0),
+    0,
+  )
+  const recipientAgentImpact =
+    recipientAgentCount > 0
+      ? `${agentUsers.length === 1 ? "1 person uses" : `${agentUsers.length} people use`} it in ${recipientAgentCount === 1 ? "1 agent" : `${recipientAgentCount} agents`}. Turning sharing off leaves those agents without it.`
+      : null
 
   if (isAgentUser) {
     return null
@@ -264,16 +310,29 @@ export function CredentialSharing({ credential, hint }: CredentialSharingProps) 
       </CardHeader>
       <CardContent className="space-y-4">
         {hint}
-        {allowSharing && isLocallyDeliverableCredentialType(credential.type) && (
-          <div className="flex items-start justify-between gap-4">
-            <div><p className="text-sm font-medium">Allow use on recipients’ computers</p>
-              <p className="text-sm text-muted-foreground">People you share this with can use it in agents on their own computer. The value is stored on their machine.</p>
-              <p className="text-sm text-muted-foreground">Disabling this cannot recall values already delivered.</p>
+        {allowSharing &&
+          isLocallyDeliverableCredentialType(credential.type) && (
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">
+                  Allow use on recipients’ computers
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  People you share this with can use it in agents on their own
+                  computer. The value is stored on their machine.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Disabling this cannot recall values already delivered.
+                </p>
+              </div>
+              <Switch
+                aria-label="Allow use on recipients’ computers"
+                checked={credential.allow_local_use ?? false}
+                disabled={localUseMutation.isPending}
+                onCheckedChange={(value) => localUseMutation.mutate(value)}
+              />
             </div>
-            <Switch aria-label="Allow use on recipients’ computers" checked={credential.allow_local_use ?? false}
-              disabled={localUseMutation.isPending} onCheckedChange={value => localUseMutation.mutate(value)} />
-          </div>
-        )}
+          )}
         {allowSharing && (
           <div className="space-y-3">
             <h4 className="text-sm font-medium">
@@ -283,7 +342,13 @@ export function CredentialSharing({ credential, hint }: CredentialSharingProps) 
               label={null}
               selected={selectedShares}
               onAdd={(u) => shareMutation.mutate(u.email)}
-              onRemove={(item) => revokeMutation.mutate(item.id)}
+              onRemove={(item) => {
+                // Warn only when this person loses something; otherwise the
+                // pill's remove stays one click.
+                const share = shares.find((s) => s.id === item.id)
+                if (share && shareHasUsages(share)) setPendingUnshare(share)
+                else revokeMutation.mutate(item.id)
+              }}
               isAdding={shareMutation.isPending}
               isRemoving={revokeMutation.isPending}
               searchPlaceholder="Search users by name or email..."
@@ -372,6 +437,14 @@ export function CredentialSharing({ credential, hint }: CredentialSharingProps) 
           ))}
         </CredentialUsagesSheet>
 
+        <UnshareCredentialDialog
+          credentialName={credential.name}
+          share={pendingUnshare}
+          isPending={revokeMutation.isPending}
+          onConfirm={(share) => revokeMutation.mutate(share.id)}
+          onClose={() => setPendingUnshare(null)}
+        />
+
         {/* Disable-sharing confirm. A `Dialog` rather than an `AlertDialog`
             because it carries fetched impact data (§2 Confirmation). */}
         <Dialog
@@ -396,7 +469,7 @@ export function CredentialSharing({ credential, hint }: CredentialSharingProps) 
               <AlertTitle>Warning</AlertTitle>
               <AlertDescription>
                 {shareCount} user{shareCount !== 1 ? "s" : ""} will lose access
-                to this credential immediately. This action cannot be undone.
+                to this credential immediately.
               </AlertDescription>
             </Alert>
             {isImpactLoading ? (
@@ -414,29 +487,62 @@ export function CredentialSharing({ credential, hint }: CredentialSharingProps) 
                 compact
               />
             ) : (
-              (bundleImpact || skillImpact) && (
+              (recipientAgentImpact ||
+                bundleImpact ||
+                skillImpact ||
+                localSkillImpact) && (
                 <div className="space-y-2">
                   <Alert variant="destructive">
                     <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>
-                      Published installs lose this credential
-                    </AlertTitle>
+                    <AlertTitle>Their agents and skills lose it</AlertTitle>
                     <AlertDescription>
-                      {[bundleImpact, skillImpact].filter(Boolean).join(" ")}
+                      {[
+                        recipientAgentImpact,
+                        bundleImpact,
+                        skillImpact,
+                        localSkillImpact,
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
                     </AlertDescription>
                   </Alert>
-                  <ListRowGroup>
-                    {bundlesBreak &&
-                      pbpBundleUsages.map((usage) => (
-                        <BundleUsageRow key={usage.bundle_uuid} usage={usage} />
-                      ))}
-                    {skillsBreak &&
-                      pbpSkillUsages.map((usage) => (
-                        <SkillUsageRow key={usage.package_uuid} usage={usage} />
-                      ))}
-                  </ListRowGroup>
+                  {(bundlesBreak || skillsBreak || localSkillsBreak) && (
+                    <ListRowGroup>
+                      {bundlesBreak &&
+                        pbpBundleUsages.map((usage) => (
+                          <BundleUsageRow
+                            key={usage.bundle_uuid}
+                            usage={usage}
+                          />
+                        ))}
+                      {skillsBreak &&
+                        pbpSkillUsages.map((usage) => (
+                          <SkillUsageRow
+                            key={usage.package_uuid}
+                            usage={usage}
+                          />
+                        ))}
+                      {!skillsBreak &&
+                        localSkillsBreak &&
+                        localSkillUsages.map((usage) => (
+                          <SkillUsageRow
+                            key={usage.package_uuid}
+                            usage={usage}
+                          />
+                        ))}
+                    </ListRowGroup>
+                  )}
                 </div>
               )
+            )}
+            {(localSkillsBreak ||
+              (deletionImpact?.local_install_share_count ?? 0) > 0) && (
+              // Turning sharing back on re-shares with skills installed on
+              // people's computers, except for people removed one by one.
+              <p className="text-sm text-muted-foreground">
+                If you turn sharing on again later, skills on people's computers
+                get it back, except for people you removed one by one.
+              </p>
             )}
             <DialogFooter>
               <Button

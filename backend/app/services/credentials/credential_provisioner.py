@@ -45,6 +45,7 @@ from app.services.bundles.credential_spec import (
     ParsedCredentialSpec,
     parse_credential_spec,
 )
+from app.services.credentials.credential_share_service import CredentialShareService
 from app.services.credentials.credentials_service import CredentialsService
 
 logger = logging.getLogger(__name__)
@@ -280,7 +281,8 @@ class CredentialProvisioner:
         ``/external/credentials``. Each ``publisher`` spec is re-checked live:
         the credential still exists, is owned by the package publisher, still
         allows sharing, still carries the spec's type and slot, works on a
-        device, and its owner consented to local use. ``user`` and
+        device, its owner consented to local use, and its owner has not
+        removed ``user``'s share of it (``CredentialShareRevocation``). ``user`` and
         ``template`` specs are filled by the installer. Idempotent. Flushes,
         never commits. Role plays no part (a credential exchange is never
         gated on role).
@@ -337,6 +339,13 @@ class CredentialProvisioner:
                     session.add(existing)
                     session.flush()
                 slots.append(outcome("already_shared", credential.id))
+                continue
+            if CredentialShareService.is_revoked(
+                session, credential_id=credential.id, user_id=user.id
+            ):
+                # The owner removed this person's share; only the owner
+                # sharing again lifts that, never an install.
+                slots.append(outcome("not_shareable"))
                 continue
             inserted = CredentialProvisioner._insert_share(
                 session,
@@ -925,8 +934,9 @@ class CredentialProvisioner:
         publisher: PublisherBoundary | None,
         log: bool,
     ) -> Credential | None:
-        """The publisher credential when it still exists, still allows sharing
-        and is owned by the package publisher; ``None`` otherwise.
+        """The publisher credential when it still exists, still allows sharing,
+        is owned by the package publisher and its owner has not removed the
+        installer's share of it; ``None`` otherwise.
 
         With ``publisher=None`` the ownership check is skipped (I7, D2).
         """
@@ -959,6 +969,26 @@ class CredentialProvisioner:
                     credential_id,
                     publisher.user_id,
                     publisher_cred.owner_id,
+                    spec_name,
+                )
+            return None
+        # The owner removed the installer's share: an install must not bring
+        # it back (only the owner sharing again does).
+        if (
+            publisher_cred.owner_id != agent.owner_id
+            and CredentialShareService.is_revoked(
+                session, credential_id=publisher_cred.id, user_id=agent.owner_id
+            )
+            and not CredentialProvisioner._has_share(
+                session, credential_id=publisher_cred.id, user_id=agent.owner_id
+            )
+        ):
+            if log:
+                logger.warning(
+                    "Publisher credential %s: its owner removed the share with "
+                    "%s — falling through for spec '%s'",
+                    credential_id,
+                    agent.owner_id,
                     spec_name,
                 )
             return None

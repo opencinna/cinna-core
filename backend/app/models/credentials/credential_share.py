@@ -84,6 +84,64 @@ class CredentialShare(CredentialShareBase, table=True):
     )
 
 
+class CredentialShareRevocation(SQLModel, table=True):
+    """The credential's owner removed one person's share of it.
+
+    Written when the owner deletes a share (``DELETE
+    /credentials/{id}/shares/{share_id}``), whatever the share's source. While
+    the row exists no automatic path shares the credential with that person
+    again: provision-local answers ``not_shareable`` and a cloud bundle or
+    skill install treats the publisher credential as unusable. Only the owner
+    sharing it with that person again (the direct share route) removes it.
+    Turning sharing off and on leaves the rows alone; turning it off writes
+    none.
+    """
+
+    __tablename__ = "credential_share_revocation"
+    __table_args__ = (
+        UniqueConstraint(
+            "credential_id",
+            "user_id",
+            name="uq_credential_share_revocation_credential_user",
+        ),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    credential_id: uuid.UUID = Field(
+        foreign_key="credential.id", ondelete="CASCADE", nullable=False
+    )
+    #: The person the share was removed from.
+    user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", nullable=False)
+    revoked_by_user_id: uuid.UUID = Field(
+        foreign_key="user.id", ondelete="CASCADE", nullable=False
+    )
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CredentialShareAgentUsage(SQLModel):
+    """A recipient's cloud agent that links the shared credential through at
+    least one of the owner's catalog skills."""
+
+    id: uuid.UUID
+    name: str
+    #: Display names of the owner's catalog skills installed on this agent
+    #: that provide the credential.
+    skill_display_names: list[str] = []
+
+
+class CredentialShareLocalSkillUsage(SQLModel):
+    """A skill of the owner, providing the credential, that the recipient
+    installed into a local agent on Cinna Desktop."""
+
+    package_uuid: uuid.UUID
+    package_id: str
+    display_name: str
+    revision_number: int
+    #: The local agent's catalog name, only when that agent is shared through
+    #: core by the recipient themselves.
+    host_agent_name: str | None = None
+
+
 class CredentialSharePublic(SQLModel):
     """Public response model for credential shares with resolved user info."""
     id: uuid.UUID
@@ -97,6 +155,12 @@ class CredentialSharePublic(SQLModel):
     shared_at: datetime
     access_level: str
     source: str | None = None  # "direct" | "bundle_install" | "skill_install" | "skill_local_install"; NULL = legacy (direct)
+    # What removing this share breaks for the recipient, so the owner can be
+    # warned first. Filled by the owner's share list only. Agents that use the
+    # credential without any of the owner's skills are counted, not named.
+    agent_usages: list[CredentialShareAgentUsage] = []
+    direct_agent_use_count: int = 0
+    local_skill_usages: list[CredentialShareLocalSkillUsage] = []
 
 
 class CredentialShareCreate(SQLModel):
