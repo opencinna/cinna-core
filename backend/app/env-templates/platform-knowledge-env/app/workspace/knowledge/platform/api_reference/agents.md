@@ -111,6 +111,7 @@ Auto-generated from OpenAPI spec. Tag: `agents`
   - `status_refresh_command`: string | null
   - `description`: string | null
   - `user_workspace_id`: string | null
+  - `auto_generate_description`: boolean
 
 **Response:** `AgentPublic`
 

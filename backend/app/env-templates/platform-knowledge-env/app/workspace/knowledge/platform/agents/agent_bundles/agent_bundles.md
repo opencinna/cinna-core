@@ -146,6 +146,8 @@ Schedules are also merged against the new revision using a behavioral signature.
 4. `Agent` row deleted; `AppDataVolume.is_orphaned` set to `true`
 5. App data remains visible in Settings → App Data as an orphaned entry
 
+Deleting a bundle also removes its storage folder `data/bundles/<bundle_id>` (see [Data Volumes](../../infrastructure/data_volumes.md)). A cloud install treats a publisher credential the owner has removed from the installer as unavailable (`publisher_unavailable` / placeholder); see [Credential Sharing](../agent_credentials/credential_sharing.md).
+
 Publisher installs cannot be uninstalled via this flow — the backend returns 400. The publisher manages their install via the Bundle settings (delete agent / delete bundle).
 
 ### Reinstalling the Same Bundle

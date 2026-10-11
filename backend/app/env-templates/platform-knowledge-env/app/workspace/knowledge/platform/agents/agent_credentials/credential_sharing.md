@@ -28,7 +28,9 @@ Enables users to share their credentials with other users, allowing recipients t
 2. Alternatively, owner disables sharing entirely (`allow_sharing=false`)
 3. Disabling sharing immediately revokes ALL existing shares (destructive, with confirmation). When the credential is publisher-provided (PBP) in published bundles, the disable-sharing dialog also surfaces the blast-radius data (same `GET /credentials/{id}/deletion-impact` cache as the delete dialog) so the publisher can see which bundles and installs will break before confirming.
 4. Either way, revocation also **unlinks the credential from every agent the recipient owns** and re-syncs their running environments. A share is a right to use the credential, but the environment payload is built from `AgentCredentialLink` alone — leaving the link behind would keep a working secret inside the recipient's containers while the credential page said access was gone. The owner's own links are untouched.
-5. Deleting a credential is **blast-radius-gated** (see Deletion Impact Gate below).
+5. **Owner removal is remembered.** `DELETE /credentials/{id}/shares/{share_id}` (any share source) records a row in `credential_share_revocation`. While it exists, `provision-local` answers `not_shareable` for that person and cloud bundle/skill installs treat the publisher credential as unavailable (`publisher_unavailable` / placeholder). Only the owner's direct re-share (`POST /credentials/{id}/shares`) clears it. Turning sharing off writes and clears no records; turning it on again lets `provision-local` share again for everyone except people removed one by one (known behaviour).
+6. **A skill-installer share outlives the skill version.** A share created by `provision-local` (`skill_local_install`) stays while the credential allows sharing. It ends only when the owner turns sharing off or unshares that person. A later skill version that stops providing the credential does not revoke it. Core warns first (the unshare dialog and sharing-off confirm list the agents and skills, including skills on the person's own computer) but allows it.
+7. Deleting a credential is **blast-radius-gated** (see Deletion Impact Gate below).
 
 ### Template Sharing (bundle context)
 
@@ -161,6 +163,8 @@ PBT (template) installs materialise an independent copy of the credential owned 
 
 **Bundle membership disclosure (all tiers / all modes).** In addition to the Tier-2 PBP block, `CredentialDeletionImpact` carries a `bundle_usages` field that lists every bundle whose publisher install links the credential, regardless of provisioning mode (`publisher`, `template`, or `user`). This field is purely informational — it does not affect the tier classification or block logic. The delete dialog always shows a "Used in bundles" section when `bundle_usages` is non-empty, so a credential that is template-provided (PBT) or user-provided (PBU) in a bundle, or publisher-provided with zero active installs, is now disclosed to the owner even when the deletion would otherwise proceed without a block. The `bundle_pbp_usages` field remains the subset that exclusively drives the Tier-2 block and install-count accounting.
 
+**Local skill installs (Desktop).** `CredentialDeletionImpact` also carries `local_install_share_count`, `active_local_skill_install_count` and `local_install_skill_usages`. Delete is Tier 2 (409 unless `force`) when active local skill installs exist. The delete dialog adds a sentence naming them.
+
 AI credentials (LLM provider keys) follow the same 409 / force pattern but have only **Tier 0** and **Tier 2**. Tier 2 for AI credentials means the credential is referenced by a published bundle as a publisher-provided AI credential (`publisher_ai_credential_conversation_id` / `publisher_ai_credential_building_id`). There is no Tier 1 (no direct AI credential shares). A forced delete nulls the FK via `ON DELETE SET NULL`, degrading the bundle back to "user provides". The force button reads "Force delete & degrade bundles".
 
 ### Constraints
@@ -284,3 +288,7 @@ Publisher sets allow_template_sharing=true + marks private fields
 - [Agent Bundles & Installs](../agent_bundles/agent_bundles.md) - `required_credential_specs` in a bundle revision drives install-time credential handling for all three modes (`provided_by`: `"user"`, `"publisher"`, `"template"`); template specs carry `template_data` and `template_private_fields`
 - [User Workspaces](../../application/user_workspaces/user_workspaces.md) - Credentials exist within workspace context
 - [Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md) - A recipient's Desktop can only copy a shared credential once the owner has separately turned on local-use consent (`allow_local_use`); the switch is shown only for locally-compatible credential types
+
+## Changelog
+
+- Owner removal of a share is recorded in `credential_share_revocation`; a skill-installer share persists across skill versions; share and deletion-impact payloads list agent and local-skill usages; delete is Tier 2 for active local skill installs.

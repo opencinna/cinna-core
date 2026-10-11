@@ -374,7 +374,7 @@ options; core runs the same checks as a cloud publish and appends a revision.
   The named credential must be the publisher's own, not a placeholder, of the
   declared type, with `service_uri` equal to the slot, and must allow sharing (the
   slot becomes publisher-provided) or template sharing (it becomes a template);
-  otherwise 422 `invalid_publisher_credential`. The preview lists, per slot, the
+  otherwise 422 `invalid_publisher_credential` (also when an editor who is not the package's publisher names any). The preview lists, per slot, the
   candidate credentials (`id`, `name`, `type`, `can_provide_as`) and never their data.
 - **Version**: the chosen version is written into the stored `SKILL.md` and returned,
   so the desktop writes the same version back into its local copy.
