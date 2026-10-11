@@ -190,11 +190,15 @@ import threading
 from contextlib import contextmanager
 
 
-def test_helper_version_matches_contract_version_1_7_0(reader) -> None:
+def test_helper_version_is_1_7_0_and_not_ahead_of_the_contract(reader) -> None:
+    # HELPER_VERSION names the contract the helper last changed in; later
+    # contracts that leave the helper alone do not move it.
     assert reader.HELPER_VERSION == "1.7.0"
     if KIT_SOURCE == "docs":
         contract = (SCRIPT.parents[3] / "CONTRACT_VERSION").read_text().strip()
-        assert contract == "1.7.0" == reader.HELPER_VERSION
+        as_tuple = lambda v: tuple(int(p) for p in v.split("."))  # noqa: E731
+        assert as_tuple(contract)[0] == as_tuple(reader.HELPER_VERSION)[0]
+        assert as_tuple(contract) >= as_tuple(reader.HELPER_VERSION)
 
 
 @pytest.mark.parametrize(
