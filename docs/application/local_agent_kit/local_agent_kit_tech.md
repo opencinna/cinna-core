@@ -680,10 +680,11 @@ the Compatibility table is unchanged because the desktop keeps a byte-identical
 copy of it.
 
 - **`runtime.engine`** — string or null, deliberately not an enum (`examples`:
-  `opencode`, `claude`, `codex`). A preference: absent → host default; a named
-  engine the host does not support → OpenCode. `_validate_runtime`: non-string →
-  error; unrecognised value → warning; `claude`/`codex` with a non-empty
-  `runtime.credential` → warning (the credential is ignored).
+  `opencode`, `claude`, `codex`, `antigravity`). A preference: absent → host
+  default; a named engine the host does not support → OpenCode.
+  `_validate_runtime`: non-string → error; unrecognised value → warning;
+  `claude`/`codex`/`antigravity` with a non-empty `runtime.credential` → warning
+  (the credential is ignored).
 - **`runtime.complexity`** — string or null, deliberately not an enum
   (`examples`: `simple`, `medium`, `complex`), so an older strict validator
   never rejects a tier a newer minor adds. Unrecognised → warning; set together with a

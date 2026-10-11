@@ -112,9 +112,9 @@
       "x-import": "only `engine` is carried; see each property",
       "properties": {
         "engine": {
-          "description": "Which engine the author prefers to run the agent on - a preference, never a requirement. Known values: `opencode` (an OpenCode server), `claude` (Claude Code) and `codex` (the Codex CLI); `claude` and `codex` drive a CLI under its own login. Absent means the host's default engine. A host that does not support the named engine - including a value it does not recognise - runs the agent on OpenCode and never refuses the folder. Deliberately not an enum: a newer minor may name an engine this schema predates, and such a folder must still validate. `claude`/`codex` and `credential` are not meaningful together: those engines spend no host credential, so a host ignores the credential and a validator warns. Minted by Cinna Desktop as contract 1.2.0; part of the one contract since 1.5.0.",
+          "description": "Which engine the author prefers to run the agent on - a preference, never a requirement. Known values: `opencode` (an OpenCode server), `claude` (Claude Code), `codex` (the Codex CLI) and `antigravity` (Google Antigravity's own ACP server, under the user's Google login); `claude`, `codex` and `antigravity` drive a CLI or agent server under its own login. Absent means the host's default engine. A host that does not support the named engine - including a value it does not recognise - runs the agent on OpenCode and never refuses the folder. Deliberately not an enum: a newer minor may name an engine this schema predates, and such a folder must still validate. `claude`/`codex`/`antigravity` and `credential` are not meaningful together: those engines spend no host credential, so a host ignores the credential and a validator warns. Minted by Cinna Desktop as contract 1.2.0; part of the one contract since 1.5.0.",
           "type": ["string", "null"],
-          "examples": ["opencode", "claude", "codex"],
+          "examples": ["opencode", "claude", "codex", "antigravity"],
           "x-scope": "portable",
           "x-import": "engine preference -> the cloud environment's SDK at agent creation (`claude` -> claude-code, anything else -> opencode); an existing agent's engine is not changed"
         },

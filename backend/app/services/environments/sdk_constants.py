@@ -149,7 +149,8 @@ def apply_credential_to_bag(
 # A manifest's engine is a *preference*, not an enum: a value the platform does
 # not run falls back to OpenCode rather than refusing the agent (kit contract
 # 1.5.0, decision 4). Known manifest values today: ``opencode``, ``claude``,
-# ``codex`` — ``codex`` has no cloud engine and so lands on OpenCode.
+# ``codex``, ``antigravity`` — ``codex`` and ``antigravity`` have no cloud
+# engine and so land on OpenCode.
 MANIFEST_ENGINE_TO_SDK_ENGINE: dict[str, str] = {
     "claude": SDK_ENGINE_CLAUDE_CODE,
     "opencode": SDK_ENGINE_OPENCODE,
@@ -167,9 +168,10 @@ def sdk_for_engine_preference(
     caller's normal SDK defaulting untouched.
 
     Engine: ``claude`` → ``claude-code``, ``opencode`` → ``opencode``, any other
-    non-empty value (including ``codex``) → ``opencode``. Matching ignores
-    surrounding whitespace and is case-sensitive, like ``kit.py`` and Cinna
-    Desktop: ``Claude`` is not a known engine anywhere, so it runs on OpenCode.
+    non-empty value (including ``codex`` and ``antigravity``) → ``opencode``.
+    Matching ignores surrounding whitespace and is case-sensitive, like
+    ``kit.py`` and Cinna Desktop: ``Claude`` is not a known engine anywhere, so
+    it runs on OpenCode.
 
     Provider: the provider of the user's default conversation SDK when the
     chosen engine accepts it (:data:`SDK_CREDENTIAL_COMPATIBILITY`), else

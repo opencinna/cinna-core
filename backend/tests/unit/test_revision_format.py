@@ -30,6 +30,7 @@ from app.services.bundles.revision_format import (
     REVISION_SCHEMA_VERSION,
     RevisionFormat,
     RevisionFormatError,
+    _kit_contract_version,
 )
 from app.services.environments.workspace_classification import (
     BUNDLE_EXCLUDED_TOPLEVEL,
@@ -621,7 +622,7 @@ def test_write_v3_tree_round_trips_through_reader(tmp_path: Path) -> None:
     assert (dest / ".gitignore").is_file()
 
     kit = json.loads((dest / "cinna-agent.json").read_text())
-    assert kit["contract_version"] == "1.9.0"
+    assert kit["contract_version"] == _kit_contract_version()
     assert kit["name"] == "Shared Agent"
     assert kit["slug"] == "shared-agent"
     assert kit["description"] == "Shared agent"
@@ -702,7 +703,7 @@ def test_write_v3_tree_preserves_unknown_kit_keys_id_and_excluded_files(
     assert kit["x-teammate"] == {"custom": True}
     assert kit["slug"] == "kept-slug"
     assert kit["name"] == "New name"
-    assert kit["contract_version"] == "1.9.0"
+    assert kit["contract_version"] == _kit_contract_version()
     assert kit["runtime"] == {"engine": "claude", "extra": 1}
     # Prune only removed what the reader would import.
     assert (dest / "AGENTS.md").read_text() == "teammate wrapper"

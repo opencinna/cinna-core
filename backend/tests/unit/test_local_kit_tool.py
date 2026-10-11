@@ -2179,6 +2179,32 @@ def test_a_plain_credential_reference_is_accepted(scaffolded_agent: Path) -> Non
     assert json.loads(result.stdout)["errors"] == []
 
 
+def test_antigravity_is_a_known_cli_login_engine(scaffolded_agent: Path) -> None:
+    """`antigravity` is known (no fallback warning) and, like `claude`/`codex`,
+    warns once when a credential sits beside it, in the desktop's wording."""
+    manifest_path = scaffolded_agent / "cinna-agent.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    manifest["runtime"] = {"engine": "antigravity"}
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    result = run_kit("validate", str(scaffolded_agent), "--json")
+    assert result.returncode == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["errors"] == []
+    assert not any("not a known engine" in w for w in payload["warnings"]), payload
+
+    manifest["runtime"] = {"engine": "antigravity", "credential": "google"}
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    result = run_kit("validate", str(scaffolded_agent), "--json")
+    assert result.returncode == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["errors"] == []
+    login_warnings = [
+        w for w in payload["warnings"] if "antigravity uses its own CLI login" in w
+    ]
+    assert len(login_warnings) == 1, payload
+
+
 @pytest.mark.parametrize(
     "forbidden",
     [

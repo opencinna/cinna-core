@@ -16,6 +16,23 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.11.0 — antigravity engine
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.11.0 folder, because the majors match.
+
+`runtime.engine` gains the known value `antigravity` (Google Antigravity's own ACP
+server, run by Cinna Desktop under the user's Google login) in
+`cinna-agent.schema.json`, `kit.py` and guide 13, with two conformance cases. Like
+`claude` and `codex` it spends no host credential, so `kit.py validate` warns when
+`runtime.credential` sits beside it, and it no longer reports the engine as
+unknown. The value was never invalid: the field is not an enum, and a host that
+does not run Antigravity runs the agent on OpenCode. Cloud import maps it to
+OpenCode, like `codex`.
+
+A new `assistants/antigravity.md` covers Antigravity as the assistant that builds
+agents: it reads no `AGENTS.md` by itself, so it reads that file first.
+
 ## 1.10.0 — catalog skills in a local agent
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built

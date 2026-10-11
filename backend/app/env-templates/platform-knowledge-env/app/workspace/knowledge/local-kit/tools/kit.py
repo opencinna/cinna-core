@@ -223,9 +223,9 @@ PROMPT_KEYS = ("workflow", "entrypoint", "refiner")
 # desktop's (`isAgentEngine` in src/shared/engine.ts, `isWorkComplexity` in
 # src/shared/modelFamilies.ts); an unrecognised value is a warning, never an
 # error, on both hosts — see `_validate_runtime`.
-KNOWN_ENGINES = ("opencode", "claude", "codex")
+KNOWN_ENGINES = ("opencode", "claude", "codex", "antigravity")
 # Engines that drive a CLI under its own login and spend no host credential.
-CLI_LOGIN_ENGINES = ("claude", "codex")
+CLI_LOGIN_ENGINES = ("claude", "codex", "antigravity")
 WORK_COMPLEXITIES = ("simple", "medium", "complex")
 # The one registered `handovers[].target_kind` (host:cinna-desktop). Only the
 # exact pair kind == slug == "coordinator" means "return to the coordinator".
@@ -1619,9 +1619,9 @@ def _validate_runtime(runtime: object, report: Report) -> None:
     # severities are the desktop validator's `checkRuntime()`: an error makes a
     # host refuse the folder, which is exactly what "minor bumps are additive"
     # promises against. Each case has defined behaviour instead — an engine the
-    # host does not support runs on OpenCode, `claude`/`codex` ignore the
-    # credential, an unknown tier reads as no tier, and `model` beats
-    # `complexity`.
+    # host does not support runs on OpenCode, an engine in `CLI_LOGIN_ENGINES`
+    # ignores the credential, an unknown tier reads as no tier, and `model`
+    # beats `complexity`.
     engine = runtime.get("engine")
     if isinstance(engine, str) and engine.strip():
         name = engine.strip()

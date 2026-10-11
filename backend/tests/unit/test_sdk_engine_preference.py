@@ -33,10 +33,12 @@ from app.services.environments.sdk_constants import (
         ("opencode", "claude-code/anthropic", "opencode/anthropic"),
         # minimax is claude-code only → anthropic
         ("opencode", "claude-code/minimax", "opencode/anthropic"),
-        # Any other non-empty engine (incl. codex) → opencode
+        # Any other non-empty engine (incl. codex, antigravity) → opencode
         ("codex", "claude-code/anthropic", "opencode/anthropic"),
         ("codex", "opencode/openai", "opencode/openai"),
         ("codex", "claude-code/minimax", "opencode/anthropic"),
+        ("antigravity", "claude-code/anthropic", "opencode/anthropic"),
+        ("antigravity", "opencode/google", "opencode/google"),
         ("some-future-engine", "opencode/google", "opencode/google"),
         # Whitespace is ignored; case is not (same as kit.py and the desktop)
         (" claude ", "claude-code/anthropic", "claude-code/anthropic"),
@@ -53,7 +55,7 @@ def test_sdk_for_engine_preference(engine, default_sdk, expected):
     assert sdk_for_engine_preference(engine, default_sdk) == expected
 
 
-@pytest.mark.parametrize("engine", ["claude", "opencode", "codex", "other"])
+@pytest.mark.parametrize("engine", ["claude", "opencode", "codex", "antigravity", "other"])
 @pytest.mark.parametrize(
     "default_sdk",
     [None, "claude-code/anthropic", "claude-code/minimax", "opencode/anthropic",

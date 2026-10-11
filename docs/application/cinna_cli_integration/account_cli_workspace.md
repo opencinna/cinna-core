@@ -214,7 +214,7 @@ create a new platform agent without opening the UI:
    `runtime.engine` (sent by `cinna agent import`). The new environment is
    created on the SDK it maps to, for both conversation and building:
    `claude` → Claude Code, `opencode` → OpenCode, any other value (including
-   `codex`) → OpenCode. The provider is the one in the user's default
+   `codex` and `antigravity`) → OpenCode. The provider is the one in the user's default
    conversation SDK when that engine supports it, otherwise Anthropic. Absent or
    blank → the user's default SDK, exactly as without the field. If the user has
    no AI credential for the mapped SDK the call returns **400** ("Missing required
