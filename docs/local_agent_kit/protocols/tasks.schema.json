@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cinna.dev/protocols/tasks/v1/tasks.schema.json",
   "title": "Cinna Task Protocol — MCP binding",
-  "description": "The eight tools every Cinna host (Cinna Desktop, cinna-core agent environments) registers on the MCP server named `cinna`. Both hosts load this file and assert their registered tools match it. Engine-visible names are derived by the host: Claude Code `mcp__cinna__<tool>`, Codex `mcp.cinna.<tool>`, OpenCode `cinna_<tool>`. Status words: `category` is what agents read and write (backlog, ready, active, waiting, done); `tasks_report.status` is the executor's statement (in_progress, blocked, done, failed). A host maps `done → completed` and `failed → error` onto its own status column.",
+  "description": "The eight tools every Cinna host (Cinna Desktop, cinna-core agent environments) registers on the MCP server named `cinna`. Both hosts load this file and assert their registered tools match it. Engine-visible names are derived by the host: Claude Code `mcp__cinna__<tool>`, Codex `mcp.cinna.<tool>`, OpenCode `cinna_<tool>`. Antigravity offers no per-tool name: the model calls its built-in `call_mcp_tool` with `ServerName: \"cinna\"` and `ToolName: \"<tool>\"`, and reads each tool's schema from a file. Status words: `category` is what agents read and write (backlog, ready, active, waiting, done); `tasks_report.status` is the executor's statement (in_progress, blocked, done, failed). A host maps `done → completed` and `failed → error` onto its own status column.",
   "protocol_version": 1,
   "server": "cinna",
   "aliases": {

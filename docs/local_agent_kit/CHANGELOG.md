@@ -33,6 +33,13 @@ OpenCode, like `codex`.
 A new `assistants/antigravity.md` covers Antigravity as the assistant that builds
 agents: it reads no `AGENTS.md` by itself, so it reads that file first.
 
+### Changed
+
+- **`protocols/tasks.schema.json`'s description** now says how Antigravity
+  reaches the `cinna` tools: it offers no per-tool name, so the model calls its
+  built-in `call_mcp_tool` with `ServerName: "cinna"` and `ToolName: "<tool>"`,
+  and reads each tool's schema from a file. Tools and schemas are unchanged.
+
 ## 1.10.0 — catalog skills in a local agent
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built
