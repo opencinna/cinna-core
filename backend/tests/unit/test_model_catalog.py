@@ -4,7 +4,7 @@ No database, no HTTP, no filesystem — all pure Python.
 
 Coverage:
   1. resolve_model — every (engine, provider, mode) with and without override
-  2. resolve_model — claude-sonnet-4-6 is the opencode/anthropic/building default
+  2. resolve_model — claude-sonnet-5-5 is the opencode/anthropic/building default
   3. resolve_model — override honored verbatim (no catalog lookup)
   4. resolve_model — openai_compatible uses passed model, falls back to literal
   5. resolve_model — unknown (engine, provider) falls back to engine/anthropic (no crash)
@@ -49,11 +49,11 @@ class TestResolveModelCatalog:
 
     def test_claude_code_minimax_conversation(self):
         result = resolve_model("claude-code", "minimax", "conversation", None)
-        assert result == "MiniMax-M2.1-lightning"
+        assert result == "MiniMax-M2.7-highspeed"
 
     def test_claude_code_minimax_building(self):
         result = resolve_model("claude-code", "minimax", "building", None)
-        assert result == "MiniMax-M2.1"
+        assert result == "MiniMax-M3"
 
     # ── opencode / anthropic ───────────────────────────────────────────────
 
@@ -61,33 +61,29 @@ class TestResolveModelCatalog:
         result = resolve_model("opencode", "anthropic", "conversation", None)
         assert result == "anthropic/claude-haiku-4-5"
 
-    def test_opencode_anthropic_building_is_sonnet_4_6(self):
-        """The freshness fix: building default must be claude-sonnet-4-6, not -4-5."""
+    def test_opencode_anthropic_building_is_sonnet_5_5(self):
         result = resolve_model("opencode", "anthropic", "building", None)
-        assert result == "anthropic/claude-sonnet-4-6", (
-            "opencode/anthropic building default must be claude-sonnet-4-6 "
-            "(the P1 freshness fix); got: " + repr(result)
-        )
+        assert result == "anthropic/claude-sonnet-5-5"
 
     # ── opencode / openai ──────────────────────────────────────────────────
 
     def test_opencode_openai_conversation(self):
         result = resolve_model("opencode", "openai", "conversation", None)
-        assert result == "openai/gpt-5.4-nano"
+        assert result == "openai/gpt-6-luna"
 
     def test_opencode_openai_building(self):
         result = resolve_model("opencode", "openai", "building", None)
-        assert result == "openai/gpt-5.4-mini"
+        assert result == "openai/gpt-5.6-terra"
 
     # ── opencode / google ──────────────────────────────────────────────────
 
     def test_opencode_google_conversation(self):
         result = resolve_model("opencode", "google", "conversation", None)
-        assert result == "google/gemini-2.5-flash"
+        assert result == "google/gemini-3.8-flash"
 
     def test_opencode_google_building(self):
         result = resolve_model("opencode", "google", "building", None)
-        assert result == "google/gemini-2.5-pro"
+        assert result == "google/gemini-3.1-pro-preview"
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +123,7 @@ class TestResolveModelOverride:
 
     def test_none_override_falls_through_to_catalog(self):
         result = resolve_model("opencode", "anthropic", "building", override=None)
-        assert result == "anthropic/claude-sonnet-4-6"
+        assert result == "anthropic/claude-sonnet-5-5"
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +299,13 @@ class TestInferTier:
     def test_lightning_infers_fast(self):
         assert infer_tier("minimax", "MiniMax-M2.1-lightning") == ModelTier.FAST
 
+    def test_highspeed_infers_fast(self):
+        assert infer_tier("minimax", "MiniMax-M2.7-highspeed") == ModelTier.FAST
+
+    def test_luna_infers_fast(self):
+        """The size marker wins over the bare gpt-6 family marker."""
+        assert infer_tier("openai", "gpt-6-luna") == ModelTier.FAST
+
     # ── BALANCED markers ──────────────────────────────────────────────────
 
     def test_sonnet_infers_balanced(self):
@@ -320,6 +323,10 @@ class TestInferTier:
     def test_gpt5_bare_infers_balanced(self):
         """Bare 'gpt-5' family marker (no size suffix) → BALANCED."""
         assert infer_tier("openai", "gpt-5") == ModelTier.BALANCED
+
+    def test_terra_and_sol_infer_balanced(self):
+        assert infer_tier("openai", "gpt-5.6-terra") == ModelTier.BALANCED
+        assert infer_tier("openai", "gpt-6-sol") == ModelTier.BALANCED
 
     # ── None (ambiguous / unknown) ────────────────────────────────────────
 

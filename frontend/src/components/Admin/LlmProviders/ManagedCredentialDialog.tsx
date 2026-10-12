@@ -1105,7 +1105,7 @@ export function ManagedCredentialDialog({
                 </div>
                 <FormControl>
                   <Input
-                    placeholder="e.g. claude-sonnet-4-6"
+                    placeholder="e.g. claude-sonnet-5-5"
                     {...field}
                     value={field.value ?? ""}
                   />

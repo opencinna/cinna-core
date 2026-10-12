@@ -125,7 +125,7 @@ Server-verified metadata injected into system prompts for integration-aware beha
 
 - **Building mode**: Default model (Sonnet/larger) for better code generation quality
 - **Conversation mode**: Haiku/smaller model for faster responses and lower cost
-- **Model Override**: Each environment can specify an explicit model per mode (`model_override_building`, `model_override_conversation`). When set, this overrides the adapter's default. Examples: `claude-opus-4`, `gpt-4o`, `gemini-2.5-pro`.
+- **Model Override**: Each environment can specify an explicit model per mode (`model_override_building`, `model_override_conversation`). When set, this overrides the adapter's default. Examples: `claude-opus-5-5`, `gpt-6-sol`, `gemini-3.8-flash`.
 
 ### Session Context Verification
 

@@ -432,7 +432,7 @@ class Settings(BaseSettings):
     # OpenAI direct provider settings (for AI functions)
     # Used when "openai" is in AI_FUNCTIONS_PROVIDERS
     OPENAI_API_KEY: str | None = None
-    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_MODEL: str = "gpt-6-luna"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

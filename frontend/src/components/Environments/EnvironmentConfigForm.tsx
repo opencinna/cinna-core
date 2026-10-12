@@ -75,9 +75,9 @@ export function sdkExpectedCredentialType(sdkId: string | null | undefined): str
 
 // Suggested models per credential type (for model override hints)
 export const SUGGESTED_MODELS: Record<string, string[]> = {
-  anthropic: ["claude-opus-4", "claude-sonnet-4-5", "claude-haiku-4-5"],
-  openai: ["gpt-4o", "gpt-4o-mini", "o3", "o4-mini"],
-  google: ["gemini-2.5-pro", "gemini-2.5-flash"],
+  anthropic: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"],
+  openai: ["gpt-6-sol", "gpt-5.6-terra", "gpt-6-luna"],
+  google: ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.5-flash-lite"],
   openai_compatible: [],
 }
 
@@ -377,7 +377,7 @@ export function EnvModeEditDialog({
                 list={datalistId}
                 value={modelOverride}
                 onChange={(e) => setModelOverride(e.target.value)}
-                placeholder={isConversation ? "e.g., claude-haiku-4-5" : "e.g., claude-opus-4"}
+                placeholder={isConversation ? "e.g., claude-haiku-4-5" : "e.g., claude-sonnet-5-5"}
                 className="h-9"
               />
               <ListModelsButton

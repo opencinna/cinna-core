@@ -21,11 +21,11 @@ class GeminiProvider(BaseAIProvider):
     Configuration:
         GOOGLE_API_KEY: Required API key for Gemini
 
-    Default model: gemini-2.5-flash-lite (fast, cheap)
+    Default model: gemini-3.5-flash-lite (fast, cheap)
     """
 
     PROVIDER_NAME = "gemini"
-    DEFAULT_MODEL = "gemini-2.5-flash-lite"
+    DEFAULT_MODEL = "gemini-3.5-flash-lite"
     # Timeout in ms for the SDK's internal retry loop (prevents long hangs on 429s)
     REQUEST_TIMEOUT_MS = 10000
 
@@ -72,7 +72,7 @@ class GeminiProvider(BaseAIProvider):
 
         Args:
             prompt: The prompt to send to Gemini
-            model: Optional model override (default: gemini-2.5-flash-lite)
+            model: Optional model override (default: gemini-3.5-flash-lite)
 
         Returns:
             ProviderResponse with generated text

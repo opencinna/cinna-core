@@ -308,7 +308,7 @@ export function ProvisioningPolicyFields({
               </div>
               <Input
                 id={`${idPrefix}-default-model`}
-                placeholder="e.g. claude-sonnet-4-6"
+                placeholder="e.g. claude-sonnet-5-5"
                 disabled={disabled}
                 value={value.default_model}
                 onChange={(event) =>

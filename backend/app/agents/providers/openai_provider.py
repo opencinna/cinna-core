@@ -28,11 +28,10 @@ class OpenAIProvider(BaseAIProvider):
     Accepts an optional explicit api_key. When not provided, falls back to
     settings.OPENAI_API_KEY for system-level usage.
 
-    Default model: gpt-4o-mini (fast, cheap)
+    Default model: settings.OPENAI_MODEL (gpt-6-luna — fast, cheap)
     """
 
     PROVIDER_NAME = "openai"
-    DEFAULT_MODEL = "gpt-4o-mini"
     API_URL = "https://api.openai.com/v1/chat/completions"
     REQUEST_TIMEOUT = 30.0
 
@@ -63,7 +62,7 @@ class OpenAIProvider(BaseAIProvider):
 
         Args:
             prompt: The prompt to send
-            model: Optional model override (default: gpt-4o-mini)
+            model: Optional model override (default: settings.OPENAI_MODEL)
 
         Returns:
             ProviderResponse with generated text
@@ -82,7 +81,7 @@ class OpenAIProvider(BaseAIProvider):
                 recoverable=recoverable,
             )
 
-        model_name = model or self.DEFAULT_MODEL
+        model_name = model or settings.OPENAI_MODEL
 
         try:
             response = httpx.post(
@@ -93,7 +92,8 @@ class OpenAIProvider(BaseAIProvider):
                 },
                 json={
                     "model": model_name,
-                    "max_tokens": 1024,
+                    # gpt-5+ rejects max_tokens; max_completion_tokens works on every model
+                    "max_completion_tokens": 1024,
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 timeout=self.REQUEST_TIMEOUT,

@@ -33,9 +33,9 @@ export const SDK_CREDENTIAL_COMPATIBILITY: Record<string, string[]> = {
 
 /** Model ids offered as `datalist` suggestions per credential type. */
 export const SUGGESTED_MODELS: Record<string, string[]> = {
-  anthropic: ["claude-opus-4", "claude-sonnet-4-5", "claude-haiku-4-5"],
-  openai: ["gpt-4o", "gpt-4o-mini", "o3", "o4-mini"],
-  google: ["gemini-2.5-pro", "gemini-2.5-flash"],
+  anthropic: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"],
+  openai: ["gpt-6-sol", "gpt-5.6-terra", "gpt-6-luna"],
+  google: ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.5-flash-lite"],
   openai_compatible: [],
 }
 

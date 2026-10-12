@@ -2556,10 +2556,11 @@ MODEL_CONVERSATION={model_conversation}
                 environment.model_override_building if mode == "building"
                 else environment.model_override_conversation
             )
-            # Primary model for this mode (override → catalog BALANCED default).
-            # MiniMax mapped both modes to the same primary model, so we resolve
-            # against the BALANCED tier regardless of mode, then let any
-            # per-mode override take precedence.
+            # Fallback primary model (override → catalog BALANCED default) for
+            # the settings file. ANTHROPIC_MODEL is only the fallback: the
+            # adapter passes MODEL_<MODE> (see _resolve_mode_model) as --model,
+            # which picks the running model — so conversation runs FAST and
+            # building runs BALANCED. Model health resolves per mode the same way.
             primary_model = resolve_model(
                 engine="claude-code",
                 provider="minimax",

@@ -64,22 +64,25 @@ DEFAULT_CATALOG: dict[tuple[str, str], dict[ModelTier, str]] = {
         ModelTier.BALANCED: "sonnet",
     },
     ("claude-code", "minimax"): {
-        ModelTier.FAST: "MiniMax-M2.1-lightning",
-        ModelTier.BALANCED: "MiniMax-M2.1",
+        ModelTier.FAST: "MiniMax-M2.7-highspeed",
+        ModelTier.BALANCED: "MiniMax-M3",
     },
     ("opencode", "anthropic"): {
+        # No Haiku 5.x is served to API keys yet — 4.5 stays the fast default.
         ModelTier.FAST: "anthropic/claude-haiku-4-5",
-        # Intentional freshness fix: previous live default was
-        # "anthropic/claude-sonnet-4-5" (one generation behind).
-        ModelTier.BALANCED: "anthropic/claude-sonnet-4-6",
+        ModelTier.BALANCED: "anthropic/claude-sonnet-5-5",
     },
     ("opencode", "openai"): {
-        ModelTier.FAST: "openai/gpt-5.4-nano",
-        ModelTier.BALANCED: "openai/gpt-5.4-mini",
+        # sol / terra / luna are the large / mid / small sizes. There is no
+        # gpt-6 terra, so the mid tier stays on the 5.6 generation.
+        ModelTier.FAST: "openai/gpt-6-luna",
+        ModelTier.BALANCED: "openai/gpt-5.6-terra",
     },
     ("opencode", "google"): {
-        ModelTier.FAST: "google/gemini-2.5-flash",
-        ModelTier.BALANCED: "google/gemini-2.5-pro",
+        ModelTier.FAST: "google/gemini-3.8-flash",
+        # Google ships no stable 3.x Pro yet; the preview is the only Pro
+        # after the 2.5 family shuts down.
+        ModelTier.BALANCED: "google/gemini-3.1-pro-preview",
     },
     # opencode/openai_compatible has no static catalog entry — the model comes
     # from the user-provided credential config (see resolve_model()).
@@ -118,12 +121,21 @@ RETIRED_MODELS: frozenset[str] = frozenset(
         "gpt-4-0613",
         "gpt-4-32k",
         "gpt-4-vision-preview",
+        # MiniMax — never an official id; the fast variants are "-highspeed"
+        "MiniMax-M2.1-lightning",
         # Google — retired Gemini snapshots
         "gemini-1.0-pro",
         "gemini-1.5-flash",
         "gemini-1.5-pro",
         "gemini-pro",
         "gemini-pro-vision",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-3-pro-preview",
+        # Gemini 2.5 shuts down on 2026-10-20; flagged ahead so owners move first
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
     }
 )
 
@@ -239,10 +251,10 @@ def infer_tier(provider: str, model_id: str) -> ModelTier | None:  # noqa: ARG00
     reserved for future provider-specific rules.
 
     Rough rules (case-insensitive, on the bare model id):
-      - contains haiku / nano / flash / lightning  → FAST
-      - contains sonnet / opus / mini / pro → BALANCED
-      - a bare family marker (gpt-5) → BALANCED, but a FAST size marker
-        (e.g. "nano" in "gpt-5.4-nano") wins over it
+      - contains haiku / nano / flash / lightning / highspeed / luna → FAST
+      - contains sonnet / opus / mini / pro / terra / sol → BALANCED
+      - a bare family marker (gpt-5, gpt-6) → BALANCED, but a FAST size
+        marker (e.g. "luna" in "gpt-6-luna") wins over it
       - otherwise → None
     """
     if not model_id:
@@ -257,8 +269,8 @@ def infer_tier(provider: str, model_id: str) -> ModelTier | None:  # noqa: ARG00
     tokens = set(re.split(r"[^a-z0-9]+", name))
 
     # Strong size markers — these take precedence and unambiguously classify.
-    fast_markers = {"haiku", "nano", "flash", "lightning"}
-    balanced_markers = {"sonnet", "opus", "mini", "pro"}
+    fast_markers = {"haiku", "nano", "flash", "lightning", "highspeed", "luna"}
+    balanced_markers = {"sonnet", "opus", "mini", "pro", "terra", "sol"}
 
     has_fast = bool(tokens & fast_markers)
     has_balanced = bool(tokens & balanced_markers)
@@ -273,7 +285,7 @@ def infer_tier(provider: str, model_id: str) -> ModelTier | None:  # noqa: ARG00
         return None
 
     # No strong size marker — fall back to a generic family marker. A bare
-    # "gpt-5" (no nano/mini suffix) is treated as BALANCED.
-    if "gpt" in tokens and any(t.startswith("5") for t in tokens):
+    # "gpt-5" / "gpt-6" (no size suffix) is treated as BALANCED.
+    if "gpt" in tokens and any(t.startswith(("5", "6")) for t in tokens):
         return ModelTier.BALANCED
     return None

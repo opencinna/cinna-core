@@ -398,11 +398,11 @@ which is the single source of truth. The table below reflects the catalog's curr
 | Engine | Provider | Building (BALANCED) | Conversation (FAST) |
 |--------|----------|---------------------|---------------------|
 | `claude-code` | `anthropic` | `sonnet` *(tier word)* | `haiku` *(tier word)* |
-| `claude-code` | `minimax` | `MiniMax-M2.1` | `MiniMax-M2.1-lightning` |
-| `opencode` | `anthropic` | `anthropic/claude-sonnet-4-6` | `anthropic/claude-haiku-4-5` |
-| `opencode` | `openai` | `openai/gpt-5.4-mini` | `openai/gpt-5.4-nano` |
+| `claude-code` | `minimax` | `MiniMax-M3` | `MiniMax-M2.7-highspeed` |
+| `opencode` | `anthropic` | `anthropic/claude-sonnet-5-5` | `anthropic/claude-haiku-4-5` |
+| `opencode` | `openai` | `openai/gpt-5.6-terra` | `openai/gpt-6-luna` |
 | `opencode` | `openai_compatible` | from credential config | from credential config |
-| `opencode` | `google` | `google/gemini-2.5-pro` | `google/gemini-2.5-flash` |
+| `opencode` | `google` | `google/gemini-3.1-pro-preview` | `google/gemini-3.8-flash` |
 
 `claude-code/anthropic` stores tier **words** (`haiku`/`sonnet`) — the Claude Code CLI auto-resolves
 these to the current model and they are never flagged as deprecated. See

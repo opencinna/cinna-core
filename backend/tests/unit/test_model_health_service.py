@@ -173,7 +173,7 @@ class TestRetiredOverride:
         # discovered_models does NOT contain the retired_id
         cred = _cred(
             AICredentialType.OPENAI,
-            discovered_models=["gpt-5.4-nano", "gpt-5.4-mini"],
+            discovered_models=["gpt-6-luna", "gpt-5.6-terra"],
         )
         cred.id = cred_id
 
@@ -206,7 +206,7 @@ class TestStalDefault:
         """Discovered list lacks the current catalog default → stale_default."""
         agent = _agent()
         cred_id = uuid.uuid4()
-        # A discovered list that lacks 'claude-sonnet-4-6' (the current opencode/anthropic/building default)
+        # A discovered list that lacks 'claude-sonnet-5-5' (the current opencode/anthropic/building default)
         cred = _cred(
             AICredentialType.ANTHROPIC,
             discovered_models=["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"],
@@ -247,7 +247,7 @@ class TestCredentialDefaultPrecedence:
         admin default, not the catalog default, is evaluated)."""
         agent = _agent()
         cred_id = uuid.uuid4()
-        # Catalog default for opencode/anthropic/building is 'claude-sonnet-4-6'
+        # Catalog default for opencode/anthropic/building is 'claude-sonnet-5-5'
         # and is NOT in this discovered list — without honoring the credential
         # default this would flag stale_default. The admin default IS present.
         cred = _cred(
@@ -341,23 +341,23 @@ class TestCredentialDefaultPrecedence:
 # ---------------------------------------------------------------------------
 
 class TestUndatedDefaultWithDatedSnapshot:
-    """KEY REGRESSION: undated catalog default ('claude-sonnet-4-6') must match the
-    dated snapshot variant ('claude-sonnet-4-6-20251231') in discovered_models.
+    """KEY REGRESSION: undated catalog default ('claude-sonnet-5-5') must match the
+    dated snapshot variant ('claude-sonnet-5-5-20260901') in discovered_models.
     Without the _normalize_model_id stem-matching logic, this would false-flag 'ok'
     models as unknown_model/stale_default."""
 
     def test_undated_default_matches_dated_discovered_snapshot(self):
-        """opencode/anthropic building default 'anthropic/claude-sonnet-4-6' must
-        match 'claude-sonnet-4-6-20251231' in discovered_models → ok (no false flag)."""
+        """opencode/anthropic building default 'anthropic/claude-sonnet-5-5' must
+        match 'claude-sonnet-5-5-20260901' in discovered_models → ok (no false flag)."""
         agent = _agent()
         cred_id = uuid.uuid4()
 
-        # The catalog default is 'anthropic/claude-sonnet-4-6' (undated).
-        # The provider API returns a dated snapshot: 'claude-sonnet-4-6-20251231'.
+        # The catalog default is 'anthropic/claude-sonnet-5-5' (undated).
+        # The provider API returns a dated snapshot: 'claude-sonnet-5-5-20260901'.
         # _normalize_model_id should strip the date and provider prefix, making them equal.
         cred = _cred(
             AICredentialType.ANTHROPIC,
-            discovered_models=["claude-sonnet-4-6-20251231", "claude-haiku-4-5-20250929"],
+            discovered_models=["claude-sonnet-5-5-20260901", "claude-haiku-4-5-20250929"],
         )
         cred.id = cred_id
 
@@ -385,7 +385,7 @@ class TestUndatedDefaultWithDatedSnapshot:
         """If the discovered list has a DIFFERENT dated snapshot of the same family
         that resolved to a different stem, it should still not flag ok.
 
-        E.g. catalog='claude-sonnet-4-6', discovered=['claude-sonnet-4-5-20250929']
+        E.g. catalog='claude-sonnet-5-5', discovered=['claude-sonnet-4-5-20250929']
         These differ by generation (4-5 vs 4-6) → NOT the same family → unknown_model.
         """
         agent = _agent()
@@ -410,7 +410,7 @@ class TestUndatedDefaultWithDatedSnapshot:
         result = evaluate_environment(session, env, agent=agent)
 
         building_mode = next(m for m in result.modes if m.mode == "building")
-        # Catalog default is claude-sonnet-4-6 (stem: claude-sonnet-4-6)
+        # Catalog default is claude-sonnet-5-5 (stem: claude-sonnet-5-5)
         # Discovered is claude-sonnet-4-5-20250929 (stem: claude-sonnet-4-5) → NO match
         assert building_mode.status == STATUS_UNKNOWN_MODEL
 
@@ -564,6 +564,34 @@ class TestUnverifiedWhenNoDiscoveryData:
                 f"MiniMax with no discovery should be ok (not unverified). Got {m.status!r}."
             )
 
+    def test_minimax_conversation_reports_the_model_it_runs(self):
+        """claude-code/minimax conversation runs the FAST model: the adapter's
+        --model (MODEL_CONVERSATION) overrides the settings-file ANTHROPIC_MODEL
+        fallback, so health must check MiniMax-M2.7-highspeed there and the
+        BALANCED MiniMax-M3 in building."""
+        agent = _agent()
+        cred = _cred(
+            AICredentialType.MINIMAX,
+            # Only the FAST id is available: conversation is ok, building (which
+            # runs BALANCED) is flagged.
+            discovered_models=["MiniMax-M2.7-highspeed"],
+        )
+        env = _env(
+            sdk_building="claude-code/minimax",
+            sdk_conversation="claude-code/minimax",
+            build_cred_id=cred.id,
+            conv_cred_id=cred.id,
+        )
+        session = _session_with(agent=agent, cred_for_building=cred, cred_for_conversation=cred)
+
+        result = evaluate_environment(session, env, agent=agent)
+
+        by_mode = {m.mode: m for m in result.modes}
+        assert by_mode["conversation"].model == "MiniMax-M2.7-highspeed"
+        assert by_mode["conversation"].status == STATUS_OK
+        assert by_mode["building"].model == "MiniMax-M3"
+        assert by_mode["building"].status != STATUS_OK
+
 
 # ---------------------------------------------------------------------------
 # 7. has_warning roll-up
@@ -692,7 +720,7 @@ class TestOpenaiAndGoogleStalDefault:
         """Discovered list doesn't include the catalog building default for opencode/openai."""
         agent = _agent()
         cred_id = uuid.uuid4()
-        # gpt-5.4-mini is the catalog building default; it's not in this discovered list.
+        # gpt-5.6-terra is the catalog building default; it's not in this discovered list.
         cred = _cred(
             AICredentialType.OPENAI,
             discovered_models=["gpt-3.5-turbo", "gpt-4o"],
@@ -714,10 +742,10 @@ class TestOpenaiAndGoogleStalDefault:
         assert build_mode.cause == CAUSE_STALE_DEFAULT
 
     def test_google_building_default_not_in_discovered(self):
-        """Catalog google building default (gemini-2.5-pro) not in discovered list → flagged."""
+        """Catalog google building default (gemini-3.1-pro-preview) not in discovered list → flagged."""
         agent = _agent()
         cred_id = uuid.uuid4()
-        # gemini-2.5-pro is the catalog default; not in this discovered list.
+        # gemini-3.1-pro-preview is the catalog default; not in this discovered list.
         cred = _cred(
             AICredentialType.GOOGLE,
             discovered_models=["gemini-1.5-flash", "gemini-1.0-pro"],

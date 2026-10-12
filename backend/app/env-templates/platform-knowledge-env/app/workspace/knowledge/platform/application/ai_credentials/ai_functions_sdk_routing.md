@@ -35,7 +35,7 @@ The `default_ai_functions_sdk` preference applies to all AI utility calls routed
 
 Implemented in `backend/app/agents/router_trigger_prompt_generator.py` and exposed via `AIFunctionsService.generate_router_trigger_prompt(agent_name, description, user, db)`.
 
-- **Model**: `gemini-2.5-flash-lite` — the same model used by `route_to_agent` for AI classification, so the generator and consumer share the same representation space
+- **Model**: `gemini-3.5-flash-lite` — the same model used by `route_to_agent` for AI classification, so the generator and consumer share the same representation space
 - **Source**: `agent.name` + `agent.description` (not the workflow prompt — descriptions are stable, short, user-facing, and match the shape the router expects)
 - **Target output**: ~120–150 chars, single sentence, starts with a capability verb (e.g., "Plans meetings, finds free slots in my calendar, and books events on my behalf")
 - **Fallback**: on any generation failure, returns `"Handles tasks related to: <first line of description, truncated to 140 chars>"` — always a non-empty string so the caller can pre-fill the field even if the LLM is unavailable
@@ -156,7 +156,7 @@ Route calls AI function (e.g., refine_user_prompt in routes/agents.py)
        → If api_key in kwargs AND provider == "openai":
             → OpenAIProvider(api_key=key).generate_content(prompt)
             → Direct httpx POST to https://api.openai.com/v1/chat/completions
-            → Model: gpt-4o-mini (default)
+            → Model: settings.OPENAI_MODEL (default gpt-6-luna)
             → No fallback on error
        → If api_key in kwargs (no provider or provider != "openai"):
             → AnthropicProvider(api_key=key).generate_content(prompt)
@@ -179,7 +179,7 @@ Route calls AI function (e.g., refine_user_prompt in routes/agents.py)
 - **AI Credentials** — The user's credential is looked up via `ai_credentials_service.get_default_for_type` (when no credential ID is pinned) or via direct `db.get(AICredential, credential_id)` (when a specific credential is pinned). The type queried matches the user's provider preference (Anthropic or OpenAI). See [AI Credentials](ai_credentials.md).
 - **`AICredentialPublic.is_oauth_token`** — The `is_oauth_token: bool` field (computed in `_to_public()`, not stored) tells the frontend whether a credential is an OAuth token so it can disable incompatible options in the Anthropic picker. See `backend/app/models/credentials/ai_credential.py`.
 - **Provider Manager** — `generate_content(prompt, api_key=key)` triggers the personal key bypass path. `generate_content(prompt, api_key=key, provider="openai")` routes to `OpenAIProvider`; without the `provider` kwarg (or with any other value), it routes to `AnthropicProvider`. See `backend/app/agents/provider_manager.py`.
-- **OpenAI Provider** — `backend/app/agents/providers/openai_provider.py`. Uses direct httpx to `https://api.openai.com/v1/chat/completions`. Default model `gpt-4o-mini`. When instantiated with an explicit `api_key`, errors are non-recoverable (`recoverable=False`).
+- **OpenAI Provider** — `backend/app/agents/providers/openai_provider.py`. Uses direct httpx to `https://api.openai.com/v1/chat/completions`. Default model `settings.OPENAI_MODEL` (`gpt-6-luna`); sends `max_completion_tokens`, which gpt-5 and newer require. When instantiated with an explicit `api_key`, errors are non-recoverable (`recoverable=False`).
 - **User Model** — `default_ai_functions_sdk` and `default_ai_functions_credential_id` fields on the `User` table, exposed in `UserPublic` and `UserUpdateMe`. See `backend/app/models/users/user.py`.
 - **Background Tasks** — `session_service.auto_generate_session_title` and `agent_service._generate_description_background` both accept a `user_id` parameter and resolve provider kwargs when user context is available.
 

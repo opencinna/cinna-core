@@ -172,7 +172,7 @@ else:
 
 ### 1. Keep Functions Simple
 - AI functions should do ONE thing
-- Use fast models (`gemini-2.5-flash-lite`)
+- Use fast models (`gemini-3.5-flash-lite`)
 - Avoid complex multi-turn conversations
 
 ### 2. Always Provide Fallbacks
@@ -210,7 +210,7 @@ GOOGLE_API_KEY=your-api-key-here
 
 # OpenAI provider settings (direct OpenAI API)
 OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-4o-mini  # Default; can be overridden
+OPENAI_MODEL=gpt-6-luna  # Default; can be overridden
 
 # OpenAI-compatible provider settings (for local/custom endpoints)
 OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1  # e.g., Ollama
@@ -222,12 +222,13 @@ OPENAI_COMPATIBLE_MODEL=llama3.2:latest
 
 **Gemini (default)**
 - Get API key from: https://makersuite.google.com/app/apikey
-- Default model: `gemini-2.5-flash-lite` (fast, cheap)
+- Default model: `gemini-3.5-flash-lite` (fast, cheap)
 
 **OpenAI**
 - Direct HTTP calls to `https://api.openai.com/v1/chat/completions` — no OpenAI SDK dependency (uses httpx)
 - Set `OPENAI_API_KEY` in `.env`
-- Default model: `gpt-4o-mini` (fast, cheap); override with `OPENAI_MODEL`
+- Default model: `gpt-6-luna` (fast, cheap); override with `OPENAI_MODEL`
+- Sends `max_completion_tokens` — gpt-5 and newer reject `max_tokens`
 - Also used for per-user personal routing when a user selects "Personal OpenAI" in Settings
 
 **OpenAI-Compatible**
@@ -261,9 +262,9 @@ GOOGLE_API_KEY=your-backup-key
 ### Model Selection
 
 Gemini models:
-- `gemini-2.5-flash-lite` - Fast and cheap (default)
-- `gemini-2.5-flash` - Balanced performance
-- `gemini-2.5-pro` - Best quality
+- `gemini-3.5-flash-lite` - Fast and cheap (default)
+- `gemini-3.8-flash` - Balanced performance
+- `gemini-3.1-pro-preview` - Best quality (preview; no stable 3.x Pro yet)
 
 For OpenAI-compatible, model depends on your endpoint (e.g., `llama3.2:latest`, `gpt-4o-mini`).
 

@@ -73,23 +73,34 @@ Keyed by `(engine, provider)` → `{ModelTier: model_string}`.
 | (engine, provider) | FAST | BALANCED |
 |---|---|---|
 | `claude-code`, `anthropic` | `"haiku"` | `"sonnet"` |
-| `claude-code`, `minimax` | `"MiniMax-M2.1-lightning"` | `"MiniMax-M2.1"` |
-| `opencode`, `anthropic` | `"anthropic/claude-haiku-4-5"` | `"anthropic/claude-sonnet-4-6"` |
-| `opencode`, `openai` | `"openai/gpt-5.4-nano"` | `"openai/gpt-5.4-mini"` |
-| `opencode`, `google` | `"google/gemini-2.5-flash"` | `"google/gemini-2.5-pro"` |
+| `claude-code`, `minimax` | `"MiniMax-M2.7-highspeed"` | `"MiniMax-M3"` |
+| `opencode`, `anthropic` | `"anthropic/claude-haiku-4-5"` | `"anthropic/claude-sonnet-5-5"` |
+| `opencode`, `openai` | `"openai/gpt-6-luna"` | `"openai/gpt-5.6-terra"` |
+| `opencode`, `google` | `"google/gemini-3.8-flash"` | `"google/gemini-3.1-pro-preview"` |
 | `opencode`, `openai_compatible` | from credential `model` field | from credential `model` field |
 
 The `claude-code/anthropic` row stores tier **words** (`haiku`/`sonnet`) rather than dated
 snapshots — the Claude Code CLI auto-resolves these, so they never go stale.
 
-Freshness fix: `opencode/anthropic` BALANCED was changed from `anthropic/claude-sonnet-4-5`
-to `anthropic/claude-sonnet-4-6` at catalog creation time.
+Choices behind the concrete rows:
+- **anthropic** — FAST stays on `claude-haiku-4-5`: no Haiku 5.x is served to API keys yet.
+- **openai** — `sol` / `terra` / `luna` are the large / mid / small sizes. FAST is the newest
+  small (`gpt-6-luna`); BALANCED is the mid size, and there is no gpt-6 terra, so it stays on 5.6.
+- **google** — Google ships no stable 3.x Pro, so BALANCED is the preview Pro. Expect to move it
+  when a stable Pro lands.
+- **minimax** — MiniMax's fast variants are named `-highspeed`; `-lightning` was never an
+  official id. Building mode runs the BALANCED id (`MiniMax-M3`).
+  Conversation mode runs the FAST id (`MiniMax-M2.7-highspeed`): `_resolve_mode_model` writes
+  `MODEL_CONVERSATION=FAST` and the claude-code adapter passes it as `--model`; the
+  `ANTHROPIC_MODEL=MiniMax-M3` in the MiniMax settings file is only a fallback.
 
 ### `RETIRED_MODELS`
 
 A `frozenset[str]` of known-retired concrete model IDs. Lenient matching: both provider-prefixed
 (e.g. `anthropic/claude-3-opus-20240229`) and bare forms are recognized. Tier words are never
-included.
+included. Besides superseded snapshots it lists `MiniMax-M2.1-lightning` (never an official id)
+and the Gemini 2.5 family, which Google shuts down on 2026-10-20 — listed ahead of time so
+owners are nudged to move before the shutdown.
 
 ### `KNOWN_TIER_WORDS`
 
@@ -119,9 +130,10 @@ Case-insensitive check against `KNOWN_TIER_WORDS` after stripping any provider p
 **`infer_tier(provider, model_id) -> ModelTier | None`**
 
 Name-heuristic tier inference. Tokenizes on non-alphanumeric separators:
-- Contains `haiku`/`nano`/`flash`/`lightning` → `FAST`
-- Contains `sonnet`/`opus`/`mini`/`pro` → `BALANCED`
-- Both or neither strong marker → `None`
+- Contains `haiku`/`nano`/`flash`/`lightning`/`highspeed`/`luna` → `FAST`
+- Contains `sonnet`/`opus`/`mini`/`pro`/`terra`/`sol` → `BALANCED`
+- Both strong markers → `None`
+- Neither, but a bare `gpt-5` / `gpt-6` family marker → `BALANCED`; otherwise `None`
 
 Used by discovery for availability checks; returns `None` rather than guessing when ambiguous.
 

@@ -213,7 +213,7 @@ export function SDKModeEditDialog({
                 placeholder={
                   isConversation
                     ? "e.g., claude-haiku-4-5"
-                    : "e.g., claude-opus-4"
+                    : "e.g., claude-sonnet-5-5"
                 }
                 className="h-9"
                 disabled={isSaving}

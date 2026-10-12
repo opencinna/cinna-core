@@ -35,8 +35,9 @@ drive selection:
   Claude Code CLI resolves tier words to the current model automatically, so they never go
   stale and are never flagged as deprecated.
 
-A notable freshness fix shipped with the catalog: the opencode/anthropic building-mode default
-was updated from the stale `anthropic/claude-sonnet-4-5` to `anthropic/claude-sonnet-4-6`.
+The concrete defaults are refreshed by hand when providers ship new generations — nothing
+detects that a newer model exists, only that a configured one is gone. Environments without an
+override pick up a new default the next time their config is regenerated (start or rebuild).
 
 ### Model Override
 
