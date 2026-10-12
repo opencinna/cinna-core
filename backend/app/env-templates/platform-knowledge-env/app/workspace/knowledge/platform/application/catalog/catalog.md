@@ -15,8 +15,8 @@ kinds of item, all through the same listing, the same access model and the same 
 
 | Kind | Words in the UI | Where it runs |
 |------|-----------------|---------------|
-| Cloud agent (bundle, `runs_on='cloud'`) | Runs in Cinna | Installed as the user's own agent in Cinna |
-| Desktop agent (bundle, `runs_on='desktop'`) | Runs on your computer | Fetched and run by Cinna Desktop; see [Desktop Agents](desktop_agents.md) |
+| Cloud agent (bundle, `runs_on='cloud'`) | Cloud | Installed as the user's own agent in Cinna |
+| Desktop agent (bundle, `runs_on='desktop'`) | Desktop | Fetched and run by Cinna Desktop; see [Desktop Agents](desktop_agents.md) |
 | Skill (package) | Skill | Added to cloud agents, or pinned into local agents by Cinna Desktop |
 
 Agent bundles are described in [Agent Bundles](../../agents/agent_bundles/agent_bundles.md) and skill
@@ -104,7 +104,7 @@ is always the source of truth. See [Event Bus](../realtime_events/event_bus_syst
 
 ### Catalog page (`/catalog`)
 
-Browse everything the user can get. A kind control (All, Agents in Cinna, Agents on your computer,
+Browse everything the user can get. A kind control (All, Cloud Agents, Desktop Agents,
 Skills) and a filter menu (All, Public, Shared with me, Installed, Mine) are kept in the URL as `kind` and `filter`. Each item
 is a tile showing its kind, description, version and date, the credentials it needs, the skills of an
 agent, and whether the user has it installed or has an update available. One footer action per kind:

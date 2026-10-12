@@ -176,7 +176,7 @@ Access is visibility plus grants (user or role x use/edit/maintain); publishing 
 
 ### Bundles that run on your computer
 
-A bundle is either **Runs in Cinna** (`runs_on='cloud'`, the default: published from a cloud agent, installed as a running copy) or **Runs on your computer** (`runs_on='desktop'`): an agent shared from Cinna Desktop, whose content is a git repo served by core. See [Desktop Agents in the Catalog](../../application/catalog/desktop_agents.md).
+A bundle is either a **Cloud** agent (`runs_on='cloud'`, the default: published from a cloud agent, installed as a running copy) or a **Desktop** agent (`runs_on='desktop'`): an agent shared from Cinna Desktop, whose content is a git repo served by core. See [Desktop Agents in the Catalog](../../application/catalog/desktop_agents.md).
 
 - A desktop bundle has no snapshot. Each accepted "Share changes" adds a revision with origin `share` ("Version N"), with release notes taken from the commit messages.
 - Access, listing, grants and delete work as for any bundle (`/api/v1/catalog/items/...`). Creating one is `POST /api/v1/catalog/desktop-agents`.

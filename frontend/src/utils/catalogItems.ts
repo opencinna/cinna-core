@@ -26,12 +26,8 @@ export const CATALOG_KINDS: Record<
     icon: LucideIcon
   }
 > = {
-  cloud: { word: "Runs in Cinna", segment: "Agents in Cinna", icon: Bot },
-  desktop: {
-    word: "Runs on your computer",
-    segment: "Agents on your computer",
-    icon: Laptop,
-  },
+  cloud: { word: "Cloud", segment: "Cloud Agents", icon: Bot },
+  desktop: { word: "Desktop", segment: "Desktop Agents", icon: Laptop },
   skill: { word: "Skill", segment: "Skills", icon: GraduationCap },
 }
 
