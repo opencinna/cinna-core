@@ -178,7 +178,7 @@ def read_credentials(
         statement = statement.where(Credential.user_workspace_id == workspace_filter)
 
     count = session.exec(count_statement).one()
-    credentials = session.exec(statement.offset(skip).limit(limit)).all()
+    credentials = session.exec(statement.order_by(Credential.name, Credential.id).offset(skip).limit(limit)).all()
 
     # Batch the agent-usage counts and bundle-usage flags once for the whole
     # page (no per-row N+1). Owned rows are owner-scoped for the usage count.

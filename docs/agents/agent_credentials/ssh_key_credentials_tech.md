@@ -33,9 +33,8 @@ All three add `openssh-client` to the apt-install list, providing `ssh`, `ssh-ke
 - `frontend/src/components/Credentials/AddCredential.tsx` — two-step dialog flow (basic step → SSH key form step → success state); `sshKeyMutation` with cache seeding
 - `frontend/src/components/Credentials/CredentialFields/SSHKeyFields.tsx` — create-time form (mode toggle, key type selector, import textareas, host aliases input, security disclaimer)
 - `frontend/src/components/Credentials/CredentialForms/SSHKeyEditView.tsx` — edit page view (metadata left column, read-only key material + rotate right column)
-- `frontend/src/components/Credentials/EditCredential.tsx` — routes `credential.type === "ssh_key"` to `SSHKeyEditView`
 - `frontend/src/components/Agents/AgentCredentialsTab.tsx` — `getCredentialTypeLabel` returns "SSH Key" for type badge
-- `frontend/src/components/Credentials/columns.tsx` — "SSH Key" label in list column mapping
+- `frontend/src/components/Credentials/credentialTypes.ts` — "SSH Key" label in the type map used by the list's Type column (`credentialColumns.tsx`)
 
 ---
 
@@ -354,7 +353,7 @@ The Rotate button is disabled while the metadata form has unsaved changes (`form
 
 ### Type Badge in List Views
 
-`frontend/src/components/Credentials/columns.tsx`: `"ssh_key": "SSH Key"` in the type-label map.
+`frontend/src/components/Credentials/credentialTypes.ts`: the `ssh_key` entry supplies the "SSH Key" label to the Type column of `credentialColumns.tsx`.
 `frontend/src/components/Agents/AgentCredentialsTab.tsx`: `getCredentialTypeLabel` returns "SSH Key" for `case "ssh_key"`.
 
 ---

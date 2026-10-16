@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { Plug, Plus, Search } from "lucide-react"
-import { useMemo, useState } from "react"
+import { type ReactNode, useMemo, useState } from "react"
 
 import {
   CredentialsService,
@@ -36,7 +36,12 @@ const SSH_KEY_DEFAULT_DATA = {
   key_type: "ed25519" as const,
 }
 
-const AddCredential = () => {
+interface AddCredentialProps {
+  /** Replaces the page header's "New Credential" button, e.g. in an empty state. */
+  trigger?: ReactNode
+}
+
+const AddCredential = ({ trigger }: AddCredentialProps = {}) => {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [pendingType, setPendingType] = useState<CredentialTypeKey | null>(null)
@@ -144,10 +149,12 @@ const AddCredential = () => {
     />
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <Button className="my-4">
-          <Plus className="mr-2" />
-          New Credential
-        </Button>
+        {trigger ?? (
+          <Button className="my-4">
+            <Plus className="mr-2" />
+            New Credential
+          </Button>
+        )}
       </DialogTrigger>
 
       <DialogContent className="sm:max-w-2xl p-0 gap-0 overflow-hidden">

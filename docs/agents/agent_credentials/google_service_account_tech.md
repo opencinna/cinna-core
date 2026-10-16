@@ -24,11 +24,9 @@
 - `frontend/src/components/Credentials/CredentialFields/ServiceAccountFields.tsx` - SA JSON textarea + file upload + validation UI
 - `frontend/src/components/Credentials/CredentialForms/ServiceAccountCredentialForm.tsx` - Wrapper passing form control to `ServiceAccountFields`
 
-### Frontend - Type Map Updates (6 files)
+### Frontend - Type Map Updates (type map)
 - `frontend/src/components/Credentials/AddCredential.tsx` - z.enum + dropdown `<SelectItem>`
-- `frontend/src/components/Credentials/EditCredential.tsx` - Rendering branch
-- `frontend/src/components/Credentials/CredentialCard.tsx` - `FileJson` icon + "Google Service Account" label
-- `frontend/src/components/Credentials/columns.tsx` - Label map entry
+- `frontend/src/components/Credentials/credentialTypes.ts` - icon + "Google Service Account" label (used by the list columns in `credentialColumns.tsx`)
 - `frontend/src/components/Agents/AgentCredentialsTab.tsx` - Label function case
 - `frontend/src/routes/_layout/credential/$credentialId.tsx` - Label function + rendering branch
 

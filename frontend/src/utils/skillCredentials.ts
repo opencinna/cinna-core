@@ -45,9 +45,9 @@ function plural(count: number, one: string, many: string): string {
 }
 
 /**
- * Credential types in the words the Credentials page uses. Moved here from
- * `Credentials/columns.tsx`, which imports it back: one table, so "Agent REST
- * API" cannot drift between the credentials list and a skill's slot row.
+ * Credential types in the words a skill's slot row uses. (The credentials list
+ * itself reads `Credentials/credentialTypes.getCredentialTypeMeta`, the type
+ * picker's table.)
  */
 const CREDENTIAL_TYPE_LABELS: Record<CredentialType, string> = {
   email_imap: "Email (IMAP)",

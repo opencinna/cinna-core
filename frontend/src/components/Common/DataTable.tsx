@@ -3,9 +3,10 @@ import {
   flexRender,
   getCoreRowModel,
   getPaginationRowModel,
+  type RowData,
   useReactTable,
 } from "@tanstack/react-table"
-import { useEffect } from "react"
+import { type MouseEvent, useEffect } from "react"
 
 import {
   DataTablePagination,
@@ -19,6 +20,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { cn } from "@/lib/utils"
+
+declare module "@tanstack/react-table" {
+  // biome-ignore lint/correctness/noUnusedVariables: the generics must repeat the library's declaration for the merge to apply.
+  interface ColumnMeta<TData extends RowData, TValue> {
+    /**
+     * Classes for both the column's header and its cells: a width
+     * (`w-[170px]`), a responsive visibility (`hidden lg:table-cell`) — which
+     * has to land on the `<th>` and every `<td>` alike, or the header row and
+     * the body disagree about how many columns there are.
+     */
+    className?: string
+  }
+}
 
 /**
  * Server-side paging, when the list is too long to hand over whole.
@@ -56,6 +71,47 @@ interface DataTableProps<TData, TValue> {
    * reuses the previous page's cells and any per-row state with them.
    */
   getRowId?: (row: TData) => string
+  /**
+   * Makes the whole row open the entity (§2 "Row as the control", table form).
+   * An enhancement only: the row must also carry a real link (usually on the
+   * name), which is what keyboard, middle-click and screen readers reach — so
+   * the `<tr>` gets no `role="button"`. Clicks on a link or button inside the
+   * row, and clicks that bubble in from a portaled menu or dialog, are ignored
+   * here; anything else that should not navigate (a pending write on the row)
+   * is the caller's check.
+   */
+  onRowClick?: (row: TData) => void
+  /** Classes for the `<table>`, e.g. `table-fixed` for truncating cells. */
+  tableClassName?: string
+  /** The footer's noun: "12 credentials". Defaults to "entries". */
+  itemLabel?: string
+  /**
+   * Client-side paging only. By default the table returns to page 1 whenever
+   * `data` changes; pass `false` to keep the page across a refetch (a delete
+   * on page 3). The page is still clamped when the list shrinks under it, and
+   * a caller that wants a reset on a filter change remounts the table (`key`).
+   */
+  autoResetPageIndex?: boolean
+  /**
+   * Hide the header row visually, for a table whose rows read on their own (a
+   * name, a few badges, a menu). It stays in the DOM as `sr-only`, so screen
+   * readers still announce each cell's column.
+   */
+  hideHeader?: boolean
+}
+
+/**
+ * Whether a click on a row is a click on the row itself. React bubbles events
+ * through portals, so a menu item or dialog button rendered from inside a cell
+ * still reaches the `<tr>`'s handler although it is nowhere near it in the DOM.
+ */
+function isRowOwnClick(event: MouseEvent<HTMLTableRowElement>): boolean {
+  const target = event.target
+  if (!(target instanceof Element)) return false
+  if (!event.currentTarget.contains(target)) return false
+  // The end of a drag-select is a click too; selecting a name is not opening it.
+  if (window.getSelection()?.toString()) return false
+  return target.closest("a, button, input, [role=menuitem]") === null
 }
 
 export function DataTable<TData, TValue>({
@@ -64,6 +120,11 @@ export function DataTable<TData, TValue>({
   serverPagination,
   emptyState,
   getRowId,
+  onRowClick,
+  tableClassName,
+  itemLabel,
+  autoResetPageIndex,
+  hideHeader = false,
 }: DataTableProps<TData, TValue>) {
   const manual = serverPagination !== undefined
   const table = useReactTable({
@@ -114,6 +175,9 @@ export function DataTable<TData, TValue>({
           },
         }
       : {
+          // Spread in only when given: an explicit `undefined` would replace
+          // the library's default, as with `onPaginationChange` above.
+          ...(autoResetPageIndex !== undefined ? { autoResetPageIndex } : {}),
           initialState: {
             pagination: { pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE },
           },
@@ -137,25 +201,59 @@ export function DataTable<TData, TValue>({
     }
   }, [serverPageIndex, pageCount, onServerPageChange])
 
+  // The client-side counterpart, needed once auto-reset is off: a list that
+  // shrinks under the current page steps back to its last page.
+  const clientPageIndex = manual
+    ? undefined
+    : table.getState().pagination.pageIndex
+  useEffect(() => {
+    if (
+      clientPageIndex !== undefined &&
+      clientPageIndex > 0 &&
+      clientPageIndex >= pageCount
+    ) {
+      table.setPageIndex(Math.max(0, pageCount - 1))
+    }
+  }, [clientPageIndex, pageCount, table])
+
   return (
     <div className="flex flex-col gap-4">
       {/* The table scrolls inside its own container rather than pushing the
           page sideways: a column set that fits at 1440 can still overflow at
           1024, and a horizontally scrolling page moves the sidebar with it. */}
       <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
+        <Table className={tableClassName}>
+          {/* A hidden header still sizes the columns: `sr-only` on the
+              `<thead>` would take it out of the table's layout, and a
+              `table-fixed` table would then split its width evenly. So the
+              row collapses to zero height and only its labels are `sr-only`. */}
+          <TableHeader
+            className={cn(hideHeader && "bg-transparent [&_tr]:border-b-0")}
+          >
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id} className="hover:bg-transparent">
                 {headerGroup.headers.map((header) => {
                   return (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
+                    <TableHead
+                      key={header.id}
+                      className={cn(
+                        header.column.columnDef.meta?.className,
+                        hideHeader && "h-0 py-0",
+                      )}
+                    >
+                      {header.isPlaceholder ? null : hideHeader ? (
+                        <span className="sr-only">
+                          {flexRender(
                             header.column.columnDef.header,
                             header.getContext(),
                           )}
+                        </span>
+                      ) : (
+                        flexRender(
+                          header.column.columnDef.header,
+                          header.getContext(),
+                        )
+                      )}
                     </TableHead>
                   )
                 })}
@@ -165,9 +263,22 @@ export function DataTable<TData, TValue>({
           <TableBody>
             {table.getRowModel().rows.length ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
+                <TableRow
+                  key={row.id}
+                  className={cn(onRowClick && "cursor-pointer")}
+                  onClick={
+                    onRowClick
+                      ? (event) => {
+                          if (isRowOwnClick(event)) onRowClick(row.original)
+                        }
+                      : undefined
+                  }
+                >
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
+                    <TableCell
+                      key={cell.id}
+                      className={cell.column.columnDef.meta?.className}
+                    >
                       {flexRender(
                         cell.column.columnDef.cell,
                         cell.getContext(),
@@ -193,6 +304,7 @@ export function DataTable<TData, TValue>({
       <DataTablePagination
         table={table}
         total={total}
+        itemLabel={itemLabel}
         showPageSize={
           !manual || serverPagination.onPageSizeChange !== undefined
         }

@@ -40,8 +40,7 @@
 - `frontend/src/components/Credentials/CredentialSharing.tsx` — the "Allow use on recipients'
   computers" `Switch`, gated on `allowSharing && isLocallyDeliverableCredentialType(credential.type)`;
   its mutation calls `CredentialsService.updateCredential({ requestBody: { allow_local_use } })`.
-- `frontend/src/components/Credentials/EditCredential.tsx` — unrelated to consent, but shares the
-  credential edit surface: `agent_api` and `mcp_provider` credentials save metadata only, so a
+- the credential edit surface — unrelated to consent, but shares it: `agent_api` and `mcp_provider` credentials save metadata only, so a
   server-minted or -refreshed token field is never echoed back on save (`SECRET_MANAGED_TYPES` at
   the top of the file).
 

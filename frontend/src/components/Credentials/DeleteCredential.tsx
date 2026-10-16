@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, Trash2 } from "lucide-react"
+import { AlertTriangle } from "lucide-react"
 import { useState } from "react"
 
 import {
@@ -23,7 +23,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -36,11 +35,26 @@ import { BundleUsageRow, SkillUsageRow } from "./CredentialUsageRows"
 import { localSkillImpactSentence } from "./localSkillImpact"
 
 interface DeleteCredentialProps {
-  credential: CredentialPublic
+  /** Only the id and the name are read, so a list row's view-model will do. */
+  credential: Pick<CredentialPublic, "id" | "name">
   onSuccess: () => void
   isOpen?: boolean
   setIsOpen?: (open: boolean) => void
+  /**
+   * The trigger. Omit it to drive the dialog purely through `isOpen` — the
+   * shape a list uses, holding one `deleteTarget` for all its rows: a trigger
+   * inside a `DropdownMenuItem` unmounts with the menu, and takes the dialog's
+   * state with it (§2 Row actions).
+   */
   children?: React.ReactNode
+}
+
+/**
+ * The key a credential's delete runs under, so a list can show that row as
+ * pending (`useIsMutating`) without owning the mutation.
+ */
+export function deleteCredentialMutationKey(credentialId: string) {
+  return ["delete-credential", credentialId] as const
 }
 
 /** Extract a CredentialDeletionImpact from a 409 ApiError body, if present. */
@@ -84,6 +98,7 @@ const DeleteCredential = ({
   })
 
   const mutation = useMutation({
+    mutationKey: deleteCredentialMutationKey(credential.id),
     mutationFn: (force: boolean) =>
       CredentialsService.deleteCredential({ id: credential.id, force }),
     onSuccess: () => {
@@ -106,9 +121,9 @@ const DeleteCredential = ({
       }
       handleError.bind(showErrorToast)(error as ApiError)
     },
-    onSettled: () => {
-      queryClient.invalidateQueries()
-    },
+    // Returned, so the mutation (and the row's pending state) lasts until the
+    // refetch lands — otherwise the deleted row briefly comes back live.
+    onSettled: () => queryClient.invalidateQueries(),
   })
 
   const tier = impact?.tier ?? 0
@@ -152,18 +167,7 @@ const DeleteCredential = ({
         if (!mutation.isPending) setIsOpen(next)
       }}
     >
-      {children ? (
-        <DialogTrigger asChild>{children}</DialogTrigger>
-      ) : (
-        <DropdownMenuItem
-          variant="destructive"
-          onSelect={(e) => e.preventDefault()}
-          onClick={() => setIsOpen(true)}
-        >
-          <Trash2 />
-          Delete Credential
-        </DropdownMenuItem>
-      )}
+      {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden sm:max-w-md [&>*]:min-w-0">
         <DialogHeader>
           <DialogTitle className="break-words">
