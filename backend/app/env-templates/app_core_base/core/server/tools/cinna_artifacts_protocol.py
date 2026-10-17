@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import posixpath
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +118,7 @@ class CinnaArtifactsClient:
         if not (self.workspace_dir / path).exists():
             return f"Error: {path} was not found in the workspace. Nothing was published.", True
         payload["path"] = path
+        payload = _drop_placeholder_args(payload, self.workspace_dir / path, path)
         if session_id:
             payload["source_session_id"] = session_id
 
@@ -138,4 +141,49 @@ class CinnaArtifactsClient:
         if response.status_code == 401:
             return "Error: authentication with the artifact service failed", True
         logger.warning("%s failed HTTP %s: %s", name, response.status_code, response.text[:500])
+        if response.status_code == 404 and "artifact_id" in payload:
+            return (
+                f"Error: {_error_detail(response)}. `artifact_id` must be an id an earlier "
+                "artifacts_publish returned; omit it to publish `path` (publishing the same "
+                "path again updates the artifact it was published to).",
+                True,
+            )
         return f"Error: {_error_detail(response)}", True
+
+
+def _drop_placeholder_args(payload: dict[str, Any], root: Path, path: str) -> dict[str, Any]:
+    """Drop optional arguments no publish of ``root`` could ever accept.
+
+    An engine that sends tools without ``"strict": false`` (OpenCode 1.14 does)
+    gets OpenAI's strict default, which makes every property required: the
+    model then fills ``artifact_id`` and ``entry`` with placeholders (``" "``,
+    ``"/"``, the nil UUID, the published file itself) and loops on the
+    rejections. An ``artifact_id`` that is not a UUID names no artifact, and an
+    ``entry`` that is not an HTML file inside the published folder names no
+    start page, so both mean "omitted". An entry written from the workspace
+    root (``artifacts/site/index.html``) is made relative to the folder.
+    """
+    cleaned = dict(payload)
+    artifact_id = cleaned.get("artifact_id")
+    if artifact_id is not None:
+        try:
+            parsed = uuid.UUID(str(artifact_id).strip())
+        except ValueError:
+            parsed = None
+        if parsed is None or parsed.int == 0:
+            cleaned.pop("artifact_id")
+        else:
+            cleaned["artifact_id"] = str(parsed)
+    entry = cleaned.get("entry")
+    if entry is not None:
+        entry = str(entry).strip()
+        while entry.startswith("./"):
+            entry = entry[2:]
+        if entry.startswith(f"{path}/"):
+            entry = entry[len(path) + 1:]
+        is_page = posixpath.splitext(entry)[1].lower() in (".html", ".htm")
+        if entry and is_page and root.is_dir() and (root / entry).is_file():
+            cleaned["entry"] = entry
+        else:
+            cleaned.pop("entry")
+    return cleaned
