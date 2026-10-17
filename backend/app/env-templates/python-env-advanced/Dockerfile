@@ -29,8 +29,16 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
 # Install Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install OpenCode binary (multi-provider AI agent)
-RUN curl -fsSL https://opencode.ai/install | bash
+# Install OpenCode binary (multi-provider AI agent), pinned. Keep the same
+# OPENCODE_VERSION in all three env Dockerfiles and in
+# docs/agents/agent_skills/agent_skills_tech.md. The image tag hashes this
+# file, so bumping the default is what rebuilds the image. Builds before
+# 1.18 sent tools to OpenAI without "strict": false, which made every
+# optional tool argument required. Stay on 1.x: 2.x changes how MCP tools
+# are called and needs an adapter port.
+ARG OPENCODE_VERSION=1.19.3
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" \
+    && /root/.opencode/bin/opencode --version | grep -qx "${OPENCODE_VERSION}"
 
 # Install mutagen-agent (used by cinna-cli live sync — /sync/exec spawns this binary)
 ARG MUTAGEN_VERSION=0.18.1

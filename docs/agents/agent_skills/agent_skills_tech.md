@@ -1427,15 +1427,33 @@ plan, rather than being frozen as test counts here.
   image, and the missing route is in the image.
 - **Operators need the new `/app/data/skills` compose mount** before Phase 3
   publishes anything (see [Storage layout](#storage-layout)).
-- **The OpenCode build is not pinned.** All three env Dockerfiles install it with
-  `RUN curl -fsSL https://opencode.ai/install | bash` at image-build time, so
-  there is no version to record for plan §13's checklist item. Support for
-  `POST /instance/dispose` and for the `skills` config object is therefore
-  **assumed and degradation-handled**, not verified against a pinned build: a
-  build without the endpoint answers 404 (logged once, skills appear at the next
-  server start), and the `skills` object shape is written to match OpenCode's
-  published closed schema. Anyone who needs certainty should pin the installer
-  and record the version here.
+- **The OpenCode build is pinned to 1.19.3.** All three env Dockerfiles
+  (`general-env`, `platform-knowledge-env`, `python-env-advanced`) declare
+  `ARG OPENCODE_VERSION=1.19.3` and pass it to the installer
+  (`bash -s -- --version "${OPENCODE_VERSION}"`). The build fails if
+  `opencode --version` prints anything else. Keep the three defaults and this
+  line in step. Before the pin, each image got whatever was latest when its
+  layer was built; the local image had 1.14.24. That build sent function tools
+  to OpenAI's Responses API without `"strict"`, so OpenAI treated a
+  strict-compatible schema as strict and made every property required. Models
+  then filled optional arguments with placeholders, for example
+  `artifacts_publish`'s `artifact_id` and `entry`. 1.19.3 sends
+  `"strict": false` on every tool. That was confirmed by capturing an env's
+  requests against a stub. Stay on 1.x: 2.x calls MCP tools through a Code
+  Mode `execute` tool and needs an adapter port. Against 1.19.3 the adapter's
+  `POST /session`, `POST /session/:id/message`, `GET /global/event`,
+  `DELETE /session/:id` and `POST /instance/dispose` all answer as expected.
+  The newer event types (`sync`, `plugin.added`, `catalog.updated`, …) fall
+  through as unhandled. `POST /instance/dispose` is supported by the pinned
+  build. The `skills` object shape still follows OpenCode's published schema;
+  the adapter's degradation handling stays in place.
+- **Rolling out an OpenCode bump.** The template image tag hashes the
+  Dockerfile, so changing the `OPENCODE_VERSION` default yields a new tag, and
+  the next environment build or rebuild builds that image. Existing
+  environments keep the old image until they are rebuilt (`/rebuild-env`,
+  `cinna agent rebuild-env <agent>`, `POST /environments/{id}/rebuild`, or the
+  admin bulk rebuild). A restart reuses the old image. To check the version
+  inside an environment, run `cinna exec opencode --version`.
 - **`${CLAUDE_SKILL_DIR}` is taught in `BUILDING_AGENT.md` but is a Claude Code
   variable.** Whether OpenCode exports an equivalent is **unconfirmed**. A skill
   authored with it may not resolve its own `scripts/` path under OpenCode; a
