@@ -2,9 +2,11 @@ import type { ArtifactFileEntry } from "@/client"
 import { JSONViewer } from "@/components/Environment/JSONViewer"
 import { TextViewer } from "@/components/Environment/TextViewer"
 import { formatBytes } from "../artifactFormat"
+import { CodeFileViewer } from "./CodeFileViewer"
 import { CsvTable } from "./CsvFileViewer"
 import {
   basename,
+  codeLanguageOf,
   downloadUrl,
   fileUrl,
   previewKind,
@@ -89,12 +91,20 @@ export function FilePreview({
           {(text) => <JSONViewer content={text} />}
         </TextFileGate>
       )
-    case "text":
+    case "text": {
+      const language = codeLanguageOf(file.path)
       return (
         <TextFileGate url={url} name={name}>
-          {(text) => <TextViewer content={text} />}
+          {(text) =>
+            language ? (
+              <CodeFileViewer content={text} language={language} />
+            ) : (
+              <TextViewer content={text} />
+            )
+          }
         </TextFileGate>
       )
+    }
     case "image":
       return <ImageFileViewer url={url} name={name} />
     case "pdf":

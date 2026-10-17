@@ -73,6 +73,46 @@ const IMAGE_EXTENSIONS = new Set([
   "ico",
 ])
 
+/**
+ * The highlight.js grammar a code file is coloured with, by extension.
+ * Plain text (`.txt`, `.log`, `.env` …) and anything unlisted stay plain.
+ */
+const CODE_LANGUAGES: Record<string, string> = {
+  py: "python",
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsx: "javascript",
+  ts: "typescript",
+  tsx: "typescript",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  yaml: "yaml",
+  yml: "yaml",
+  toml: "ini",
+  ini: "ini",
+  sql: "sql",
+  xml: "xml",
+  css: "css",
+  scss: "scss",
+  go: "go",
+  rs: "rust",
+  java: "java",
+  c: "c",
+  h: "c",
+  cpp: "cpp",
+  hpp: "cpp",
+  rb: "ruby",
+}
+
+/** Text above this size is shown plain: highlighting it would stall the page. */
+export const HIGHLIGHT_LIMIT = 200 * 1024
+
+export function codeLanguageOf(path: string): string | null {
+  return CODE_LANGUAGES[extensionOf(path)] ?? null
+}
+
 export function extensionOf(path: string): string {
   const name = path.split("/").pop() ?? path
   const dot = name.lastIndexOf(".")
